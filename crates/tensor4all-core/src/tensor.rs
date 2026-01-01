@@ -1,10 +1,6 @@
 use std::sync::Arc;
 use crate::index::Index;
-use crate::storage::Storage;
-
-/// Marker type: element type is dynamic (stored in `Storage`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AnyScalar;
+use crate::storage::{AnyScalar, Storage, SumFromStorage};
 
 /// Tensor with dynamic rank (number of indices).
 pub struct TensorDynLen<Id, T> {
@@ -37,6 +33,21 @@ impl<Id, T> TensorDynLen<Id, T> {
     pub fn storage_mut(&mut self) -> &mut Storage {
         Arc::make_mut(&mut self.storage)
     }
+
+    /// Sum all elements, returning `T`.
+    ///
+    /// For dynamic element tensors, use `T = AnyScalar`.
+    pub fn sum(&self) -> T
+    where
+        T: SumFromStorage,
+    {
+        T::sum_from_storage(&self.storage)
+    }
+
+    /// Sum all elements as f64.
+    pub fn sum_f64(&self) -> f64 {
+        f64::sum_from_storage(&self.storage)
+    }
 }
 
 /// Tensor with static rank `N` (number of indices).
@@ -61,6 +72,21 @@ impl<const N: usize, Id, T> TensorStaticLen<N, Id, T> {
     /// Get a mutable reference to storage (COW: clones if shared).
     pub fn storage_mut(&mut self) -> &mut Storage {
         Arc::make_mut(&mut self.storage)
+    }
+
+    /// Sum all elements, returning `T`.
+    ///
+    /// For dynamic element tensors, use `T = AnyScalar`.
+    pub fn sum(&self) -> T
+    where
+        T: SumFromStorage,
+    {
+        T::sum_from_storage(&self.storage)
+    }
+
+    /// Sum all elements as f64.
+    pub fn sum_f64(&self) -> f64 {
+        f64::sum_from_storage(&self.storage)
     }
 }
 

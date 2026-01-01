@@ -1,7 +1,8 @@
 use tensor4all_core::index::{Index, DynId, generate_id};
-use tensor4all_core::storage::{Storage, make_mut_storage};
-use tensor4all_core::tensor::{TensorDynLen, TensorStaticLen, AnyScalar};
+use tensor4all_core::storage::{AnyScalar, DenseStorageFactory, Storage, make_mut_storage};
+use tensor4all_core::tensor::{TensorDynLen, TensorStaticLen};
 use std::sync::Arc;
+use num_complex::Complex64;
 
 #[test]
 fn test_id_generation() {
@@ -37,11 +38,45 @@ fn test_index_with_custom_id() {
 fn test_storage_dense_f64() {
     let storage = Storage::new_dense_f64(10);
     assert_eq!(storage.len(), 0);
+    assert_eq!(storage.sum_f64(), 0.0);
     
     match storage {
         Storage::DenseF64(v) => {
             assert_eq!(v.capacity(), 10);
         }
+        Storage::DenseC64(_) => panic!("expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_storage_dense_c64() {
+    let storage = Storage::new_dense_c64(10);
+    assert_eq!(storage.len(), 0);
+    assert_eq!(storage.sum_c64(), Complex64::new(0.0, 0.0));
+
+    match storage {
+        Storage::DenseC64(v) => {
+            assert_eq!(v.capacity(), 10);
+        }
+        Storage::DenseF64(_) => panic!("expected DenseC64"),
+    }
+}
+
+#[test]
+fn test_storage_factory_f64() {
+    let storage = <f64 as DenseStorageFactory>::new_dense(7);
+    match storage {
+        Storage::DenseF64(v) => assert_eq!(v.capacity(), 7),
+        Storage::DenseC64(_) => panic!("expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_storage_factory_c64() {
+    let storage = <Complex64 as DenseStorageFactory>::new_dense(9);
+    match storage {
+        Storage::DenseC64(v) => assert_eq!(v.capacity(), 9),
+        Storage::DenseF64(_) => panic!("expected DenseC64"),
     }
 }
 
@@ -61,6 +96,7 @@ fn test_cow_storage() {
                 v.push(1.0);
                 v.push(2.0);
             }
+            Storage::DenseC64(_) => panic!("expected DenseF64"),
         }
     }
     
@@ -72,6 +108,7 @@ fn test_cow_storage() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 0);
         }
+        Storage::DenseC64(_) => panic!("expected DenseF64"),
     }
     
     // storage1 should have the new data
@@ -81,6 +118,7 @@ fn test_cow_storage() {
             assert_eq!(v[0], 1.0);
             assert_eq!(v[1], 2.0);
         }
+        Storage::DenseC64(_) => panic!("expected DenseF64"),
     }
 }
 
@@ -145,6 +183,7 @@ fn test_tensor_cow() {
             Storage::DenseF64(v) => {
                 v.push(42.0);
             }
+            Storage::DenseC64(_) => panic!("expected DenseF64"),
         }
     }
     
@@ -156,6 +195,7 @@ fn test_tensor_cow() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 0);
         }
+        Storage::DenseC64(_) => panic!("expected DenseF64"),
     }
     
     // tensor1's storage should have the new data
@@ -164,6 +204,53 @@ fn test_tensor_cow() {
             assert_eq!(v.len(), 1);
             assert_eq!(v[0], 42.0);
         }
+        Storage::DenseC64(_) => panic!("expected DenseF64"),
     }
+}
+
+#[test]
+fn test_tensor_sum_f64_no_match() {
+    let indices = vec![Index::new_dyn(2)];
+    let dims = vec![2];
+    let mut storage = Arc::new(Storage::new_dense_f64(0));
+    {
+        let s = make_mut_storage(&mut storage);
+        match s {
+            Storage::DenseF64(v) => v.extend([1.0, 2.0, 3.0]),
+            Storage::DenseC64(_) => panic!("expected DenseF64"),
+        }
+    }
+
+    let t: TensorDynLen<DynId, AnyScalar> = TensorDynLen::new(indices, dims, storage);
+    let sum_f64 = t.sum_f64();
+    assert_eq!(sum_f64, 6.0);
+
+    let sum_any: AnyScalar = t.sum();
+    assert_eq!(sum_any, AnyScalar::F64(6.0));
+}
+
+#[test]
+fn test_tensor_sum_c64() {
+    let indices = vec![Index::new_dyn(2)];
+    let dims = vec![2];
+    let mut storage = Arc::new(Storage::new_dense_c64(0));
+    {
+        let s = make_mut_storage(&mut storage);
+        match s {
+            Storage::DenseC64(v) => v.extend([Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)]),
+            Storage::DenseF64(_) => panic!("expected DenseC64"),
+        }
+    }
+
+    // Static element type: returns Complex64
+    let t_c64: TensorDynLen<DynId, Complex64> =
+        TensorDynLen::new(indices.clone(), dims.clone(), Arc::clone(&storage));
+    let sum_c64: Complex64 = t_c64.sum();
+    assert_eq!(sum_c64, Complex64::new(4.0, 1.0));
+
+    // Dynamic element type: returns AnyScalar
+    let t_any: TensorDynLen<DynId, AnyScalar> = TensorDynLen::new(indices, dims, storage);
+    let sum_any: AnyScalar = t_any.sum();
+    assert_eq!(sum_any, AnyScalar::C64(Complex64::new(4.0, 1.0)));
 }
 
