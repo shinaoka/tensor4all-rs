@@ -146,6 +146,63 @@ Same as ITensors.jl: **total dimension = sum of all block dimensions**.
 3. **Quantum Number Blocking**: Each tensor block labeled by quantum number vector
 4. **Non-Abelian Support**: Clebsch-Gordan coefficients for non-Abelian symmetries
 
+### ITensors.jl ID Generation Algorithm
+
+ITensors.jl uses **random ID generation** for Index objects:
+
+```julia
+const IDType = UInt64
+
+const _INDEX_ID_RNG_KEY = :ITensors_index_id_rng_bLeTZeEsme4bG3vD
+index_id_rng() = get!(task_local_storage(), _INDEX_ID_RNG_KEY, Xoshiro())::Xoshiro
+
+function Index(dim::Number; tags="", plev=0, dir=Neither)
+  return Index(rand(index_id_rng(), IDType), dim, dir, tags, plev)
+end
+```
+
+**Key characteristics**:
+- **Random generation**: Uses `rand(index_id_rng(), UInt64)` to generate random 64-bit IDs
+- **Task-local RNG**: Each Julia task has its own `Xoshiro` random number generator stored in task-local storage
+- **Collision probability**: Extremely low due to the large ID space (2^64 ≈ 1.84 × 10^19)
+- **Reproducibility**: Can be controlled by seeding the task-local RNG if needed
+
+**Collision Probability Analysis** (Birthday Paradox):
+
+For `n` randomly generated IDs, the probability of at least one collision is approximately:
+
+```
+P(collision) ≈ 1 - exp(-n² / (2 × 2^b))
+```
+
+where `b` is the number of bits (64 for UInt64, 128 for UInt128).
+
+**UInt64 (64-bit IDs)**:
+- **n = 10^5 (100,000 indices)**: P(collision) ≈ **2.7 × 10^-10** (0.000000027%)
+- **n = 10^6 (1 million indices)**: P(collision) ≈ **2.7 × 10^-8** (0.0000027%)
+- **n = 10^9 (1 billion indices)**: P(collision) ≈ **2.7 × 10^-2** (2.7%)
+- Collision probability becomes significant (>50%) at approximately **√(2^64 × ln(2)) ≈ 5.4 × 10^9** IDs
+
+**UInt128 (128-bit IDs)**:
+- **n = 10^5 (100,000 indices)**: P(collision) ≈ **1.5 × 10^-29** (negligible)
+- **n = 10^6 (1 million indices)**: P(collision) ≈ **1.5 × 10^-27** (negligible)
+- **n = 10^9 (1 billion indices)**: P(collision) ≈ **1.5 × 10^-21** (negligible)
+- Collision probability becomes significant (>50%) at approximately **√(2^128 × ln(2)) ≈ 1.5 × 10^19** IDs
+
+**Comparison**: UInt128 provides approximately **2^64 ≈ 1.8 × 10^19** times lower collision probability than UInt64 for the same number of IDs. For 10^5 indices, UInt128 reduces the collision probability from 2.7 × 10^-10 to 1.5 × 10^-29, making collisions effectively impossible in practice.
+
+**Comparison with tensor4all-rs**:
+- **ITensors.jl**: Random IDs (UInt64 from Xoshiro RNG, task-local)
+- **tensor4all-rs**: Random IDs (UInt128 from thread-local RNG)
+
+**tensor4all-rs implementation**:
+- Uses `u128` (UInt128) for even lower collision probability
+- Thread-local random number generator (similar to ITensors.jl's task-local RNG)
+- Each thread has its own RNG instance, providing thread-safe ID generation without global synchronization
+- Collision probability for 10^5 indices: ~1.5 × 10^-29 (effectively zero)
+
+The UInt128 approach provides significantly better collision resistance than UInt64 while maintaining the benefits of random ID generation (better hash distribution, no ID reuse issues).
+
 ---
 
 ## Part 2: Rust Design for tensor4all-rs
@@ -216,14 +273,25 @@ impl<Id, Symm: Symmetry> Index<Id, Symm> {
 
 ```rust
 /// Runtime ID for ITensors-like dynamic identity.
+///
+/// Uses UInt128 for extremely low collision probability (see design.md for analysis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DynId(pub u64);
+pub struct DynId(pub u128);
 
-// Thread-safe ID generation
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+thread_local! {
+    /// Thread-local random number generator for ID generation.
+    ///
+    /// Each thread has its own RNG, similar to ITensors.jl's task-local RNG.
+    /// This provides thread-safe ID generation without global synchronization.
+    static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::thread_rng());
+}
 
-pub fn generate_id() -> u64 {
-    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+/// Generate a unique random ID for dynamic indices (thread-safe).
+///
+/// Uses thread-local random number generator to generate UInt128 IDs,
+/// providing extremely low collision probability.
+pub fn generate_id() -> u128 {
+    ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 ```
 

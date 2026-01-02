@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 num-complex = "0.4"
+rand = "0.8"
 
 [dev-dependencies]
 
