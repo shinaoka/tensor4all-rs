@@ -32,7 +32,6 @@ jobs:
         run: cargo test --release
 
   rollup:
-    name: Rollup
     runs-on: ubuntu-latest
     needs:
       - test
