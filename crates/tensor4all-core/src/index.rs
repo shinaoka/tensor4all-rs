@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use crate::tagset::TagSet;
+use crate::tagset::DefaultTagSet;
 use rand::Rng;
 
 /// Runtime ID for ITensors-like dynamic identity.
@@ -46,9 +46,9 @@ impl Symmetry for NoSymmSpace {
     }
 }
 
-/// Index with generic identity type `Id` and symmetry type `Symm`.
+/// Index with generic identity type `Id`, symmetry type `Symm`, and tag type `Tags`.
 ///
-/// - `Id = DynId` (or `u64`) for ITensors-like runtime identity
+/// - `Id = DynId` for ITensors-like runtime identity
 /// - `Id = ZST marker type` for compile-time-known identity
 /// - `Symm = NoSymmSpace` for no symmetry (default, corresponds to `Index{Int}` in ITensors.jl)
 /// - `Symm = QNSpace` (future) for quantum number spaces (corresponds to `Index{QNBlocks}` in ITensors.jl)
@@ -57,24 +57,27 @@ impl Symmetry for NoSymmSpace {
 /// **Equality**: Two `Index` values are considered equal if and only if their `id` fields match.
 /// Tags are not used for equality comparison.
 #[derive(Debug, Clone)]
-pub struct Index<Id, Symm = NoSymmSpace, const MAX_TAGS: usize = 4, const MAX_TAG_LEN: usize = 16> {
+pub struct Index<Id, Symm = NoSymmSpace, Tags = DefaultTagSet> {
     pub id: Id,
     pub symm: Symm,
-    pub tags: TagSet<MAX_TAGS, MAX_TAG_LEN>,
+    pub tags: Tags,
 }
 
-impl<Id, Symm: Symmetry, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN> {
+impl<Id, Symm: Symmetry, Tags> Index<Id, Symm, Tags> 
+where
+    Tags: Default,
+{
     /// Create a new index with the given identity and symmetry.
     pub fn new(id: Id, symm: Symm) -> Self {
         Self {
             id,
             symm,
-            tags: TagSet::new(),
+            tags: Tags::default(),
         }
     }
 
     /// Create a new index with the given identity, symmetry, and tags.
-    pub fn new_with_tags(id: Id, symm: Symm, tags: TagSet<MAX_TAGS, MAX_TAG_LEN>) -> Self {
+    pub fn new_with_tags(id: Id, symm: Symm, tags: Tags) -> Self {
         Self { id, symm, tags }
     }
 
@@ -86,17 +89,20 @@ impl<Id, Symm: Symmetry, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<
     }
 
     /// Get a reference to the tags.
-    pub fn tags(&self) -> &TagSet<MAX_TAGS, MAX_TAG_LEN> {
+    pub fn tags(&self) -> &Tags {
         &self.tags
     }
 
     /// Get a mutable reference to the tags.
-    pub fn tags_mut(&mut self) -> &mut TagSet<MAX_TAGS, MAX_TAG_LEN> {
+    pub fn tags_mut(&mut self) -> &mut Tags {
         &mut self.tags
     }
 }
 
-impl<Id, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<Id, NoSymmSpace, MAX_TAGS, MAX_TAG_LEN> {
+impl<Id, Tags> Index<Id, NoSymmSpace, Tags>
+where
+    Tags: Default,
+{
     /// Create a new index with no symmetry from dimension.
     ///
     /// This is a convenience constructor for the common case of no symmetry.
@@ -104,12 +110,12 @@ impl<Id, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<Id, NoSymmSpace,
         Self {
             id,
             symm: NoSymmSpace::new(size),
-            tags: TagSet::new(),
+            tags: Tags::default(),
         }
     }
 
     /// Create a new index with no symmetry from dimension and tags.
-    pub fn new_with_size_and_tags(id: Id, size: usize, tags: TagSet<MAX_TAGS, MAX_TAG_LEN>) -> Self {
+    pub fn new_with_size_and_tags(id: Id, size: usize, tags: Tags) -> Self {
         Self {
             id,
             symm: NoSymmSpace::new(size),
@@ -118,18 +124,21 @@ impl<Id, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<Id, NoSymmSpace,
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<DynId, NoSymmSpace, MAX_TAGS, MAX_TAG_LEN> {
+impl<Tags> Index<DynId, NoSymmSpace, Tags>
+where
+    Tags: Default,
+{
     /// Create a new index with a generated dynamic ID and no symmetry.
     pub fn new_dyn(size: usize) -> Self {
         Self {
             id: DynId(generate_id()),
             symm: NoSymmSpace::new(size),
-            tags: TagSet::new(),
+            tags: Tags::default(),
         }
     }
 
     /// Create a new index with a generated dynamic ID, no symmetry, and tags.
-    pub fn new_dyn_with_tags(size: usize, tags: TagSet<MAX_TAGS, MAX_TAG_LEN>) -> Self {
+    pub fn new_dyn_with_tags(size: usize, tags: Tags) -> Self {
         Self {
             id: DynId(generate_id()),
             symm: NoSymmSpace::new(size),
@@ -139,26 +148,22 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Index<DynId, NoSymmSpace, 
 }
 
 // Equality and Hash implementations: only compare by `id`
-impl<Id: PartialEq, Symm, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> PartialEq for Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN> {
+impl<Id: PartialEq, Symm, Tags> PartialEq for Index<Id, Symm, Tags> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<Id: Eq, Symm, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Eq for Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN> {}
+impl<Id: Eq, Symm, Tags> Eq for Index<Id, Symm, Tags> {}
 
-impl<Id: std::hash::Hash, Symm, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> std::hash::Hash for Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN> {
+impl<Id: std::hash::Hash, Symm, Tags> std::hash::Hash for Index<Id, Symm, Tags> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-// Copy implementation: Index is Copy when Id, Symm, and TagSet are all Copy
-impl<Id: Copy, Symm: Copy, const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Copy 
-    for Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN> 
-where
-    TagSet<MAX_TAGS, MAX_TAG_LEN>: Copy,
-{}
+// Copy implementation: Index is Copy when Id, Symm, and Tags are all Copy
+impl<Id: Copy, Symm: Copy, Tags: Copy> Copy for Index<Id, Symm, Tags> {}
 
 thread_local! {
     /// Thread-local random number generator for ID generation.
@@ -192,4 +197,4 @@ pub fn generate_id() -> u128 {
 }
 
 /// Default Index type with default tag capacity (max 4 tags, each max 16 characters).
-pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, 4, 16>;
+pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, DefaultTagSet>;
