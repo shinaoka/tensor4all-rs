@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::borrow::{Borrow, Cow};
 use num_complex::Complex64;
-use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice};
+use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice, DTensor, Rank};
 use mdarray_linalg::{matmul::{MatMul, ContractBuilder}, Naive};
 
 /// Dense storage for f64 elements.
@@ -700,6 +700,44 @@ pub trait StorageScalar: Copy + 'static {
 
     /// Create `Storage` from owned dense data.
     fn dense_storage(data: Vec<Self>) -> Arc<Storage>;
+}
+
+/// Convert dense storage to a DTensor with rank 2.
+///
+/// This function extracts data from dense storage and reshapes it into a `DTensor<T, 2>`
+/// with the specified shape `[m, n]`. The data length must match `m * n`.
+///
+/// # Arguments
+/// * `storage` - Dense storage (DenseF64 or DenseC64)
+/// * `shape` - Shape array `[m, n]`
+///
+/// # Returns
+/// A `DTensor<T, 2>` with the specified shape
+///
+/// # Errors
+/// Returns an error if:
+/// - Storage type doesn't match T
+/// - Data length doesn't match `m * n`
+pub fn storage_to_dtensor<T: StorageScalar>(
+    storage: &Storage,
+    shape: [usize; 2],
+) -> Result<DTensor<T, 2>, String> {
+    // Extract data
+    let data = T::extract_dense(storage)?;
+    
+    // Validate length
+    let expected_len: usize = shape[0] * shape[1];
+    if data.len() != expected_len {
+        return Err(format!(
+            "Data length {} doesn't match shape product {}",
+            data.len(),
+            expected_len
+        ));
+    }
+    
+    // Create 1D tensor, then reshape to 2D
+    let tensor_1d = mdarray::Tensor::<T, Rank<1>>::from(data);
+    Ok(tensor_1d.into_shape(shape))
 }
 
 impl StorageScalar for f64 {

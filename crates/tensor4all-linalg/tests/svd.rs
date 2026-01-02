@@ -188,12 +188,9 @@ fn test_svd_invalid_rank() {
     
     let result = svd(&tensor, &[i.clone()]);
     assert!(result.is_err());
-    match result {
-        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {
-            // Expected: unfold_split returns an error for rank < 2
-        }
-        Err(e) => panic!("Expected UnfoldError, got {:?}", e),
-        Ok(_) => panic!("Expected error but got Ok"),
+    // Expected: unfold_split returns an error for rank < 2
+    if result.is_ok() {
+        panic!("Expected error but got Ok");
     }
 }
 
@@ -212,21 +209,11 @@ fn test_svd_invalid_split() {
     
     // Empty left_inds should fail
     let result = svd(&tensor, &[]);
-    assert!(result.is_err());
-    match result {
-        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {},
-        Err(e) => panic!("Expected UnfoldError for empty left_inds, got {:?}", e),
-        Ok(_) => panic!("Expected error but got Ok"),
-    }
+    assert!(result.is_err(), "Expected error for empty left_inds");
     
     // All indices in left_inds should fail
     let result = svd(&tensor, &[i.clone(), j.clone()]);
-    assert!(result.is_err());
-    match result {
-        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {},
-        Err(e) => panic!("Expected UnfoldError for all indices in left_inds, got {:?}", e),
-        Ok(_) => panic!("Expected error but got Ok"),
-    }
+    assert!(result.is_err(), "Expected error for all indices in left_inds");
 }
 
 #[test]

@@ -3,26 +3,100 @@ use tensor4all_index::index::{Index, DynId, NoSymmSpace, Symmetry};
 use tensor4all_index::tagset::DefaultTagSet;
 use tensor4all_tensor::{Storage, StorageScalar, TensorDynLen, unfold_split};
 use mdarray::DSlice;
-use mdarray_linalg::svd::{SVD, SVDDecomp, SVDError as MdarraySvdError};
-use mdarray_linalg_faer::Faer;
+use mdarray_linalg::svd::{SVD, SVDDecomp};
 use num_complex::{Complex64, ComplexFloat};
-use faer_traits::ComplexField;
 use thiserror::Error;
+
+#[cfg(feature = "backend-faer")]
+use mdarray_linalg_faer::Faer;
+
+#[cfg(feature = "backend-lapack")]
+use mdarray_linalg_lapack::Lapack;
+
+use faer_traits::ComplexField;
 
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]
 pub enum SvdError {
-    #[error("Tensor storage must be DenseF64 or DenseC64, got {0:?}")]
-    UnsupportedStorage(String),
+    #[error("SVD computation failed: {0}")]
+    ComputationError(#[from] anyhow::Error),
+}
 
-    #[error("mdarray-linalg SVD error: {0}")]
-    BackendError(#[from] MdarraySvdError),
+/// Extract U, S, V from mdarray-linalg's SVDDecomp (which returns U, S, Vt).
+///
+/// This helper function converts the backend's SVD result to our desired format:
+/// - Extracts singular values from the diagonal view (first row)
+/// - Converts U from m×m to m×k (takes first k columns)
+/// - Converts Vt to V (takes first k rows and (conjugate-)transposes)
+///
+/// # Arguments
+/// * `decomp` - SVD decomposition from mdarray-linalg
+/// * `m` - Number of rows
+/// * `n` - Number of columns
+/// * `k` - Bond dimension (min(m, n))
+///
+/// # Returns
+/// A tuple `(u_vec, s_vec, v_vec)` where:
+/// - `u_vec` is a vector of length `m * k` containing U matrix data
+/// - `s_vec` is a vector of length `k` containing singular values (real, f64)
+/// - `v_vec` is a vector of length `n * k` containing V matrix data
+fn extract_usv_from_svd_decomp<T: ComplexFloat>(
+    decomp: SVDDecomp<T>,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> (Vec<T>, Vec<f64>, Vec<T>)
+where
+    <T as ComplexFloat>::Real: Into<f64>,
+{
+    let SVDDecomp { s, u, vt } = decomp;
 
-    #[error("Unfold error: {0}")]
-    UnfoldError(#[from] anyhow::Error),
+    // Extract singular values and convert to real type.
+    //
+    // NOTE:
+    // `mdarray-linalg-faer` writes singular values into a diagonal view created by
+    // `into_faer_diag_mut`, which (by design) treats the **first row** as the
+    // singular-value buffer (LAPACK-style convention). Therefore, the values live at
+    // `s[0, i]`, not necessarily at `s[i, i]`.
+    //
+    // Singular values are always real (f64), even for complex matrices.
+    let mut s_vec: Vec<f64> = Vec::with_capacity(k);
+    for i in 0..k {
+        let s_val = s[[0, i]];
+        // <T as ComplexFloat>::Real is f64 for both f64 and Complex64
+        let real_val: <T as ComplexFloat>::Real = s_val.re();
+        // Convert to f64 using Into trait
+        s_vec.push(real_val.into());
+    }
 
-    #[error("Storage extraction error: {0}")]
-    StorageExtractionError(String),
+    // Convert U from m×m to m×k (take first k columns)
+    let mut u_vec = Vec::with_capacity(m * k);
+    for i in 0..m {
+        for j in 0..k {
+            u_vec.push(u[[i, j]]);
+        }
+    }
+
+    // Convert backend `vt` (V^T / V^H) to V (n×k).
+    //
+    // `mdarray-linalg` returns `vt` as (conceptually) V^T for real types or V^H for complex types.
+    // We want V (not Vt), so we take the first k rows of V^T/V^H and (conjugate-)transpose.
+    let mut vt_vec = Vec::with_capacity(k * n);
+    for i in 0..k {
+        for j in 0..n {
+            vt_vec.push(vt[[i, j]]);
+        }
+    }
+
+    let mut v_vec = Vec::with_capacity(n * k);
+    for j in 0..n {
+        for i in 0..k {
+            // `ComplexFloat::conj` is a no-op for real types.
+            v_vec.push(vt_vec[i * n + j].conj());
+        }
+    }
+
+    (u_vec, s_vec, v_vec)
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
@@ -78,91 +152,57 @@ where
 {
     // Unfold tensor into matrix (returns DTensor<T, 2>)
     let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
-        .map_err(SvdError::UnfoldError)?;
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+        .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
-    // Call SVD using faer backend
+    // Call SVD using selected backend
     // DTensor can be converted to DSlice via as_mut()
-    let bd = Faer;
     let a_slice: &mut DSlice<T, 2> = a_tensor.as_mut();
-    let SVDDecomp { s, u, vt } = bd.svd(a_slice)?;
-
-    // Extract singular values and convert to real type.
-    //
-    // NOTE:
-    // `mdarray-linalg-faer` writes singular values into a diagonal view created by
-    // `into_faer_diag_mut`, which (by design) treats the **first row** as the
-    // singular-value buffer (LAPACK-style convention). Therefore, the values live at
-    // `s[0, i]`, not necessarily at `s[i, i]`.
-    //
-    // Singular values are always real (f64), even for complex matrices.
-    let mut s_vec: Vec<f64> = Vec::with_capacity(k);
-    for i in 0..k {
-        let s_val = s[[0, i]];
-        // <T as ComplexFloat>::Real is f64 for both f64 and Complex64
-        let real_val: <T as ComplexFloat>::Real = s_val.re();
-        // Convert to f64 using Into trait
-        s_vec.push(real_val.into());
-    }
-
-    // Convert U from m×m to m×k (take first k columns)
-    let mut u_vec = Vec::with_capacity(m * k);
-    for i in 0..m {
-        for j in 0..k {
-            u_vec.push(u[[i, j]]);
+    let decomp = {
+        #[cfg(feature = "backend-faer")]
+        {
+            let bd = Faer;
+            bd.svd(a_slice)
+        }
+        #[cfg(feature = "backend-lapack")]
+        {
+            let bd = Lapack::new();
+            bd.svd(a_slice)
+        }
+        #[cfg(not(any(feature = "backend-faer", feature = "backend-lapack")))]
+        {
+            compile_error!("At least one backend feature must be enabled (backend-faer or backend-lapack)");
         }
     }
+    .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))
+    .map_err(SvdError::ComputationError)?;
 
-    // Convert backend `vt` (V^T / V^H) to V (n×k).
-    //
-    // `mdarray-linalg` returns `vt` as (conceptually) V^T for real types or V^H for complex types.
-    // We want V (not Vt), so we take the first k rows of V^T/V^H and (conjugate-)transpose.
-    let mut vt_vec = Vec::with_capacity(k * n);
-    for i in 0..k {
-        for j in 0..n {
-            vt_vec.push(vt[[i, j]]);
-        }
-    }
-
-    let mut v_vec = Vec::with_capacity(n * k);
-    for j in 0..n {
-        for i in 0..k {
-            // `ComplexFloat::conj` is a no-op for real types.
-            v_vec.push(vt_vec[i * n + j].conj());
-        }
-    }
+    // Extract U, S, V from the decomposition
+    let (u_vec, s_vec, v_vec) = extract_usv_from_svd_decomp(decomp, m, n, k);
 
     // Create bond index with "Link" tag
-    // Convert from DynId to Id type
-    let bond_dyn_id = DynId(tensor4all_index::index::generate_id());
-    let bond_id: Id = bond_dyn_id.into();
-    let bond_symm: Symm = NoSymmSpace::new(k).into();
-    let mut bond_index: Index<Id, Symm, DefaultTagSet> = Index::new(bond_id, bond_symm);
-    bond_index.tags_mut().add_tag("Link").map_err(|_| {
-        SvdError::UnsupportedStorage("Failed to add Link tag".to_string())
-    })?;
+    let bond_index: Index<Id, Symm, DefaultTagSet> = Index::new_link(k)
+        .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
+        .map_err(SvdError::ComputationError)?;
 
     // Create U tensor: [left_inds..., bond_index]
     let mut u_indices = left_indices.clone();
     u_indices.push(bond_index.clone());
-    let mut u_dims: Vec<usize> = left_indices.iter().map(|idx| idx.size()).collect();
-    u_dims.push(k);
     let u_storage = T::dense_storage(u_vec);
-    let u = TensorDynLen::new(u_indices, u_dims, u_storage);
+    let u = TensorDynLen::from_indices(u_indices, u_storage);
 
     // Create S tensor: [bond_index, bond_index] (diagonal)
     // Singular values are always real (f64), even for complex input
     let s_indices = vec![bond_index.clone(), bond_index.clone()];
     let s_storage = Arc::new(Storage::new_diag_f64(s_vec));
-    let s = TensorDynLen::new(s_indices, vec![k, k], s_storage);
+    let s = TensorDynLen::from_indices(s_indices, s_storage);
 
     // Create V tensor: [right_inds..., bond_index]
     let mut v_indices = right_indices.clone();
     v_indices.push(bond_index.clone());
-    let mut v_dims: Vec<usize> = right_indices.iter().map(|idx| idx.size()).collect();
-    v_dims.push(k);
     let v_storage = T::dense_storage(v_vec);
-    let v = TensorDynLen::new(v_indices, v_dims, v_storage);
+    let v = TensorDynLen::from_indices(v_indices, v_storage);
 
     Ok((u, s, v))
 }

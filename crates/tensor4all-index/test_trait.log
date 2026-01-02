@@ -1,0 +1,27 @@
+   Compiling tensor4all-core v0.1.0 (/Users/hiroshi/projects/tensor4all/tensor4all-rs/crates/tensor4all-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (/Users/hiroshi/projects/tensor4all/tensor4all-rs/target/debug/deps/tensor4all_core-fb15a74a153865cb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/basic.rs (/Users/hiroshi/projects/tensor4all/tensor4all-rs/target/debug/deps/basic-8803bd7909ced7e0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/index_tags.rs (/Users/hiroshi/projects/tensor4all/tensor4all-rs/target/debug/deps/index_tags-038c20dd79f1a7a9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/tagset.rs (/Users/hiroshi/projects/tensor4all/tensor4all-rs/target/debug/deps/tagset-110c34238036455b)
+
+running 1 test
+test test_tagset_like_trait ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use crate::tagset::DefaultTagSet;
+use crate::tagset::{DefaultTagSet, TagSetLike, TagSetError};
 use rand::Rng;
 
 /// Runtime ID for ITensors-like dynamic identity.
@@ -124,6 +124,34 @@ where
     }
 }
 
+impl<Id, Symm, Tags> Index<Id, Symm, Tags>
+where
+    Id: From<DynId>,
+    Symm: From<NoSymmSpace>,
+    Tags: Default + TagSetLike,
+{
+    /// Create a new bond index with "Link" tag (for SVD, QR, etc.).
+    ///
+    /// This is a convenience method for creating bond indices commonly used in tensor
+    /// decompositions like SVD and QR factorization. The ID is automatically generated,
+    /// and the symmetry type is converted from `NoSymmSpace`.
+    ///
+    /// # Arguments
+    /// * `size` - Dimension of the bond index
+    ///
+    /// # Returns
+    /// A new index with "Link" tag and the specified size, or an error if the tag cannot be added.
+    pub fn new_link(size: usize) -> Result<Self, TagSetError> {
+        let mut tags = Tags::default();
+        tags.add_tag("Link")?;
+        Ok(Self {
+            id: DynId(generate_id()).into(),
+            symm: NoSymmSpace::new(size).into(),
+            tags,
+        })
+    }
+}
+
 impl<Tags> Index<DynId, NoSymmSpace, Tags>
 where
     Tags: Default,
@@ -144,6 +172,29 @@ where
             symm: NoSymmSpace::new(size),
             tags,
         }
+    }
+}
+
+impl<Tags> Index<DynId, NoSymmSpace, Tags>
+where
+    Tags: Default + TagSetLike,
+{
+    /// Create a new index with a generated dynamic ID, no symmetry, and a single tag.
+    ///
+    /// # Arguments
+    /// * `size` - Dimension of the index
+    /// * `tag` - Tag to add to the index
+    ///
+    /// # Returns
+    /// A new index with the specified size and tag, or an error if the tag cannot be added.
+    pub fn new_dyn_with_tag(size: usize, tag: &str) -> Result<Self, TagSetError> {
+        let mut tags = Tags::default();
+        tags.add_tag(tag)?;
+        Ok(Self {
+            id: DynId(generate_id()),
+            symm: NoSymmSpace::new(size),
+            tags,
+        })
     }
 }
 

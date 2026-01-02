@@ -6,12 +6,18 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["backend-faer"]
+backend-faer = ["mdarray-linalg-faer"]
+backend-lapack = ["mdarray-linalg-lapack"]
+
 [dependencies]
 tensor4all-tensor = { path = "../tensor4all-tensor" }
 tensor4all-index = { path = "../tensor4all-index" }
 mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
 mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
-mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer" }
+mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer", optional = true }
+mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-lapack", optional = true }
 faer-traits = "0.23"
 thiserror = "2.0"
 num-complex = "0.4"

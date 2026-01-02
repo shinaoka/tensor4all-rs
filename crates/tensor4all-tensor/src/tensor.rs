@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use num_complex::Complex64;
 use tensor4all_index::index::{Index, NoSymmSpace, common_inds, Symmetry};
-use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage};
+use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage, storage_to_dtensor};
 use anyhow::Result;
 use mdarray::DTensor;
 
@@ -81,9 +81,10 @@ pub struct TensorDynLen<Id, T, Symm = NoSymmSpace> {
 impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// Create a new tensor with dynamic rank.
     ///
+    /// Dimensions are automatically computed from the indices using `Index::size()`.
+    ///
     /// # Panics
-    /// Panics if `indices.len() != dims.len()`, or if the storage is Diag
-    /// and not all indices have the same dimension.
+    /// Panics if the storage is Diag and not all indices have the same dimension.
     pub fn new(indices: Vec<Index<Id, Symm>>, dims: Vec<usize>, storage: Arc<Storage>) -> Self {
         assert_eq!(
             indices.len(),
@@ -109,6 +110,20 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             storage,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Create a new tensor with dynamic rank, automatically computing dimensions from indices.
+    ///
+    /// This is a convenience constructor that extracts dimensions from indices using `Index::size()`.
+    ///
+    /// # Panics
+    /// Panics if the storage is Diag and not all indices have the same dimension.
+    pub fn from_indices(indices: Vec<Index<Id, Symm>>, storage: Arc<Storage>) -> Self
+    where
+        Symm: Symmetry,
+    {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        Self::new(indices, dims, storage)
     }
 
     /// Get a mutable reference to storage (COW: clones if shared).
@@ -934,13 +949,9 @@ where
     let m: usize = unfolded.dims[..left_len].iter().product();
     let n: usize = unfolded.dims[left_len..].iter().product();
 
-    // Extract data from storage and create DTensor
-    let data = T::extract_dense(unfolded.storage.as_ref())
-        .map_err(|e| anyhow::anyhow!("Failed to extract dense storage: {}", e))?;
-    
-    // Create DTensor from vector: first as 1D, then reshape to 2D
-    let tensor_1d = mdarray::Tensor::<T, mdarray::Rank<1>>::from(data);
-    let matrix_tensor = tensor_1d.into_shape([m, n]);
+    // Create DTensor directly from storage
+    let matrix_tensor = storage_to_dtensor::<T>(unfolded.storage.as_ref(), [m, n])
+        .map_err(|e| anyhow::anyhow!("Failed to create DTensor: {}", e))?;
 
     Ok((
         matrix_tensor,
