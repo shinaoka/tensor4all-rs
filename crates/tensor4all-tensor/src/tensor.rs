@@ -1,7 +1,9 @@
 use std::sync::Arc;
+use std::collections::HashSet;
 use num_complex::Complex64;
 use tensor4all_index::index::{Index, NoSymmSpace, common_inds, Symmetry};
 use crate::storage::{AnyScalar, Storage, SumFromStorage, contract_storage};
+use anyhow::Result;
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -840,4 +842,102 @@ pub type AnyTensorDynLen<Id, Symm = NoSymmSpace> = TensorDynLen<Id, AnyScalar, S
 
 /// Convenience alias for dynamic element type tensors with static rank.
 pub type AnyTensorStaticLen<const N: usize, Id, Symm = NoSymmSpace> = TensorStaticLen<N, Id, AnyScalar, Symm>;
+
+/// Unfold a tensor into a matrix by splitting indices into left and right groups.
+///
+/// This function validates the split, permutes the tensor so that left indices come first,
+/// and returns the unfolded tensor along with the matrix dimensions (m, n).
+///
+/// # Arguments
+/// * `t` - Input tensor
+/// * `left_inds` - Indices to place on the left (row) side of the matrix
+///
+/// # Returns
+/// A tuple `(unfolded_tensor, left_len, m, n, left_indices, right_indices)` where:
+/// - `unfolded_tensor` is the tensor permuted to have left indices first, then right indices
+/// - `left_len` is the number of left indices
+/// - `m` is the product of left index dimensions
+/// - `n` is the product of right index dimensions
+/// - `left_indices` is the vector of left indices (cloned)
+/// - `right_indices` is the vector of right indices (cloned)
+///
+/// # Errors
+/// Returns an error if:
+/// - The tensor rank is < 2
+/// - `left_inds` is empty or contains all indices
+/// - `left_inds` contains indices not in the tensor or duplicates
+pub fn unfold_split<Id, T, Symm>(
+    t: &TensorDynLen<Id, T, Symm>,
+    left_inds: &[Index<Id, Symm>],
+) -> Result<(
+    TensorDynLen<Id, T, Symm>,
+    usize,
+    usize,
+    usize,
+    Vec<Index<Id, Symm>>,
+    Vec<Index<Id, Symm>>,
+)>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    let rank = t.dims.len();
+    
+    // Validate rank
+    anyhow::ensure!(rank >= 2, "Tensor must have rank >= 2, got rank {}", rank);
+
+    let left_len = left_inds.len();
+    
+    // Validate split: must be a proper subset
+    anyhow::ensure!(
+        left_len > 0 && left_len < rank,
+        "Left indices must be a non-empty proper subset of tensor indices (0 < left_len < rank), got left_len={}, rank={}",
+        left_len,
+        rank
+    );
+
+    // Validate that all left_inds are in the tensor and there are no duplicates
+    let tensor_id_set: HashSet<_> = t.indices.iter().map(|idx| &idx.id).collect();
+    let mut left_id_set = HashSet::new();
+    
+    for left_idx in left_inds {
+        anyhow::ensure!(
+            tensor_id_set.contains(&left_idx.id),
+            "Index in left_inds not found in tensor"
+        );
+        anyhow::ensure!(
+            left_id_set.insert(&left_idx.id),
+            "Duplicate index in left_inds"
+        );
+    }
+
+    // Build right_inds: all indices not in left_inds, in original order
+    let mut right_inds = Vec::new();
+    for idx in &t.indices {
+        if !left_id_set.contains(&idx.id) {
+            right_inds.push(idx.clone());
+        }
+    }
+
+    // Build new_indices: left_inds first, then right_inds
+    let mut new_indices = Vec::with_capacity(rank);
+    new_indices.extend_from_slice(left_inds);
+    new_indices.extend_from_slice(&right_inds);
+
+    // Permute tensor to have left indices first, then right indices
+    let unfolded = t.permute_indices(&new_indices);
+
+    // Compute matrix dimensions
+    let m: usize = unfolded.dims[..left_len].iter().product();
+    let n: usize = unfolded.dims[left_len..].iter().product();
+
+    Ok((
+        unfolded,
+        left_len,
+        m,
+        n,
+        left_inds.to_vec(),
+        right_inds,
+    ))
+}
 

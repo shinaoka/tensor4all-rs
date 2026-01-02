@@ -22,7 +22,7 @@ fn test_svd_identity() {
         storage,
     );
     
-    let (u, s, v) = svd(&tensor).expect("SVD should succeed");
+    let (u, s, v) = svd(&tensor, &[i.clone()]).expect("SVD should succeed");
     
     // Check dimensions
     assert_eq!(u.dims, vec![2, 2]);
@@ -63,7 +63,7 @@ fn test_svd_simple_matrix() {
         storage,
     );
     
-    let (u, s, v) = svd(&tensor).expect("SVD should succeed");
+    let (u, s, v) = svd(&tensor, &[i.clone()]).expect("SVD should succeed");
     
     // Check dimensions: m=2, n=3, k=min(2,3)=2
     assert_eq!(u.dims, vec![2, 2]);
@@ -105,7 +105,7 @@ fn test_svd_reconstruction() {
         storage,
     );
     
-    let (u, s, v) = svd(&tensor).expect("SVD should succeed");
+    let (u, s, v) = svd(&tensor, &[i.clone()]).expect("SVD should succeed");
     
     // Reconstruct: A = U * S * V^T
     // Note: Our SVD returns V (not V^T), so we need to compute U * S * V^T
@@ -176,26 +176,108 @@ fn test_svd_reconstruction() {
 
 #[test]
 fn test_svd_invalid_rank() {
-    // Test that SVD fails for non-rank-2 tensors
+    // Test that SVD fails for rank-1 tensors
+    let i = Index::new_dyn(2);
+    
+    let storage = Arc::new(Storage::new_dense_f64(2));
+    let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(
+        vec![i.clone()],
+        vec![2],
+        storage,
+    );
+    
+    let result = svd(&tensor, &[i.clone()]);
+    assert!(result.is_err());
+    match result {
+        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {
+            // Expected: unfold_split returns an error for rank < 2
+        }
+        Err(e) => panic!("Expected UnfoldError, got {:?}", e),
+        Ok(_) => panic!("Expected error but got Ok"),
+    }
+}
+
+#[test]
+fn test_svd_invalid_split() {
+    // Test that SVD fails when left_inds is empty or contains all indices
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    
+    let storage = Arc::new(Storage::new_dense_f64(6));
+    let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(
+        vec![i.clone(), j.clone()],
+        vec![2, 3],
+        storage,
+    );
+    
+    // Empty left_inds should fail
+    let result = svd(&tensor, &[]);
+    assert!(result.is_err());
+    match result {
+        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {},
+        Err(e) => panic!("Expected UnfoldError for empty left_inds, got {:?}", e),
+        Ok(_) => panic!("Expected error but got Ok"),
+    }
+    
+    // All indices in left_inds should fail
+    let result = svd(&tensor, &[i.clone(), j.clone()]);
+    assert!(result.is_err());
+    match result {
+        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {},
+        Err(e) => panic!("Expected UnfoldError for all indices in left_inds, got {:?}", e),
+        Ok(_) => panic!("Expected error but got Ok"),
+    }
+}
+
+#[test]
+fn test_svd_rank3() {
+    // Test SVD of a rank-3 tensor: split first index vs remaining two
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
     
-    let storage = Arc::new(Storage::new_dense_f64(24));
+    // Create a 2×3×4 tensor with some data
+    let data = (0..24).map(|x| x as f64).collect::<Vec<_>>();
+    let storage = Arc::new(Storage::DenseF64(tensor4all_tensor::storage::DenseStorageF64::from_vec(data)));
     let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(
-        vec![i, j, k],
+        vec![i.clone(), j.clone(), k.clone()],
         vec![2, 3, 4],
         storage,
     );
     
-    let result = svd(&tensor);
-    assert!(result.is_err());
-    match result {
-        Err(tensor4all_linalg::SvdError::InvalidRank(rank)) => {
-            assert_eq!(rank, 3);
-        }
-        _ => panic!("Expected InvalidRank error"),
-    }
+    // Split: left = [i], right = [j, k]
+    // This unfolds to a 2×12 matrix
+    let (u, s, v) = svd(&tensor, &[i.clone()]).expect("SVD should succeed");
+    
+    // Check dimensions:
+    // U should be [i, bond] = [2, min(2, 12)] = [2, 2]
+    // S should be [bond, bond] = [2, 2]
+    // V should be [j, k, bond] = [3, 4, 2]
+    assert_eq!(u.dims, vec![2, 2]);
+    assert_eq!(s.dims, vec![2, 2]);
+    assert_eq!(v.dims, vec![3, 4, 2]);
+    
+    // Check indices
+    assert_eq!(u.indices.len(), 2);
+    assert_eq!(s.indices.len(), 2);
+    assert_eq!(v.indices.len(), 3);
+    
+    // Check that U has left index first, then bond
+    assert_eq!(u.indices[0].id, i.id);
+    
+    // Check that V has right indices first, then bond
+    assert_eq!(v.indices[0].id, j.id);
+    assert_eq!(v.indices[1].id, k.id);
+    
+    // Check that U and V share the bond index
+    assert_eq!(u.indices[1].id, s.indices[0].id);
+    assert_eq!(s.indices[0].id, s.indices[1].id);
+    assert_eq!(s.indices[1].id, v.indices[2].id);
+    
+    // Check that bond index has "Link" tag
+    assert!(u.indices[1].tags().has_tag("Link"));
+    assert!(s.indices[0].tags().has_tag("Link"));
+    assert!(v.indices[2].tags().has_tag("Link"));
 }
 
 #[test]
@@ -220,7 +302,7 @@ fn test_svd_complex_reconstruction() {
         storage,
     );
 
-    let (u, s, v) = svd_c64(&tensor).expect("Complex SVD should succeed");
+    let (u, s, v) = svd_c64(&tensor, &[i_idx.clone()]).expect("Complex SVD should succeed");
 
     let u_data = match u.storage.as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),

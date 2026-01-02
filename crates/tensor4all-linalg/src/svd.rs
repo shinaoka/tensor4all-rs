@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tensor4all_index::index::{Index, DynId, NoSymmSpace, Symmetry};
 use tensor4all_index::tagset::DefaultTagSet;
-use tensor4all_tensor::{Storage, TensorDynLen};
+use tensor4all_tensor::{Storage, TensorDynLen, unfold_split};
 use tensor4all_tensor::storage::DenseStorageF64;
 use mdarray::{Dense, Slice, tensor};
 use mdarray_linalg::svd::{SVD, SVDDecomp, SVDError as MdarraySvdError};
@@ -12,36 +12,43 @@ use thiserror::Error;
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]
 pub enum SvdError {
-    #[error("Tensor must have rank 2, got rank {0}")]
-    InvalidRank(usize),
-
-    #[error("Tensor storage must be DenseF64, got {0:?}")]
+    #[error("Tensor storage must be DenseF64 or DenseC64, got {0:?}")]
     UnsupportedStorage(String),
 
     #[error("mdarray-linalg SVD error: {0}")]
     BackendError(#[from] MdarraySvdError),
+
+    #[error("Unfold error: {0}")]
+    UnfoldError(#[from] anyhow::Error),
 }
 
-/// Compute SVD decomposition of a rank-2 tensor, returning (U, S, V).
+/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
 ///
 /// This function mimics ITensor's SVD API, returning U, S, and V (not Vt).
-/// The input tensor must be rank-2 with DenseF64 storage.
+/// The input tensor can have any rank >= 2, and indices are split into left and right groups.
+/// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 ///
 /// # Arguments
-/// * `t` - Input tensor of rank 2 with DenseF64 storage
+/// * `t` - Input tensor with DenseF64 storage
+/// * `left_inds` - Indices to place on the left (row) side of the unfolded matrix
 ///
 /// # Returns
 /// A tuple `(U, S, V)` where:
-/// - `U` is an m×k tensor with indices `[left_index, bond_index]`
+/// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., k]`
 /// - `S` is a k×k diagonal tensor with indices `[bond_index, bond_index]`
-/// - `V` is an n×k tensor with indices `[right_index, bond_index]`
-/// where `k = min(m, n)` is the bond dimension.
+/// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., k]`
+/// where `k = min(m, n)` is the bond dimension, `m = ∏left_dims`, and `n = ∏right_dims`.
 ///
 /// # Errors
-/// Returns `SvdError` if the tensor is not rank-2, storage is not DenseF64,
-/// or if the SVD computation fails.
+/// Returns `SvdError` if:
+/// - The tensor rank is < 2
+/// - Storage is not DenseF64
+/// - `left_inds` is empty or contains all indices
+/// - `left_inds` contains indices not in the tensor or duplicates
+/// - The SVD computation fails
 pub fn svd<Id, Symm>(
     t: &TensorDynLen<Id, f64, Symm>,
+    left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
         TensorDynLen<Id, f64, Symm>,
@@ -54,33 +61,36 @@ where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
 {
-    // Validate rank
-    if t.dims.len() != 2 {
-        return Err(SvdError::InvalidRank(t.dims.len()));
-    }
-
     // Validate storage type
-    let dense_storage = match t.storage.as_ref() {
-        Storage::DenseF64(ds) => ds,
+    match t.storage.as_ref() {
+        Storage::DenseF64(_) => {},
         _ => {
             return Err(SvdError::UnsupportedStorage(format!(
                 "{:?}",
                 t.storage
             )));
         }
-    };
+    }
 
-    let m = t.dims[0];
-    let n = t.dims[1];
+    // Unfold tensor into matrix
+    let (unfolded, left_len, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+        .map_err(SvdError::UnfoldError)?;
     let k = m.min(n);
 
-    // Get original indices
-    let left_index = t.indices[0].clone();
-    let right_index = t.indices[1].clone();
+    // Get storage from unfolded tensor (already permuted)
+    let unfolded_dense_storage = match unfolded.storage.as_ref() {
+        Storage::DenseF64(ds) => ds,
+        _ => {
+            return Err(SvdError::UnsupportedStorage(format!(
+                "{:?}",
+                unfolded.storage
+            )));
+        }
+    };
 
     // Create mdarray tensor from dense storage data
     // SVD destroys the input, so we need to clone the data
-    let a_data = dense_storage.as_slice().to_vec();
+    let a_data = unfolded_dense_storage.as_slice().to_vec();
     let mut a_tensor = tensor![[0.0; n]; m];
     for i in 0..m {
         for j in 0..n {
@@ -141,9 +151,11 @@ where
         SvdError::UnsupportedStorage("Failed to add Link tag".to_string())
     })?;
 
-    // Create U tensor: [left_index, bond_index]
-    let u_indices = vec![left_index.clone(), bond_index.clone()];
-    let u_dims = vec![m, k];
+    // Create U tensor: [left_inds..., bond_index]
+    let mut u_indices = left_indices.clone();
+    u_indices.push(bond_index.clone());
+    let mut u_dims = unfolded.dims[..left_len].to_vec();
+    u_dims.push(k);
     let u_storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(u_vec)));
     let u = TensorDynLen::new(u_indices, u_dims, u_storage);
 
@@ -152,25 +164,50 @@ where
     let s_storage = Arc::new(Storage::new_diag_f64(s_vec));
     let s = TensorDynLen::new(s_indices, vec![k, k], s_storage);
 
-    // Create V tensor: [right_index, bond_index]
-    let v_indices = vec![right_index.clone(), bond_index.clone()];
-    let v_dims = vec![n, k];
+    // Create V tensor: [right_inds..., bond_index]
+    let mut v_indices = right_indices.clone();
+    v_indices.push(bond_index.clone());
+    let mut v_dims = unfolded.dims[left_len..].to_vec();
+    v_dims.push(k);
     let v_storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(v_vec)));
     let v = TensorDynLen::new(v_indices, v_dims, v_storage);
 
     Ok((u, s, v))
 }
 
-/// Compute SVD decomposition of a rank-2 complex tensor, returning (U, S, V).
+/// Compute SVD decomposition of a complex tensor with arbitrary rank, returning (U, S, V).
 ///
-/// For complex-valued matrices, the mathematical convention is:
+/// For complex-valued tensors, the mathematical convention is:
 /// \[ A = U * Σ * V^H \]
 /// where \(V^H\) is the conjugate-transpose of \(V\).
 ///
+/// The input tensor can have any rank >= 2, and indices are split into left and right groups.
+/// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
+///
 /// `mdarray-linalg` returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
 /// and we return **V** (not Vt), so we build V by conjugate-transposing the leading k rows.
+///
+/// # Arguments
+/// * `t` - Input tensor with DenseC64 storage
+/// * `left_inds` - Indices to place on the left (row) side of the unfolded matrix
+///
+/// # Returns
+/// A tuple `(U, S, V)` where:
+/// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., k]`
+/// - `S` is a k×k diagonal tensor with indices `[bond_index, bond_index]`
+/// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., k]`
+/// where `k = min(m, n)` is the bond dimension, `m = ∏left_dims`, and `n = ∏right_dims`.
+///
+/// # Errors
+/// Returns `SvdError` if:
+/// - The tensor rank is < 2
+/// - Storage is not DenseC64
+/// - `left_inds` is empty or contains all indices
+/// - `left_inds` contains indices not in the tensor or duplicates
+/// - The SVD computation fails
 pub fn svd_c64<Id, Symm>(
     t: &TensorDynLen<Id, Complex64, Symm>,
+    left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
         TensorDynLen<Id, Complex64, Symm>,
@@ -183,29 +220,35 @@ where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
 {
-    if t.dims.len() != 2 {
-        return Err(SvdError::InvalidRank(t.dims.len()));
-    }
-
-    let dense_storage = match t.storage.as_ref() {
-        Storage::DenseC64(ds) => ds,
+    // Validate storage type
+    match t.storage.as_ref() {
+        Storage::DenseC64(_) => {},
         _ => {
             return Err(SvdError::UnsupportedStorage(format!(
                 "{:?}",
                 t.storage
             )));
         }
-    };
+    }
 
-    let m = t.dims[0];
-    let n = t.dims[1];
+    // Unfold tensor into matrix
+    let (unfolded, left_len, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+        .map_err(SvdError::UnfoldError)?;
     let k = m.min(n);
 
-    let left_index = t.indices[0].clone();
-    let right_index = t.indices[1].clone();
+    // Get storage from unfolded tensor (already permuted)
+    let unfolded_dense_storage = match unfolded.storage.as_ref() {
+        Storage::DenseC64(ds) => ds,
+        _ => {
+            return Err(SvdError::UnsupportedStorage(format!(
+                "{:?}",
+                unfolded.storage
+            )));
+        }
+    };
 
     // Build mdarray tensor (SVD destroys input)
-    let a_data = dense_storage.as_slice().to_vec();
+    let a_data = unfolded_dense_storage.as_slice().to_vec();
     let mut a_tensor = tensor![[Complex64::new(0.0, 0.0); n]; m];
     for i in 0..m {
         for j in 0..n {
@@ -255,17 +298,25 @@ where
         SvdError::UnsupportedStorage("Failed to add Link tag".to_string())
     })?;
 
-    let u_indices = vec![left_index.clone(), bond_index.clone()];
+    // Create U tensor: [left_inds..., bond_index]
+    let mut u_indices = left_indices.clone();
+    u_indices.push(bond_index.clone());
+    let mut u_dims = unfolded.dims[..left_len].to_vec();
+    u_dims.push(k);
     let u_storage = Arc::new(Storage::DenseC64(tensor4all_tensor::storage::DenseStorageC64::from_vec(u_vec)));
-    let u_t = TensorDynLen::new(u_indices, vec![m, k], u_storage);
+    let u_t = TensorDynLen::new(u_indices, u_dims, u_storage);
 
     let s_indices = vec![bond_index.clone(), bond_index.clone()];
     let s_storage = Arc::new(Storage::new_diag_c64(s_vec));
     let s_t = TensorDynLen::new(s_indices, vec![k, k], s_storage);
 
-    let v_indices = vec![right_index.clone(), bond_index.clone()];
+    // Create V tensor: [right_inds..., bond_index]
+    let mut v_indices = right_indices.clone();
+    v_indices.push(bond_index.clone());
+    let mut v_dims = unfolded.dims[left_len..].to_vec();
+    v_dims.push(k);
     let v_storage = Arc::new(Storage::DenseC64(tensor4all_tensor::storage::DenseStorageC64::from_vec(v_vec)));
-    let v_t = TensorDynLen::new(v_indices, vec![n, k], v_storage);
+    let v_t = TensorDynLen::new(v_indices, v_dims, v_storage);
 
     Ok((u_t, s_t, v_t))
 }
