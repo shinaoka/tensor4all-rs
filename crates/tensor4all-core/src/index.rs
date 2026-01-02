@@ -1,9 +1,12 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::RefCell;
 use crate::tagset::TagSet;
+use rand::Rng;
 
 /// Runtime ID for ITensors-like dynamic identity.
+///
+/// Uses UInt128 for extremely low collision probability (see design.md for analysis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DynId(pub u64);
+pub struct DynId(pub u128);
 
 /// Trait for symmetry information (quantum number space).
 ///
@@ -157,11 +160,35 @@ where
     TagSet<MAX_TAGS, MAX_TAG_LEN>: Copy,
 {}
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+thread_local! {
+    /// Thread-local random number generator for ID generation.
+    ///
+    /// Each thread has its own RNG, similar to ITensors.jl's task-local RNG.
+    /// This provides thread-safe ID generation without global synchronization.
+    ///
+    /// **Seed initialization**: Each thread's RNG is automatically seeded with
+    /// cryptographically secure random data from the OS (via `getrandom` crate)
+    /// when first accessed. This ensures different threads use different seeds
+    /// and produce independent random sequences.
+    ///
+    /// **Dynamic thread creation**: When new threads are created (e.g., thread pool
+    /// resizing, new tasks), each new thread gets its own RNG with a fresh seed.
+    /// Existing threads continue using their existing RNG instances. This ensures
+    /// that IDs generated in different threads remain unique even when the thread
+    /// count changes dynamically.
+    ///
+    /// **Thread reuse**: If a thread is reused (e.g., in a thread pool), it continues
+    /// using the same RNG instance, maintaining the random sequence from where it
+    /// left off. This is safe because the RNG state is thread-local and independent.
+    static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::thread_rng());
+}
 
-/// Generate a unique ID for dynamic indices (thread-safe).
-pub fn generate_id() -> u64 {
-    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+/// Generate a unique random ID for dynamic indices (thread-safe).
+///
+/// Uses thread-local random number generator to generate UInt128 IDs,
+/// providing extremely low collision probability (see design.md for analysis).
+pub fn generate_id() -> u128 {
+    ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 
 /// Default Index type with default tag capacity (max 4 tags, each max 16 characters).
