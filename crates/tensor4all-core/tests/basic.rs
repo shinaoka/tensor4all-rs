@@ -1,4 +1,4 @@
-use tensor4all_core::index::{Index, DynId, generate_id};
+use tensor4all_core::index::{DefaultIndex as Index, DynId, generate_id};
 use tensor4all_core::storage::{AnyScalar, DenseStorageFactory, Storage, make_mut_storage};
 use tensor4all_core::tensor::{TensorDynLen, TensorStaticLen};
 use std::sync::Arc;
