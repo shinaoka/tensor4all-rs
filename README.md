@@ -8,11 +8,13 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 
 ## Key Features
 
-- **Type-safe Index system**: Generic `Index<Id, Symm>` type supporting both runtime and compile-time identities
+- **Type-safe Index system**: Generic `Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN>` type supporting both runtime and compile-time identities
+- **Tag support**: Index tags with configurable capacity (default: max 4 tags, each max 16 characters)
 - **Quantum number symmetries**: Support for Abelian (U(1), Z_n) and non-Abelian (SU(2), SU(N)) symmetries (planned)
 - **Thread-safe ID generation**: UInt128 random IDs using thread-local RNG for extremely low collision probability
 - **Flexible tensor types**: Both dynamic-rank and static-rank tensor variants
 - **Copy-on-write storage**: Efficient memory management for tensor networks
+- **Multiple storage backends**: DenseF64 and DenseC64 storage types
 
 ## Design Philosophy
 
@@ -20,14 +22,14 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 
 | Concept | QSpace v4 | ITensors.jl | tensor4all-rs |
 |---------|-----------|-------------|---------------|
-| **Tensor with QNs** | `QSpace` | `ITensor` | `Tensor<Id, T, Symm>` |
-| **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm>` |
-| **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum |
+| **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` / `TensorStaticLen<N, Id, T, Symm>` |
+| **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN>` |
+| **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum (DenseF64, DenseC64) |
 | **Language** | MATLAB/C++ | Julia | Rust |
 
 ### Index Design
 
-The `Index` type is parameterized by both identity type `Id` and symmetry type `Symm`:
+The `Index` type is parameterized by identity type `Id`, symmetry type `Symm`, and tag capacity:
 
 ```rust
 pub struct Index<Id, Symm = NoSymmSpace, const MAX_TAGS: usize = 4, const MAX_TAG_LEN: usize = 16> {
@@ -44,6 +46,11 @@ pub struct Index<Id, Symm = NoSymmSpace, const MAX_TAGS: usize = 4, const MAX_TA
 **Symmetry Types**:
 - `NoSymmSpace`: No symmetry (corresponds to `Index{Int}` in ITensors.jl)
 - `QNSpace` (planned): Quantum number spaces (corresponds to `Index{QNBlocks}`)
+
+**Tags**:
+- Configurable tag capacity via const generics
+- Default: max 4 tags, each max 16 characters
+- Tags are stored in `TagSet` using `SmallString` for efficient storage
 
 ### ID Generation
 
@@ -71,13 +78,27 @@ Examples:
 Two tensor variants for different use cases:
 
 1. **Dynamic rank**: `TensorDynLen<Id, T, Symm = NoSymmSpace>`
+   - Rank determined at runtime
+   - Uses `Vec<Index>` and `Vec<usize>` for indices and dimensions
+
 2. **Static rank**: `TensorStaticLen<const N: usize, Id, T, Symm = NoSymmSpace>`
+   - Rank determined at compile time
+   - Uses arrays `[Index; N]` and `[usize; N]` for indices and dimensions
 
 ### Storage
 
 Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 - If uniquely owned, mutate in place
 - If shared, clone then mutate
+
+**Storage Types**:
+- `DenseF64`: Dense storage for `f64` elements
+- `DenseC64`: Dense storage for `Complex64` elements
+
+### Element Types
+
+- **Static element type**: Use concrete types like `f64` or `Complex64`
+- **Dynamic element type**: Use `AnyScalar` enum for runtime type dispatch
 
 ## Type Correspondence
 
@@ -87,6 +108,27 @@ Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 | `Index{QNBlocks}` | `Index<Id, QNSpace>` (future) |
 | `Index(id, dim, ...)` | `Index::new_with_size(id, dim)` |
 | `Index(dim)` | `Index::new_dyn(dim)` |
+
+## Usage Example
+
+```rust
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::storage::Storage;
+use tensor4all_core::tensor::TensorDynLen;
+use std::sync::Arc;
+
+// Create indices
+let i = Index::new_dyn(2);  // Index with dimension 2, auto-generated ID
+let j = Index::new_dyn(3);  // Index with dimension 3, auto-generated ID
+
+// Create storage
+let storage = Arc::new(Storage::new_dense_f64(6));  // Capacity for 2×3=6 elements
+
+// Create tensor
+let indices = vec![i, j];
+let dims = vec![2, 3];
+let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(indices, dims, storage);
+```
 
 ## ITensors.jl ID Generation Algorithm
 
