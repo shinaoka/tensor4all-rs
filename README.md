@@ -18,9 +18,26 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 - **Flexible tensor types**: Both dynamic-rank and static-rank tensor variants
 - **Copy-on-write storage**: Efficient memory management for tensor networks
 - **Multiple storage backends**: DenseF64, DenseC64, DiagF64, and DiagC64 storage types
-- **Modular architecture**: Separated into `tensor4all-index` (core index/tag utilities) and `tensor4all-tensor` (tensor and storage implementations)
+- **Linear algebra operations**: SVD and QR decompositions with configurable truncation tolerance, supporting both FAER and LAPACK backends
+- **Modular architecture**: Separated into `tensor4all-index` (core index/tag utilities), `tensor4all-tensor` (tensor and storage implementations), and `tensor4all-linalg` (linear algebra operations: SVD, QR)
 
 ## Design Philosophy
+
+### Design Principles
+
+tensor4all-rs is designed with the following principles in mind:
+
+- **Modular architecture for fast development cycles**: The library is split into independent crates (`tensor4all-index`, `tensor4all-tensor`, and `tensor4all-linalg`) to enable rapid AI-assisted code generation and testing. Each module can be developed, tested, and compiled independently, minimizing iteration time during development.
+
+- **Compile-time error detection**: The design leverages Rust's type system to catch errors at compile time rather than runtime:
+  - Generic type parameters (`Index<Id, Symm, Tags>`) enable compile-time validation of index compatibility
+  - Static-rank tensors (`TensorStaticLen<N, Id, T, Symm>`) catch rank mismatches at compile time
+  - Type-safe storage variants prevent incorrect storage type usage
+  - Compile-time identity types (ZST markers) enable static analysis of index relationships
+
+- **Extensibility without breaking changes**: The generic design allows adding new features (e.g., quantum number symmetries) without breaking existing code, through trait implementations and type parameters.
+
+- **Performance through zero-cost abstractions**: Rust's zero-cost abstractions ensure that the type-safe, generic design does not incur runtime overhead compared to more direct implementations.
 
 ### Comparison with Existing Libraries
 
@@ -143,7 +160,7 @@ tensor4all-rs and ITensors.jl use different conventions for truncation tolerance
 
 ## Project Structure
 
-tensor4all-rs is organized as a Cargo workspace with two main crates:
+tensor4all-rs is organized as a Cargo workspace with three main crates:
 
 - **`tensor4all-index`**: Core index, tag, and small string utilities
   - `Index<Id, Symm, Tags>`: Generic index type
@@ -156,6 +173,12 @@ tensor4all-rs is organized as a Cargo workspace with two main crates:
   - `TensorStaticLen<N, Id, T, Symm>`: Static-rank tensors
   - `Storage`: Storage backend enum
   - Storage newtypes: `DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`
+
+- **`tensor4all-linalg`**: Linear algebra operations for tensor networks
+  - `svd`: Singular Value Decomposition with truncation control
+  - `qr`: QR decomposition with truncation control
+  - Backend support: FAER (default) and LAPACK (optional)
+  - Configurable relative tolerance (`rtol`) for truncation
 
 ## Usage Example
 
