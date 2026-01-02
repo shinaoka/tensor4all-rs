@@ -262,9 +262,25 @@ The UInt128 approach provides significantly better collision resistance than UIn
 
 - **Optimize DiagTensor × DenseTensor contraction**: Currently, DiagTensor is converted to DenseTensor before contraction, which is inefficient. This can be optimized by implementing Block Matrix × Block Matrix contraction, as DiagTensor × DenseTensor is a special case of block matrix multiplication.
 
+## Acknowledgments
+
+This implementation is inspired by **ITensors.jl** (https://github.com/ITensor/ITensors.jl).
+We have borrowed API design concepts and function names for compatibility, but the implementation
+is independently written in Rust.
+
+**Note**: This library is experimental and not intended for production use. If you use this code
+in research and publish a paper, please cite:
+
+> We used tensor4all-rs (https://github.com/tensor4all/tensor4all-rs), inspired by ITensors.jl.
+
+If you cite ITensors.jl directly, please use:
+
+> M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
+
 ## References
 
 - ITensors.jl: https://github.com/ITensor/ITensors.jl
+- ITensors.jl paper: M. Fishman, S. R. White, E. M. Stoudenmire, arXiv:2007.14822 (2020)
 - QSpace v4.0 Documentation: `qspace-v4-pub/Docu/user-guide.pdf`
 - QSpace Source: `qspace-v4-pub/Source/QSpace.hh`, `qspace-v4-pub/Source/wbindex.hh`
 - Original QSpace paper: A. Weichselbaum, Annals of Physics **327**, 2972 (2012)
@@ -272,4 +288,9 @@ The UInt128 approach provides significantly better collision resistance than UIn
 
 ## License
 
-MIT OR Apache-2.0
+This project is dual-licensed under either:
+
+- **MIT License** (see [LICENSE-MIT](LICENSE-MIT))
+- **Apache License 2.0** (see [LICENSE-APACHE](LICENSE-APACHE))
+
+at your option.
