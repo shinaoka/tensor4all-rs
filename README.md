@@ -1,6 +1,9 @@
 # tensor4all-rs
 
-A Rust implementation of tensor networks with quantum number symmetries, inspired by ITensors.jl and QSpace v4.
+A Rust implementation of tensor networks, inspired by ITensors.jl and QSpace v4.
+The API is designed to be largely compatible with ITensors.jl, with the goal of enabling easy conversion between the two libraries.
+
+This library is experimental and is planned to focus primarily on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation) in the near future. Abelian and non-Abelian symmetries are not in the initial scope, but the design is extensible to support them in the future.
 
 ## Overview
 

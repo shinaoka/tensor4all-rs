@@ -1,6 +1,7 @@
 use tensor4all_tensor::{Storage, TensorDynLen, TensorStaticLen};
 use tensor4all_tensor::storage::DenseStorageF64;
-use tensor4all_index::index::{DefaultIndex as Index, DynId, common_inds};
+use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_index::index_ops::common_inds;
 use std::sync::Arc;
 
 #[test]

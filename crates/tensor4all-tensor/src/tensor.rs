@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::collections::HashSet;
 use num_complex::Complex64;
-use tensor4all_index::index::{Index, NoSymmSpace, common_inds, Symmetry};
+use tensor4all_index::index::{Index, NoSymmSpace, Symmetry};
+use tensor4all_index::index_ops::common_inds;
 use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage, storage_to_dtensor};
 use anyhow::Result;
 use mdarray::DTensor;
