@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use num_complex::Complex64;
+use mdarray::{DenseMapping, View, DynRank, Shape, Dense};
 
 /// Storage backend for tensor data.
 /// Currently only DenseF64 and DenseC64 are supported.
@@ -103,5 +104,64 @@ impl Storage {
 /// Helper to get a mutable reference to storage, cloning if needed (COW).
 pub fn make_mut_storage(arc: &mut Arc<Storage>) -> &mut Storage {
     Arc::make_mut(arc)
+}
+
+/// Permute the dense storage data according to the given permutation.
+///
+/// This is an internal helper function that permutes the data in a `Storage`
+/// according to the given dimensions and permutation.
+///
+/// # Arguments
+/// * `storage` - The storage to permute
+/// * `dims` - The original dimensions of the tensor
+/// * `perm` - The permutation: new axis i corresponds to old axis `perm[i]`
+///
+/// # Panics
+/// Panics if `perm.len() != dims.len()` or if the permutation is invalid.
+pub fn permute_storage(storage: &Storage, dims: &[usize], perm: &[usize]) -> Storage {
+    assert_eq!(
+        perm.len(),
+        dims.len(),
+        "permutation length must match dimensions length"
+    );
+
+    match storage {
+        Storage::DenseF64(vec) => {
+            // Create mdarray shape from dimensions
+            let shape = DynRank::from_dims(dims);
+            let mapping = DenseMapping::new(shape);
+
+            // Create a view over the vector data
+            let view: View<'_, f64, DynRank, Dense> = unsafe {
+                View::new_unchecked(vec.as_ptr(), mapping)
+            };
+
+            // Permute the view
+            let permuted_view = view.into_permuted(perm);
+
+            // Convert to tensor and extract vector
+            let permuted_vec = permuted_view.to_tensor().into_vec();
+
+            Storage::DenseF64(permuted_vec)
+        }
+        Storage::DenseC64(vec) => {
+            // Create mdarray shape from dimensions
+            let shape = DynRank::from_dims(dims);
+            let mapping = DenseMapping::new(shape);
+
+            // Create a view over the vector data
+            let view: View<'_, Complex64, DynRank, Dense> = unsafe {
+                View::new_unchecked(vec.as_ptr(), mapping)
+            };
+
+            // Permute the view
+            let permuted_view = view.into_permuted(perm);
+
+            // Convert to tensor and extract vector
+            let permuted_vec = permuted_view.to_tensor().into_vec();
+
+            Storage::DenseC64(permuted_vec)
+        }
+    }
 }
 

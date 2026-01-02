@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 num-complex = "0.4"
 rand = "0.8"
+mdarray = { git = "https://github.com/fre-hu/mdarray", tag = "v0.7.2" }
 
 [dev-dependencies]
 
