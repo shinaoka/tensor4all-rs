@@ -124,6 +124,23 @@ Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 | `NDTensors.Dense` | `Storage::DenseF64` or `Storage::DenseC64` |
 | `NDTensors.Diag` | `Storage::DiagF64` or `Storage::DiagC64` |
 
+## Truncation Tolerance Comparison
+
+tensor4all-rs and ITensors.jl use different conventions for truncation tolerance:
+
+| Library | Parameter | Semantics | Guarantee |
+|---------|-----------|----------|-----------|
+| **tensor4all-rs** | `rtol` | Relative Frobenius error tolerance | \|A - A_approx\|_F / \|A\|_F ≤ rtol |
+| **ITensors.jl** | `cutoff` | Squared relative error (discarded weight ratio) | Σ_{discarded} σ²_i / Σ_i σ²_i ≤ cutoff |
+
+**Conversion**: ITensors.jl's `cutoff` corresponds to `rtol²` in tensor4all-rs:
+- To achieve the same truncation behavior, use `rtol = sqrt(cutoff)` in tensor4all-rs
+- For example, ITensors `cutoff=1e-20` (for ~10 digit accuracy) corresponds to `rtol=1e-10` in tensor4all-rs
+
+**Default values**:
+- tensor4all-rs: `rtol = 1e-12` (near machine precision)
+- ITensors.jl: `cutoff = 1e-16` (default, corresponds to `rtol ≈ 1e-8`)
+
 ## Project Structure
 
 tensor4all-rs is organized as a Cargo workspace with two main crates:

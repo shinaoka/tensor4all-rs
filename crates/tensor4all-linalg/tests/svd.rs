@@ -1,7 +1,9 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_index::index::{DefaultIndex as Index, DynId};
-use tensor4all_linalg::{svd, svd_c64};
+use tensor4all_linalg::{
+    default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions,
+};
 use tensor4all_tensor::{Storage, TensorDynLen};
 
 #[test]
@@ -331,4 +333,183 @@ fn test_svd_complex_reconstruction() {
             diff
         );
     }
+}
+
+#[test]
+fn test_svd_truncation() {
+    // Test that truncation works correctly with a matrix that has a tiny singular value
+    // Create a 2×2 diagonal matrix with singular values [1.0, 1e-14]
+    // With rtol=1e-10, the second singular value should be truncated
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+
+    // Create diagonal matrix: [[1, 0], [0, 1e-14]]
+    // This matrix has singular values [1.0, 1e-14]
+    let mut data = vec![0.0; 4];
+    data[0] = 1.0;      // [0, 0] = 1.0
+    data[3] = 1e-14;    // [1, 1] = 1e-14
+
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_tensor::storage::DenseStorageF64::from_vec(data),
+    ));
+    let tensor: TensorDynLen<DynId, f64> =
+        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+
+    // Use a more lenient rtol to ensure truncation happens
+    let options = SvdOptions::with_rtol(1e-10);
+    let (u, s, v) = svd_with(&tensor, &[i.clone()], &options).expect("SVD should succeed");
+
+    // With rtol=1e-10, the discarded weight ratio is (1e-14)^2 / (1^2 + (1e-14)^2) ≈ 1e-28
+    // This is much less than (1e-10)^2 = 1e-20, so truncation should occur
+    // However, we need to be careful: the actual criterion is sum_{i>r} σ_i² / sum_i σ_i² <= rtol²
+    // For σ = [1, 1e-14], we have:
+    //   sum_i σ_i² = 1 + 1e-28 ≈ 1
+    //   sum_{i>1} σ_i² = 1e-28
+    //   ratio = 1e-28 / 1 = 1e-28 < (1e-10)^2 = 1e-20
+    // So rank 1 should be retained
+
+    // Check that truncation occurred: bond dimension should be 1
+    assert_eq!(u.dims, vec![2, 1], "U should be truncated to rank 1");
+    assert_eq!(s.dims, vec![1, 1], "S should be truncated to rank 1");
+    assert_eq!(v.dims, vec![2, 1], "V should be truncated to rank 1");
+
+    // Check singular value
+    match s.storage.as_ref() {
+        Storage::DiagF64(diag) => {
+            let s_vals = diag.as_slice();
+            assert_eq!(s_vals.len(), 1);
+            // The retained singular value should be approximately 1.0
+            assert!(
+                (s_vals[0] - 1.0).abs() < 1e-10,
+                "Retained singular value should be ~1.0, got {}",
+                s_vals[0]
+            );
+        }
+        _ => panic!("S should be diagonal storage"),
+    }
+}
+
+#[test]
+fn test_svd_with_override() {
+    // Test that svd_with can override the global default rtol
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+
+    // Create a matrix with singular values that will be truncated with a lenient rtol
+    // but not with a strict rtol
+    let mut data = vec![0.0; 4];
+    data[0] = 1.0;      // [0, 0] = 1.0
+    data[3] = 1e-6;     // [1, 1] = 1e-6
+
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_tensor::storage::DenseStorageF64::from_vec(data),
+    ));
+    let tensor: TensorDynLen<DynId, f64> =
+        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+
+    // Save original default
+    let original_rtol = default_svd_rtol();
+
+    // Test with lenient rtol (should truncate)
+    let lenient_options = SvdOptions::with_rtol(1e-4);
+    let (u1, s1, _v1) = svd_with(&tensor, &[i.clone()], &lenient_options)
+        .expect("SVD should succeed");
+
+    // Test with strict rtol (should not truncate)
+    let strict_options = SvdOptions::with_rtol(1e-12);
+    let (u2, s2, _v2) = svd_with(&tensor, &[i.clone()], &strict_options)
+        .expect("SVD should succeed");
+
+    // With rtol=1e-4, the ratio is (1e-6)^2 / (1^2 + (1e-6)^2) ≈ 1e-12 < (1e-4)^2 = 1e-8
+    // So truncation should occur
+    assert_eq!(u1.dims[1], 1, "Lenient rtol should truncate to rank 1");
+    assert_eq!(s1.dims[0], 1, "Lenient rtol should truncate to rank 1");
+
+    // With rtol=1e-12, the ratio is 1e-12 < (1e-12)^2 = 1e-24 (not satisfied)
+    // Actually, let's recalculate: (1e-6)^2 / (1^2 + (1e-6)^2) ≈ 1e-12
+    // For rtol=1e-12, we need 1e-12 <= (1e-12)^2 = 1e-24, which is false
+    // So with rtol=1e-12, we should NOT truncate (keep rank 2)
+    assert_eq!(u2.dims[1], 2, "Strict rtol should keep full rank");
+    assert_eq!(s2.dims[0], 2, "Strict rtol should keep full rank");
+
+    // Restore original default
+    set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
+}
+
+#[test]
+fn test_default_svd_rtol() {
+    // Test global default rtol getter and setter
+    // Note: Other tests may have changed the global default, so we restore it first
+    let original_rtol = default_svd_rtol();
+    
+    // Restore to expected default (1e-12) for this test
+    set_default_svd_rtol(1e-12).expect("Should set default rtol");
+    let current_rtol = default_svd_rtol();
+
+    // Default should be 1e-12
+    assert!(
+        (current_rtol - 1e-12).abs() < 1e-15,
+        "Default rtol should be 1e-12, got {}",
+        current_rtol
+    );
+
+    // Test setting a new value
+    let new_rtol = 1e-8;
+    set_default_svd_rtol(new_rtol).expect("Should set rtol");
+    assert!(
+        (default_svd_rtol() - new_rtol).abs() < 1e-15,
+        "Should retrieve the set rtol value"
+    );
+
+    // Test invalid values
+    assert!(
+        set_default_svd_rtol(-1.0).is_err(),
+        "Negative rtol should be rejected"
+    );
+    assert!(
+        set_default_svd_rtol(f64::NAN).is_err(),
+        "NaN rtol should be rejected"
+    );
+    assert!(
+        set_default_svd_rtol(f64::INFINITY).is_err(),
+        "Infinite rtol should be rejected"
+    );
+
+    // Restore original
+    set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
+    assert!(
+        (default_svd_rtol() - original_rtol).abs() < 1e-15,
+        "Should restore original rtol"
+    );
+}
+
+#[test]
+fn test_svd_uses_global_default() {
+    // Test that svd() uses the global default rtol
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+
+    // Create a simple matrix
+    let data = vec![1.0, 0.0, 0.0, 1.0];
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_tensor::storage::DenseStorageF64::from_vec(data),
+    ));
+    let tensor: TensorDynLen<DynId, f64> =
+        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+
+    // Save original default
+    let original_rtol = default_svd_rtol();
+
+    // Change global default
+    set_default_svd_rtol(1e-6).expect("Should set rtol");
+
+    // svd() should use the new global default
+    let (u, s, _v) = svd(&tensor, &[i.clone()]).expect("SVD should succeed");
+
+    // With rtol=1e-6, identity matrix should keep full rank (both singular values are 1.0)
+    assert_eq!(u.dims[1], 2, "Identity matrix should keep full rank");
+    assert_eq!(s.dims[0], 2, "Identity matrix should keep full rank");
+
+    // Restore original
+    set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
 }

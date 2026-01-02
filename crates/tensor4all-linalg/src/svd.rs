@@ -1,6 +1,7 @@
 use mdarray::DSlice;
 use mdarray_linalg::svd::SVDDecomp;
 use num_complex::{Complex64, ComplexFloat};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tensor4all_index::index::{DynId, Index, NoSymmSpace, Symmetry};
 use tensor4all_index::tagset::DefaultTagSet;
@@ -15,6 +16,107 @@ use faer_traits::ComplexField;
 pub enum SvdError {
     #[error("SVD computation failed: {0}")]
     ComputationError(#[from] anyhow::Error),
+    #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
+    InvalidRtol(f64),
+}
+
+/// Options for SVD decomposition with truncation control.
+#[derive(Debug, Clone, Copy)]
+pub struct SvdOptions {
+    /// Relative Frobenius error tolerance for truncation.
+    /// If `None`, uses the global default rtol.
+    /// The truncation guarantees: ||A - A_approx||_F / ||A||_F <= rtol.
+    pub rtol: Option<f64>,
+}
+
+impl Default for SvdOptions {
+    fn default() -> Self {
+        Self {
+            rtol: None, // Use global default
+        }
+    }
+}
+
+impl SvdOptions {
+    /// Create new SVD options with the specified rtol.
+    pub fn with_rtol(rtol: f64) -> Self {
+        Self { rtol: Some(rtol) }
+    }
+}
+
+// Global default rtol stored as AtomicU64 (f64::to_bits())
+// Default value: 1e-12 (near machine precision)
+static DEFAULT_SVD_RTOL: AtomicU64 = AtomicU64::new(1e-12_f64.to_bits());
+
+/// Get the global default rtol for SVD truncation.
+///
+/// The default value is 1e-12 (near machine precision).
+pub fn default_svd_rtol() -> f64 {
+    f64::from_bits(DEFAULT_SVD_RTOL.load(Ordering::Relaxed))
+}
+
+/// Set the global default rtol for SVD truncation.
+///
+/// # Arguments
+/// * `rtol` - Relative Frobenius error tolerance (must be finite and non-negative)
+///
+/// # Errors
+/// Returns `SvdError::InvalidRtol` if rtol is not finite or is negative.
+pub fn set_default_svd_rtol(rtol: f64) -> Result<(), SvdError> {
+    if !rtol.is_finite() || rtol < 0.0 {
+        return Err(SvdError::InvalidRtol(rtol));
+    }
+    DEFAULT_SVD_RTOL.store(rtol.to_bits(), Ordering::Relaxed);
+    Ok(())
+}
+
+/// Compute the retained rank based on rtol (TSVD truncation).
+///
+/// This implements the truncation criterion:
+///   sum_{i>r} σ_i² / sum_i σ_i² <= rtol²
+///
+/// # Arguments
+/// * `s_vec` - Singular values in descending order (non-negative)
+/// * `rtol` - Relative Frobenius error tolerance
+///
+/// # Returns
+/// The retained rank `r` (at least 1, at most s_vec.len())
+fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
+    if s_vec.is_empty() {
+        return 1;
+    }
+
+    // Compute total squared norm: sum_i σ_i²
+    let total_sq_norm: f64 = s_vec.iter().map(|&s| s * s).sum();
+
+    // Edge case: if total norm is zero, keep rank 1
+    if total_sq_norm == 0.0 {
+        return 1;
+    }
+
+    // Compute cumulative discarded weight from the end
+    // We want: sum_{i>r} σ_i² / sum_i σ_i² <= rtol²
+    // So: sum_{i>r} σ_i² <= rtol² * sum_i σ_i²
+    let rtol_sq = rtol * rtol;
+    let threshold = rtol_sq * total_sq_norm;
+
+    // Start from the end and accumulate discarded weight
+    let mut discarded_sq_norm = 0.0;
+    let mut r = s_vec.len();
+
+    // Iterate backwards, adding singular values until threshold is exceeded
+    for i in (0..s_vec.len()).rev() {
+        let s_sq = s_vec[i] * s_vec[i];
+        if discarded_sq_norm + s_sq <= threshold {
+            discarded_sq_norm += s_sq;
+            r = i;
+        } else {
+            break;
+        }
+    }
+
+    // Ensure at least rank 1 is kept
+    r.max(1)
 }
 
 /// Extract U, S, V from mdarray-linalg's SVDDecomp (which returns U, S, Vt).
@@ -97,9 +199,15 @@ where
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
 ///
+/// This function uses the global default rtol for truncation.
+/// See `svd_with` for per-call rtol control.
+///
 /// This function mimics ITensor's SVD API, returning U, S, and V (not Vt).
 /// The input tensor can have any rank >= 2, and indices are split into left and right groups.
 /// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
+///
+/// Truncation is performed based on the relative Frobenius error tolerance (rtol):
+/// The truncation guarantees: ||A - A_approx||_F / ||A||_F <= rtol.
 ///
 /// For complex-valued matrices, the mathematical convention is:
 /// \[ A = U * Σ * V^H \]
@@ -114,10 +222,10 @@ where
 ///
 /// # Returns
 /// A tuple `(U, S, V)` where:
-/// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., k]`
-/// - `S` is a k×k diagonal tensor with indices `[bond_index, bond_index]` (singular values are real)
-/// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., k]`
-/// where `k = min(m, n)` is the bond dimension, `m = ∏left_dims`, and `n = ∏right_dims`.
+/// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
+/// - `S` is a r×r diagonal tensor with indices `[bond_index, bond_index]` (singular values are real)
+/// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., r]`
+/// where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// Note: Singular values `S` are always real, even for complex input tensors.
 ///
@@ -146,6 +254,75 @@ where
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
+    svd_with(t, left_inds, &SvdOptions::default())
+}
+
+/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
+///
+/// This function allows per-call control of the truncation tolerance via `SvdOptions`.
+/// If `options.rtol` is `None`, uses the global default rtol.
+///
+/// This function mimics ITensor's SVD API, returning U, S, and V (not Vt).
+/// The input tensor can have any rank >= 2, and indices are split into left and right groups.
+/// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
+///
+/// Truncation is performed based on the relative Frobenius error tolerance (rtol):
+/// The truncation guarantees: ||A - A_approx||_F / ||A||_F <= rtol.
+///
+/// For complex-valued matrices, the mathematical convention is:
+/// \[ A = U * Σ * V^H \]
+/// where \(V^H\) is the conjugate-transpose of \(V\).
+///
+/// `mdarray-linalg` returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
+/// and we return **V** (not Vt), so we build V by (conjugate-)transposing the leading k rows.
+///
+/// # Arguments
+/// * `t` - Input tensor with DenseF64 or DenseC64 storage
+/// * `left_inds` - Indices to place on the left (row) side of the unfolded matrix
+/// * `options` - SVD options including rtol for truncation control
+///
+/// # Returns
+/// A tuple `(U, S, V)` where:
+/// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
+/// - `S` is a r×r diagonal tensor with indices `[bond_index, bond_index]` (singular values are real)
+/// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., r]`
+/// where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
+///
+/// Note: Singular values `S` are always real, even for complex input tensors.
+///
+/// # Errors
+/// Returns `SvdError` if:
+/// - The tensor rank is < 2
+/// - Storage is not DenseF64 or DenseC64
+/// - `left_inds` is empty or contains all indices
+/// - `left_inds` contains indices not in the tensor or duplicates
+/// - The SVD computation fails
+/// - `options.rtol` is invalid (not finite or negative)
+#[allow(private_bounds)]
+pub fn svd_with<Id, Symm, T>(
+    t: &TensorDynLen<Id, T, Symm>,
+    left_inds: &[Index<Id, Symm>],
+    options: &SvdOptions,
+) -> Result<
+    (
+        TensorDynLen<Id, T, Symm>,
+        TensorDynLen<Id, <T as ComplexFloat>::Real, Symm>,
+        TensorDynLen<Id, T, Symm>,
+    ),
+    SvdError,
+>
+where
+    Id: Clone + std::hash::Hash + Eq + From<DynId>,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
+    // Determine rtol to use
+    let rtol = options.rtol.unwrap_or_else(default_svd_rtol);
+    if !rtol.is_finite() || rtol < 0.0 {
+        return Err(SvdError::InvalidRtol(rtol));
+    }
+
     // Unfold tensor into matrix (returns DTensor<T, 2>)
     let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
@@ -157,11 +334,33 @@ where
     let a_slice: &mut DSlice<T, 2> = a_tensor.as_mut();
     let decomp = svd_backend(a_slice).map_err(SvdError::ComputationError)?;
 
-    // Extract U, S, V from the decomposition
-    let (u_vec, s_vec, v_vec) = extract_usv_from_svd_decomp(decomp, m, n, k);
+    // Extract U, S, V from the decomposition (full rank k)
+    let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_decomp(decomp, m, n, k);
 
-    // Create bond index with "Link" tag
-    let bond_index: Index<Id, Symm, DefaultTagSet> = Index::new_link(k)
+    // Compute retained rank based on rtol truncation
+    let r = compute_retained_rank(&s_vec_full, rtol);
+
+    // Truncate to retained rank r
+    let s_vec: Vec<f64> = s_vec_full[..r].to_vec();
+
+    // Truncate U: keep first r columns (m×r)
+    let mut u_vec = Vec::with_capacity(m * r);
+    for i in 0..m {
+        for j in 0..r {
+            u_vec.push(u_vec_full[i * k + j]);
+        }
+    }
+
+    // Truncate V: keep first r columns (n×r)
+    let mut v_vec = Vec::with_capacity(n * r);
+    for i in 0..n {
+        for j in 0..r {
+            v_vec.push(v_vec_full[i * k + j]);
+        }
+    }
+
+    // Create bond index with "Link" tag (dimension r, not k)
+    let bond_index: Index<Id, Symm, DefaultTagSet> = Index::new_link(r)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
         .map_err(SvdError::ComputationError)?;
 
