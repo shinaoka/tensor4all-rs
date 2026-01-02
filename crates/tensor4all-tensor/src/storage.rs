@@ -497,21 +497,8 @@ impl SumFromStorage for Complex64 {
     }
 }
 
-/// Dynamic scalar value (for dynamic element type tensors).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AnyScalar {
-    F64(f64),
-    C64(Complex64),
-}
-
-impl SumFromStorage for AnyScalar {
-    fn sum_from_storage(storage: &Storage) -> Self {
-        match storage {
-            Storage::DenseF64(_) | Storage::DiagF64(_) => AnyScalar::F64(f64::sum_from_storage(storage)),
-            Storage::DenseC64(_) | Storage::DiagC64(_) => AnyScalar::C64(Complex64::sum_from_storage(storage)),
-        }
-    }
-}
+// AnyScalar is now in its own module
+pub use crate::any_scalar::AnyScalar;
 
 impl Storage {
     /// Create a new DenseF64 storage with the given capacity.

@@ -1,5 +1,5 @@
-use tensor4all_index::index::DefaultIndex as Index;
-use tensor4all_index::tagset::DefaultTagSet as TagSet;
+use tensor4all_core::index::DefaultIndex as Index;
+use tensor4all_core::tagset::DefaultTagSet as TagSet;
 
 #[test]
 fn test_index_with_tags() {

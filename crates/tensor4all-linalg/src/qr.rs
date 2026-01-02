@@ -1,8 +1,8 @@
 use mdarray::{DSlice, DTensor};
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tensor4all_index::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_index::tagset::DefaultTagSet;
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::tagset::DefaultTagSet;
 use tensor4all_tensor::{unfold_split, StorageScalar, TensorDynLen};
 use thiserror::Error;
 

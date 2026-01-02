@@ -13,15 +13,15 @@ backend-lapack = ["mdarray-linalg-lapack"]
 
 [dependencies]
 tensor4all-tensor = { path = "../tensor4all-tensor" }
-tensor4all-index = { path = "../tensor4all-index" }
-mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
-mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
-mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer", optional = true }
-mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-lapack", optional = true }
-faer-traits = "0.23"
-thiserror = "2.0"
-num-complex = "0.4"
-anyhow = "1.0"
+tensor4all-core = { path = "../tensor4all-core" }
+mdarray.workspace = true
+mdarray-linalg.workspace = true
+mdarray-linalg-faer = { workspace = true, optional = true }
+mdarray-linalg-lapack = { workspace = true, optional = true }
+faer-traits.workspace = true
+thiserror.workspace = true
+num-complex.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 

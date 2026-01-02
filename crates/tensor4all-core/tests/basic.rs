@@ -1,4 +1,4 @@
-use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen, TensorStaticLen, make_mut_storage};
 use std::sync::Arc;
 use num_complex::Complex64;

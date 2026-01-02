@@ -1,5 +1,5 @@
 use tensor4all_tensor::{Storage, TensorDynLen, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, diag_tensor_static_len, is_diag_tensor, is_diag_tensor_static};
-use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use num_complex::Complex64;
 use std::sync::Arc;
 
