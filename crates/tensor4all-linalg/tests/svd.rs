@@ -227,8 +227,8 @@ fn test_svd_complex_reconstruction() {
         _ => panic!("U should be dense complex"),
     };
     let s_data = match s.storage.as_ref() {
-        Storage::DiagC64(diag) => diag.as_slice(),
-        _ => panic!("S should be diagonal complex"),
+        Storage::DiagF64(diag) => diag.as_slice(),
+        _ => panic!("S should be diagonal real (f64)"),
     };
     let v_data = match v.storage.as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
@@ -239,7 +239,7 @@ fn test_svd_complex_reconstruction() {
     let n = v.dims[0];
     let k = u.dims[1];
 
-    // A[i,j] = Σ_r U[i,r] * S[r] * conj(V[j,r])
+    // A[i,j] = Σ_r U[i,r] * S[r] * conj(V[j,r]), where S[r] is real.
     let mut reconstructed = vec![Complex64::new(0.0, 0.0); m * n];
     for i in 0..m {
         for j in 0..n {
