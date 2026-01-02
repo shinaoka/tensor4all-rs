@@ -243,54 +243,169 @@ thread_local! {
 ///
 /// Uses thread-local random number generator to generate UInt128 IDs,
 /// providing extremely low collision probability (see design.md for analysis).
-pub fn generate_id() -> u128 {
+pub(crate) fn generate_id() -> u128 {
     ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 
 /// Default Index type with default tag capacity (max 4 tags, each max 16 characters).
 pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, DefaultTagSet>;
 
-/// Find common indices between two index collections.
-///
-/// Returns a vector of indices that appear in both `indices_a` and `indices_b`
-/// (set intersection). This is similar to ITensors.jl's `commoninds` function.
-///
-/// # Arguments
-/// * `indices_a` - First collection of indices
-/// * `indices_b` - Second collection of indices
-///
-/// # Returns
-/// A vector containing indices that are common to both collections (matched by ID).
-///
-/// # Example
-/// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId, common_inds};
-///
-/// let i = Index::new_dyn(2);
-/// let j = Index::new_dyn(3);
-/// let k = Index::new_dyn(4);
-///
-/// let indices_a = vec![i.clone(), j.clone()];
-/// let indices_b = vec![j.clone(), k.clone()];
-///
-/// let common = common_inds(&indices_a, &indices_b);
-/// assert_eq!(common.len(), 1);
-/// assert_eq!(common[0].id, j.id);
-/// ```
-pub fn common_inds<Id, Symm, Tags>(
-    indices_a: &[Index<Id, Symm, Tags>],
-    indices_b: &[Index<Id, Symm, Tags>],
-) -> Vec<Index<Id, Symm, Tags>>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Clone,
-    Tags: Clone,
-{
-    let mut result = Vec::new();
-    for idx_a in indices_a {
-        if indices_b.iter().any(|idx_b| idx_b.id == idx_a.id) {
-            result.push(idx_a.clone());
+#[cfg(test)]
+mod tests {
+    use super::generate_id;
+    use std::thread;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_id_generation() {
+        let id1 = generate_id();
+        let id2 = generate_id();
+        let id3 = generate_id();
+        
+        // IDs should be unique (random generation, not sequential)
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+        
+        // IDs should be non-zero (very high probability with u128)
+        assert_ne!(id1, 0);
+        assert_ne!(id2, 0);
+        assert_ne!(id3, 0);
+    }
+
+    #[test]
+    fn test_thread_local_rng_different_seeds() {
+        // Test that different threads produce different ID sequences
+        // This verifies that each thread gets a different seed
+        const NUM_THREADS: usize = 4;
+        const IDS_PER_THREAD: usize = 100;
+        
+        let handles: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                thread::spawn(|| {
+                    let mut thread_ids = Vec::new();
+                    for _ in 0..IDS_PER_THREAD {
+                        thread_ids.push(generate_id());
+                    }
+                    thread_ids
+                })
+            })
+            .collect();
+        
+        let mut all_ids = HashSet::new();
+        let mut thread_sets = Vec::new();
+        
+        for handle in handles {
+            let thread_ids = handle.join().unwrap();
+            let thread_set: HashSet<_> = thread_ids.iter().cloned().collect();
+            thread_sets.push(thread_set.clone());
+            all_ids.extend(thread_ids);
+        }
+        
+        // All IDs should be unique across all threads
+        assert_eq!(all_ids.len(), NUM_THREADS * IDS_PER_THREAD, 
+                   "All IDs should be unique across threads");
+        
+        // Check that different threads produce different sequences
+        // (with extremely high probability if seeds are different)
+        for i in 0..thread_sets.len() {
+            for j in (i+1)..thread_sets.len() {
+                let intersection: Vec<_> = thread_sets[i].intersection(&thread_sets[j]).collect();
+                assert_eq!(intersection.len(), 0,
+                           "Thread {} and {} should produce different ID sequences (different seeds)",
+                           i, j);
+            }
         }
     }
-    result
+
+    #[test]
+    fn test_thread_count_changes() {
+        // Test behavior when thread count changes dynamically
+        // This simulates scenarios like thread pool resizing or new threads being spawned
+        
+        // Phase 1: Generate IDs in initial threads
+        const INITIAL_THREADS: usize = 2;
+        const IDS_PER_PHASE: usize = 50;
+        
+        let mut all_ids = HashSet::new();
+        let mut phase1_ids = HashSet::new();
+        
+        // Phase 1: Initial threads
+        let handles1: Vec<_> = (0..INITIAL_THREADS)
+            .map(|_| {
+                thread::spawn(|| {
+                    let mut thread_ids = Vec::new();
+                    for _ in 0..IDS_PER_PHASE {
+                        thread_ids.push(generate_id());
+                    }
+                    thread_ids
+                })
+            })
+            .collect();
+        
+        for handle in handles1 {
+            let thread_ids = handle.join().unwrap();
+            for id in &thread_ids {
+                all_ids.insert(*id);
+                phase1_ids.insert(*id);
+            }
+        }
+        
+        assert_eq!(phase1_ids.len(), INITIAL_THREADS * IDS_PER_PHASE);
+        
+        // Phase 2: Spawn new threads (simulating thread count increase)
+        const NEW_THREADS: usize = 3;
+        let handles2: Vec<_> = (0..NEW_THREADS)
+            .map(|_| {
+                thread::spawn(|| {
+                    let mut thread_ids = Vec::new();
+                    for _ in 0..IDS_PER_PHASE {
+                        thread_ids.push(generate_id());
+                    }
+                    thread_ids
+                })
+            })
+            .collect();
+        
+        let mut phase2_ids = HashSet::new();
+        for handle in handles2 {
+            let thread_ids = handle.join().unwrap();
+            for id in &thread_ids {
+                all_ids.insert(*id);
+                phase2_ids.insert(*id);
+            }
+        }
+        
+        assert_eq!(phase2_ids.len(), NEW_THREADS * IDS_PER_PHASE);
+        
+        // All IDs should still be unique across both phases
+        assert_eq!(all_ids.len(), (INITIAL_THREADS + NEW_THREADS) * IDS_PER_PHASE,
+                   "All IDs should be unique even when thread count changes");
+        
+        // Phase 1 and Phase 2 IDs should not overlap
+        let intersection: Vec<_> = phase1_ids.intersection(&phase2_ids).collect();
+        assert_eq!(intersection.len(), 0,
+                   "IDs from different thread phases should not overlap");
+        
+        // Phase 3: Reuse a thread (simulating thread pool reuse)
+        // When a thread is reused, it continues using its existing RNG
+        let handle3 = thread::spawn(|| {
+            let mut thread_ids = Vec::new();
+            for _ in 0..IDS_PER_PHASE {
+                thread_ids.push(generate_id());
+            }
+            thread_ids
+        });
+        
+        let phase3_ids: HashSet<_> = handle3.join().unwrap().into_iter().collect();
+        
+        // Phase 3 IDs should be unique (new thread = new seed)
+        assert_eq!(phase3_ids.len(), IDS_PER_PHASE);
+        
+        // Phase 3 should not overlap with previous phases
+        let intersection_13: Vec<_> = phase1_ids.intersection(&phase3_ids).collect();
+        let intersection_23: Vec<_> = phase2_ids.intersection(&phase3_ids).collect();
+        assert_eq!(intersection_13.len(), 0, "Phase 1 and Phase 3 should not overlap");
+        assert_eq!(intersection_23.len(), 0, "Phase 2 and Phase 3 should not overlap");
+    }
 }

@@ -91,6 +91,81 @@ cargo test --workspace
 - Use `clippy` for linting (run `cargo clippy`)
 - Prefer explicit error handling over `unwrap()` or `expect()` in library code
 
+## API Design
+
+- **Do not make functions `pub` unnecessarily**: Only expose functions that are part of the public API. Internal helper functions should remain private.
+- Functions should be `pub` only when they need to be used by other crates or are part of the documented public interface.
+
+## Testing Guidelines
+
+- **Private function testing**: For private functions and internal helpers, add tests at the end of the source file using `#[cfg(test)]` modules.
+- **Integration test file naming**: When creating test files in the `tests/` directory, follow the naming convention:
+  - Use the same name as the source file: `src/index.rs` → `tests/index.rs`
+  - For testing specific features: `src/index.rs` → `tests/index_ops.rs` (where `_ops` indicates operations)
+  - The test file name should clearly indicate what is being tested
+
+**Example:**
+```rust
+// src/index.rs
+fn internal_helper() -> usize {
+    42
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_internal_helper() {
+        assert_eq!(internal_helper(), 42);
+    }
+}
+```
+
+For public API testing, use `tests/index.rs` or `tests/index_ops.rs` as appropriate.
+
+- **Avoid code duplication in tests**: When writing tests, avoid unnecessary code duplication. If you have nearly identical tests for different types (e.g., `f64` and `Complex64`), consider using generic test functions or macros to reduce duplication.
+
+**Example:**
+```rust
+// Instead of duplicating tests for f64 and Complex64:
+#[test]
+fn test_operation_f64() {
+    let x: f64 = 1.0;
+    let y: f64 = 2.0;
+    assert_eq!(operation(x, y), 3.0);
+}
+
+#[test]
+fn test_operation_c64() {
+    let x = Complex64::new(1.0, 0.0);
+    let y = Complex64::new(2.0, 0.0);
+    assert_eq!(operation(x, y), Complex64::new(3.0, 0.0));
+}
+
+// Consider using a generic test helper:
+fn test_operation_generic<T: Scalar + PartialEq + std::fmt::Debug>()
+where
+    T: From<f64>,
+{
+    let x = T::from(1.0);
+    let y = T::from(2.0);
+    assert_eq!(operation(x, y), T::from(3.0));
+}
+
+#[test]
+fn test_operation_f64() {
+    test_operation_generic::<f64>();
+}
+
+#[test]
+fn test_operation_c64() {
+    test_operation_generic::<Complex64>();
+}
+```
+
+This approach reduces maintenance burden and ensures consistency across similar test cases.
+
 ## Dependencies
 
 - When adding dependencies, consider:
