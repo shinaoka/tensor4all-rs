@@ -1,5 +1,5 @@
 use tensor4all_core::smallstring::{SmallString, SmallStringError};
-use tensor4all_core::tagset::{DefaultTagSet, Tag, TagSet, TagSetError};
+use tensor4all_core::tagset::{DefaultTagSet, Tag, TagSet, TagSetError, TagSetLike};
 
 #[test]
 fn test_smallstring_new() {
@@ -167,5 +167,55 @@ fn test_default_types() {
     
     let ts: DefaultTagSet = TagSet::<4, 16>::from_str("t1,t2").unwrap();
     assert_eq!(ts.len(), 2);
+}
+
+#[test]
+fn test_tagset_like_trait() {
+    // Test that TagSet implements TagSetLike
+    let mut ts1: TagSet<4, 16> = <TagSet<4, 16> as TagSetLike>::from_str("t1,t2,t3").unwrap();
+    let ts2: TagSet<4, 16> = <TagSet<4, 16> as TagSetLike>::from_str("t2,t3").unwrap();
+    
+    // Test trait methods
+    assert_eq!(TagSetLike::len(&ts1), 3);
+    assert!(!TagSetLike::is_empty(&ts1));
+    assert_eq!(TagSetLike::capacity(&ts1), 4);
+    
+    // Test get() returns String
+    assert_eq!(TagSetLike::get(&ts1, 0), Some("t1".to_string()));
+    assert_eq!(TagSetLike::get(&ts1, 1), Some("t2".to_string()));
+    assert_eq!(TagSetLike::get(&ts1, 2), Some("t3".to_string()));
+    assert_eq!(TagSetLike::get(&ts1, 3), None);
+    
+    // Test iteration
+    let tags: Vec<String> = TagSetLike::iter(&ts1).collect();
+    assert_eq!(tags, vec!["t1".to_string(), "t2".to_string(), "t3".to_string()]);
+    
+    // Test has_tag
+    assert!(TagSetLike::has_tag(&ts1, "t1"));
+    assert!(TagSetLike::has_tag(&ts1, "t2"));
+    assert!(!TagSetLike::has_tag(&ts1, "t4"));
+    
+    // Test has_tags with same type
+    assert!(TagSetLike::has_tags(&ts1, &ts2));
+    
+    // Test add_tag via trait
+    TagSetLike::add_tag(&mut ts1, "t4").unwrap();
+    assert_eq!(TagSetLike::len(&ts1), 4);
+    assert!(TagSetLike::has_tag(&ts1, "t4"));
+    
+    // Test remove_tag via trait
+    assert!(TagSetLike::remove_tag(&mut ts1, "t2"));
+    assert_eq!(TagSetLike::len(&ts1), 3);
+    assert!(!TagSetLike::has_tag(&ts1, "t2"));
+    
+    // Test common_tags via trait
+    // ts1 now has: t1, t3, t4 (after removing t2)
+    let ts3: TagSet<4, 16> = <TagSet<4, 16> as TagSetLike>::from_str("t1,t3,t4").unwrap();
+    let common = TagSetLike::common_tags(&ts1, &ts3);
+    assert_eq!(TagSetLike::len(&common), 3);
+    assert!(TagSetLike::has_tag(&common, "t1"));
+    assert!(TagSetLike::has_tag(&common, "t3"));
+    assert!(TagSetLike::has_tag(&common, "t4"));
+    assert!(!TagSetLike::has_tag(&common, "t2"));
 }
 

@@ -1,5 +1,121 @@
 use crate::smallstring::{SmallString, SmallStringError};
 
+/// Trait for tag set implementations.
+///
+/// This trait allows different tag set implementations to be used interchangeably,
+/// enabling flexibility in storage strategies (e.g., fixed-size arrays, vectors, hash sets).
+///
+/// # Design Principles
+///
+/// - **String-based interface**: All tag operations use `&str` to hide implementation details
+/// - **Sorted order**: Tags are maintained in sorted order (similar to ITensors.jl)
+/// - **Error handling**: Operations that can fail return `Result<(), TagSetError>`
+/// - **Iteration**: Provides iteration over tags as `&str` slices
+pub trait TagSetLike: Default + Clone + PartialEq + Eq {
+    /// Get the number of tags.
+    fn len(&self) -> usize;
+
+    /// Check if the tag set is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Get the maximum capacity (if applicable).
+    ///
+    /// For unbounded implementations, this may return `usize::MAX` or a reasonable upper bound.
+    fn capacity(&self) -> usize;
+
+    /// Get a tag at the given index as a string.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    fn get(&self, index: usize) -> Option<String>;
+
+    /// Iterate over tags as strings.
+    fn iter(&self) -> TagSetIterator<'_>;
+
+    /// Check if a tag is present.
+    fn has_tag(&self, tag: &str) -> bool;
+
+    /// Check if all tags in another tag set are present.
+    ///
+    /// This allows comparing different tag set implementations.
+    fn has_tags<T: TagSetLike>(&self, other: &T) -> bool {
+        for i in 0..other.len() {
+            if let Some(tag) = other.get(i) {
+                if !self.has_tag(&tag) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Add a tag (maintains sorted order).
+    ///
+    /// Returns an error if the tag cannot be added (e.g., capacity exceeded, invalid tag).
+    fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError>;
+
+    /// Remove a tag.
+    ///
+    /// Returns `true` if the tag was present and removed, `false` otherwise.
+    fn remove_tag(&mut self, tag: &str) -> bool;
+
+    /// Get common tags between this tag set and another.
+    ///
+    /// Returns a new tag set containing only tags present in both.
+    fn common_tags<T: TagSetLike>(&self, other: &T) -> Self {
+        let mut result = Self::default();
+        for i in 0..self.len() {
+            if let Some(tag) = self.get(i) {
+                if other.has_tag(&tag) {
+                    result.add_tag(&tag).ok();
+                }
+            }
+        }
+        result
+    }
+
+    /// Create a tag set from a comma-separated string.
+    ///
+    /// Whitespace is ignored (similar to ITensors.jl).
+    /// Tags are automatically sorted.
+    fn from_str(s: &str) -> Result<Self, TagSetError> {
+        let mut tagset = Self::default();
+        
+        // Parse comma-separated tags, ignoring whitespace
+        let mut current_tag = String::new();
+        for ch in s.chars() {
+            if ch == ',' {
+                if !current_tag.is_empty() {
+                    let trimmed: String = current_tag.chars().filter(|c| !c.is_whitespace()).collect();
+                    if !trimmed.is_empty() {
+                        tagset.add_tag(&trimmed)?;
+                    }
+                    current_tag.clear();
+                }
+            } else {
+                current_tag.push(ch);
+            }
+        }
+        
+        // Handle the last tag
+        if !current_tag.is_empty() {
+            let trimmed: String = current_tag.chars().filter(|c| !c.is_whitespace()).collect();
+            if !trimmed.is_empty() {
+                tagset.add_tag(&trimmed)?;
+            }
+        }
+        
+        Ok(tagset)
+    }
+}
+
+/// Iterator over tags in a tag set.
+///
+/// This is a type alias to allow different implementations to provide their own iterator types.
+/// The iterator yields `String` values representing each tag.
+pub type TagSetIterator<'a> = Box<dyn Iterator<Item = String> + 'a>;
+
 /// A set of tags with fixed capacity, stored in sorted order.
 ///
 /// Tags are always maintained in sorted order, regardless of insertion order,
@@ -32,33 +148,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
     /// Whitespace is ignored (similar to ITensors.jl).
     /// Tags are automatically sorted.
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
-        let mut tagset = Self::new();
-        
-        // Parse comma-separated tags, ignoring whitespace
-        let mut current_tag = String::new();
-        for ch in s.chars() {
-            if ch == ',' {
-                if !current_tag.is_empty() {
-                    let trimmed: String = current_tag.chars().filter(|c| !c.is_whitespace()).collect();
-                    if !trimmed.is_empty() {
-                        tagset.add_tag(&trimmed)?;
-                    }
-                    current_tag.clear();
-                }
-            } else {
-                current_tag.push(ch);
-            }
-        }
-        
-        // Handle the last tag
-        if !current_tag.is_empty() {
-            let trimmed: String = current_tag.chars().filter(|c| !c.is_whitespace()).collect();
-            if !trimmed.is_empty() {
-                tagset.add_tag(&trimmed)?;
-            }
-        }
-        
-        Ok(tagset)
+        <Self as TagSetLike>::from_str(s)
     }
 
     /// Get the number of tags.
@@ -87,6 +177,52 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
 
     /// Check if a tag is present.
     pub fn has_tag(&self, tag: &str) -> bool {
+        <Self as TagSetLike>::has_tag(self, tag)
+    }
+
+    /// Check if all tags in another TagSet are present.
+    pub fn has_tags(&self, tags: &TagSet<MAX_TAGS, MAX_TAG_LEN>) -> bool {
+        <Self as TagSetLike>::has_tags(self, tags)
+    }
+
+    /// Add a tag (maintains sorted order).
+    pub fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
+        <Self as TagSetLike>::add_tag(self, tag)
+    }
+
+    /// Remove a tag.
+    pub fn remove_tag(&mut self, tag: &str) -> bool {
+        <Self as TagSetLike>::remove_tag(self, tag)
+    }
+
+    /// Get common tags between two TagSets.
+    pub fn common_tags(&self, other: &Self) -> Self {
+        <Self as TagSetLike>::common_tags(self, other)
+    }
+}
+
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSetLike for TagSet<MAX_TAGS, MAX_TAG_LEN> {
+    fn len(&self) -> usize {
+        self.length
+    }
+
+    fn capacity(&self) -> usize {
+        MAX_TAGS
+    }
+
+    fn get(&self, index: usize) -> Option<String> {
+        if index < self.length {
+            Some(self.tags[index].as_str())
+        } else {
+            None
+        }
+    }
+
+    fn iter(&self) -> TagSetIterator<'_> {
+        Box::new(self.tags[..self.length].iter().map(|s| s.as_str()))
+    }
+
+    fn has_tag(&self, tag: &str) -> bool {
         let tag_str = match SmallString::<MAX_TAG_LEN>::from_str(tag) {
             Ok(s) => s,
             Err(_) => return false,
@@ -94,25 +230,13 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
         self._has_tag(&tag_str)
     }
 
-    /// Check if all tags in another TagSet are present.
-    pub fn has_tags(&self, tags: &TagSet<MAX_TAGS, MAX_TAG_LEN>) -> bool {
-        for tag in tags.iter() {
-            if !self._has_tag(tag) {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// Add a tag (maintains sorted order).
-    pub fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
+    fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
         let tag_str = SmallString::<MAX_TAG_LEN>::from_str(tag)
             .map_err(|e| TagSetError::InvalidTag(e))?;
         self._add_tag_ordered(tag_str)
     }
 
-    /// Remove a tag.
-    pub fn remove_tag(&mut self, tag: &str) -> bool {
+    fn remove_tag(&mut self, tag: &str) -> bool {
         let tag_str = match SmallString::<MAX_TAG_LEN>::from_str(tag) {
             Ok(s) => s,
             Err(_) => return false,
@@ -129,19 +253,9 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
             false
         }
     }
+}
 
-    /// Get common tags between two TagSets.
-    pub fn common_tags(&self, other: &Self) -> Self {
-        let mut result = Self::new();
-        for tag in self.iter() {
-            if other._has_tag(tag) {
-                // Safe to unwrap because we know the tag fits
-                result._add_tag_ordered(*tag).ok();
-            }
-        }
-        result
-    }
-
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_LEN> {
     /// Internal: Add a tag in sorted order (similar to ITensors.jl's `_addtag_ordered!`).
     fn _add_tag_ordered(&mut self, tag: SmallString<MAX_TAG_LEN>) -> Result<(), TagSetError> {
         // Check for duplicates
