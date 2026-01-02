@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use tensor4all_index::index::{Index, DynId, NoSymmSpace, Symmetry};
 use tensor4all_index::tagset::DefaultTagSet;
-use tensor4all_tensor::{Storage, TensorDynLen, unfold_split};
-use tensor4all_tensor::storage::{DenseStorageF64, DenseStorageC64};
-use mdarray::{Dense, Slice, tensor};
+use tensor4all_tensor::{Storage, StorageScalar, TensorDynLen, unfold_split};
+use mdarray::DSlice;
 use mdarray_linalg::svd::{SVD, SVDDecomp, SVDError as MdarraySvdError};
 use mdarray_linalg_faer::Faer;
 use num_complex::{Complex64, ComplexFloat};
@@ -21,60 +20,9 @@ pub enum SvdError {
 
     #[error("Unfold error: {0}")]
     UnfoldError(#[from] anyhow::Error),
-}
 
-/// Scalar types supported by this SVD wrapper.
-///
-/// We keep `f64` hardcoding (due to `Storage` being specialized to `f64`/`Complex64`)
-/// sealed inside these impls, so the generic `svd` implementation can work with
-/// `T` and `T::Real` without mentioning `f64` directly.
-pub(crate) trait SvdScalar:
-    Copy
-    + ComplexFloat
-    + ComplexField
-    + Default
-    + From<<Self as ComplexFloat>::Real>
-    + 'static
-{
-    fn extract_dense(storage: &Storage) -> Result<Vec<Self>, SvdError>;
-    fn dense_storage(data: Vec<Self>) -> Arc<Storage>;
-    fn diag_real_storage(data: Vec<<Self as ComplexFloat>::Real>) -> Arc<Storage>;
-}
-
-impl SvdScalar for f64 {
-    fn extract_dense(storage: &Storage) -> Result<Vec<Self>, SvdError> {
-        match storage {
-            Storage::DenseF64(ds) => Ok(ds.as_slice().to_vec()),
-            _ => Err(SvdError::UnsupportedStorage(format!("{:?}", storage))),
-        }
-    }
-
-    fn dense_storage(data: Vec<Self>) -> Arc<Storage> {
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)))
-    }
-
-    fn diag_real_storage(data: Vec<<Self as ComplexFloat>::Real>) -> Arc<Storage> {
-        // Here `Self::Real = f64`.
-        Arc::new(Storage::new_diag_f64(data))
-    }
-}
-
-impl SvdScalar for Complex64 {
-    fn extract_dense(storage: &Storage) -> Result<Vec<Self>, SvdError> {
-        match storage {
-            Storage::DenseC64(ds) => Ok(ds.as_slice().to_vec()),
-            _ => Err(SvdError::UnsupportedStorage(format!("{:?}", storage))),
-        }
-    }
-
-    fn dense_storage(data: Vec<Self>) -> Arc<Storage> {
-        Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)))
-    }
-
-    fn diag_real_storage(data: Vec<<Self as ComplexFloat>::Real>) -> Arc<Storage> {
-        // Here `Self::Real = f64`, and our `Storage` only supports `DiagF64` for real diagonals.
-        Arc::new(Storage::new_diag_f64(data))
-    }
+    #[error("Storage extraction error: {0}")]
+    StorageExtractionError(String),
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
@@ -125,28 +73,18 @@ pub fn svd<Id, Symm, T>(
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
-    T: SvdScalar,
-    <T as ComplexFloat>::Real: ComplexFloat + Default + 'static,
+    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    // Unfold tensor into matrix
-    let (unfolded, left_len, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+    // Unfold tensor into matrix (returns DTensor<T, 2>)
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(SvdError::UnfoldError)?;
     let k = m.min(n);
 
-    // Extract data from unfolded tensor
-    let a_data = T::extract_dense(unfolded.storage.as_ref())?;
-
-    // Create mdarray tensor
-    let mut a_tensor = tensor![[T::default(); n]; m];
-    for i in 0..m {
-        for j in 0..n {
-            a_tensor[[i, j]] = a_data[i * n + j];
-        }
-    }
-
     // Call SVD using faer backend
+    // DTensor can be converted to DSlice via as_mut()
     let bd = Faer;
-    let a_slice: &mut Slice<T, (usize, usize), Dense> = a_tensor.as_mut();
+    let a_slice: &mut DSlice<T, 2> = a_tensor.as_mut();
     let SVDDecomp { s, u, vt } = bd.svd(a_slice)?;
 
     // Extract singular values and convert to real type.
@@ -157,11 +95,14 @@ where
     // singular-value buffer (LAPACK-style convention). Therefore, the values live at
     // `s[0, i]`, not necessarily at `s[i, i]`.
     //
-    // Singular values are always real, even for complex matrices.
-    let mut s_vec: Vec<<T as ComplexFloat>::Real> = Vec::with_capacity(k);
+    // Singular values are always real (f64), even for complex matrices.
+    let mut s_vec: Vec<f64> = Vec::with_capacity(k);
     for i in 0..k {
         let s_val = s[[0, i]];
-        s_vec.push(s_val.re());
+        // <T as ComplexFloat>::Real is f64 for both f64 and Complex64
+        let real_val: <T as ComplexFloat>::Real = s_val.re();
+        // Convert to f64 using Into trait
+        s_vec.push(real_val.into());
     }
 
     // Convert U from m×m to m×k (take first k columns)
@@ -204,20 +145,21 @@ where
     // Create U tensor: [left_inds..., bond_index]
     let mut u_indices = left_indices.clone();
     u_indices.push(bond_index.clone());
-    let mut u_dims = unfolded.dims[..left_len].to_vec();
+    let mut u_dims: Vec<usize> = left_indices.iter().map(|idx| idx.size()).collect();
     u_dims.push(k);
     let u_storage = T::dense_storage(u_vec);
     let u = TensorDynLen::new(u_indices, u_dims, u_storage);
 
     // Create S tensor: [bond_index, bond_index] (diagonal)
+    // Singular values are always real (f64), even for complex input
     let s_indices = vec![bond_index.clone(), bond_index.clone()];
-    let s_storage = T::diag_real_storage(s_vec);
+    let s_storage = Arc::new(Storage::new_diag_f64(s_vec));
     let s = TensorDynLen::new(s_indices, vec![k, k], s_storage);
 
     // Create V tensor: [right_inds..., bond_index]
     let mut v_indices = right_indices.clone();
     v_indices.push(bond_index.clone());
-    let mut v_dims = unfolded.dims[left_len..].to_vec();
+    let mut v_dims: Vec<usize> = right_indices.iter().map(|idx| idx.size()).collect();
     v_dims.push(k);
     let v_storage = T::dense_storage(v_vec);
     let v = TensorDynLen::new(v_indices, v_dims, v_storage);
