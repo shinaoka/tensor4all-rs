@@ -1,4 +1,4 @@
-use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::{Storage, TensorDynLen, TensorStaticLen, compute_permutation_from_indices};
 use num_complex::Complex64;
 use std::sync::Arc;

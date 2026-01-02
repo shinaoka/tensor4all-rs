@@ -19,7 +19,7 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 - **Copy-on-write storage**: Efficient memory management for tensor networks
 - **Multiple storage backends**: DenseF64, DenseC64, DiagF64, and DiagC64 storage types
 - **Linear algebra operations**: SVD and QR decompositions with configurable truncation tolerance, supporting both FAER and LAPACK backends
-- **Modular architecture**: Separated into `tensor4all-index` (core index/tag utilities), `tensor4all-tensor` (tensor and storage implementations), and `tensor4all-linalg` (linear algebra operations: SVD, QR)
+- **Modular architecture**: Separated into `tensor4all-core` (core index/tag utilities), `tensor4all-tensor` (tensor and storage implementations), and `tensor4all-linalg` (linear algebra operations: SVD, QR)
 
 ## Design Philosophy
 
@@ -27,7 +27,7 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 
 tensor4all-rs is designed with the following principles in mind:
 
-- **Modular architecture for fast development cycles**: The library is split into independent crates (`tensor4all-index`, `tensor4all-tensor`, and `tensor4all-linalg`) to enable rapid AI-assisted code generation and testing. Each module can be developed, tested, and compiled independently, minimizing iteration time during development.
+- **Modular architecture for fast development cycles**: The library is split into independent crates (`tensor4all-core`, `tensor4all-tensor`, and `tensor4all-linalg`) to enable rapid AI-assisted code generation and testing. Each module can be developed, tested, and compiled independently, minimizing iteration time during development.
 
 - **Compile-time error detection**: The design leverages Rust's type system to catch errors at compile time rather than runtime:
   - Generic type parameters (`Index<Id, Symm, Tags>`) enable compile-time validation of index compatibility
@@ -162,7 +162,7 @@ tensor4all-rs and ITensors.jl use different conventions for truncation tolerance
 
 tensor4all-rs is organized as a Cargo workspace with three main crates:
 
-- **`tensor4all-index`**: Core index, tag, and small string utilities
+- **`tensor4all-core`**: Core index, tag, and small string utilities
   - `Index<Id, Symm, Tags>`: Generic index type
   - `TagSet`: Index tag management
   - `SmallString`: Efficient small string storage
@@ -185,7 +185,7 @@ tensor4all-rs is organized as a Cargo workspace with three main crates:
 ### Basic Tensor Creation
 
 ```rust
-use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::{Storage, TensorDynLen};
 use std::sync::Arc;
 
@@ -205,7 +205,7 @@ let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(indices, dims, storage)
 ### Diagonal Tensor Creation
 
 ```rust
-use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::diag_tensor_dyn_len;
 
 // Create a 3×3 diagonal tensor
@@ -219,7 +219,7 @@ let tensor = diag_tensor_dyn_len(vec![i, j], diag_data);
 ### Tensor Contraction
 
 ```rust
-use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::{Storage, TensorDynLen};
 use tensor4all_tensor::storage::DenseStorageF64;
 use std::sync::Arc;

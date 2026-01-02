@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::collections::HashSet;
 use num_complex::Complex64;
-use tensor4all_index::index::{Index, NoSymmSpace, Symmetry};
-use tensor4all_index::index_ops::common_inds;
+use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
+use tensor4all_core::index_ops::common_inds;
 use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage, storage_to_dtensor};
 use anyhow::Result;
 use mdarray::DTensor;
@@ -28,7 +28,7 @@ use mdarray::DTensor;
 /// # Example
 /// ```
 /// use tensor4all_tensor::tensor::compute_permutation_from_indices;
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -165,7 +165,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// # Example
     /// ```
     /// use tensor4all_tensor::TensorDynLen;
-    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
@@ -221,7 +221,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// # Example
     /// ```
     /// use tensor4all_tensor::TensorDynLen;
-    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
@@ -290,7 +290,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// # Example
     /// ```
     /// use tensor4all_tensor::TensorDynLen;
-    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
@@ -465,7 +465,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     /// # Example
     /// ```
     /// use tensor4all_tensor::TensorStaticLen;
-    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
@@ -521,7 +521,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     /// # Example
     /// ```
     /// use tensor4all_tensor::TensorStaticLen;
-    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
@@ -594,7 +594,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     /// # Example
     /// ```
     /// use tensor4all_tensor::{TensorStaticLen, TensorDynLen};
-    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///

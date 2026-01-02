@@ -1,5 +1,5 @@
-use tensor4all_index::index::DefaultIndex as Index;
-use tensor4all_index::index_ops::{
+use tensor4all_core::index::DefaultIndex as Index;
+use tensor4all_core::index_ops::{
     sim, sim_owned, replaceinds, replaceinds_in_place, ReplaceIndsError, unique_inds,
     noncommon_inds, union_inds, hasind, hasinds, hascommoninds, common_inds,
 };

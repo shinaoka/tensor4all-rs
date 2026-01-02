@@ -15,8 +15,8 @@ use crate::index::{Index, DynId, Symmetry, generate_id};
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::sim;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::sim;
 ///
 /// let idx = Index::new_dyn(8);
 /// let similar = sim(&idx);
@@ -51,8 +51,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::sim_owned;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::sim_owned;
 ///
 /// let idx = Index::new_dyn(8);
 /// let similar = sim_owned(idx);  // idx is consumed
@@ -119,8 +119,8 @@ impl std::error::Error for ReplaceIndsError {}
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::replaceinds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::replaceinds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -185,8 +185,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::replaceinds_in_place;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::replaceinds_in_place;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -244,8 +244,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::unique_inds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::unique_inds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -289,8 +289,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::noncommon_inds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::noncommon_inds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -346,8 +346,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::union_inds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::union_inds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -397,8 +397,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::hasind;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::hasind;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -430,8 +430,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::hasinds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::hasinds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -465,8 +465,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::hascommoninds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::hascommoninds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -503,8 +503,8 @@ where
 ///
 /// # Example
 /// ```
-/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_index::index_ops::common_inds;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::common_inds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);

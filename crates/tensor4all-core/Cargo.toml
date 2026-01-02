@@ -1,5 +1,5 @@
 [package]
-name = "tensor4all-index"
+name = "tensor4all-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-num-complex = "0.4"
-rand = "0.8"
+num-complex.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 tensor4all-tensor = { path = "../tensor4all-tensor" }

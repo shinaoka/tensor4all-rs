@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tensor4all-index", "crates/tensor4all-tensor", "crates/tensor4all-linalg"]
+members = ["crates/tensor4all-core", "crates/tensor4all-tensor", "crates/tensor4all-linalg"]
 resolver = "2"
 
 [workspace.package]
@@ -8,4 +8,17 @@ edition = "2021"
 authors = ["tensor4all collaboration"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tensor4all/tensor4all-rs"
+
+[workspace.dependencies]
+# 共通依存関係
+num-complex = "0.4"
+num-traits = "0.2"
+anyhow = "1.0"
+mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
+mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
+mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer" }
+mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-lapack" }
+faer-traits = "0.23"
+thiserror = "2.0"
+rand = "0.8"
 

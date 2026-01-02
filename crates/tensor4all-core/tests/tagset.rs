@@ -1,5 +1,5 @@
-use tensor4all_index::smallstring::{SmallString, SmallStringError};
-use tensor4all_index::tagset::{DefaultTagSet, Tag, TagSet, TagSetError, TagSetLike};
+use tensor4all_core::smallstring::{SmallString, SmallStringError};
+use tensor4all_core::tagset::{DefaultTagSet, Tag, TagSet, TagSetError, TagSetLike};
 
 #[test]
 fn test_smallstring_new() {
