@@ -12,6 +12,7 @@ tensor4all-index = { path = "../tensor4all-index" }
 mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
 mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
 mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer" }
+faer-traits = "0.23"
 thiserror = "2.0"
 num-complex = "0.4"
 anyhow = "1.0"
