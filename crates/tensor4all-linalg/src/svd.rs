@@ -1,18 +1,13 @@
-use std::sync::Arc;
-use tensor4all_index::index::{Index, DynId, NoSymmSpace, Symmetry};
-use tensor4all_index::tagset::DefaultTagSet;
-use tensor4all_tensor::{Storage, StorageScalar, TensorDynLen, unfold_split};
 use mdarray::DSlice;
-use mdarray_linalg::svd::{SVD, SVDDecomp};
+use mdarray_linalg::svd::SVDDecomp;
 use num_complex::{Complex64, ComplexFloat};
+use std::sync::Arc;
+use tensor4all_index::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_index::tagset::DefaultTagSet;
+use tensor4all_tensor::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use thiserror::Error;
 
-#[cfg(feature = "backend-faer")]
-use mdarray_linalg_faer::Faer;
-
-#[cfg(feature = "backend-lapack")]
-use mdarray_linalg_lapack::Lapack;
-
+use crate::backend::svd_backend;
 use faer_traits::ComplexField;
 
 /// Error type for SVD operations in tensor4all-linalg.
@@ -160,24 +155,7 @@ where
     // Call SVD using selected backend
     // DTensor can be converted to DSlice via as_mut()
     let a_slice: &mut DSlice<T, 2> = a_tensor.as_mut();
-    let decomp = {
-        #[cfg(feature = "backend-faer")]
-        {
-            let bd = Faer;
-            bd.svd(a_slice)
-        }
-        #[cfg(feature = "backend-lapack")]
-        {
-            let bd = Lapack::new();
-            bd.svd(a_slice)
-        }
-        #[cfg(not(any(feature = "backend-faer", feature = "backend-lapack")))]
-        {
-            compile_error!("At least one backend feature must be enabled (backend-faer or backend-lapack)");
-        }
-    }
-    .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))
-    .map_err(SvdError::ComputationError)?;
+    let decomp = svd_backend(a_slice).map_err(SvdError::ComputationError)?;
 
     // Extract U, S, V from the decomposition
     let (u_vec, s_vec, v_vec) = extract_usv_from_svd_decomp(decomp, m, n, k);
