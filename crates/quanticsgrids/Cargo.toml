@@ -2,7 +2,11 @@
 name = "quanticsgrids"
 version.workspace = true
 edition.workspace = true
-authors.workspace = true
+authors = [
+    "Ritter.Marc <Ritter.Marc@physik.uni-muenchen.de>",
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+    "Samuel Badr <samuel.badr@gmail.com>",
+]
 license.workspace = true
 repository.workspace = true
 description = "Quantics grid structures for efficient conversion between quantics, grid indices, and original coordinates"
