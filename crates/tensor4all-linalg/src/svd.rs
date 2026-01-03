@@ -4,6 +4,7 @@ use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::index_ops::sim;
 use tensor4all_core::tagset::DefaultTagSet;
 use tensor4all_tensor::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use thiserror::Error;
@@ -370,9 +371,10 @@ where
     let u_storage = T::dense_storage(u_vec);
     let u = TensorDynLen::from_indices(u_indices, u_storage);
 
-    // Create S tensor: [bond_index, bond_index] (diagonal)
+    // Create S tensor: [bond_index, sim(bond_index)] (diagonal)
     // Singular values are always real (f64), even for complex input
-    let s_indices = vec![bond_index.clone(), bond_index.clone()];
+    // Use sim() to create a similar index with a new ID to avoid duplicate index IDs
+    let s_indices = vec![bond_index.clone(), sim(&bond_index)];
     let s_storage = Arc::new(Storage::new_diag_f64(s_vec));
     let s = TensorDynLen::from_indices(s_indices, s_storage);
 

@@ -82,8 +82,10 @@ fn test_svd_simple_matrix() {
 
     // Check that U and V share the bond index
     assert_eq!(u.indices[1].id, s.indices[0].id);
-    assert_eq!(s.indices[0].id, s.indices[1].id);
-    assert_eq!(s.indices[1].id, v.indices[1].id);
+    // S tensor has two indices with same dimension and tags but different IDs (to avoid duplicate IDs)
+    assert_eq!(s.indices[0].size(), s.indices[1].size());
+    assert_eq!(s.indices[0].tags(), s.indices[1].tags());
+    assert_eq!(s.indices[0].id, v.indices[1].id);
 
     // Check that bond index has "Link" tag
     assert!(u.indices[1].tags().has_tag("Link"));
@@ -263,8 +265,10 @@ fn test_svd_rank3() {
 
     // Check that U and V share the bond index
     assert_eq!(u.indices[1].id, s.indices[0].id);
-    assert_eq!(s.indices[0].id, s.indices[1].id);
-    assert_eq!(s.indices[1].id, v.indices[2].id);
+    // S tensor has two indices with same dimension and tags but different IDs (to avoid duplicate IDs)
+    assert_eq!(s.indices[0].size(), s.indices[1].size());
+    assert_eq!(s.indices[0].tags(), s.indices[1].tags());
+    assert_eq!(s.indices[0].id, v.indices[2].id);
 
     // Check that bond index has "Link" tag
     assert!(u.indices[1].tags().has_tag("Link"));
