@@ -61,6 +61,103 @@ where
         }
     }
 
+    /// Create a TreeTN from a list of tensors and node names using einsum rule.
+    ///
+    /// This function connects tensors that share common indices (by ID).
+    /// The algorithm is O(n) where n is the number of tensors:
+    /// 1. Add all tensors as nodes
+    /// 2. Build a map from index ID to (node, index) pairs in a single pass
+    /// 3. Connect nodes that share the same index ID
+    ///
+    /// # Arguments
+    /// * `tensors` - Vector of tensors to add to the network
+    /// * `node_names` - Vector of node names corresponding to each tensor
+    ///
+    /// # Returns
+    /// A new TreeTN with tensors connected by common indices, or an error if:
+    /// - The lengths of `tensors` and `node_names` don't match
+    /// - An index ID appears in more than 2 tensors (TreeTN is a tree, so each bond connects exactly 2 nodes)
+    /// - Connection fails (e.g., dimension mismatch)
+    ///
+    /// # Errors
+    /// Returns an error if validation fails or connection fails.
+    pub fn from_tensors_with_names(
+        tensors: Vec<TensorDynLen<Id, Symm>>,
+        node_names: Vec<V>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
+    {
+        // Validate input lengths
+        if tensors.len() != node_names.len() {
+            return Err(anyhow::anyhow!(
+                "Length mismatch: {} tensors but {} node names",
+                tensors.len(),
+                node_names.len()
+            ))
+            .context("from_tensors_with_names: tensors and node_names must have the same length");
+        }
+
+        // Create empty TreeTN
+        let mut treetn = Self::new();
+
+        // Step 1: Add all tensors as nodes and collect NodeIndex mappings
+        let mut node_indices = Vec::with_capacity(tensors.len());
+        for (tensor, node_name) in tensors.into_iter().zip(node_names.into_iter()) {
+            let node_idx = treetn.add_tensor_with_vertex(node_name, tensor)?;
+            node_indices.push(node_idx);
+        }
+
+        // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
+        // Key: index ID, Value: vector of (NodeIndex, Index) pairs
+        let mut index_map: HashMap<Id, Vec<(NodeIndex, Index<Id, Symm>)>> = HashMap::new();
+        
+        for node_idx in &node_indices {
+            let tensor = treetn.tensor(*node_idx)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_idx))?;
+            
+            for index in &tensor.indices {
+                index_map
+                    .entry(index.id.clone())
+                    .or_insert_with(Vec::new)
+                    .push((*node_idx, index.clone()));
+            }
+        }
+
+        // Step 3: Connect nodes that share the same index ID
+        // For TreeTN (tree structure), each index ID should appear in exactly 2 tensors
+        for (index_id, nodes_with_index) in index_map {
+            match nodes_with_index.len() {
+                0 => unreachable!(),
+                1 => {
+                    // Index appears in only one tensor - this is a physical index, no connection needed
+                    continue;
+                }
+                2 => {
+                    // Index appears in exactly 2 tensors - connect them
+                    let (node_a, index_a) = &nodes_with_index[0];
+                    let (node_b, index_b) = &nodes_with_index[1];
+                    
+                    treetn.connect(*node_a, index_a, *node_b, index_b)
+                        .with_context(|| format!(
+                            "Failed to connect nodes {:?} and {:?} via index ID {:?}",
+                            node_a, node_b, index_id
+                        ))?;
+                }
+                n => {
+                    // Index appears in more than 2 tensors - this violates tree structure
+                    return Err(anyhow::anyhow!(
+                        "Index ID {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
+                        index_id, n
+                    ))
+                    .context("from_tensors_with_names: each bond index must connect exactly 2 nodes");
+                }
+            }
+        }
+
+        Ok(treetn)
+    }
+
     /// Add a tensor to the network with a node name.
     ///
     /// Returns the NodeIndex for the newly added tensor.
