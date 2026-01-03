@@ -785,3 +785,87 @@ fn test_clear_auto_centers() {
     assert!(tn.auto_centers().is_empty());
 }
 
+#[test]
+fn test_validate_ortho_consistency_requires_connected_auto_centers() {
+    let mut tn = TreeTN::<DynId>::new();
+
+    // Create three nodes, but don't connect them (auto_centers will be disconnected).
+    let i1 = Index::new_dyn(2);
+    let j1 = Index::new_dyn(3);
+    let tensor1 = TensorDynLen::new(vec![i1, j1], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
+    let n1 = tn.add_tensor(tensor1);
+
+    let i2 = Index::new_dyn(2);
+    let j2 = Index::new_dyn(3);
+    let tensor2 = TensorDynLen::new(vec![i2, j2], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
+    let n2 = tn.add_tensor(tensor2);
+
+    // Two centers that are not connected by edges should fail connectivity check.
+    tn.set_auto_centers(vec![n1, n2]).unwrap();
+    assert!(tn.validate_ortho_consistency().is_err());
+}
+
+#[test]
+fn test_validate_ortho_consistency_none_only_inside_centers() {
+    let mut tn = TreeTN::<DynId>::new();
+
+    // Build a simple chain: n1 -- n2
+    let i1 = Index::new_dyn(2);
+    let j1 = Index::new_dyn(3);
+    let tensor1 = TensorDynLen::new(vec![i1.clone(), j1.clone()], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
+    let n1 = tn.add_tensor(tensor1);
+
+    let i2 = Index::new_dyn(3);
+    let k2 = Index::new_dyn(4);
+    let tensor2 = TensorDynLen::new(vec![i2.clone(), k2.clone()], vec![3, 4], Arc::new(Storage::new_dense_f64(12)));
+    let n2 = tn.add_tensor(tensor2);
+
+    let e = tn.connect(n1, &j1, n2, &i2).unwrap();
+
+    // Only n2 is center.
+    tn.set_auto_centers(vec![n2]).unwrap();
+
+    // Incorrectly set None on boundary edge (should be forbidden).
+    {
+        let conn = tn.connection_mut(e).unwrap();
+        conn.ortho_towards = None;
+    }
+    assert!(tn.validate_ortho_consistency().is_err());
+}
+
+#[test]
+fn test_validate_ortho_consistency_chain_points_towards_centers() {
+    let mut tn = TreeTN::<DynId>::new();
+
+    // Build chain: n1 -- n2 -- n3, center is n2.
+    let a1 = Index::new_dyn(2);
+    let b1 = Index::new_dyn(3);
+    let t1 = TensorDynLen::new(vec![a1, b1.clone()], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
+    let n1 = tn.add_tensor(t1);
+
+    let a2 = Index::new_dyn(3);
+    let b2 = Index::new_dyn(4);
+    let c2 = Index::new_dyn(5);
+    let t2 = TensorDynLen::new(vec![a2.clone(), b2.clone(), c2], vec![3, 4, 5], Arc::new(Storage::new_dense_f64(60)));
+    let n2 = tn.add_tensor(t2);
+
+    let a3 = Index::new_dyn(4);
+    let b3 = Index::new_dyn(6);
+    let t3 = TensorDynLen::new(vec![a3.clone(), b3], vec![4, 6], Arc::new(Storage::new_dense_f64(24)));
+    let n3 = tn.add_tensor(t3);
+
+    // Connect n1 -- n2 via b1 (dim3) and a2 (dim3)
+    let e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
+    // Connect n2 -- n3 via b2 (dim4) and a3 (dim4)
+    let e23 = tn.connect(n2, &b2, n3, &a3).unwrap();
+
+    tn.set_auto_centers(vec![n2]).unwrap();
+
+    // Boundary edges must point into centers: for e12, center is n2, which is the target (n1,n2) => use a2
+    tn.set_edge_ortho_towards(e12, Some(a2.clone())).unwrap();
+    // for e23, center is n2, which is the source (n2,n3) => use b2
+    tn.set_edge_ortho_towards(e23, Some(b2.clone())).unwrap();
+
+    assert!(tn.validate_ortho_consistency().is_ok());
+}
+

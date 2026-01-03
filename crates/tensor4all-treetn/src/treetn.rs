@@ -1,6 +1,7 @@
 use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
 use petgraph::Undirected;
 use petgraph::visit::{Dfs, EdgeRef};
+use std::collections::VecDeque;
 use std::collections::HashSet;
 use tensor4all_tensor::TensorDynLen;
 use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
@@ -389,6 +390,159 @@ where
     /// Remove a node from auto_centers.
     pub fn remove_auto_center(&mut self, center: NodeIndex) {
         self.auto_centers.remove(&center);
+    }
+
+    /// Validate that `auto_centers` and edge `ortho_towards` are consistent.
+    ///
+    /// Rules:
+    /// - If `auto_centers` is empty (not orthogonalized), all edges must have `ortho_towards == None`.
+    /// - If `auto_centers` is non-empty, it must be connected in the tree (forms a subtree).
+    /// - `ortho_towards == None` is allowed **only** when both edge endpoints are in `auto_centers`.
+    /// - For any edge with at least one endpoint outside `auto_centers`, `ortho_towards` must be `Some(...)`
+    ///   and must point towards the endpoint with smaller distance to `auto_centers`.
+    pub fn validate_ortho_consistency(&self) -> Result<()> {
+        // If not orthogonalized, require no edge directions.
+        if self.auto_centers.is_empty() {
+            for e in self.graph.edge_indices() {
+                let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
+                if conn.ortho_towards.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "Found ortho_towards on edge {:?} but auto_centers is empty",
+                        e
+                    ))
+                    .context("validate_ortho_consistency: auto_centers empty implies no directions");
+                }
+            }
+            return Ok(());
+        }
+
+        // Validate all auto_centers exist.
+        for c in &self.auto_centers {
+            if !self.graph.contains_node(*c) {
+                return Err(anyhow::anyhow!("auto_center {:?} does not exist in graph", c))
+                    .context("validate_ortho_consistency: all auto_centers must be valid nodes");
+            }
+        }
+
+        // Check auto_centers connectivity in the induced subgraph.
+        let start = *self
+            .auto_centers
+            .iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("auto_centers unexpectedly empty"))?;
+        let mut stack = vec![start];
+        let mut seen = HashSet::new();
+        seen.insert(start);
+        while let Some(v) = stack.pop() {
+            for nb in self.graph.neighbors(v) {
+                if self.auto_centers.contains(&nb) && seen.insert(nb) {
+                    stack.push(nb);
+                }
+            }
+        }
+        if seen.len() != self.auto_centers.len() {
+            return Err(anyhow::anyhow!(
+                "auto_centers is not connected: reached {} out of {} centers",
+                seen.len(),
+                self.auto_centers.len()
+            ))
+            .context("validate_ortho_consistency: auto_centers must form a connected subtree");
+        }
+
+        // Multi-source BFS distances to auto_centers.
+        let mut dist: std::collections::HashMap<NodeIndex, usize> = std::collections::HashMap::new();
+        let mut q = VecDeque::new();
+        for &c in &self.auto_centers {
+            dist.insert(c, 0);
+            q.push_back(c);
+        }
+        while let Some(v) = q.pop_front() {
+            let dv = dist[&v];
+            for nb in self.graph.neighbors(v) {
+                if !dist.contains_key(&nb) {
+                    dist.insert(nb, dv + 1);
+                    q.push_back(nb);
+                }
+            }
+        }
+
+        // Check each edge.
+        for e in self.graph.edge_indices() {
+            let (source, target) = self
+                .graph
+                .edge_endpoints(e)
+                .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
+            let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
+
+            let s_in = self.auto_centers.contains(&source);
+            let t_in = self.auto_centers.contains(&target);
+
+            // None allowed only when both endpoints are centers.
+            if conn.ortho_towards.is_none() {
+                if !(s_in && t_in) {
+                    return Err(anyhow::anyhow!(
+                        "ortho_towards is None on edge {:?} but not both endpoints are in auto_centers",
+                        e
+                    ))
+                    .context("validate_ortho_consistency: None allowed only inside auto_centers");
+                }
+                continue;
+            }
+
+            // From here on, ortho_towards must be Some.
+            let ortho_idx = conn.ortho_towards.as_ref().unwrap();
+
+            // Distances must exist.
+            let ds = *dist
+                .get(&source)
+                .ok_or_else(|| anyhow::anyhow!("No distance for source node {:?}", source))?;
+            let dt = *dist
+                .get(&target)
+                .ok_or_else(|| anyhow::anyhow!("No distance for target node {:?}", target))?;
+
+            // Choose expected direction: towards smaller distance (closer to auto_centers).
+            // In a tree with connected auto_centers, adjacent nodes should differ by exactly 1
+            // unless both are in auto_centers (handled above).
+            if ds == dt {
+                return Err(anyhow::anyhow!(
+                    "Ambiguous direction on edge {:?}: distances are equal ({} == {})",
+                    e,
+                    ds,
+                    dt
+                ))
+                .context("validate_ortho_consistency: outside auto_centers, distances should differ");
+            }
+
+            let expect_source_side = ds < dt;
+            let expected_id = if expect_source_side {
+                &conn.index_source.id
+            } else {
+                &conn.index_target.id
+            };
+
+            if &ortho_idx.id != expected_id {
+                return Err(anyhow::anyhow!(
+                    "Invalid ortho_towards on edge {:?}: expected to point to {} side",
+                    e,
+                    if expect_source_side { "source" } else { "target" }
+                ))
+                .context("validate_ortho_consistency: ortho_towards must point towards auto_centers");
+            }
+
+            // Additionally enforce that boundary edges (one in centers, one out) always point into centers.
+            if s_in ^ t_in {
+                let expected_into_centers_id = if s_in { &conn.index_source.id } else { &conn.index_target.id };
+                if &ortho_idx.id != expected_into_centers_id {
+                    return Err(anyhow::anyhow!(
+                        "Boundary edge {:?} must point into auto_centers",
+                        e
+                    ))
+                    .context("validate_ortho_consistency: boundary must point into auto_centers");
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
