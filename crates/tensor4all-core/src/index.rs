@@ -5,7 +5,7 @@ use rand::Rng;
 /// Runtime ID for ITensors-like dynamic identity.
 ///
 /// Uses UInt128 for extremely low collision probability (see design.md for analysis).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DynId(pub u128);
 
 /// Trait for symmetry information (quantum number space).

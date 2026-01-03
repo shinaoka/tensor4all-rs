@@ -65,6 +65,9 @@ fn test_replaceinds_space_mismatch() {
             assert_eq!(from_dim, 3);
             assert_eq!(to_dim, 5);
         }
+        ReplaceIndsError::DuplicateIndices { .. } => {
+            panic!("Expected SpaceMismatch error, got DuplicateIndices");
+        }
     }
 }
 

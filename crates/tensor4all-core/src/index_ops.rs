@@ -83,6 +83,13 @@ pub enum ReplaceIndsError {
         /// The dimension/size of the replacement index
         to_dim: usize,
     },
+    /// Duplicate indices found in the collection.
+    DuplicateIndices {
+        /// The position of the first duplicate index
+        first_pos: usize,
+        /// The position of the duplicate index
+        duplicate_pos: usize,
+    },
 }
 
 impl std::fmt::Display for ReplaceIndsError {
@@ -95,11 +102,59 @@ impl std::fmt::Display for ReplaceIndsError {
                     from_dim, to_dim
                 )
             }
+            ReplaceIndsError::DuplicateIndices { first_pos, duplicate_pos } => {
+                write!(
+                    f,
+                    "Duplicate indices found: index at position {} has the same ID as index at position {}",
+                    duplicate_pos, first_pos
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for ReplaceIndsError {}
+
+/// Check if a collection of indices contains any duplicates (by ID).
+///
+/// # Arguments
+/// * `indices` - Collection of indices to check
+///
+/// # Returns
+/// `Ok(())` if all indices are unique, or `Err(ReplaceIndsError::DuplicateIndices)` if duplicates are found.
+///
+/// # Example
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index_ops::check_unique_indices;
+///
+/// let i = Index::new_dyn(2);
+/// let j = Index::new_dyn(3);
+/// let indices = vec![i.clone(), j.clone()];
+/// assert!(check_unique_indices(&indices).is_ok());
+///
+/// let duplicate = vec![i.clone(), i.clone()];
+/// assert!(check_unique_indices(&duplicate).is_err());
+/// ```
+pub fn check_unique_indices<Id, Symm, Tags>(
+    indices: &[Index<Id, Symm, Tags>],
+) -> Result<(), ReplaceIndsError>
+where
+    Id: std::hash::Hash + Eq,
+{
+    use std::collections::HashMap;
+    let mut seen = HashMap::new();
+    for (pos, idx) in indices.iter().enumerate() {
+        if let Some(&first_pos) = seen.get(&idx.id) {
+            return Err(ReplaceIndsError::DuplicateIndices {
+                first_pos,
+                duplicate_pos: pos,
+            });
+        }
+        seen.insert(&idx.id, pos);
+    }
+    Ok(())
+}
 
 /// Replace indices in a collection based on ID matching.
 ///
@@ -143,6 +198,9 @@ where
     Symm: Symmetry + Clone,
     Tags: Clone,
 {
+    // Check for duplicates in input indices
+    check_unique_indices(&indices)?;
+
     // Build a map from old ID to new index for fast lookup
     let mut replacement_map = std::collections::HashMap::new();
     for (old, new) in replacements {
@@ -165,6 +223,9 @@ where
             result.push(idx);
         }
     }
+
+    // Check for duplicates in result indices
+    check_unique_indices(&result)?;
     Ok(result)
 }
 
@@ -208,6 +269,9 @@ where
     Symm: Symmetry + Clone,
     Tags: Clone,
 {
+    // Check for duplicates in input indices
+    check_unique_indices(indices)?;
+
     // Build a map from old ID to new index for fast lookup
     let mut replacement_map = std::collections::HashMap::new();
     for (old, new) in replacements {
@@ -227,6 +291,9 @@ where
             *idx = (*new_idx).clone();
         }
     }
+
+    // Check for duplicates in result indices
+    check_unique_indices(indices)?;
     Ok(())
 }
 

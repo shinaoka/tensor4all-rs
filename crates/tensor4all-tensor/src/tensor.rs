@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use num_complex::Complex64;
 use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
-use tensor4all_core::index_ops::common_inds;
+use tensor4all_core::index_ops::{common_inds, check_unique_indices};
 use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage, storage_to_dtensor};
 use anyhow::Result;
 use mdarray::DTensor;
@@ -71,11 +71,57 @@ where
     perm
 }
 
+/// Trait for extracting type parameters from tensor types.
+///
+/// This allows extracting `Id` and `Symm` from tensor types like `TensorDynLen<Id, Symm>`
+/// without exposing them directly in the type signature.
+pub trait TensorType {
+    /// Index ID type
+    type Id: Clone + std::hash::Hash + Eq;
+    /// Symmetry type
+    type Symm: Clone + Symmetry;
+}
+
+/// Trait for accessing tensor fields.
+///
+/// This trait provides access to the internal fields of tensor types,
+/// allowing generic code to work with tensors without knowing the exact type.
+pub trait TensorAccess: TensorType {
+    /// Get a reference to the indices.
+    fn indices(&self) -> &[Index<Self::Id, Self::Symm>];
+    
+    /// Get a reference to the storage.
+    fn storage(&self) -> &Storage;
+}
+
 /// Tensor with dynamic rank (number of indices) and dynamic scalar type.
 pub struct TensorDynLen<Id, Symm = NoSymmSpace> {
     pub indices: Vec<Index<Id, Symm>>,
     pub dims: Vec<usize>,
     pub storage: Arc<Storage>,
+}
+
+impl<Id, Symm> TensorType for TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    type Id = Id;
+    type Symm = Symm;
+}
+
+impl<Id, Symm> TensorAccess for TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    fn indices(&self) -> &[Index<Self::Id, Self::Symm>] {
+        &self.indices
+    }
+    
+    fn storage(&self) -> &Storage {
+        &self.storage
+    }
 }
 
 impl<Id, Symm> TensorDynLen<Id, Symm> {
@@ -85,12 +131,19 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     ///
     /// # Panics
     /// Panics if the storage is Diag and not all indices have the same dimension.
-    pub fn new(indices: Vec<Index<Id, Symm>>, dims: Vec<usize>, storage: Arc<Storage>) -> Self {
+    /// Panics if there are duplicate indices (indices with the same ID).
+    pub fn new(indices: Vec<Index<Id, Symm>>, dims: Vec<usize>, storage: Arc<Storage>) -> Self
+    where
+        Id: std::hash::Hash + Eq,
+    {
         assert_eq!(
             indices.len(),
             dims.len(),
             "indices and dims must have the same length"
         );
+        
+        // Check for duplicate indices
+        check_unique_indices(&indices).expect("Tensor indices must all be unique (no duplicate IDs)");
         
         // Validate DiagTensor: all indices must have the same dimension
         if storage.as_ref().is_diag() {
@@ -117,9 +170,11 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     ///
     /// # Panics
     /// Panics if the storage is Diag and not all indices have the same dimension.
+    /// Panics if there are duplicate indices (indices with the same ID).
     pub fn from_indices(indices: Vec<Index<Id, Symm>>, storage: Arc<Storage>) -> Self
     where
         Symm: Symmetry,
+        Id: std::hash::Hash + Eq,
     {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         Self::new(indices, dims, storage)
@@ -557,7 +612,7 @@ pub fn diag_tensor_dyn_len<Id, Symm>(
     diag_data: Vec<f64>,
 ) -> TensorDynLen<Id, Symm>
 where
-    Id: Clone,
+    Id: Clone + std::hash::Hash + Eq,
     Symm: Clone + Symmetry,
 {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
@@ -590,7 +645,7 @@ pub fn diag_tensor_dyn_len_c64<Id, Symm>(
     diag_data: Vec<Complex64>,
 ) -> TensorDynLen<Id, Symm>
 where
-    Id: Clone,
+    Id: Clone + std::hash::Hash + Eq,
     Symm: Clone + Symmetry,
 {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();

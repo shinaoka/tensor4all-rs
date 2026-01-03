@@ -676,7 +676,7 @@ fn test_treetn_validate_tree_empty() {
 fn test_auto_centers_empty() {
     let tn = TreeTN::<DynId>::new();
     assert!(!tn.is_orthogonalized());
-    assert!(tn.auto_centers().is_empty());
+    assert!(tn.ortho_region().is_empty());
 }
 
 #[test]
@@ -694,12 +694,12 @@ fn test_set_auto_centers() {
     // Initially not orthogonalized
     assert!(!tn.is_orthogonalized());
     
-    // Set auto_centers
-    let result = tn.set_auto_centers(vec![node]);
+    // Set ortho_region
+    let result = tn.set_ortho_region(vec![node]);
     assert!(result.is_ok());
     assert!(tn.is_orthogonalized());
-    assert_eq!(tn.auto_centers().len(), 1);
-    assert!(tn.auto_centers().contains(&node));
+    assert_eq!(tn.ortho_region().len(), 1);
+    assert!(tn.ortho_region().contains(&node));
 }
 
 #[test]
@@ -707,7 +707,7 @@ fn test_set_auto_centers_invalid_node() {
     let mut tn = TreeTN::<DynId>::new();
     
     let invalid_node = NodeIndex::new(999);
-    let result = tn.set_auto_centers(vec![invalid_node]);
+    let result = tn.set_ortho_region(vec![invalid_node]);
     assert!(result.is_err());
     let err_msg = format!("{:?}", result);
     assert!(err_msg.contains("exist") || err_msg.contains("valid"));
@@ -733,29 +733,29 @@ fn test_add_remove_auto_center() {
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
     let node2 = tn.add_tensor(tensor2);
     
-    // Add first center
-    let result = tn.add_auto_center(node1);
+    // Add first node to region
+    let result = tn.add_to_ortho_region(node1);
     assert!(result.is_ok());
     assert!(tn.is_orthogonalized());
-    assert_eq!(tn.auto_centers().len(), 1);
+    assert_eq!(tn.ortho_region().len(), 1);
     
-    // Add second center
-    let result = tn.add_auto_center(node2);
+    // Add second node to region
+    let result = tn.add_to_ortho_region(node2);
     assert!(result.is_ok());
-    assert_eq!(tn.auto_centers().len(), 2);
-    assert!(tn.auto_centers().contains(&node1));
-    assert!(tn.auto_centers().contains(&node2));
+    assert_eq!(tn.ortho_region().len(), 2);
+    assert!(tn.ortho_region().contains(&node1));
+    assert!(tn.ortho_region().contains(&node2));
     
-    // Remove first center
-    tn.remove_auto_center(node1);
-    assert_eq!(tn.auto_centers().len(), 1);
-    assert!(!tn.auto_centers().contains(&node1));
-    assert!(tn.auto_centers().contains(&node2));
+    // Remove first node from region
+    tn.remove_from_ortho_region(&node1);
+    assert_eq!(tn.ortho_region().len(), 1);
+    assert!(!tn.ortho_region().contains(&node1));
+    assert!(tn.ortho_region().contains(&node2));
     
-    // Remove second center
-    tn.remove_auto_center(node2);
+    // Remove second node from region
+    tn.remove_from_ortho_region(&node2);
     assert!(!tn.is_orthogonalized());
-    assert!(tn.auto_centers().is_empty());
+    assert!(tn.ortho_region().is_empty());
 }
 
 #[test]
@@ -763,7 +763,7 @@ fn test_add_auto_center_invalid() {
     let mut tn = TreeTN::<DynId>::new();
     
     let invalid_node = NodeIndex::new(999);
-    let result = tn.add_auto_center(invalid_node);
+    let result = tn.add_to_ortho_region(invalid_node);
     assert!(result.is_err());
 }
 
@@ -779,19 +779,19 @@ fn test_clear_auto_centers() {
     let tensor = TensorDynLen::new(indices, dims, storage);
     let node = tn.add_tensor(tensor);
     
-    tn.set_auto_centers(vec![node]).unwrap();
+    tn.set_ortho_region(vec![node]).unwrap();
     assert!(tn.is_orthogonalized());
     
-    tn.clear_auto_centers();
+    tn.clear_ortho_region();
     assert!(!tn.is_orthogonalized());
-    assert!(tn.auto_centers().is_empty());
+    assert!(tn.ortho_region().is_empty());
 }
 
 #[test]
 fn test_validate_ortho_consistency_requires_connected_auto_centers() {
     let mut tn = TreeTN::<DynId>::new();
 
-    // Create three nodes, but don't connect them (auto_centers will be disconnected).
+    // Create three nodes, but don't connect them (ortho_region will be disconnected).
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
     let tensor1 = TensorDynLen::new(vec![i1, j1], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
@@ -803,7 +803,7 @@ fn test_validate_ortho_consistency_requires_connected_auto_centers() {
     let n2 = tn.add_tensor(tensor2);
 
     // Two centers that are not connected by edges should fail connectivity check.
-    tn.set_auto_centers(vec![n1, n2]).unwrap();
+    tn.set_ortho_region(vec![n1, n2]).unwrap();
     assert!(tn.validate_ortho_consistency().is_err());
 }
 
@@ -825,7 +825,7 @@ fn test_validate_ortho_consistency_none_only_inside_centers() {
     let e = tn.connect(n1, &j1, n2, &i2).unwrap();
 
     // Only n2 is center.
-    tn.set_auto_centers(vec![n2]).unwrap();
+    tn.set_ortho_region(vec![n2]).unwrap();
 
     // Incorrectly set None on boundary edge (should be forbidden).
     {
@@ -861,7 +861,7 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
     // Connect n2 -- n3 via b2 (dim4) and a3 (dim4)
     let e23 = tn.connect(n2, &b2, n3, &a3).unwrap();
 
-    tn.set_auto_centers(vec![n2]).unwrap();
+    tn.set_ortho_region(vec![n2]).unwrap();
 
     // Boundary edges must point into centers: for e12, center is n2, which is the target (n1,n2) => use a2
     tn.set_edge_ortho_towards(e12, Some(a2.clone())).unwrap();
@@ -874,7 +874,7 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
 #[test]
 fn test_orthogonalize_with_qr_simple() {
     // Create a simple 2-node tree: n1 -- n2
-    let mut tn = TreeTN::new();
+    let mut tn: TreeTN<DynId> = TreeTN::new();
     
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
@@ -901,7 +901,7 @@ fn test_orthogonalize_with_qr_simple() {
     
     // Verify that the network is orthogonalized
     assert!(tn_ortho.is_orthogonalized());
-    assert!(tn_ortho.auto_centers().contains(&n2));
+    assert!(tn_ortho.ortho_region().contains(&n2));
     
     // Verify ortho consistency
     assert!(tn_ortho.validate_ortho_consistency().is_ok());
@@ -910,7 +910,7 @@ fn test_orthogonalize_with_qr_simple() {
 #[test]
 fn test_orthogonalize_with_qr_mixed_storage() {
     // Test orthogonalization with mixed f64 and Complex64 storage
-    let mut tn = TreeTN::new();
+    let mut tn: TreeTN<DynId> = TreeTN::new();
     
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
@@ -939,7 +939,7 @@ fn test_orthogonalize_with_qr_mixed_storage() {
     
     // Verify that the network is orthogonalized
     assert!(tn_ortho.is_orthogonalized());
-    assert!(tn_ortho.auto_centers().contains(&n2));
+    assert!(tn_ortho.ortho_region().contains(&n2));
     
     // Verify ortho consistency
     assert!(tn_ortho.validate_ortho_consistency().is_ok());
