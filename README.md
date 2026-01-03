@@ -3,7 +3,7 @@
 A Rust implementation of tensor networks, inspired by ITensors.jl and QSpace v4.
 The API is designed to be largely compatible with ITensors.jl, with the goal of enabling easy conversion between the two libraries.
 
-This library is experimental and is planned to focus primarily on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation) in the near future. Abelian and non-Abelian symmetries are not in the initial scope, but the design is extensible to support them in the future.
+This library is experimental and currently focuses on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation) algorithms. Abelian and non-Abelian symmetries are not in the initial scope, but the design is extensible to support them in the future.
 
 ## Overview
 
@@ -19,7 +19,12 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 - **Copy-on-write storage**: Efficient memory management for tensor networks
 - **Multiple storage backends**: DenseF64, DenseC64, DiagF64, and DiagC64 storage types
 - **Linear algebra operations**: SVD and QR decompositions with configurable truncation tolerance, supporting both FAER and LAPACK backends
-- **Modular architecture**: Separated into `tensor4all-core` (core index/tag utilities), `tensor4all-tensor` (tensor and storage implementations), and `tensor4all-linalg` (linear algebra operations: SVD, QR)
+- **Tensor Train (MPS) algorithms**: Tensor Train decomposition, compression, and arithmetic operations
+- **Tensor Cross Interpolation (TCI)**: TCI1 and TCI2 algorithms for tensor approximation
+- **Matrix Cross Interpolation**: Matrix ACA, LU, and LU-CI algorithms
+- **Tree Tensor Networks (TTN)**: Tree tensor network structure and operations
+- **Quantics grids**: Efficient conversion between quantics, grid indices, and original coordinates
+- **Modular architecture**: Separated into independent crates for core utilities, tensor operations, linear algebra, and various algorithms
 
 ## Design Philosophy
 
@@ -153,7 +158,9 @@ tensor4all-rs and ITensors.jl use different conventions for truncation tolerance
 
 ## Project Structure
 
-tensor4all-rs is organized as a Cargo workspace with three main crates:
+tensor4all-rs is organized as a Cargo workspace with the following crates:
+
+### Core Crates
 
 - **`tensor4all-core`**: Core index, tag, and small string utilities
   - `Index<Id, Symm, Tags>`: Generic index type
@@ -171,6 +178,34 @@ tensor4all-rs is organized as a Cargo workspace with three main crates:
   - `qr`: QR decomposition with truncation control
   - Backend support: FAER (default) and LAPACK (optional)
   - Configurable relative tolerance (`rtol`) for truncation
+
+### Algorithm Crates
+
+- **`tensor4all-tensortrain`**: Tensor Train (MPS) algorithms
+  - Tensor Train decomposition and compression
+  - Arithmetic operations for Tensor Trains
+  - Contraction operations
+
+- **`tensor4all-matrixci`**: Matrix Cross Interpolation algorithms
+  - Matrix ACA (Adaptive Cross Approximation)
+  - Matrix LU decomposition
+  - Matrix LU-CI (LU Cross Interpolation)
+
+- **`tensor4all-tensorci`**: Tensor Cross Interpolation algorithms
+  - TCI1 and TCI2 algorithms for tensor approximation
+  - Cached function evaluation
+  - Index set management
+
+- **`tensor4all-treetn`**: Tree Tensor Network (TTN) implementation
+  - Tree tensor network structure
+  - Named graph representation
+  - Site index network management
+
+### Utility Crates
+
+- **`quanticsgrids`**: Quantics grid structures
+  - Efficient conversion between quantics, grid indices, and original coordinates
+  - Discretized grid utilities
 
 ## Usage Example
 
