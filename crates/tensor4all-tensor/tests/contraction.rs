@@ -57,6 +57,67 @@ fn test_contract_dyn_len_matrix_multiplication() {
     }
 }
 
+#[test]
+fn test_mul_operator_contraction() {
+    // Test that the * operator performs tensor contraction
+    // Create two matrices: A[i, j] and B[j, k]
+    // Result should be C[i, k] = A[i, j] * B[j, k]
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(4);
+
+    // Create tensor A[i, j] with all ones
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+
+    // Create tensor B[j, k] with all ones
+    let indices_b = vec![j.clone(), k.clone()];
+    let dims_b = vec![3, 4];
+    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+
+    // Contract along j using * operator: result should be C[i, k] with all 3.0
+    let result = &tensor_a * &tensor_b;
+    assert_eq!(result.dims, vec![2, 4]);
+    assert_eq!(result.indices.len(), 2);
+    assert_eq!(result.indices[0].id, i.id);
+    assert_eq!(result.indices[1].id, k.id);
+
+    // Check that all elements are 3.0
+    if let Storage::DenseF64(ref vec) = *result.storage {
+        assert_eq!(vec.len(), 8); // 2 * 4 = 8
+        for &val in vec.iter() {
+            assert_eq!(val, 3.0);
+        }
+    } else {
+        panic!("Expected DenseF64 storage");
+    }
+}
+
+#[test]
+fn test_mul_operator_owned() {
+    // Test * operator with owned tensors
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(4);
+
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+
+    let indices_b = vec![j.clone(), k.clone()];
+    let dims_b = vec![3, 4];
+    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+
+    // Use * operator with owned tensors
+    let result = tensor_a * tensor_b;
+    assert_eq!(result.dims, vec![2, 4]);
+    assert_eq!(result.indices.len(), 2);
+}
 
 #[test]
 #[should_panic(expected = "No common indices found")]

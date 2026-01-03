@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::collections::HashSet;
+use std::ops::Mul;
 use num_complex::Complex64;
 use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
 use tensor4all_core::index_ops::{common_inds, check_unique_indices};
@@ -589,6 +590,91 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
             dims: result_dims,
             storage: result_storage,
         })
+    }
+}
+
+/// Implement multiplication operator for tensor contraction.
+///
+/// The `*` operator performs tensor contraction along common indices.
+/// This is equivalent to calling the `contract` method.
+///
+/// # Example
+/// ```
+/// use tensor4all_tensor::TensorDynLen;
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_tensor::Storage;
+/// use tensor4all_tensor::storage::DenseStorageF64;
+/// use std::sync::Arc;
+///
+/// // Create two tensors: A[i, j] and B[j, k]
+/// let i = Index::new_dyn(2);
+/// let j = Index::new_dyn(3);
+/// let k = Index::new_dyn(4);
+///
+/// let indices_a = vec![i.clone(), j.clone()];
+/// let dims_a = vec![2, 3];
+/// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
+/// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+///
+/// let indices_b = vec![j.clone(), k.clone()];
+/// let dims_b = vec![3, 4];
+/// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 12])));
+/// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+///
+/// // Contract along j using * operator: result is C[i, k]
+/// let result = &tensor_a * &tensor_b;
+/// assert_eq!(result.dims, vec![2, 4]);
+/// ```
+impl<Id, Symm> Mul<&TensorDynLen<Id, Symm>> for &TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    type Output = TensorDynLen<Id, Symm>;
+
+    fn mul(self, other: &TensorDynLen<Id, Symm>) -> Self::Output {
+        self.contract(other)
+    }
+}
+
+/// Implement multiplication operator for tensor contraction (owned version).
+///
+/// This allows using `tensor_a * tensor_b` when both tensors are owned.
+impl<Id, Symm> Mul<TensorDynLen<Id, Symm>> for TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    type Output = TensorDynLen<Id, Symm>;
+
+    fn mul(self, other: TensorDynLen<Id, Symm>) -> Self::Output {
+        self.contract(&other)
+    }
+}
+
+/// Implement multiplication operator for tensor contraction (mixed reference/owned).
+impl<Id, Symm> Mul<TensorDynLen<Id, Symm>> for &TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    type Output = TensorDynLen<Id, Symm>;
+
+    fn mul(self, other: TensorDynLen<Id, Symm>) -> Self::Output {
+        self.contract(&other)
+    }
+}
+
+/// Implement multiplication operator for tensor contraction (mixed owned/reference).
+impl<Id, Symm> Mul<&TensorDynLen<Id, Symm>> for TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    type Output = TensorDynLen<Id, Symm>;
+
+    fn mul(self, other: &TensorDynLen<Id, Symm>) -> Self::Output {
+        self.contract(other)
     }
 }
 
