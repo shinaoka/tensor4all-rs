@@ -1,8 +1,10 @@
 use tensor4all_treetn::{Connection, TreeTN};
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::{TensorDynLen, Storage};
+use tensor4all_tensor::storage::{DenseStorageF64, DenseStorageC64};
 use std::sync::Arc;
 use petgraph::graph::NodeIndex;
+use num_complex::Complex64;
 
 #[test]
 fn test_connection_creation() {
@@ -867,5 +869,79 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
     tn.set_edge_ortho_towards(e23, Some(b2.clone())).unwrap();
 
     assert!(tn.validate_ortho_consistency().is_ok());
+}
+
+#[test]
+fn test_orthogonalize_with_qr_simple() {
+    // Create a simple 2-node tree: n1 -- n2
+    let mut tn = TreeTN::new();
+    
+    let a1 = Index::new_dyn(2);
+    let b1 = Index::new_dyn(3);
+    let a2 = Index::new_dyn(3);
+    let b2 = Index::new_dyn(4);
+    
+    let indices1 = vec![a1.clone(), b1.clone()];
+    let dims1 = vec![2, 3];
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(indices1, dims1, storage1);
+    
+    let indices2 = vec![a2.clone(), b2.clone()];
+    let dims2 = vec![3, 4];
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(indices2, dims2, storage2);
+    
+    let n1 = tn.add_tensor(tensor1);
+    let n2 = tn.add_tensor(tensor2);
+    
+    let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
+    
+    // Orthogonalize towards n2
+    let tn_ortho = tn.orthogonalize_with_qr(vec![n2]).unwrap();
+    
+    // Verify that the network is orthogonalized
+    assert!(tn_ortho.is_orthogonalized());
+    assert!(tn_ortho.auto_centers().contains(&n2));
+    
+    // Verify ortho consistency
+    assert!(tn_ortho.validate_ortho_consistency().is_ok());
+}
+
+#[test]
+fn test_orthogonalize_with_qr_mixed_storage() {
+    // Test orthogonalization with mixed f64 and Complex64 storage
+    let mut tn = TreeTN::new();
+    
+    let a1 = Index::new_dyn(2);
+    let b1 = Index::new_dyn(3);
+    let a2 = Index::new_dyn(3);
+    let b2 = Index::new_dyn(4);
+    
+    // n1: f64 tensor
+    let indices1 = vec![a1.clone(), b1.clone()];
+    let dims1 = vec![2, 3];
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(indices1, dims1, storage1);
+    
+    // n2: Complex64 tensor
+    let indices2 = vec![a2.clone(), b2.clone()];
+    let dims2 = vec![3, 4];
+    let storage2 = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(vec![Complex64::new(1.0, 0.0); 12])));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(indices2, dims2, storage2);
+    
+    let n1 = tn.add_tensor(tensor1);
+    let n2 = tn.add_tensor(tensor2);
+    
+    let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
+    
+    // Orthogonalize towards n2
+    let tn_ortho = tn.orthogonalize_with_qr(vec![n2]).unwrap();
+    
+    // Verify that the network is orthogonalized
+    assert!(tn_ortho.is_orthogonalized());
+    assert!(tn_ortho.auto_centers().contains(&n2));
+    
+    // Verify ortho consistency
+    assert!(tn_ortho.validate_ortho_consistency().is_ok());
 }
 

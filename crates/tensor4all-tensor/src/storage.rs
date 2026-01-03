@@ -69,6 +69,15 @@ impl DenseStorageF64 {
             dims.len(),
             "permutation length must match dimensions length"
         );
+        let expected_len: usize = dims.iter().product();
+        assert_eq!(
+            self.0.len(),
+            expected_len,
+            "DenseStorageF64 length {} does not match dims product {}. \
+             This likely indicates uninitialized storage (created with capacity but not filled).",
+            self.0.len(),
+            expected_len
+        );
 
         // Create mdarray shape from dimensions
         let shape = DynRank::from_dims(dims);
@@ -97,6 +106,24 @@ impl DenseStorageF64 {
         other_dims: &[usize],
         other_axes: &[usize],
     ) -> Self {
+        let expected_len: usize = dims.iter().product();
+        assert_eq!(
+            self.0.len(),
+            expected_len,
+            "DenseStorageF64 length {} does not match dims product {}. \
+             This likely indicates uninitialized storage (created with capacity but not filled).",
+            self.0.len(),
+            expected_len
+        );
+        let other_expected_len: usize = other_dims.iter().product();
+        assert_eq!(
+            other.0.len(),
+            other_expected_len,
+            "DenseStorageF64 (other) length {} does not match dims product {}. \
+             This likely indicates uninitialized storage (created with capacity but not filled).",
+            other.0.len(),
+            other_expected_len
+        );
         // Create mdarray views (which can be used as slices)
         let shape = DynRank::from_dims(dims);
         let mapping = DenseMapping::new(shape);
@@ -188,6 +215,15 @@ impl DenseStorageC64 {
             dims.len(),
             "permutation length must match dimensions length"
         );
+        let expected_len: usize = dims.iter().product();
+        assert_eq!(
+            self.0.len(),
+            expected_len,
+            "DenseStorageC64 length {} does not match dims product {}. \
+             This likely indicates uninitialized storage (created with capacity but not filled).",
+            self.0.len(),
+            expected_len
+        );
 
         // Create mdarray shape from dimensions
         let shape = DynRank::from_dims(dims);
@@ -216,6 +252,24 @@ impl DenseStorageC64 {
         other_dims: &[usize],
         other_axes: &[usize],
     ) -> Self {
+        let expected_len: usize = dims.iter().product();
+        assert_eq!(
+            self.0.len(),
+            expected_len,
+            "DenseStorageC64 length {} does not match dims product {}. \
+             This likely indicates uninitialized storage (created with capacity but not filled).",
+            self.0.len(),
+            expected_len
+        );
+        let other_expected_len: usize = other_dims.iter().product();
+        assert_eq!(
+            other.0.len(),
+            other_expected_len,
+            "DenseStorageC64 (other) length {} does not match dims product {}. \
+             This likely indicates uninitialized storage (created with capacity but not filled).",
+            other.0.len(),
+            other_expected_len
+        );
         // Create mdarray views (which can be used as slices)
         let shape = DynRank::from_dims(dims);
         let mapping = DenseMapping::new(shape);

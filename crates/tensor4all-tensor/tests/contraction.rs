@@ -216,3 +216,144 @@ fn test_contract_mixed_c64_f64() {
     }
 }
 
+#[test]
+fn test_contract_pairs_different_ids() {
+    // Test contract_pairs with indices that have different IDs but same dimensions
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);  // Same dimension as j, but different ID
+    let l = Index::new_dyn(4);
+
+    // Create tensor A[i, j]
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+
+    // Create tensor B[k, l] where k has same dimension as j but different ID
+    let indices_b = vec![k.clone(), l.clone()];
+    let dims_b = vec![3, 4];
+    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+
+    // Contract j (from A) with k (from B): result should be C[i, l] with all 3.0
+    let result = tensor_a.contract_pairs(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
+    assert_eq!(result.dims, vec![2, 4]);
+    assert_eq!(result.indices.len(), 2);
+    assert_eq!(result.indices[0].id, i.id);
+    assert_eq!(result.indices[1].id, l.id);
+
+    // Check that all elements are 3.0
+    if let Storage::DenseF64(ref vec) = *result.storage {
+        assert_eq!(vec.len(), 8);
+        for &val in vec.iter() {
+            assert_eq!(val, 3.0);
+        }
+    } else {
+        panic!("Expected DenseF64 storage");
+    }
+}
+
+#[test]
+fn test_contract_pairs_dimension_mismatch() {
+    // Test that dimension mismatch returns an error
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(5);  // Different dimension from j
+
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Arc::new(Storage::new_dense_f64(6));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+
+    let indices_b = vec![k.clone()];
+    let dims_b = vec![5];
+    let storage_b = Arc::new(Storage::new_dense_f64(5));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+
+    let result = tensor_a.contract_pairs(&tensor_b, &[(j.clone(), k.clone())]);
+    assert!(result.is_err());
+    if let Err(e) = result {
+        let err_msg = format!("{}", e);
+        assert!(err_msg.contains("dimension") || err_msg.contains("mismatch"));
+    }
+}
+
+#[test]
+fn test_contract_pairs_index_not_found() {
+    // Test that specifying a non-existent index returns an error
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+    let nonexistent = Index::new_dyn(3);
+
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Arc::new(Storage::new_dense_f64(6));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+
+    let indices_b = vec![k.clone()];
+    let dims_b = vec![3];
+    let storage_b = Arc::new(Storage::new_dense_f64(3));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+
+    // Try to contract with a non-existent index from tensor_a
+    let result = tensor_a.contract_pairs(&tensor_b, &[(nonexistent.clone(), k.clone())]);
+    assert!(result.is_err());
+    if let Err(e) = result {
+        let err_msg = format!("{}", e);
+        assert!(err_msg.contains("not found") || err_msg.contains("index"));
+    }
+}
+
+#[test]
+fn test_contract_pairs_duplicate_axis() {
+    // Test that specifying the same axis twice returns an error
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+    let l = Index::new_dyn(4);
+
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Arc::new(Storage::new_dense_f64(6));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+
+    let indices_b = vec![k.clone(), l.clone()];
+    let dims_b = vec![3, 4];
+    let storage_b = Arc::new(Storage::new_dense_f64(12));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+
+    // Try to contract j twice (duplicate axis in self)
+    let result = tensor_a.contract_pairs(&tensor_b, &[
+        (j.clone(), k.clone()),
+        (j.clone(), l.clone()),  // j is used twice
+    ]);
+    // Just verify it's an error - duplicate axes should be detected
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_contract_pairs_empty_pairs() {
+    // Test that empty pairs returns an error
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Arc::new(Storage::new_dense_f64(6));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+
+    let indices_b = vec![j.clone()];
+    let dims_b = vec![3];
+    let storage_b = Arc::new(Storage::new_dense_f64(3));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+
+    let result = tensor_a.contract_pairs(&tensor_b, &[]);
+    assert!(result.is_err());
+    if let Err(e) = result {
+        let err_msg = format!("{}", e);
+        assert!(err_msg.contains("No pairs") || err_msg.contains("empty") || err_msg.contains("specified"));
+    }
+}
+

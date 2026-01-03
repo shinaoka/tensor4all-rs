@@ -9,6 +9,8 @@ repository.workspace = true
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-tensor = { path = "../tensor4all-tensor" }
+tensor4all-linalg = { path = "../tensor4all-linalg" }
 petgraph.workspace = true
 anyhow.workspace = true
+num-complex.workspace = true
 

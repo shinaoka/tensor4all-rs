@@ -3,11 +3,14 @@ use petgraph::Undirected;
 use petgraph::visit::{Dfs, EdgeRef};
 use std::collections::VecDeque;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use tensor4all_tensor::TensorDynLen;
-use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
+use tensor4all_tensor::Storage;
+use tensor4all_core::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all_core::index_ops::common_inds;
 use crate::connection::Connection;
 use anyhow::{Result, Context};
+use num_complex::Complex64;
 
 /// Tree Tensor Network structure.
 ///
@@ -543,6 +546,224 @@ where
         }
 
         Ok(())
+    }
+
+    /// Orthogonalize the network using QR decomposition towards the specified auto_centers.
+    ///
+    /// This method consumes the TreeTN and returns a new orthogonalized TreeTN.
+    /// The algorithm:
+    /// 1. Validates that the graph is a tree
+    /// 2. Sets the auto_centers and validates connectivity
+    /// 3. Computes distances from auto_centers using BFS
+    /// 4. Processes nodes in order of decreasing distance (farthest first)
+    /// 5. For each node, performs QR decomposition on edges pointing towards auto_centers
+    /// 6. Absorbs R factors into parent nodes using contract_pairs
+    ///
+    /// # Arguments
+    /// * `auto_centers` - The nodes that will serve as orthogonalization centers
+    ///
+    /// # Returns
+    /// A new orthogonalized TreeTN, or an error if validation fails or QR decomposition fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The graph is not a tree
+    /// - auto_centers are not connected
+    /// - QR decomposition fails
+    /// - Tensor storage types are not DenseF64 or DenseC64
+    pub fn orthogonalize_with_qr(
+        mut self,
+        auto_centers: impl IntoIterator<Item = NodeIndex>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        use tensor4all_linalg::qr;
+
+        // 1. Validate tree structure
+        self.validate_tree()
+            .context("orthogonalize_with_qr: graph must be a tree")?;
+
+        // 2. Set auto_centers and validate connectivity
+        self.set_auto_centers(auto_centers)
+            .context("orthogonalize_with_qr: failed to set auto_centers")?;
+
+        if self.auto_centers.is_empty() {
+            return Ok(self); // Nothing to do if no centers
+        }
+
+        // Validate auto_centers connectivity (similar to validate_ortho_consistency)
+        let start = *self
+            .auto_centers
+            .iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("auto_centers unexpectedly empty"))?;
+        let mut stack = vec![start];
+        let mut seen = HashSet::new();
+        seen.insert(start);
+        while let Some(v) = stack.pop() {
+            for nb in self.graph.neighbors(v) {
+                if self.auto_centers.contains(&nb) && seen.insert(nb) {
+                    stack.push(nb);
+                }
+            }
+        }
+        if seen.len() != self.auto_centers.len() {
+            return Err(anyhow::anyhow!(
+                "auto_centers is not connected: reached {} out of {} centers",
+                seen.len(),
+                self.auto_centers.len()
+            ))
+            .context("orthogonalize_with_qr: auto_centers must form a connected subtree");
+        }
+
+        // 3. Multi-source BFS to compute distances from auto_centers
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut q = VecDeque::new();
+        for &c in &self.auto_centers {
+            dist.insert(c, 0);
+            q.push_back(c);
+        }
+        while let Some(v) = q.pop_front() {
+            let dv = dist[&v];
+            for nb in self.graph.neighbors(v) {
+                if !dist.contains_key(&nb) {
+                    dist.insert(nb, dv + 1);
+                    q.push_back(nb);
+                }
+            }
+        }
+
+        // 4. Process nodes in order of decreasing distance (farthest first)
+        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .map(|(&node, &d)| (node, d))
+            .collect();
+        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1)); // Sort descending by distance
+
+        for (v, _dv) in nodes_by_distance {
+            // Skip nodes in auto_centers (they are already at distance 0)
+            if self.auto_centers.contains(&v) {
+                continue;
+            }
+
+            // Find parent: neighbor with distance one less
+            let v_dist = dist[&v];
+            let parent_dist = v_dist.checked_sub(1)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in auto_centers", v))
+                .context("orthogonalize_with_qr: distance calculation error")?;
+
+            let parent = self.graph
+                .neighbors(v)
+                .find(|&nb| {
+                    dist.get(&nb).map(|&d| d == parent_dist).unwrap_or(false)
+                })
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Node {:?} at distance {} has no parent (neighbor with distance {})",
+                    v,
+                    v_dist,
+                    parent_dist
+                ))
+                .context("orthogonalize_with_qr: tree structure violation")?;
+
+            // Find the edge between v and parent
+            let edge = self.graph
+                .edges_connecting(v, parent)
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
+                .context("orthogonalize_with_qr: edge not found")?
+                .id();
+
+            // Get the bond index on v-side corresponding to the parent edge.
+            // We will place this index on the RIGHT side of the QR unfolding so that
+            // R carries this bond and can be absorbed into the parent tensor.
+            let parent_bond_v = self
+                .edge_index_for_node(edge, v)
+                .context("orthogonalize_with_qr: failed to get parent bond index on v")?
+                .clone();
+
+            // Get the tensor at node v (reference)
+            let tensor_v = self
+                .tensor(v)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
+                .context("orthogonalize_with_qr: tensor not found")?;
+
+            // Build left_inds = all indices of tensor_v EXCEPT the parent bond.
+            let left_inds: Vec<Index<Id, Symm>> = tensor_v
+                .indices
+                .iter()
+                .filter(|idx| idx.id != parent_bond_v.id)
+                .cloned()
+                .collect();
+            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
+                return Err(anyhow::anyhow!(
+                    "Cannot QR-orthogonalize node {:?}: need at least one left index and at least one right index",
+                    v
+                ))
+                .context("orthogonalize_with_qr: invalid tensor rank for QR");
+            }
+
+            // Determine storage type and perform QR decomposition
+            let (q_tensor, r_tensor) = match tensor_v.storage.as_ref() {
+                Storage::DenseF64(_) => qr::<Id, Symm, f64>(tensor_v, &left_inds)
+                    .map_err(|e| anyhow::anyhow!("QR decomposition failed: {}", e))
+                    .context("orthogonalize_with_qr: QR decomposition failed for f64")?,
+                Storage::DenseC64(_) => qr::<Id, Symm, Complex64>(tensor_v, &left_inds)
+                    .map_err(|e| anyhow::anyhow!("QR decomposition failed: {}", e))
+                    .context("orthogonalize_with_qr: QR decomposition failed for Complex64")?,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unsupported storage type for QR decomposition (only DenseF64 and DenseC64 are supported)"
+                    ))
+                    .context("orthogonalize_with_qr: unsupported storage type");
+                }
+            };
+
+            // In this split, R must contain the parent bond (as part of its right indices).
+            // We will absorb R into the parent along (edge_index_parent, parent_bond_v).
+            let edge_index_parent = self
+                .edge_index_for_node(edge, parent)
+                .context("orthogonalize_with_qr: failed to get edge index for parent")?
+                .clone();
+
+            let parent_tensor = self
+                .tensor(parent)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
+                .context("orthogonalize_with_qr: parent tensor not found")?;
+
+            let updated_parent_tensor = parent_tensor
+                .contract_pairs(&r_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .context("orthogonalize_with_qr: failed to absorb R into parent tensor")?;
+
+            // The new bond index is the QR-created bond shared between Q and R.
+            // It is always the last index of Q and the first index of R.
+            let new_bond_index = q_tensor
+                .indices
+                .last()
+                .ok_or_else(|| anyhow::anyhow!("Q tensor has no indices"))?
+                .clone();
+
+            // Update the connection bond indices FIRST, so replace_tensor validation matches.
+            self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
+                .context("orthogonalize_with_qr: failed to update edge bond indices")?;
+
+            // Now update tensors. These validations should pass because the edge expects new_bond_index.
+            self.replace_tensor(v, q_tensor)
+                .context("orthogonalize_with_qr: failed to replace tensor at node v")?;
+            self.replace_tensor(parent, updated_parent_tensor)
+                .context("orthogonalize_with_qr: failed to replace tensor at parent node")?;
+
+            // Set ortho_towards to point towards parent (auto_centers direction)
+            let ortho_towards_index = self
+                .edge_index_for_node(edge, parent)
+                .context("orthogonalize_with_qr: failed to get ortho_towards index for parent")?
+                .clone();
+            self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
+                .context("orthogonalize_with_qr: failed to set ortho_towards")?;
+        }
+
+        Ok(self)
     }
 }
 

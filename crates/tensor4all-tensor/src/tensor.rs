@@ -160,6 +160,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// use tensor4all_tensor::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
+    /// use tensor4all_tensor::storage::DenseStorageF64;
     /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
@@ -167,7 +168,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// let j = Index::new_dyn(3);
     /// let indices = vec![i.clone(), j.clone()];
     /// let dims = vec![2, 3];
-    /// let storage = Arc::new(Storage::new_dense_f64(6));
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
     /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
     ///
     /// // Permute to 3×2: swap the two dimensions by providing new indices order
@@ -215,6 +216,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// use tensor4all_tensor::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
+    /// use tensor4all_tensor::storage::DenseStorageF64;
     /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
@@ -223,7 +225,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     ///     Index::new_dyn(3),
     /// ];
     /// let dims = vec![2, 3];
-    /// let storage = Arc::new(Storage::new_dense_f64(6));
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
     /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
     ///
     /// // Permute to 3×2: swap the two dimensions
@@ -283,6 +285,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// use tensor4all_tensor::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use tensor4all_tensor::Storage;
+    /// use tensor4all_tensor::storage::DenseStorageF64;
     /// use std::sync::Arc;
     ///
     /// // Create two tensors: A[i, j] and B[j, k]
@@ -292,12 +295,12 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     ///
     /// let indices_a = vec![i.clone(), j.clone()];
     /// let dims_a = vec![2, 3];
-    /// let storage_a = Arc::new(Storage::new_dense_f64(6));
+    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
     /// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
     ///
     /// let indices_b = vec![j.clone(), k.clone()];
     /// let dims_b = vec![3, 4];
-    /// let storage_b = Arc::new(Storage::new_dense_f64(12));
+    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 12])));
     /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
     ///
     /// // Contract along j: result is C[i, k]
@@ -380,6 +383,157 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
             dims: result_dims,
             storage: result_storage,
         }
+    }
+
+    /// Contract this tensor with another tensor along explicitly specified index pairs.
+    ///
+    /// This method contracts along the specified pairs of indices, where each pair
+    /// consists of an index from `self` and an index from `other`. The indices
+    /// do not need to have matching IDs - only matching dimensions are required.
+    ///
+    /// # Arguments
+    /// * `other` - The tensor to contract with
+    /// * `pairs` - Pairs of indices to contract: `(index_from_self, index_from_other)`
+    ///
+    /// # Returns
+    /// A new tensor resulting from the contraction, or an error if:
+    /// - Any specified index is not found in the respective tensor
+    /// - Dimensions don't match for any pair
+    /// - The same axis is specified multiple times in `self` or `other`
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_tensor::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
+    /// use tensor4all_tensor::storage::DenseStorageF64;
+    /// use std::sync::Arc;
+    ///
+    /// // Create two tensors: A[i, j] and B[k, l] where j and k have same dimension but different IDs
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let k = Index::new_dyn(3);  // Same dimension as j, but different ID
+    /// let l = Index::new_dyn(4);
+    ///
+    /// let indices_a = vec![i.clone(), j.clone()];
+    /// let dims_a = vec![2, 3];
+    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
+    /// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    ///
+    /// let indices_b = vec![k.clone(), l.clone()];
+    /// let dims_b = vec![3, 4];
+    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 12])));
+    /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    ///
+    /// // Contract j (from A) with k (from B): result is C[i, l]
+    /// let result = tensor_a.contract_pairs(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
+    /// assert_eq!(result.dims, vec![2, 4]);
+    /// ```
+    pub fn contract_pairs(
+        &self,
+        other: &Self,
+        pairs: &[(Index<Id, Symm>, Index<Id, Symm>)],
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq,
+        Symm: Clone + Symmetry,
+    {
+        use anyhow::Context;
+
+        if pairs.is_empty() {
+            return Err(anyhow::anyhow!("No pairs specified for contraction"))
+                .context("contract_pairs: at least one pair must be specified");
+        }
+
+        // Find positions of indices in both tensors and validate
+        let mut axes_a = Vec::new();
+        let mut axes_b = Vec::new();
+
+        for (idx_a, idx_b) in pairs {
+            // Find position in self
+            let pos_a = self.indices
+                .iter()
+                .position(|idx| idx.id == idx_a.id)
+                .ok_or_else(|| anyhow::anyhow!("Index with id matching specified index not found in self tensor"))
+                .context("contract_pairs: index from self not found")?;
+
+            // Find position in other
+            let pos_b = other.indices
+                .iter()
+                .position(|idx| idx.id == idx_b.id)
+                .ok_or_else(|| anyhow::anyhow!("Index with id matching specified index not found in other tensor"))
+                .context("contract_pairs: index from other not found")?;
+
+            // Verify dimensions match
+            if self.dims[pos_a] != other.dims[pos_b] {
+                return Err(anyhow::anyhow!(
+                    "Dimension mismatch for pair: self[{}] = {} != other[{}] = {}",
+                    pos_a,
+                    self.dims[pos_a],
+                    pos_b,
+                    other.dims[pos_b]
+                ))
+                .context("contract_pairs: dimensions must match for each pair");
+            }
+
+            // Check for duplicate axes in self
+            if axes_a.contains(&pos_a) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate axis {} in self tensor",
+                    pos_a
+                ))
+                .context("contract_pairs: each axis can only be contracted once");
+            }
+
+            // Check for duplicate axes in other
+            if axes_b.contains(&pos_b) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate axis {} in other tensor",
+                    pos_b
+                ))
+                .context("contract_pairs: each axis can only be contracted once");
+            }
+
+            axes_a.push(pos_a);
+            axes_b.push(pos_b);
+        }
+
+        // Get non-contracted indices
+        let mut result_indices = Vec::new();
+        let mut result_dims = Vec::new();
+
+        // Add non-contracted indices from self
+        for (i, idx) in self.indices.iter().enumerate() {
+            if !axes_a.contains(&i) {
+                result_indices.push(idx.clone());
+                result_dims.push(self.dims[i]);
+            }
+        }
+
+        // Add non-contracted indices from other
+        for (i, idx) in other.indices.iter().enumerate() {
+            if !axes_b.contains(&i) {
+                result_indices.push(idx.clone());
+                result_dims.push(other.dims[i]);
+            }
+        }
+
+        // Perform contraction
+        let result_storage = Arc::new(contract_storage(
+            &self.storage,
+            &self.dims,
+            &axes_a,
+            &other.storage,
+            &other.dims,
+            &axes_b,
+            &result_dims,
+        ));
+
+        Ok(Self {
+            indices: result_indices,
+            dims: result_dims,
+            storage: result_storage,
+        })
     }
 }
 
