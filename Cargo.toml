@@ -9,6 +9,7 @@ members = [
     "tensor4all-matrixci",
     "tensor4all-tensortrain",
     "tensor4all-tensorci",
+    "tensor4all-capi",
 ]
 resolver = "2"
 

@@ -1,0 +1,24 @@
+name = "Tensor4all"
+uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+authors = ["tensor4all collaboration"]
+version = "0.1.0"
+
+[deps]
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+
+[weakdeps]
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
+
+[extensions]
+Tensor4allITensorsExt = ["ITensors"]
+
+[compat]
+ITensors = "0.6, 0.7, 0.8"
+julia = "1.9"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
+
+[targets]
+test = ["Test", "ITensors"]

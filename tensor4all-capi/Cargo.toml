@@ -1,0 +1,19 @@
+[package]
+name = "tensor4all-capi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "C API for tensor4all (Rust) core types"
+
+[lib]
+name = "tensor4all_capi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tensor4all-core-common = { path = "../tensor4all/core-common" }
+libc = "0.2"
+thiserror.workspace = true
+paste = "1.0"
+
