@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tensor4all-core", "crates/tensor4all-tensor", "crates/tensor4all-linalg"]
+members = ["crates/tensor4all-core", "crates/tensor4all-tensor", "crates/tensor4all-linalg", "crates/tensor4all-treetn"]
 resolver = "2"
 
 [workspace.package]
@@ -10,7 +10,6 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tensor4all/tensor4all-rs"
 
 [workspace.dependencies]
-# 共通依存関係
 num-complex = "0.4"
 num-traits = "0.2"
 anyhow = "1.0"
@@ -21,4 +20,5 @@ mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", 
 faer-traits = "0.23"
 thiserror = "2.0"
 rand = "0.8"
+petgraph = "0.6"
 

@@ -1,0 +1,14 @@
+[package]
+name = "tensor4all-treetn"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tensor4all-core = { path = "../tensor4all-core" }
+tensor4all-tensor = { path = "../tensor4all-tensor" }
+petgraph.workspace = true
+anyhow.workspace = true
+
