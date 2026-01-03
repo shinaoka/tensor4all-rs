@@ -303,9 +303,4 @@ If you cite ITensors.jl directly, please use:
 
 ## License
 
-This project is dual-licensed under either:
-
-- **MIT License** (see [LICENSE-MIT](LICENSE-MIT))
-- **Apache License 2.0** (see [LICENSE-APACHE](LICENSE-APACHE))
-
-at your option.
+This project is licensed under the **MIT License** (see [LICENSE-MIT](LICENSE-MIT)).
