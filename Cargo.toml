@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tensor4all-core", "crates/tensor4all-tensor", "crates/tensor4all-linalg", "crates/tensor4all-treetn"]
+members = ["crates/tensor4all-core", "crates/tensor4all-tensor", "crates/tensor4all-linalg", "crates/tensor4all-treetn", "crates/quanticsgrids"]
 resolver = "2"
 
 [workspace.package]
