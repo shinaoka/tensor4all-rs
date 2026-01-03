@@ -26,6 +26,28 @@ impl SumFromStorage for AnyScalar {
 }
 
 impl AnyScalar {
+    /// Create a real scalar value.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_tensor::AnyScalar;
+    /// let s = AnyScalar::new_real(3.5);
+    /// ```
+    pub fn new_real(x: f64) -> Self {
+        x.into()
+    }
+
+    /// Create a complex scalar value from real and imaginary parts.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_tensor::AnyScalar;
+    /// let s = AnyScalar::new_complex(1.0, 2.0);  // 1 + 2i
+    /// ```
+    pub fn new_complex(re: f64, im: f64) -> Self {
+        Complex64::new(re, im).into()
+    }
+
     /// Check if this scalar is complex.
     pub fn is_complex(&self) -> bool {
         matches!(self, AnyScalar::C64(_))

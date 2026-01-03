@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::borrow::{Borrow, Cow};
+use std::ops::{Add, Mul};
 use num_complex::Complex64;
 use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice, DTensor, Rank};
 use mdarray_linalg::{matmul::{MatMul, ContractBuilder}, Naive};
@@ -569,6 +570,90 @@ impl Storage {
             Storage::DiagC64(v) => Storage::DiagC64(v.clone()),
         }
     }
+
+    /// Extract real part from Complex64 storage as f64 storage.
+    /// For f64 storage, returns a copy.
+    pub fn extract_real_part(&self) -> Storage {
+        match self {
+            Storage::DenseF64(v) => Storage::DenseF64(DenseStorageF64::from_vec(v.as_slice().to_vec())),
+            Storage::DiagF64(d) => Storage::DiagF64(DiagStorageF64::from_vec(d.as_slice().to_vec())),
+            Storage::DenseC64(v) => {
+                let real_vec: Vec<f64> = v.as_slice().iter().map(|z| z.re).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec(real_vec))
+            }
+            Storage::DiagC64(d) => {
+                let real_vec: Vec<f64> = d.as_slice().iter().map(|z| z.re).collect();
+                Storage::DiagF64(DiagStorageF64::from_vec(real_vec))
+            }
+        }
+    }
+
+    /// Extract imaginary part from Complex64 storage as f64 storage.
+    /// For f64 storage, returns zero storage (will be resized appropriately).
+    pub fn extract_imag_part(&self, dims: &[usize]) -> Storage {
+        match self {
+            Storage::DenseF64(_) => {
+                // For real storage, imaginary part is zero
+                let total_size: usize = dims.iter().product();
+                Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; total_size]))
+            }
+            Storage::DiagF64(_) => {
+                // For real diagonal storage, imaginary part is zero
+                let mindim_val = mindim(dims);
+                Storage::DiagF64(DiagStorageF64::from_vec(vec![0.0; mindim_val]))
+            }
+            Storage::DenseC64(v) => {
+                let imag_vec: Vec<f64> = v.as_slice().iter().map(|z| z.im).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec(imag_vec))
+            }
+            Storage::DiagC64(d) => {
+                let imag_vec: Vec<f64> = d.as_slice().iter().map(|z| z.im).collect();
+                Storage::DiagF64(DiagStorageF64::from_vec(imag_vec))
+            }
+        }
+    }
+
+    /// Convert f64 storage to Complex64 storage (real part only, imaginary part is zero).
+    /// For Complex64 storage, returns a copy.
+    pub fn to_complex_storage(&self) -> Storage {
+        match self {
+            Storage::DenseF64(v) => {
+                let c64_vec: Vec<Complex64> = v.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(c64_vec))
+            }
+            Storage::DiagF64(d) => {
+                let c64_vec: Vec<Complex64> = d.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(c64_vec))
+            }
+            Storage::DenseC64(v) => Storage::DenseC64(DenseStorageC64::from_vec(v.as_slice().to_vec())),
+            Storage::DiagC64(d) => Storage::DiagC64(DiagStorageC64::from_vec(d.as_slice().to_vec())),
+        }
+    }
+
+    /// Combine two f64 storages into Complex64 storage.
+    /// real_storage becomes the real part, imag_storage becomes the imaginary part.
+    /// Formula: real + i * imag
+    pub fn combine_to_complex(real_storage: &Storage, imag_storage: &Storage) -> Storage {
+        match (real_storage, imag_storage) {
+            (Storage::DenseF64(real), Storage::DenseF64(imag)) => {
+                assert_eq!(real.len(), imag.len(), "Storage lengths must match");
+                let complex_vec: Vec<Complex64> = real.as_slice().iter()
+                    .zip(imag.as_slice().iter())
+                    .map(|(&r, &i)| Complex64::new(r, i))
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(complex_vec))
+            }
+            (Storage::DiagF64(real), Storage::DiagF64(imag)) => {
+                assert_eq!(real.len(), imag.len(), "Storage lengths must match");
+                let complex_vec: Vec<Complex64> = real.as_slice().iter()
+                    .zip(imag.as_slice().iter())
+                    .map(|(&r, &i)| Complex64::new(r, i))
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(complex_vec))
+            }
+            _ => panic!("Both storages must be the same type (DenseF64 or DiagF64)"),
+        }
+    }
 }
 
 /// Helper to get a mutable reference to storage, cloning if needed (COW).
@@ -626,6 +711,7 @@ pub fn contract_storage(
     }
 
     match (storage_a, storage_b) {
+        // Same type cases (existing - no change)
         (Storage::DenseF64(a), Storage::DenseF64(b)) => {
             Storage::DenseF64(a.contract(dims_a, axes_a, b, dims_b, axes_b))
         }
@@ -639,7 +725,62 @@ pub fn contract_storage(
         (Storage::DiagC64(a), Storage::DiagC64(b)) => {
             a.contract_diag_diag(dims_a, b, dims_b, result_dims)
         }
-        // DiagTensor × DenseTensor: convert Diag to Dense first
+        
+        // Mixed types: f64 × Complex64 (use real/imaginary separation)
+        (Storage::DenseF64(_), Storage::DenseC64(_)) | (Storage::DiagF64(_), Storage::DiagC64(_)) => {
+            // Extract real and imaginary parts from Complex64
+            let c64_real = storage_b.extract_real_part();
+            let c64_imag = storage_b.extract_imag_part(dims_b);
+            
+            // Contract f64 with real part
+            let result_real = contract_storage(
+                storage_a, dims_a, axes_a,
+                &c64_real, dims_b, axes_b,
+                result_dims
+            );
+            
+            // Contract f64 with imaginary part
+            let result_imag = contract_storage(
+                storage_a, dims_a, axes_a,
+                &c64_imag, dims_b, axes_b,
+                result_dims
+            );
+            
+            // Combine: result_real + i * result_imag
+            // Convert real part to Complex64, multiply imag by i (which promotes to Complex64), then add
+            let result_real_c64 = result_real.to_complex_storage();
+            let result_imag_scaled = &result_imag * Complex64::new(0.0, 1.0);
+            &result_real_c64 + &result_imag_scaled
+        }
+        
+        // Mixed types: Complex64 × f64 (use real/imaginary separation)
+        (Storage::DenseC64(_), Storage::DenseF64(_)) | (Storage::DiagC64(_), Storage::DiagF64(_)) => {
+            // Extract real and imaginary parts from Complex64
+            let c64_real = storage_a.extract_real_part();
+            let c64_imag = storage_a.extract_imag_part(dims_a);
+            
+            // Contract real part with f64
+            let result_real = contract_storage(
+                &c64_real, dims_a, axes_a,
+                storage_b, dims_b, axes_b,
+                result_dims
+            );
+            
+            // Contract imaginary part with f64
+            let result_imag = contract_storage(
+                &c64_imag, dims_a, axes_a,
+                storage_b, dims_b, axes_b,
+                result_dims
+            );
+            
+            // Combine: result_real + i * result_imag
+            let result_real_c64 = result_real.to_complex_storage();
+            let result_imag_scaled = &result_imag * Complex64::new(0.0, 1.0);
+            let result_imag_c64 = result_imag_scaled.to_complex_storage();
+            &result_real_c64 + &result_imag_c64
+        }
+        
+        // DiagTensor × DenseTensor: convert Diag to Dense first, then handle mixed types
         (Storage::DiagF64(_), Storage::DenseF64(_)) | (Storage::DiagC64(_), Storage::DenseC64(_)) => {
             let dense_a = storage_a.to_dense_storage(dims_a);
             contract_storage(&dense_a, dims_a, axes_a, storage_b, dims_b, axes_b, result_dims)
@@ -648,7 +789,24 @@ pub fn contract_storage(
             let dense_b = storage_b.to_dense_storage(dims_b);
             contract_storage(storage_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
         }
-        _ => panic!("Storage types must be compatible for contraction"),
+        
+        // Mixed Diag/Dense with type mixing: convert Diag to Dense first, then apply separation
+        (Storage::DiagF64(_), Storage::DenseC64(_)) => {
+            let dense_a = storage_a.to_dense_storage(dims_a);
+            contract_storage(&dense_a, dims_a, axes_a, storage_b, dims_b, axes_b, result_dims)
+        }
+        (Storage::DenseC64(_), Storage::DiagF64(_)) => {
+            let dense_b = storage_b.to_dense_storage(dims_b);
+            contract_storage(storage_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
+        }
+        (Storage::DiagC64(_), Storage::DenseF64(_)) => {
+            let dense_b = storage_b.to_dense_storage(dims_b);
+            contract_storage(storage_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
+        }
+        (Storage::DenseF64(_), Storage::DiagC64(_)) => {
+            let dense_a = storage_a.to_dense_storage(dims_a);
+            contract_storage(&dense_a, dims_a, axes_a, storage_b, dims_b, axes_b, result_dims)
+        }
     }
 }
 
@@ -750,6 +908,130 @@ impl StorageScalar for Complex64 {
 
     fn dense_storage(data: Vec<Self>) -> Arc<Storage> {
         Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)))
+    }
+}
+
+/// Add two storages element-wise.
+/// Both storages must have the same type and length.
+impl Add<&Storage> for &Storage {
+    type Output = Storage;
+
+    fn add(self, rhs: &Storage) -> Self::Output {
+        match (self, rhs) {
+            (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+                assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
+                let sum_vec: Vec<f64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Storage::DenseF64(DenseStorageF64::from_vec(sum_vec))
+            }
+            (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+                assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
+                let sum_vec: Vec<Complex64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(sum_vec))
+            }
+            (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+                assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
+                let sum_vec: Vec<f64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Storage::DiagF64(DiagStorageF64::from_vec(sum_vec))
+            }
+            (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+                assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
+                let sum_vec: Vec<Complex64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(sum_vec))
+            }
+            _ => panic!("Storage types must match for addition"),
+        }
+    }
+}
+
+/// Multiply storage by a scalar (f64).
+/// For Complex64 storage, multiplies each element by the scalar (treated as real).
+impl Mul<f64> for &Storage {
+    type Output = Storage;
+
+    fn mul(self, scalar: f64) -> Self::Output {
+        match self {
+            Storage::DenseF64(v) => {
+                let scaled_vec: Vec<f64> = v.as_slice().iter().map(|&x| x * scalar).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec(scaled_vec))
+            }
+            Storage::DenseC64(v) => {
+                let scaled_vec: Vec<Complex64> = v.as_slice().iter()
+                    .map(|&z| z * Complex64::new(scalar, 0.0))
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(scaled_vec))
+            }
+            Storage::DiagF64(d) => {
+                let scaled_vec: Vec<f64> = d.as_slice().iter().map(|&x| x * scalar).collect();
+                Storage::DiagF64(DiagStorageF64::from_vec(scaled_vec))
+            }
+            Storage::DiagC64(d) => {
+                let scaled_vec: Vec<Complex64> = d.as_slice().iter()
+                    .map(|&z| z * Complex64::new(scalar, 0.0))
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
+            }
+        }
+    }
+}
+
+/// Multiply storage by a scalar (Complex64).
+impl Mul<Complex64> for &Storage {
+    type Output = Storage;
+
+    fn mul(self, scalar: Complex64) -> Self::Output {
+        match self {
+            Storage::DenseF64(v) => {
+                // Promote f64 to Complex64
+                let scaled_vec: Vec<Complex64> = v.as_slice().iter()
+                    .map(|&x| Complex64::new(x, 0.0) * scalar)
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(scaled_vec))
+            }
+            Storage::DenseC64(v) => {
+                let scaled_vec: Vec<Complex64> = v.as_slice().iter()
+                    .map(|&z| z * scalar)
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(scaled_vec))
+            }
+            Storage::DiagF64(d) => {
+                // Promote f64 to Complex64
+                let scaled_vec: Vec<Complex64> = d.as_slice().iter()
+                    .map(|&x| Complex64::new(x, 0.0) * scalar)
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
+            }
+            Storage::DiagC64(d) => {
+                let scaled_vec: Vec<Complex64> = d.as_slice().iter()
+                    .map(|&z| z * scalar)
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
+            }
+        }
+    }
+}
+
+/// Multiply storage by a scalar (AnyScalar).
+/// May promote f64 storage to Complex64 when scalar is complex.
+impl Mul<AnyScalar> for &Storage {
+    type Output = Storage;
+
+    fn mul(self, scalar: AnyScalar) -> Self::Output {
+        match scalar {
+            AnyScalar::F64(x) => self * x,
+            AnyScalar::C64(z) => self * z,
+        }
     }
 }
 

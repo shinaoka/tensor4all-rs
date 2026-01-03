@@ -1,4 +1,4 @@
-use tensor4all_tensor::{Storage, TensorDynLen, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor};
+use tensor4all_tensor::{AnyScalar, Storage, TensorDynLen, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor};
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use num_complex::Complex64;
 use std::sync::Arc;
@@ -31,8 +31,8 @@ fn test_diag_tensor_sum() {
     let diag_data = vec![1.0, 2.0, 3.0];
     
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
-    let sum: f64 = tensor.sum();
-    assert_eq!(sum, 6.0);
+    let sum: AnyScalar = tensor.sum();
+    assert_eq!(sum, AnyScalar::F64(6.0));
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn test_diag_tensor_contract_diag_dense() {
     let dims_b = vec![2, 2];
     use tensor4all_tensor::storage::DenseStorageF64;
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 4]));
-    let tensor_b: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
     
     // Contract along j: result should be DenseTensor[i, k]
     let result = tensor_a.contract(&tensor_b);
@@ -193,8 +193,8 @@ fn test_diag_tensor_rank3() {
     assert!(is_diag_tensor(&tensor));
     
     // Sum should work
-    let sum: f64 = tensor.sum();
-    assert_eq!(sum, 3.0);
+    let sum: AnyScalar = tensor.sum();
+    assert_eq!(sum, AnyScalar::F64(3.0));
 }
 
 #[test]
@@ -208,8 +208,8 @@ fn test_diag_tensor_complex() {
     assert!(is_diag_tensor(&tensor));
     
     // Sum should work
-    let sum: Complex64 = tensor.sum();
-    assert_eq!(sum, Complex64::new(3.0, 1.5));
+    let sum: AnyScalar = tensor.sum();
+    assert_eq!(sum, AnyScalar::C64(Complex64::new(3.0, 1.5)));
 }
 
 #[test]

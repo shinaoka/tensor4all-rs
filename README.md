@@ -191,7 +191,7 @@ let storage = Arc::new(Storage::new_dense_f64(6));  // Capacity for 2×3=6 eleme
 // Create tensor
 let indices = vec![i, j];
 let dims = vec![2, 3];
-let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(indices, dims, storage);
+let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
 ```
 
 ### Diagonal Tensor Creation

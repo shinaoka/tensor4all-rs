@@ -71,15 +71,14 @@ where
     perm
 }
 
-/// Tensor with dynamic rank (number of indices).
-pub struct TensorDynLen<Id, T, Symm = NoSymmSpace> {
+/// Tensor with dynamic rank (number of indices) and dynamic scalar type.
+pub struct TensorDynLen<Id, Symm = NoSymmSpace> {
     pub indices: Vec<Index<Id, Symm>>,
     pub dims: Vec<usize>,
     pub storage: Arc<Storage>,
-    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
+impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// Create a new tensor with dynamic rank.
     ///
     /// Dimensions are automatically computed from the indices using `Index::size()`.
@@ -109,7 +108,6 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             indices,
             dims,
             storage,
-            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -132,14 +130,9 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
         Arc::make_mut(&mut self.storage)
     }
 
-    /// Sum all elements, returning `T`.
-    ///
-    /// For dynamic element tensors, use `T = AnyScalar`.
-    pub fn sum(&self) -> T
-    where
-        T: SumFromStorage,
-    {
-        T::sum_from_storage(&self.storage)
+    /// Sum all elements, returning `AnyScalar`.
+    pub fn sum(&self) -> AnyScalar {
+        AnyScalar::sum_from_storage(&self.storage)
     }
 
     /// Sum all elements as f64.
@@ -175,7 +168,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// let indices = vec![i.clone(), j.clone()];
     /// let dims = vec![2, 3];
     /// let storage = Arc::new(Storage::new_dense_f64(6));
-    /// let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(indices, dims, storage);
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
     ///
     /// // Permute to 3×2: swap the two dimensions by providing new indices order
     /// let permuted = tensor.permute_indices(&[j, i]);
@@ -202,7 +195,6 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             indices: new_indices.to_vec(),
             dims: new_dims,
             storage: new_storage,
-            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -232,7 +224,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// ];
     /// let dims = vec![2, 3];
     /// let storage = Arc::new(Storage::new_dense_f64(6));
-    /// let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(indices, dims, storage);
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
     ///
     /// // Permute to 3×2: swap the two dimensions
     /// let permuted = tensor.permute(&[1, 0]);
@@ -266,7 +258,6 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             indices: new_indices,
             dims: new_dims,
             storage: new_storage,
-            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -302,12 +293,12 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// let indices_a = vec![i.clone(), j.clone()];
     /// let dims_a = vec![2, 3];
     /// let storage_a = Arc::new(Storage::new_dense_f64(6));
-    /// let tensor_a: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    /// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
     ///
     /// let indices_b = vec![j.clone(), k.clone()];
     /// let dims_b = vec![3, 4];
     /// let storage_b = Arc::new(Storage::new_dense_f64(12));
-    /// let tensor_b: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
     ///
     /// // Contract along j: result is C[i, k]
     /// let result = tensor_a.contract(&tensor_b);
@@ -388,14 +379,13 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             indices: result_indices,
             dims: result_dims,
             storage: result_storage,
-            _phantom: std::marker::PhantomData,
         }
     }
 }
 
 
 /// Check if a tensor is a DiagTensor (has Diag storage).
-pub fn is_diag_tensor<Id, T, Symm>(tensor: &TensorDynLen<Id, T, Symm>) -> bool {
+pub fn is_diag_tensor<Id, Symm>(tensor: &TensorDynLen<Id, Symm>) -> bool {
     tensor.storage.as_ref().is_diag()
 }
 
@@ -411,7 +401,7 @@ pub fn is_diag_tensor<Id, T, Symm>(tensor: &TensorDynLen<Id, T, Symm>) -> bool {
 pub fn diag_tensor_dyn_len<Id, Symm>(
     indices: Vec<Index<Id, Symm>>,
     diag_data: Vec<f64>,
-) -> TensorDynLen<Id, f64, Symm>
+) -> TensorDynLen<Id, Symm>
 where
     Id: Clone,
     Symm: Clone + Symmetry,
@@ -444,7 +434,7 @@ where
 pub fn diag_tensor_dyn_len_c64<Id, Symm>(
     indices: Vec<Index<Id, Symm>>,
     diag_data: Vec<Complex64>,
-) -> TensorDynLen<Id, Complex64, Symm>
+) -> TensorDynLen<Id, Symm>
 where
     Id: Clone,
     Symm: Clone + Symmetry,
@@ -474,9 +464,6 @@ where
 }
 
 
-/// Convenience alias for dynamic element type tensors with dynamic rank.
-pub type AnyTensorDynLen<Id, Symm = NoSymmSpace> = TensorDynLen<Id, AnyScalar, Symm>;
-
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
 ///
 /// This function validates the split, permutes the tensor so that left indices come first,
@@ -502,7 +489,7 @@ pub type AnyTensorDynLen<Id, Symm = NoSymmSpace> = TensorDynLen<Id, AnyScalar, S
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - Storage type is not supported (must be DenseF64 or DenseC64)
 pub fn unfold_split<Id, T, Symm>(
-    t: &TensorDynLen<Id, T, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
 ) -> Result<(
     DTensor<T, 2>,

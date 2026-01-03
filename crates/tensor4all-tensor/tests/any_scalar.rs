@@ -190,6 +190,27 @@ fn test_from_f64() {
 }
 
 #[test]
+fn test_new_real() {
+    let s = AnyScalar::new_real(3.5);
+    assert_eq!(s, AnyScalar::F64(3.5));
+    assert_eq!(s.real(), 3.5);
+}
+
+#[test]
+fn test_new_complex() {
+    let s = AnyScalar::new_complex(1.0, 2.0);
+    match s {
+        AnyScalar::C64(z) => {
+            assert_eq!(z.re, 1.0);
+            assert_eq!(z.im, 2.0);
+        }
+        _ => panic!("Expected C64"),
+    }
+    assert_eq!(s.real(), 1.0);
+    assert!(s.is_complex());
+}
+
+#[test]
 fn test_from_complex64() {
     let z = Complex64::new(1.0, 2.0);
     let s: AnyScalar = z.into();

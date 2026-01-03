@@ -238,13 +238,13 @@ where
 /// - The SVD computation fails
 #[allow(private_bounds)]
 pub fn svd<Id, Symm, T>(
-    t: &TensorDynLen<Id, T, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
-        TensorDynLen<Id, T, Symm>,
-        TensorDynLen<Id, <T as ComplexFloat>::Real, Symm>,
-        TensorDynLen<Id, T, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
     ),
     SvdError,
 >
@@ -254,7 +254,7 @@ where
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    svd_with(t, left_inds, &SvdOptions::default())
+    svd_with::<Id, Symm, T>(t, left_inds, &SvdOptions::default())
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
@@ -300,14 +300,14 @@ where
 /// - `options.rtol` is invalid (not finite or negative)
 #[allow(private_bounds)]
 pub fn svd_with<Id, Symm, T>(
-    t: &TensorDynLen<Id, T, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
     options: &SvdOptions,
 ) -> Result<
     (
-        TensorDynLen<Id, T, Symm>,
-        TensorDynLen<Id, <T as ComplexFloat>::Real, Symm>,
-        TensorDynLen<Id, T, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
     ),
     SvdError,
 >
@@ -324,7 +324,7 @@ where
     }
 
     // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<Id, T, Symm>(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
@@ -402,13 +402,13 @@ where
 /// Note: Singular values `S` are always real (f64), even for complex input tensors.
 #[inline]
 pub fn svd_c64<Id, Symm>(
-    t: &TensorDynLen<Id, Complex64, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
-        TensorDynLen<Id, Complex64, Symm>,
-        TensorDynLen<Id, f64, Symm>,
-        TensorDynLen<Id, Complex64, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
     ),
     SvdError,
 >
@@ -416,5 +416,5 @@ where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
 {
-    svd(t, left_inds)
+    svd::<Id, Symm, Complex64>(t, left_inds)
 }

@@ -143,16 +143,16 @@ where
 /// - The QR computation fails
 #[allow(private_bounds)]
 pub fn qr<Id, Symm, T>(
-    t: &TensorDynLen<Id, T, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
-) -> Result<(TensorDynLen<Id, T, Symm>, TensorDynLen<Id, T, Symm>), QrError>
+) -> Result<(TensorDynLen<Id, Symm>, TensorDynLen<Id, Symm>), QrError>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    qr_with(t, left_inds, &QrOptions::default())
+    qr_with::<Id, Symm, T>(t, left_inds, &QrOptions::default())
 }
 
 /// Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R).
@@ -193,10 +193,10 @@ where
 /// - `options.rtol` is invalid (not finite or negative)
 #[allow(private_bounds)]
 pub fn qr_with<Id, Symm, T>(
-    t: &TensorDynLen<Id, T, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
     options: &QrOptions,
-) -> Result<(TensorDynLen<Id, T, Symm>, TensorDynLen<Id, T, Symm>), QrError>
+) -> Result<(TensorDynLen<Id, Symm>, TensorDynLen<Id, Symm>), QrError>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
@@ -210,7 +210,7 @@ where
     }
 
     // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<Id, T, Symm>(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
@@ -272,12 +272,12 @@ where
 /// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 #[inline]
 pub fn qr_c64<Id, Symm>(
-    t: &TensorDynLen<Id, Complex64, Symm>,
+    t: &TensorDynLen<Id, Symm>,
     left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
-        TensorDynLen<Id, Complex64, Symm>,
-        TensorDynLen<Id, Complex64, Symm>,
+        TensorDynLen<Id, Symm>,
+        TensorDynLen<Id, Symm>,
     ),
     QrError,
 >
@@ -285,5 +285,5 @@ where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
 {
-    qr(t, left_inds)
+    qr::<Id, Symm, Complex64>(t, left_inds)
 }
