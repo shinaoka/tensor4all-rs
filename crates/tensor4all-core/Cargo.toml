@@ -10,6 +10,3 @@ repository.workspace = true
 num-complex.workspace = true
 rand.workspace = true
 
-[dev-dependencies]
-tensor4all-tensor = { path = "../tensor4all-tensor" }
-
