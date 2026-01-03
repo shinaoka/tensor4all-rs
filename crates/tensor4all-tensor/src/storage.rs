@@ -708,6 +708,80 @@ impl Storage {
             _ => panic!("Both storages must be the same type (DenseF64 or DiagF64)"),
         }
     }
+
+    /// Add two storages element-wise, returning `Result` on error instead of panicking.
+    ///
+    /// Both storages must have the same type and length.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Storage types don't match
+    /// - Storage lengths don't match
+    pub fn try_add(&self, other: &Storage) -> Result<Storage, String> {
+        match (self, other) {
+            (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for addition: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let sum_vec: Vec<f64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Ok(Storage::DenseF64(DenseStorageF64::from_vec(sum_vec)))
+            }
+            (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for addition: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let sum_vec: Vec<Complex64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Ok(Storage::DenseC64(DenseStorageC64::from_vec(sum_vec)))
+            }
+            (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for addition: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let sum_vec: Vec<f64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Ok(Storage::DiagF64(DiagStorageF64::from_vec(sum_vec)))
+            }
+            (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for addition: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let sum_vec: Vec<Complex64> = a.as_slice().iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x + y)
+                    .collect();
+                Ok(Storage::DiagC64(DiagStorageC64::from_vec(sum_vec)))
+            }
+            _ => Err(format!(
+                "Storage types must match for addition: {:?} vs {:?}",
+                std::mem::discriminant(self),
+                std::mem::discriminant(other)
+            )),
+        }
+    }
 }
 
 /// Helper to get a mutable reference to storage, cloning if needed (COW).
@@ -967,6 +1041,15 @@ impl StorageScalar for Complex64 {
 
 /// Add two storages element-wise.
 /// Both storages must have the same type and length.
+///
+/// # Panics
+///
+/// Panics if storage types don't match or lengths differ.
+///
+/// # Note
+///
+/// **Prefer using [`Storage::try_add`]** which returns a `Result` instead of panicking.
+/// This trait implementation is kept for convenience but may panic on invalid inputs.
 impl Add<&Storage> for &Storage {
     type Output = Storage;
 

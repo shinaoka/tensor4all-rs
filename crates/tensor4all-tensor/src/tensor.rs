@@ -684,6 +684,119 @@ pub fn is_diag_tensor<Id, Symm>(tensor: &TensorDynLen<Id, Symm>) -> bool {
     tensor.storage.as_ref().is_diag()
 }
 
+impl<Id, Symm> TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    /// Add two tensors element-wise.
+    ///
+    /// The tensors must have the same index set (matched by ID). If the indices
+    /// are in a different order, the other tensor will be permuted to match `self`.
+    ///
+    /// # Arguments
+    /// * `other` - The tensor to add
+    ///
+    /// # Returns
+    /// A new tensor representing `self + other`, or an error if:
+    /// - The tensors have different index sets
+    /// - The dimensions don't match
+    /// - Storage types are incompatible
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_tensor::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
+    /// use tensor4all_tensor::storage::DenseStorageF64;
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    ///
+    /// let indices_a = vec![i.clone(), j.clone()];
+    /// let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    /// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, vec![2, 3], storage_a);
+    ///
+    /// let indices_b = vec![i.clone(), j.clone()];
+    /// let data_b = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, vec![2, 3], storage_b);
+    ///
+    /// let sum = tensor_a.add(&tensor_b).unwrap();
+    /// // sum = [[2, 3, 4], [5, 6, 7]]
+    /// ```
+    pub fn add(&self, other: &Self) -> Result<Self> {
+        // Validate that both tensors have the same number of indices
+        if self.indices.len() != other.indices.len() {
+            return Err(anyhow::anyhow!(
+                "Index count mismatch: self has {} indices, other has {}",
+                self.indices.len(),
+                other.indices.len()
+            ));
+        }
+
+        // Validate that both tensors have the same set of index IDs
+        let self_ids: HashSet<_> = self.indices.iter().map(|idx| &idx.id).collect();
+        let other_ids: HashSet<_> = other.indices.iter().map(|idx| &idx.id).collect();
+
+        if self_ids != other_ids {
+            return Err(anyhow::anyhow!(
+                "Index set mismatch: tensors must have the same indices (by ID)"
+            ));
+        }
+
+        // Check if we need to permute other to match self's index order
+        let needs_permute = self.indices.iter()
+            .zip(other.indices.iter())
+            .any(|(a, b)| a.id != b.id);
+
+        let other_aligned = if needs_permute {
+            // Permute other to match self's index order
+            other.permute_indices(&self.indices)
+        } else {
+            // No permutation needed; we'll use a reference via clone
+            // (cheap due to Arc)
+            other.clone()
+        };
+
+        // Validate dimensions match after alignment
+        if self.dims != other_aligned.dims {
+            return Err(anyhow::anyhow!(
+                "Dimension mismatch after alignment: self has dims {:?}, other has {:?}",
+                self.dims,
+                other_aligned.dims
+            ));
+        }
+
+        // Add storages using try_add (returns Result instead of panicking)
+        let result_storage = self.storage.as_ref()
+            .try_add(other_aligned.storage.as_ref())
+            .map_err(|e| anyhow::anyhow!("Storage addition failed: {}", e))?;
+
+        Ok(Self {
+            indices: self.indices.clone(),
+            dims: self.dims.clone(),
+            storage: Arc::new(result_storage),
+        })
+    }
+}
+
+impl<Id, Symm> Clone for TensorDynLen<Id, Symm>
+where
+    Id: Clone,
+    Symm: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            indices: self.indices.clone(),
+            dims: self.dims.clone(),
+            storage: Arc::clone(&self.storage),
+        }
+    }
+}
+
 
 /// Create a DiagTensor with dynamic rank from diagonal data.
 ///

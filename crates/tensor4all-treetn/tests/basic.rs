@@ -1,8 +1,10 @@
-use tensor4all_treetn::{Connection, TreeTN};
+use tensor4all_treetn::{Connection, TreeTN, TreeTopology};
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use tensor4all_tensor::{TensorDynLen, Storage};
+use tensor4all_core::NoSymmSpace;
 use tensor4all_tensor::storage::{DenseStorageF64, DenseStorageC64};
 use std::sync::Arc;
+use std::collections::HashMap;
 use petgraph::graph::NodeIndex;
 use num_complex::Complex64;
 
@@ -911,37 +913,663 @@ fn test_orthogonalize_with_qr_simple() {
 fn test_orthogonalize_with_qr_mixed_storage() {
     // Test orthogonalization with mixed f64 and Complex64 storage
     let mut tn: TreeTN<DynId> = TreeTN::new();
-    
+
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
     let a2 = Index::new_dyn(3);
     let b2 = Index::new_dyn(4);
-    
+
     // n1: f64 tensor
     let indices1 = vec![a1.clone(), b1.clone()];
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor1: TensorDynLen<DynId> = TensorDynLen::new(indices1, dims1, storage1);
-    
+
     // n2: Complex64 tensor
     let indices2 = vec![a2.clone(), b2.clone()];
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(vec![Complex64::new(1.0, 0.0); 12])));
     let tensor2: TensorDynLen<DynId> = TensorDynLen::new(indices2, dims2, storage2);
-    
+
     let n1 = tn.add_tensor(tensor1);
     let n2 = tn.add_tensor(tensor2);
-    
+
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
-    
+
     // Orthogonalize towards n2
     let tn_ortho = tn.orthogonalize_with_qr(vec![n2]).unwrap();
-    
+
     // Verify that the network is orthogonalized
     assert!(tn_ortho.is_orthogonalized());
     assert!(tn_ortho.ortho_region().contains(&n2));
-    
+
     // Verify ortho consistency
     assert!(tn_ortho.validate_ortho_consistency().is_ok());
 }
 
+// ============================================================================
+// TensorDynLen::add tests
+// ============================================================================
+
+#[test]
+fn test_tensor_add_same_indices() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_a);
+
+    let data_b = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_b);
+
+    let sum = tensor_a.add(&tensor_b).unwrap();
+    assert_eq!(sum.dims, vec![2, 3]);
+
+    // Verify values
+    match sum.storage.as_ref() {
+        Storage::DenseF64(d) => {
+            let data = d.as_slice();
+            assert_eq!(data[0], 2.0);
+            assert_eq!(data[5], 7.0);
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_tensor_add_permuted_indices() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_a);
+
+    // tensor_b has indices in reverse order
+    let data_b = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![j.clone(), i.clone()], vec![3, 2], storage_b);
+
+    // Should still work - tensor_b will be permuted to match tensor_a
+    let sum = tensor_a.add(&tensor_b).unwrap();
+    assert_eq!(sum.dims, vec![2, 3]);
+}
+
+#[test]
+fn test_tensor_add_different_indices_fails() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+
+    let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_a);
+
+    let data_b = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), k.clone()], vec![2, 3], storage_b);
+
+    let result = tensor_a.add(&tensor_b);
+    assert!(result.is_err());
+}
+
+// ============================================================================
+// TreeTN scalar multiplication tests
+// ============================================================================
+
+#[test]
+fn test_treetn_scalar_mul_positive() {
+    let mut tn: TreeTN<DynId> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i, j], vec![2, 3], storage);
+    let _node = tn.add_tensor(tensor);
+
+    // Multiply by 4.0
+    let tn_scaled = tn * 4.0;
+
+    // Since there's one node and ortho_region is empty, all data should be scaled by 4^(1/1) = 4
+    let node = tn_scaled.node_indices()[0];
+    let tensor = tn_scaled.tensor(node).unwrap();
+    match tensor.storage.as_ref() {
+        Storage::DenseF64(d) => {
+            // Should be 4.0 for all elements
+            assert!((d.as_slice()[0] - 4.0).abs() < 1e-10);
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_treetn_scalar_mul_negative() {
+    let mut tn: TreeTN<DynId> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 1.0])));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
+    let _node = tn.add_tensor(tensor);
+
+    // Multiply by -4.0
+    let tn_scaled = tn * (-4.0);
+
+    let node = tn_scaled.node_indices()[0];
+    let tensor = tn_scaled.tensor(node).unwrap();
+    match tensor.storage.as_ref() {
+        Storage::DenseF64(d) => {
+            // Should be -4.0 for all elements
+            assert!((d.as_slice()[0] + 4.0).abs() < 1e-10);
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_treetn_scalar_mul_zero() {
+    let mut tn: TreeTN<DynId> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0])));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
+    let _node = tn.add_tensor(tensor);
+
+    // Multiply by 0.0
+    let tn_scaled = tn * 0.0;
+
+    let node = tn_scaled.node_indices()[0];
+    let tensor = tn_scaled.tensor(node).unwrap();
+    match tensor.storage.as_ref() {
+        Storage::DenseF64(d) => {
+            // All elements should be 0
+            for val in d.as_slice() {
+                assert_eq!(*val, 0.0);
+            }
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_treetn_scalar_mul_complex() {
+    let mut tn: TreeTN<DynId> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 1.0])));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
+    let _node = tn.add_tensor(tensor);
+
+    // Multiply by a complex scalar
+    let tn_scaled = tn * Complex64::new(0.0, 2.0);
+
+    let node = tn_scaled.node_indices()[0];
+    let tensor = tn_scaled.tensor(node).unwrap();
+    match tensor.storage.as_ref() {
+        Storage::DenseC64(d) => {
+            // Should have imaginary component of 2.0
+            assert!((d.as_slice()[0].im - 2.0).abs() < 1e-10);
+        }
+        _ => panic!("Expected DenseC64"),
+    }
+}
+
+// ============================================================================
+// TreeTN::contract_to_tensor tests
+// ============================================================================
+
+#[test]
+fn test_treetn_contract_single_node() {
+    let mut tn: TreeTN<DynId> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i, j], vec![2, 3], storage);
+    let _node = tn.add_tensor(tensor);
+
+    let result = tn.contract_to_tensor().unwrap();
+    assert_eq!(result.dims, vec![2, 3]);
+}
+
+#[test]
+fn test_treetn_contract_two_nodes() {
+    let mut tn: TreeTN<DynId> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let j1 = Index::new_dyn(3);
+    let j2 = Index::new_dyn(3);
+    let k = Index::new_dyn(4);
+
+    // node 1: indices [i, j1] with dims [2, 3]
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j1.clone()], vec![2, 3], storage1);
+    let n1 = tn.add_tensor(tensor1);
+
+    // node 2: indices [j2, k] with dims [3, 4]
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![j2.clone(), k.clone()], vec![3, 4], storage2);
+    let n2 = tn.add_tensor(tensor2);
+
+    // Connect via j1 and j2
+    tn.connect(n1, &j1, n2, &j2).unwrap();
+
+    // Contract to tensor - currently this performs simple sequential contraction
+    // which may not eliminate bond indices if they have different IDs
+    // For this test, we just verify it runs without errors and produces valid output
+    let result = tn.contract_to_tensor().unwrap();
+
+    // The result should have some dimensions (implementation-dependent)
+    assert!(!result.dims.is_empty());
+
+    // Verify total size is consistent
+    let total_size: usize = result.dims.iter().product();
+    assert!(total_size > 0);
+}
+
+#[test]
+fn test_treetn_contract_empty_fails() {
+    let tn: TreeTN<DynId> = TreeTN::new();
+    let result = tn.contract_to_tensor();
+    assert!(result.is_err());
+}
+
+// ============================================================================
+// TreeTN::add tests
+// ============================================================================
+
+#[test]
+fn test_treetn_add_single_node() {
+    // Create two compatible TreeTNs with single nodes
+    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let data_a = vec![1.0; 6];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_a);
+    tn_a.add_tensor_with_vertex(0, tensor_a).unwrap();
+
+    let data_b = vec![2.0; 6];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_b);
+    tn_b.add_tensor_with_vertex(0, tensor_b).unwrap();
+
+    // Add should succeed for compatible networks
+    assert!(tn_a.can_add(&tn_b));
+}
+
+// ============================================================================
+// TreeTopology and decompose_tensor_to_treetn tests
+// ============================================================================
+
+#[test]
+fn test_tree_topology_validation() {
+    // Valid topology: 2 nodes, 1 edge
+    let mut nodes: HashMap<usize, Vec<usize>> = HashMap::new();
+    nodes.insert(0, vec![0]);
+    nodes.insert(1, vec![1]);
+    let edges = vec![(0, 1)];
+    let topology = TreeTopology::new(nodes, edges);
+    assert!(topology.validate().is_ok());
+}
+
+#[test]
+fn test_tree_topology_validation_fails_wrong_edge_count() {
+    // Invalid: 3 nodes but 1 edge (should be 2)
+    let mut nodes: HashMap<usize, Vec<usize>> = HashMap::new();
+    nodes.insert(0, vec![0]);
+    nodes.insert(1, vec![1]);
+    nodes.insert(2, vec![2]);
+    let edges = vec![(0, 1)];
+    let topology = TreeTopology::new(nodes, edges);
+    assert!(topology.validate().is_err());
+}
+
+#[test]
+fn test_tree_topology_validation_fails_unknown_node() {
+    let mut nodes: HashMap<usize, Vec<usize>> = HashMap::new();
+    nodes.insert(0, vec![0]);
+    nodes.insert(1, vec![1]);
+    let edges = vec![(0, 2)]; // Node 2 doesn't exist
+    let topology = TreeTopology::new(nodes, edges);
+    assert!(topology.validate().is_err());
+}
+
+// ============================================================================
+// TreeTN::add correctness validation tests
+// Verify that contract(A+B) == contract(A) + contract(B)
+// ============================================================================
+
+/// Helper function to compute Frobenius norm of a tensor (works with both f64 and Complex64)
+fn tensor_norm(tensor: &TensorDynLen<DynId>) -> f64 {
+    match tensor.storage.as_ref() {
+        Storage::DenseF64(d) => {
+            d.as_slice().iter().map(|x| x * x).sum::<f64>().sqrt()
+        }
+        Storage::DenseC64(d) => {
+            d.as_slice().iter().map(|x| x.norm_sqr()).sum::<f64>().sqrt()
+        }
+        _ => panic!("tensor_norm: unsupported storage type"),
+    }
+}
+
+/// Helper function to compute max absolute difference between two tensors (works with both f64 and Complex64)
+fn tensor_max_diff(a: &TensorDynLen<DynId>, b: &TensorDynLen<DynId>) -> f64 {
+    assert_eq!(a.dims, b.dims, "Dimension mismatch for tensor comparison");
+
+    match (a.storage.as_ref(), b.storage.as_ref()) {
+        (Storage::DenseF64(da), Storage::DenseF64(db)) => {
+            da.as_slice().iter().zip(db.as_slice().iter())
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0_f64, f64::max)
+        }
+        (Storage::DenseC64(da), Storage::DenseC64(db)) => {
+            da.as_slice().iter().zip(db.as_slice().iter())
+                .map(|(x, y)| (x - y).norm())
+                .fold(0.0_f64, f64::max)
+        }
+        _ => panic!("tensor_max_diff: mismatched or unsupported storage types"),
+    }
+}
+
+/// Verify that contract(A + B) == contract(A) + contract(B) within tolerance
+fn assert_treetn_add_correctness(
+    tn_a: TreeTN<DynId, NoSymmSpace, usize>,
+    tn_b: TreeTN<DynId, NoSymmSpace, usize>,
+    context: &str,
+) {
+    let contracted_a = tn_a.clone().contract_to_tensor().unwrap();
+    let contracted_b = tn_b.clone().contract_to_tensor().unwrap();
+    let expected = contracted_a.add(&contracted_b).unwrap();
+
+    let tn_sum = tn_a.add(tn_b).unwrap();
+    let actual = tn_sum.contract_to_tensor().unwrap();
+
+    // Compare dimensions (as sets, since order may differ)
+    assert_eq!(
+        expected.dims.iter().collect::<std::collections::HashSet<_>>(),
+        actual.dims.iter().collect::<std::collections::HashSet<_>>(),
+        "{}: dimension sets should match", context
+    );
+
+    let max_diff = tensor_max_diff(&expected, &actual);
+    let norm = tensor_norm(&expected);
+
+    assert!(
+        max_diff < 1e-10 * norm.max(1.0),
+        "{}: contract(A+B) should equal contract(A) + contract(B). Max diff: {}, norm: {}",
+        context, max_diff, norm
+    );
+}
+
+/// Macro to generate two-nodes correctness tests for different scalar types
+macro_rules! test_treetn_add_two_nodes_correctness {
+    ($test_name:ident, $scalar_type:ty, $storage_variant:ident, $storage_type:ty, $make_scalar:expr) => {
+        #[test]
+        fn $test_name() {
+            // Structure: vertex 0 -- vertex 1
+            let i0 = Index::new_dyn(2);
+            let k1 = Index::new_dyn(3);
+            let bond_a = Index::new_dyn(4);
+            let bond_b = Index::new_dyn(4);
+
+            // Network A
+            let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+
+            let data_a0: Vec<$scalar_type> = (1..=8).map(|x| $make_scalar(x, 1)).collect();
+            let storage_a0 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a0)));
+            let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(
+                vec![i0.clone(), bond_a.clone()], vec![2, 4], storage_a0);
+            let n0_a = tn_a.add_tensor_with_vertex(0, tensor_a0).unwrap();
+
+            let data_a1: Vec<$scalar_type> = (1..=12).map(|x| $make_scalar(x * 3, 2)).collect();
+            let storage_a1 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a1)));
+            let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(
+                vec![bond_a.clone(), k1.clone()], vec![4, 3], storage_a1);
+            let n1_a = tn_a.add_tensor_with_vertex(1, tensor_a1).unwrap();
+
+            tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
+
+            // Network B
+            let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+
+            let data_b0: Vec<$scalar_type> = (1..=8).map(|x| $make_scalar(x * 10, 3)).collect();
+            let storage_b0 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b0)));
+            let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(
+                vec![i0.clone(), bond_b.clone()], vec![2, 4], storage_b0);
+            let n0_b = tn_b.add_tensor_with_vertex(0, tensor_b0).unwrap();
+
+            let data_b1: Vec<$scalar_type> = (1..=12).map(|x| $make_scalar(x * 7, 4)).collect();
+            let storage_b1 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b1)));
+            let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(
+                vec![bond_b.clone(), k1.clone()], vec![4, 3], storage_b1);
+            let n1_b = tn_b.add_tensor_with_vertex(1, tensor_b1).unwrap();
+
+            tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
+
+            assert_treetn_add_correctness(tn_a, tn_b, stringify!($test_name));
+        }
+    };
+}
+
+// Generate tests for f64 and Complex64
+test_treetn_add_two_nodes_correctness!(
+    test_treetn_add_two_nodes_f64,
+    f64, DenseF64, DenseStorageF64,
+    |x: i32, _: i32| x as f64
+);
+
+test_treetn_add_two_nodes_correctness!(
+    test_treetn_add_two_nodes_c64,
+    Complex64, DenseC64, DenseStorageC64,
+    |x: i32, y: i32| Complex64::new(x as f64, (y * x) as f64)
+);
+
+/// Macro to generate single-node correctness tests for different scalar types
+macro_rules! test_treetn_add_single_node_correctness {
+    ($test_name:ident, $scalar_type:ty, $storage_variant:ident, $storage_type:ty, $make_scalar:expr) => {
+        #[test]
+        fn $test_name() {
+            let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+            let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+
+            let i = Index::new_dyn(2);
+            let j = Index::new_dyn(3);
+
+            let data_a: Vec<$scalar_type> = (1..=6).map(|x| $make_scalar(x, 1)).collect();
+            let storage_a = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a)));
+            let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
+                vec![i.clone(), j.clone()], vec![2, 3], storage_a);
+            tn_a.add_tensor_with_vertex(0, tensor_a).unwrap();
+
+            let data_b: Vec<$scalar_type> = (1..=6).map(|x| $make_scalar(x * 10, 2)).collect();
+            let storage_b = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b)));
+            let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
+                vec![i.clone(), j.clone()], vec![2, 3], storage_b);
+            tn_b.add_tensor_with_vertex(0, tensor_b).unwrap();
+
+            assert_treetn_add_correctness(tn_a, tn_b, stringify!($test_name));
+        }
+    };
+}
+
+// Generate single-node tests for f64 and Complex64
+test_treetn_add_single_node_correctness!(
+    test_treetn_add_single_node_f64,
+    f64, DenseF64, DenseStorageF64,
+    |x: i32, _: i32| x as f64
+);
+
+test_treetn_add_single_node_correctness!(
+    test_treetn_add_single_node_c64,
+    Complex64, DenseC64, DenseStorageC64,
+    |x: i32, y: i32| Complex64::new(x as f64, (y * x) as f64)
+);
+
+#[test]
+fn test_treetn_add_bond_dimension_growth() {
+    // Verify that bond dimensions grow as expected: new_dim = dim_A + dim_B
+    // Using shared bond indices within each network for proper contraction
+    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+
+    let i0 = Index::new_dyn(2);
+    let bond_a = Index::new_dyn(3);  // shared bond dim 3 in network A
+    let k1 = Index::new_dyn(4);
+
+    // Network A with bond dim 3
+    let storage_a0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(vec![i0.clone(), bond_a.clone()], vec![2, 3], storage_a0);
+    let n0_a = tn_a.add_tensor_with_vertex(0, tensor_a0).unwrap();
+
+    let storage_a1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
+    let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(vec![bond_a.clone(), k1.clone()], vec![3, 4], storage_a1);
+    let n1_a = tn_a.add_tensor_with_vertex(1, tensor_a1).unwrap();
+
+    tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
+
+    // Network B with bond dim 5
+    let bond_b = Index::new_dyn(5);  // shared bond dim 5 in network B
+
+    let storage_b0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 10])));
+    let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(vec![i0.clone(), bond_b.clone()], vec![2, 5], storage_b0);
+    let n0_b = tn_b.add_tensor_with_vertex(0, tensor_b0).unwrap();
+
+    let storage_b1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20])));
+    let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(vec![bond_b.clone(), k1.clone()], vec![5, 4], storage_b1);
+    let n1_b = tn_b.add_tensor_with_vertex(1, tensor_b1).unwrap();
+
+    tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
+
+    // Add the networks
+    let tn_sum = tn_a.add(tn_b).unwrap();
+
+    // Check bond dimension grew to 3 + 5 = 8
+    assert_eq!(tn_sum.edge_count(), 1);
+    // Get the edge from edges_for_node on any node
+    let any_node = tn_sum.node_indices()[0];
+    let edges = tn_sum.edges_for_node(any_node);
+    assert!(!edges.is_empty(), "Should have at least one edge");
+    let edge = edges[0].0;
+    let conn = tn_sum.connection(edge).unwrap();
+    assert_eq!(conn.bond_dim(), 8, "Bond dimension should be 3 + 5 = 8");
+}
+
+#[test]
+fn test_treetn_add_multi_physical_permuted() {
+    // Regression test for issue #1: verify correctness when a vertex has
+    // multiple physical indices and tensor_b has them in a different order.
+    //
+    // Network A: vertex 0 with tensor indices [i, j, k] (3 physical indices)
+    // Network B: vertex 0 with tensor indices [k, i, j] (permuted order)
+    //
+    // Both should represent the same logical data when accounting for permutation,
+    // and contract(A + B) should equal contract(A) + contract(B).
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(4);
+
+    // Network A: indices in order [i, j, k]
+    // Data: sequential values 1..24
+    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+    let data_a: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![i.clone(), j.clone(), k.clone()],
+        vec![2, 3, 4],
+        storage_a,
+    );
+    tn_a.add_tensor_with_vertex(0, tensor_a).unwrap();
+
+    // Network B: indices in order [k, i, j] (permuted from [i, j, k])
+    // Data: different values, also sequential but scaled
+    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+    let data_b: Vec<f64> = (1..=24).map(|x| (x * 10) as f64).collect();
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![k.clone(), i.clone(), j.clone()],  // Permuted order!
+        vec![4, 2, 3],  // Corresponding dimensions
+        storage_b,
+    );
+    tn_b.add_tensor_with_vertex(0, tensor_b).unwrap();
+
+    assert_treetn_add_correctness(tn_a, tn_b, "test_treetn_add_multi_physical_permuted");
+}
+
+#[test]
+fn test_treetn_add_two_nodes_multi_physical_permuted() {
+    // More complex test: two connected nodes, each with 2 physical indices,
+    // where network B has permuted physical index ordering.
+    //
+    // Structure: vertex 0 -- vertex 1
+    // Vertex 0: physical indices [i0, j0], bond index
+    // Vertex 1: bond index, physical indices [k1, l1]
+    //
+    // Network B permutes the physical indices at each vertex.
+
+    let i0 = Index::new_dyn(2);
+    let j0 = Index::new_dyn(3);
+    let k1 = Index::new_dyn(2);
+    let l1 = Index::new_dyn(3);
+    let bond_a = Index::new_dyn(4);  // shared bond for network A
+    let bond_b = Index::new_dyn(4);  // shared bond for network B
+
+    // Network A with standard ordering
+    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+
+    // Vertex 0: [i0, j0, bond] -> 2*3*4 = 24 elements
+    let data_a0: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+    let storage_a0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a0)));
+    let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![i0.clone(), j0.clone(), bond_a.clone()],
+        vec![2, 3, 4],
+        storage_a0,
+    );
+    let n0_a = tn_a.add_tensor_with_vertex(0, tensor_a0).unwrap();
+
+    // Vertex 1: [bond, k1, l1] -> 4*2*3 = 24 elements
+    let data_a1: Vec<f64> = (1..=24).map(|x| (x * 2) as f64).collect();
+    let storage_a1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a1)));
+    let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_a.clone(), k1.clone(), l1.clone()],
+        vec![4, 2, 3],
+        storage_a1,
+    );
+    let n1_a = tn_a.add_tensor_with_vertex(1, tensor_a1).unwrap();
+
+    tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
+
+    // Network B with permuted physical indices
+    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+
+    // Vertex 0: [j0, i0, bond] (i0, j0 swapped)
+    let data_b0: Vec<f64> = (1..=24).map(|x| (x * 10) as f64).collect();
+    let storage_b0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b0)));
+    let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![j0.clone(), i0.clone(), bond_b.clone()],  // Permuted!
+        vec![3, 2, 4],
+        storage_b0,
+    );
+    let n0_b = tn_b.add_tensor_with_vertex(0, tensor_b0).unwrap();
+
+    // Vertex 1: [l1, bond, k1] (permuted)
+    let data_b1: Vec<f64> = (1..=24).map(|x| (x * 20) as f64).collect();
+    let storage_b1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b1)));
+    let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![l1.clone(), bond_b.clone(), k1.clone()],  // Permuted!
+        vec![3, 4, 2],
+        storage_b1,
+    );
+    let n1_b = tn_b.add_tensor_with_vertex(1, tensor_b1).unwrap();
+
+    tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
+
+    assert_treetn_add_correctness(tn_a, tn_b, "test_treetn_add_two_nodes_multi_physical_permuted");
+}
+
+// Note: Complex64 two-nodes correctness test is generated by the macro (test_treetn_add_two_nodes_c64)
