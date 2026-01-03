@@ -1,0 +1,23 @@
+[package]
+name = "tensor4all-tensortrain"
+description = "Tensor Train (MPS) algorithms for tensor4all"
+version.workspace = true
+edition.workspace = true
+authors = [
+    "Simone Foderà <simone.fodera@lmu.de>",
+    "Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>",
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+]
+license = "MIT"
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+tensor4all-matrixci = { path = "../tensor4all-matrixci" }
+
+[dev-dependencies]
+approx = "0.5"

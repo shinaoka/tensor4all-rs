@@ -1,0 +1,20 @@
+[package]
+name = "tensor4all-tensorci"
+description = "Tensor Cross Interpolation algorithms for tensor4all"
+version.workspace = true
+edition.workspace = true
+authors = ["Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>", "Hiroshi Shinaoka <h.shinaoka@gmail.com>", "tensor4all contributors"]
+license = "MIT"
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+tensor4all-matrixci = { path = "../tensor4all-matrixci" }
+tensor4all-tensortrain = { path = "../tensor4all-tensortrain" }
+
+[dev-dependencies]
+approx = "0.5"
