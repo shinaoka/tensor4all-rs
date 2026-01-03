@@ -1,0 +1,27 @@
+[package]
+name = "tensor4all-core-linalg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["backend-faer"]
+backend-faer = ["mdarray-linalg-faer"]
+backend-lapack = ["mdarray-linalg-lapack"]
+
+[dependencies]
+tensor4all-core-tensor = { path = "../core-tensor" }
+tensor4all-core-common = { path = "../core-common" }
+mdarray.workspace = true
+mdarray-linalg.workspace = true
+mdarray-linalg-faer = { workspace = true, optional = true }
+mdarray-linalg-lapack = { workspace = true, optional = true }
+faer-traits.workspace = true
+thiserror.workspace = true
+num-complex.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+

@@ -1,0 +1,12 @@
+[package]
+name = "tensor4all-core-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+rand.workspace = true
+

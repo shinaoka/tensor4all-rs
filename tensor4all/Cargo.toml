@@ -1,0 +1,19 @@
+[package]
+name = "tensor4all"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tensor4all-core-common = { path = "core-common" }
+tensor4all-core-tensor = { path = "core-tensor" }
+tensor4all-core-linalg = { path = "core-linalg", optional = true }
+
+[features]
+default = ["linalg"]
+linalg = ["dep:tensor4all-core-linalg"]
+# linalgのfeature flagsを伝播
+backend-faer = ["linalg", "tensor4all-core-linalg/backend-faer"]
+backend-lapack = ["linalg", "tensor4all-core-linalg/backend-lapack"]
