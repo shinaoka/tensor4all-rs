@@ -15,7 +15,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          check-regexp: '^CI_rs / rollup$'
+          check-name: 'rollup-rs'
           running-workflow-name: CI
           wait-interval: 10
           allowed-conclusions: success
@@ -25,7 +25,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          check-regexp: '^CI_julia / rollup$'
+          check-name: 'rollup-julia'
           running-workflow-name: CI
           wait-interval: 10
           allowed-conclusions: success
@@ -35,7 +35,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          check-regexp: '^CI_py / rollup$'
+          check-name: 'rollup-py'
           running-workflow-name: CI
           wait-interval: 10
           allowed-conclusions: success
