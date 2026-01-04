@@ -1,0 +1,3 @@
+# This directory holds the native shared library (libtensor4all_capi.*)
+# The library is built from ../../../tensor4all-capi and copied here.
+# Run: python scripts/build_capi.py
