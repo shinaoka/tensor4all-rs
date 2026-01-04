@@ -12,18 +12,19 @@ echo "=== Setting up Python environment ==="
 cd pytensor4all
 
 # Copy library
-python scripts/build_capi.py
 
 # Install dependencies and package
 if command -v uv &> /dev/null; then
+    uv run python scripts/build_capi.py
     echo "Using uv..."
     uv sync --all-extras
     uv pip install -e ".[dev]"
     echo "=== Running Python tests ==="
     uv run pytest -v
 else
+    python3 scripts/build_capi.py
     echo "Using pip..."
-    python -m pip install --upgrade pip
+    python3 -m pip install --upgrade pip
     pip install -e ".[dev]"
     echo "=== Running Python tests ==="
     pytest -v
