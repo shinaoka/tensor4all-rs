@@ -17,8 +17,8 @@ python scripts/build_capi.py
 # Install dependencies and package
 if command -v uv &> /dev/null; then
     echo "Using uv..."
-    uv sync
-    uv pip install -e .
+    uv sync --all-extras
+    uv pip install -e ".[dev]"
     echo "=== Running Python tests ==="
     uv run pytest -v
 else

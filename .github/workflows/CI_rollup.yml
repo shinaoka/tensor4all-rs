@@ -20,12 +20,12 @@ jobs:
           wait-interval: 10
           allowed-conclusions: success
 
-      - name: Wait for CI_julia
+      - name: Wait for CI_jl
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          check-name: 'rollup-julia'
+          check-name: 'rollup-jl'
           running-workflow-name: CI
           wait-interval: 10
           allowed-conclusions: success

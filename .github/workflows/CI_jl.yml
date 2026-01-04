@@ -1,4 +1,4 @@
-name: CI_julia
+name: CI_jl
 
 on:
   push:
@@ -64,7 +64,7 @@ jobs:
       - name: Run Julia tests
         run: ./run_julia_tests.sh
 
-  rollup-julia:
+  rollup-jl:
     runs-on: ubuntu-latest
     needs:
       - test
