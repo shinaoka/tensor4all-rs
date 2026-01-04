@@ -207,6 +207,55 @@ tensor4all-rs is organized as a Cargo workspace with the following crates:
   - Efficient conversion between quantics, grid indices, and original coordinates
   - Discretized grid utilities
 
+## Language Bindings
+
+tensor4all-rs provides bindings for multiple programming languages through its C API (`tensor4all-capi`):
+
+### Julia: Tensor4all.jl
+
+Located in `Tensor4all.jl/`, this package provides Julia bindings with ITensors.jl interoperability.
+
+```julia
+using Tensor4all
+
+# Create indices
+i = Index(2, tags="Site")
+j = Index(3, tags="Link")
+
+# Convert to/from ITensors.Index
+using ITensors
+it_idx = ITensors.Index(i)
+t4a_idx = Tensor4all.Index(it_idx)
+```
+
+### Python: pytensor4all
+
+Located in `pytensor4all/`, this package provides Python bindings via cffi with NumPy integration.
+
+```python
+from pytensor4all import Index, Tensor
+import numpy as np
+
+# Create indices
+i = Index(2, tags="Site")
+j = Index(3, tags="Link")
+
+# Create tensor from NumPy array
+data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
+t = Tensor([i, j], data)
+
+# Convert back to NumPy
+arr = t.to_numpy()
+```
+
+**Installation (development)**:
+```bash
+cd pytensor4all
+python scripts/build_capi.py  # Build Rust library
+uv sync && uv pip install -e ".[dev]"
+uv run pytest
+```
+
 ## Usage Example
 
 ### Basic Tensor Creation
