@@ -12,6 +12,7 @@
 
 | Document | Description |
 |----------|-------------|
+| [adaptive-tci-interpolation.md](./adaptive-tci-interpolation.md) | Adaptive TCI patching, convergence, pivot recycling, and structured embedding |
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
 
 ## Automatic Differentiation

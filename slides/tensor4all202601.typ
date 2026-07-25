@@ -490,7 +490,7 @@
     };
 
     let options = TCI2Options { tolerance: 1e-10, ..Default::default() };
-    let (tci, ranks, errors) = crossinterpolate2(
+    let tensor4all_tensorci::TCI2OptimizationResult { tci, ranks, errors, .. } = crossinterpolate2(
         f, None, vec![4, 4, 4], vec![vec![0, 0, 0]], options)?;
     ```
   ]

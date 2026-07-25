@@ -402,6 +402,76 @@ impl TensorDynLenStorage {
     }
 }
 
+/// Errors returned when constructing a compact copy-selector tensor.
+///
+/// A copy-selector has logical values
+/// `scale * delta(left, right) * delta(site, selected_value)` and is used to
+/// carry a bond through a fixed physical site without dense bond-squared storage.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, StructuredSelectorError, TensorDynLen};
+///
+/// let left = DynIndex::new_dyn(2);
+/// let site = DynIndex::new_dyn(3);
+/// let right = DynIndex::new_dyn(4);
+/// let error = TensorDynLen::from_copy_selector(left, site, right, 1, 1.0_f64)
+///     .unwrap_err();
+/// assert!(matches!(error, StructuredSelectorError::BondDimensionMismatch { .. }));
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum StructuredSelectorError {
+    /// The two logical copy axes have different dimensions.
+    #[error("copy-selector bond dimensions differ: left={left}, right={right}")]
+    BondDimensionMismatch {
+        /// Dimension of the left copy axis.
+        left: usize,
+        /// Dimension of the right copy axis.
+        right: usize,
+    },
+    /// One of the logical axes has dimension zero.
+    #[error("copy-selector {axis} dimension must be positive")]
+    ZeroDimension {
+        /// Name of the zero-dimensional axis.
+        axis: &'static str,
+    },
+    /// The selected physical coordinate is outside the site dimension.
+    #[error("selected site value {value} is outside 0..{site_dim}")]
+    SelectedValueOutOfBounds {
+        /// Requested zero-based physical coordinate.
+        value: usize,
+        /// Dimension of the physical site.
+        site_dim: usize,
+    },
+    /// The compact payload element count cannot be represented by `usize`.
+    #[error("copy-selector payload size overflows usize for dimensions {bond_dim} x {site_dim}")]
+    PayloadSizeOverflow {
+        /// Dimension shared by the copy axes.
+        bond_dim: usize,
+        /// Dimension of the physical site.
+        site_dim: usize,
+    },
+    /// A compact payload stride cannot be represented by `isize`.
+    #[error("copy-selector bond stride {bond_dim} exceeds isize::MAX")]
+    StrideOverflow {
+        /// Bond dimension that could not be converted to a stride.
+        bond_dim: usize,
+    },
+    /// Reserving the compact payload failed.
+    #[error("could not allocate copy-selector payload with {elements} elements")]
+    AllocationFailed {
+        /// Number of compact payload elements requested.
+        elements: usize,
+    },
+    /// Backend structured-storage validation failed.
+    #[error("invalid copy-selector storage: {message}")]
+    InvalidStorage {
+        /// Diagnostic returned by structured-storage validation.
+        message: String,
+    },
+}
+
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
 ///
@@ -1826,6 +1896,131 @@ impl TensorDynLen {
     /// ```
     pub fn from_structured_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
         Self::from_storage(indices, storage)
+    }
+
+    /// Construct a compact copy tensor that selects one physical-site value.
+    ///
+    /// The returned rank-3 tensor has logical indices `[left, site, right]` and
+    /// value `scale` exactly when `left == right` and `site == selected_value`;
+    /// every other entry is zero. Its payload has `left.dim * site.dim`
+    /// elements rather than `left.dim * site.dim * right.dim` dense elements.
+    ///
+    /// # Arguments
+    ///
+    /// - `left`: left copy axis; its dimension must be positive and equal to
+    ///   `right.dim`.
+    /// - `site`: physical axis whose selected coordinate remains active.
+    /// - `right`: right copy axis paired with `left`.
+    /// - `selected_value`: zero-based coordinate in `0..site.dim`.
+    /// - `scale`: value stored on the selected copy diagonal.
+    ///
+    /// # Returns
+    ///
+    /// A compact structured tensor with axis classes `[0, 1, 0]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StructuredSelectorError`] when dimensions are zero or
+    /// inconsistent, the selected value is out of bounds, checked size or
+    /// stride arithmetic overflows, allocation fails, or backend structured
+    /// storage validation rejects the metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::StorageKind;
+    ///
+    /// let left = DynIndex::new_dyn(2);
+    /// let site = DynIndex::new_dyn(3);
+    /// let right = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_copy_selector(
+    ///     left,
+    ///     site,
+    ///     right,
+    ///     1,
+    ///     2.5_f64,
+    /// ).unwrap();
+    ///
+    /// assert_eq!(tensor.storage().storage_kind(), StorageKind::Structured);
+    /// assert_eq!(tensor.storage().payload_len(), 6);
+    /// assert_eq!(
+    ///     tensor.to_vec::<f64>().unwrap(),
+    ///     vec![0.0, 0.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.5, 0.0, 0.0],
+    /// );
+    /// ```
+    pub fn from_copy_selector<T>(
+        left: DynIndex,
+        site: DynIndex,
+        right: DynIndex,
+        selected_value: usize,
+        scale: T,
+    ) -> std::result::Result<Self, StructuredSelectorError>
+    where
+        T: TensorElement + StorageScalar + Copy + Zero,
+    {
+        if left.dim == 0 {
+            return Err(StructuredSelectorError::ZeroDimension { axis: "left" });
+        }
+        if site.dim == 0 {
+            return Err(StructuredSelectorError::ZeroDimension { axis: "site" });
+        }
+        if right.dim == 0 {
+            return Err(StructuredSelectorError::ZeroDimension { axis: "right" });
+        }
+        if left.dim != right.dim {
+            return Err(StructuredSelectorError::BondDimensionMismatch {
+                left: left.dim,
+                right: right.dim,
+            });
+        }
+        if selected_value >= site.dim {
+            return Err(StructuredSelectorError::SelectedValueOutOfBounds {
+                value: selected_value,
+                site_dim: site.dim,
+            });
+        }
+
+        let payload_len =
+            left.dim
+                .checked_mul(site.dim)
+                .ok_or(StructuredSelectorError::PayloadSizeOverflow {
+                    bond_dim: left.dim,
+                    site_dim: site.dim,
+                })?;
+        let site_stride = isize::try_from(left.dim)
+            .map_err(|_| StructuredSelectorError::StrideOverflow { bond_dim: left.dim })?;
+        let selected_offset = left.dim.checked_mul(selected_value).ok_or(
+            StructuredSelectorError::PayloadSizeOverflow {
+                bond_dim: left.dim,
+                site_dim: site.dim,
+            },
+        )?;
+
+        let mut payload = Vec::new();
+        payload.try_reserve_exact(payload_len).map_err(|_| {
+            StructuredSelectorError::AllocationFailed {
+                elements: payload_len,
+            }
+        })?;
+        payload.resize(payload_len, T::zero());
+        for bond in 0..left.dim {
+            payload[selected_offset + bond] = scale;
+        }
+        let storage = Storage::new_structured(
+            payload,
+            vec![left.dim, site.dim],
+            vec![1, site_stride],
+            vec![0, 1, 0],
+        )
+        .map_err(|error| StructuredSelectorError::InvalidStorage {
+            message: error.to_string(),
+        })?;
+        Self::from_structured_storage(vec![left, site, right], Arc::new(storage)).map_err(|error| {
+            StructuredSelectorError::InvalidStorage {
+                message: error.to_string(),
+            }
+        })
     }
 
     /// Create a tensor from a native tenferro payload.

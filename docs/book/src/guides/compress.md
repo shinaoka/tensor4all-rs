@@ -21,7 +21,7 @@ or `1e-6`.
 # fn main() -> anyhow::Result<()> {
 use std::f64::consts::PI;
 use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
 
 let local_dims = vec![128, 128, 128];
 let f = |idx: &Vec<usize>| {
@@ -31,7 +31,7 @@ let f = |idx: &Vec<usize>| {
     x.cos() + y.cos() + z.cos()
 };
 
-let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     f,
     None,
     local_dims.clone(),
@@ -43,9 +43,9 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
     },
 )?;
 
-assert!(*errors.last().unwrap() < 1e-10);
+assert_eq!(result.termination, TCI2Termination::Converged);
 
-let tt = tci.to_tensor_train()?;
+let tt = result.tci.to_tensor_train()?;
 for point in [
     vec![0, 0, 0],
     vec![1, 2, 3],
@@ -79,7 +79,7 @@ The quality of the compression is visible in the bond dimensions and the paramet
 #     let z = 2.0 * PI * idx[2] as f64 / 128.0;
 #     x.cos() + y.cos() + z.cos()
 # };
-# let (tci, _, _) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+# let tensor4all_tensorci::TCI2OptimizationResult { tci, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 #     f, None, local_dims.clone(), vec![vec![0, 0, 0]],
 #     TCI2Options { tolerance: 1e-12, max_bond_dim: 64, ..Default::default() },
 # )?;

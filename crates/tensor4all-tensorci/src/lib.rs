@@ -32,21 +32,20 @@
 //! let local_dims = vec![4, 4];
 //! let first_pivot = vec![vec![1, 1]];
 //!
-//! let (tci, _ranks, errors) =
-//!     crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
-//!         f,
-//!         None,
-//!         local_dims,
-//!         first_pivot,
-//!         TCI2Options::default(),
-//!     )
-//!     .unwrap();
+//! let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+//!     f,
+//!     None,
+//!     local_dims,
+//!     first_pivot,
+//!     TCI2Options::default(),
+//! )
+//! .unwrap();
 //!
 //! // Check convergence
-//! assert!(*errors.last().unwrap() < 1e-6);
+//! assert_eq!(result.termination, tensor4all_tensorci::TCI2Termination::Converged);
 //!
 //! // Evaluate through the tensor train
-//! let tt = tci.to_tensor_train().unwrap();
+//! let tt = result.tci.to_tensor_train().unwrap();
 //! let val = tt.evaluate(&[2, 3]).unwrap();
 //! assert!((val - 6.0).abs() < 1e-10); // f(2,3) = 2+3+1 = 6
 //! ```
@@ -81,6 +80,6 @@ pub use globalsearch::{estimate_true_error, floating_zone};
 pub use optfirstpivot::opt_first_pivot;
 pub use tensorci1::{crossinterpolate1, TCI1Options, TCI1SweepStrategy, TensorCI1};
 pub use tensorci2::{
-    crossinterpolate2, optimize_with_finder, PivotSearchStrategy, Sweep2Strategy, TCI2Options,
-    TensorCI2,
+    crossinterpolate2, optimize_with_finder, PivotSearchStrategy, Sweep2Strategy,
+    TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
 };

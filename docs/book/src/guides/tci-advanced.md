@@ -8,7 +8,7 @@ This path bypasses the high-level quantics wrapper and works directly with quant
 
 ```rust
 use tensor4all_simplett::AbstractTensorTrain;
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
 
 let r = 8;
 let local_dims = vec![2; r];
@@ -22,7 +22,7 @@ let f = move |idx: &Vec<usize>| {
 };
 
 let initial_pivots = vec![vec![0; r]];
-let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     f,
     None,
     local_dims.clone(),
@@ -34,9 +34,9 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
     },
 ).unwrap();
 
-assert!(*errors.last().unwrap() < 1e-10);
+assert_eq!(result.termination, TCI2Termination::Converged);
 
-let tt = tci.to_tensor_train().unwrap();
+let tt = result.tci.to_tensor_train().unwrap();
 for bits in [
     vec![0, 0, 0, 0, 0, 0, 0, 0],
     vec![1, 0, 0, 0, 0, 0, 0, 0],
@@ -119,7 +119,7 @@ let cf = CachedFunction::new(
 ).unwrap();
 
 let cached_f = |idx: &Vec<usize>| cf.eval(idx);
-let (tci_cached, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+let tensor4all_tensorci::TCI2OptimizationResult { tci: tci_cached, ranks: _ranks, errors: _errors, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     cached_f,
     None,
     local_dims.clone(),
@@ -165,7 +165,7 @@ For a uniform half-open grid on `[x_min, x_max)`, the quantics tensor train sum 
 #     let x = q as f64 * step;
 #     (-3.0 * x).exp()
 # };
-# let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+# let tensor4all_tensorci::TCI2OptimizationResult { tci, ranks: _ranks, errors: _errors, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 #     f, None, local_dims, vec![vec![0; r]],
 #     TCI2Options { tolerance: 1e-12, seed: Some(42), ..Default::default() },
 # ).unwrap();

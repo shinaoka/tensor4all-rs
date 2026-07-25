@@ -147,6 +147,53 @@ fn tensor_from_structured_storage_preserves_compact_payload() {
 }
 
 #[test]
+fn copy_selector_is_compact_and_numerically_correct() {
+    let left = Index::new_dyn(2);
+    let site = Index::new_dyn(3);
+    let right = Index::new_dyn(2);
+
+    let tensor = TensorDynLen::from_copy_selector(left, site, right, 1, 2.5_f64).unwrap();
+
+    assert_eq!(tensor.storage().storage_kind(), StorageKind::Structured);
+    assert_eq!(tensor.storage().payload_len(), 6);
+    assert_eq!(tensor.storage().axis_classes(), &[0, 1, 0]);
+    assert_eq!(
+        tensor.to_vec::<f64>().unwrap(),
+        vec![0.0, 0.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.5, 0.0, 0.0]
+    );
+}
+
+#[test]
+fn copy_selector_rejects_payload_and_stride_overflow_before_allocation() {
+    let payload_error = TensorDynLen::from_copy_selector(
+        Index::new_dyn(usize::MAX),
+        Index::new_dyn(2),
+        Index::new_dyn(usize::MAX),
+        0,
+        1.0_f64,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        payload_error,
+        tensor4all_core::StructuredSelectorError::PayloadSizeOverflow { .. }
+    ));
+
+    let oversized_stride = (isize::MAX as usize) + 1;
+    let stride_error = TensorDynLen::from_copy_selector(
+        Index::new_dyn(oversized_stride),
+        Index::new_dyn(1),
+        Index::new_dyn(oversized_stride),
+        0,
+        1.0_f64,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        stride_error,
+        tensor4all_core::StructuredSelectorError::StrideOverflow { .. }
+    ));
+}
+
+#[test]
 fn tensor_from_structured_storage_rejects_index_dim_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(4);

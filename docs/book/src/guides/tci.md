@@ -15,13 +15,13 @@ The function must accept a `&Vec<usize>` of 0-indexed multi-indices and return a
 
 ```rust
 use tensor4all_simplett::AbstractTensorTrain;
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
 
 let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 let local_dims = vec![4, 4];
 let initial_pivots = vec![vec![3, 3]]; // pick where |f| is large
 
-let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     f,
     None,
     local_dims,
@@ -33,9 +33,9 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
     },
 ).unwrap();
 
-assert!(*errors.last().unwrap() < 1e-10);
+assert_eq!(result.termination, TCI2Termination::Converged);
 
-let tt = tci.to_tensor_train().unwrap();
+let tt = result.tci.to_tensor_train().unwrap();
 let value = tt.evaluate(&[2, 3]).unwrap();
 assert!((value - 6.0).abs() < 1e-10);
 assert!(tt.rank() >= 1);
@@ -55,13 +55,17 @@ The most important parameters:
 
 ### Interpreting the results
 
-`crossinterpolate2` returns a triple:
+`crossinterpolate2` returns a `TCI2OptimizationResult`:
 
-| Value | Type | Description |
+| Field | Type | Description |
 |-------|------|-------------|
 | `tci` | `TensorCI2<T>` | Completed TCI object; call `.to_tensor_train()` to get a `TensorTrain`. |
 | `ranks` | `Vec<usize>` | Bond dimensions after each sweep. |
-| `errors` | `Vec<f64>` | Error estimate after each sweep; convergence when the last value is below tolerance. |
+| `errors` | `Vec<f64>` | Error estimate after each sweep. |
+| `termination` | `TCI2Termination` | Whether the full criterion converged, the rank cap was reached, or iterations were exhausted. |
+
+Do not infer convergence from `errors.last()` alone. Full convergence also
+requires no recent global pivots and a stable rank history.
 
 ### Convergence diagnostics
 
@@ -82,7 +86,7 @@ Convert to a tensor train for further manipulation:
 # use tensor4all_simplett::AbstractTensorTrain;
 # use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
 # let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
-# let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+# let tensor4all_tensorci::TCI2OptimizationResult { tci, ranks: _ranks, errors: _errors, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 #     f, None, vec![4, 4], vec![vec![3, 3]],
 #     TCI2Options { seed: Some(42), ..Default::default() },
 # ).unwrap();

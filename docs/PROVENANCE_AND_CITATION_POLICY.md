@@ -71,6 +71,7 @@ relationship; the role is stated only on the first row.
 | `tensor4all-quanticstransform` | Quantics operators (shift, flip, QFT, affine) | [Quantics.jl](https://github.com/tensor4all/Quantics.jl) | Port (validated against v0.4.7) |
 | `tensor4all-aci` | Alternating cross interpolation elementwise ops | [AlternatingCrossInterpolation.jl](https://github.com/tensor4all/AlternatingCrossInterpolation.jl) | Port |
 | `tensor4all-partitionedtt` | Partitioned TT over subdomains | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Port |
+| `tensor4all-partitionedtt` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive TCI interpolation |
 | `tensor4all-hdf5` | HDF5 serialization | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl file formats | Compatible (round-trip validated) |
 | `tensor4all-capi` | C FFI surface for language bindings | — | Original (consumed by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)) |
 
@@ -96,4 +97,5 @@ list is best-effort; corrections and additions are welcome.
 | Partitioned tensor trains / adaptive patching | `partitionedtt` | G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive Patching for Tensor Train Computations", [arXiv:2602.22372](https://arxiv.org/abs/2602.22372) |
 
 License-bearing derivations are declared in the affected crate
-(`tensor4all-treetn`: `LICENSE-APACHE`, SPDX `MIT AND Apache-2.0`).
+(`tensor4all-treetn`: `LICENSE-APACHE`, SPDX `MIT AND Apache-2.0`;
+`tensor4all-partitionedtt`: `LICENSE-TCIALGORITHMS-MIT`, crate remains MIT).

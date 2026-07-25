@@ -32,6 +32,14 @@ pub enum PartitionedTTError {
     #[error("Tensor train error: {0}")]
     TensorTrainError(String),
 
+    /// Error from tensor cross interpolation
+    #[error("Tensor cross interpolation error: {0}")]
+    TensorCrossInterpolation(#[from] tensor4all_tensorci::TCIError),
+
+    /// Invalid site-index or pivot input for adaptive interpolation
+    #[error("Invalid adaptive interpolation input: {0}")]
+    InvalidAdaptiveInterpolationInput(String),
+
     /// Feature not yet implemented
     #[error("Not implemented: {0}")]
     NotImplemented(String),

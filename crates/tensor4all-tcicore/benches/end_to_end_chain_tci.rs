@@ -35,15 +35,16 @@ fn bench_chain_tci(c: &mut Criterion) {
         };
         group.bench_with_input(BenchmarkId::new("full", n_sites), &n_sites, |b, _| {
             b.iter(|| {
-                let (tci, ranks, errors) =
-                    crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
-                        chain_value,
-                        Some(chain_values),
-                        local_dims.clone(),
-                        initial_pivots.clone(),
-                        full_options.clone(),
-                    )
-                    .unwrap();
+                let tensor4all_tensorci::TCI2OptimizationResult {
+                    tci, ranks, errors, ..
+                } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+                    chain_value,
+                    Some(chain_values),
+                    local_dims.clone(),
+                    initial_pivots.clone(),
+                    full_options.clone(),
+                )
+                .unwrap();
                 black_box((
                     tci.rank(),
                     ranks.len(),
@@ -58,15 +59,16 @@ fn bench_chain_tci(c: &mut Criterion) {
         };
         group.bench_with_input(BenchmarkId::new("rook", n_sites), &n_sites, |b, _| {
             b.iter(|| {
-                let (tci, ranks, errors) =
-                    crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
-                        chain_value,
-                        Some(chain_values),
-                        local_dims.clone(),
-                        initial_pivots.clone(),
-                        rook_options.clone(),
-                    )
-                    .unwrap();
+                let tensor4all_tensorci::TCI2OptimizationResult {
+                    tci, ranks, errors, ..
+                } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+                    chain_value,
+                    Some(chain_values),
+                    local_dims.clone(),
+                    initial_pivots.clone(),
+                    rook_options.clone(),
+                )
+                .unwrap();
                 black_box((
                     tci.rank(),
                     ranks.len(),

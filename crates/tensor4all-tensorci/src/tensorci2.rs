@@ -154,6 +154,81 @@ impl Default for TCI2Options {
     }
 }
 
+/// Reason why a TCI2 optimization stopped.
+///
+/// Only [`Self::Converged`] means that the complete history-based convergence
+/// criterion was satisfied. Reaching a configured limit is reported separately
+/// so adaptive callers can choose whether to accept or refine the result.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
+///
+/// let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+///     |_| 1.0,
+///     None,
+///     vec![2, 2],
+///     vec![vec![0, 0]],
+///     TCI2Options {
+///         ncheck_history: 1,
+///         nsearch: 0,
+///         max_nglobal_pivot: 0,
+///         ..TCI2Options::default()
+///     },
+/// ).unwrap();
+/// assert_eq!(result.termination, TCI2Termination::Converged);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TCI2Termination {
+    /// Bond error, global-pivot history, and rank stability all converged.
+    Converged,
+    /// The recent rank history reached the configured maximum bond dimension.
+    MaxBondDimension,
+    /// The iteration limit was exhausted before another stopping condition held.
+    MaxIterations,
+}
+
+/// Result of a complete TCI2 optimization.
+///
+/// This groups the optimized state with its sweep histories and termination
+/// reason. Use [`TCI2Termination`] rather than the last error alone when deciding
+/// whether the optimization converged.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::AbstractTensorTrain;
+/// use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
+///
+/// let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+///     |idx| ((idx[0] + 1) * (idx[1] + 1)) as f64,
+///     None,
+///     vec![2, 2],
+///     vec![vec![1, 1]],
+///     TCI2Options {
+///         ncheck_history: 1,
+///         nsearch: 0,
+///         max_nglobal_pivot: 0,
+///         ..TCI2Options::default()
+///     },
+/// ).unwrap();
+/// assert_eq!(result.termination, TCI2Termination::Converged);
+/// let tt = result.tci.to_tensor_train().unwrap();
+/// assert!((tt.evaluate(&[1, 0]).unwrap() - 2.0).abs() < 1.0e-12);
+/// ```
+#[derive(Debug, Clone)]
+pub struct TCI2OptimizationResult<T: Scalar + TTScalar> {
+    /// Optimized interpolation state after the final one-site cleanup sweep.
+    pub tci: TensorCI2<T>,
+    /// Bond dimension recorded after each half-sweep.
+    pub ranks: Vec<usize>,
+    /// Normalized or absolute error estimate recorded after each half-sweep.
+    pub errors: Vec<f64>,
+    /// Reason why optimization stopped.
+    pub termination: TCI2Termination,
+}
+
 #[derive(Clone, Copy)]
 struct Sweep1SiteBondConfig {
     rel_tol: f64,
@@ -1182,9 +1257,9 @@ fn convergence_criterion(
     tolerance: f64,
     max_bond_dim: usize,
     ncheck_history: usize,
-) -> bool {
+) -> Option<TCI2Termination> {
     if errors.len() < ncheck_history {
-        return false;
+        return None;
     }
 
     let n = errors.len();
@@ -1198,7 +1273,13 @@ fn convergence_criterion(
         last_ranks.iter().min().copied().unwrap_or(0) == last_ranks.last().copied().unwrap_or(0);
     let at_max_bond = last_ranks.iter().all(|&r| r >= max_bond_dim);
 
-    (errors_converged && no_global_pivots && rank_stable) || at_max_bond
+    if at_max_bond {
+        Some(TCI2Termination::MaxBondDimension)
+    } else if errors_converged && no_global_pivots && rank_stable {
+        Some(TCI2Termination::Converged)
+    } else {
+        None
+    }
 }
 
 /// Approximate a function as a tensor train using the TCI2 algorithm.
@@ -1224,14 +1305,10 @@ fn convergence_criterion(
 ///
 /// # Returns
 ///
-/// A tuple `(tci, ranks, errors)`:
-///
-/// * `tci: TensorCI2<T>` -- The interpolation state. Call
-///   [`to_tensor_train`](TensorCI2::to_tensor_train) to get a
-///   [`TensorTrain`].
-/// * `ranks: Vec<usize>` -- Bond dimension after each half-sweep.
-/// * `errors: Vec<f64>` -- Normalized error estimate after each half-sweep.
-///   The last value should be below `tolerance` if the algorithm converged.
+/// A [`TCI2OptimizationResult`] containing the interpolation state, sweep
+/// histories, and the reason optimization stopped. Check
+/// [`TCI2OptimizationResult::termination`] rather than inferring convergence
+/// from the final error alone.
 ///
 /// # Errors
 ///
@@ -1251,30 +1328,29 @@ fn convergence_criterion(
 /// let local_dims = vec![4, 4];
 /// let initial_pivots = vec![vec![3, 3]]; // pick where |f| is large
 ///
-/// let (tci, _ranks, errors) =
-///     crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
-///         f,
-///         None,
-///         local_dims,
-///         initial_pivots,
-///         TCI2Options {
-///             tolerance: 1e-10,
-///             seed: Some(42),
-///             ..TCI2Options::default()
-///         },
-///     )
-///     .unwrap();
+/// let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+///     f,
+///     None,
+///     local_dims,
+///     initial_pivots,
+///     TCI2Options {
+///         tolerance: 1e-10,
+///         seed: Some(42),
+///         ..TCI2Options::default()
+///     },
+/// )
+/// .unwrap();
 ///
 /// // Verify convergence
-/// assert!(*errors.last().unwrap() < 1e-10);
+/// assert_eq!(result.termination, tensor4all_tensorci::TCI2Termination::Converged);
 ///
 /// // Evaluate through the tensor train
-/// let tt = tci.to_tensor_train().unwrap();
+/// let tt = result.tci.to_tensor_train().unwrap();
 /// let val = tt.evaluate(&[2, 3]).unwrap();
 /// assert!((val - 6.0).abs() < 1e-10); // f(2,3) = 2+3+1 = 6
 ///
 /// // Bond dimensions are available
-/// assert!(!tci.link_dims().is_empty());
+/// assert!(!tt.link_dims().is_empty());
 /// ```
 pub fn crossinterpolate2<T, F, B>(
     f: F,
@@ -1282,7 +1358,7 @@ pub fn crossinterpolate2<T, F, B>(
     local_dims: Vec<usize>,
     initial_pivots: Vec<MultiIndex>,
     options: TCI2Options,
-) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
+) -> Result<TCI2OptimizationResult<T>>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
@@ -1345,8 +1421,8 @@ where
 ///
 /// # Returns
 ///
-/// Returns `(tci, ranks, errors)`, matching [`crossinterpolate2`]. `ranks` and
-/// `errors` contain one entry per half-sweep.
+/// Returns a [`TCI2OptimizationResult`], matching [`crossinterpolate2`]. Its
+/// rank and error histories contain one entry per half-sweep.
 ///
 /// # Errors
 ///
@@ -1367,23 +1443,22 @@ where
 /// tci.add_global_pivots(&[vec![3, 3]]).unwrap();
 ///
 /// let finder = DefaultGlobalPivotFinder::new(0, 0, 10.0);
-/// let (tci, ranks, errors) =
-///     optimize_with_finder::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
-///         tci,
-///         f,
-///         None,
-///         TCI2Options {
-///             tolerance: 1e-10,
-///             max_iter: 5,
-///             ..TCI2Options::default()
-///         },
-///         finder,
-///     )
-///     .unwrap();
+/// let result = optimize_with_finder::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
+///     tci,
+///     f,
+///     None,
+///     TCI2Options {
+///         tolerance: 1e-10,
+///         max_iter: 5,
+///         ..TCI2Options::default()
+///     },
+///     finder,
+/// )
+/// .unwrap();
 ///
-/// assert!(!ranks.is_empty());
-/// assert!(!errors.is_empty());
-/// let tt = tci.to_tensor_train().unwrap();
+/// assert!(!result.ranks.is_empty());
+/// assert!(!result.errors.is_empty());
+/// let tt = result.tci.to_tensor_train().unwrap();
 /// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
 /// ```
 pub fn optimize_with_finder<T, F, B, G>(
@@ -1392,7 +1467,7 @@ pub fn optimize_with_finder<T, F, B, G>(
     batched_f: Option<B>,
     options: TCI2Options,
     finder: G,
-) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
+) -> Result<TCI2OptimizationResult<T>>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
@@ -1410,6 +1485,7 @@ where
     let mut errors = Vec::new();
     let mut ranks = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
+    let mut termination = TCI2Termination::MaxIterations;
 
     let mut rng = if let Some(seed) = options.seed {
         rand::rngs::StdRng::seed_from_u64(seed)
@@ -1521,15 +1597,17 @@ where
             );
         }
 
-        // Check convergence
-        if convergence_criterion(
+        // `errors` is already divided by `error_normalization`, so compare it
+        // with the configured relative tolerance rather than `abs_tol`.
+        if let Some(reason) = convergence_criterion(
             &ranks,
             &errors,
             &nglobal_pivots_history,
-            abs_tol,
+            options.tolerance,
             options.max_bond_dim,
             options.ncheck_history,
         ) {
+            termination = reason;
             break;
         }
     }
@@ -1545,7 +1623,12 @@ where
     let abs_tol = options.tolerance * error_normalization;
     tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
 
-    Ok((tci, ranks, errors))
+    Ok(TCI2OptimizationResult {
+        tci,
+        ranks,
+        errors,
+        termination,
+    })
 }
 
 /// Update pivots at bond b using LU-based cross interpolation

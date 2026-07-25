@@ -17,7 +17,12 @@ fn test_sweep1site_preserves_accuracy() {
         ..Default::default()
     };
 
-    let (mut tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        mut tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -63,12 +68,12 @@ fn test_make_canonical() {
         ..Default::default()
     };
 
-    let (mut tci, _, _) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
-        f,
-        None,
-        local_dims,
-        first_pivot,
-        options,
+    let crate::TCI2OptimizationResult { mut tci, .. } = crossinterpolate2::<
+        f64,
+        _,
+        fn(&[MultiIndex]) -> Vec<f64>,
+    >(
+        f, None, local_dims, first_pivot, options
     )
     .unwrap();
 
@@ -110,12 +115,12 @@ fn test_fill_site_tensors() {
         ..Default::default()
     };
 
-    let (mut tci, _, _) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
-        f,
-        None,
-        local_dims,
-        first_pivot,
-        options,
+    let crate::TCI2OptimizationResult { mut tci, .. } = crossinterpolate2::<
+        f64,
+        _,
+        fn(&[MultiIndex]) -> Vec<f64>,
+    >(
+        f, None, local_dims, first_pivot, options
     )
     .unwrap();
 
@@ -151,7 +156,12 @@ fn test_crossinterpolate2_constant() {
     let first_pivot = vec![vec![0, 0]];
     let options = TCI2Options::default();
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -162,6 +172,37 @@ fn test_crossinterpolate2_constant() {
 
     assert_eq!(tci.len(), 2);
     assert!(tci.rank() >= 1);
+}
+
+#[test]
+fn test_crossinterpolate2_reports_convergence_and_rank_cap_separately() {
+    let options = |max_bond_dim| TCI2Options {
+        max_bond_dim,
+        ncheck_history: 1,
+        nsearch: 0,
+        max_nglobal_pivot: 0,
+        ..TCI2Options::default()
+    };
+
+    let converged = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        |_| 1.0,
+        None,
+        vec![2, 2],
+        vec![vec![0, 0]],
+        options(usize::MAX),
+    )
+    .unwrap();
+    assert_eq!(converged.termination, TCI2Termination::Converged);
+
+    let capped = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        |_| 1.0,
+        None,
+        vec![2, 2],
+        vec![vec![0, 0]],
+        options(1),
+    )
+    .unwrap();
+    assert_eq!(capped.termination, TCI2Termination::MaxBondDimension);
 }
 
 #[test]
@@ -179,8 +220,12 @@ fn test_crossinterpolate2_with_batch_function() {
     let first_pivot = vec![vec![1, 1]];
     let options = TCI2Options::default();
 
-    let (tci, _ranks, _errors) =
-        crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
 
     assert_eq!(tci.len(), 2);
 }
@@ -197,7 +242,12 @@ fn test_crossinterpolate2_rank2_function() {
         ..Default::default()
     };
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -237,7 +287,12 @@ fn test_crossinterpolate2_rank2_function_rook_search() {
         ..Default::default()
     };
 
-    let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -266,7 +321,12 @@ fn test_crossinterpolate2_pivot_errors_match_diagonal_values() {
             0.0
         }
     };
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         vec![3, 3],
@@ -311,8 +371,12 @@ fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
         ..Default::default()
     };
 
-    let (_tci, _ranks, _errors) =
-        crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
+    let crate::TCI2OptimizationResult {
+        tci: _tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
 
     assert!(
         max_batch.get() < 64,
@@ -381,7 +445,7 @@ fn test_crossinterpolate2_3sites_constant() {
         "crossinterpolate2 failed: {:?}",
         result.err()
     );
-    let (tci, _ranks, _errors) = result.unwrap();
+    let crate::TCI2OptimizationResult { tci, .. } = result.unwrap();
 
     assert_eq!(tci.len(), 3);
     assert!(tci.rank() >= 1);
@@ -432,7 +496,7 @@ fn test_crossinterpolate2_4sites_product() {
         "crossinterpolate2 failed: {:?}",
         result.err()
     );
-    let (tci, _ranks, _errors) = result.unwrap();
+    let crate::TCI2OptimizationResult { tci, .. } = result.unwrap();
 
     assert_eq!(tci.len(), 4);
 
@@ -476,7 +540,7 @@ fn test_crossinterpolate2_5sites_constant() {
         "crossinterpolate2 failed: {:?}",
         result.err()
     );
-    let (tci, _ranks, _errors) = result.unwrap();
+    let crate::TCI2OptimizationResult { tci, .. } = result.unwrap();
 
     assert_eq!(tci.len(), 5);
 
@@ -552,7 +616,12 @@ fn test_crossinterpolate2_rank2_full_grid_reconstruction() {
         ..Default::default()
     };
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -598,7 +667,12 @@ fn test_crossinterpolate2_non_strictly_nested() {
         pivot_search: PivotSearchStrategy::Full,
         ..Default::default()
     };
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims.clone(),
@@ -622,7 +696,12 @@ fn test_crossinterpolate2_non_strictly_nested() {
         pivot_search: PivotSearchStrategy::Full,
         ..Default::default()
     };
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims.clone(),
@@ -646,7 +725,12 @@ fn test_crossinterpolate2_non_strictly_nested() {
         pivot_search: PivotSearchStrategy::Rook,
         ..Default::default()
     };
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims.clone(),
@@ -670,7 +754,12 @@ fn test_crossinterpolate2_non_strictly_nested() {
         pivot_search: PivotSearchStrategy::Rook,
         ..Default::default()
     };
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -705,7 +794,12 @@ fn test_crossinterpolate2_lorentz_f64() {
         ..Default::default()
     };
 
-    let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims.clone(),
@@ -763,11 +857,18 @@ fn test_crossinterpolate2_lorentz_c64() {
         ..Default::default()
     };
 
-    let (tci, _ranks, errors) = crossinterpolate2::<
-        Complex64,
-        _,
-        fn(&[MultiIndex]) -> Vec<Complex64>,
-    >(f, None, local_dims, first_pivot, options)
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors,
+        ..
+    } = crossinterpolate2::<Complex64, _, fn(&[MultiIndex]) -> Vec<Complex64>>(
+        f,
+        None,
+        local_dims,
+        first_pivot,
+        options,
+    )
     .unwrap();
 
     let final_error = *errors.last().unwrap();
@@ -797,54 +898,41 @@ fn test_crossinterpolate2_lorentz_c64() {
 #[test]
 fn test_convergence_criterion() {
     // Not converged: too few history points
-    assert!(!super::convergence_criterion(
-        &[2],
-        &[1e-10],
-        &[0],
-        1e-8,
-        100,
-        3
-    ));
+    assert_eq!(
+        super::convergence_criterion(&[2], &[1e-10], &[0], 1e-8, 100, 3),
+        None
+    );
 
     // Converged: 3 iterations with low error, no global pivots, stable rank
-    assert!(super::convergence_criterion(
-        &[5, 5, 5],
-        &[1e-10, 1e-10, 1e-10],
-        &[0, 0, 0],
-        1e-8,
-        100,
-        3
-    ));
+    assert_eq!(
+        super::convergence_criterion(&[5, 5, 5], &[1e-10, 1e-10, 1e-10], &[0, 0, 0], 1e-8, 100, 3,),
+        Some(TCI2Termination::Converged)
+    );
+
+    // Normalized errors are compared with the configured relative tolerance,
+    // not with an absolute tolerance rescaled by a large function magnitude.
+    assert_eq!(
+        super::convergence_criterion(&[5, 5, 5], &[1e-6, 1e-6, 1e-6], &[0, 0, 0], 1e-8, 100, 3,),
+        None
+    );
 
     // Not converged: global pivots still being added
-    assert!(!super::convergence_criterion(
-        &[5, 5, 5],
-        &[1e-10, 1e-10, 1e-10],
-        &[0, 1, 0],
-        1e-8,
-        100,
-        3
-    ));
+    assert_eq!(
+        super::convergence_criterion(&[5, 5, 5], &[1e-10, 1e-10, 1e-10], &[0, 1, 0], 1e-8, 100, 3,),
+        None
+    );
 
-    // Converged: at max bond dim
-    assert!(super::convergence_criterion(
-        &[100, 100, 100],
-        &[0.1, 0.1, 0.1],
-        &[5, 5, 5],
-        1e-8,
-        100,
-        3
-    ));
+    // Reaching the rank cap is a limit, not convergence.
+    assert_eq!(
+        super::convergence_criterion(&[100, 100, 100], &[0.1, 0.1, 0.1], &[5, 5, 5], 1e-8, 100, 3,),
+        Some(TCI2Termination::MaxBondDimension)
+    );
 
     // Not converged: rank still growing
-    assert!(!super::convergence_criterion(
-        &[3, 4, 5],
-        &[1e-10, 1e-10, 1e-10],
-        &[0, 0, 0],
-        1e-8,
-        100,
-        3
-    ));
+    assert_eq!(
+        super::convergence_criterion(&[3, 4, 5], &[1e-10, 1e-10, 1e-10], &[0, 0, 0], 1e-8, 100, 3,),
+        None
+    );
 }
 
 /// Port of Julia test: global search with oscillatory function
@@ -876,7 +964,12 @@ fn test_global_search_oscillatory() {
         ..Default::default()
     };
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -980,7 +1073,12 @@ fn test_custom_global_pivot_finder() {
         ..Default::default()
     };
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims.clone(),
@@ -1065,17 +1163,27 @@ fn test_optimize_with_finder_invokes_custom_finder() {
     let finder = CountingFinder {
         calls: Rc::clone(&calls),
     };
-    let (tci, ranks, errors) = optimize_with_finder::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks,
+        errors,
+        termination,
+    } = optimize_with_finder::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
         tci,
         f,
         None,
-        TCI2Options::default(),
+        TCI2Options {
+            max_iter: 3,
+            ncheck_history: 1,
+            ..TCI2Options::default()
+        },
         finder,
     )
     .unwrap();
 
-    assert!(!ranks.is_empty());
-    assert!(!errors.is_empty());
+    assert_eq!(ranks.len(), 3);
+    assert_eq!(errors.len(), 3);
     assert!(tci.rank() >= 1);
-    assert!(calls.get() > 0);
+    assert_eq!(calls.get(), 3);
+    assert_eq!(termination, TCI2Termination::MaxIterations);
 }

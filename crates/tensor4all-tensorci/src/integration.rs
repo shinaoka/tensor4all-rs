@@ -580,7 +580,12 @@ where
 
     let local_dims = vec![n_nodes; ndims];
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<T, _, fn(&[MultiIndex]) -> Vec<T>>(
+    let crate::TCI2OptimizationResult {
+        tci,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<T, _, fn(&[MultiIndex]) -> Vec<T>>(
         wrapper,
         None,
         local_dims,

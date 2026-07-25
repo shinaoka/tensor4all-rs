@@ -49,20 +49,24 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
             + 1.0;
         coeff / Complex64::new(denom, 0.0)
     };
-    let (source, _ranks, _errors) =
-        crossinterpolate2::<Complex64, _, fn(&[MultiIndex]) -> Vec<Complex64>>(
-            f,
-            None,
-            vec![4; 4],
-            vec![vec![0; 4]],
-            TCI2Options {
-                tolerance: 1e-12,
-                max_iter: 20,
-                max_bond_dim: 5,
-                ..TCI2Options::default()
-            },
-        )
-        .unwrap();
+    let crate::TCI2OptimizationResult {
+        tci: source,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<Complex64, _, fn(&[MultiIndex]) -> Vec<Complex64>>(
+        f,
+        None,
+        vec![4; 4],
+        vec![vec![0; 4]],
+        TCI2Options {
+            tolerance: 1e-12,
+            max_iter: 20,
+            max_bond_dim: 5,
+            ..TCI2Options::default()
+        },
+    )
+    .unwrap();
     let source_tt = source.to_tensor_train().unwrap();
     let (expected_data, expected_shape) = source_tt.fulltensor();
     let converted = TensorCI2::from_tensor_train(
@@ -91,7 +95,12 @@ fn test_tensorci2_from_tensor_train_preserves_nontrivial_tensor() {
         let z = (idx[2] + 3) as f64;
         x * y + z
     };
-    let (source, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let crate::TCI2OptimizationResult {
+        tci: source,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         vec![3, 3, 3],
