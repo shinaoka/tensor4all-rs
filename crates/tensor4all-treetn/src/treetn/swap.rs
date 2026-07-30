@@ -104,12 +104,14 @@ where
 ///
 /// When `max_rank` or `rtol` are set, the swap may introduce approximation error
 /// by truncating bond dimension. Default (both `None`) allows rank growth to preserve
-/// the tensor exactly.
+/// the tensor exactly: `None` is an explicit "no truncation" request and does
+/// *not* fall back to the process-global SVD truncation policy.
 #[derive(Debug, Clone, Default)]
 pub struct SwapOptions {
     /// Maximum bond dimension after each SVD (None = no limit).
     pub max_rank: Option<usize>,
-    /// Relative tolerance for singular value truncation (None = no truncation).
+    /// Relative tolerance for singular value truncation (None = no truncation,
+    /// equivalent to `Some(0.0)`).
     pub rtol: Option<f64>,
 }
 

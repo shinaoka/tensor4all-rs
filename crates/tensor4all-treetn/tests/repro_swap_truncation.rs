@@ -1,21 +1,17 @@
-//! Reproduction for `TreeTN::swap_site_indices` dropping singular values that the
-//! caller never asked to drop.
+//! Regression tests for `TreeTN::swap_site_indices` dropping singular values
+//! that the caller never asked to drop (issue #564).
 //!
-//! `SwapOptions` documents `rtol: None` as "no truncation" and `swap_site_indices`
-//! documents its default as "no truncation, exact", but two independent paths fall
-//! back to the process-global `DEFAULT_SVD_TRUNCATION_POLICY` (per-value rtol 1e-12):
+//! Two independent paths used to fall back to the process-global
+//! `DEFAULT_SVD_TRUNCATION_POLICY` (per-value rtol 1e-12):
 //!
-//! 1. `rtol: None` sets no SVD policy on the swap factorization, so the global
-//!    default applies instead of an exact decomposition.
-//! 2. The canonical-center transport sweep never receives `SwapOptions` at all, so
-//!    even `rtol: Some(0.0)` cannot make the operation exact.
-//!
-//! Both tests below assert the *intended* (exact) behaviour and therefore fail on
-//! the current implementation. They are `#[ignore]`d so CI stays green until the
-//! fix lands.
+//! 1. `rtol: None` set no SVD policy on the swap factorization, so the global
+//!    default applied instead of an exact decomposition.
+//! 2. The canonical-center transport sweep never received `SwapOptions` at all,
+//!    so even `rtol: Some(0.0)` could not make the operation exact.
 //!
 //! The singular value 1e-13 is chosen to sit well below the global default 1e-12
-//! and well above f64 roundoff 1e-16.
+//! and well above f64 roundoff 1e-16, so any fallback to the global policy
+//! truncates it and fails these tests.
 
 use std::collections::HashMap;
 
@@ -102,10 +98,9 @@ fn bond_dim_at(tn: &TreeTN<TensorDynLen, String>, node: &str, sites: &[&DynIndex
         .unwrap_or(0)
 }
 
-/// A swap step that needs a transport sweep must not truncate, even with
-/// `rtol: Some(0.0)`, because `SwapOptions` is never passed to the transport.
+/// A swap step that needs a transport sweep must not truncate: the transport
+/// used to run a truncating factorization that ignored `SwapOptions` entirely.
 #[test]
-#[ignore = "reproduces the swap_site_indices truncation bug; unignore with the fix"]
 fn swap_with_transport_must_not_truncate() {
     let (tn, s0, s1, s2, s3) = chain_with_tiny_singular_values();
     let before = tn.contract_to_tensor().unwrap();
@@ -143,10 +138,9 @@ fn swap_with_transport_must_not_truncate() {
     }
 }
 
-/// A swap step with no transport at all still truncates when `rtol: None`,
-/// which isolates the "`None` means global default, not exact" cause.
+/// A swap step with no transport at all must not truncate with `rtol: None`:
+/// this isolates the "`None` used to mean global default, not exact" cause.
 #[test]
-#[ignore = "reproduces the swap_site_indices truncation bug; unignore with the fix"]
 fn swap_without_transport_must_not_truncate() {
     // 2-node network A--B with M = H2 * diag(1, 1e-13) * H2^T on the single bond.
     // Root is "A" (min node name), so the swap step has an empty transport path.
