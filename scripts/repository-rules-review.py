@@ -1167,7 +1167,7 @@ def merge_findings(all_findings: list[Finding]) -> list[Finding]:
     return list(merged.values())
 
 
-def budget_exhausted_finding(reviewed: int, total: int) -> Finding:
+def budget_exhausted_finding(reviewed: int, total: int, budget: float) -> Finding:
     return Finding(
         id="llm-budget-exhausted",
         severity="warn",
@@ -1177,7 +1177,7 @@ def budget_exhausted_finding(reviewed: int, total: int) -> Finding:
         summary="External LLM review stopped at its time budget",
         detail=(
             f"Reviewed {reviewed} of {total} diff chunk(s) before the "
-            f"{DEFAULT_BUDGET_SECONDS:.0f}s budget ran out, so part of this "
+            f"{budget:.0f}s budget ran out, so part of this "
             "diff was not reviewed. Deterministic checks still covered all of "
             "it. Split the PR or raise --budget-seconds to review the rest."
         ),
@@ -1611,7 +1611,11 @@ def main(argv: list[str] | None = None) -> int:
                     "chunk(s)",
                     file=sys.stderr,
                 )
-                findings.append(budget_exhausted_finding(reviewed, len(chunks)))
+                findings.append(
+                    budget_exhausted_finding(
+                        reviewed, len(chunks), args.budget_seconds
+                    )
+                )
                 break
             try:
                 _, chunk_findings = review_chunk(
