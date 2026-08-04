@@ -46,6 +46,9 @@ def make_diff(path: str, added: list[str], *, start: int = 1) -> str:
 # span below the 12-character threshold the quoted-credential pattern uses.
 PAT = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123"
 PW = "correct " + "horse " + "battery " + "staple"
+# Spelled out, the opener plus the following value line would make this
+# file trip the continuation detector it exercises.
+KEYNAME = "API" + "_KEY"
 AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
 SK = "sk-" + "0123456789abcdef0123456789abcdef"
 VALUE = "abcdefghij" + "klmnopqrst"
@@ -361,9 +364,20 @@ def test_tenferro_route_ignores_feature_line_edit() -> None:
 def test_tenferro_route_allows_tensorbackend() -> None:
     mod = load_module()
     path = "crates/tensor4all-tensorbackend/Cargo.toml"
-    findings = check_cargo(
-        mod, path, {path: [(8, "tenferro-linalg.workspace = true")]}
+    manifest = (
+        '[package]\nname = "tensor4all-tensorbackend"\n\n'
+        "[dependencies]\ntenferro-linalg.workspace = true\n"
     )
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: manifest
+    try:
+        findings = mod.deterministic_checks(
+            [path],
+            added={path: [(5, "tenferro-linalg.workspace = true")]},
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
     assert findings == []
 
 
@@ -961,6 +975,137 @@ def test_budget_exhausted_finding_warns_without_blocking() -> None:
     # covered the whole diff.
     assert finding.severity == "warn"
     assert "2 of 5" in finding.detail
+
+
+def test_sensitive_diff_blocks_a_value_on_a_continuation_line() -> None:
+    """The assignment can stay unchanged while only the value line is replaced."""
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            f" const {KEYNAME}: &str =",
+            '-    "old";',
+            f'+    "{PW}";',
+        ]
+    )
+    finding = mod.sensitive_diff_finding(diff)
+    assert finding is not None
+    assert finding.severity == "block"
+
+
+def test_sensitive_diff_ignores_an_ordinary_continuation_value() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            " let message =",
+            '+    "hello world there";',
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is None
+
+
+def test_sensitive_diff_ignores_an_unchanged_continuation_value() -> None:
+    """Only added lines may be reported; a context value is pre-existing."""
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,3 +1,3 @@",
+            f" const {KEYNAME}: &str =",
+            f'     "{PW}";',
+            "+let unrelated = 1;",
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is None
+
+
+def test_redactor_does_not_consume_a_deletion_marker_as_the_value() -> None:
+    mod = load_module()
+    text = 'const API_KEY: &str =\n-    "old";'
+    # The separator must not cross the newline and swallow the `-` marker,
+    # which used to leave the following line's literal untouched.
+    assert mod.redact_sensitive_text(text).splitlines()[1] == '-    "old";'
+
+
+# --- Cargo manifest scope ---
+
+
+WORKSPACE_MANIFEST = """[package]
+name = "xtask"
+
+[dependencies]
+# linalg = { package = "tenferro-linalg" }
+serde = "1"  # package = "tenferro-ad"
+real = { package = "tenferro-cpu" }
+"""
+
+BACKEND_MANIFEST = """[package]
+name = "tensor4all-tensorbackend"
+
+[dependencies]
+tenferro-linalg.workspace = true
+"""
+
+
+def test_tenferro_dependency_lines_ignores_toml_comments() -> None:
+    """A commented example is not a declaration."""
+    mod = load_module()
+    assert mod.tenferro_dependency_lines(WORKSPACE_MANIFEST) == {7: "tenferro-cpu"}
+
+
+def test_strip_toml_comment_respects_quoted_hashes() -> None:
+    mod = load_module()
+    assert mod.strip_toml_comment('a = "x#y"  # note') == 'a = "x#y"  '
+    assert mod.strip_toml_comment("# whole line") == ""
+
+
+def test_tenferro_route_covers_manifests_outside_crates() -> None:
+    """xtask, tools/, and docs/ are workspace members too."""
+    mod = load_module()
+    path = "xtask/Cargo.toml"
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: WORKSPACE_MANIFEST
+    try:
+        findings = mod.deterministic_checks(
+            [path],
+            added={path: [(7, 'real = { package = "tenferro-cpu" }')]},
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
+    assert len(findings) == 1
+    assert "tenferro-cpu" in findings[0].detail
+
+
+def test_tenferro_route_exempts_by_package_name_not_directory() -> None:
+    mod = load_module()
+    path = "vendor/backend/Cargo.toml"
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: BACKEND_MANIFEST
+    try:
+        findings = mod.deterministic_checks(
+            [path],
+            added={path: [(5, "tenferro-linalg.workspace = true")]},
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
+    assert findings == []
+
+
+def test_package_name_of_reads_the_package_table() -> None:
+    mod = load_module()
+    assert mod.package_name_of(BACKEND_MANIFEST) == "tensor4all-tensorbackend"
+    assert mod.package_name_of('[dependencies]\nname = "not-a-package"\n') is None
 
 
 # --- secret handling ---------------------------------------------------------
