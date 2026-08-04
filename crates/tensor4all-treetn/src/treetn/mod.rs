@@ -63,14 +63,6 @@ pub use partial_contraction::{
 // Re-export swap types
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 
-enum SweepFactorization<'a> {
-    Options(&'a FactorizeOptions),
-    FullRank {
-        alg: FactorizeAlg,
-        canonical: Canonical,
-    },
-}
-
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
 /// Maintains a graph of tensors connected by bonds (edges).
@@ -590,60 +582,29 @@ where
         Ok(Some(SweepContext { edges }))
     }
 
-    /// Process one edge during a sweep operation.
+    /// Process one edge during an exact sweep operation.
     ///
-    /// Factorizes the tensor at `src` node, absorbs the right factor into `dst` (parent),
-    /// and updates the edge bond and ortho_towards.
+    /// Factorizes the tensor at `src` node with the requested decomposition
+    /// algorithm, absorbs the right factor into `dst` (parent), and updates the
+    /// edge bond and ortho_towards. No truncation controls are passed and the
+    /// global rank-dropping defaults are not consulted, so the represented
+    /// tensor is preserved exactly.
     ///
     /// # Arguments
     /// * `src` - The source node to factorize (further from center)
     /// * `dst` - The destination/parent node (closer to center)
-    /// * `factorize_options` - Options for factorization (algorithm, rtol, max_rank)
+    /// * `alg` - Decomposition algorithm to use
+    /// * `canonical` - Which factor carries the canonical form
     /// * `context_name` - Name for error context
     ///
     /// # Returns
     /// `Ok(())` if successful, or an error if any step fails.
-    pub(crate) fn sweep_edge(
-        &mut self,
-        src: NodeIndex,
-        dst: NodeIndex,
-        factorize_options: &FactorizeOptions,
-        context_name: &str,
-    ) -> Result<()> {
-        self.sweep_edge_impl(
-            src,
-            dst,
-            SweepFactorization::Options(factorize_options),
-            context_name,
-        )
-    }
-
-    /// Process one edge during an exact sweep operation.
-    ///
-    /// This is the canonicalization variant of [`Self::sweep_edge`]. It uses
-    /// the requested decomposition algorithm without passing truncation controls
-    /// or consulting global rank-dropping defaults.
     pub(crate) fn sweep_edge_full_rank(
         &mut self,
         src: NodeIndex,
         dst: NodeIndex,
         alg: FactorizeAlg,
         canonical: Canonical,
-        context_name: &str,
-    ) -> Result<()> {
-        self.sweep_edge_impl(
-            src,
-            dst,
-            SweepFactorization::FullRank { alg, canonical },
-            context_name,
-        )
-    }
-
-    fn sweep_edge_impl(
-        &mut self,
-        src: NodeIndex,
-        dst: NodeIndex,
-        factorization: SweepFactorization<'_>,
         context_name: &str,
     ) -> Result<()> {
         // Find edge between src and dst
@@ -731,14 +692,10 @@ where
         }
 
         // Perform factorization
-        let factorize_result = match factorization {
-            SweepFactorization::Options(options) => tensor_src.factorize(&left_inds, options),
-            SweepFactorization::FullRank { alg, canonical } => {
-                tensor_src.factorize_full_rank(&left_inds, alg, canonical)
-            }
-        }
-        .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-        .with_context(|| format!("{}: factorization failed", context_name))?;
+        let factorize_result = tensor_src
+            .factorize_full_rank(&left_inds, alg, canonical)
+            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+            .with_context(|| format!("{}: factorization failed", context_name))?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
@@ -1651,15 +1608,17 @@ where
         )
         .context("swap_site_indices: canonicalize")?;
 
-        let mut swap_factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
+        // `rtol: None` must mean "no truncation", so always set an explicit
+        // policy: falling back to the process-global SVD default would silently
+        // drop singular values the caller never asked to drop.
+        let mut swap_factorize_options = FactorizeOptions::svd()
+            .with_canonical(Canonical::Left)
+            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(
+                options.rtol.unwrap_or(0.0),
+            ));
         if let Some(mr) = options.max_rank {
             swap_factorize_options = swap_factorize_options.with_max_rank(mr);
         }
-        if let Some(rtol) = options.rtol {
-            swap_factorize_options = swap_factorize_options
-                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol));
-        }
-        let transport_factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
 
         for step in &schedule.steps {
             for edge in step.transport_path.windows(2) {
@@ -1671,10 +1630,14 @@ where
                 let dst_idx = self.node_index(dst_name).ok_or_else(|| {
                     anyhow::anyhow!("swap_site_indices: transport node {:?} not found", dst_name)
                 })?;
-                self.sweep_edge(
+                // Transporting the orthogonality center is an exact rewrite, so
+                // use the full-rank sweep that canonicalization uses instead of
+                // a truncating factorization.
+                self.sweep_edge_full_rank(
                     src_idx,
                     dst_idx,
-                    &transport_factorize_options,
+                    FactorizeAlg::QR,
+                    Canonical::Left,
                     "swap_transport",
                 )
                 .context("swap_site_indices: transport")?;
