@@ -21,6 +21,7 @@ When ``.env`` exists at the repository root it is loaded automatically.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -714,6 +715,16 @@ def reconcile_verdict(findings: list[Finding]) -> str:
     return "fail" if any(item.severity == "block" for item in findings) else "pass"
 
 
+# Every way the request can fail below the JSON layer. OSError covers
+# socket.timeout, TimeoutError, ConnectionResetError, ssl.SSLError, and
+# urllib.error.URLError/HTTPError. http.client.HTTPException is a sibling of
+# OSError, not a subclass, so a truncated chunked response (IncompleteRead)
+# needs naming separately. socket.timeout only aliases TimeoutError from
+# Python 3.10 on, so listing TimeoutError alone is not enough on 3.9.
+TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    http.client.HTTPException,
+)
 NETWORK_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 5.0
 
@@ -745,13 +756,13 @@ def call_deepseek(
         },
         method="POST",
     )
-    last_error: OSError | None = None
+    last_error: BaseException | None = None
     for attempt in range(1, NETWORK_RETRIES + 1):
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
             break
-        except OSError as exc:
+        except TRANSPORT_ERRORS as exc:
             # Timeouts and connection resets are common enough on large diffs
             # that one blocked PR per blip is not an acceptable failure mode.
             last_error = exc
@@ -1167,7 +1178,7 @@ def main(argv: list[str] | None = None) -> int:
                     diff_chunk=chunk,
                     timeout=args.timeout,
                 )
-            except (KeyError, ValueError, OSError) as exc:
+            except (KeyError, ValueError, *TRANSPORT_ERRORS) as exc:
                 print(
                     f"LLM chunk {index}/{len(chunks)}: failed after "
                     f"{time.monotonic() - chunk_started:.1f}s: "

@@ -538,8 +538,24 @@ def test_split_large_file_diff_splits_single_overlong_line() -> None:
         assert len(chunk) <= mod.MAX_FILE_DIFF_CHARS
 
 
+def test_transport_errors_cover_every_below_json_failure() -> None:
+    """socket.timeout only aliases TimeoutError from Python 3.10 on."""
+    import http.client
+    import socket
+    import urllib.error
+
+    mod = load_module()
+    for exc_type in (
+        socket.timeout,
+        TimeoutError,
+        ConnectionResetError,
+        urllib.error.URLError,
+        http.client.IncompleteRead,
+    ):
+        assert issubclass(exc_type, mod.TRANSPORT_ERRORS), exc_type
+
+
 def test_call_deepseek_retries_transient_network_errors() -> None:
-    """socket.timeout is only a TimeoutError alias from Python 3.10 on."""
     import socket
     import urllib.request
 
@@ -605,7 +621,7 @@ def test_call_deepseek_reraises_after_retries_exhausted() -> None:
             user_content="u",
             timeout=1.0,
         )
-    except OSError:
+    except mod.TRANSPORT_ERRORS:
         pass
     else:
         raise AssertionError("expected the timeout to propagate")
