@@ -1,0 +1,234 @@
+name: review bot
+
+# Delta-scoped REPOSITORY_RULES review, ported from tenferro-rs by way of
+# strided-rs (tensor4all/tensor4all-rs#566 Phase 1). This workflow runs from the
+# trusted base revision and treats PR contents as data only: it fetches the PR
+# head for git diffs, but never checks out or executes files from the PR branch.
+
+on:
+  pull_request_target:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: review-bot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  REVIEW_WAIVE_LABEL: rules-review:waive
+  REVIEW_NO_LLM_LABEL: rules-review:no-llm
+
+jobs:
+  review-bot:
+    name: repository rules review (LLM)
+    if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
+      !contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch PR head for diff only
+        id: refs
+        run: |
+          set -euo pipefail
+          pr_ref="refs/remotes/origin/pr-${{ github.event.pull_request.number }}"
+          expected_head="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --no-recurse-submodules origin \
+            "+refs/pull/${{ github.event.pull_request.number }}/head:${pr_ref}"
+          actual_head="$(git rev-parse "${pr_ref}")"
+          if [ "${actual_head}" != "${expected_head}" ]; then
+            echo "Fetched PR head ${actual_head}, but event head is ${expected_head}." >&2
+            exit 1
+          fi
+          merge_base="$(git merge-base HEAD "${pr_ref}")"
+          echo "base=${merge_base}" >> "${GITHUB_OUTPUT}"
+          echo "head=${actual_head}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run repository rules review
+        id: review
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-pro' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/repository-rules-review.py \
+            --base "${{ steps.refs.outputs.base }}" \
+            --head "${{ steps.refs.outputs.head }}" \
+            --no-dotenv \
+            --output-json review-report.json \
+            | tee review-report.txt
+
+      - name: Post PR summary comment
+        if: always() && steps.review.outcome != 'skipped'
+        continue-on-error: true
+        uses: ./.github/actions/post-review-comment
+
+      - name: Fail on block findings
+        if: steps.review.outcome == 'failure'
+        run: |
+          echo "Repository rules review reported block-severity findings."
+          exit 1
+
+  review-bot-no-llm:
+    name: repository rules review (LLM skipped)
+    if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
+      contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify label actor can skip LLM
+        uses: ./.github/actions/verify-review-label
+        with:
+          label: ${{ env.REVIEW_NO_LLM_LABEL }}
+
+      - name: Fetch PR head for diff only
+        id: refs
+        run: |
+          set -euo pipefail
+          pr_ref="refs/remotes/origin/pr-${{ github.event.pull_request.number }}"
+          expected_head="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --no-recurse-submodules origin \
+            "+refs/pull/${{ github.event.pull_request.number }}/head:${pr_ref}"
+          actual_head="$(git rev-parse "${pr_ref}")"
+          if [ "${actual_head}" != "${expected_head}" ]; then
+            echo "Fetched PR head ${actual_head}, but event head is ${expected_head}." >&2
+            exit 1
+          fi
+          merge_base="$(git merge-base HEAD "${pr_ref}")"
+          echo "base=${merge_base}" >> "${GITHUB_OUTPUT}"
+          echo "head=${actual_head}" >> "${GITHUB_OUTPUT}"
+
+      - name: Record LLM skip
+        run: |
+          set -euo pipefail
+          python3 scripts/repository-rules-review.py \
+            --base "${{ steps.refs.outputs.base }}" \
+            --head "${{ steps.refs.outputs.head }}" \
+            --no-dotenv \
+            --dry-run \
+            --llm-skipped-reason "Skipped by ${REVIEW_NO_LLM_LABEL} label after maintainer review." \
+            | tee review-report.txt
+
+      - name: Post PR summary comment
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/post-review-comment
+
+  review-bot-waived:
+    name: repository rules review (waived)
+    if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'rules-review:waive')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify label actor can waive review
+        uses: ./.github/actions/verify-review-label
+        with:
+          label: ${{ env.REVIEW_WAIVE_LABEL }}
+
+      - name: Fetch PR head for diff only
+        id: refs
+        run: |
+          set -euo pipefail
+          pr_ref="refs/remotes/origin/pr-${{ github.event.pull_request.number }}"
+          expected_head="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --no-recurse-submodules origin \
+            "+refs/pull/${{ github.event.pull_request.number }}/head:${pr_ref}"
+          actual_head="$(git rev-parse "${pr_ref}")"
+          if [ "${actual_head}" != "${expected_head}" ]; then
+            echo "Fetched PR head ${actual_head}, but event head is ${expected_head}." >&2
+            exit 1
+          fi
+          merge_base="$(git merge-base HEAD "${pr_ref}")"
+          echo "base=${merge_base}" >> "${GITHUB_OUTPUT}"
+          echo "head=${actual_head}" >> "${GITHUB_OUTPUT}"
+
+      - name: Record waiver
+        run: |
+          set -euo pipefail
+          python3 scripts/repository-rules-review.py \
+            --base "${{ steps.refs.outputs.base }}" \
+            --head "${{ steps.refs.outputs.head }}" \
+            --no-dotenv \
+            --waived \
+            --dry-run \
+            | tee review-report.txt
+
+      - name: Post PR summary comment
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/post-review-comment
+
+  review-bot-gate:
+    name: repository rules review gate
+    needs: [review-bot, review-bot-no-llm, review-bot-waived]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require review result
+        env:
+          REVIEW_RESULT: ${{ needs.review-bot.result }}
+          NO_LLM_RESULT: ${{ needs.review-bot-no-llm.result }}
+          WAIVED_RESULT: ${{ needs.review-bot-waived.result }}
+          IS_EXTERNAL_PR: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          REVIEW_WAIVE_LABEL: ${{ env.REVIEW_WAIVE_LABEL }}
+          REVIEW_NO_LLM_LABEL: ${{ env.REVIEW_NO_LLM_LABEL }}
+        run: |
+          set -euo pipefail
+          if [ "${IS_EXTERNAL_PR}" = "true" ]; then
+            echo "External PRs are not accepted for repository rules review."
+            exit 1
+          fi
+          if [ "${WAIVED_RESULT}" = "success" ]; then
+            echo "Review waived via label ${REVIEW_WAIVE_LABEL}."
+            exit 0
+          fi
+          if [ "${NO_LLM_RESULT}" = "success" ]; then
+            echo "LLM review skipped via label ${REVIEW_NO_LLM_LABEL}; deterministic checks passed."
+            exit 0
+          fi
+          if [ "${REVIEW_RESULT}" = "success" ]; then
+            exit 0
+          fi
+          echo "Expected review-bot success, no-LLM skip, or waiver; got review-bot=${REVIEW_RESULT} no-llm=${NO_LLM_RESULT} waived=${WAIVED_RESULT}"
+          exit 1
