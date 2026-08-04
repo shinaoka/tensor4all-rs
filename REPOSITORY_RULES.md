@@ -2,8 +2,9 @@
 
 ## Public Surface Drift
 
-- `README.md`, rustdoc, mdBook guide snippets, and examples must not claim
-  capabilities beyond the current public surface.
+- `README.md`, rustdoc, mdBook guide snippets, examples, and
+  `skills/use-tensor4all-rs/` must not claim capabilities beyond the current
+  public surface.
 - When public APIs, documented capabilities, or user-facing examples change,
   check for stale names, stale capability claims, and references to removed
   paths or workflows before considering the work complete.
