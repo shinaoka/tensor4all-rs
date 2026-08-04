@@ -45,6 +45,7 @@ def make_diff(path: str, added: list[str], *, start: int = 1) -> str:
 # to review such a PR is a maintainer waiver. Short names keep the interpolated
 # span below the 12-character threshold the quoted-credential pattern uses.
 PAT = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123"
+PW = "correct " + "horse " + "battery " + "staple"
 AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
 SK = "sk-" + "0123456789abcdef0123456789abcdef"
 VALUE = "abcdefghij" + "klmnopqrst"
@@ -757,6 +758,209 @@ def test_api_key_error_finding_blocks_and_names_the_secret() -> None:
     assert finding.severity == "block"
     assert finding.id == "llm-api-key-invalid"
     assert "DEEPSEEK_API_KEY" in finding.summary
+
+
+def test_contains_sensitive_text_flags_passphrase_with_spaces() -> None:
+    """A quoted credential may legitimately contain spaces."""
+    mod = load_module()
+    assert mod.contains_sensitive_text(f'password = "{PW}"')
+
+
+def test_redact_sensitive_text_masks_whole_quoted_value() -> None:
+    mod = load_module()
+    redacted = mod.redact_sensitive_text(f'password = "{PW}"')
+    assert "horse" not in redacted
+    assert "battery" not in redacted
+    assert redacted == "password = [REDACTED_SECRET]"
+
+
+def test_contains_sensitive_text_flags_unterminated_quote() -> None:
+    """A value that closes on a later line hides from single-line patterns."""
+    mod = load_module()
+    assert mod.contains_sensitive_text('secret = "opens here')
+    assert mod.contains_sensitive_text("token: &str = 'starts")
+
+
+def test_prohibited_doctest_recognizes_tilde_fences() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/lib.rs"
+    diff = make_diff(path, ["/// ~~~rust,no_run", "/// let x = 1;", "/// ~~~"])
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert len(findings) == 1
+    assert "no_run" in findings[0].detail
+
+
+# --- Cargo dependency forms ---------------------------------------------------
+
+
+CARGO_ALIASES = """[features]
+tenferro-cpu-faer = ["dep:tenferro-cpu"]
+
+[dependencies]
+linalg = { package = "tenferro-linalg", workspace = true }
+"tenferro-tensor" = { workspace = true }
+
+[dependencies.tenferro-einsum]
+workspace = true
+
+[target.'cfg(unix)'.dependencies]
+renamed = { package = "tenferro-ad" }
+
+[dev-dependencies]
+tenferro-cpu.workspace = true
+"""
+
+
+def test_tenferro_dependency_lines_sees_every_declaration_form() -> None:
+    """Cargo renaming, quoted keys, and subtables all declare a dependency."""
+    mod = load_module()
+    found = mod.tenferro_dependency_lines(CARGO_ALIASES)
+    assert found == {
+        5: "tenferro-linalg",   # package = rename
+        6: "tenferro-tensor",   # quoted key
+        8: "tenferro-einsum",   # [dependencies.<name>] subtable
+        12: "tenferro-ad",      # rename under a target table
+    }
+    # The [features] entry and the dev-dependency stay out of scope.
+    assert 2 not in found
+    assert 15 not in found
+
+
+def test_dependency_table_of_classifies_headers() -> None:
+    mod = load_module()
+    assert mod.dependency_table_of("dependencies") == ("dependencies", None)
+    assert mod.dependency_table_of("dependencies.tenferro-linalg") == (
+        "dependencies",
+        "tenferro-linalg",
+    )
+    assert mod.dependency_table_of("target.'cfg(unix)'.dependencies") == (
+        "dependencies",
+        None,
+    )
+    assert mod.dependency_table_of("features") is None
+    assert mod.dependency_table_of("package") is None
+
+
+def test_tenferro_route_blocks_a_renamed_dependency() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/Cargo.toml"
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: CARGO_ALIASES
+    try:
+        findings = mod.deterministic_checks(
+            [path],
+            added={path: [(5, 'linalg = { package = "tenferro-linalg" }')]},
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
+    assert len(findings) == 1
+    assert "tenferro-linalg" in findings[0].detail
+
+
+# --- content-based routing ----------------------------------------------------
+
+
+def test_select_rule_sections_routes_on_changed_content() -> None:
+    """A generic path gaining an unsafe block must still supply the rule."""
+    mod = load_module()
+    path = "crates/tensor4all-core/src/lib.rs"
+    assert "Unsafe Code Boundary" not in mod.select_rule_sections([path])
+    added = {path: [(10, "    unsafe { ptr.read() }")]}
+    assert "Unsafe Code Boundary" in mod.select_rule_sections([path], added)
+
+
+def test_content_triggers_cover_the_generic_path_cases() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/lib.rs"
+    cases = [
+        ("pub fn f() -> anyhow::Result<()> { Ok(()) }", "Error Handling"),
+        ("let d = tt.to_dense()?;",
+         "No Hidden Dense Materialization In Production Paths"),
+        ("use tenferro_linalg::svd;", "Dense Layout And Linear Algebra"),
+        ("if a.id() == b.id() {", "Index Identity Semantics"),
+        ("static CACHE: OnceLock<u8> = OnceLock::new();", "Cache Ownership"),
+    ]
+    for line, section in cases:
+        sections = mod.select_rule_sections([path], {path: [(1, line)]})
+        assert section in sections, line
+
+
+def test_content_triggers_never_select_human_only_sections() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/lib.rs"
+    added = {path: [(1, "unsafe { }"), (2, "anyhow::Result<()>")]}
+    sections = set(mod.select_rule_sections([path], added))
+    assert sections.isdisjoint(mod.HUMAN_ONLY_SECTIONS)
+
+
+def test_content_triggers_name_only_documented_sections() -> None:
+    mod = load_module()
+    documented = set(mod.parse_repository_rules_sections())
+    for _pattern, names in mod.CONTENT_TRIGGERS:
+        assert set(names) <= documented, names
+
+
+def test_budget_is_smaller_than_the_workflow_timeout() -> None:
+    """The script must finish before the job is killed, or no report is posted."""
+    mod = load_module()
+    workflow = (mod.ROOT / ".github" / "workflows" / "review_bot.yml").read_text()
+    minutes = [
+        int(line.split(":")[1].strip())
+        for line in workflow.splitlines()
+        if line.strip().startswith("timeout-minutes:")
+    ]
+    assert minutes, "review_bot.yml lost its job timeout"
+    assert mod.DEFAULT_BUDGET_SECONDS < min(minutes) * 60
+
+
+def test_call_deepseek_does_not_retry_past_the_deadline() -> None:
+    """Retrying into the job deadline loses the report to a kill signal."""
+    import socket
+    import urllib.request
+
+    mod = load_module()
+    calls = {"n": 0}
+
+    def always_timeout(request, timeout=None):
+        calls["n"] += 1
+        raise socket.timeout("nope")
+
+    original_urlopen = urllib.request.urlopen
+    original_sleep = mod.time.sleep
+    urllib.request.urlopen = always_timeout
+    mod.time.sleep = lambda _seconds: None
+    try:
+        mod.call_deepseek(
+            api_key="k",
+            model="m",
+            api_url="https://example.invalid",
+            system_prompt="s",
+            user_content="u",
+            timeout=1.0,
+            deadline=mod.time.monotonic(),  # already expired
+        )
+    except mod.TRANSPORT_ERRORS:
+        pass
+    else:
+        raise AssertionError("expected the timeout to propagate")
+    finally:
+        urllib.request.urlopen = original_urlopen
+        mod.time.sleep = original_sleep
+
+    # One attempt, not two: the retry would have run past the deadline.
+    assert calls["n"] == 1
+
+
+def test_budget_exhausted_finding_warns_without_blocking() -> None:
+    mod = load_module()
+    finding = mod.budget_exhausted_finding(2, 5)
+    # A partial review must not fail the gate; the deterministic checks still
+    # covered the whole diff.
+    assert finding.severity == "warn"
+    assert "2 of 5" in finding.detail
 
 
 # --- secret handling ---------------------------------------------------------
