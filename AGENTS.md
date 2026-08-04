@@ -93,7 +93,8 @@ Every public type, trait, and function **must** have doc comments with the follo
 
 ### Public Surface Drift
 
-- `README.md`, rustdoc, and examples must not claim more than the current public surface actually provides.
+- `README.md`, rustdoc, examples, and `skills/use-tensor4all-rs/` must not
+  claim more than the current public surface actually provides.
 - When changing public APIs, documented capabilities, or user-facing examples, check for stale names, stale capability claims, and references to removed paths or workflows.
 - Keep documentation slightly behind reality if validation is incomplete; do not advertise partially landed surfaces as stable or fully supported.
 

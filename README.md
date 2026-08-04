@@ -69,6 +69,17 @@ validated in CI. Longer runnable examples live in the
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
 - **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
 
+## Agent Skill
+
+A portable [Agent Skill](skills/use-tensor4all-rs/SKILL.md) teaches compatible
+coding agents the crate map, common workflows, and tensor4all-rs conventions.
+Install and update it with:
+
+```bash
+npx skills add tensor4all/tensor4all-rs --skill use-tensor4all-rs -g
+npx skills update use-tensor4all-rs -g
+```
+
 ## Acknowledgments
 
 Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl) and
