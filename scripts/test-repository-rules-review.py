@@ -39,6 +39,18 @@ def make_diff(path: str, added: list[str], *, start: int = 1) -> str:
     )
 
 
+# Secret-shaped fixtures are assembled at runtime so this file contains no
+# contiguous secret-shaped literal of its own. Otherwise the guard under test
+# blocks the LLM pass on every PR that touches its own tests, and the only way
+# to review such a PR is a maintainer waiver. Short names keep the interpolated
+# span below the 12-character threshold the quoted-credential pattern uses.
+PAT = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123"
+AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
+SK = "sk-" + "0123456789abcdef0123456789abcdef"
+VALUE = "abcdefghij" + "klmnopqrst"
+BEARER = "Authorization: Bearer " + VALUE
+
+
 # --- diff parsing ------------------------------------------------------------
 
 
@@ -630,22 +642,132 @@ def test_call_deepseek_reraises_after_retries_exhausted() -> None:
         mod.time.sleep = original_sleep
 
 
+def test_contains_sensitive_text_flags_typed_declaration() -> None:
+    """A type annotation used to hide the literal from the pre-upload guard."""
+    mod = load_module()
+    for line in (
+        f'const API_KEY: &str = "{VALUE}";',
+        f'let api_key: String = "{VALUE}".into();',
+        f'client_secret : &\'static str = "{VALUE}"',
+        f'PASSWORD: str = "{VALUE}"',
+    ):
+        assert mod.contains_sensitive_text(line), line
+
+
+def test_redact_sensitive_text_masks_typed_declaration() -> None:
+    mod = load_module()
+    redacted = mod.redact_sensitive_text(f'const API_KEY: &str = "{VALUE}";')
+    assert VALUE not in redacted
+    assert "[REDACTED_SECRET]" in redacted
+
+
+def test_typed_declaration_guard_keeps_env_lookups_quiet() -> None:
+    mod = load_module()
+    for line in (
+        'let key = std::env::var("DEEPSEEK_API_KEY")?;',
+        "DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}",
+        "api_key: Option<String>,",
+    ):
+        assert not mod.contains_sensitive_text(line), line
+
+
+# --- hunk header renumbering --------------------------------------------------
+
+
+def test_split_oversized_hunk_renumbers_each_chunk() -> None:
+    mod = load_module()
+    header = ["diff --git a/big.rs b/big.rs", "--- a/big.rs", "+++ b/big.rs"]
+    body = [f"+line {index}" + "y" * 900 for index in range(120)]
+    chunks = mod.split_oversized_hunk(header, ["@@ -1,0 +1,120 @@ fn ctx()", *body])
+    assert len(chunks) > 1
+
+    starts = []
+    for chunk in chunks:
+        assert len(chunk) <= mod.MAX_FILE_DIFF_CHARS
+        hunk_line = [line for line in chunk.splitlines() if line.startswith("@@")][0]
+        parsed = mod.HUNK_HEADER.match(hunk_line)
+        assert parsed is not None
+        assert parsed.group(5) == " fn ctx()"
+        starts.append((int(parsed.group(3)), int(parsed.group(4))))
+
+    # Every chunk starts where the previous one ended, and the counts sum to
+    # the original 120 added lines.
+    assert starts[0][0] == 1
+    for (start, count), (next_start, _) in zip(starts, starts[1:]):
+        assert start + count == next_start
+    assert sum(count for _, count in starts) == 120
+
+
+def test_split_oversized_hunk_counts_context_and_removals() -> None:
+    mod = load_module()
+    header = ["diff --git a/a.rs b/a.rs", "--- a/a.rs", "+++ b/a.rs"]
+    hunk = ["@@ -10,3 +20,3 @@", " ctx", "-gone", "+added"]
+    chunks = mod.split_oversized_hunk(header, hunk)
+    assert len(chunks) == 1
+    hunk_line = [line for line in chunks[0].splitlines() if line.startswith("@@")][0]
+    parsed = mod.HUNK_HEADER.match(hunk_line)
+    # context + removal advance old; context + addition advance new.
+    assert (int(parsed.group(1)), int(parsed.group(2))) == (10, 2)
+    assert (int(parsed.group(3)), int(parsed.group(4))) == (20, 2)
+
+
+def test_split_oversized_hunk_falls_back_on_unparseable_header() -> None:
+    mod = load_module()
+    header = ["diff --git a/a.rs b/a.rs", "--- a/a.rs", "+++ b/a.rs"]
+    chunks = mod.split_oversized_hunk(header, ["@@ garbage @@", "+one"])
+    assert len(chunks) == 1
+    assert "@@ garbage @@" in chunks[0]
+
+
+def test_line_deltas_classifies_diff_lines() -> None:
+    mod = load_module()
+    assert mod.line_deltas("+added") == (0, 1)
+    assert mod.line_deltas("-removed") == (1, 0)
+    assert mod.line_deltas(" context") == (1, 1)
+    assert mod.line_deltas("\\ No newline at end of file") == (0, 0)
+
+
+# --- API key validation -------------------------------------------------------
+
+
+def test_api_key_problem_detects_non_ascii_without_echoing_it() -> None:
+    mod = load_module()
+    key = SK[:29] + "\u2026" + "tail"
+    problem = mod.api_key_problem(key)
+    assert problem is not None
+    assert "non-ASCII" in problem
+    assert "29" in problem
+    assert key not in problem
+
+
+def test_api_key_problem_detects_empty_and_whitespace() -> None:
+    mod = load_module()
+    assert "empty" in mod.api_key_problem("")
+    assert "whitespace" in mod.api_key_problem("sk-abc def")
+
+
+def test_api_key_problem_accepts_a_normal_key() -> None:
+    mod = load_module()
+    assert mod.api_key_problem(SK) is None
+
+
+def test_api_key_error_finding_blocks_and_names_the_secret() -> None:
+    mod = load_module()
+    finding = mod.api_key_error_finding("The secret is empty.")
+    assert finding.severity == "block"
+    assert finding.id == "llm-api-key-invalid"
+    assert "DEEPSEEK_API_KEY" in finding.summary
+
+
 # --- secret handling ---------------------------------------------------------
 
 
 def test_redact_sensitive_text_masks_common_secret_forms() -> None:
     mod = load_module()
-    text = "\n".join(
-        [
-            "ghp_abcdefghijklmnopqrstuvwxyz0123",
-            "AKIAABCDEFGHIJKLMNOP",
-            "api_key = supersecretvalue",
-            "Authorization: Bearer abcdefghijklmnopqrst",
-        ]
-    )
+    text = "\n".join([PAT, AWS, "api_key = supersecretvalue", BEARER])
     redacted = mod.redact_sensitive_text(text)
-    assert "ghp_abcdefghijklmnopqrstuvwxyz0123" not in redacted
-    assert "AKIAABCDEFGHIJKLMNOP" not in redacted
+    assert PAT not in redacted
+    assert AWS not in redacted
     assert "supersecretvalue" not in redacted
     assert redacted.count("[REDACTED_SECRET]") >= 4
 
@@ -660,7 +782,7 @@ def test_contains_sensitive_text_ignores_env_lookup_code() -> None:
 
 def test_contains_sensitive_text_flags_quoted_credential() -> None:
     mod = load_module()
-    assert mod.contains_sensitive_text('let api_key = "abcdefghijklmnop";')
+    assert mod.contains_sensitive_text(f'let api_key = "{VALUE}";')
 
 
 def test_sensitive_diff_finding_checks_added_lines_only() -> None:
@@ -671,7 +793,7 @@ def test_sensitive_diff_finding_checks_added_lines_only() -> None:
             "--- a/a.rs",
             "+++ b/a.rs",
             "@@ -1,2 +1,2 @@",
-            " let token = ghp_abcdefghijklmnopqrstuvwxyz0123;",
+            f" let token = {PAT};",
             "+let clean = 1;",
         ]
     )
@@ -681,7 +803,7 @@ def test_sensitive_diff_finding_checks_added_lines_only() -> None:
 def test_sensitive_diff_finding_reports_added_match_location() -> None:
     mod = load_module()
     diff = make_diff(
-        "a.rs", ["let clean = 1;", "let t = ghp_abcdefghijklmnopqrstuvwxyz0123;"]
+        "a.rs", ["let clean = 1;", f"let t = {PAT};"]
     )
     finding = mod.sensitive_diff_finding(diff)
     assert finding is not None
