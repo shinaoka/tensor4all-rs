@@ -1,0 +1,77 @@
+name: Post review comment
+description: >-
+  Create or update the single repository-rules review comment on the PR.
+  Report text is HTML-escaped and wrapped in <pre>; it is treated as data.
+
+inputs:
+  report-path:
+    description: Path to the plain-text review report
+    required: false
+    default: review-report.txt
+  max-report-chars:
+    description: Truncate the report beyond this many characters
+    required: false
+    default: "60000"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v7
+      env:
+        REPORT_PATH: ${{ inputs.report-path }}
+        MAX_REPORT_CHARS: ${{ inputs.max-report-chars }}
+      with:
+        script: |
+          const fs = require("node:fs");
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issue_number = context.payload.pull_request.number;
+          const reportPath = process.env.REPORT_PATH;
+          const maxReportChars = Number(process.env.MAX_REPORT_CHARS);
+
+          function escapeReport(text) {
+            let value = text;
+            if (value.length > maxReportChars) {
+              value = value.slice(0, maxReportChars) + "\n...[truncated]";
+            }
+            return value
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/@/g, "@&#8203;");
+          }
+
+          let body = "## Repository rules review\n\n";
+          if (fs.existsSync(reportPath)) {
+            body += "<pre>" + escapeReport(fs.readFileSync(reportPath, "utf8")) + "</pre>\n";
+          } else {
+            body += "Review step did not produce a report.\n";
+          }
+
+          const marker = "<!-- repository-rules-review -->";
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number,
+            per_page: 100,
+          });
+          const existing = comments.find(
+            (comment) => comment.user.type === "Bot" && comment.body.includes(marker)
+          );
+
+          body += `\n${marker}`;
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+          }

@@ -85,6 +85,15 @@ jobs:
   #     - name: Run HDF5 tests
   #       run: cargo test --release -p tensor4all-hdf5
 
+  scripts:
+    name: Maintenance scripts
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the repository-rules review script
+        run: python3 scripts/test-repository-rules-review.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-22.04
@@ -116,6 +125,7 @@ jobs:
       #- test
       - coverage
       - doctest
+      - scripts
     if: always()
     steps:
       - name: All Rust checks passed

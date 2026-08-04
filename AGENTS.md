@@ -264,6 +264,51 @@ cargo nextest run --release --workspace # Full test suite
 cargo doc --workspace --no-deps        # Build rustdoc
 ```
 
+### Repository Rules Review Bot
+
+`.github/workflows/review_bot.yml` reviews every PR diff against
+`REPOSITORY_RULES.md`. It runs from the trusted base revision and treats PR
+contents as data: the PR head is fetched for `git diff` only, never checked out
+or executed. Findings post as a single updating PR comment; only
+`block`-severity findings fail the check.
+
+Preview the review locally before pushing:
+
+```bash
+python3 scripts/repository-rules-review.py --base main --worktree --dry-run
+python3 scripts/test-repository-rules-review.py   # the script's own tests
+```
+
+Drop `--dry-run` to include the LLM pass; it needs `DEEPSEEK_API_KEY` in the
+environment or in a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
+
+The system prompt lives in `ai/prompts/repository-rules-review.md`. Three
+deterministic checks run before the LLM and independently of it:
+
+| Check | Rule | Baseline |
+|-------|------|----------|
+| Secret-shaped text in added lines | — | Blocks the upload before anything reaches the API |
+| New direct `tenferro-*` dependency outside `tensor4all-tensorbackend` | Dense Layout And Linear Algebra | #566 Phase 3 backlog: core, tcicore, simplett, treetci |
+| Added `ignore` / `no_run` doctest fence | Documentation Examples | #566 Phase 1 backlog: 2 `no_run` sites |
+
+Both rule checks are delta-scoped: they reject new violations without failing on
+the recorded backlog. The tenferro check parses Cargo.toml table context, so
+`tenferro-*` **feature** names are not mistaken for dependencies, and
+`dev-dependencies` are out of scope.
+
+Maintainer escape hatches, both requiring the `maintain`/`admin` role and
+reapplication after the latest push:
+
+| Label | Effect |
+|-------|--------|
+| `rules-review:no-llm` | Skips the LLM pass; deterministic checks still run |
+| `rules-review:waive` | Waives the review entirely |
+
+When adding a `## ` section to `REPOSITORY_RULES.md`, also route it in
+`SECTION_TRIGGERS` (or `ALWAYS_SECTIONS` / `HUMAN_ONLY_SECTIONS`); an unrouted
+section is never shown to the reviewer, and
+`test_every_rule_section_is_reachable` fails.
+
 | Change Type | Workflow |
 |-------------|----------|
 | Minor fixes | Branch + PR with auto-merge |
