@@ -1112,6 +1112,99 @@ def test_package_name_of_reads_the_package_table() -> None:
     assert mod.package_name_of('[dependencies]\nname = "not-a-package"\n') is None
 
 
+def test_filter_findings_keeps_file_level_block_for_deletions() -> None:
+    """A deletion-only violation has no new-file line the model can anchor to."""
+    mod = load_module()
+    block = mod.Finding("x", "block", "S", "a.rs", None, "removed validation", "d")
+    assert mod.filter_findings([block], ["a.rs"], {}) == []
+    kept = mod.filter_findings([block], ["a.rs"], {}, files_with_deletions={"a.rs"})
+    assert kept == [block]
+
+
+def test_files_with_deleted_lines_reads_the_new_side_path() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/a.rs b/a.rs",
+            "--- a/a.rs",
+            "+++ b/a.rs",
+            "@@ -1,2 +1,1 @@",
+            " keep",
+            "-gone",
+            "diff --git a/b.rs b/b.rs",
+            "--- a/b.rs",
+            "+++ b/b.rs",
+            "@@ -1,1 +1,2 @@",
+            " keep",
+            "+added",
+        ]
+    )
+    assert mod.files_with_deleted_lines(diff) == {"a.rs"}
+
+
+def test_sensitive_diff_blocks_a_bare_continuation_value() -> None:
+    """The continuation value need not be quoted."""
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            f" {KEYNAME} =",
+            "-old",
+            "+abcdefghijklmnopqrstuvwx",
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is not None
+
+
+def test_sensitive_diff_ignores_an_ordinary_bare_continuation() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            " let total =",
+            "+    compute_sum(values)",
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is None
+
+
+def test_workspace_dependencies_is_not_a_dependent_package() -> None:
+    """A virtual root declares versions; members opt in separately."""
+    mod = load_module()
+    assert mod.dependency_table_of("workspace.dependencies") is None
+    assert mod.dependency_table_of("dependencies") == ("dependencies", None)
+    assert mod.dependency_table_of("target.'cfg(unix)'.dependencies") == (
+        "dependencies",
+        None,
+    )
+
+
+def test_root_manifest_tenferro_pin_is_not_a_route_violation() -> None:
+    mod = load_module()
+    root = (
+        '[workspace]\nmembers = ["crates/a"]\n\n'
+        "[workspace.dependencies]\n"
+        'tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "abc" }\n'
+    )
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: root
+    try:
+        findings = mod.deterministic_checks(
+            ["Cargo.toml"],
+            added={"Cargo.toml": [(5, "tenferro-linalg = { git = ... }")]},
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
+    assert findings == []
+
+
 # --- secret handling ---------------------------------------------------------
 
 
