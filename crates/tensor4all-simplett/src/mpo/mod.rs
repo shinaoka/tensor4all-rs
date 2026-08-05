@@ -43,6 +43,7 @@ pub(crate) fn matrix2_zeros<T: crate::traits::TTScalar + Default>(
     crate::tensor::Tensor::from_elem([rows, cols], T::default())
 }
 
+pub(crate) mod canonical;
 pub mod contract_fit;
 pub mod contract_naive;
 pub mod contract_zipup;
@@ -55,6 +56,8 @@ pub mod inverse_mpo;
 #[allow(clippy::module_inception)]
 pub mod mpo;
 pub mod site_mpo;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod tt_contraction;
 pub mod types;
 pub mod vidal_mpo;

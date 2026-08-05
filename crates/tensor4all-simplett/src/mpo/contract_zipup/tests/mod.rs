@@ -55,3 +55,41 @@ fn test_contract_zipup_compresses() {
     // Bond dimension should be limited
     assert!(result.rank() <= 2);
 }
+
+/// Without truncation the zip-up pass must reproduce the exact product, which
+/// pins the index conventions of the two pairwise contractions and of the
+/// reshapes around the local factorization.
+#[test]
+fn test_contract_zipup_untruncated_matches_naive() {
+    use crate::mpo::contract_naive;
+    use crate::mpo::test_support::random_mpo;
+
+    let mpo_a = random_mpo(&[1, 3, 4, 1], 2, 3, 0x1234_5678_9ABC_DEF0, |x: f64| x);
+    let mpo_b = random_mpo(&[1, 2, 5, 1], 3, 2, 0x0FED_CBA9_8765_4321, |x: f64| x);
+
+    let options = ContractionOptions {
+        tolerance: 0.0,
+        max_bond_dim: usize::MAX,
+        factorize_method: FactorizeMethod::SVD,
+    };
+
+    let zipped = contract_zipup(&mpo_a, &mpo_b, &options).unwrap();
+    let exact = contract_naive(&mpo_a, &mpo_b, None).unwrap();
+
+    let (zipped_dense, zipped_shape) = zipped.fulltensor();
+    let (exact_dense, exact_shape) = exact.fulltensor();
+    assert_eq!(zipped_shape, exact_shape);
+    assert_eq!(zipped_shape, vec![2, 2, 2, 2, 2, 2]);
+
+    let max_diff = zipped_dense
+        .iter()
+        .zip(exact_dense.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0_f64, f64::max);
+    let scale = exact_dense.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    assert!(
+        max_diff < 1e-10 * scale,
+        "zip-up deviates from the exact product: max abs difference {max_diff:e} \
+         against scale {scale:e}"
+    );
+}

@@ -3,14 +3,15 @@
 //! Contracts two MPOs by directly multiplying site tensors,
 //! optionally followed by compression.
 
+use super::canonical::right_canonicalize;
 use super::contraction::ContractionOptions;
 use super::environment::contract_site_tensors;
 use super::error::{MPOError, Result};
 use super::factorize::{factorize, FactorizeOptions, SVDScalar};
 use super::mpo::MPO;
-use super::types::{tensor4_zeros, Tensor4, Tensor4Ops};
-use super::{matrix2_zeros, Matrix2};
-use crate::einsum_helper::EinsumScalar;
+use super::types::{Tensor4, Tensor4Ops};
+use super::Matrix2;
+use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
 
 /// Perform naive contraction of two MPOs
 ///
@@ -90,7 +91,15 @@ where
 }
 
 /// Compress an MPO using the specified options
-fn compress_mpo<T: SVDScalar>(mpo: &mut MPO<T>, options: &ContractionOptions) -> Result<()>
+///
+/// The MPO is first brought into right-canonical form with rank-preserving QR
+/// factorizations. Only then is the truncating left-to-right sweep run, so
+/// every local SVD truncation sees an orthonormal environment on both sides
+/// and discards the singular values that are actually smallest globally.
+fn compress_mpo<T: SVDScalar + EinsumScalar>(
+    mpo: &mut MPO<T>,
+    options: &ContractionOptions,
+) -> Result<()>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
 {
@@ -106,6 +115,8 @@ where
         ..Default::default()
     };
 
+    right_canonicalize(mpo)?;
+
     // Sweep left to right, factorizing each bond
     for i in 0..(mpo.len() - 1) {
         let tensor = mpo.site_tensor(i);
@@ -114,78 +125,45 @@ where
         let s2 = tensor.site_dim_2();
         let right_dim = tensor.right_dim();
 
-        // Reshape to matrix: (left * s1 * s2, right)
+        // Column-major data of `(left, s1, s2, right)` groups the leading
+        // three axes contiguously, so this reshape to `(left * s1 * s2, right)`
+        // is a pure metadata change.
         let rows = left_dim * s1 * s2;
-        let cols = right_dim;
-        let mut mat: Matrix2<T> = matrix2_zeros(rows, cols);
-        for l in 0..left_dim {
-            for i1 in 0..s1 {
-                for i2 in 0..s2 {
-                    let row = (l * s1 + i1) * s2 + i2;
-                    for col in 0..cols {
-                        mat[[row, col]] = *tensor.get4(l, i1, i2, col);
-                    }
-                }
-            }
-        }
+        let mat = typed_tensor_reshape(tensor.as_inner(), &[rows, right_dim])
+            .map_err(|err| naive_error("Failed to reshape MPO site tensor", err))?;
+        let mat: Matrix2<T> = Matrix2::from_tenferro_unchecked(mat);
 
-        // Factorize
         let fact_result = factorize(&mat, &factorize_opts)?;
         let new_rank = fact_result.rank;
 
-        // Update current tensor with left factor
-        let mut new_tensor = tensor4_zeros(left_dim, s1, s2, new_rank);
-        let left_rows = fact_result.left.dim(0);
-        let left_cols = fact_result.left.dim(1);
-        for l in 0..left_dim {
-            for i1 in 0..s1 {
-                for i2 in 0..s2 {
-                    let row = (l * s1 + i1) * s2 + i2;
-                    for r in 0..new_rank {
-                        if row < left_rows && r < left_cols {
-                            new_tensor.set4(l, i1, i2, r, fact_result.left[[row, r]]);
-                        }
-                    }
-                }
-            }
-        }
+        let new_tensor =
+            typed_tensor_reshape(fact_result.left.as_inner(), &[left_dim, s1, s2, new_rank])
+                .map_err(|err| naive_error("Failed to reshape compressed MPO site tensor", err))?;
+        let new_tensor = Tensor4::from_tenferro(new_tensor)
+            .map_err(|err| naive_error("Compressed MPO site has invalid rank", err))?;
 
-        // Get next tensor's dimensions
-        let next_tensor = mpo.site_tensor(i + 1);
-        let next_left = next_tensor.left_dim();
-        let next_s1 = next_tensor.site_dim_1();
-        let next_s2 = next_tensor.site_dim_2();
-        let next_right = next_tensor.right_dim();
-
-        // Multiply right factor into next tensor
+        // Multiply the right factor into the next tensor:
         // R[new_rank, right_dim] @ next[right_dim, s1, s2, next_right]
-        // = new_next[new_rank, s1, s2, next_right]
-        let right_rows = fact_result.right.dim(0);
-        let right_cols = fact_result.right.dim(1);
-        let mut new_next = tensor4_zeros(new_rank, next_s1, next_s2, next_right);
-        for l in 0..new_rank {
-            for i1 in 0..next_s1 {
-                for i2 in 0..next_s2 {
-                    for r in 0..next_right {
-                        let mut sum = T::zero();
-                        for k in 0..next_left.min(right_cols) {
-                            if l < right_rows {
-                                sum = sum
-                                    + fact_result.right[[l, k]] * *next_tensor.get4(k, i1, i2, r);
-                            }
-                        }
-                        new_next.set4(l, i1, i2, r, sum);
-                    }
-                }
-            }
-        }
+        let next_tensor = mpo.site_tensor(i + 1);
+        let new_next = einsum_tensors(
+            "lk,ksqr->lsqr",
+            &[fact_result.right.as_inner(), next_tensor.as_inner()],
+        )
+        .map_err(|err| naive_error("Failed to absorb right factor into MPO site", err))?;
+        let new_next = Tensor4::from_tenferro(new_next)
+            .map_err(|err| naive_error("Compressed MPO site has invalid rank", err))?;
 
-        // Update tensors in place
         *mpo.site_tensor_mut(i) = new_tensor;
         *mpo.site_tensor_mut(i + 1) = new_next;
     }
 
     Ok(())
+}
+
+fn naive_error(context: &str, err: impl std::fmt::Display) -> MPOError {
+    MPOError::InvalidOperation {
+        message: format!("{context}: {err}"),
+    }
 }
 
 #[cfg(test)]

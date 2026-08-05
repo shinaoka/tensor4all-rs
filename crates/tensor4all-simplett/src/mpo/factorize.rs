@@ -29,7 +29,16 @@ pub enum FactorizeMethod {
 pub struct FactorizeOptions {
     /// Factorization method to use
     pub method: FactorizeMethod,
-    /// Tolerance for truncation
+    /// Relative truncation tolerance.
+    ///
+    /// Singular values (or pivots) smaller than `tolerance * sigma_max` are
+    /// discarded, where `sigma_max` is the largest singular value (or pivot)
+    /// of the matrix being factorized. The threshold is therefore invariant
+    /// under a global rescaling of the input, matching
+    /// [`crate::CompressionOptions::tolerance`] and
+    /// `tensor4all_core::SvdTruncationPolicy::new`.
+    ///
+    /// Smaller values preserve more accuracy but produce larger ranks.
     pub tolerance: f64,
     /// Maximum rank (bond dimension) after factorization
     pub max_rank: usize,
@@ -194,18 +203,35 @@ fn factorize_svd<T: SVDScalar>(
         total_weight += sv * sv;
     }
 
-    // Find rank by keeping singular values above tolerance
+    // Truncation is relative to the largest singular value, so the retained
+    // rank does not change when the input matrix is globally rescaled. An
+    // absolute cutoff would keep near-noise singular values for large-norm
+    // inputs and over-truncate small-norm ones.
+    // `svd_backend` returns singular values in non-increasing order, so the
+    // first entry is the largest; fall back to a scan to stay robust.
+    let s_max = singular_values
+        .iter()
+        .take(min_dim)
+        .map(|&sv| T::linalg_real_to_f64(sv))
+        .fold(0.0_f64, f64::max);
+
+    // Find rank by keeping singular values above the relative cutoff.
+    // A zero matrix (or an empty spectrum) has no meaningful reference scale;
+    // it falls through to the rank-1 floor below.
     let mut kept_weight: f64 = 0.0;
-    for &singular_value in singular_values.iter().take(min_dim) {
-        if rank >= options.max_rank {
-            break;
+    if s_max > 0.0 {
+        let cutoff = options.tolerance * s_max;
+        for &singular_value in singular_values.iter().take(min_dim) {
+            if rank >= options.max_rank {
+                break;
+            }
+            let sv = T::linalg_real_to_f64(singular_value);
+            if sv < cutoff {
+                break;
+            }
+            kept_weight += sv * sv;
+            rank += 1;
         }
-        let sv = T::linalg_real_to_f64(singular_value);
-        if sv < options.tolerance {
-            break;
-        }
-        kept_weight += sv * sv;
-        rank += 1;
     }
 
     // Ensure at least rank 1
@@ -278,6 +304,10 @@ fn factorize_rsvd<T: SVDScalar>(
 ///
 /// This function requires the tensor4all_tcicore::Scalar trait.
 /// Use this directly when you need LU-based factorization.
+///
+/// [`FactorizeOptions::tolerance`] is passed as `RrLUOptions::rel_tol` with
+/// `abs_tol` set to zero, so the cutoff is relative to the largest pivot,
+/// matching the SVD path.
 pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
