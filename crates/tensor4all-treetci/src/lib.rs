@@ -69,6 +69,8 @@ pub(crate) fn column_2d<T>(
     })
 }
 
+/// Adaptive physical-domain patching for tree TCI.
+pub mod adaptive;
 /// High-level TreeTCI entry points.
 pub mod api;
 /// Assembly helpers from subtree-local pivots to global site-order indices.
@@ -95,6 +97,9 @@ pub mod visitor;
 #[cfg(test)]
 mod test_support;
 
+pub use adaptive::{
+    adaptive_crossinterpolate2, AdaptiveTreeTciOptions, AdaptiveTreeTciPatch, AdaptiveTreeTciResult,
+};
 pub use api::crossinterpolate2;
 pub use assemble::{assemble_global_point, assemble_points_column_major, MultiIndex};
 pub use batch::{GlobalIndexBatch, OwnedGlobalIndexBatch};
