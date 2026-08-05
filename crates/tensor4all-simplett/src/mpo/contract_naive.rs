@@ -6,6 +6,7 @@
 use super::canonical::right_canonicalize;
 use super::contraction::ContractionOptions;
 use super::environment::contract_site_tensors;
+use super::environment::mpo_helper_error;
 use super::error::{MPOError, Result};
 use super::factorize::{factorize, FactorizeOptions, SVDScalar};
 use super::mpo::MPO;
@@ -130,7 +131,7 @@ where
         // is a pure metadata change.
         let rows = left_dim * s1 * s2;
         let mat = typed_tensor_reshape(tensor.as_inner(), &[rows, right_dim])
-            .map_err(|err| naive_error("Failed to reshape MPO site tensor", err))?;
+            .map_err(|err| mpo_helper_error("Failed to reshape MPO site tensor", err))?;
         let mat: Matrix2<T> = Matrix2::from_tenferro_unchecked(mat);
 
         let fact_result = factorize(&mat, &factorize_opts)?;
@@ -138,9 +139,11 @@ where
 
         let new_tensor =
             typed_tensor_reshape(fact_result.left.as_inner(), &[left_dim, s1, s2, new_rank])
-                .map_err(|err| naive_error("Failed to reshape compressed MPO site tensor", err))?;
+                .map_err(|err| {
+                    mpo_helper_error("Failed to reshape compressed MPO site tensor", err)
+                })?;
         let new_tensor = Tensor4::from_tenferro(new_tensor)
-            .map_err(|err| naive_error("Compressed MPO site has invalid rank", err))?;
+            .map_err(|err| mpo_helper_error("Compressed MPO site has invalid rank", err))?;
 
         // Multiply the right factor into the next tensor:
         // R[new_rank, right_dim] @ next[right_dim, s1, s2, next_right]
@@ -149,21 +152,15 @@ where
             "lk,ksqr->lsqr",
             &[fact_result.right.as_inner(), next_tensor.as_inner()],
         )
-        .map_err(|err| naive_error("Failed to absorb right factor into MPO site", err))?;
+        .map_err(|err| mpo_helper_error("Failed to absorb right factor into MPO site", err))?;
         let new_next = Tensor4::from_tenferro(new_next)
-            .map_err(|err| naive_error("Compressed MPO site has invalid rank", err))?;
+            .map_err(|err| mpo_helper_error("Compressed MPO site has invalid rank", err))?;
 
         *mpo.site_tensor_mut(i) = new_tensor;
         *mpo.site_tensor_mut(i + 1) = new_next;
     }
 
     Ok(())
-}
-
-fn naive_error(context: &str, err: impl std::fmt::Display) -> MPOError {
-    MPOError::InvalidOperation {
-        message: format!("{context}: {err}"),
-    }
 }
 
 #[cfg(test)]

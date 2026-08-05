@@ -93,3 +93,51 @@ fn test_contract_zipup_untruncated_matches_naive() {
          against scale {scale:e}"
     );
 }
+
+#[test]
+fn test_contract_zipup_length_mismatch() {
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0);
+
+    let err = contract_zipup(&mpo_a, &mpo_b, &ContractionOptions::default()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::mpo::MPOError::LengthMismatch {
+                expected: 2,
+                got: 1
+            }
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_contract_zipup_shared_dimension_mismatch() {
+    // A's second site index is 3 but B's first site index is 2, so the shared
+    // index does not line up at site 0.
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0);
+
+    let err = contract_zipup(&mpo_a, &mpo_b, &ContractionOptions::default()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::mpo::MPOError::SharedDimensionMismatch {
+                site: 0,
+                dim_a: 3,
+                dim_b: 2
+            }
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_contract_zipup_empty() {
+    let mpo_a = MPO::<f64>::from_tensors_unchecked(Vec::new());
+    let mpo_b = MPO::<f64>::from_tensors_unchecked(Vec::new());
+
+    let result = contract_zipup(&mpo_a, &mpo_b, &ContractionOptions::default()).unwrap();
+    assert!(result.is_empty());
+}

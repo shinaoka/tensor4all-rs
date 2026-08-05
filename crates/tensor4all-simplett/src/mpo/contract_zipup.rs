@@ -6,6 +6,7 @@
 use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
 
 use super::contraction::ContractionOptions;
+use super::environment::mpo_helper_error;
 use super::error::{MPOError, Result};
 use super::factorize::{factorize, FactorizeOptions, SVDScalar};
 use super::mpo::MPO;
@@ -106,17 +107,17 @@ where
         // which is two bond dimensions worse than the pairwise route and was
         // the dominant cost of this function.
         let ra = einsum_tensors("nab,askc->nbskc", &[&remainder, a.as_inner()])
-            .map_err(|err| zipup_error("Failed to contract remainder with MPO A", err))?;
+            .map_err(|err| mpo_helper_error("Failed to contract remainder with MPO A", err))?;
         let c = einsum_tensors("nbskc,bktd->nstcd", &[&ra, b.as_inner()])
-            .map_err(|err| zipup_error("Failed to contract remainder with MPO B", err))?;
+            .map_err(|err| mpo_helper_error("Failed to contract remainder with MPO B", err))?;
 
         if i == n - 1 {
             // Last site: the trailing bonds are both 1, so this is a reshape.
             let last = typed_tensor_reshape(&c, &[c_new_link, c_s1, c_s2, 1])
-                .map_err(|err| zipup_error("Failed to reshape final zip-up site", err))?;
+                .map_err(|err| mpo_helper_error("Failed to reshape final zip-up site", err))?;
             result_tensors.push(
                 Tensor4::from_tenferro(last)
-                    .map_err(|err| zipup_error("Final zip-up site has invalid rank", err))?,
+                    .map_err(|err| mpo_helper_error("Final zip-up site has invalid rank", err))?,
             );
             continue;
         }
@@ -127,7 +128,7 @@ where
         let rows = c_new_link * c_s1 * c_s2;
         let cols = c_right_a * c_right_b;
         let c_mat = typed_tensor_reshape(&c, &[rows, cols])
-            .map_err(|err| zipup_error("Failed to reshape zip-up site", err))?;
+            .map_err(|err| mpo_helper_error("Failed to reshape zip-up site", err))?;
         let c_mat: Matrix2<T> = Matrix2::from_tenferro_unchecked(c_mat);
 
         let fact_result = factorize(&c_mat, &factorize_opts)?;
@@ -137,26 +138,20 @@ where
             fact_result.left.as_inner(),
             &[c_new_link, c_s1, c_s2, new_bond_dim],
         )
-        .map_err(|err| zipup_error("Failed to reshape zip-up left factor", err))?;
+        .map_err(|err| mpo_helper_error("Failed to reshape zip-up left factor", err))?;
         result_tensors.push(
             Tensor4::from_tenferro(site)
-                .map_err(|err| zipup_error("Zip-up site has invalid rank", err))?,
+                .map_err(|err| mpo_helper_error("Zip-up site has invalid rank", err))?,
         );
 
         remainder = typed_tensor_reshape(
             fact_result.right.as_inner(),
             &[new_bond_dim, c_right_a, c_right_b],
         )
-        .map_err(|err| zipup_error("Failed to reshape zip-up right factor", err))?;
+        .map_err(|err| mpo_helper_error("Failed to reshape zip-up right factor", err))?;
     }
 
     Ok(MPO::from_tensors_unchecked(result_tensors))
-}
-
-fn zipup_error(context: &str, err: impl std::fmt::Display) -> MPOError {
-    MPOError::InvalidOperation {
-        message: format!("{context}: {err}"),
-    }
 }
 
 #[cfg(test)]
