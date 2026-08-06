@@ -11,7 +11,9 @@ use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
 
-fn mpo_helper_error(context: &str, err: impl std::fmt::Display) -> MPOError {
+/// Wrap a helper-layer error (einsum, reshape, backend linear algebra) into an
+/// `MPOError` with the caller's context preserved for the C API and bindings.
+pub(crate) fn mpo_helper_error(context: &str, err: impl std::fmt::Display) -> MPOError {
     MPOError::InvalidOperation {
         message: format!("{context}: {err}"),
     }

@@ -15,7 +15,13 @@ use super::Matrix2;
 /// Options for contraction operations
 #[derive(Debug, Clone)]
 pub struct ContractionOptions {
-    /// Tolerance for truncation
+    /// Relative truncation tolerance forwarded to
+    /// [`FactorizeOptions::tolerance`](super::factorize::FactorizeOptions::tolerance).
+    ///
+    /// Singular values smaller than `tolerance * sigma_max` are discarded at
+    /// each bond, where `sigma_max` is the largest singular value of that
+    /// bond's matrix. The threshold is invariant under a global rescaling of
+    /// the operators being contracted.
     pub tolerance: f64,
     /// Maximum bond dimension after contraction
     pub max_bond_dim: usize,

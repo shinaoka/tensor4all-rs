@@ -14,7 +14,13 @@ use crate::einsum_helper::EinsumScalar;
 /// Options for the variational fit algorithm
 #[derive(Debug, Clone)]
 pub struct FitOptions {
-    /// Tolerance for truncation at each step
+    /// Relative truncation tolerance at each step, forwarded to
+    /// [`FactorizeOptions::tolerance`](super::factorize::FactorizeOptions::tolerance).
+    ///
+    /// Singular values smaller than `tolerance * sigma_max` are discarded at
+    /// each bond, where `sigma_max` is the largest singular value of that
+    /// bond's matrix. The threshold is invariant under a global rescaling of
+    /// the operators being contracted.
     pub tolerance: f64,
     /// Maximum bond dimension
     pub max_bond_dim: usize,
