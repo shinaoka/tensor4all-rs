@@ -119,8 +119,10 @@ impl Default for TreeTciOptions {
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
 /// let (ranks, errors) = optimize_default(&mut state, evaluate, &options).unwrap();
 ///
-/// assert_eq!(ranks.len(), 5); // one entry per iteration
-/// assert_eq!(errors.len(), 5);
+/// // One entry per sweep actually run; the loop stops early once converged,
+/// // so this may be less than max_iter (5).
+/// assert!(!ranks.is_empty() && ranks.len() <= 5);
+/// assert_eq!(ranks.len(), errors.len());
 /// assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
 /// ```
 pub fn optimize_default<T, F>(
@@ -173,8 +175,10 @@ where
 ///     &mut state, evaluate, &options, &proposer,
 /// ).unwrap();
 ///
-/// assert_eq!(ranks.len(), 3);
-/// assert_eq!(errors.len(), 3);
+/// // One entry per sweep actually run; the loop stops early once converged,
+/// // so this may be less than max_iter (3).
+/// assert!(!ranks.is_empty() && ranks.len() <= 3);
+/// assert_eq!(ranks.len(), errors.len());
 /// ```
 pub fn optimize_with_proposer<T, F, P>(
     state: &mut TreeTCI2<T>,
@@ -200,6 +204,14 @@ where
     let mut errors = Vec::new();
     let visitor = AllEdges;
     const INNER_EDGE_PASSES: usize = 2;
+    // Matches `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
+    // (see `convergence_criterion` in tensorci2.rs, itself a port of Julia's
+    // `convergencecriterion`). A single below-tolerance sweep is not reliable:
+    // the bond-error estimate can dip before the pivot search has actually
+    // stabilized. TreeTCI2 has no per-sweep "new global pivots" count to check
+    // (unlike TensorCI2), so this only checks error-below-tolerance + rank
+    // stability over the trailing window, not the third TensorCI2 criterion.
+    const NCHECK_HISTORY: usize = 3;
 
     for _iter in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
@@ -230,6 +242,31 @@ where
             state.max_bond_error()
         };
         errors.push(normalized_error);
+
+        // BUGFIX (local, not upstream): the sweep loop previously always ran
+        // to `max_iter` with no convergence check, wasting O(max_iter /
+        // actual_sweeps_needed) work on already-converged problems. See
+        // ~/tensor4all-rust/treetci-optimize-no-early-stop-bug.md.
+        //
+        // Mirrors `TreeTCI.jl`'s `convergencecriterion` (as locally patched
+        // for the scale-mismatch bug on branch `local-fix-convergence`,
+        // commit 06563dd): error-below-tolerance + rank-stable over the
+        // trailing window, OR the rank has saturated at `max_bond_dim` for
+        // the whole window (further sweeps cannot reduce the error once the
+        // bond dimension is capped, so waiting for it to also cross
+        // `tolerance` would just burn the remaining `max_iter` sweeps).
+        if errors.len() >= NCHECK_HISTORY {
+            let n = errors.len();
+            let last_errors = &errors[n - NCHECK_HISTORY..];
+            let last_ranks = &ranks[n - NCHECK_HISTORY..];
+            let errors_converged = last_errors.iter().all(|&e| e < options.tolerance);
+            let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
+                == last_ranks.last().copied().unwrap_or(0);
+            let bond_dim_saturated = last_ranks.iter().all(|&r| r >= options.max_bond_dim);
+            if (errors_converged && rank_stable) || bond_dim_saturated {
+                break;
+            }
+        }
     }
 
     Ok((ranks, errors))
