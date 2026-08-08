@@ -308,6 +308,21 @@ fn index_set_expected_dataset_is_rejected() {
 }
 
 #[test]
+fn index_set_noncanonical_child_names_are_rejected() {
+    for (case, replacement) in [("leading_zero", "index_01"), ("ordinal_zero", "index_0")] {
+        let name = format!("index_set_noncanonical_{case}");
+        let error = itensor_error(&name, |tensor| {
+            tensor
+                .group("inds")
+                .unwrap()
+                .relink("index_1", replacement)
+                .unwrap();
+        });
+        assert!(error.contains(replacement), "{case}: {error}");
+    }
+}
+
+#[test]
 fn index_set_expected_soft_link_is_rejected() {
     let path = temp_path("index_set_expected_soft_link");
     save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
@@ -337,6 +352,38 @@ fn index_set_zero_length_with_children_is_rejected() {
             .unwrap();
     });
     assert!(error.contains("index_1") || error.contains("length"));
+}
+
+#[test]
+fn index_set_zero_length_with_many_unrelated_members_is_rejected_without_panic() {
+    let path = temp_path("index_set_zero_length_many_unrelated");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let inds = file.group("tensor/inds").unwrap();
+    inds.dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&0_i64)
+        .unwrap();
+    for n in 0..64 {
+        let name = format!("unrelated_{n}");
+        inds.new_dataset::<u8>()
+            .shape(())
+            .create(name.as_str())
+            .unwrap()
+            .as_writer()
+            .write_scalar(&0_u8)
+            .unwrap();
+    }
+    drop(file);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_itensor(&path, "tensor")
+    }));
+    assert!(result.is_ok(), "reader panicked: {:?}", result.err());
+    let error = result.unwrap().unwrap_err().to_string();
+    assert!(error.contains("length"), "{error}");
+    std::fs::remove_file(path).ok();
 }
 
 /// Create a simple 3-site MPS for testing.
@@ -559,6 +606,21 @@ fn mps_expected_dataset_is_rejected() {
 }
 
 #[test]
+fn mps_noncanonical_child_names_are_rejected() {
+    for (case, replacement) in [
+        ("missing_closing_bracket", "MPS[1"),
+        ("leading_zero", "MPS[01]"),
+        ("ordinal_zero", "MPS[0]"),
+    ] {
+        let name = format!("mps_noncanonical_{case}");
+        let error = mps_error(&name, |group| {
+            group.relink("MPS[1]", replacement).unwrap();
+        });
+        assert!(error.contains(replacement), "{case}: {error}");
+    }
+}
+
+#[test]
 fn mps_expected_soft_link_is_rejected() {
     let path = temp_path("mps_expected_soft_link");
     save_mps(&path, "mps", &make_test_mps()).unwrap();
@@ -585,6 +647,32 @@ fn mps_zero_length_with_children_is_rejected() {
 
     let error = load_mps(&path, "mps").unwrap_err().to_string();
     assert!(error.contains("MPS[1]"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_zero_length_with_many_unrelated_members_is_rejected_without_panic() {
+    let path = temp_path("mps_zero_length_many_unrelated");
+    save_mps(&path, "mps", &TensorTrain::new(Vec::new()).unwrap()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    for n in 0..64 {
+        let name = format!("unrelated_{n}");
+        group
+            .new_dataset::<u8>()
+            .shape(())
+            .create(name.as_str())
+            .unwrap()
+            .as_writer()
+            .write_scalar(&0_u8)
+            .unwrap();
+    }
+    drop(file);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_mps(&path, "mps")));
+    assert!(result.is_ok(), "reader panicked: {:?}", result.err());
+    let error = result.unwrap().unwrap_err().to_string();
+    assert!(error.contains("length"), "{error}");
     std::fs::remove_file(path).ok();
 }
 

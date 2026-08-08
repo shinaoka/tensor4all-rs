@@ -1,7 +1,7 @@
 //! Layer 0: Index / TagSet HDF5 read/write (ITensors.jl compatible).
 
 use crate::backend::types::VarLenUnicode;
-use crate::backend::{Group, LinkType, LocationType};
+use crate::backend::{Group, LinkType};
 use anyhow::{bail, Context, Result};
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
@@ -15,99 +15,123 @@ pub(crate) fn read_nonnegative_usize(name: &'static str, value: i64) -> Result<u
         .with_context(|| format!("HDF5 dataset {name} must be non-negative, got {value}"))
 }
 
-pub(crate) fn read_expected_child_groups(
+pub(crate) fn expected_child_name(prefix: &str, ordinal: usize, closing: Option<char>) -> String {
+    match closing {
+        Some(closing) => format!("{prefix}{ordinal}{closing}"),
+        None => format!("{prefix}{ordinal}"),
+    }
+}
+
+fn canonical_child_ordinal(name: &str, prefix: &str, closing: Option<char>) -> Option<usize> {
+    let suffix = name.strip_prefix(prefix)?;
+    let suffix = match closing {
+        Some(closing) => suffix.strip_suffix(closing)?,
+        None => suffix,
+    };
+    if suffix.is_empty()
+        || (suffix.len() > 1 && suffix.as_bytes().first() == Some(&b'0'))
+        || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
+fn is_expected_member(
+    name: &str,
+    length: usize,
+    prefix: &str,
+    closing: Option<char>,
+    metadata_names: &[&str],
+) -> bool {
+    metadata_names.contains(&name)
+        || canonical_child_ordinal(name, prefix, closing)
+            .is_some_and(|ordinal| ordinal != 0 && ordinal <= length)
+}
+
+fn first_unexpected_member(
+    group: &Group,
+    length: usize,
+    prefix: &str,
+    closing: Option<char>,
+    metadata_names: &[&str],
+) -> Result<Option<String>> {
+    group
+        .iter_visit_default(None, |_, name, _, unexpected| {
+            if is_expected_member(name, length, prefix, closing, metadata_names) {
+                true
+            } else {
+                *unexpected = Some(name.to_owned());
+                false
+            }
+        })
+        .with_context(|| "Failed to enumerate HDF5 child members")
+}
+
+/// Validate the exact child-link schema without retaining attacker-controlled members.
+///
+/// The declared child count is checked against the parent link count before any
+/// caller allocates its result. Each expected child is then opened as a group and
+/// dropped immediately. Callers reopen the validated groups only while reading them.
+pub(crate) fn validate_expected_child_groups(
     group: &Group,
     length: usize,
     object_kind: &str,
     prefix: &str,
     closing: Option<char>,
-) -> Result<Vec<Group>> {
-    let members = group
-        .iter_visit_default(Vec::new(), |_, name, info, members| {
-            members.push((name.to_owned(), info.link_type));
-            true
-        })
-        .with_context(|| format!("Failed to enumerate {object_kind} child members"))?;
-    if length > members.len() {
+    metadata_names: &[&str],
+) -> Result<()> {
+    let expected_member_count = u64::try_from(length)
+        .context("HDF5 child length does not fit in a member count")?
+        .checked_add(
+            u64::try_from(metadata_names.len())
+                .context("HDF5 metadata member count does not fit in a member count")?,
+        )
+        .context("HDF5 child length overflows the expected member count")?;
+    let member_count = group.len();
+
+    if member_count != expected_member_count {
+        if let Some(name) = first_unexpected_member(group, length, prefix, closing, metadata_names)?
+        {
+            bail!(
+                "HDF5 {object_kind} child member {name} is outside the exact declared range 1..={length} for declared length {length}"
+            );
+        }
         bail!(
-            "HDF5 dataset length declares {length} {object_kind} children, but the parent has only {} members",
-            members.len()
+            "HDF5 dataset length declares {length} {object_kind} children, but found {member_count} parent members instead of {expected_member_count}; expected child groups do not match"
+        );
+    }
+    if let Some(name) = first_unexpected_member(group, length, prefix, closing, metadata_names)? {
+        bail!(
+            "HDF5 {object_kind} child member {name} is outside the exact declared range 1..={length} for declared length {length}"
         );
     }
 
-    let mut child_groups = Vec::new();
-    for (name, link_type) in members {
-        let Some(suffix) = name.strip_prefix(prefix) else {
-            if link_type != LinkType::Hard {
-                bail!("HDF5 {object_kind} has unexpected child member {name} with a non-hard link");
-            }
-            match group
-                .loc_type_by_name(&name)
-                .with_context(|| format!("Failed to inspect HDF5 {object_kind} member {name}"))?
+    let non_hard_child = group
+        .iter_visit_default(None, |_, name, info, non_hard_child| {
+            if canonical_child_ordinal(name, prefix, closing)
+                .is_some_and(|ordinal| ordinal != 0 && ordinal <= length)
+                && info.link_type != LinkType::Hard
             {
-                LocationType::Group => bail!(
-                    "HDF5 {object_kind} has unexpected child group {name} for declared length {length}"
-                ),
-                LocationType::Dataset => {}
-                other => bail!(
-                    "HDF5 {object_kind} has unexpected child member {name} of type {other:?}"
-                ),
+                *non_hard_child = Some(name.to_owned());
+                false
+            } else {
+                true
             }
-            continue;
-        };
+        })
+        .with_context(|| format!("Failed to inspect {object_kind} child links"))?;
+    if let Some(name) = non_hard_child {
+        bail!("HDF5 {object_kind} expected child {name} must be a hard-linked group");
+    }
 
-        let Some(suffix) = closing.map_or(Some(suffix), |closing| suffix.strip_suffix(closing))
-        else {
-            bail!(
-                "HDF5 {object_kind} child member {name} is malformed; expected names beginning with {prefix}"
-            );
-        };
-        let ordinal = suffix.parse::<usize>().with_context(|| {
-            format!("HDF5 {object_kind} child member {name} has a non-numeric ordinal")
-        })?;
-        let expected_name = match closing {
-            Some(closing) => format!("{prefix}{ordinal}{closing}"),
-            None => format!("{prefix}{ordinal}"),
-        };
-        if ordinal == 0 || ordinal > length || name != expected_name {
-            bail!(
-                "HDF5 {object_kind} child member {name} is outside the exact declared range 1..={length}"
-            );
-        }
-        if link_type != LinkType::Hard {
-            bail!("HDF5 {object_kind} expected child {name} must be a hard-linked group");
-        }
-        if group
-            .loc_type_by_name(&name)
-            .with_context(|| format!("Failed to inspect HDF5 {object_kind} child {name}"))?
-            != LocationType::Group
-        {
-            bail!("HDF5 {object_kind} expected child {name} is not a group");
-        }
-        let child_group = group
+    for ordinal in 1..=length {
+        let name = expected_child_name(prefix, ordinal, closing);
+        let _child_group = group
             .group(&name)
             .with_context(|| format!("Failed to open HDF5 {object_kind} child group {name}"))?;
-        child_groups.push((ordinal, child_group));
     }
 
-    child_groups.sort_unstable_by_key(|(ordinal, _)| *ordinal);
-    if child_groups.len() != length {
-        bail!(
-            "HDF5 dataset length declares {length} {object_kind} children, but found {} expected child groups",
-            child_groups.len()
-        );
-    }
-    for (position, (ordinal, _)) in child_groups.iter().enumerate() {
-        let expected_ordinal = position + 1;
-        if *ordinal != expected_ordinal {
-            bail!("HDF5 {object_kind} child group for ordinal {expected_ordinal} is missing");
-        }
-    }
-
-    Ok(child_groups
-        .into_iter()
-        .map(|(_, child_group)| child_group)
-        .collect())
+    Ok(())
 }
 
 /// Convert a [`TagSet`] to a comma-separated string (ITensors.jl format).
@@ -298,9 +322,13 @@ pub(crate) fn read_index_set(group: &Group) -> Result<Vec<DynIndex>> {
         .context("Failed to read IndexSet length")?;
     let length = read_nonnegative_usize("length", length)?;
 
-    let index_groups = read_expected_child_groups(group, length, "IndexSet", "index_", None)?;
+    validate_expected_child_groups(group, length, "IndexSet", "index_", None, &["length"])?;
     let mut indices = Vec::with_capacity(length);
-    for index_group in index_groups {
+    for ordinal in 1..=length {
+        let name = expected_child_name("index_", ordinal, None);
+        let index_group = group
+            .group(&name)
+            .with_context(|| format!("Failed to open HDF5 IndexSet child group {name}"))?;
         indices.push(read_index(&index_group)?);
     }
 

@@ -159,9 +159,20 @@ pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
     validate_ortho_limits(llim, rlim, length)?;
     let canonical_form = read_canonical_form(group)?;
 
-    let tensor_groups = index::read_expected_child_groups(group, length, "MPS", "MPS[", Some(']'))?;
+    index::validate_expected_child_groups(
+        group,
+        length,
+        "MPS",
+        "MPS[",
+        Some(']'),
+        &["length", "llim", "rlim"],
+    )?;
     let mut tensors = Vec::with_capacity(length);
-    for tensor_group in tensor_groups {
+    for ordinal in 1..=length {
+        let name = index::expected_child_name("MPS[", ordinal, Some(']'));
+        let tensor_group = group
+            .group(&name)
+            .with_context(|| format!("Failed to open HDF5 MPS child group {name}"))?;
         tensors.push(itensor::read_itensor(&tensor_group)?);
     }
 
