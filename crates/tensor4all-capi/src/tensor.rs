@@ -101,6 +101,27 @@ fn dims_from_indices(indices: &[InternalIndex]) -> Vec<usize> {
     indices.iter().map(|index| index.size()).collect()
 }
 
+fn checked_dims_product(name: &str, dims: &[usize]) -> CapiResult<usize> {
+    dims.iter().try_fold(1usize, |product, &dim| {
+        product.checked_mul(dim).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{name} dimension product overflows usize for dims {dims:?}"),
+            )
+        })
+    })
+}
+
+fn validate_raw_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
+    if len > isize::MAX as usize / std::mem::size_of::<T>() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name} byte length overflows isize::MAX"),
+        ));
+    }
+    Ok(())
+}
+
 fn read_plain_slice<T: Copy>(
     name: &str,
     ptr: *const T,
@@ -112,6 +133,7 @@ fn read_plain_slice<T: Copy>(
     if ptr.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, format!("{name} is null")));
     }
+    validate_raw_slice_len::<T>(name, len)?;
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
 }
 
@@ -132,6 +154,7 @@ fn read_c64_slice(
             format!("{name} length overflows usize"),
         )
     })?;
+    validate_raw_slice_len::<f64>(name, raw_len)?;
     let raw = unsafe { std::slice::from_raw_parts(ptr, raw_len) };
     Ok((0..n_complex)
         .map(|i| Complex64::new(raw[2 * i], raw[2 * i + 1]))
@@ -793,7 +816,8 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let expected_len: usize = dims_from_indices(&indices).iter().product();
+        let dims = dims_from_indices(&indices);
+        let expected_len = checked_dims_product("dense tensor", &dims)?;
         if expected_len > 0 && data.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "data is null"));
         }
@@ -804,7 +828,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
             ));
         }
 
-        let values = unsafe { std::slice::from_raw_parts(data, data_len) }.to_vec();
+        let values = read_plain_slice("data", data, data_len)?;
         let tensor = InternalTensor::from_dense(indices, values)
             .map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?;
         Ok(t4a_tensor::new(tensor))
@@ -822,7 +846,8 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let expected_len: usize = dims_from_indices(&indices).iter().product();
+        let dims = dims_from_indices(&indices);
+        let expected_len = checked_dims_product("dense tensor", &dims)?;
         if expected_len > 0 && data_interleaved.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "data_interleaved is null"));
         }
@@ -833,10 +858,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             ));
         }
 
-        let raw = unsafe { std::slice::from_raw_parts(data_interleaved, 2 * n_complex) };
-        let values = (0..n_complex)
-            .map(|i| Complex64::new(raw[2 * i], raw[2 * i + 1]))
-            .collect::<Vec<_>>();
+        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
         let tensor = InternalTensor::from_dense(indices, values)
             .map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?;
         Ok(t4a_tensor::new(tensor))

@@ -317,6 +317,85 @@ fn test_tensor_dense_c64_roundtrip() {
 }
 
 #[test]
+fn dense_constructor_rejects_dimension_product_overflow() {
+    let huge = new_index(usize::MAX);
+    let two = new_index(2);
+    let indices = [huge as *const t4a_index, two as *const t4a_index];
+
+    let mut real = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_f64(
+            indices.len(),
+            indices.as_ptr(),
+            std::ptr::null(),
+            0,
+            &mut real,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(real.is_null());
+    assert!(last_error().contains("dimension product"));
+
+    let mut complex = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_c64(
+            indices.len(),
+            indices.as_ptr(),
+            std::ptr::null(),
+            0,
+            &mut complex,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(complex.is_null());
+    assert!(last_error().contains("dimension product"));
+
+    t4a_index_release(two);
+    t4a_index_release(huge);
+}
+
+#[test]
+fn c64_reader_rejects_interleaved_length_overflow_before_dereference() {
+    let error = read_c64_slice(
+        "data_interleaved",
+        std::ptr::NonNull::<f64>::dangling().as_ptr(),
+        usize::MAX,
+    )
+    .unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("overflows"));
+}
+
+#[test]
+fn raw_slice_rejects_byte_length_overflow() {
+    let len = isize::MAX as usize / std::mem::size_of::<f64>() + 1;
+    let error =
+        read_plain_slice("data", std::ptr::NonNull::<f64>::dangling().as_ptr(), len).unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("byte length"));
+}
+
+#[test]
+fn c64_reader_rejects_interleaved_byte_length_overflow() {
+    let n_complex = isize::MAX as usize / (2 * std::mem::size_of::<f64>()) + 1;
+    let error = read_c64_slice(
+        "data_interleaved",
+        std::ptr::NonNull::<f64>::dangling().as_ptr(),
+        n_complex,
+    )
+    .unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("byte length"));
+}
+
+#[test]
+fn raw_slice_null_pointer_precedes_byte_length_validation() {
+    let error = read_plain_slice::<f64>("data", std::ptr::null(), 1).unwrap_err();
+    assert_eq!(error.0, T4A_NULL_POINTER);
+    assert!(error.1.contains("data is null"));
+}
+
+#[test]
 fn test_tensor_select_indices_f64_drops_selected_axes() {
     let i = new_index(2);
     let j = new_index(3);
