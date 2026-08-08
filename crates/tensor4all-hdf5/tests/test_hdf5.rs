@@ -885,12 +885,16 @@ fn mps_invalid_canonical_form_type_is_rejected_with_context() {
 }
 
 #[test]
-fn mps_reader_does_not_enumerate_attribute_names() {
-    let source = include_str!("../src/mps.rs");
-    assert!(
-        !source.contains("attr_names("),
-        "MPS reader must use constant-space attribute lookup"
-    );
+fn mps_attribute_lookup_does_not_enumerate_attribute_names() {
+    for (path, source) in [
+        ("src/mps.rs", include_str!("../src/mps.rs")),
+        ("src/backend.rs", include_str!("../src/backend.rs")),
+    ] {
+        assert!(
+            !source.contains("attr_names("),
+            "{path} must use constant-space attribute lookup"
+        );
+    }
 }
 
 #[test]
