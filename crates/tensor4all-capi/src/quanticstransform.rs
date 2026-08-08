@@ -160,9 +160,53 @@ macro_rules! require_layout_or_return {
 }
 
 fn bit_dim(bits: usize, what: &str) -> CapiResult<usize> {
+    let shift = u32::try_from(bits).map_err(|_| {
+        capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{what} exceeds the usize shift width: {bits}"),
+        )
+    })?;
     1usize
-        .checked_shl(bits as u32)
-        .ok_or_else(|| capi_error(T4A_INVALID_ARGUMENT, format!("{what} is too large")))
+        .checked_shl(shift)
+        .ok_or_else(|| capi_error(T4A_INVALID_ARGUMENT, format!("{what} is too large: {bits}")))
+}
+
+fn checked_allocation_len<T>(dims: &[usize], name: &str) -> CapiResult<usize> {
+    let elements = dims.iter().try_fold(1usize, |product, &dim| {
+        product.checked_mul(dim).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{name} element count overflows usize for dimensions {dims:?}"),
+            )
+        })
+    })?;
+    let element_size = std::mem::size_of::<T>();
+    if element_size != 0 {
+        let bytes = elements.checked_mul(element_size).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{name} byte length overflows usize for dimensions {dims:?}"),
+            )
+        })?;
+        if bytes > isize::MAX as usize {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{name} byte length exceeds isize::MAX for dimensions {dims:?}"),
+            ));
+        }
+    }
+    Ok(elements)
+}
+
+fn checked_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
+    let element_size = std::mem::size_of::<T>();
+    if element_size != 0 && len > isize::MAX as usize / element_size {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name} byte length exceeds isize::MAX"),
+        ));
+    }
+    Ok(())
 }
 
 fn extract_chain_sites(mpo: &InternalTreeTN) -> CapiResult<Vec<SourceSite>> {
@@ -174,6 +218,7 @@ fn extract_chain_sites(mpo: &InternalTreeTN) -> CapiResult<Vec<SourceSite>> {
         ));
     }
 
+    checked_allocation_len::<SourceSite>(&[nsites], "source site list")?;
     let mut sites = Vec::with_capacity(nsites);
     for site in 0..nsites {
         sites.push(SourceSite::from_chain_treetn(mpo, site, nsites)?);
@@ -214,7 +259,7 @@ where
         indices.push(idx);
     }
 
-    let total_size: usize = dims.iter().product();
+    let total_size = checked_allocation_len::<Complex64>(&dims, "chain tensor")?;
     let mut data = vec![Complex64::new(0.0, 0.0); total_size];
 
     for left in 0..left_dim {
@@ -346,18 +391,22 @@ fn expand_chain_with_identities(
         ));
     }
 
-    let mut bond_dims = vec![1; nsites.saturating_sub(1)];
+    let bond_count = nsites.saturating_sub(1);
+    checked_allocation_len::<usize>(&[bond_count], "expanded bond list")?;
+    let mut bond_dims = vec![1; bond_count];
     for (src_idx, window) in source_positions.windows(2).enumerate() {
         let bond_dim = source_sites[src_idx].right_dim;
         for dim in bond_dims.iter_mut().take(window[1]).skip(window[0]) {
             *dim = bond_dim;
         }
     }
+    checked_allocation_len::<InternalIndex>(&[bond_dims.len()], "expanded bond indices")?;
     let bond_indices: Vec<_> = bond_dims
         .iter()
         .map(|&dim| InternalIndex::new_dyn(dim))
         .collect();
 
+    checked_allocation_len::<TensorDynLen>(&[nsites], "expanded tensor list")?;
     let mut tensors = Vec::with_capacity(nsites);
     let mut next_source = 0usize;
     for site in 0..nsites {
@@ -392,7 +441,14 @@ fn embed_single_var_fused(
     source_sites: &[SourceSite],
 ) -> CapiResult<InternalTreeTN> {
     let nvariables = layout.nvariables();
+    if target_var >= nvariables {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "target_var must be smaller than nvariables",
+        ));
+    }
     let phys_dim = bit_dim(nvariables, "fused local dimension")?;
+    checked_allocation_len::<Complex64>(&[phys_dim, phys_dim], "fused site tensor")?;
     let nsites = layout.nsites();
     if source_sites.len() != nsites {
         return Err(capi_error(
@@ -401,12 +457,17 @@ fn embed_single_var_fused(
         ));
     }
 
+    checked_allocation_len::<InternalIndex>(
+        &[source_sites.len().saturating_sub(1)],
+        "fused bond indices",
+    )?;
     let bond_indices: Vec<_> = source_sites
         .iter()
         .take(source_sites.len().saturating_sub(1))
         .map(|site| InternalIndex::new_dyn(site.right_dim))
         .collect();
 
+    checked_allocation_len::<TensorDynLen>(&[nsites], "fused tensor list")?;
     let mut tensors = Vec::with_capacity(nsites);
     for (site_idx, src) in source_sites.iter().enumerate() {
         let left_bond = (site_idx > 0).then(|| bond_indices[site_idx - 1].clone());
@@ -459,6 +520,59 @@ fn materialize_single_var_operator(
     }
 }
 
+fn rational_from_i64_parts(
+    name: &str,
+    index: usize,
+    numerator: i64,
+    denominator: i64,
+) -> CapiResult<Rational64> {
+    if denominator == 0 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name}[{index}] has zero denominator"),
+        ));
+    }
+
+    let numerator_magnitude = numerator.unsigned_abs();
+    let denominator_magnitude = denominator.unsigned_abs();
+    let mut a = numerator_magnitude;
+    let mut b = denominator_magnitude;
+    while b != 0 {
+        let remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    let gcd = a.max(1);
+    let numerator_magnitude = numerator_magnitude / gcd;
+    let denominator_magnitude = denominator_magnitude / gcd;
+    if denominator_magnitude > i64::MAX as u64 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name}[{index}] denominator is not representable after reduction"),
+        ));
+    }
+
+    let negative = (numerator < 0) ^ (denominator < 0);
+    let numerator = if numerator_magnitude == 1u64 << 63 {
+        if negative {
+            i64::MIN
+        } else {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{name}[{index}] numerator is not representable after reduction"),
+            ));
+        }
+    } else {
+        let magnitude = numerator_magnitude as i64;
+        if negative {
+            -magnitude
+        } else {
+            magnitude
+        }
+    };
+    Ok(Rational64::new(numerator, denominator_magnitude as i64))
+}
+
 fn parse_rationals(
     numerators: *const i64,
     denominators: *const i64,
@@ -474,22 +588,14 @@ fn parse_rationals(
             format!("{name} numerator/denominator array is null"),
         ));
     }
+    checked_slice_len::<i64>(name, len)?;
 
     let nums = unsafe { std::slice::from_raw_parts(numerators, len) };
     let dens = unsafe { std::slice::from_raw_parts(denominators, len) };
     nums.iter()
         .zip(dens.iter())
         .enumerate()
-        .map(|(i, (&num, &den))| {
-            if den == 0 {
-                Err(capi_error(
-                    T4A_INVALID_ARGUMENT,
-                    format!("{name}[{i}] has zero denominator"),
-                ))
-            } else {
-                Ok(Rational64::new(num, den))
-            }
-        })
+        .map(|(i, (&num, &den))| rational_from_i64_parts(name, i, num, den))
         .collect()
 }
 
@@ -503,6 +609,7 @@ fn parse_boundary_conditions(
     if bc.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, "bc is null"));
     }
+    checked_slice_len::<t4a_boundary_condition>("bc", len)?;
     Ok(unsafe { std::slice::from_raw_parts(bc, len) }
         .iter()
         .copied()
@@ -528,6 +635,7 @@ pub extern "C" fn t4a_qtt_layout_new(
         if variable_resolutions.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "variable_resolutions is null"));
         }
+        checked_slice_len::<usize>("variable_resolutions", nvariables)?;
 
         let resolutions = unsafe { std::slice::from_raw_parts(variable_resolutions, nvariables) };
         let layout = InternalQttLayout::new(kind, resolutions.to_vec())
@@ -691,8 +799,10 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
 ///
 /// # Errors
 ///
-/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
-/// is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
+/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `m * n` or a
+/// fused site/allocation size overflows, `layout->kind()` is not `Fused`,
+/// `b_den[i] == 0`, or `a_den[i + k * m] == 0`. Dimension and byte checks run
+/// before reading any coefficient or boundary-condition pointer.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtransform_affine_materialize(
     layout: *const t4a_qtt_layout,
@@ -721,7 +831,19 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
             ));
         }
 
-        let a = parse_rationals(a_num, a_den, m * n, "a")?;
+        let a_len = m.checked_mul(n).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("affine matrix element count overflows usize: {m} × {n}"),
+            )
+        })?;
+        checked_slice_len::<i64>("a", a_len)?;
+        checked_slice_len::<i64>("b", m)?;
+        let input_dim = bit_dim(n, "affine input local dimension")?;
+        let output_dim = bit_dim(m, "affine output local dimension")?;
+        checked_allocation_len::<Complex64>(&[output_dim, input_dim], "affine fused site tensor")?;
+
+        let a = parse_rationals(a_num, a_den, a_len, "a")?;
         let b = parse_rationals(b_num, b_den, m, "b")?;
         let bc = parse_boundary_conditions(bc, m)?;
         let params =

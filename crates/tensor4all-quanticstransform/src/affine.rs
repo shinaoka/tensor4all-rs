@@ -6,22 +6,24 @@
 //!
 //! Based on the algorithm from Quantics.jl/src/affine.jl
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 use anyhow::Result;
+use num_bigint::BigInt;
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Rational64;
-use num_traits::One;
+use num_traits::{One, Signed, ToPrimitive, Zero};
 use sprs::CsMat;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::LinearizationOrder;
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    checked_pow2, tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+    checked_allocation_len, checked_pow2, tensortrain_to_linear_operator_asymmetric,
+    BoundaryCondition, QuanticsOperator,
 };
-use tensor4all_simplett::tensor::Tensor3 as GenericTensor3;
+use tensor4all_simplett::{tensor::Tensor3 as GenericTensor3, tensor3_from_data};
 
 #[derive(Clone, Debug)]
 struct BoolTensor<const N: usize> {
@@ -33,12 +35,12 @@ type BoolTensor2 = BoolTensor<2>;
 type BoolTensor3 = BoolTensor<3>;
 
 impl<const N: usize> BoolTensor<N> {
-    fn from_elem(dims: [usize; N], value: bool) -> Self {
-        let total: usize = dims.iter().product();
-        Self {
+    fn from_elem(dims: [usize; N], value: bool) -> Result<Self> {
+        let total = checked_allocation_len::<u8>(&dims, "affine boolean tensor")?;
+        Ok(Self {
             data: vec![u8::from(value); total],
             dims,
-        }
+        })
     }
 
     fn dims(&self) -> &[usize; N] {
@@ -133,16 +135,15 @@ impl LinearConstraintRow {
         let common_factor = coefficients
             .iter()
             .chain(std::iter::once(&rhs))
-            .fold(0i64, |factor, value| factor.gcd(value))
-            .abs();
+            .fold(0u64, |factor, value| factor.gcd(&value.unsigned_abs()));
 
         if common_factor > 1 {
             Self {
                 coefficients: coefficients
                     .into_iter()
-                    .map(|coefficient| coefficient / common_factor)
+                    .map(|coefficient| divide_i64_by_u64(coefficient, common_factor))
                     .collect(),
-                rhs: rhs / common_factor,
+                rhs: divide_i64_by_u64(rhs, common_factor),
             }
         } else {
             Self { coefficients, rhs }
@@ -166,6 +167,10 @@ impl LinearConstraintRow {
     /// affine/halfspace projector operators; do not use it to simplify a
     /// general affine map `y = A*x + b`.
     ///
+    /// # Errors
+    /// Returns an error if the primitive integer representation cannot fit in
+    /// `i64`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -175,25 +180,70 @@ impl LinearConstraintRow {
     /// let row = LinearConstraintRow::from_rationals(
     ///     vec![Rational64::new(2, 3), Rational64::new(4, 3)],
     ///     Rational64::from_integer(2),
-    /// );
+    /// ).unwrap();
     /// assert_eq!(row.coefficients, vec![1, 2]);
     /// assert_eq!(row.rhs, 3);
     /// ```
-    pub fn from_rationals(coefficients: Vec<Rational64>, rhs: Rational64) -> Self {
-        let mut denominator_lcm = 1i64;
+    pub fn from_rationals(coefficients: Vec<Rational64>, rhs: Rational64) -> Result<Self> {
+        let mut denominator_lcm = BigInt::one();
         for coefficient in &coefficients {
-            denominator_lcm = denominator_lcm.lcm(coefficient.denom());
+            denominator_lcm = denominator_lcm.lcm(&BigInt::from(*coefficient.denom()));
         }
-        denominator_lcm = denominator_lcm.lcm(rhs.denom());
+        denominator_lcm = denominator_lcm.lcm(&BigInt::from(*rhs.denom()));
 
         let integer_coefficients = coefficients
             .iter()
-            .map(|coefficient| (coefficient * denominator_lcm).to_integer())
+            .map(|coefficient| {
+                let numerator = BigInt::from(*coefficient.numer());
+                let denominator = BigInt::from(*coefficient.denom());
+                numerator * (&denominator_lcm / denominator)
+            })
             .collect();
-        let integer_rhs = (rhs * denominator_lcm).to_integer();
+        let integer_rhs =
+            BigInt::from(*rhs.numer()) * (&denominator_lcm / BigInt::from(*rhs.denom()));
 
-        Self::from_integers(integer_coefficients, integer_rhs)
+        normalize_bigint_row(integer_coefficients, integer_rhs)
     }
+}
+
+fn divide_i64_by_u64(value: i64, divisor: u64) -> i64 {
+    if divisor == (1u64 << 63) {
+        if value == i64::MIN {
+            -1
+        } else {
+            0
+        }
+    } else {
+        value / divisor as i64
+    }
+}
+
+fn normalize_bigint_row(coefficients: Vec<BigInt>, rhs: BigInt) -> Result<LinearConstraintRow> {
+    let common_factor = coefficients
+        .iter()
+        .chain(std::iter::once(&rhs))
+        .fold(BigInt::zero(), |factor, value| factor.gcd(value))
+        .abs();
+    let common_factor = if common_factor > BigInt::one() {
+        common_factor
+    } else {
+        BigInt::one()
+    };
+
+    let coefficients = coefficients
+        .into_iter()
+        .map(|coefficient| coefficient / &common_factor)
+        .map(|coefficient| {
+            coefficient
+                .to_i64()
+                .ok_or_else(|| anyhow::anyhow!("normalized constraint coefficient exceeds i64"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let rhs = (rhs / common_factor)
+        .to_i64()
+        .ok_or_else(|| anyhow::anyhow!("normalized constraint right-hand side exceeds i64"))?;
+
+    Ok(LinearConstraintRow { coefficients, rhs })
 }
 
 /// Affine transformation parameters.
@@ -212,16 +262,16 @@ impl LinearConstraintRow {
 ///
 /// // 1D shift: y = x + 3
 /// let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
-/// assert_eq!(params.m, 1);
-/// assert_eq!(params.n, 1);
+/// assert_eq!(params.m(), 1);
+/// assert_eq!(params.n(), 1);
 ///
 /// // 2D rotation: y = [[1,1],[1,-1]] * x
 /// // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]]
 /// let params = AffineParams::from_integers(
 ///     vec![1, 1, 1, -1], vec![0, 0], 2, 2
 /// ).unwrap();
-/// assert_eq!(params.m, 2);
-/// assert_eq!(params.n, 2);
+/// assert_eq!(params.m(), 2);
+/// assert_eq!(params.n(), 2);
 ///
 /// // With rational coefficients: y = (1/2)*x
 /// let params = AffineParams::new(
@@ -232,14 +282,10 @@ impl LinearConstraintRow {
 /// ```
 #[derive(Clone, Debug)]
 pub struct AffineParams {
-    /// Transformation matrix A (M×N), stored in column-major order
-    pub a: Vec<Rational64>,
-    /// Translation vector b (M elements)
-    pub b: Vec<Rational64>,
-    /// Number of output dimensions (M)
-    pub m: usize,
-    /// Number of input dimensions (N)
-    pub n: usize,
+    a: Vec<Rational64>,
+    b: Vec<Rational64>,
+    m: usize,
+    n: usize,
 }
 
 impl AffineParams {
@@ -252,7 +298,9 @@ impl AffineParams {
     /// * `n` - Number of input dimensions
     ///
     /// # Errors
-    /// Returns an error when `a.len() != m * n` or `b.len() != m`.
+    /// Returns an error when the matrix/vector lengths do not match the
+    /// dimensions, a dimension product overflows, or a power-of-two site
+    /// dimension cannot be represented safely.
     ///
     /// # Examples
     ///
@@ -278,8 +326,7 @@ impl AffineParams {
         let expected_a_len = m
             .checked_mul(n)
             .ok_or_else(|| anyhow::anyhow!("Affine matrix dimensions overflow usize: {m} × {n}"))?;
-        checked_pow2(m, "output variable count")?;
-        checked_pow2(n, "input variable count")?;
+        checked_affine_site_dims(m, n)?;
         if a.len() != expected_a_len {
             return Err(anyhow::anyhow!(
                 "Matrix A has {} elements but expected {}×{}={}",
@@ -296,7 +343,89 @@ impl AffineParams {
                 m
             ));
         }
-        Ok(Self { a, b, m, n })
+        let params = Self { a, b, m, n };
+        params.validate()?;
+        Ok(params)
+    }
+
+    /// Return the matrix entries in column-major order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::AffineParams;
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(params.a(), &[1.into()]);
+    /// ```
+    pub fn a(&self) -> &[Rational64] {
+        &self.a
+    }
+
+    /// Return the translation vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::AffineParams;
+    /// let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
+    /// assert_eq!(params.b(), &[3.into()]);
+    /// ```
+    pub fn b(&self) -> &[Rational64] {
+        &self.b
+    }
+
+    /// Return the number of output variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::AffineParams;
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(params.m(), 1);
+    /// ```
+    pub fn m(&self) -> usize {
+        self.m
+    }
+
+    /// Return the number of input variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::AffineParams;
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(params.n(), 1);
+    /// ```
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    fn validate(&self) -> Result<()> {
+        let expected_a_len = self.m.checked_mul(self.n).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Affine matrix dimensions overflow usize: {} × {}",
+                self.m,
+                self.n
+            )
+        })?;
+        if self.a.len() != expected_a_len {
+            return Err(anyhow::anyhow!(
+                "Matrix A has {} elements but expected {}×{}={}",
+                self.a.len(),
+                self.m,
+                self.n,
+                expected_a_len
+            ));
+        }
+        if self.b.len() != self.m {
+            return Err(anyhow::anyhow!(
+                "Vector b has {} elements but expected {}",
+                self.b.len(),
+                self.m
+            ));
+        }
+        checked_affine_site_dims(self.m, self.n)?;
+        Ok(())
     }
 
     /// Create affine parameters from integer matrix and vector.
@@ -304,7 +433,9 @@ impl AffineParams {
     /// Convenience method that converts integer values to rationals.
     ///
     /// # Errors
-    /// Returns an error when `a.len() != m * n` or `b.len() != m`.
+    /// Returns an error when the matrix/vector lengths do not match the
+    /// dimensions, a dimension product overflows, or a power-of-two site
+    /// dimension cannot be represented safely.
     ///
     /// # Examples
     ///
@@ -315,8 +446,8 @@ impl AffineParams {
     /// let params = AffineParams::from_integers(
     ///     vec![1, 0, 0, 1], vec![1, 2], 2, 2,
     /// ).unwrap();
-    /// assert_eq!(params.m, 2);
-    /// assert_eq!(params.n, 2);
+    /// assert_eq!(params.m(), 2);
+    /// assert_eq!(params.n(), 2);
     /// ```
     pub fn from_integers(a: Vec<i64>, b: Vec<i64>, m: usize, n: usize) -> Result<Self> {
         let a_rat: Vec<Rational64> = a.into_iter().map(Rational64::from_integer).collect();
@@ -324,55 +455,49 @@ impl AffineParams {
         Self::new(a_rat, b_rat, m, n)
     }
 
-    /// Get element A[i, j] (0-indexed)
+    /// Get element A[i, j] (0-indexed).
     #[allow(dead_code)]
     fn get_a(&self, i: usize, j: usize) -> Rational64 {
         self.a[i + self.m * j]
     }
 
-    /// Convert to integer representation by scaling with LCM of denominators.
-    /// Returns (A_int, b_int, scale) where A_int = scale * A and b_int = scale * b.
-    fn to_integer_scaled(&self) -> (Vec<i64>, Vec<i64>, i64) {
-        // Find LCM of all denominators
-        let mut denom_lcm = 1i64;
+    /// Convert to an exact integer representation by scaling with the LCM of
+    /// all denominators.
+    fn to_integer_scaled(&self) -> (Vec<BigInt>, Vec<BigInt>, BigInt) {
+        let mut denom_lcm = BigInt::one();
         for r in &self.a {
-            denom_lcm = denom_lcm.lcm(r.denom());
+            denom_lcm = denom_lcm.lcm(&BigInt::from(*r.denom()));
         }
         for r in &self.b {
-            denom_lcm = denom_lcm.lcm(r.denom());
+            denom_lcm = denom_lcm.lcm(&BigInt::from(*r.denom()));
         }
 
-        // Scale to integers
-        let a_int: Vec<i64> = self
-            .a
-            .iter()
-            .map(|r| (r * denom_lcm).to_integer())
-            .collect();
-        let b_int: Vec<i64> = self
-            .b
-            .iter()
-            .map(|r| (r * denom_lcm).to_integer())
-            .collect();
-
+        let scale = |r: &Rational64| {
+            let numerator = BigInt::from(*r.numer());
+            let denominator = BigInt::from(*r.denom());
+            numerator * (&denom_lcm / denominator)
+        };
+        let a_int = self.a.iter().map(scale).collect();
+        let b_int = self.b.iter().map(scale).collect();
         (a_int, b_int, denom_lcm)
     }
 }
 
-fn affine_boundary_weight(carry: &[i64], bc: &[BoundaryCondition]) -> f64 {
+fn affine_boundary_weight(carry: &[BigInt], bc: &[BoundaryCondition]) -> f64 {
     carry
         .iter()
         .zip(bc.iter())
-        .map(|(&c, &boundary)| match boundary {
+        .map(|(c, &boundary)| match boundary {
             BoundaryCondition::Periodic => 1.0,
             BoundaryCondition::AntiPeriodic => {
-                if c.rem_euclid(2) == 0 {
+                if c.is_even() {
                     1.0
                 } else {
                     -1.0
                 }
             }
             BoundaryCondition::Open => {
-                if c == 0 {
+                if c.is_zero() {
                     1.0
                 } else {
                     0.0
@@ -382,8 +507,8 @@ fn affine_boundary_weight(carry: &[i64], bc: &[BoundaryCondition]) -> f64 {
         .product()
 }
 
-fn affine_needs_extension(bc: &[BoundaryCondition], b_work: &[i64]) -> bool {
-    b_work.iter().any(|&b| b > 0)
+fn affine_needs_extension(bc: &[BoundaryCondition], b_work: &[BigInt]) -> bool {
+    b_work.iter().any(|b| b > &BigInt::zero())
         && bc
             .iter()
             .any(|b| matches!(b, BoundaryCondition::AntiPeriodic | BoundaryCondition::Open))
@@ -402,6 +527,7 @@ fn checked_affine_site_dims(m: usize, n: usize) -> Result<(usize, usize, usize)>
             "affine site dimension overflows usize for {m} output variables and {n} input variables"
         )
     })?;
+    checked_allocation_len::<Complex64>(&[site_dim], "affine site tensor")?;
     Ok((input_dim, output_dim, site_dim))
 }
 
@@ -415,6 +541,7 @@ fn remap_affine_site_indices(
     let output_dim = checked_pow2(m, "output variable count")?;
 
     // Build permutation table: perm[old_idx] = remapped index
+    checked_allocation_len::<usize>(&[site_dim], "affine permutation")?;
     let perm: Vec<usize> = (0..site_dim)
         .map(|old_idx| {
             let y_bits = old_idx & (output_dim - 1);
@@ -424,6 +551,7 @@ fn remap_affine_site_indices(
         .collect();
 
     let r = mpo.len();
+    checked_allocation_len::<GenericTensor3<Complex64>>(&[r], "remapped affine tensor list")?;
     let mut new_tensors = Vec::with_capacity(r);
 
     for i in 0..r {
@@ -431,7 +559,17 @@ fn remap_affine_site_indices(
         let left_dim = tensor.left_dim();
         let right_dim = tensor.right_dim();
 
-        let mut t = tensor3_zeros(left_dim, site_dim, right_dim);
+        let total_size = checked_allocation_len::<Complex64>(
+            &[left_dim, site_dim, right_dim],
+            "remapped affine tensor",
+        )?;
+        let mut t = tensor3_from_data(
+            vec![Complex64::new(0.0, 0.0); total_size],
+            left_dim,
+            site_dim,
+            right_dim,
+        )
+        .map_err(|err| anyhow::anyhow!("Failed to allocate remapped affine tensor: {err}"))?;
         for l in 0..left_dim {
             for (old_s, &new_s) in perm.iter().enumerate() {
                 for rr in 0..right_dim {
@@ -470,7 +608,9 @@ fn remap_affine_site_indices(
 ///
 /// # Errors
 ///
-/// Returns an error if `r == 0` or if `bc.len() != params.m`.
+/// Returns an error if `params` is invalid, `r == 0`, if `bc.len() != params.m()`,
+/// or if a required dimension/allocation exceeds the supported `usize` and
+/// `isize::MAX` bounds.
 ///
 /// # Examples
 ///
@@ -506,6 +646,7 @@ pub fn affine_operator(
     params: &AffineParams,
     bc: &[BoundaryCondition],
 ) -> Result<QuanticsOperator> {
+    params.validate()?;
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
@@ -556,13 +697,14 @@ pub fn affine_operator(
 ///
 /// # Returns
 ///
-/// A [`LinearOperator`] whose node `i` has `params.n` input mappings and
-/// `params.m` output mappings, all with binary dimension.
+/// A [`LinearOperator`] whose node `i` has `params.n()` input mappings and
+/// `params.m()` output mappings, all with binary dimension.
 ///
 /// # Errors
 ///
-/// Returns an error when `r == 0`, when `bc.len() != params.m`, or when the
-/// affine tensor network cannot be constructed.
+/// Returns an error when `params` is invalid, `r == 0`, when
+/// `bc.len() != params.m()`, when a required allocation exceeds its checked
+/// byte bound, or when the affine tensor network cannot be constructed.
 ///
 /// # Examples
 ///
@@ -643,12 +785,15 @@ pub fn affine_operator_interleaved(
 /// Use for testing/verification only.
 ///
 /// # Errors
-/// Returns an error when `r == 0` or when `bc.len() != params.m`.
+/// Returns an error when `params` is invalid, `r == 0`, when
+/// `bc.len() != params.m()`, or when dense dimensions/allocation sizes cannot
+/// be represented safely.
 pub fn affine_transform_matrix(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
 ) -> Result<CsMat<f64>> {
+    params.validate()?;
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
@@ -672,15 +817,8 @@ pub fn affine_transform_matrix(
     })?;
     let input_size = checked_pow2(input_exponent, "affine input dimension exponent")?;
     let output_size = checked_pow2(output_exponent, "affine output dimension exponent")?;
-    let modulus_shift = u32::try_from(r)
-        .map_err(|_| anyhow::anyhow!("number of bits {r} exceeds signed modulus width"))?;
-    let modulus = 1i64
-        .checked_shl(modulus_shift)
-        .ok_or_else(|| anyhow::anyhow!("number of bits {r} exceeds signed modulus width"))?;
-    if r >= (i64::BITS - 1) as usize {
-        anyhow::bail!("number of bits {r} exceeds signed modulus width");
-    }
     let bit_mask = checked_pow2(r, "number of bits")? - 1;
+    let modulus = BigInt::one() << r;
 
     let mut rows = Vec::new();
     let mut cols = Vec::new();
@@ -692,41 +830,49 @@ pub fn affine_transform_matrix(
     for x_flat in 0..input_size {
         // Decode x_flat to N-dimensional x vector
         // x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
-        let x: Vec<i64> = (0..n)
-            .map(|var| ((x_flat >> (var * r)) & bit_mask) as i64)
-            .collect();
+        let mut x = Vec::with_capacity(n);
+        for var in 0..n {
+            let bit_shift = var
+                .checked_mul(r)
+                .ok_or_else(|| anyhow::anyhow!("input bit offset overflows usize"))?;
+            x.push(BigInt::from((x_flat >> bit_shift) & bit_mask));
+        }
 
-        // Compute v = A*x + b (unscaled)
-        let mut v: Vec<i64> = vec![0; m];
+        // Compute v = A*x + b (unscaled) exactly.
+        let mut v = vec![BigInt::zero(); m];
         for i in 0..m {
-            v[i] = b_int[i];
+            v[i] = b_int[i].clone();
             for j in 0..n {
-                v[i] += a_int[i + m * j] * x[j];
+                v[i] += &a_int[i + m * j] * &x[j];
             }
         }
 
         for y_flat in 0..output_size {
             // Decode y_flat to M-dimensional y vector
-            let y: Vec<i64> = (0..m)
-                .map(|var| ((y_flat >> (var * r)) & bit_mask) as i64)
-                .collect();
+            let mut y = Vec::with_capacity(m);
+            for var in 0..m {
+                let bit_shift = var
+                    .checked_mul(r)
+                    .ok_or_else(|| anyhow::anyhow!("output bit offset overflows usize"))?;
+                y.push(BigInt::from((y_flat >> bit_shift) & bit_mask));
+            }
 
-            let mut carry = vec![0i64; m];
+            let mut carry = vec![BigInt::zero(); m];
             let mut valid = true;
             for i in 0..m {
-                let diff = v[i] - scale * y[i];
+                let diff = &v[i] - &scale * &y[i];
                 match bc[i] {
                     BoundaryCondition::Periodic | BoundaryCondition::AntiPeriodic => {
-                        if diff.rem_euclid(modulus) == 0 {
-                            carry[i] = diff / modulus;
+                        if (&diff % &modulus).is_zero() {
+                            carry[i] = &diff / &modulus;
                         } else {
                             valid = false;
                             break;
                         }
                     }
                     BoundaryCondition::Open => {
-                        if diff == 0 {
-                            carry[i] = 0;
+                        if diff.is_zero() {
+                            carry[i] = BigInt::zero();
                         } else {
                             valid = false;
                             break;
@@ -763,7 +909,7 @@ fn affine_transform_mpo(
     let n = params.n;
 
     // Compute core tensors
-    let tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, bc)?;
+    let tensors = affine_transform_tensors(r, &a_int, &b_int, &scale, m, n, bc)?;
 
     TensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create affine transform MPO: {}", e))
@@ -787,8 +933,9 @@ fn affine_transform_mpo(
 /// Vector of R tensors with unfused physical indices.
 ///
 /// # Errors
-/// Returns an error when `r == 0`, when `bc.len() != params.m`, or when affine
-/// tensor construction fails.
+/// Returns an error when `params` is invalid, `r == 0`, when
+/// `bc.len() != params.m()`, when a tensor allocation exceeds the checked
+/// byte bound, or when affine tensor construction fails.
 ///
 /// # Examples
 ///
@@ -813,6 +960,7 @@ pub fn affine_transform_tensors_unfused(
     params: &AffineParams,
     bc: &[BoundaryCondition],
 ) -> Result<Vec<GenericTensor3<Complex64>>> {
+    params.validate()?;
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
@@ -830,7 +978,7 @@ pub fn affine_transform_tensors_unfused(
     let (_, _, site_dim) = checked_affine_site_dims(m, n)?;
 
     // Compute fused tensors first
-    let fused_tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, bc)?;
+    let fused_tensors = affine_transform_tensors(r, &a_int, &b_int, &scale, m, n, bc)?;
 
     // Convert fused tensors to unfused format
     // Fused: [left, fused_site, right] where fused_site = 2^(M+N)
@@ -844,6 +992,7 @@ pub fn affine_transform_tensors_unfused(
     // We preserve that semantic index order:
     // unfused[left, y0, y1, ..., yM-1, x0, x1, ..., xN-1, right]
 
+    checked_allocation_len::<GenericTensor3<Complex64>>(&[r], "unfused affine tensor list")?;
     let mut unfused_tensors = Vec::with_capacity(r);
 
     for tensor in fused_tensors.iter() {
@@ -869,41 +1018,53 @@ pub fn affine_transform_tensors_unfused(
         // Preserve the Quantics.jl physical index order
         // (y0, y1, ..., yM-1, x0, x1, ..., xN-1).
 
-        let mut unfused_data = vec![Complex64::new(0.0, 0.0); left_dim * site_dim * right_dim];
+        let total_size = checked_allocation_len::<Complex64>(
+            &[left_dim, site_dim, right_dim],
+            "unfused affine tensor",
+        )?;
+        let mut unfused_data = vec![Complex64::new(0.0, 0.0); total_size];
 
         for l in 0..left_dim {
             for fused_idx in 0..site_dim {
                 for rr in 0..right_dim {
                     let val = tensor.get3(l, fused_idx, rr);
                     if val.norm() > 0.0 {
-                        // The fused index encodes: site_idx = y_bits | (x_bits << M)
-                        // This matches Quantics.jl's ordering (y variables first, then x)
-                        // so we can use fused_idx directly.
-                        //
-                        // The caller can reshape [left, site_dim, right] to
-                        // [left, 2, 2, ..., 2, right] with M+N dimensions of size 2,
-                        // where indices are in order (y[0], y[1], ..., y[M-1], x[0], ..., x[N-1])
-                        let flat_idx = l * site_dim * right_dim + fused_idx * right_dim + rr;
+                        // Tensor3 storage is column-major: axis 0 is minor.
+                        let flat_idx = l
+                            .checked_add(
+                                left_dim
+                                    .checked_mul(
+                                        fused_idx
+                                            .checked_add(
+                                                site_dim.checked_mul(rr).ok_or_else(|| {
+                                                    anyhow::anyhow!(
+                                                        "unfused affine tensor offset overflows usize"
+                                                    )
+                                                })?,
+                                            )
+                                            .ok_or_else(|| {
+                                                anyhow::anyhow!(
+                                                    "unfused affine tensor offset overflows usize"
+                                                )
+                                            })?,
+                                    )
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "unfused affine tensor offset overflows usize"
+                                        )
+                                    })?,
+                            )
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("unfused affine tensor offset overflows usize")
+                            })?;
                         unfused_data[flat_idx] = *val;
                     }
                 }
             }
         }
 
-        // Create Tensor3 with shape [left_dim, site_dim, right_dim]
-        // The caller can reshape this to [left_dim, 2, 2, ..., 2, right_dim]
-        // with the understanding that the indices are ordered as (y0, y1, ..., x0, x1, ...)
-        let mut unfused_tensor =
-            GenericTensor3::from_elem([left_dim, site_dim, right_dim], Complex64::new(0.0, 0.0));
-        for l in 0..left_dim {
-            for s in 0..site_dim {
-                for r in 0..right_dim {
-                    unfused_tensor[[l, s, r]] =
-                        unfused_data[l * site_dim * right_dim + s * right_dim + r];
-                }
-            }
-        }
-
+        let unfused_tensor = tensor3_from_data(unfused_data, left_dim, site_dim, right_dim)
+            .map_err(|err| anyhow::anyhow!("Failed to allocate unfused affine tensor: {err}"))?;
         unfused_tensors.push(unfused_tensor);
     }
 
@@ -921,48 +1082,143 @@ pub fn affine_transform_tensors_unfused(
 /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
 ///
 /// let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
-/// let info = UnfusedTensorInfo::new(&params);
+/// let info = UnfusedTensorInfo::new(&params).unwrap();
 ///
-/// assert_eq!(info.m, 2);
-/// assert_eq!(info.n, 2);
-/// assert_eq!(info.num_physical_dims, 4);
+/// assert_eq!(info.m(), 2);
+/// assert_eq!(info.n(), 2);
+/// assert_eq!(info.num_physical_dims(), 4);
 ///
 /// // Get shape for a tensor with bond dims 3 and 5
 /// let shape = info.unfused_shape(3, 5);
 /// assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
 ///
 /// // Round-trip encode/decode
-/// let fused = info.encode_fused_index(&[1, 0], &[0, 1]);
-/// let (y_bits, x_bits) = info.decode_fused_index(fused);
+/// let fused = info.encode_fused_index(&[1, 0], &[0, 1]).unwrap();
+/// let (y_bits, x_bits) = info.decode_fused_index(fused).unwrap();
 /// assert_eq!(y_bits, vec![1, 0]);
 /// assert_eq!(x_bits, vec![0, 1]);
 /// ```
 #[derive(Clone, Debug)]
 pub struct UnfusedTensorInfo {
-    /// Number of output variables (M)
-    pub m: usize,
-    /// Number of input variables (N)
-    pub n: usize,
-    /// Total physical dimensions per site (M + N)
-    pub num_physical_dims: usize,
-    /// Dimension of each physical index (always 2)
-    pub physical_dim: usize,
+    m: usize,
+    n: usize,
+    num_physical_dims: usize,
+    physical_dim: usize,
+    site_dim: usize,
 }
 
 impl UnfusedTensorInfo {
-    /// Create info for the given affine parameters.
-    pub fn new(params: &AffineParams) -> Self {
-        Self {
+    /// Create checked metadata for the given affine parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the affine parameters are malformed, a variable
+    /// width cannot be represented by `usize`, the fused site dimension
+    /// overflows, or `M + N` cannot be represented safely.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// let info = UnfusedTensorInfo::new(&params).unwrap();
+    /// assert_eq!(info.site_dim(), 4);
+    /// ```
+    pub fn new(params: &AffineParams) -> Result<Self> {
+        let num_physical_dims = params
+            .m
+            .checked_add(params.n)
+            .ok_or_else(|| anyhow::anyhow!("unfused physical dimension count overflows usize"))?;
+        params.validate()?;
+        let (_, _, site_dim) = checked_affine_site_dims(params.m, params.n)?;
+        num_physical_dims
+            .checked_add(2)
+            .ok_or_else(|| anyhow::anyhow!("unfused shape rank overflows usize"))?;
+        Ok(Self {
             m: params.m,
             n: params.n,
-            num_physical_dims: params.m + params.n,
+            num_physical_dims,
             physical_dim: 2,
-        }
+            site_dim,
+        })
+    }
+
+    /// Return the number of output variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(UnfusedTensorInfo::new(&params).unwrap().m(), 1);
+    /// ```
+    pub fn m(&self) -> usize {
+        self.m
+    }
+
+    /// Return the number of input variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(UnfusedTensorInfo::new(&params).unwrap().n(), 1);
+    /// ```
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Return the total number of binary physical dimensions per site.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(UnfusedTensorInfo::new(&params).unwrap().num_physical_dims(), 2);
+    /// ```
+    pub fn num_physical_dims(&self) -> usize {
+        self.num_physical_dims
+    }
+
+    /// Return the dimension of each unfused physical index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(UnfusedTensorInfo::new(&params).unwrap().physical_dim(), 2);
+    /// ```
+    pub fn physical_dim(&self) -> usize {
+        self.physical_dim
+    }
+
+    /// Return the fused site dimension.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// assert_eq!(UnfusedTensorInfo::new(&params).unwrap().site_dim(), 4);
+    /// ```
+    pub fn site_dim(&self) -> usize {
+        self.site_dim
     }
 
     /// Get the shape for a fully unfused tensor at a given site.
     ///
     /// Returns `[left_bond, 2, 2, ..., 2, right_bond]` where there are M+N 2s.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// let info = UnfusedTensorInfo::new(&params).unwrap();
+    /// assert_eq!(info.unfused_shape(2, 3), vec![2, 2, 2, 3]);
+    /// ```
     pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Vec<usize> {
         let mut shape = Vec::with_capacity(2 + self.num_physical_dims);
         shape.push(left_bond);
@@ -973,28 +1229,100 @@ impl UnfusedTensorInfo {
 
     /// Decode a fused site index to individual variable bits.
     ///
-    /// Returns `(y_bits, x_bits)` where:
-    /// - `y_bits[i]` is the bit for output variable i
-    /// - `x_bits[j]` is the bit for input variable j
-    pub fn decode_fused_index(&self, fused_idx: usize) -> (Vec<usize>, Vec<usize>) {
-        let y_combined = fused_idx & ((1 << self.m) - 1);
+    /// # Errors
+    /// Returns an error when `fused_idx` is outside the checked fused site
+    /// dimension.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// let info = UnfusedTensorInfo::new(&params).unwrap();
+    /// assert_eq!(info.decode_fused_index(3).unwrap(), (vec![1], vec![1]));
+    /// ```
+    pub fn decode_fused_index(&self, fused_idx: usize) -> Result<(Vec<usize>, Vec<usize>)> {
+        if fused_idx >= self.site_dim {
+            return Err(anyhow::anyhow!(
+                "fused index {fused_idx} is outside site dimension {}",
+                self.site_dim
+            ));
+        }
+        let output_dim = checked_pow2(self.m, "output variable count")?;
+        let y_combined = fused_idx & (output_dim - 1);
         let x_combined = fused_idx >> self.m;
 
         let y_bits: Vec<usize> = (0..self.m).map(|i| (y_combined >> i) & 1).collect();
         let x_bits: Vec<usize> = (0..self.n).map(|j| (x_combined >> j) & 1).collect();
 
-        (y_bits, x_bits)
+        Ok((y_bits, x_bits))
     }
 
     /// Encode individual variable bits to a fused site index.
     ///
     /// # Arguments
-    /// * `y_bits` - Bits for output variables (length M)
-    /// * `x_bits` - Bits for input variables (length N)
-    pub fn encode_fused_index(&self, y_bits: &[usize], x_bits: &[usize]) -> usize {
-        let y_combined: usize = y_bits.iter().enumerate().map(|(i, &b)| b << i).sum();
-        let x_combined: usize = x_bits.iter().enumerate().map(|(j, &b)| b << j).sum();
-        y_combined | (x_combined << self.m)
+    /// * `y_bits` - Bits for output variables (length M), each either 0 or 1.
+    /// * `x_bits` - Bits for input variables (length N), each either 0 or 1.
+    ///
+    /// # Errors
+    /// Returns an error when either slice has the wrong length, contains a
+    /// value other than 0 or 1, or the encoded index cannot be represented.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+    /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    /// let info = UnfusedTensorInfo::new(&params).unwrap();
+    /// assert_eq!(info.encode_fused_index(&[1], &[1]).unwrap(), 3);
+    /// assert!(info.encode_fused_index(&[2], &[0]).is_err());
+    /// ```
+    pub fn encode_fused_index(&self, y_bits: &[usize], x_bits: &[usize]) -> Result<usize> {
+        if y_bits.len() != self.m || x_bits.len() != self.n {
+            return Err(anyhow::anyhow!(
+                "fused index bit lengths must be {} output and {} input bits",
+                self.m,
+                self.n
+            ));
+        }
+
+        let mut y_combined = 0usize;
+        for (i, &bit) in y_bits.iter().enumerate() {
+            if bit > 1 {
+                return Err(anyhow::anyhow!("output bit {i} must be 0 or 1, got {bit}"));
+            }
+            let shift = u32::try_from(i)
+                .map_err(|_| anyhow::anyhow!("output bit shift {i} exceeds u32"))?;
+            y_combined |= bit
+                .checked_shl(shift)
+                .ok_or_else(|| anyhow::anyhow!("output bit shift {i} overflows usize"))?;
+        }
+
+        let mut x_combined = 0usize;
+        for (j, &bit) in x_bits.iter().enumerate() {
+            if bit > 1 {
+                return Err(anyhow::anyhow!("input bit {j} must be 0 or 1, got {bit}"));
+            }
+            let shift =
+                u32::try_from(j).map_err(|_| anyhow::anyhow!("input bit shift {j} exceeds u32"))?;
+            x_combined |= bit
+                .checked_shl(shift)
+                .ok_or_else(|| anyhow::anyhow!("input bit shift {j} overflows usize"))?;
+        }
+
+        let shift = u32::try_from(self.m)
+            .map_err(|_| anyhow::anyhow!("output variable count exceeds u32 shift width"))?;
+        let encoded = x_combined
+            .checked_shl(shift)
+            .map(|x| x | y_combined)
+            .ok_or_else(|| anyhow::anyhow!("fused index overflows usize"))?;
+        if encoded >= self.site_dim {
+            return Err(anyhow::anyhow!(
+                "encoded fused index {encoded} is outside site dimension {}",
+                self.site_dim
+            ));
+        }
+        Ok(encoded)
     }
 }
 
@@ -1015,30 +1343,40 @@ impl UnfusedTensorInfo {
 /// - Middle sites: shape (num_carries, site_dim, num_carries)
 fn affine_transform_tensors(
     r: usize,
-    a_int: &[i64],
-    b_int: &[i64],
-    scale: i64,
+    a_int: &[BigInt],
+    b_int: &[BigInt],
+    scale: &BigInt,
     m: usize,
     n: usize,
     bc: &[BoundaryCondition],
 ) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
     let (_, _, site_dim) = checked_affine_site_dims(m, n)?;
 
-    // Track sign separately and work with absolute value
-    // so that right-shifting always terminates (Julia PR #45 approach)
-    let bsign: Vec<i64> = b_int.iter().map(|&b| if b >= 0 { 1 } else { -1 }).collect();
-    let mut b_work: Vec<i64> = b_int.iter().map(|&b| b.abs()).collect();
+    // Track sign separately and work with absolute value so that right-shifting
+    // always terminates. BigInt keeps all coefficient arithmetic exact.
+    let bsign: Vec<i8> = b_int
+        .iter()
+        .map(|b| if b.is_negative() { -1 } else { 1 })
+        .collect();
+    let mut b_work: Vec<BigInt> = b_int.iter().map(|b| b.abs()).collect();
 
     // Process from LSB (site R-1) to MSB (site 0)
-    let mut carries: Vec<Vec<i64>> = vec![vec![0i64; m]];
+    let mut carries: Vec<Vec<BigInt>> = vec![vec![BigInt::zero(); m]];
+    checked_allocation_len::<AffineCoreData>(&[r], "affine core list")?;
     let mut core_data_list: Vec<AffineCoreData> = Vec::with_capacity(r);
 
     for _site in (0..r).rev() {
         // Extract current bit: (b_work & 1) * bsign
-        let b_curr: Vec<i64> = b_work
+        let b_curr: Vec<BigInt> = b_work
             .iter()
             .zip(bsign.iter())
-            .map(|(&b, &s)| (b & 1) * s)
+            .map(|(b, &s)| {
+                if (b % 2u8).is_zero() {
+                    BigInt::zero()
+                } else {
+                    BigInt::from(s)
+                }
+            })
             .collect();
 
         let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, true)?;
@@ -1057,11 +1395,17 @@ fn affine_transform_tensors(
     // We fold them into the MSB tensor as a "cap matrix" (Julia approach).
     let cap_matrix: Option<Vec<f64>> = if affine_needs_extension(bc, &b_work) {
         let mut ext_data_list: Vec<AffineCoreData> = Vec::new();
-        while b_work.iter().any(|&b| b > 0) {
-            let b_curr: Vec<i64> = b_work
+        while b_work.iter().any(|b| b > &BigInt::zero()) {
+            let b_curr: Vec<BigInt> = b_work
                 .iter()
                 .zip(bsign.iter())
-                .map(|(&b, &s)| (b & 1) * s)
+                .map(|(b, &s)| {
+                    if (b % 2u8).is_zero() {
+                        BigInt::zero()
+                    } else {
+                        BigInt::from(s)
+                    }
+                })
                 .collect();
 
             let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, false)?;
@@ -1108,6 +1452,10 @@ fn affine_transform_tensors(
     };
 
     // Build tensors in the same order, then reverse to get [site 0, site 1, ..., site R-1]
+    checked_allocation_len::<tensor4all_simplett::Tensor3<Complex64>>(
+        &[r],
+        "affine MPO tensor list",
+    )?;
     let mut tensors = Vec::with_capacity(r);
 
     // Helper: compute BC weight for a carry-out index
@@ -1139,8 +1487,17 @@ fn affine_transform_tensors(
         let left_dim = if is_msb { 1 } else { num_carry_out };
         let right_dim = if is_lsb { 1 } else { num_carry_in };
 
-        let mut t: tensor4all_simplett::Tensor3<Complex64> =
-            tensor3_zeros(left_dim, site_dim, right_dim);
+        let total_size = checked_allocation_len::<Complex64>(
+            &[left_dim, site_dim, right_dim],
+            "affine MPO tensor",
+        )?;
+        let mut t: tensor4all_simplett::Tensor3<Complex64> = tensor3_from_data(
+            vec![Complex64::new(0.0, 0.0); total_size],
+            left_dim,
+            site_dim,
+            right_dim,
+        )
+        .map_err(|err| anyhow::anyhow!("Failed to allocate affine MPO tensor: {err}"))?;
 
         if is_lsb && is_msb {
             // R==1: single site case
@@ -1209,7 +1566,7 @@ fn affine_transform_tensors(
 /// where site_dim = 2^(M+N)
 struct AffineCoreData {
     /// Possible outgoing carry vectors
-    carries_out: Vec<Vec<i64>>,
+    carries_out: Vec<Vec<BigInt>>,
     /// Tensor data: tensor[carry_out_idx, carry_in_idx, site_idx]
     tensor: BoolTensor3,
 }
@@ -1222,15 +1579,15 @@ struct AffineCoreData {
 /// - carries_out: list of possible outgoing carry vectors
 /// - tensor: shape (num_carry_out, num_carry_in, site_dim)
 fn affine_transform_core(
-    a_int: &[i64],
-    b_curr: &[i64],
-    scale: i64,
+    a_int: &[BigInt],
+    b_curr: &[BigInt],
+    scale: &BigInt,
     m: usize,
     n: usize,
-    carries_in: &[Vec<i64>],
+    carries_in: &[Vec<BigInt>],
     activebit: bool,
 ) -> Result<AffineCoreData> {
-    let mut carry_out_map: HashMap<Vec<i64>, BoolTensor2> = HashMap::new();
+    let mut carry_out_map: HashMap<Vec<BigInt>, BoolTensor2> = HashMap::new();
     let x_range = if activebit {
         checked_pow2(n, "input variable count")?
     } else {
@@ -1247,73 +1604,96 @@ fn affine_transform_core(
         )
     })?;
     let num_carry_in = carries_in.len();
+    let variable_shift = u32::try_from(m)
+        .map_err(|_| anyhow::anyhow!("output variable count exceeds u32 shift width"))?;
 
-    // Iterate over all input carries
+    // Iterate over all input carries.
     for (c_idx, carry_in) in carries_in.iter().enumerate() {
-        // Iterate over all possible x values (N bits)
+        // Iterate over all possible x values (N bits).
         for x_bits in 0..x_range {
-            let x: Vec<i64> = (0..n).map(|j| ((x_bits >> j) & 1) as i64).collect();
+            let x: Vec<BigInt> = (0..n).map(|j| BigInt::from((x_bits >> j) & 1)).collect();
 
-            // Compute z = A*x + b + carry_in
-            let mut z: Vec<i64> = vec![0; m];
+            // Compute z = A*x + b + carry_in exactly.
+            let mut z = vec![BigInt::zero(); m];
             for i in 0..m {
-                z[i] = carry_in[i] + b_curr[i];
+                z[i] = &carry_in[i] + &b_curr[i];
                 for j in 0..n {
-                    z[i] += a_int[i + m * j] * x[j];
+                    z[i] += &a_int[i + m * j] * &x[j];
                 }
             }
 
-            if scale % 2 == 1 {
-                // Scale is odd: unique y that satisfies condition
-                let y: Vec<i64> = z.iter().map(|&zi| zi & 1).collect();
-
-                // When bits are inactive, y must be zero (Julia PR #45 fix)
-                if !activebit && y.iter().any(|&yi| yi != 0) {
-                    continue;
-                }
-
-                let y_bits: usize = y
+            if scale.is_odd() {
+                // Scale is odd: unique y that satisfies the condition.
+                let y: Vec<BigInt> = z
                     .iter()
-                    .enumerate()
-                    .map(|(i, &yi)| (yi as usize) << i)
-                    .sum();
-
-                // Compute carry_out = (z - scale * y) / 2
-                let carry_out: Vec<i64> = z
-                    .iter()
-                    .zip(y.iter())
-                    .map(|(&zi, &yi)| (zi - scale * yi) >> 1)
+                    .map(|zi| {
+                        if zi.is_odd() {
+                            BigInt::one()
+                        } else {
+                            BigInt::zero()
+                        }
+                    })
                     .collect();
 
-                // Site index: y bits in lower positions, x bits in upper positions
-                let site_idx = y_bits | (x_bits << m);
-
-                let entry = carry_out_map
-                    .entry(carry_out)
-                    .or_insert_with(|| BoolTensor2::from_elem([num_carry_in, site_dim], false));
-                entry.set([c_idx, site_idx], true);
-            } else {
-                // Scale is even: z must be even for valid y
-                if z.iter().any(|&zi| zi % 2 != 0) {
+                // When bits are inactive, y must be zero (Julia PR #45 fix).
+                if !activebit && y.iter().any(|yi| !yi.is_zero()) {
                     continue;
                 }
 
-                // y can be any value
-                for y_bits in 0..y_range {
-                    let y: Vec<i64> = (0..m).map(|i| ((y_bits >> i) & 1) as i64).collect();
+                let mut y_bits = 0usize;
+                for (i, yi) in y.iter().enumerate() {
+                    if yi.is_one() {
+                        let shift = u32::try_from(i)
+                            .map_err(|_| anyhow::anyhow!("output bit shift exceeds u32"))?;
+                        y_bits |= 1usize
+                            .checked_shl(shift)
+                            .ok_or_else(|| anyhow::anyhow!("output bit shift overflows usize"))?;
+                    }
+                }
 
-                    // Compute carry_out = (z - scale * y) / 2
-                    let carry_out: Vec<i64> = z
+                let carry_out: Vec<BigInt> = z
+                    .iter()
+                    .zip(y.iter())
+                    .map(|(zi, yi)| (zi - scale * yi) >> 1usize)
+                    .collect();
+                let shifted_x = x_bits
+                    .checked_shl(variable_shift)
+                    .ok_or_else(|| anyhow::anyhow!("affine site index overflows usize"))?;
+                let site_idx = y_bits | shifted_x;
+
+                let entry = match carry_out_map.entry(carry_out) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        entry.insert(BoolTensor2::from_elem([num_carry_in, site_dim], false)?)
+                    }
+                };
+                entry.set([c_idx, site_idx], true);
+            } else {
+                // Scale is even: z must be even for a valid y.
+                if z.iter().any(|zi| zi.is_odd()) {
+                    continue;
+                }
+
+                // y can be any value.
+                for y_bits in 0..y_range {
+                    let y: Vec<BigInt> = (0..m).map(|i| BigInt::from((y_bits >> i) & 1)).collect();
+
+                    let carry_out: Vec<BigInt> = z
                         .iter()
                         .zip(y.iter())
-                        .map(|(&zi, &yi)| (zi - scale * yi) >> 1)
+                        .map(|(zi, yi)| (zi - scale * yi) >> 1usize)
                         .collect();
+                    let shifted_x = x_bits
+                        .checked_shl(variable_shift)
+                        .ok_or_else(|| anyhow::anyhow!("affine site index overflows usize"))?;
+                    let site_idx = y_bits | shifted_x;
 
-                    let site_idx = y_bits | (x_bits << m);
-
-                    let entry = carry_out_map
-                        .entry(carry_out)
-                        .or_insert_with(|| BoolTensor2::from_elem([num_carry_in, site_dim], false));
+                    let entry = match carry_out_map.entry(carry_out) {
+                        Entry::Occupied(entry) => entry.into_mut(),
+                        Entry::Vacant(entry) => {
+                            entry.insert(BoolTensor2::from_elem([num_carry_in, site_dim], false)?)
+                        }
+                    };
                     entry.set([c_idx, site_idx], true);
                 }
             }
@@ -1321,13 +1701,13 @@ fn affine_transform_core(
     }
 
     // Convert to sorted vectors for deterministic ordering
-    let mut carries_out: Vec<Vec<i64>> = carry_out_map.keys().cloned().collect();
+    let mut carries_out: Vec<Vec<BigInt>> = carry_out_map.keys().cloned().collect();
     carries_out.sort();
 
     let num_carry_out = carries_out.len();
 
     // Build 3D tensor: (num_carry_out, num_carry_in, site_dim)
-    let mut tensor = BoolTensor3::from_elem([num_carry_out, num_carry_in, site_dim], false);
+    let mut tensor = BoolTensor3::from_elem([num_carry_out, num_carry_in, site_dim], false)?;
     for (cout_idx, carry) in carries_out.iter().enumerate() {
         let data_2d = &carry_out_map[carry];
         for cin_idx in 0..num_carry_in {

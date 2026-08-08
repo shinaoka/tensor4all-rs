@@ -23,3 +23,10 @@ fn test_identity_mpo() {
         assert_eq!(t.right_dim(), 1);
     }
 }
+
+#[test]
+fn checked_allocation_len_rejects_complex_byte_limit_before_allocation() {
+    let elements = isize::MAX as usize / std::mem::size_of::<Complex64>() + 1;
+    let error = checked_allocation_len::<Complex64>(&[elements], "complex tensor").unwrap_err();
+    assert!(error.to_string().contains("byte length"));
+}

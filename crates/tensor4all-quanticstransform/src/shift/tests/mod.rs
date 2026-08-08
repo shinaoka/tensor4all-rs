@@ -105,6 +105,13 @@ fn multivar_dims_reject_squared_site_dimension_overflow() {
 }
 
 #[test]
+fn multivar_dims_reject_site_byte_limit_before_tensor_allocation() {
+    let nvariables = usize::BITS as usize / 2 - 1;
+    let error = checked_multivar_dims(nvariables).unwrap_err();
+    assert!(error.to_string().contains("byte length"));
+}
+
+#[test]
 fn sibling_multivar_operators_reject_usize_shift_width() {
     let nvariables = usize::BITS as usize;
 
@@ -114,4 +121,13 @@ fn sibling_multivar_operators_reject_usize_shift_width() {
 
     let phase_error = phase_rotation_operator_multivar(1, 0.0, nvariables, 0).unwrap_err();
     assert!(phase_error.to_string().contains("nvariables"));
+}
+
+#[test]
+fn multivar_rejects_fewer_than_two_variables_and_invalid_target() {
+    let error = shift_operator_multivar(1, 0, BoundaryCondition::Periodic, 1, 0).unwrap_err();
+    assert!(error.to_string().contains("at least 2"));
+
+    let error = shift_operator_multivar(1, 0, BoundaryCondition::Periodic, 2, 2).unwrap_err();
+    assert!(error.to_string().contains("target_var"));
 }

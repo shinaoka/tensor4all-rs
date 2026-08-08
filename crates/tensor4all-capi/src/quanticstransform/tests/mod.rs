@@ -344,6 +344,79 @@ fn test_affine_fused_materialization_matches_rust_reference() {
 }
 
 #[test]
+fn test_affine_fused_materialization_handles_i64_extreme_coefficients() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let a_num = [i64::MIN];
+    let a_den = [1i64];
+    let b_num = [i64::MIN];
+    let b_den = [1i64];
+    let bc = [t4a_boundary_condition::Periodic];
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            layout,
+            a_num.as_ptr(),
+            a_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op,
+        ),
+        T4A_SUCCESS
+    );
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    for x in 0..4usize {
+        let y = ((i64::MIN as i128) * (x as i128) + i64::MIN as i128).rem_euclid(4) as usize;
+        assert_eq!(actual[y + 4 * x], Complex64::new(1.0, 0.0));
+    }
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_fused_allocation_checks_f64_and_c64_byte_boundaries() {
+    let f64_elements = isize::MAX as usize / std::mem::size_of::<f64>() + 1;
+    let c64_elements = isize::MAX as usize / std::mem::size_of::<Complex64>() + 1;
+    let f64_error = checked_allocation_len::<f64>(&[f64_elements], "f64 site").unwrap_err();
+    let c64_error = checked_allocation_len::<Complex64>(&[c64_elements], "c64 site").unwrap_err();
+    assert_eq!(f64_error.0, T4A_INVALID_ARGUMENT);
+    assert_eq!(c64_error.0, T4A_INVALID_ARGUMENT);
+    assert!(f64_error.1.contains("byte length"));
+    assert!(c64_error.1.contains("byte length"));
+}
+
+#[test]
+fn test_affine_rational_parts_handle_i64_extremes_without_panic() {
+    let value = rational_from_i64_parts("a", 0, i64::MIN, 1).unwrap();
+    assert_eq!(value, Rational64::from_integer(i64::MIN));
+
+    let error = rational_from_i64_parts("a", 0, i64::MIN, -1).unwrap_err();
+    assert!(error.1.contains("not representable"));
+}
+
+#[test]
+fn test_fused_multivar_site_dimension_errors_are_reported() {
+    let resolutions = vec![1usize; usize::BITS as usize / 2];
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &resolutions);
+    let mut op = std::ptr::null_mut();
+
+    assert_eq!(
+        t4a_qtransform_shift_materialize(layout, 0, 0, t4a_boundary_condition::Periodic, &mut op,),
+        T4A_INVALID_ARGUMENT
+    );
+    let error = last_error();
+    assert!(
+        error.contains("site") || error.contains("byte") || error.contains("allocation"),
+        "unexpected diagnostic: {error}"
+    );
+    assert!(op.is_null());
+
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
 fn test_layout_and_affine_validation_errors_are_reported() {
     let mut layout = std::ptr::null_mut();
     assert_eq!(
@@ -351,6 +424,17 @@ fn test_layout_and_affine_validation_errors_are_reported() {
         T4A_INVALID_ARGUMENT
     );
     assert!(last_error().contains("nvariables must be greater than zero"));
+
+    assert_eq!(
+        t4a_qtt_layout_new(
+            t4a_qtt_layout_kind::Fused,
+            usize::MAX,
+            std::ptr::NonNull::<usize>::dangling().as_ptr(),
+            &mut layout,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("byte length"));
 
     let resolutions = [2usize];
     assert_eq!(
@@ -423,6 +507,38 @@ fn test_layout_and_affine_validation_errors_are_reported() {
         T4A_INVALID_ARGUMENT
     );
     assert!(last_error().contains("zero denominator"));
+
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            fused,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            usize::MAX,
+            2,
+            std::ptr::null(),
+            &mut op,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("element count") || last_error().contains("dimension"));
+
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            fused,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op,
+        ),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("a numerator/denominator array is null"));
 
     t4a_qtt_layout_release(interleaved);
     t4a_qtt_layout_release(fused);

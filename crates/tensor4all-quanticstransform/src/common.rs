@@ -1,13 +1,16 @@
 //! Common types and helper functions for quantics transformations.
 
 use std::collections::HashMap;
+use std::mem::size_of;
 
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::TensorDynLen;
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{
+    tensor3_from_data, types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
+};
 use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
 
 /// Type alias for the default index type.
@@ -101,6 +104,19 @@ pub fn tensortrain_to_linear_operator(
     if n == 0 {
         return Err(anyhow::anyhow!("Empty tensor train"));
     }
+    if site_dims.len() != n {
+        return Err(anyhow::anyhow!("Dimension array must have length {n}"));
+    }
+    let bond_capacity = n
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("tensor-train bond count overflows usize"))?;
+    checked_allocation_len::<DynIndex>(&[n], "operator site indices")?;
+    checked_allocation_len::<DynIndex>(&[bond_capacity], "operator bond indices")?;
+    checked_allocation_len::<TensorDynLen>(&[n], "operator tensor list")?;
+    checked_allocation_len::<usize>(&[n], "operator node-name list")?;
+    for (site, &dim) in site_dims.iter().enumerate() {
+        checked_allocation_len::<Complex64>(&[dim, dim], &format!("site {site}"))?;
+    }
 
     // Create site indices for input and output
     let mut site_in_indices: Vec<DynIndex> = Vec::with_capacity(n);
@@ -118,7 +134,7 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
+    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(bond_capacity);
 
     for i in 0..=n {
         let dim = if i == 0 {
@@ -140,7 +156,9 @@ pub fn tensortrain_to_linear_operator(
         let right_dim = tensor.right_dim();
 
         // Expected site_dim is product of input and output dimensions
-        let expected_site_dim = site_dims[i] * site_dims[i];
+        let expected_site_dim = site_dims[i]
+            .checked_mul(site_dims[i])
+            .ok_or_else(|| anyhow::anyhow!("site {i} dimension product overflows usize"))?;
         if site_dim != expected_site_dim {
             return Err(anyhow::anyhow!(
                 "Site {} has dimension {} but expected {} ({}x{})",
@@ -174,7 +192,7 @@ pub fn tensortrain_to_linear_operator(
 
         // Reshape tensor data: (left, site_out*site_in, right) -> (left, site_out, site_in, right)
         // or appropriate variant for boundary tensors
-        let total_size: usize = dims_vec.iter().product();
+        let total_size = checked_allocation_len::<Complex64>(&dims_vec, &format!("site {i}"))?;
         let mut data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); total_size];
 
         // Map from TT format to TreeTN format
@@ -281,6 +299,19 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     if input_dims.len() != n || output_dims.len() != n {
         return Err(anyhow::anyhow!("Dimension arrays must have length {}", n));
     }
+    let bond_capacity = n
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("tensor-train bond count overflows usize"))?;
+    checked_allocation_len::<DynIndex>(&[n], "operator site indices")?;
+    checked_allocation_len::<DynIndex>(&[bond_capacity], "operator bond indices")?;
+    checked_allocation_len::<TensorDynLen>(&[n], "operator tensor list")?;
+    checked_allocation_len::<usize>(&[n], "operator node-name list")?;
+    for i in 0..n {
+        checked_allocation_len::<Complex64>(
+            &[output_dims[i], input_dims[i]],
+            &format!("site {i}"),
+        )?;
+    }
 
     // Create site indices for input and output
     let mut site_in_indices: Vec<DynIndex> = Vec::with_capacity(n);
@@ -298,7 +329,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
+    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(bond_capacity);
 
     for i in 0..=n {
         let dim = if i == 0 {
@@ -323,7 +354,9 @@ pub fn tensortrain_to_linear_operator_asymmetric(
         let out_dim = output_dims[i];
 
         // Expected site_dim is product of input and output dimensions
-        let expected_site_dim = in_dim * out_dim;
+        let expected_site_dim = in_dim
+            .checked_mul(out_dim)
+            .ok_or_else(|| anyhow::anyhow!("site {i} dimension product overflows usize"))?;
         if site_dim != expected_site_dim {
             return Err(anyhow::anyhow!(
                 "Site {} has dimension {} but expected {} ({}x{})",
@@ -353,7 +386,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
         }
 
         // Reshape tensor data: (left, site_out*site_in, right) -> (left, site_out, site_in, right)
-        let total_size: usize = dims_vec.iter().product();
+        let total_size = checked_allocation_len::<Complex64>(&dims_vec, &format!("site {i}"))?;
         let mut data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); total_size];
 
         // Map from TT format to TreeTN format
@@ -444,6 +477,26 @@ pub(crate) fn checked_pow2(width: usize, name: &str) -> Result<usize> {
         .ok_or_else(|| anyhow::anyhow!("{name} {width} exceeds usize shift width"))
 }
 
+pub(crate) fn checked_allocation_len<T>(dims: &[usize], name: &str) -> Result<usize> {
+    let elements = dims.iter().try_fold(1usize, |product, &dim| {
+        product.checked_mul(dim).ok_or_else(|| {
+            anyhow::anyhow!("{name} element count overflows usize for dimensions {dims:?}")
+        })
+    })?;
+    let element_size = size_of::<T>();
+    if element_size != 0 {
+        let bytes = elements.checked_mul(element_size).ok_or_else(|| {
+            anyhow::anyhow!("{name} byte length overflows usize for dimensions {dims:?}")
+        })?;
+        if bytes > isize::MAX as usize {
+            return Err(anyhow::anyhow!(
+                "{name} byte length exceeds isize::MAX for dimensions {dims:?}"
+            ));
+        }
+    }
+    Ok(elements)
+}
+
 pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)> {
     if nvariables < 2 {
         anyhow::bail!("nvariables must be at least 2, got {nvariables}");
@@ -453,6 +506,7 @@ pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)>
     let site_dim = local_dim.checked_mul(local_dim).ok_or_else(|| {
         anyhow::anyhow!("multi-variable site dimension overflows usize for nvariables {nvariables}")
     })?;
+    checked_allocation_len::<Complex64>(&[site_dim], "multi-variable site tensor")?;
     Ok((local_dim, site_dim))
 }
 
@@ -484,6 +538,10 @@ pub(crate) fn embed_single_var_mpo(
     }
     let (dim_multi, site_dim_new) = checked_multivar_dims(nvariables)?;
     let r = mpo.len();
+    checked_allocation_len::<tensor4all_simplett::Tensor3<Complex64>>(
+        &[r],
+        "embedded MPO tensor list",
+    )?;
 
     let mut new_tensors = Vec::with_capacity(r);
 
@@ -498,7 +556,17 @@ pub(crate) fn embed_single_var_mpo(
             "Input MPO must have site_dim=4 (single variable)"
         );
 
-        let mut t = tensor3_zeros(left_dim, site_dim_new, right_dim);
+        let total_size = checked_allocation_len::<Complex64>(
+            &[left_dim, site_dim_new, right_dim],
+            "embedded MPO tensor",
+        )?;
+        let mut t = tensor3_from_data(
+            vec![Complex64::new(0.0, 0.0); total_size],
+            left_dim,
+            site_dim_new,
+            right_dim,
+        )
+        .map_err(|err| anyhow::anyhow!("Failed to allocate embedded MPO tensor: {err}"))?;
 
         for s_out_multi in 0..dim_multi {
             for s_in_multi in 0..dim_multi {

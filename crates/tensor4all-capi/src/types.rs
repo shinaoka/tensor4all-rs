@@ -650,7 +650,9 @@ impl InternalQttLayout {
                         "interleaved layouts require all variable_resolutions to match".to_string(),
                     );
                 }
-                first * variable_resolutions.len()
+                first
+                    .checked_mul(variable_resolutions.len())
+                    .ok_or_else(|| "interleaved layout site count overflows usize".to_string())?
             }
             t4a_qtt_layout_kind::Fused => {
                 if !all_equal {
