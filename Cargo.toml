@@ -29,8 +29,26 @@ authors = ["tensor4all collaboration"]
 license = "MIT"
 repository = "https://github.com/tensor4all/tensor4all-rs"
 
+# Keep default profiles free of full debug info (shared rule: build-artifact
+# hygiene). Line tables preserve readable RUST_BACKTRACE file:line output.
+# For full debugger info, build with --profile release-debug, or override one
+# command with CARGO_PROFILE_DEV_DEBUG=2 / CARGO_PROFILE_TEST_DEBUG=2.
+[profile.dev]
+debug = 0
+debug-assertions = true
+overflow-checks = true
+
+[profile.test]
+debug = 0
+debug-assertions = true
+overflow-checks = true
+
 [profile.release]
-debug = true  # Include debug info in release builds (enables detailed RUST_BACKTRACE)
+debug = "line-tables-only"
+
+[profile.release-debug]
+inherits = "release"
+debug = true
 
 [workspace.dependencies]
 num-complex = "0.4"
