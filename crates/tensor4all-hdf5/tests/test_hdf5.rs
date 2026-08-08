@@ -13,6 +13,30 @@ fn temp_path(name: &str) -> String {
         .to_string()
 }
 
+fn itensor_error(name: &str, mutate: impl FnOnce(&hdf5_metno::Group)) -> String {
+    let path = temp_path(name);
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    mutate(&file.group("tensor").unwrap());
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    std::fs::remove_file(path).ok();
+    error
+}
+
+fn mps_error(name: &str, mutate: impl FnOnce(&hdf5_metno::Group)) -> String {
+    let path = temp_path(name);
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    mutate(&file.group("mps").unwrap());
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    std::fs::remove_file(path).ok();
+    error
+}
+
 /// Create a simple 2x3 f64 tensor with known data.
 fn make_test_tensor_f64() -> TensorDynLen {
     let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap()).set_plev(1);
@@ -245,6 +269,76 @@ fn index_set_length_exceeding_child_groups_is_rejected() {
     std::fs::remove_file(path).ok();
 }
 
+#[test]
+fn index_set_excess_child_group_is_rejected() {
+    let error = itensor_error("index_set_excess_child_group", |tensor| {
+        tensor
+            .group("inds")
+            .unwrap()
+            .create_group("index_3")
+            .unwrap();
+    });
+    assert!(error.contains("index_3"));
+    assert!(error.contains("declared range"), "{error}");
+}
+
+#[test]
+fn index_set_misleading_prefix_child_is_rejected() {
+    let error = itensor_error("index_set_misleading_prefix", |tensor| {
+        tensor
+            .group("inds")
+            .unwrap()
+            .create_group("index_stale")
+            .unwrap();
+    });
+    assert!(error.contains("index_stale"));
+}
+
+#[test]
+fn index_set_expected_dataset_is_rejected() {
+    let error = itensor_error("index_set_expected_dataset", |tensor| {
+        let inds = tensor.group("inds").unwrap();
+        inds.unlink("index_1").unwrap();
+        inds.new_dataset::<i64>()
+            .shape(())
+            .create("index_1")
+            .unwrap();
+    });
+    assert!(error.contains("index_1"));
+}
+
+#[test]
+fn index_set_expected_soft_link_is_rejected() {
+    let path = temp_path("index_set_expected_soft_link");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let tensor = file.group("tensor").unwrap();
+    let inds = tensor.group("inds").unwrap();
+    tensor.link_hard("inds/index_1", "target_index").unwrap();
+    inds.unlink("index_1").unwrap();
+    inds.link_soft("/tensor/target_index", "index_1").unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("index_1"), "{error}");
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn index_set_zero_length_with_children_is_rejected() {
+    let error = itensor_error("index_set_zero_length_with_children", |tensor| {
+        tensor
+            .group("inds")
+            .unwrap()
+            .dataset("length")
+            .unwrap()
+            .as_writer()
+            .write_scalar(&0_i64)
+            .unwrap();
+    });
+    assert!(error.contains("index_1") || error.contains("length"));
+}
+
 /// Create a simple 3-site MPS for testing.
 fn make_test_mps() -> TensorTrain {
     // Site 0: (1, d0=2, chi01=3) → indices: [link_left_dummy, site0, link01]
@@ -343,19 +437,154 @@ fn mps_length_exceeding_child_groups_is_rejected() {
     let path = temp_path("mps_length_exceeds_groups");
     save_mps(&path, "mps", &make_test_mps()).unwrap();
     let file = File::open_rw(&path).unwrap();
-    file.group("mps")
-        .unwrap()
+    let group = file.group("mps").unwrap();
+    group
         .dataset("length")
         .unwrap()
         .as_writer()
         .write_scalar(&4_i64)
+        .unwrap();
+    group
+        .dataset("rlim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&5_i64)
         .unwrap();
     drop(file);
 
     let error = load_mps(&path, "mps").unwrap_err().to_string();
     assert!(error.contains("length"));
     assert!(error.contains("4"));
-    assert!(error.contains("child groups"));
+    assert!(
+        error.contains("MPS[4]") || error.contains("expected child groups"),
+        "{error}"
+    );
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_i32_max_limits_are_rejected() {
+    for field in ["llim", "rlim"] {
+        let name = format!("mps_i32_max_{field}");
+        let error = mps_error(&name, |group| {
+            group
+                .dataset(field)
+                .unwrap()
+                .as_writer()
+                .write_scalar(&(i32::MAX as i64))
+                .unwrap();
+        });
+        assert!(error.contains(field), "{field}: {error}");
+        assert!(error.contains("2147483647"), "{field}: {error}");
+        assert!(error.contains("length"), "{field}: {error}");
+    }
+}
+
+#[test]
+fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
+    for (name, llim, rlim) in [
+        ("below_left_boundary", -2_i64, 4_i64),
+        ("past_right_boundary", -1, 5),
+        ("wrong_gap", 0, 3),
+        ("center_past_end", 2, 4),
+    ] {
+        let name = format!("mps_invalid_ortho_{name}");
+        let error = mps_error(&name, |group| {
+            group
+                .dataset("llim")
+                .unwrap()
+                .as_writer()
+                .write_scalar(&llim)
+                .unwrap();
+            group
+                .dataset("rlim")
+                .unwrap()
+                .as_writer()
+                .write_scalar(&rlim)
+                .unwrap();
+        });
+        assert!(error.contains("llim"), "{llim}, {rlim}: {error}");
+        assert!(error.contains("rlim"), "{llim}, {rlim}: {error}");
+        assert!(error.contains(&llim.to_string()), "{llim}, {rlim}: {error}");
+        assert!(error.contains(&rlim.to_string()), "{llim}, {rlim}: {error}");
+        assert!(error.contains("length"), "{llim}, {rlim}: {error}");
+    }
+}
+
+#[test]
+fn valid_mps_orthogonality_boundaries_roundtrip() {
+    for (name, llim, rlim) in [("first", -1, 1), ("last", 1, 3)] {
+        let path = temp_path(&format!("mps_valid_ortho_{name}"));
+        let source = make_test_mps();
+        let tensors = source.tensors().into_iter().cloned().collect();
+        let mps =
+            TensorTrain::with_ortho(tensors, llim, rlim, Some(CanonicalForm::Unitary)).unwrap();
+
+        save_mps(&path, "mps", &mps).unwrap();
+        let loaded = load_mps(&path, "mps").unwrap();
+        assert_eq!(loaded.llim(), llim);
+        assert_eq!(loaded.rlim(), rlim);
+        std::fs::remove_file(path).ok();
+    }
+}
+
+#[test]
+fn mps_excess_child_group_is_rejected() {
+    let error = mps_error("mps_excess_child_group", |group| {
+        group.create_group("MPS[4]").unwrap();
+    });
+    assert!(error.contains("MPS[4]"));
+    assert!(error.contains("declared range"), "{error}");
+}
+
+#[test]
+fn mps_misleading_prefix_child_is_rejected() {
+    let error = mps_error("mps_misleading_prefix", |group| {
+        group.create_group("MPS[stale]").unwrap();
+    });
+    assert!(error.contains("MPS[stale]"));
+}
+
+#[test]
+fn mps_expected_dataset_is_rejected() {
+    let error = mps_error("mps_expected_dataset", |group| {
+        group.unlink("MPS[1]").unwrap();
+        group
+            .new_dataset::<i64>()
+            .shape(())
+            .create("MPS[1]")
+            .unwrap();
+    });
+    assert!(error.contains("MPS[1]"));
+}
+
+#[test]
+fn mps_expected_soft_link_is_rejected() {
+    let path = temp_path("mps_expected_soft_link");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    file.link_hard("mps/MPS[1]", "mps_target").unwrap();
+    group.unlink("MPS[1]").unwrap();
+    group.link_soft("/mps_target", "MPS[1]").unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("MPS[1]"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_zero_length_with_children_is_rejected() {
+    let path = temp_path("mps_zero_length_with_children");
+    let mps = TensorTrain::new(Vec::new()).unwrap();
+    save_mps(&path, "mps", &mps).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("mps").unwrap().create_group("MPS[1]").unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("MPS[1]"));
     std::fs::remove_file(path).ok();
 }
 

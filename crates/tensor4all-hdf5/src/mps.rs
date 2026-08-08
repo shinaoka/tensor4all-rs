@@ -4,16 +4,42 @@
 //! so this module is a thin wrapper around [`crate::itensor`].
 
 use crate::backend::Group;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
 use crate::index;
 use crate::itensor;
 use crate::schema;
 
-fn read_i32(name: &'static str, value: i64) -> Result<i32> {
-    i32::try_from(value)
-        .with_context(|| format!("HDF5 dataset {name} does not fit in i32, got {value}"))
+fn read_i32(name: &'static str, value: i64, length: usize) -> Result<i32> {
+    i32::try_from(value).with_context(|| {
+        format!("HDF5 dataset {name} does not fit in i32, got {value} for MPS length {length}")
+    })
+}
+
+fn validate_ortho_limits(llim: i32, rlim: i32, length: usize) -> Result<()> {
+    let length_i32 = i32::try_from(length).map_err(|_| {
+        anyhow::anyhow!(
+            "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; length does not fit in i32"
+        )
+    })?;
+    let default_rlim = length_i32.checked_add(1).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; length + 1 overflows i32"
+        )
+    })?;
+    let center_in_bounds = llim
+        .checked_add(1)
+        .map(|center| center < length_i32)
+        .unwrap_or(false);
+    let single_center = llim >= -1 && center_in_bounds && llim.checked_add(2) == Some(rlim);
+    let no_center = llim == -1 && rlim == default_rlim;
+    if !single_center && !no_center {
+        anyhow::bail!(
+            "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; expected llim=-1 and rlim={default_rlim}, or llim + 2 = rlim with a center in 0..{length}"
+        );
+    }
+    Ok(())
 }
 
 const CANONICAL_FORM_ATTR: &str = "canonical_form";
@@ -122,41 +148,20 @@ pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS llim")?;
-    let llim = read_i32("llim", llim)?;
+    let llim = read_i32("llim", llim, length)?;
 
     let rlim: i64 = group
         .dataset("rlim")?
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS rlim")?;
-    let rlim = read_i32("rlim", rlim)?;
+    let rlim = read_i32("rlim", rlim, length)?;
+    validate_ortho_limits(llim, rlim, length)?;
     let canonical_form = read_canonical_form(group)?;
 
-    let member_names = group
-        .member_names()
-        .context("Failed to enumerate MPS child groups")?;
-    let child_group_count = member_names
-        .iter()
-        .filter(|name| name.starts_with("MPS[") && name.ends_with(']'))
-        .count();
-    if length > child_group_count {
-        bail!(
-            "HDF5 dataset length declares {length} MPS tensors, but found only {child_group_count} MPS[N] child groups"
-        );
-    }
-    for i in 1..=length {
-        let name = format!("MPS[{i}]");
-        if !group.link_exists(&name) {
-            bail!(
-                "HDF5 dataset length declares {length} MPS tensors, but child group {name} is missing"
-            );
-        }
-    }
-
+    let tensor_groups = index::read_expected_child_groups(group, length, "MPS", "MPS[", Some(']'))?;
     let mut tensors = Vec::with_capacity(length);
-    for i in 1..=length {
-        let name = format!("MPS[{i}]");
-        let tensor_group = group.group(&name)?;
+    for tensor_group in tensor_groups {
         tensors.push(itensor::read_itensor(&tensor_group)?);
     }
 

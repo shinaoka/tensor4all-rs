@@ -10,7 +10,7 @@
 // When both features are active (due to Cargo feature unification),
 // runtime-loading takes priority.
 #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
-pub use hdf5_metno::{types, Attribute, Dataset, File, Group, Result};
+pub use hdf5_metno::{types, Attribute, Dataset, File, Group, LinkType, LocationType, Result};
 
 #[cfg(feature = "runtime-loading")]
-pub use hdf5_rt::{types, Attribute, Dataset, File, Group, Result};
+pub use hdf5_rt::{types, Attribute, Dataset, File, Group, LinkType, LocationType, Result};
