@@ -714,8 +714,10 @@ impl Default for RrLUOptions {
 ///
 /// # Errors
 ///
-/// Returns [`MatrixCIError::NaNEncountered`]
-/// if NaN values appear in the L or U factors.
+/// Returns [`MatrixCIError::InvalidArgument`] if the matrix shape product
+/// overflows `usize` or its backing storage length does not match the shape.
+/// Returns [`MatrixCIError::NaNEncountered`] if NaN values appear in the L or U
+/// factors.
 ///
 /// # Examples
 ///
@@ -822,8 +824,10 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 ///
 /// # Errors
 ///
-/// Returns [`MatrixCIError::NaNEncountered`]
-/// if NaN values appear in the L or U factors.
+/// Returns [`MatrixCIError::InvalidArgument`] if the matrix shape product
+/// overflows `usize` or its backing storage length does not match the shape.
+/// Returns [`MatrixCIError::NaNEncountered`] if NaN values appear in the L or U
+/// factors.
 ///
 /// # Examples
 ///

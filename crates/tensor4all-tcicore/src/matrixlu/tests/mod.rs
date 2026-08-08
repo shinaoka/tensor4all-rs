@@ -98,7 +98,11 @@ fn test_rrlu_complex64_reconstruct() {
     let reconstructed = mat_mul(&lu.left(true), &lu.right(true)).unwrap();
     for i in 0..m.nrows() {
         for j in 0..m.ncols() {
-            assert!((m[[i, j]] - reconstructed[[i, j]]).norm() < 1e-10);
+            let residual = (m[[i, j]] - reconstructed[[i, j]]).norm();
+            assert!(
+                residual < 1e-10,
+                "Complex64 reconstruction residual at ({i}, {j}): {residual}"
+            );
         }
     }
 }
