@@ -121,6 +121,10 @@ The C API (`tensor4all-capi`) preserves error details through
   `Err(e)` values and panic payloads reach `t4a_last_error_message`.
 - **Do not add new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns**
   without preserving error messages.
+- Ordinary release builds omit Rust debug information. When debugging through
+  Tensor4all.jl or the C API requires source-level Rust backtraces, build with
+  `cargo build --profile release-debug -p tensor4all-capi` and set
+  `RUST_BACKTRACE=1` when running the caller.
 
 ## Testing
 
