@@ -14,6 +14,30 @@ fn point_from_batch_rejects_out_of_bounds_point() {
 }
 
 #[test]
+fn grid_evaluation_propagates_coordinate_conversion_failure() {
+    let called = std::cell::Cell::new(false);
+    let result = evaluate_grid_point(
+        &[3_i64],
+        |_point| anyhow::bail!("synthetic coordinate failure"),
+        |_coord| {
+            called.set(true);
+            1.0_f64
+        },
+    );
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("synthetic coordinate failure"));
+    assert!(error.contains("[3]"));
+    assert!(!called.get());
+}
+
+#[test]
+fn grid_evaluation_passes_converted_coordinates_to_callback() {
+    let value =
+        evaluate_grid_point(&[1_i64], |_point| Ok(vec![0.25]), |coord| coord[0] * 4.0).unwrap();
+    assert_eq!(value, 1.0);
+}
+
+#[test]
 fn test_discrete_simple_function() {
     // f(i, j) = i + j (grididx are 1-indexed)
     // Use 4x4 grid which gives 2 sites with Fused scheme
