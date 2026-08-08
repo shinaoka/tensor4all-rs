@@ -21,7 +21,7 @@ use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
     checked_allocation_len, checked_pow2, tensortrain_to_linear_operator_asymmetric,
-    BoundaryCondition, QuanticsOperator,
+    try_vec_with_capacity, BoundaryCondition, QuanticsOperator,
 };
 use tensor4all_simplett::{tensor::Tensor3 as GenericTensor3, tensor3_from_data};
 
@@ -37,10 +37,9 @@ type BoolTensor3 = BoolTensor<3>;
 impl<const N: usize> BoolTensor<N> {
     fn from_elem(dims: [usize; N], value: bool) -> Result<Self> {
         let total = checked_allocation_len::<u8>(&dims, "affine boolean tensor")?;
-        Ok(Self {
-            data: vec![u8::from(value); total],
-            dims,
-        })
+        let mut data = try_vec_with_capacity::<u8>("affine boolean tensor", total)?;
+        data.resize(total, u8::from(value));
+        Ok(Self { data, dims })
     }
 
     fn dims(&self) -> &[usize; N] {
@@ -175,7 +174,8 @@ impl LinearConstraintRow {
     /// general affine map `y = A*x + b`.
     ///
     /// # Errors
-    /// Returns an error if the primitive integer representation cannot fit in
+    /// Returns an error if any coefficient or the right-hand side has a zero
+    /// denominator, or if the primitive integer representation cannot fit in
     /// `i64`.
     ///
     /// # Examples
@@ -310,7 +310,8 @@ impl AffineParams {
     /// * `n` - Number of input dimensions
     ///
     /// # Errors
-    /// Returns an error when the matrix/vector lengths do not match the
+    /// Returns an error when any matrix or translation entry has a zero
+    /// denominator, when the matrix/vector lengths do not match the
     /// dimensions, a dimension product overflows, or a power-of-two site
     /// dimension cannot be represented safely.
     ///
@@ -569,8 +570,8 @@ fn remap_affine_site_indices(
         .collect();
 
     let r = mpo.len();
-    checked_allocation_len::<GenericTensor3<Complex64>>(&[r], "remapped affine tensor list")?;
-    let mut new_tensors = Vec::with_capacity(r);
+    let mut new_tensors =
+        try_vec_with_capacity::<GenericTensor3<Complex64>>("remapped affine tensor list", r)?;
 
     for i in 0..r {
         let tensor = mpo.site_tensor(i);
@@ -581,13 +582,10 @@ fn remap_affine_site_indices(
             &[left_dim, site_dim, right_dim],
             "remapped affine tensor",
         )?;
-        let mut t = tensor3_from_data(
-            vec![Complex64::new(0.0, 0.0); total_size],
-            left_dim,
-            site_dim,
-            right_dim,
-        )
-        .map_err(|err| anyhow::anyhow!("Failed to allocate remapped affine tensor: {err}"))?;
+        let mut data = try_vec_with_capacity::<Complex64>("remapped affine tensor", total_size)?;
+        data.resize(total_size, Complex64::new(0.0, 0.0));
+        let mut t = tensor3_from_data(data, left_dim, site_dim, right_dim)
+            .map_err(|err| anyhow::anyhow!("Failed to allocate remapped affine tensor: {err}"))?;
         for l in 0..left_dim {
             for (old_s, &new_s) in perm.iter().enumerate() {
                 for rr in 0..right_dim {
@@ -691,8 +689,10 @@ pub fn affine_operator(
     // We need to remap the site indices.
     let remapped_mpo = remap_affine_site_indices(&mpo, m, n, site_dim)?;
 
-    let input_dims = vec![input_dim; r];
-    let output_dims = vec![output_dim; r];
+    let mut input_dims = try_vec_with_capacity::<usize>("affine input site dimensions", r)?;
+    input_dims.resize(r, input_dim);
+    let mut output_dims = try_vec_with_capacity::<usize>("affine output site dimensions", r)?;
+    output_dims.resize(r, output_dim);
     tensortrain_to_linear_operator_asymmetric(&remapped_mpo, &input_dims, &output_dims)
 }
 
@@ -865,7 +865,7 @@ pub fn affine_transform_matrix(
     for x_flat in 0..input_size {
         // Decode x_flat to N-dimensional x vector
         // x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
-        let mut x = Vec::with_capacity(n);
+        let mut x = try_vec_with_capacity::<BigInt>("affine input values", n)?;
         for var in 0..n {
             let bit_shift = var
                 .checked_mul(r)
@@ -874,7 +874,8 @@ pub fn affine_transform_matrix(
         }
 
         // Compute v = A*x + b (unscaled) exactly.
-        let mut v = vec![BigInt::zero(); m];
+        let mut v = try_vec_with_capacity::<BigInt>("affine output values", m)?;
+        v.resize(m, BigInt::zero());
         for i in 0..m {
             v[i] = b_int[i].clone();
             for j in 0..n {
@@ -884,7 +885,7 @@ pub fn affine_transform_matrix(
 
         for y_flat in 0..output_size {
             // Decode y_flat to M-dimensional y vector
-            let mut y = Vec::with_capacity(m);
+            let mut y = try_vec_with_capacity::<BigInt>("affine output coordinates", m)?;
             for var in 0..m {
                 let bit_shift = var
                     .checked_mul(r)
@@ -892,7 +893,8 @@ pub fn affine_transform_matrix(
                 y.push(BigInt::from((y_flat >> bit_shift) & bit_mask));
             }
 
-            let mut carry = vec![BigInt::zero(); m];
+            let mut carry = try_vec_with_capacity::<BigInt>("affine carry values", m)?;
+            carry.resize(m, BigInt::zero());
             let mut valid = true;
             for i in 0..m {
                 let diff = &v[i] - &scale * &y[i];
@@ -1027,8 +1029,8 @@ pub fn affine_transform_tensors_unfused(
     // We preserve that semantic index order:
     // unfused[left, y0, y1, ..., yM-1, x0, x1, ..., xN-1, right]
 
-    checked_allocation_len::<GenericTensor3<Complex64>>(&[r], "unfused affine tensor list")?;
-    let mut unfused_tensors = Vec::with_capacity(r);
+    let mut unfused_tensors =
+        try_vec_with_capacity::<GenericTensor3<Complex64>>("unfused affine tensor list", r)?;
 
     for tensor in fused_tensors.iter() {
         let left_dim = tensor.left_dim();
@@ -1057,7 +1059,9 @@ pub fn affine_transform_tensors_unfused(
             &[left_dim, site_dim, right_dim],
             "unfused affine tensor",
         )?;
-        let mut unfused_data = vec![Complex64::new(0.0, 0.0); total_size];
+        let mut unfused_data =
+            try_vec_with_capacity::<Complex64>("unfused affine tensor", total_size)?;
+        unfused_data.resize(total_size, Complex64::new(0.0, 0.0));
 
         for l in 0..left_dim {
             for fused_idx in 0..site_dim {
@@ -1396,9 +1400,11 @@ fn affine_transform_tensors(
     let mut b_work: Vec<BigInt> = b_int.iter().map(|b| b.abs()).collect();
 
     // Process from LSB (site R-1) to MSB (site 0)
-    let mut carries: Vec<Vec<BigInt>> = vec![vec![BigInt::zero(); m]];
-    checked_allocation_len::<AffineCoreData>(&[r], "affine core list")?;
-    let mut core_data_list: Vec<AffineCoreData> = Vec::with_capacity(r);
+    let mut initial_carry = try_vec_with_capacity::<BigInt>("affine initial carry", m)?;
+    initial_carry.resize(m, BigInt::zero());
+    let mut carries = try_vec_with_capacity::<Vec<BigInt>>("affine carry list", 1)?;
+    carries.push(initial_carry);
+    let mut core_data_list = try_vec_with_capacity::<AffineCoreData>("affine core list", r)?;
 
     for _site in (0..r).rev() {
         // Extract current bit: (b_work & 1) * bsign
@@ -1469,7 +1475,9 @@ fn affine_transform_tensors(
         let mut current_weights = bc_weights;
         for ext_data in ext_data_list.iter().rev() {
             let num_cin = ext_data.tensor.dims()[1];
-            let mut new_weights = vec![0.0; num_cin];
+            let mut new_weights =
+                try_vec_with_capacity::<f64>("affine extension weights", num_cin)?;
+            new_weights.resize(num_cin, 0.0);
             for (cin_idx, nw) in new_weights.iter_mut().enumerate() {
                 for (cout_idx, &w) in current_weights.iter().enumerate() {
                     if w != 0.0 && ext_data.tensor.get([cout_idx, cin_idx, 0]) {
@@ -1487,11 +1495,10 @@ fn affine_transform_tensors(
     };
 
     // Build tensors in the same order, then reverse to get [site 0, site 1, ..., site R-1]
-    checked_allocation_len::<tensor4all_simplett::Tensor3<Complex64>>(
-        &[r],
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "affine MPO tensor list",
+        r,
     )?;
-    let mut tensors = Vec::with_capacity(r);
 
     // Helper: compute BC weight for a carry-out index
     let compute_bc_weight = |cout_idx: usize, core_data: &AffineCoreData| -> Complex64 {
@@ -1526,13 +1533,11 @@ fn affine_transform_tensors(
             &[left_dim, site_dim, right_dim],
             "affine MPO tensor",
         )?;
-        let mut t: tensor4all_simplett::Tensor3<Complex64> = tensor3_from_data(
-            vec![Complex64::new(0.0, 0.0); total_size],
-            left_dim,
-            site_dim,
-            right_dim,
-        )
-        .map_err(|err| anyhow::anyhow!("Failed to allocate affine MPO tensor: {err}"))?;
+        let mut data = try_vec_with_capacity::<Complex64>("affine MPO tensor", total_size)?;
+        data.resize(total_size, Complex64::new(0.0, 0.0));
+        let mut t: tensor4all_simplett::Tensor3<Complex64> =
+            tensor3_from_data(data, left_dim, site_dim, right_dim)
+                .map_err(|err| anyhow::anyhow!("Failed to allocate affine MPO tensor: {err}"))?;
 
         if is_lsb && is_msb {
             // R==1: single site case
@@ -1668,8 +1673,10 @@ fn affine_transform_core(
         // Reuse these buffers across all x/y states. The map owns a carry vector
         // only when it is a new key; duplicate transitions keep the scratch
         // allocation in place.
-        let mut z = vec![BigInt::zero(); m];
-        let mut carry_out = vec![BigInt::zero(); m];
+        let mut z = try_vec_with_capacity::<BigInt>("affine core scratch", m)?;
+        z.resize(m, BigInt::zero());
+        let mut carry_out = try_vec_with_capacity::<BigInt>("affine core carry scratch", m)?;
+        carry_out.resize(m, BigInt::zero());
 
         // Iterate over all possible x values (N bits).
         for x_bits in 0..x_range {

@@ -152,10 +152,13 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Create site indices for input and output
-    let mut site_in_indices: Vec<DynIndex> = Vec::with_capacity(n);
-    let mut site_out_indices: Vec<DynIndex> = Vec::with_capacity(n);
-    let mut internal_in_indices: Vec<DynIndex> = Vec::with_capacity(n);
-    let mut internal_out_indices: Vec<DynIndex> = Vec::with_capacity(n);
+    let mut site_in_indices = try_vec_with_capacity::<DynIndex>("operator input site indices", n)?;
+    let mut site_out_indices =
+        try_vec_with_capacity::<DynIndex>("operator output site indices", n)?;
+    let mut internal_in_indices =
+        try_vec_with_capacity::<DynIndex>("operator internal input indices", n)?;
+    let mut internal_out_indices =
+        try_vec_with_capacity::<DynIndex>("operator internal output indices", n)?;
 
     for &dim in site_dims.iter() {
         // True site indices (for state)
@@ -167,7 +170,8 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(bond_capacity);
+    let mut bond_indices =
+        try_vec_with_capacity::<DynIndex>("operator bond indices", bond_capacity)?;
 
     for i in 0..=n {
         let dim = if i == 0 {
@@ -179,8 +183,8 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Build tensors for TreeTN
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let mut node_names: Vec<usize> = Vec::with_capacity(n);
+    let mut tensors = try_vec_with_capacity::<TensorDynLen>("operator tensor list", n)?;
+    let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
 
     for i in 0..n {
         let tensor = tt.site_tensor(i);
@@ -207,8 +211,8 @@ pub fn tensortrain_to_linear_operator(
         // For first tensor: (site_out, site_in, right_bond)
         // For last tensor: (left_bond, site_out, site_in)
         // For middle: (left_bond, site_out, site_in, right_bond)
-        let mut indices: Vec<DynIndex> = Vec::with_capacity(4);
-        let mut dims_vec: Vec<usize> = Vec::with_capacity(4);
+        let mut indices = try_vec_with_capacity::<DynIndex>("operator tensor indices", 4)?;
+        let mut dims_vec = try_vec_with_capacity::<usize>("operator tensor dimensions", 4)?;
 
         if i > 0 {
             indices.push(bond_indices[i].clone());
@@ -226,7 +230,8 @@ pub fn tensortrain_to_linear_operator(
         // Reshape tensor data: (left, site_out*site_in, right) -> (left, site_out, site_in, right)
         // or appropriate variant for boundary tensors
         let total_size = checked_allocation_len::<Complex64>(&dims_vec, &format!("site {i}"))?;
-        let mut data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); total_size];
+        let mut data = try_vec_with_capacity::<Complex64>("operator site data", total_size)?;
+        data.resize(total_size, Complex64::new(0.0, 0.0));
 
         // Map from TT format to TreeTN format
         if i == 0 && n == 1 {
@@ -368,10 +373,13 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Create site indices for input and output
-    let mut site_in_indices: Vec<DynIndex> = Vec::with_capacity(n);
-    let mut site_out_indices: Vec<DynIndex> = Vec::with_capacity(n);
-    let mut internal_in_indices: Vec<DynIndex> = Vec::with_capacity(n);
-    let mut internal_out_indices: Vec<DynIndex> = Vec::with_capacity(n);
+    let mut site_in_indices = try_vec_with_capacity::<DynIndex>("operator input site indices", n)?;
+    let mut site_out_indices =
+        try_vec_with_capacity::<DynIndex>("operator output site indices", n)?;
+    let mut internal_in_indices =
+        try_vec_with_capacity::<DynIndex>("operator internal input indices", n)?;
+    let mut internal_out_indices =
+        try_vec_with_capacity::<DynIndex>("operator internal output indices", n)?;
 
     for i in 0..n {
         // True site indices (for state)
@@ -383,7 +391,8 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(bond_capacity);
+    let mut bond_indices =
+        try_vec_with_capacity::<DynIndex>("operator bond indices", bond_capacity)?;
 
     for i in 0..=n {
         let dim = if i == 0 {
@@ -395,8 +404,8 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Build tensors for TreeTN
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let mut node_names: Vec<usize> = Vec::with_capacity(n);
+    let mut tensors = try_vec_with_capacity::<TensorDynLen>("operator tensor list", n)?;
+    let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
 
     for i in 0..n {
         let tensor = tt.site_tensor(i);
@@ -423,8 +432,8 @@ pub fn tensortrain_to_linear_operator_asymmetric(
         }
 
         // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
-        let mut indices: Vec<DynIndex> = Vec::with_capacity(4);
-        let mut dims_vec: Vec<usize> = Vec::with_capacity(4);
+        let mut indices = try_vec_with_capacity::<DynIndex>("operator tensor indices", 4)?;
+        let mut dims_vec = try_vec_with_capacity::<usize>("operator tensor dimensions", 4)?;
 
         if i > 0 {
             indices.push(bond_indices[i].clone());
@@ -441,7 +450,8 @@ pub fn tensortrain_to_linear_operator_asymmetric(
 
         // Reshape tensor data: (left, site_out*site_in, right) -> (left, site_out, site_in, right)
         let total_size = checked_allocation_len::<Complex64>(&dims_vec, &format!("site {i}"))?;
-        let mut data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); total_size];
+        let mut data = try_vec_with_capacity::<Complex64>("operator site data", total_size)?;
+        data.resize(total_size, Complex64::new(0.0, 0.0));
 
         // Map from TT format to TreeTN format
         // TT format has site index = s_out * in_dim + s_in (output major, input minor)
@@ -551,8 +561,13 @@ pub(crate) fn checked_allocation_len<T>(dims: &[usize], name: &str) -> Result<us
     Ok(elements)
 }
 
-pub(crate) fn checked_site_list_capacity(r: usize, name: &str) -> Result<()> {
-    checked_allocation_len::<tensor4all_simplett::Tensor3<Complex64>>(&[r], name).map(|_| ())
+pub(crate) fn try_vec_with_capacity<T>(name: &str, capacity: usize) -> Result<Vec<T>> {
+    checked_allocation_len::<T>(&[capacity], name)?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(capacity).map_err(|err| {
+        anyhow::anyhow!("{name} allocation failed for capacity {capacity}: {err}")
+    })?;
+    Ok(values)
 }
 
 pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)> {
@@ -596,9 +611,10 @@ pub(crate) fn embed_single_var_mpo(
     }
     let (dim_multi, site_dim_new) = checked_multivar_dims(nvariables)?;
     let r = mpo.len();
-    checked_site_list_capacity(r, "embedded MPO tensor list")?;
-
-    let mut new_tensors = Vec::with_capacity(r);
+    let mut new_tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "embedded MPO tensor list",
+        r,
+    )?;
 
     for i in 0..r {
         let tensor = mpo.site_tensor(i);
@@ -615,13 +631,10 @@ pub(crate) fn embed_single_var_mpo(
             &[left_dim, site_dim_new, right_dim],
             "embedded MPO tensor",
         )?;
-        let mut t = tensor3_from_data(
-            vec![Complex64::new(0.0, 0.0); total_size],
-            left_dim,
-            site_dim_new,
-            right_dim,
-        )
-        .map_err(|err| anyhow::anyhow!("Failed to allocate embedded MPO tensor: {err}"))?;
+        let mut data = try_vec_with_capacity::<Complex64>("embedded MPO tensor", total_size)?;
+        data.resize(total_size, Complex64::new(0.0, 0.0));
+        let mut t = tensor3_from_data(data, left_dim, site_dim_new, right_dim)
+            .map_err(|err| anyhow::anyhow!("Failed to allocate embedded MPO tensor: {err}"))?;
 
         for s_out_multi in 0..dim_multi {
             for s_in_multi in 0..dim_multi {
@@ -689,9 +702,10 @@ pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
-    checked_site_list_capacity(r, "identity MPO site list")?;
-
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "identity MPO site list",
+        r,
+    )?;
 
     for _ in 0..r {
         // Identity tensor: delta_{s_out, s_in}

@@ -4,7 +4,7 @@ use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
 fn test_chebyshev_grid() {
-    let (grid, weights) = chebyshev_grid(4);
+    let (grid, weights) = chebyshev_grid(4).unwrap();
 
     // Check endpoints
     assert_relative_eq!(grid[0], 0.0, epsilon = 1e-10);
@@ -22,8 +22,7 @@ fn test_chebyshev_grid() {
 
 #[test]
 fn test_lagrange_polynomial_at_grid_points() {
-    let (grid, weights) = chebyshev_grid(5);
-
+    let (grid, weights) = chebyshev_grid(5).unwrap();
     // P_alpha(grid[alpha]) = 1
     for alpha in 0..=5 {
         let val = lagrange_polynomial(&grid, &weights, alpha, grid[alpha]);

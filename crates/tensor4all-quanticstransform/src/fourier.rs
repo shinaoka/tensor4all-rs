@@ -14,7 +14,7 @@ use tensor4all_simplett::{
     Tensor3Ops, TensorTrain,
 };
 
-use crate::common::{checked_site_list_capacity, tensortrain_to_linear_operator, QuanticsOperator};
+use crate::common::{tensortrain_to_linear_operator, try_vec_with_capacity, QuanticsOperator};
 use tensor4all_simplett::tensor::Tensor4;
 
 /// Options for Fourier transform construction.
@@ -140,7 +140,9 @@ impl FTCore {
     /// Returns an error when converting the cached Fourier MPO to a linear
     /// operator fails.
     pub fn forward(&self) -> Result<QuanticsOperator> {
-        let site_dims = vec![2; self.r];
+        let mut site_dims =
+            try_vec_with_capacity::<usize>("Fourier forward site dimensions", self.r)?;
+        site_dims.resize(self.r, 2);
         tensortrain_to_linear_operator(&self.forward_mpo, &site_dims)
     }
 
@@ -156,7 +158,9 @@ impl FTCore {
             ..self.options.clone()
         };
         let inverse_mpo = quantics_fourier_mpo(self.r, &inverse_options)?;
-        let site_dims = vec![2; self.r];
+        let mut site_dims =
+            try_vec_with_capacity::<usize>("Fourier inverse site dimensions", self.r)?;
+        site_dims.resize(self.r, 2);
         tensortrain_to_linear_operator(&inverse_mpo, &site_dims)
     }
 
@@ -207,7 +211,8 @@ pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<Qu
     }
 
     let mpo = quantics_fourier_mpo(r, &options)?;
-    let site_dims = vec![2; r];
+    let mut site_dims = try_vec_with_capacity::<usize>("Fourier operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -217,13 +222,11 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
-    checked_site_list_capacity(r, "Fourier MPO site list")?;
-
     let k = options.k;
     let sign = options.sign;
 
     // Get Chebyshev grid and barycentric weights
-    let (grid, bary_weights) = chebyshev_grid(k);
+    let (grid, bary_weights) = chebyshev_grid(k)?;
 
     // Build core tensor A[alpha, tau, sigma, beta]
     // alpha, beta in 0..=K (K+1 values each)
@@ -231,7 +234,10 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
     let core_tensor = build_dft_core_tensor(&grid, &bary_weights, sign);
 
     // Construct tensor train
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "Fourier MPO site list",
+        r,
+    )?;
 
     // First tensor: sum over alpha (contract with ones vector)
     // Shape: (1, 4, K+1) where 4 = 2*2 for (tau, sigma)
@@ -321,9 +327,12 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
 /// Returns (grid, bary_weights) where:
 /// - grid[j] = 0.5 * (1 - cos(π*j/K)) for j = 0, ..., K
 /// - bary_weights are the barycentric interpolation weights
-fn chebyshev_grid(k: usize) -> (Vec<f64>, Vec<f64>) {
-    let mut grid = Vec::with_capacity(k + 1);
-    let mut bary_weights = Vec::with_capacity(k + 1);
+fn chebyshev_grid(k: usize) -> Result<(Vec<f64>, Vec<f64>)> {
+    let count = k
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("Chebyshev grid size overflows usize for k={k}"))?;
+    let mut grid = try_vec_with_capacity::<f64>("Fourier Chebyshev grid", count)?;
+    let mut bary_weights = try_vec_with_capacity::<f64>("Fourier barycentric weights", count)?;
 
     // Compute Chebyshev grid points
     for j in 0..=k {
@@ -342,7 +351,7 @@ fn chebyshev_grid(k: usize) -> (Vec<f64>, Vec<f64>) {
         bary_weights.push(weight);
     }
 
-    (grid, bary_weights)
+    Ok((grid, bary_weights))
 }
 
 /// Evaluate Lagrange polynomial P_alpha(x).

@@ -56,12 +56,27 @@ fn test_affine_extreme_i64_coefficients_are_exact() {
         let params =
             AffineParams::from_integers(vec![coefficient], vec![translation], 1, 1).unwrap();
         let matrix = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
+        let operator = affine_operator(2, &params, &[BoundaryCondition::Periodic]).unwrap();
+        let actual_operator = affine_operator_dense_matrix(&operator, 2);
+
         for x in 0..4usize {
-            let expected =
+            let expected_y =
                 ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
-            assert_eq!(*matrix.get(expected, x).unwrap_or(&0.0), 1.0);
+            for y in 0..4usize {
+                let expected = f64::from((y == expected_y) as u8);
+                assert_eq!(
+                    *matrix.get(y, x).unwrap_or(&0.0),
+                    expected,
+                    "reference matrix entry ({y}, {x}) for a={coefficient}, b={translation}"
+                );
+                assert_eq!(
+                    actual_operator[y + 4 * x].re,
+                    expected,
+                    "MPO entry ({y}, {x}) for a={coefficient}, b={translation}"
+                );
+                assert_eq!(actual_operator[y + 4 * x].im, 0.0);
+            }
         }
-        assert_affine_mpo_matches_matrix(2, &params, &[BoundaryCondition::Periodic]);
     }
 }
 
@@ -713,6 +728,37 @@ fn affine_dense_reference_element_count(r: usize, m: usize, n: usize) -> Option<
     let total_bits = r.checked_mul(local_bits)?;
     let shift = u32::try_from(total_bits).ok()?;
     1usize.checked_shl(shift)
+}
+
+fn affine_operator_dense_matrix(op: &QuanticsOperator, r: usize) -> Vec<Complex64> {
+    let indices: Vec<_> = (0..r)
+        .flat_map(|site| {
+            [
+                op.get_output_mapping(&site)
+                    .expect("missing output mapping")
+                    .internal_index
+                    .clone(),
+                op.get_input_mapping(&site)
+                    .expect("missing input mapping")
+                    .internal_index
+                    .clone(),
+            ]
+        })
+        .collect();
+    let size = 1usize << r;
+    let mut matrix = vec![Complex64::new(0.0, 0.0); size * size];
+
+    for x in 0..size {
+        for y in 0..size {
+            let mut values = Vec::with_capacity(2 * r);
+            for site in 0..r {
+                values.push((y >> (r - 1 - site)) & 1);
+                values.push((x >> (r - 1 - site)) & 1);
+            }
+            matrix[y + size * x] = op.mpo().evaluate_point(&indices, &values).unwrap().into();
+        }
+    }
+    matrix
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -1401,4 +1447,35 @@ fn test_affine_antiperiodic_difference_delta_signs() {
             }
         }
     }
+}
+
+#[test]
+fn test_affine_antiperiodic_mpo_applies_outgoing_carry_parity() {
+    let r = 3;
+    let modulus = 1i64 << r;
+    let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
+    let operator = affine_operator(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();
+    let actual = affine_operator_dense_matrix(&operator, r);
+
+    for x in 0..modulus as usize {
+        let raw = x as i64 + 1;
+        let expected_y = raw.rem_euclid(modulus) as usize;
+        let expected_sign = if raw.div_euclid(modulus).rem_euclid(2) == 0 {
+            1.0
+        } else {
+            -1.0
+        };
+        for y in 0..modulus as usize {
+            let expected = if y == expected_y { expected_sign } else { 0.0 };
+            assert_eq!(
+                actual[y + modulus as usize * x].re,
+                expected,
+                "MPO entry ({y}, {x}) for outgoing carry parity"
+            );
+            assert_eq!(actual[y + modulus as usize * x].im, 0.0);
+        }
+    }
+
+    // x = 7 produces outgoing carry 1 and must receive the anti-periodic sign.
+    assert_eq!(actual[7 * modulus as usize], Complex64::new(-1.0, 0.0));
 }

@@ -10,8 +10,8 @@ use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    checked_multivar_dims, checked_site_list_capacity, embed_single_var_mpo,
-    tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric, BoundaryCondition,
+    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
+    tensortrain_to_linear_operator_asymmetric, try_vec_with_capacity, BoundaryCondition,
     QuanticsOperator,
 };
 
@@ -49,7 +49,8 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
     }
 
     let mpo = shift_mpo(r, offset, bc)?;
-    let site_dims = vec![2; r];
+    let mut site_dims = try_vec_with_capacity::<usize>("shift operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -93,7 +94,8 @@ pub fn shift_operator_multivar(
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = shift_mpo(r, offset, bc)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
-    let dims = vec![dim_multi; r];
+    let mut dims = try_vec_with_capacity::<usize>("shift multivariable site dimensions", r)?;
+    dims.resize(r, dim_multi);
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
@@ -129,7 +131,6 @@ pub(crate) fn shift_mpo(
         return transpose_binary_operator_mpo(&mpo);
     }
 
-    checked_site_list_capacity(r, "shift MPO site list")?;
     let shift = u32::try_from(r)
         .map_err(|_| anyhow::anyhow!("number of sites {r} exceeds signed shift width"))?;
     let n_max = 1i64
@@ -146,9 +147,13 @@ pub(crate) fn shift_mpo(
     // Convert offset to binary (big-endian: MSB first)
     // Site n contains bit 2^(R-1-n)
     // offset_bits[n] = bit at position (R-1-n)
-    let offset_bits: Vec<usize> = (0..r).map(|n| (offset_mod >> (r - 1 - n)) & 1).collect();
+    let mut offset_bits = try_vec_with_capacity::<usize>("shift offset bits", r)?;
+    for n in 0..r {
+        offset_bits.push((offset_mod >> (r - 1 - n)) & 1);
+    }
 
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors =
+        try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>("shift MPO site list", r)?;
 
     // Carry states: index 0 = carry 0, index 1 = carry 1
     // For addition, carry can be 0 or 1.
@@ -276,7 +281,10 @@ pub(crate) fn shift_mpo(
 }
 
 fn transpose_binary_operator_mpo(mpo: &TensorTrain<Complex64>) -> Result<TensorTrain<Complex64>> {
-    let mut transposed = Vec::with_capacity(mpo.len());
+    let mut transposed = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "transposed shift MPO site list",
+        mpo.len(),
+    )?;
     for site in 0..mpo.len() {
         let tensor = mpo.site_tensor(site);
         let mut new_tensor =

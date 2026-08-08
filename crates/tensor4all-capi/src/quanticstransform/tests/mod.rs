@@ -4,9 +4,8 @@ use num_complex::Complex64;
 use num_rational::Rational64;
 use tensor4all_core::TensorDynLen;
 use tensor4all_quanticstransform::{
-    affine_operator, affine_transform_matrix, cumsum_operator, flip_operator,
-    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams,
-    BoundaryCondition, FourierOptions,
+    affine_operator, cumsum_operator, flip_operator, phase_rotation_operator,
+    quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::LinearOperator;
 
@@ -374,22 +373,19 @@ fn test_affine_fused_materialization_handles_i64_extreme_coefficients() {
             T4A_SUCCESS
         );
         let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
-        let params = AffineParams::new(
-            vec![Rational64::from_integer(coefficient)],
-            vec![Rational64::from_integer(translation)],
-            1,
-            1,
-        )
-        .unwrap();
-        let direct = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
-        // The direct reference enumerates variable values MSB-first, while
-        // the C matrix helper enumerates the two MPO sites in chain order.
+        // The C matrix helper enumerates the two MPO sites in chain order,
+        // while the affine formula uses integer values with site 0 as MSB.
         let reverse_bits = |value: usize| ((value & 1) << 1) | ((value >> 1) & 1);
         for x_site in 0..4usize {
-            let x_value = reverse_bits(x_site);
+            let x_value = reverse_bits(x_site) as i128;
+            let expected_y =
+                ((coefficient as i128) * x_value + translation as i128).rem_euclid(4) as usize;
             for row_site in 0..4usize {
-                let y_value = reverse_bits(row_site);
-                let expected = Complex64::new(*direct.get(y_value, x_value).unwrap_or(&0.0), 0.0);
+                let expected = if reverse_bits(row_site) == expected_y {
+                    Complex64::new(1.0, 0.0)
+                } else {
+                    Complex64::new(0.0, 0.0)
+                };
                 assert_eq!(
                     actual[row_site + 4 * x_site],
                     expected,
@@ -400,6 +396,13 @@ fn test_affine_fused_materialization_handles_i64_extreme_coefficients() {
         t4a_treetn_release(op);
         t4a_qtt_layout_release(layout);
     }
+}
+
+#[test]
+fn test_try_vec_with_capacity_reports_invalid_argument_context() {
+    let (status, error) = try_vec_with_capacity::<u8>("test C site list", usize::MAX).unwrap_err();
+    assert_eq!(status, T4A_INVALID_ARGUMENT);
+    assert!(error.contains("test C site list"));
 }
 
 #[test]

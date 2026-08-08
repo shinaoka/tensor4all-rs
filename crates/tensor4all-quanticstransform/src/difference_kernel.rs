@@ -6,7 +6,9 @@ use num_traits::Zero;
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::affine::{affine_transform_tensors_unfused, AffineParams};
-use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
+use crate::common::{
+    tensortrain_to_linear_operator, try_vec_with_capacity, BoundaryCondition, QuanticsOperator,
+};
 
 /// Build an MPO for the one-dimensional difference kernel `A[x, x'] = f(x - x')`.
 ///
@@ -43,7 +45,10 @@ pub fn difference_kernel_mpo(
 
     let params = AffineParams::from_integers(vec![1, -1], vec![0], 1, 2)?;
     let delta = affine_transform_tensors_unfused(f.len(), &params, &[boundary])?;
-    let mut tensors = Vec::with_capacity(f.len());
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "difference-kernel MPO site list",
+        f.len(),
+    )?;
 
     for (site, delta_core) in delta.iter().enumerate() {
         let f_core = f.site_tensor(site);
@@ -102,6 +107,8 @@ pub fn difference_kernel_operator(
     boundary: BoundaryCondition,
 ) -> Result<QuanticsOperator> {
     let mpo = difference_kernel_mpo(f, boundary)?;
-    let site_dims = vec![2; f.len()];
+    let mut site_dims =
+        try_vec_with_capacity::<usize>("difference-kernel site dimensions", f.len())?;
+    site_dims.resize(f.len(), 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }

@@ -209,6 +209,18 @@ fn checked_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
     Ok(())
 }
 
+fn try_vec_with_capacity<T>(name: &str, capacity: usize) -> CapiResult<Vec<T>> {
+    checked_allocation_len::<T>(&[capacity], name)?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(capacity).map_err(|err| {
+        capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name} allocation failed for capacity {capacity}: {err}"),
+        )
+    })?;
+    Ok(values)
+}
+
 fn validate_single_var_materialization_layout(
     layout: &InternalQttLayout,
     target_var: usize,
@@ -255,8 +267,7 @@ fn extract_chain_sites(mpo: &InternalTreeTN) -> CapiResult<Vec<SourceSite>> {
         ));
     }
 
-    checked_allocation_len::<SourceSite>(&[nsites], "source site list")?;
-    let mut sites = Vec::with_capacity(nsites);
+    let mut sites = try_vec_with_capacity::<SourceSite>("source site list", nsites)?;
     for site in 0..nsites {
         sites.push(SourceSite::from_chain_treetn(mpo, site, nsites)?);
     }
@@ -278,8 +289,8 @@ where
     let in_dim = in_index.dim();
     let right_dim = right_bond.as_ref().map_or(1, |idx| idx.dim());
 
-    let mut indices = Vec::new();
-    let mut dims = Vec::new();
+    let mut indices = try_vec_with_capacity::<InternalIndex>("chain tensor indices", 4)?;
+    let mut dims = try_vec_with_capacity::<usize>("chain tensor dimensions", 4)?;
     let has_left = left_bond.is_some();
     let has_right = right_bond.is_some();
 
@@ -297,7 +308,8 @@ where
     }
 
     let total_size = checked_allocation_len::<Complex64>(&dims, "chain tensor")?;
-    let mut data = vec![Complex64::new(0.0, 0.0); total_size];
+    let mut data = try_vec_with_capacity::<Complex64>("chain tensor data", total_size)?;
+    data.resize(total_size, Complex64::new(0.0, 0.0));
 
     for left in 0..left_dim {
         for out in 0..out_dim {
@@ -353,7 +365,8 @@ fn build_identity_site(
 }
 
 fn build_treetn_from_chain(tensors: Vec<TensorDynLen>) -> CapiResult<InternalTreeTN> {
-    let node_names: Vec<usize> = (0..tensors.len()).collect();
+    let mut node_names = try_vec_with_capacity::<usize>("chain node-name list", tensors.len())?;
+    node_names.extend(0..tensors.len());
     InternalTreeTN::from_tensors(tensors, node_names)
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))
 }
@@ -370,9 +383,12 @@ fn single_var_positions(layout: &InternalQttLayout, target_var: usize) -> CapiRe
     let positions = match layout.kind() {
         t4a_qtt_layout_kind::Interleaved => {
             let nvariables = layout.nvariables();
-            (0..resolution)
-                .map(|level| level * nvariables + target_var)
-                .collect()
+            let mut positions =
+                try_vec_with_capacity::<usize>("single-variable source positions", resolution)?;
+            for level in 0..resolution {
+                positions.push(level * nvariables + target_var);
+            }
+            positions
         }
         t4a_qtt_layout_kind::Fused => {
             return Err(capi_error(
@@ -429,22 +445,21 @@ fn expand_chain_with_identities(
     }
 
     let bond_count = nsites.saturating_sub(1);
-    checked_allocation_len::<usize>(&[bond_count], "expanded bond list")?;
-    let mut bond_dims = vec![1; bond_count];
+    let mut bond_dims = try_vec_with_capacity::<usize>("expanded bond list", bond_count)?;
+    bond_dims.resize(bond_count, 1);
     for (src_idx, window) in source_positions.windows(2).enumerate() {
         let bond_dim = source_sites[src_idx].right_dim;
         for dim in bond_dims.iter_mut().take(window[1]).skip(window[0]) {
             *dim = bond_dim;
         }
     }
-    checked_allocation_len::<InternalIndex>(&[bond_dims.len()], "expanded bond indices")?;
-    let bond_indices: Vec<_> = bond_dims
-        .iter()
-        .map(|&dim| InternalIndex::new_dyn(dim))
-        .collect();
+    let mut bond_indices =
+        try_vec_with_capacity::<InternalIndex>("expanded bond indices", bond_dims.len())?;
+    for &dim in &bond_dims {
+        bond_indices.push(InternalIndex::new_dyn(dim));
+    }
 
-    checked_allocation_len::<TensorDynLen>(&[nsites], "expanded tensor list")?;
-    let mut tensors = Vec::with_capacity(nsites);
+    let mut tensors = try_vec_with_capacity::<TensorDynLen>("expanded tensor list", nsites)?;
     let mut next_source = 0usize;
     for site in 0..nsites {
         let left_bond = (site > 0).then(|| bond_indices[site - 1].clone());
@@ -494,18 +509,14 @@ fn embed_single_var_fused(
         ));
     }
 
-    checked_allocation_len::<InternalIndex>(
-        &[source_sites.len().saturating_sub(1)],
-        "fused bond indices",
-    )?;
-    let bond_indices: Vec<_> = source_sites
-        .iter()
-        .take(source_sites.len().saturating_sub(1))
-        .map(|site| InternalIndex::new_dyn(site.right_dim))
-        .collect();
+    let bond_count = source_sites.len().saturating_sub(1);
+    let mut bond_indices =
+        try_vec_with_capacity::<InternalIndex>("fused bond indices", bond_count)?;
+    for site in source_sites.iter().take(bond_count) {
+        bond_indices.push(InternalIndex::new_dyn(site.right_dim));
+    }
 
-    checked_allocation_len::<TensorDynLen>(&[nsites], "fused tensor list")?;
-    let mut tensors = Vec::with_capacity(nsites);
+    let mut tensors = try_vec_with_capacity::<TensorDynLen>("fused tensor list", nsites)?;
     for (site_idx, src) in source_sites.iter().enumerate() {
         let left_bond = (site_idx > 0).then(|| bond_indices[site_idx - 1].clone());
         let right_bond = (site_idx + 1 < nsites).then(|| bond_indices[site_idx].clone());
@@ -626,14 +637,14 @@ fn parse_rationals(
         ));
     }
     checked_slice_len::<i64>(name, len)?;
+    let mut values = try_vec_with_capacity::<Rational64>(name, len)?;
 
     let nums = unsafe { std::slice::from_raw_parts(numerators, len) };
     let dens = unsafe { std::slice::from_raw_parts(denominators, len) };
-    nums.iter()
-        .zip(dens.iter())
-        .enumerate()
-        .map(|(i, (&num, &den))| rational_from_i64_parts(name, i, num, den))
-        .collect()
+    for (i, (&num, &den)) in nums.iter().zip(dens.iter()).enumerate() {
+        values.push(rational_from_i64_parts(name, i, num, den)?);
+    }
+    Ok(values)
 }
 
 fn parse_boundary_conditions(
@@ -647,11 +658,11 @@ fn parse_boundary_conditions(
         return Err(capi_error(T4A_NULL_POINTER, "bc is null"));
     }
     checked_slice_len::<t4a_boundary_condition>("bc", len)?;
-    Ok(unsafe { std::slice::from_raw_parts(bc, len) }
-        .iter()
-        .copied()
-        .map(Into::into)
-        .collect())
+    let mut values = try_vec_with_capacity::<BoundaryCondition>("boundary-condition list", len)?;
+    for &value in unsafe { std::slice::from_raw_parts(bc, len) } {
+        values.push(value.into());
+    }
+    Ok(values)
 }
 
 /// Create an immutable canonical QTT layout descriptor.
@@ -675,7 +686,10 @@ pub extern "C" fn t4a_qtt_layout_new(
         checked_slice_len::<usize>("variable_resolutions", nvariables)?;
 
         let resolutions = unsafe { std::slice::from_raw_parts(variable_resolutions, nvariables) };
-        let layout = InternalQttLayout::new(kind, resolutions.to_vec())
+        let mut resolution_values =
+            try_vec_with_capacity::<usize>("variable resolution list", nvariables)?;
+        resolution_values.extend_from_slice(resolutions);
+        let layout = InternalQttLayout::new(kind, resolution_values)
             .map_err(|msg| capi_error(T4A_INVALID_ARGUMENT, msg))?;
         Ok(t4a_qtt_layout::new(layout))
     })
