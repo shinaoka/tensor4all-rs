@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::Complex64;
 use tensor4all_tensorbackend::{from_vec2d, mat_mul, transpose, Matrix};
 
 fn identity(n: usize) -> Matrix<f64> {
@@ -67,6 +68,37 @@ fn test_rrlu_reconstruct() {
                 j,
                 diff
             );
+        }
+    }
+}
+
+#[test]
+fn rrlu_shape_validation_rejects_overflow_and_length_mismatch() {
+    assert!(validate_col_major_matrix_len(usize::MAX, 2, 0)
+        .unwrap_err()
+        .to_string()
+        .contains("overflows"));
+    assert!(validate_col_major_matrix_len(2, 2, 3)
+        .unwrap_err()
+        .to_string()
+        .contains("expected 4"));
+    validate_col_major_matrix_len(0, usize::MAX, 0).unwrap();
+}
+
+#[test]
+fn test_rrlu_complex64_reconstruct() {
+    let m = from_vec2d(vec![
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+        vec![Complex64::new(3.0, -2.0), Complex64::new(5.0, 0.5)],
+    ]);
+
+    let lu = rrlu(&m, None).unwrap();
+    assert_eq!(lu.npivots(), 2);
+
+    let reconstructed = mat_mul(&lu.left(true), &lu.right(true)).unwrap();
+    for i in 0..m.nrows() {
+        for j in 0..m.ncols() {
+            assert!((m[[i, j]] - reconstructed[[i, j]]).norm() < 1e-10);
         }
     }
 }

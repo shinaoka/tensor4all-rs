@@ -432,6 +432,26 @@ impl<T: Scalar> RrLU<T> {
     }
 }
 
+fn validate_col_major_matrix_len(
+    nrows: usize,
+    ncols: usize,
+    actual_len: usize,
+) -> crate::Result<()> {
+    let expected = nrows
+        .checked_mul(ncols)
+        .ok_or_else(|| MatrixCIError::InvalidArgument {
+            message: format!("matrix shape {nrows} x {ncols} overflows usize"),
+        })?;
+    if actual_len != expected {
+        return Err(MatrixCIError::InvalidArgument {
+            message: format!(
+                "column-major matrix length mismatch: expected {expected}, got {actual_len}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[inline]
 fn col_major_offset(nrows: usize, row: usize, col: usize) -> usize {
     row + nrows * col
@@ -715,6 +735,7 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
     let nr = a.nrows();
     let nc = a.ncols();
     let data = a.as_col_major_mut_slice();
+    validate_col_major_matrix_len(nr, nc, data.len())?;
     debug_assert_eq!(data.len(), nr * nc);
 
     let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
