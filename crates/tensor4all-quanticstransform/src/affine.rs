@@ -144,11 +144,12 @@ impl LinearConstraintRow {
             .fold(0u64, |factor, value| factor.gcd(&value.unsigned_abs()));
 
         if common_factor > 1 {
+            let mut coefficients = coefficients;
+            for coefficient in &mut coefficients {
+                *coefficient = divide_i64_by_u64(*coefficient, common_factor);
+            }
             Self {
-                coefficients: coefficients
-                    .into_iter()
-                    .map(|coefficient| divide_i64_by_u64(coefficient, common_factor))
-                    .collect(),
+                coefficients,
                 rhs: divide_i64_by_u64(rhs, common_factor),
             }
         } else {
@@ -175,8 +176,8 @@ impl LinearConstraintRow {
     ///
     /// # Errors
     /// Returns an error if any coefficient or the right-hand side has a zero
-    /// denominator, or if the primitive integer representation cannot fit in
-    /// `i64`.
+    /// denominator, if the primitive integer representation cannot fit in
+    /// `i64`, or if a backing allocation fails.
     ///
     /// # Examples
     ///
@@ -203,14 +204,13 @@ impl LinearConstraintRow {
         }
         denominator_lcm = denominator_lcm.lcm(&BigInt::from(*rhs.denom()));
 
-        let integer_coefficients = coefficients
-            .iter()
-            .map(|coefficient| {
-                let numerator = BigInt::from(*coefficient.numer());
-                let denominator = BigInt::from(*coefficient.denom());
-                numerator * (&denominator_lcm / denominator)
-            })
-            .collect();
+        let mut integer_coefficients =
+            try_vec_with_capacity::<BigInt>("constraint coefficient list", coefficients.len())?;
+        for coefficient in &coefficients {
+            let numerator = BigInt::from(*coefficient.numer());
+            let denominator = BigInt::from(*coefficient.denom());
+            integer_coefficients.push(numerator * (&denominator_lcm / denominator));
+        }
         let integer_rhs =
             BigInt::from(*rhs.numer()) * (&denominator_lcm / BigInt::from(*rhs.denom()));
 
@@ -242,20 +242,23 @@ fn normalize_bigint_row(coefficients: Vec<BigInt>, rhs: BigInt) -> Result<Linear
         BigInt::one()
     };
 
-    let coefficients = coefficients
-        .into_iter()
-        .map(|coefficient| coefficient / &common_factor)
-        .map(|coefficient| {
-            coefficient
+    let mut normalized_coefficients =
+        try_vec_with_capacity::<i64>("normalized constraint coefficient list", coefficients.len())?;
+    for coefficient in coefficients {
+        normalized_coefficients.push(
+            (coefficient / &common_factor)
                 .to_i64()
-                .ok_or_else(|| anyhow::anyhow!("normalized constraint coefficient exceeds i64"))
-        })
-        .collect::<Result<Vec<_>>>()?;
+                .ok_or_else(|| anyhow::anyhow!("normalized constraint coefficient exceeds i64"))?,
+        );
+    }
     let rhs = (rhs / common_factor)
         .to_i64()
         .ok_or_else(|| anyhow::anyhow!("normalized constraint right-hand side exceeds i64"))?;
 
-    Ok(LinearConstraintRow { coefficients, rhs })
+    Ok(LinearConstraintRow {
+        coefficients: normalized_coefficients,
+        rhs,
+    })
 }
 
 /// Affine transformation parameters.
@@ -452,9 +455,9 @@ impl AffineParams {
     /// Convenience method that converts integer values to rationals.
     ///
     /// # Errors
-    /// Returns an error when the matrix/vector lengths do not match the
-    /// dimensions, a dimension product overflows, or a power-of-two site
-    /// dimension cannot be represented safely.
+    /// Returns an error when a backing allocation fails, when the matrix/vector
+    /// lengths do not match the dimensions, a dimension product overflows, or
+    /// a power-of-two site dimension cannot be represented safely.
     ///
     /// # Examples
     ///
@@ -469,8 +472,14 @@ impl AffineParams {
     /// assert_eq!(params.n(), 2);
     /// ```
     pub fn from_integers(a: Vec<i64>, b: Vec<i64>, m: usize, n: usize) -> Result<Self> {
-        let a_rat: Vec<Rational64> = a.into_iter().map(Rational64::from_integer).collect();
-        let b_rat: Vec<Rational64> = b.into_iter().map(Rational64::from_integer).collect();
+        let mut a_rat = try_vec_with_capacity::<Rational64>("affine coefficient list", a.len())?;
+        for value in a {
+            a_rat.push(Rational64::from_integer(value));
+        }
+        let mut b_rat = try_vec_with_capacity::<Rational64>("affine translation list", b.len())?;
+        for value in b {
+            b_rat.push(Rational64::from_integer(value));
+        }
         Self::new(a_rat, b_rat, m, n)
     }
 
@@ -482,7 +491,7 @@ impl AffineParams {
 
     /// Convert to an exact integer representation by scaling with the LCM of
     /// all denominators.
-    fn to_integer_scaled(&self) -> (Vec<BigInt>, Vec<BigInt>, BigInt) {
+    fn to_integer_scaled(&self) -> Result<(Vec<BigInt>, Vec<BigInt>, BigInt)> {
         let mut denom_lcm = BigInt::one();
         for r in &self.a {
             denom_lcm = denom_lcm.lcm(&BigInt::from(*r.denom()));
@@ -496,10 +505,24 @@ impl AffineParams {
             let denominator = BigInt::from(*r.denom());
             numerator * (&denom_lcm / denominator)
         };
-        let a_int = self.a.iter().map(scale).collect();
-        let b_int = self.b.iter().map(scale).collect();
-        (a_int, b_int, denom_lcm)
+        let mut a_int =
+            try_vec_with_capacity::<BigInt>("scaled affine coefficient list", self.a.len())?;
+        for value in &self.a {
+            a_int.push(scale(value));
+        }
+        let mut b_int =
+            try_vec_with_capacity::<BigInt>("scaled affine translation list", self.b.len())?;
+        for value in &self.b {
+            b_int.push(scale(value));
+        }
+        Ok((a_int, b_int, denom_lcm))
     }
+}
+
+fn try_reserve_for_push<T>(values: &mut Vec<T>, name: &str) -> Result<()> {
+    values
+        .try_reserve(1)
+        .map_err(|err| anyhow::anyhow!("{name} allocation failed while growing: {err}"))
 }
 
 fn affine_boundary_weight(carry: &[BigInt], bc: &[BoundaryCondition]) -> f64 {
@@ -561,13 +584,12 @@ fn remap_affine_site_indices(
 
     // Build permutation table: perm[old_idx] = remapped index
     checked_allocation_len::<usize>(&[site_dim], "affine permutation")?;
-    let perm: Vec<usize> = (0..site_dim)
-        .map(|old_idx| {
-            let y_bits = old_idx & (output_dim - 1);
-            let x_bits = old_idx >> m;
-            y_bits * input_dim + x_bits
-        })
-        .collect();
+    let mut perm = try_vec_with_capacity::<usize>("affine permutation", site_dim)?;
+    for old_idx in 0..site_dim {
+        let y_bits = old_idx & (output_dim - 1);
+        let x_bits = old_idx >> m;
+        perm.push(y_bits * input_dim + x_bits);
+    }
 
     let r = mpo.len();
     let mut new_tensors =
@@ -746,34 +768,36 @@ pub fn affine_operator_interleaved(
 ) -> Result<QuanticsOperator> {
     let mut op = affine_operator(r, params, bc)?;
 
-    let fused_output_indices = (0..r)
-        .map(|site| {
-            op.get_output_mapping(&site)
-                .ok_or_else(|| anyhow::anyhow!("missing affine output mapping for site {site}"))
-                .map(|mapping| mapping.true_index.clone())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let fused_input_indices = (0..r)
-        .map(|site| {
-            op.get_input_mapping(&site)
-                .ok_or_else(|| anyhow::anyhow!("missing affine input mapping for site {site}"))
-                .map(|mapping| mapping.true_index.clone())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut fused_output_indices =
+        try_vec_with_capacity::<Index<DynId, TagSet>>("affine fused output indices", r)?;
+    for site in 0..r {
+        let mapping = op
+            .get_output_mapping(&site)
+            .ok_or_else(|| anyhow::anyhow!("missing affine output mapping for site {site}"))?;
+        fused_output_indices.push(mapping.true_index.clone());
+    }
+    let mut fused_input_indices =
+        try_vec_with_capacity::<Index<DynId, TagSet>>("affine fused input indices", r)?;
+    for site in 0..r {
+        let mapping = op
+            .get_input_mapping(&site)
+            .ok_or_else(|| anyhow::anyhow!("missing affine input mapping for site {site}"))?;
+        fused_input_indices.push(mapping.true_index.clone());
+    }
 
     for site in 0..r {
-        let output_indices = (0..params.m)
-            .map(|_| Index::<DynId, TagSet>::new_dyn(2))
-            .collect::<Vec<_>>();
+        let mut output_indices =
+            try_vec_with_capacity::<Index<DynId, TagSet>>("affine output indices", params.m)?;
+        output_indices.extend((0..params.m).map(|_| Index::<DynId, TagSet>::new_dyn(2)));
         op = op.unfuse_output_index(
             &fused_output_indices[site],
             &output_indices,
             LinearizationOrder::ColumnMajor,
         )?;
 
-        let input_indices = (0..params.n)
-            .map(|_| Index::<DynId, TagSet>::new_dyn(2))
-            .collect::<Vec<_>>();
+        let mut input_indices =
+            try_vec_with_capacity::<Index<DynId, TagSet>>("affine input indices", params.n)?;
+        input_indices.extend((0..params.n).map(|_| Index::<DynId, TagSet>::new_dyn(2)));
         op = op.unfuse_input_index(
             &fused_input_indices[site],
             &input_indices,
@@ -840,7 +864,7 @@ pub fn affine_transform_matrix(
         ));
     }
 
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled()?;
     let m = params.m;
     let n = params.n;
 
@@ -923,6 +947,9 @@ pub fn affine_transform_matrix(
                 if weight == 0.0 {
                     continue;
                 }
+                try_reserve_for_push(&mut rows, "affine matrix row list")?;
+                try_reserve_for_push(&mut cols, "affine matrix column list")?;
+                try_reserve_for_push(&mut vals, "affine matrix value list")?;
                 rows.push(y_flat);
                 cols.push(x_flat);
                 vals.push(weight);
@@ -941,7 +968,7 @@ fn affine_transform_mpo(
     params: &AffineParams,
     bc: &[BoundaryCondition],
 ) -> Result<TensorTrain<Complex64>> {
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled()?;
     let m = params.m;
     let n = params.n;
 
@@ -1009,7 +1036,7 @@ pub fn affine_transform_tensors_unfused(
         ));
     }
 
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled()?;
     let m = params.m;
     let n = params.n;
     let (_, _, site_dim) = checked_affine_site_dims(m, n)?;
@@ -1128,7 +1155,7 @@ pub fn affine_transform_tensors_unfused(
 /// assert_eq!(info.num_physical_dims(), 4);
 ///
 /// // Get shape for a tensor with bond dims 3 and 5
-/// let shape = info.unfused_shape(3, 5);
+/// let shape = info.unfused_shape(3, 5).unwrap();
 /// assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
 ///
 /// // Round-trip encode/decode
@@ -1256,21 +1283,29 @@ impl UnfusedTensorInfo {
     /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
     /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
     /// let info = UnfusedTensorInfo::new(&params).unwrap();
-    /// assert_eq!(info.unfused_shape(2, 3), vec![2, 2, 2, 3]);
+    /// assert_eq!(info.unfused_shape(2, 3).unwrap(), vec![2, 2, 2, 3]);
     /// ```
-    pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Vec<usize> {
-        let mut shape = Vec::with_capacity(2 + self.num_physical_dims);
+    ///
+    /// # Errors
+    /// Returns an error if the shape rank or backing allocation cannot be
+    /// represented safely.
+    pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Result<Vec<usize>> {
+        let rank = self
+            .num_physical_dims
+            .checked_add(2)
+            .ok_or_else(|| anyhow::anyhow!("unfused shape rank overflows usize"))?;
+        let mut shape = try_vec_with_capacity::<usize>("unfused shape", rank)?;
         shape.push(left_bond);
         shape.extend(std::iter::repeat_n(2, self.num_physical_dims));
         shape.push(right_bond);
-        shape
+        Ok(shape)
     }
 
     /// Decode a fused site index to individual variable bits.
     ///
     /// # Errors
     /// Returns an error when `fused_idx` is outside the checked fused site
-    /// dimension.
+    /// dimension or when a decoded-bit backing allocation fails.
     ///
     /// # Examples
     ///
@@ -1291,8 +1326,14 @@ impl UnfusedTensorInfo {
         let y_combined = fused_idx & (output_dim - 1);
         let x_combined = fused_idx >> self.m;
 
-        let y_bits: Vec<usize> = (0..self.m).map(|i| (y_combined >> i) & 1).collect();
-        let x_bits: Vec<usize> = (0..self.n).map(|j| (x_combined >> j) & 1).collect();
+        let mut y_bits = try_vec_with_capacity::<usize>("decoded affine output bits", self.m)?;
+        for i in 0..self.m {
+            y_bits.push((y_combined >> i) & 1);
+        }
+        let mut x_bits = try_vec_with_capacity::<usize>("decoded affine input bits", self.n)?;
+        for j in 0..self.n {
+            x_bits.push((x_combined >> j) & 1);
+        }
 
         Ok((y_bits, x_bits))
     }
@@ -1393,11 +1434,12 @@ fn affine_transform_tensors(
 
     // Track sign separately and work with absolute value so that right-shifting
     // always terminates. BigInt keeps all coefficient arithmetic exact.
-    let bsign: Vec<i8> = b_int
-        .iter()
-        .map(|b| if b.is_negative() { -1 } else { 1 })
-        .collect();
-    let mut b_work: Vec<BigInt> = b_int.iter().map(|b| b.abs()).collect();
+    let mut bsign = try_vec_with_capacity::<i8>("affine translation signs", m)?;
+    let mut b_work = try_vec_with_capacity::<BigInt>("affine translation magnitudes", m)?;
+    for b in b_int {
+        bsign.push(if b.is_negative() { -1 } else { 1 });
+        b_work.push(b.abs());
+    }
 
     // Process from LSB (site R-1) to MSB (site 0)
     let mut initial_carry = try_vec_with_capacity::<BigInt>("affine initial carry", m)?;
@@ -1408,17 +1450,14 @@ fn affine_transform_tensors(
 
     for _site in (0..r).rev() {
         // Extract current bit: (b_work & 1) * bsign
-        let b_curr: Vec<BigInt> = b_work
-            .iter()
-            .zip(bsign.iter())
-            .map(|(b, &s)| {
-                if (b % 2u8).is_zero() {
-                    BigInt::zero()
-                } else {
-                    BigInt::from(s)
-                }
-            })
-            .collect();
+        let mut b_curr = try_vec_with_capacity::<BigInt>("affine current translation bits", m)?;
+        for (b, &s) in b_work.iter().zip(bsign.iter()) {
+            b_curr.push(if (b % 2u8).is_zero() {
+                BigInt::zero()
+            } else {
+                BigInt::from(s)
+            });
+        }
 
         let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, true)?;
         carries = core_data.carries_out.clone();
@@ -1437,20 +1476,19 @@ fn affine_transform_tensors(
     let cap_matrix: Option<Vec<f64>> = if affine_needs_extension(bc, &b_work) {
         let mut ext_data_list: Vec<AffineCoreData> = Vec::new();
         while b_work.iter().any(|b| b > &BigInt::zero()) {
-            let b_curr: Vec<BigInt> = b_work
-                .iter()
-                .zip(bsign.iter())
-                .map(|(b, &s)| {
-                    if (b % 2u8).is_zero() {
-                        BigInt::zero()
-                    } else {
-                        BigInt::from(s)
-                    }
-                })
-                .collect();
+            let mut b_curr =
+                try_vec_with_capacity::<BigInt>("affine extension translation bits", m)?;
+            for (b, &s) in b_work.iter().zip(bsign.iter()) {
+                b_curr.push(if (b % 2u8).is_zero() {
+                    BigInt::zero()
+                } else {
+                    BigInt::from(s)
+                });
+            }
 
             let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, false)?;
             carries = core_data.carries_out.clone();
+            try_reserve_for_push(&mut ext_data_list, "affine extension core list")?;
             ext_data_list.push(core_data);
 
             b_work.iter_mut().for_each(|b| *b >>= 1);
@@ -1464,10 +1502,11 @@ fn affine_transform_tensors(
         // then multiply inward toward the main tensor chain.
 
         // Start with BC weights on the final carries
-        let bc_weights: Vec<f64> = carries
-            .iter()
-            .map(|c| affine_boundary_weight(c, bc))
-            .collect();
+        let mut bc_weights =
+            try_vec_with_capacity::<f64>("affine boundary weights", carries.len())?;
+        for carry in &carries {
+            bc_weights.push(affine_boundary_weight(carry, bc));
+        }
 
         // Contract extension tensors from outermost to innermost
         // ext_data_list is [innermost, ..., outermost] (order of computation)
@@ -1765,7 +1804,9 @@ fn affine_transform_core(
     }
 
     // Convert to sorted vectors for deterministic ordering
-    let mut carries_out: Vec<Vec<BigInt>> = carry_out_map.keys().cloned().collect();
+    let mut carries_out =
+        try_vec_with_capacity::<Vec<BigInt>>("affine outgoing carry list", carry_out_map.len())?;
+    carries_out.extend(carry_out_map.keys().cloned());
     carries_out.sort();
 
     let num_carry_out = carries_out.len();

@@ -56,5 +56,10 @@ fn identity_mpo_rejects_oversized_site_list() {
 #[test]
 fn try_vec_with_capacity_reports_capacity_overflow_context() {
     let error = try_vec_with_capacity::<u8>("test site list", usize::MAX).unwrap_err();
-    assert!(error.to_string().contains("test site list"));
+    let message = error.to_string();
+    assert!(message.contains("test site list"));
+    assert!(
+        message.contains("allocation failed"),
+        "unexpected error: {message}"
+    );
 }

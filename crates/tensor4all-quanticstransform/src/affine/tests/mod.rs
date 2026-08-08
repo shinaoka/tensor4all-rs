@@ -57,7 +57,17 @@ fn test_affine_extreme_i64_coefficients_are_exact() {
             AffineParams::from_integers(vec![coefficient], vec![translation], 1, 1).unwrap();
         let matrix = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
         let operator = affine_operator(2, &params, &[BoundaryCondition::Periodic]).unwrap();
-        let actual_operator = affine_operator_dense_matrix(&operator, 2);
+        let actual = operator.mpo().contract_to_tensor().unwrap();
+        let expected = affine_operator_expected_dense_tensor(&operator, &actual, 2, |y, x| {
+            let expected_y =
+                ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
+            Complex64::new(f64::from((y == expected_y) as u8), 0.0)
+        });
+        let maxabs = actual.distance(&expected).unwrap();
+        assert!(
+            maxabs < 1e-12,
+            "MPO mismatch for a={coefficient}, b={translation}: {maxabs}"
+        );
 
         for x in 0..4usize {
             let expected_y =
@@ -69,12 +79,6 @@ fn test_affine_extreme_i64_coefficients_are_exact() {
                     expected,
                     "reference matrix entry ({y}, {x}) for a={coefficient}, b={translation}"
                 );
-                assert_eq!(
-                    actual_operator[y + 4 * x].re,
-                    expected,
-                    "MPO entry ({y}, {x}) for a={coefficient}, b={translation}"
-                );
-                assert_eq!(actual_operator[y + 4 * x].im, 0.0);
             }
         }
     }
@@ -111,7 +115,7 @@ fn test_affine_params_to_integer_scaled() {
     let b = vec![Rational64::new(1, 6)]; // 1/6
     let params = AffineParams::new(a, b, 1, 2).unwrap();
 
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled().unwrap();
 
     // LCM of denominators (2, 3, 6) = 6
     assert_eq!(scale, BigInt::from(6));
@@ -159,7 +163,7 @@ fn test_linear_constraint_row_preserves_all_zero_row() {
 fn test_affine_params_to_integer_scaled_does_not_normalize_constraint_rows() {
     let params = AffineParams::from_integers(vec![16], vec![64], 1, 1).unwrap();
 
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled().unwrap();
 
     assert_eq!(a_int, vec![BigInt::from(16)]);
     assert_eq!(b_int, vec![BigInt::from(64)]);
@@ -730,35 +734,60 @@ fn affine_dense_reference_element_count(r: usize, m: usize, n: usize) -> Option<
     1usize.checked_shl(shift)
 }
 
-fn affine_operator_dense_matrix(op: &QuanticsOperator, r: usize) -> Vec<Complex64> {
-    let indices: Vec<_> = (0..r)
-        .flat_map(|site| {
-            [
-                op.get_output_mapping(&site)
-                    .expect("missing output mapping")
-                    .internal_index
-                    .clone(),
-                op.get_input_mapping(&site)
-                    .expect("missing input mapping")
-                    .internal_index
-                    .clone(),
-            ]
+fn affine_operator_expected_dense_tensor(
+    op: &QuanticsOperator,
+    template: &TensorDynLen,
+    r: usize,
+    mut expected: impl FnMut(usize, usize) -> Complex64,
+) -> TensorDynLen {
+    let indices = template.indices().to_vec();
+    let dims = template.dims();
+    let mut id_to_pos = std::collections::HashMap::new();
+    for (pos, index) in indices.iter().enumerate() {
+        id_to_pos.insert(*index.id(), pos);
+    }
+
+    let output_positions: Vec<usize> = (0..r)
+        .map(|site| {
+            let internal_id = *op
+                .get_output_mapping(&site)
+                .expect("missing output mapping")
+                .internal_index
+                .id();
+            *id_to_pos
+                .get(&internal_id)
+                .expect("output index not found in contracted tensor")
         })
         .collect();
-    let size = 1usize << r;
-    let mut matrix = vec![Complex64::new(0.0, 0.0); size * size];
+    let input_positions: Vec<usize> = (0..r)
+        .map(|site| {
+            let internal_id = *op
+                .get_input_mapping(&site)
+                .expect("missing input mapping")
+                .internal_index
+                .id();
+            *id_to_pos
+                .get(&internal_id)
+                .expect("input index not found in contracted tensor")
+        })
+        .collect();
 
+    let size = 1usize << r;
+    let mut data = vec![Complex64::new(0.0, 0.0); dims.iter().product()];
+    let mut coords = vec![0usize; dims.len()];
     for x in 0..size {
         for y in 0..size {
-            let mut values = Vec::with_capacity(2 * r);
+            coords.fill(0);
             for site in 0..r {
-                values.push((y >> (r - 1 - site)) & 1);
-                values.push((x >> (r - 1 - site)) & 1);
+                let bit_pos = r - 1 - site;
+                coords[output_positions[site]] = (y >> bit_pos) & 1;
+                coords[input_positions[site]] = (x >> bit_pos) & 1;
             }
-            matrix[y + size * x] = op.mpo().evaluate_point(&indices, &values).unwrap().into();
+            data[column_major_offset(&dims, &coords)] = expected(y, x);
         }
     }
-    matrix
+
+    TensorDynLen::from_dense(indices, data).expect("failed to build expected affine tensor")
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -1124,7 +1153,7 @@ fn test_unfused_tensor_info() {
     assert_eq!(info.physical_dim(), 2);
 
     // Test shape
-    let shape = info.unfused_shape(3, 5);
+    let shape = info.unfused_shape(3, 5).unwrap();
     assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
 
     // Test index encoding/decoding
@@ -1455,9 +1484,8 @@ fn test_affine_antiperiodic_mpo_applies_outgoing_carry_parity() {
     let modulus = 1i64 << r;
     let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
     let operator = affine_operator(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();
-    let actual = affine_operator_dense_matrix(&operator, r);
-
-    for x in 0..modulus as usize {
+    let actual = operator.mpo().contract_to_tensor().unwrap();
+    let expected = affine_operator_expected_dense_tensor(&operator, &actual, r, |y, x| {
         let raw = x as i64 + 1;
         let expected_y = raw.rem_euclid(modulus) as usize;
         let expected_sign = if raw.div_euclid(modulus).rem_euclid(2) == 0 {
@@ -1465,17 +1493,20 @@ fn test_affine_antiperiodic_mpo_applies_outgoing_carry_parity() {
         } else {
             -1.0
         };
-        for y in 0..modulus as usize {
-            let expected = if y == expected_y { expected_sign } else { 0.0 };
-            assert_eq!(
-                actual[y + modulus as usize * x].re,
-                expected,
-                "MPO entry ({y}, {x}) for outgoing carry parity"
-            );
-            assert_eq!(actual[y + modulus as usize * x].im, 0.0);
-        }
-    }
+        Complex64::new(if y == expected_y { expected_sign } else { 0.0 }, 0.0)
+    });
+    let maxabs = actual.distance(&expected).unwrap();
+    assert!(maxabs < 1e-12, "anti-periodic MPO mismatch: {maxabs}");
 
     // x = 7 produces outgoing carry 1 and must receive the anti-periodic sign.
-    assert_eq!(actual[7 * modulus as usize], Complex64::new(-1.0, 0.0));
+    let raw = 7i64 + 1;
+    assert_eq!(raw.div_euclid(modulus).rem_euclid(2), 1);
+    assert_eq!(
+        if raw.div_euclid(modulus).rem_euclid(2) == 0 {
+            1.0
+        } else {
+            -1.0
+        },
+        -1.0
+    );
 }

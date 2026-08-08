@@ -210,7 +210,6 @@ fn checked_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
 }
 
 fn try_vec_with_capacity<T>(name: &str, capacity: usize) -> CapiResult<Vec<T>> {
-    checked_allocation_len::<T>(&[capacity], name)?;
     let mut values = Vec::new();
     values.try_reserve_exact(capacity).map_err(|err| {
         capi_error(
@@ -233,12 +232,6 @@ fn validate_single_var_materialization_layout(
     }
 
     let r = layout.resolution(target_var);
-    checked_allocation_len::<SourceSite>(&[r], "source MPO site list")?;
-    checked_allocation_len::<TensorDynLen>(&[layout.nsites()], "materialized tensor list")?;
-    checked_allocation_len::<InternalIndex>(
-        &[layout.nsites().saturating_sub(1)],
-        "materialized bond index list",
-    )?;
 
     if layout.kind() == t4a_qtt_layout_kind::Fused {
         let phys_dim = bit_dim(layout.nvariables(), "fused local dimension")?;

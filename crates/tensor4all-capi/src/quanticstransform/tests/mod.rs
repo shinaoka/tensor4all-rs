@@ -403,6 +403,30 @@ fn test_try_vec_with_capacity_reports_invalid_argument_context() {
     let (status, error) = try_vec_with_capacity::<u8>("test C site list", usize::MAX).unwrap_err();
     assert_eq!(status, T4A_INVALID_ARGUMENT);
     assert!(error.contains("test C site list"));
+    assert!(
+        error.contains("allocation failed"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn test_public_phase_materializer_reservation_failure_preserves_sentinel() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[usize::MAX]);
+    let sentinel = std::ptr::NonNull::<t4a_treetn>::dangling().as_ptr();
+    let mut op = sentinel;
+
+    assert_eq!(
+        t4a_qtransform_phase_rotation_materialize(layout, 0, 0.0, &mut op),
+        T4A_INVALID_ARGUMENT
+    );
+    assert_eq!(op, sentinel);
+    let error = last_error();
+    assert!(
+        error.contains("allocation failed"),
+        "expected actual reservation failure, got: {error}"
+    );
+
+    t4a_qtt_layout_release(layout);
 }
 
 #[test]

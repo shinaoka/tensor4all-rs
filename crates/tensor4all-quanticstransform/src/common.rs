@@ -562,7 +562,6 @@ pub(crate) fn checked_allocation_len<T>(dims: &[usize], name: &str) -> Result<us
 }
 
 pub(crate) fn try_vec_with_capacity<T>(name: &str, capacity: usize) -> Result<Vec<T>> {
-    checked_allocation_len::<T>(&[capacity], name)?;
     let mut values = Vec::new();
     values.try_reserve_exact(capacity).map_err(|err| {
         anyhow::anyhow!("{name} allocation failed for capacity {capacity}: {err}")
