@@ -113,7 +113,8 @@ fn checked_dims_product(name: &str, dims: &[usize]) -> CapiResult<usize> {
 }
 
 fn validate_raw_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
-    if len > isize::MAX as usize / std::mem::size_of::<T>() {
+    let element_size = std::mem::size_of::<T>();
+    if element_size != 0 && len > isize::MAX as usize / element_size {
         return Err(capi_error(
             T4A_INVALID_ARGUMENT,
             format!("{name} byte length overflows isize::MAX"),

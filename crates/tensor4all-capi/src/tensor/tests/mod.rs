@@ -396,6 +396,14 @@ fn raw_slice_null_pointer_precedes_byte_length_validation() {
 }
 
 #[test]
+fn raw_slice_accepts_positive_length_zst() {
+    let len = 3;
+    let values = read_plain_slice::<()>("data", std::ptr::NonNull::dangling().as_ptr(), len)
+        .expect("ZST slices should not panic or fail validation");
+    assert_eq!(values, vec![(); len]);
+}
+
+#[test]
 fn test_tensor_select_indices_f64_drops_selected_axes() {
     let i = new_index(2);
     let j = new_index(3);
