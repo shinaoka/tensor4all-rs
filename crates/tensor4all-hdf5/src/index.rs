@@ -2,13 +2,18 @@
 
 use crate::backend::types::VarLenUnicode;
 use crate::backend::Group;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::tagset::TagSetLike;
 use tensor4all_core::IndexLike;
 
 use crate::schema;
+
+pub(crate) fn read_nonnegative_usize(name: &'static str, value: i64) -> Result<usize> {
+    usize::try_from(value)
+        .with_context(|| format!("HDF5 dataset {name} must be non-negative, got {value}"))
+}
 
 /// Convert a [`TagSet`] to a comma-separated string (ITensors.jl format).
 fn tagset_to_string(tags: &TagSet) -> String {
@@ -130,6 +135,7 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
         .as_reader()
         .read_scalar()
         .context("Failed to read index dim")?;
+    let dim = read_nonnegative_usize("dim", dim)?;
 
     // dir is read for schema compatibility but ignored
     let _dir: i64 = group
@@ -147,7 +153,7 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
     let tags_group = group.group("tags")?;
     let tags = read_tagset(&tags_group)?;
 
-    let idx = Index::new_with_tags(DynId(id), dim as usize, tags).set_plev(plev);
+    let idx = Index::new_with_tags(DynId(id), dim, tags).set_plev(plev);
     Ok(idx)
 }
 
@@ -195,8 +201,30 @@ pub(crate) fn read_index_set(group: &Group) -> Result<Vec<DynIndex>> {
         .as_reader()
         .read_scalar()
         .context("Failed to read IndexSet length")?;
+    let length = read_nonnegative_usize("length", length)?;
 
-    let mut indices = Vec::with_capacity(length as usize);
+    let member_names = group
+        .member_names()
+        .context("Failed to enumerate IndexSet child groups")?;
+    let child_group_count = member_names
+        .iter()
+        .filter(|name| name.starts_with("index_"))
+        .count();
+    if length > child_group_count {
+        bail!(
+            "HDF5 dataset length declares {length} indices, but found only {child_group_count} index_N child groups"
+        );
+    }
+    for i in 0..length {
+        let name = format!("index_{}", i + 1);
+        if !group.link_exists(&name) {
+            bail!(
+                "HDF5 dataset length declares {length} indices, but child group {name} is missing"
+            );
+        }
+    }
+
+    let mut indices = Vec::with_capacity(length);
     for i in 0..length {
         let name = format!("index_{}", i + 1);
         let index_group = group.group(&name)?;

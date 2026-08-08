@@ -184,6 +184,67 @@ fn test_itensor_3d_roundtrip() {
     std::fs::remove_file(&path).ok();
 }
 
+#[test]
+fn negative_index_dimension_is_rejected() {
+    let path = temp_path("negative_index_dim");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("tensor/inds/index_1")
+        .unwrap()
+        .dataset("dim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&-1_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("dim"));
+    assert!(error.contains("-1"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn negative_index_set_length_is_rejected() {
+    let path = temp_path("negative_index_set_length");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("tensor/inds")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&-1_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("-1"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn index_set_length_exceeding_child_groups_is_rejected() {
+    let path = temp_path("index_set_length_exceeds_groups");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("tensor/inds")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&3_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("3"));
+    assert!(error.contains("child groups"));
+    std::fs::remove_file(path).ok();
+}
+
 /// Create a simple 3-site MPS for testing.
 fn make_test_mps() -> TensorTrain {
     // Site 0: (1, d0=2, chi01=3) → indices: [link_left_dummy, site0, link01]
@@ -229,6 +290,73 @@ fn make_test_mps() -> TensorTrain {
     let t2 = TensorDynLen::from_dense(vec![link12_right, site2, right_dummy], data2).unwrap();
 
     TensorTrain::new(vec![t0, t1, t2]).unwrap()
+}
+
+#[test]
+fn negative_mps_length_is_rejected() {
+    let path = temp_path("negative_mps_length");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("mps")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&-1_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("-1"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn oversized_mps_limits_are_rejected() {
+    let path = temp_path("oversized_mps_limits");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    group
+        .dataset("llim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&i64::MAX)
+        .unwrap();
+    group
+        .dataset("rlim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&i64::MIN)
+        .unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("llim") || error.contains("rlim"));
+    assert!(error.contains("9223372036854775807") || error.contains("-9223372036854775808"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_length_exceeding_child_groups_is_rejected() {
+    let path = temp_path("mps_length_exceeds_groups");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("mps")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&4_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("4"));
+    assert!(error.contains("child groups"));
+    std::fs::remove_file(path).ok();
 }
 
 #[test]

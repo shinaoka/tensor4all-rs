@@ -4,11 +4,17 @@
 //! so this module is a thin wrapper around [`crate::itensor`].
 
 use crate::backend::Group;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
+use crate::index;
 use crate::itensor;
 use crate::schema;
+
+fn read_i32(name: &'static str, value: i64) -> Result<i32> {
+    i32::try_from(value)
+        .with_context(|| format!("HDF5 dataset {name} does not fit in i32, got {value}"))
+}
 
 const CANONICAL_FORM_ATTR: &str = "canonical_form";
 
@@ -109,31 +115,55 @@ pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS length")?;
+    let length = index::read_nonnegative_usize("length", length)?;
 
     let llim: i64 = group
         .dataset("llim")?
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS llim")?;
+    let llim = read_i32("llim", llim)?;
 
     let rlim: i64 = group
         .dataset("rlim")?
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS rlim")?;
+    let rlim = read_i32("rlim", rlim)?;
     let canonical_form = read_canonical_form(group)?;
 
-    let mut tensors = Vec::with_capacity(length as usize);
+    let member_names = group
+        .member_names()
+        .context("Failed to enumerate MPS child groups")?;
+    let child_group_count = member_names
+        .iter()
+        .filter(|name| name.starts_with("MPS[") && name.ends_with(']'))
+        .count();
+    if length > child_group_count {
+        bail!(
+            "HDF5 dataset length declares {length} MPS tensors, but found only {child_group_count} MPS[N] child groups"
+        );
+    }
     for i in 1..=length {
-        let name = format!("MPS[{}]", i);
+        let name = format!("MPS[{i}]");
+        if !group.link_exists(&name) {
+            bail!(
+                "HDF5 dataset length declares {length} MPS tensors, but child group {name} is missing"
+            );
+        }
+    }
+
+    let mut tensors = Vec::with_capacity(length);
+    for i in 1..=length {
+        let name = format!("MPS[{i}]");
         let tensor_group = group.group(&name)?;
         tensors.push(itensor::read_itensor(&tensor_group)?);
     }
 
     Ok(TensorTrain::with_ortho(
         tensors,
-        llim as i32,
-        rlim as i32,
+        llim,
+        rlim,
         canonical_form,
     )?)
 }
