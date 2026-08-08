@@ -334,6 +334,26 @@ fn test_discrete_with_initial_pivots() {
 }
 
 #[test]
+fn test_discrete_rejects_invalid_initial_pivot() {
+    let result = quanticscrossinterpolate_discrete(
+        &[4],
+        |_idx: &[i64]| 1.0_f64,
+        Some(vec![vec![0_i64]]),
+        QtciOptions::default().with_nrandominitpivot(0),
+    );
+    let message = match result {
+        Ok(_) => panic!("invalid initial pivot unexpectedly succeeded"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        message.contains("initial pivot [0] conversion failed"),
+        "{message}"
+    );
+    assert!(message.contains("Grid index 0"), "{message}");
+}
+
+#[test]
 fn test_continuous_grid_with_initial_pivots() {
     // Test quanticscrossinterpolate with initial pivots.
     let grid = DiscretizedGrid::builder(&[3])
@@ -376,6 +396,32 @@ fn test_continuous_grid_with_initial_pivots() {
     assert!(val.is_finite());
     let val = qtci.evaluate(&[8]).unwrap();
     assert!(val.is_finite());
+}
+
+#[test]
+fn test_continuous_grid_rejects_invalid_initial_pivot() {
+    let grid = DiscretizedGrid::builder(&[3])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .include_endpoint(true)
+        .build()
+        .unwrap();
+    let result = quanticscrossinterpolate(
+        &grid,
+        |_coords: &[f64]| 1.0_f64,
+        Some(vec![vec![0_i64]]),
+        QtciOptions::default().with_nrandominitpivot(0),
+    );
+    let message = match result {
+        Ok(_) => panic!("invalid initial pivot unexpectedly succeeded"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        message.contains("initial pivot [0] conversion failed"),
+        "{message}"
+    );
+    assert!(message.contains("Grid index 0"), "{message}");
 }
 
 #[test]
