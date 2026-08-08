@@ -103,6 +103,12 @@ fn test_fourier_error_one_site() {
 }
 
 #[test]
+fn test_fourier_error_oversized_site_list() {
+    let error = quantics_fourier_operator(usize::MAX, FourierOptions::default()).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}
+
+#[test]
 fn test_ftcore_error_one_site() {
     let options = FourierOptions::default();
     let result = FTCore::new(1, options);

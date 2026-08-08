@@ -30,3 +30,25 @@ fn checked_allocation_len_rejects_complex_byte_limit_before_allocation() {
     let error = checked_allocation_len::<Complex64>(&[elements], "complex tensor").unwrap_err();
     assert!(error.to_string().contains("byte length"));
 }
+
+#[test]
+fn checked_allocation_len_covers_product_and_zero_size_branches() {
+    let error = checked_allocation_len::<u8>(&[usize::MAX, 2], "overflow").unwrap_err();
+    assert!(error.to_string().contains("element count"));
+
+    assert_eq!(
+        checked_allocation_len::<u8>(&[0, usize::MAX], "zero").unwrap(),
+        0
+    );
+    assert_eq!(checked_allocation_len::<u8>(&[], "empty").unwrap(), 1);
+    assert_eq!(
+        checked_allocation_len::<()>(&[usize::MAX], "zst").unwrap(),
+        usize::MAX
+    );
+}
+
+#[test]
+fn identity_mpo_rejects_oversized_site_list() {
+    let error = identity_mpo(usize::MAX).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}

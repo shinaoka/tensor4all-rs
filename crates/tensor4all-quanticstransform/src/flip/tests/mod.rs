@@ -64,3 +64,9 @@ fn test_flip_error_zero_sites() {
     let result = flip_operator(0, BoundaryCondition::Periodic);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_flip_error_oversized_site_list() {
+    let error = flip_operator(usize::MAX, BoundaryCondition::Periodic).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}

@@ -71,7 +71,10 @@ pub use affine::{
     affine_operator, affine_operator_interleaved, affine_transform_matrix,
     affine_transform_tensors_unfused, AffineParams, LinearConstraintRow, UnfusedTensorInfo,
 };
-pub use common::{BoundaryCondition, CarryDirection};
+pub use common::{
+    identity_mpo, tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric,
+    BoundaryCondition, CarryDirection, QuanticsOperator,
+};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
 pub use difference_kernel::{difference_kernel_mpo, difference_kernel_operator};
 pub use flip::{flip_operator, flip_operator_multivar};

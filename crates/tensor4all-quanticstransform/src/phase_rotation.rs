@@ -9,8 +9,8 @@ use std::f64::consts::PI;
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
-    tensortrain_to_linear_operator_asymmetric, QuanticsOperator,
+    checked_multivar_dims, checked_site_list_capacity, embed_single_var_mpo,
+    tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric, QuanticsOperator,
 };
 
 /// Create a phase rotation operator: f(x) = exp(i*θ*x) * g(x)
@@ -31,8 +31,9 @@ use crate::common::{
 /// LinearOperator representing the phase rotation
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when `theta` is not finite, or when
-/// internal MPO/operator construction fails.
+/// Returns an error when `r` is zero, when `theta` is not finite, when the
+/// MPO site-list allocation exceeds checked bounds, or when internal
+/// MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -130,6 +131,7 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
 
     // Normalize theta to [0, 2π)
     let theta_mod = theta.rem_euclid(2.0 * PI);
+    checked_site_list_capacity(r, "phase rotation MPO site list")?;
 
     let mut tensors = Vec::with_capacity(r);
 

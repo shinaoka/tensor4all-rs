@@ -6,7 +6,7 @@
 //!
 //! Based on the algorithm from Quantics.jl/src/affine.jl
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use num_bigint::BigInt;
@@ -103,6 +103,13 @@ pub struct LinearConstraintRow {
     pub rhs: i64,
 }
 
+fn validate_rational_slice(values: &[Rational64], name: &str) -> Result<()> {
+    if let Some(index) = values.iter().position(|value| *value.denom() == 0) {
+        anyhow::bail!("{name}[{index}] has zero denominator");
+    }
+    Ok(())
+}
+
 impl LinearConstraintRow {
     /// Create a primitive integer constraint row.
     ///
@@ -185,6 +192,11 @@ impl LinearConstraintRow {
     /// assert_eq!(row.rhs, 3);
     /// ```
     pub fn from_rationals(coefficients: Vec<Rational64>, rhs: Rational64) -> Result<Self> {
+        validate_rational_slice(&coefficients, "constraint coefficients")?;
+        if *rhs.denom() == 0 {
+            anyhow::bail!("constraint rhs has zero denominator");
+        }
+
         let mut denominator_lcm = BigInt::one();
         for coefficient in &coefficients {
             denominator_lcm = denominator_lcm.lcm(&BigInt::from(*coefficient.denom()));
@@ -323,6 +335,9 @@ impl AffineParams {
     /// ).is_err());
     /// ```
     pub fn new(a: Vec<Rational64>, b: Vec<Rational64>, m: usize, n: usize) -> Result<Self> {
+        validate_rational_slice(&a, "affine matrix")?;
+        validate_rational_slice(&b, "affine translation")?;
+
         let expected_a_len = m
             .checked_mul(n)
             .ok_or_else(|| anyhow::anyhow!("Affine matrix dimensions overflow usize: {m} × {n}"))?;
@@ -401,6 +416,9 @@ impl AffineParams {
     }
 
     fn validate(&self) -> Result<()> {
+        validate_rational_slice(&self.a, "affine matrix")?;
+        validate_rational_slice(&self.b, "affine translation")?;
+
         let expected_a_len = self.m.checked_mul(self.n).ok_or_else(|| {
             anyhow::anyhow!(
                 "Affine matrix dimensions overflow usize: {} × {}",
@@ -788,6 +806,23 @@ pub fn affine_operator_interleaved(
 /// Returns an error when `params` is invalid, `r == 0`, when
 /// `bc.len() != params.m()`, or when dense dimensions/allocation sizes cannot
 /// be represented safely.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{
+///     affine_transform_matrix, AffineParams, BoundaryCondition,
+/// };
+///
+/// let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
+/// let matrix = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
+/// assert_eq!(matrix.rows(), 4);
+/// assert_eq!(matrix.cols(), 4);
+/// assert_eq!(matrix.nnz(), 4);
+/// for x in 0..4 {
+///     assert_eq!(matrix.get((x + 1) % 4, x), Some(&1.0));
+/// }
+/// ```
 pub fn affine_transform_matrix(
     r: usize,
     params: &AffineParams,
@@ -1571,6 +1606,27 @@ struct AffineCoreData {
     tensor: BoolTensor3,
 }
 
+fn record_affine_core_transition(
+    carry_out_map: &mut HashMap<Vec<BigInt>, BoolTensor2>,
+    carry_out: &mut Vec<BigInt>,
+    carry_len: usize,
+    num_carry_in: usize,
+    site_dim: usize,
+    carry_in_idx: usize,
+    site_idx: usize,
+) -> Result<()> {
+    if let Some(entry) = carry_out_map.get_mut(&*carry_out) {
+        entry.set([carry_in_idx, site_idx], true);
+        return Ok(());
+    }
+
+    let mut data = BoolTensor2::from_elem([num_carry_in, site_dim], false)?;
+    data.set([carry_in_idx, site_idx], true);
+    carry_out_map.insert(std::mem::take(carry_out), data);
+    carry_out.resize_with(carry_len, BigInt::zero);
+    Ok(())
+}
+
 /// Compute a single core tensor for the affine transformation.
 ///
 /// The core tensor encodes: 2 * carry_out = A * x + b_curr - scale * y + carry_in
@@ -1609,92 +1665,93 @@ fn affine_transform_core(
 
     // Iterate over all input carries.
     for (c_idx, carry_in) in carries_in.iter().enumerate() {
+        // Reuse these buffers across all x/y states. The map owns a carry vector
+        // only when it is a new key; duplicate transitions keep the scratch
+        // allocation in place.
+        let mut z = vec![BigInt::zero(); m];
+        let mut carry_out = vec![BigInt::zero(); m];
+
         // Iterate over all possible x values (N bits).
         for x_bits in 0..x_range {
-            let x: Vec<BigInt> = (0..n).map(|j| BigInt::from((x_bits >> j) & 1)).collect();
-
-            // Compute z = A*x + b + carry_in exactly.
-            let mut z = vec![BigInt::zero(); m];
+            // Compute z = A*x + b + carry_in exactly. Read x bits directly so
+            // coefficients are only added for set bits; this avoids constructing
+            // a BigInt-valued x vector and multiplying by zero or one.
             for i in 0..m {
-                z[i] = &carry_in[i] + &b_curr[i];
+                z[i].clone_from(&carry_in[i]);
+                z[i] += &b_curr[i];
                 for j in 0..n {
-                    z[i] += &a_int[i + m * j] * &x[j];
+                    if ((x_bits >> j) & 1) != 0 {
+                        z[i] += &a_int[i + m * j];
+                    }
                 }
             }
 
+            let shifted_x = x_bits
+                .checked_shl(variable_shift)
+                .ok_or_else(|| anyhow::anyhow!("affine site index overflows usize"))?;
+
             if scale.is_odd() {
-                // Scale is odd: unique y that satisfies the condition.
-                let y: Vec<BigInt> = z
-                    .iter()
-                    .map(|zi| {
-                        if zi.is_odd() {
-                            BigInt::one()
-                        } else {
-                            BigInt::zero()
-                        }
-                    })
-                    .collect();
-
-                // When bits are inactive, y must be zero (Julia PR #45 fix).
-                if !activebit && y.iter().any(|yi| !yi.is_zero()) {
-                    continue;
-                }
-
+                // Scale is odd: unique y that satisfies the condition. Build
+                // its packed bit index directly from z's parity and reuse the
+                // carry-out scratch vector.
                 let mut y_bits = 0usize;
-                for (i, yi) in y.iter().enumerate() {
-                    if yi.is_one() {
+                for i in 0..m {
+                    carry_out[i].clone_from(&z[i]);
+                    if z[i].is_odd() {
+                        if !activebit {
+                            y_bits = 0;
+                            break;
+                        }
                         let shift = u32::try_from(i)
                             .map_err(|_| anyhow::anyhow!("output bit shift exceeds u32"))?;
                         y_bits |= 1usize
                             .checked_shl(shift)
                             .ok_or_else(|| anyhow::anyhow!("output bit shift overflows usize"))?;
+                        carry_out[i] -= scale;
                     }
+                    carry_out[i] >>= 1usize;
                 }
 
-                let carry_out: Vec<BigInt> = z
-                    .iter()
-                    .zip(y.iter())
-                    .map(|(zi, yi)| (zi - scale * yi) >> 1usize)
-                    .collect();
-                let shifted_x = x_bits
-                    .checked_shl(variable_shift)
-                    .ok_or_else(|| anyhow::anyhow!("affine site index overflows usize"))?;
-                let site_idx = y_bits | shifted_x;
+                // When bits are inactive, y must be zero (Julia PR #45 fix).
+                if !activebit && z.iter().any(|zi| zi.is_odd()) {
+                    continue;
+                }
 
-                let entry = match carry_out_map.entry(carry_out) {
-                    Entry::Occupied(entry) => entry.into_mut(),
-                    Entry::Vacant(entry) => {
-                        entry.insert(BoolTensor2::from_elem([num_carry_in, site_dim], false)?)
-                    }
-                };
-                entry.set([c_idx, site_idx], true);
+                record_affine_core_transition(
+                    &mut carry_out_map,
+                    &mut carry_out,
+                    m,
+                    num_carry_in,
+                    site_dim,
+                    c_idx,
+                    y_bits | shifted_x,
+                )?;
             } else {
                 // Scale is even: z must be even for a valid y.
                 if z.iter().any(|zi| zi.is_odd()) {
                     continue;
                 }
 
-                // y can be any value.
+                // y can be any value. Subtract scale only for set output bits,
+                // then shift in place; no per-state BigInt bit vector needed.
                 for y_bits in 0..y_range {
-                    let y: Vec<BigInt> = (0..m).map(|i| BigInt::from((y_bits >> i) & 1)).collect();
-
-                    let carry_out: Vec<BigInt> = z
-                        .iter()
-                        .zip(y.iter())
-                        .map(|(zi, yi)| (zi - scale * yi) >> 1usize)
-                        .collect();
-                    let shifted_x = x_bits
-                        .checked_shl(variable_shift)
-                        .ok_or_else(|| anyhow::anyhow!("affine site index overflows usize"))?;
-                    let site_idx = y_bits | shifted_x;
-
-                    let entry = match carry_out_map.entry(carry_out) {
-                        Entry::Occupied(entry) => entry.into_mut(),
-                        Entry::Vacant(entry) => {
-                            entry.insert(BoolTensor2::from_elem([num_carry_in, site_dim], false)?)
+                    for i in 0..m {
+                        carry_out[i].clone_from(&z[i]);
+                        if ((y_bits >> i) & 1) != 0 {
+                            carry_out[i] -= scale;
                         }
-                    };
-                    entry.set([c_idx, site_idx], true);
+                        carry_out[i] >>= 1usize;
+                    }
+
+                    record_affine_core_transition(
+                        &mut carry_out_map,
+                        &mut carry_out,
+                        m,
+                        num_carry_in,
+                        site_dim,
+                        c_idx,
+                        y_bits | shifted_x,
+                    )?;
                 }
             }
         }

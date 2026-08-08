@@ -209,6 +209,43 @@ fn checked_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
     Ok(())
 }
 
+fn validate_single_var_materialization_layout(
+    layout: &InternalQttLayout,
+    target_var: usize,
+) -> CapiResult<usize> {
+    if target_var >= layout.nvariables() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "target_var must be smaller than nvariables",
+        ));
+    }
+
+    let r = layout.resolution(target_var);
+    checked_allocation_len::<SourceSite>(&[r], "source MPO site list")?;
+    checked_allocation_len::<TensorDynLen>(&[layout.nsites()], "materialized tensor list")?;
+    checked_allocation_len::<InternalIndex>(
+        &[layout.nsites().saturating_sub(1)],
+        "materialized bond index list",
+    )?;
+
+    if layout.kind() == t4a_qtt_layout_kind::Fused {
+        let phys_dim = bit_dim(layout.nvariables(), "fused local dimension")?;
+        checked_allocation_len::<Complex64>(&[phys_dim, phys_dim], "fused site tensor")?;
+    }
+
+    Ok(r)
+}
+
+fn validate_affine_materialization_layout(layout: &InternalQttLayout) -> CapiResult<()> {
+    checked_allocation_len::<SourceSite>(&[layout.nsites()], "affine site list")?;
+    checked_allocation_len::<TensorDynLen>(&[layout.nsites()], "affine tensor list")?;
+    checked_allocation_len::<InternalIndex>(
+        &[layout.nsites().saturating_sub(1)],
+        "affine bond index list",
+    )?;
+    Ok(())
+}
+
 fn extract_chain_sites(mpo: &InternalTreeTN) -> CapiResult<Vec<SourceSite>> {
     let nsites = mpo.node_count();
     if nsites == 0 {
@@ -656,13 +693,7 @@ pub extern "C" fn t4a_qtransform_shift_materialize(
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
-        if target_var >= layout_ref.nvariables() {
-            return Err(capi_error(
-                T4A_INVALID_ARGUMENT,
-                "target_var must be smaller than nvariables",
-            ));
-        }
-        let r = layout_ref.resolution(target_var);
+        let r = validate_single_var_materialization_layout(layout_ref, target_var)?;
         let source = shift_operator(r, offset, bc.into())
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
@@ -681,13 +712,7 @@ pub extern "C" fn t4a_qtransform_flip_materialize(
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
-        if target_var >= layout_ref.nvariables() {
-            return Err(capi_error(
-                T4A_INVALID_ARGUMENT,
-                "target_var must be smaller than nvariables",
-            ));
-        }
-        let r = layout_ref.resolution(target_var);
+        let r = validate_single_var_materialization_layout(layout_ref, target_var)?;
         let source =
             flip_operator(r, bc.into()).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
@@ -706,13 +731,7 @@ pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
-        if target_var >= layout_ref.nvariables() {
-            return Err(capi_error(
-                T4A_INVALID_ARGUMENT,
-                "target_var must be smaller than nvariables",
-            ));
-        }
-        let r = layout_ref.resolution(target_var);
+        let r = validate_single_var_materialization_layout(layout_ref, target_var)?;
         let source = phase_rotation_operator(r, theta)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
@@ -730,13 +749,7 @@ pub extern "C" fn t4a_qtransform_cumsum_materialize(
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
-        if target_var >= layout_ref.nvariables() {
-            return Err(capi_error(
-                T4A_INVALID_ARGUMENT,
-                "target_var must be smaller than nvariables",
-            ));
-        }
-        let r = layout_ref.resolution(target_var);
+        let r = validate_single_var_materialization_layout(layout_ref, target_var)?;
         let source = cumsum_operator(r).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
         Ok(t4a_treetn::new(treetn))
@@ -756,13 +769,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
-        if target_var >= layout_ref.nvariables() {
-            return Err(capi_error(
-                T4A_INVALID_ARGUMENT,
-                "target_var must be smaller than nvariables",
-            ));
-        }
-        let r = layout_ref.resolution(target_var);
+        let r = validate_single_var_materialization_layout(layout_ref, target_var)?;
         let mut options = if forward != 0 {
             FourierOptions::forward()
         } else {
@@ -799,10 +806,12 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
 ///
 /// # Errors
 ///
-/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `m * n` or a
-/// fused site/allocation size overflows, `layout->kind()` is not `Fused`,
-/// `b_den[i] == 0`, or `a_den[i + k * m] == 0`. Dimension and byte checks run
-/// before reading any coefficient or boundary-condition pointer.
+/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `m * n`, the
+/// layout-dependent site-list allocation, or a fused site/allocation size
+/// overflows, `layout->kind()` is not `Fused`, `b_den[i] == 0`, or
+/// `a_den[i + k * m] == 0`. Dimension and byte checks run before reading any
+/// coefficient or boundary-condition pointer, so invalid layout dimensions
+/// take precedence over null coefficient and boundary-condition pointers.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtransform_affine_materialize(
     layout: *const t4a_qtt_layout,
@@ -830,6 +839,7 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
                 "affine materialization currently supports fused layouts only",
             ));
         }
+        validate_affine_materialization_layout(layout_ref)?;
 
         let a_len = m.checked_mul(n).ok_or_else(|| {
             capi_error(

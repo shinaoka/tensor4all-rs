@@ -4,8 +4,9 @@ use num_complex::Complex64;
 use num_rational::Rational64;
 use tensor4all_core::TensorDynLen;
 use tensor4all_quanticstransform::{
-    affine_operator, cumsum_operator, flip_operator, phase_rotation_operator,
-    quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
+    affine_operator, affine_transform_matrix, cumsum_operator, flip_operator,
+    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams,
+    BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::LinearOperator;
 
@@ -345,34 +346,60 @@ fn test_affine_fused_materialization_matches_rust_reference() {
 
 #[test]
 fn test_affine_fused_materialization_handles_i64_extreme_coefficients() {
-    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
-    let a_num = [i64::MIN];
-    let a_den = [1i64];
-    let b_num = [i64::MIN];
-    let b_den = [1i64];
-    let bc = [t4a_boundary_condition::Periodic];
-    let mut op = std::ptr::null_mut();
-    assert_eq!(
-        t4a_qtransform_affine_materialize(
-            layout,
-            a_num.as_ptr(),
-            a_den.as_ptr(),
-            b_num.as_ptr(),
-            b_den.as_ptr(),
+    for &(coefficient, translation) in &[
+        (i64::MIN, i64::MIN),
+        (i64::MIN, i64::MAX),
+        (i64::MAX, i64::MIN),
+        (i64::MAX, i64::MAX),
+    ] {
+        let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+        let a_num = [coefficient];
+        let a_den = [1i64];
+        let b_num = [translation];
+        let b_den = [1i64];
+        let bc = [t4a_boundary_condition::Periodic];
+        let mut op = std::ptr::null_mut();
+        assert_eq!(
+            t4a_qtransform_affine_materialize(
+                layout,
+                a_num.as_ptr(),
+                a_den.as_ptr(),
+                b_num.as_ptr(),
+                b_den.as_ptr(),
+                1,
+                1,
+                bc.as_ptr(),
+                &mut op,
+            ),
+            T4A_SUCCESS
+        );
+        let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+        let params = AffineParams::new(
+            vec![Rational64::from_integer(coefficient)],
+            vec![Rational64::from_integer(translation)],
             1,
             1,
-            bc.as_ptr(),
-            &mut op,
-        ),
-        T4A_SUCCESS
-    );
-    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
-    for x in 0..4usize {
-        let y = ((i64::MIN as i128) * (x as i128) + i64::MIN as i128).rem_euclid(4) as usize;
-        assert_eq!(actual[y + 4 * x], Complex64::new(1.0, 0.0));
+        )
+        .unwrap();
+        let direct = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
+        // The direct reference enumerates variable values MSB-first, while
+        // the C matrix helper enumerates the two MPO sites in chain order.
+        let reverse_bits = |value: usize| ((value & 1) << 1) | ((value >> 1) & 1);
+        for x_site in 0..4usize {
+            let x_value = reverse_bits(x_site);
+            for row_site in 0..4usize {
+                let y_value = reverse_bits(row_site);
+                let expected = Complex64::new(*direct.get(y_value, x_value).unwrap_or(&0.0), 0.0);
+                assert_eq!(
+                    actual[row_site + 4 * x_site],
+                    expected,
+                    "matrix entry ({row_site}, {x_site}) for a={coefficient}, b={translation}"
+                );
+            }
+        }
+        t4a_treetn_release(op);
+        t4a_qtt_layout_release(layout);
     }
-    t4a_treetn_release(op);
-    t4a_qtt_layout_release(layout);
 }
 
 #[test]
@@ -385,6 +412,92 @@ fn test_fused_allocation_checks_f64_and_c64_byte_boundaries() {
     assert_eq!(c64_error.0, T4A_INVALID_ARGUMENT);
     assert!(f64_error.1.contains("byte length"));
     assert!(c64_error.1.contains("byte length"));
+}
+
+#[test]
+fn test_checked_allocation_len_covers_product_and_zero_size_branches() {
+    let product_error = checked_allocation_len::<u8>(&[usize::MAX, 2], "product").unwrap_err();
+    assert_eq!(product_error.0, T4A_INVALID_ARGUMENT);
+    assert!(product_error.1.contains("element count"));
+    assert_eq!(
+        checked_allocation_len::<u8>(&[0, usize::MAX], "zero").unwrap(),
+        0
+    );
+    assert_eq!(checked_allocation_len::<u8>(&[], "empty").unwrap(), 1);
+    assert_eq!(
+        checked_allocation_len::<()>(&[usize::MAX], "zst").unwrap(),
+        usize::MAX
+    );
+}
+
+#[test]
+fn test_fused_materializers_reject_oversized_site_list_before_source_mpo() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[usize::MAX]);
+    let mut op = std::ptr::null_mut();
+
+    macro_rules! assert_rejected {
+        ($call:expr) => {{
+            assert_eq!($call, T4A_INVALID_ARGUMENT);
+            assert!(op.is_null());
+            op = std::ptr::null_mut();
+            let error = last_error();
+            assert!(
+                error.contains("site") || error.contains("allocation") || error.contains("byte"),
+                "unexpected diagnostic: {error}"
+            );
+        }};
+    }
+
+    assert_rejected!(t4a_qtransform_flip_materialize(
+        layout,
+        0,
+        t4a_boundary_condition::Periodic,
+        &mut op
+    ));
+    assert_rejected!(t4a_qtransform_phase_rotation_materialize(
+        layout, 0, 0.0, &mut op
+    ));
+    assert_rejected!(t4a_qtransform_cumsum_materialize(layout, 0, &mut op));
+    assert_rejected!(t4a_qtransform_fourier_materialize(
+        layout, 0, 1, 0, 0.0, &mut op
+    ));
+    assert_rejected!(t4a_qtransform_shift_materialize(
+        layout,
+        0,
+        0,
+        t4a_boundary_condition::Periodic,
+        &mut op
+    ));
+    assert!(op.is_null());
+
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_affine_layout_site_allocation_precedes_coefficient_pointer_parsing() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[usize::MAX]);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            layout,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            1,
+            std::ptr::null(),
+            &mut op,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(op.is_null());
+    let error = last_error();
+    assert!(
+        error.contains("site") || error.contains("allocation") || error.contains("byte"),
+        "unexpected diagnostic: {error}"
+    );
+    t4a_qtt_layout_release(layout);
 }
 
 #[test]

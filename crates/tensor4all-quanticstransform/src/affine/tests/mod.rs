@@ -29,6 +29,23 @@ fn test_linear_constraint_row_accepts_i64_extremes() {
 }
 
 #[test]
+fn test_rational_inputs_reject_zero_denominators() {
+    let malformed = Rational64::new_raw(1, 0);
+
+    let error =
+        AffineParams::new(vec![malformed], vec![Rational64::from_integer(0)], 1, 1).unwrap_err();
+    assert!(error.to_string().contains("zero denominator"));
+
+    let error = LinearConstraintRow::from_rationals(vec![malformed], Rational64::from_integer(1))
+        .unwrap_err();
+    assert!(error.to_string().contains("zero denominator"));
+
+    let error = LinearConstraintRow::from_rationals(vec![Rational64::from_integer(1)], malformed)
+        .unwrap_err();
+    assert!(error.to_string().contains("zero denominator"));
+}
+
+#[test]
 fn test_affine_extreme_i64_coefficients_are_exact() {
     for &(coefficient, translation) in &[
         (i64::MIN, i64::MIN),
@@ -44,7 +61,7 @@ fn test_affine_extreme_i64_coefficients_are_exact() {
                 ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
             assert_eq!(*matrix.get(expected, x).unwrap_or(&0.0), 1.0);
         }
-        assert!(affine_operator(2, &params, &[BoundaryCondition::Periodic]).is_ok());
+        assert_affine_mpo_matches_matrix(2, &params, &[BoundaryCondition::Periodic]);
     }
 }
 

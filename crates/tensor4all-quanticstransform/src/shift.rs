@@ -10,8 +10,9 @@ use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
-    tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+    checked_multivar_dims, checked_site_list_capacity, embed_single_var_mpo,
+    tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric, BoundaryCondition,
+    QuanticsOperator,
 };
 
 /// Create a shift operator for `|x> -> |x + offset>`.
@@ -128,6 +129,7 @@ pub(crate) fn shift_mpo(
         return transpose_binary_operator_mpo(&mpo);
     }
 
+    checked_site_list_capacity(r, "shift MPO site list")?;
     let shift = u32::try_from(r)
         .map_err(|_| anyhow::anyhow!("number of sites {r} exceeds signed shift width"))?;
     let n_max = 1i64

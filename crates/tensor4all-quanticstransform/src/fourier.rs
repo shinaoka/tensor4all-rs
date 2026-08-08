@@ -14,7 +14,7 @@ use tensor4all_simplett::{
     Tensor3Ops, TensorTrain,
 };
 
-use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
+use crate::common::{checked_site_list_capacity, tensortrain_to_linear_operator, QuanticsOperator};
 use tensor4all_simplett::tensor::Tensor4;
 
 /// Options for Fourier transform construction.
@@ -115,7 +115,9 @@ impl FTCore {
     /// Create a new FTCore for r bits.
     ///
     /// # Errors
-    /// Returns an error when `r < 2` or when Fourier MPO construction fails.
+    /// Returns an error when `r < 2`, when the Fourier MPO site-list
+    /// allocation exceeds checked bounds, or when Fourier MPO construction
+    /// fails.
     pub fn new(r: usize, options: FourierOptions) -> Result<Self> {
         if r < 2 {
             anyhow::bail!("Number of sites must be at least 2, got {r}");
@@ -185,8 +187,8 @@ impl FTCore {
 /// LinearOperator representing the QFT
 ///
 /// # Errors
-/// Returns an error when `r < 2` or when Fourier MPO/operator construction
-/// fails.
+/// Returns an error when `r < 2`, when the Fourier MPO site-list allocation
+/// exceeds checked bounds, or when Fourier MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -214,6 +216,8 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
     if r < 2 {
         anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
+
+    checked_site_list_capacity(r, "Fourier MPO site list")?;
 
     let k = options.k;
     let sign = options.sign;

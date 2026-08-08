@@ -8,8 +8,9 @@ use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
-    tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+    checked_multivar_dims, checked_site_list_capacity, embed_single_var_mpo,
+    tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric, BoundaryCondition,
+    QuanticsOperator,
 };
 
 /// Create a flip operator: f(x) = g(2^R - x)
@@ -25,7 +26,8 @@ use crate::common::{
 ///
 /// # Errors
 /// Returns an error when `r` is zero, when one-site flip construction is
-/// requested, or when internal MPO/operator construction fails.
+/// requested, when the MPO site-list allocation exceeds checked bounds, or
+/// when internal MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -119,6 +121,7 @@ pub fn flip_operator_multivar(
 #[allow(clippy::needless_range_loop)]
 fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
     let single_tensor = single_tensor_flip();
+    checked_site_list_capacity(r, "flip MPO site list")?;
 
     let mut tensors = Vec::with_capacity(r);
 

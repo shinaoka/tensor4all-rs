@@ -63,6 +63,12 @@ fn test_phase_rotation_error_zero_sites() {
 }
 
 #[test]
+fn test_phase_rotation_error_oversized_site_list() {
+    let error = phase_rotation_operator(usize::MAX, PI).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}
+
+#[test]
 fn test_phase_rotation_periodicity() {
     // θ and θ + 2π should give the same result
     let mpo1 = phase_rotation_mpo(4, PI / 3.0).unwrap();

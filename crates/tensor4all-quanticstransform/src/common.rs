@@ -82,6 +82,18 @@ pub enum CarryDirection {
 
 /// Type alias for the standard LinearOperator used in this crate.
 /// Uses TensorDynLen as the tensor type and usize as the node name type.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{
+///     identity_mpo, tensortrain_to_linear_operator, QuanticsOperator,
+/// };
+///
+/// let mpo = identity_mpo(1).unwrap();
+/// let operator: QuanticsOperator = tensortrain_to_linear_operator(&mpo, &[2]).unwrap();
+/// assert_eq!(operator.mpo().node_count(), 1);
+/// ```
 pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 
 /// Convert a TensorTrain (MPO form) to a LinearOperator.
@@ -95,7 +107,28 @@ pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 /// * `site_dims` - Site dimensions for input/output (typically all 2s)
 ///
 /// # Returns
-/// LinearOperator wrapping the MPO as a TreeTN
+/// LinearOperator wrapping the MPO as a TreeTN.
+///
+/// # Errors
+/// Returns an error when the tensor train is empty, `site_dims` has the wrong
+/// length, a site dimension product overflows, or a required allocation exceeds
+/// the checked `usize`/`isize::MAX` bounds.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_quanticstransform::tensortrain_to_linear_operator;
+/// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+///
+/// let mut tensor = tensor3_zeros(1, 4, 1);
+/// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
+/// tensor.set3(0, 3, 0, Complex64::new(1.0, 0.0));
+/// let mpo = TensorTrain::new(vec![tensor]).unwrap();
+/// let operator = tensortrain_to_linear_operator(&mpo, &[2]).unwrap();
+/// assert_eq!(operator.mpo().node_count(), 1);
+/// assert!(tensortrain_to_linear_operator(&mpo, &[2, 2]).is_err());
+/// ```
 pub fn tensortrain_to_linear_operator(
     tt: &TensorTrain<Complex64>,
     site_dims: &[usize],
@@ -286,7 +319,28 @@ pub fn tensortrain_to_linear_operator(
 /// * `output_dims` - Output dimensions per site
 ///
 /// # Returns
-/// LinearOperator wrapping the MPO as a TreeTN
+/// LinearOperator wrapping the MPO as a TreeTN.
+///
+/// # Errors
+/// Returns an error when the tensor train is empty, either dimension slice has
+/// the wrong length, a site input/output product overflows, or a required
+/// allocation exceeds the checked `usize`/`isize::MAX` bounds.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_quanticstransform::tensortrain_to_linear_operator_asymmetric;
+/// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+///
+/// let mut tensor = tensor3_zeros(1, 6, 1);
+/// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
+/// tensor.set3(0, 5, 0, Complex64::new(1.0, 0.0));
+/// let mpo = TensorTrain::new(vec![tensor]).unwrap();
+/// let operator = tensortrain_to_linear_operator_asymmetric(&mpo, &[2], &[3]).unwrap();
+/// assert_eq!(operator.mpo().node_count(), 1);
+/// assert!(tensortrain_to_linear_operator_asymmetric(&mpo, &[2], &[2]).is_err());
+/// ```
 pub fn tensortrain_to_linear_operator_asymmetric(
     tt: &TensorTrain<Complex64>,
     input_dims: &[usize],
@@ -497,6 +551,10 @@ pub(crate) fn checked_allocation_len<T>(dims: &[usize], name: &str) -> Result<us
     Ok(elements)
 }
 
+pub(crate) fn checked_site_list_capacity(r: usize, name: &str) -> Result<()> {
+    checked_allocation_len::<tensor4all_simplett::Tensor3<Complex64>>(&[r], name).map(|_| ())
+}
+
 pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)> {
     if nvariables < 2 {
         anyhow::bail!("nvariables must be at least 2, got {nvariables}");
@@ -538,10 +596,7 @@ pub(crate) fn embed_single_var_mpo(
     }
     let (dim_multi, site_dim_new) = checked_multivar_dims(nvariables)?;
     let r = mpo.len();
-    checked_allocation_len::<tensor4all_simplett::Tensor3<Complex64>>(
-        &[r],
-        "embedded MPO tensor list",
-    )?;
+    checked_site_list_capacity(r, "embedded MPO tensor list")?;
 
     let mut new_tensors = Vec::with_capacity(r);
 
@@ -612,12 +667,29 @@ pub(crate) fn embed_single_var_mpo(
         .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e))
 }
 
-/// Create an identity MPO for r sites with dimension 2.
+/// Create an identity MPO for `r` binary sites.
+///
+/// # Errors
+/// Returns an error when `r == 0` or when the site-list allocation exceeds
+/// the checked `usize`/`isize::MAX` bounds.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::identity_mpo;
+/// use tensor4all_simplett::AbstractTensorTrain;
+///
+/// let mpo = identity_mpo(2).unwrap();
+/// assert_eq!(mpo.len(), 2);
+/// assert_eq!(mpo.site_dims(), vec![4, 4]);
+/// assert!(identity_mpo(0).is_err());
+/// ```
 #[allow(dead_code)]
 pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
+    checked_site_list_capacity(r, "identity MPO site list")?;
 
     let mut tensors = Vec::with_capacity(r);
 

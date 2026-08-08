@@ -521,8 +521,12 @@ enum t4a_status_code t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t
  *
  * # Errors
  *
- * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
- * is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
+ * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `m * n`, the
+ * layout-dependent site-list allocation, or a fused site/allocation size
+ * overflows, `layout->kind()` is not `Fused`, `b_den[i] == 0`, or
+ * `a_den[i + k * m] == 0`. Dimension and byte checks run before reading any
+ * coefficient or boundary-condition pointer, so invalid layout dimensions
+ * take precedence over null coefficient and boundary-condition pointers.
  */
 enum t4a_status_code t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout,
                                                        const int64_t *a_num,
