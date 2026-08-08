@@ -87,7 +87,10 @@ thread_local! {
 /// Store an error message in thread-local storage.
 ///
 /// When the `RUST_BACKTRACE` environment variable is set (to `1` or `full`),
-/// a backtrace is captured and appended to the message.
+/// a backtrace is captured and appended to the message. Ordinary release builds
+/// omit source-level debug information; use
+/// `cargo build --profile release-debug -p tensor4all-capi` when file-and-line
+/// diagnostics or a Rust debugger are required.
 pub(crate) fn set_last_error(msg: &str) {
     let bt = std::backtrace::Backtrace::capture();
     let full_msg = match bt.status() {
