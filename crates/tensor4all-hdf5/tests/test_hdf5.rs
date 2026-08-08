@@ -1,6 +1,8 @@
 use approx::assert_abs_diff_eq;
+use hdf5_metno::types::VarLenUnicode;
 use hdf5_metno::File;
 use num_complex::Complex64;
+use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 use tensor4all_hdf5::{append_itensor, append_mps, load_itensor, load_mps, save_itensor, save_mps};
@@ -11,6 +13,26 @@ fn temp_path(name: &str) -> String {
     dir.join(format!("tensor4all_hdf5_test_{}.h5", name))
         .to_string_lossy()
         .to_string()
+}
+
+struct TempHdf5Path(String);
+
+impl TempHdf5Path {
+    fn new(name: &str) -> Self {
+        let path = temp_path(name);
+        std::fs::remove_file(&path).ok();
+        Self(path)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for TempHdf5Path {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.0).ok();
+    }
 }
 
 fn itensor_error(name: &str, mutate: impl FnOnce(&hdf5_metno::Group)) -> String {
@@ -356,34 +378,34 @@ fn index_set_zero_length_with_children_is_rejected() {
 
 #[test]
 fn index_set_zero_length_with_many_unrelated_members_is_rejected_without_panic() {
-    let path = temp_path("index_set_zero_length_many_unrelated");
-    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
-    let file = File::open_rw(&path).unwrap();
-    let inds = file.group("tensor/inds").unwrap();
-    inds.dataset("length")
-        .unwrap()
-        .as_writer()
-        .write_scalar(&0_i64)
-        .unwrap();
-    for n in 0..64 {
-        let name = format!("unrelated_{n}");
-        inds.new_dataset::<u8>()
-            .shape(())
-            .create(name.as_str())
+    let path = TempHdf5Path::new("index_set_zero_length_many_unrelated");
+    save_itensor(path.as_str(), "tensor", &make_test_tensor_f64()).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let inds = file.group("tensor/inds").unwrap();
+        inds.dataset("length")
             .unwrap()
             .as_writer()
-            .write_scalar(&0_u8)
+            .write_scalar(&0_i64)
             .unwrap();
+        for n in 0..64 {
+            let name = format!("unrelated_{n}");
+            inds.new_dataset::<u8>()
+                .shape(())
+                .create(name.as_str())
+                .unwrap()
+                .as_writer()
+                .write_scalar(&0_u8)
+                .unwrap();
+        }
     }
-    drop(file);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        load_itensor(&path, "tensor")
+        load_itensor(path.as_str(), "tensor")
     }));
     assert!(result.is_ok(), "reader panicked: {:?}", result.err());
     let error = result.unwrap().unwrap_err().to_string();
     assert!(error.contains("length"), "{error}");
-    std::fs::remove_file(path).ok();
 }
 
 /// Create a simple 3-site MPS for testing.
@@ -638,42 +660,44 @@ fn mps_expected_soft_link_is_rejected() {
 
 #[test]
 fn mps_zero_length_with_children_is_rejected() {
-    let path = temp_path("mps_zero_length_with_children");
+    let path = TempHdf5Path::new("mps_zero_length_with_children");
     let mps = TensorTrain::new(Vec::new()).unwrap();
-    save_mps(&path, "mps", &mps).unwrap();
-    let file = File::open_rw(&path).unwrap();
-    file.group("mps").unwrap().create_group("MPS[1]").unwrap();
-    drop(file);
+    save_mps(path.as_str(), "mps", &mps).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        file.group("mps").unwrap().create_group("MPS[1]").unwrap();
+    }
 
-    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    let error = load_mps(path.as_str(), "mps").unwrap_err().to_string();
     assert!(error.contains("MPS[1]"));
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn mps_zero_length_with_many_unrelated_members_is_rejected_without_panic() {
-    let path = temp_path("mps_zero_length_many_unrelated");
-    save_mps(&path, "mps", &TensorTrain::new(Vec::new()).unwrap()).unwrap();
-    let file = File::open_rw(&path).unwrap();
-    let group = file.group("mps").unwrap();
-    for n in 0..64 {
-        let name = format!("unrelated_{n}");
-        group
-            .new_dataset::<u8>()
-            .shape(())
-            .create(name.as_str())
-            .unwrap()
-            .as_writer()
-            .write_scalar(&0_u8)
-            .unwrap();
+    let path = TempHdf5Path::new("mps_zero_length_many_unrelated");
+    save_mps(path.as_str(), "mps", &TensorTrain::new(Vec::new()).unwrap()).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("mps").unwrap();
+        for n in 0..64 {
+            let name = format!("unrelated_{n}");
+            group
+                .new_dataset::<u8>()
+                .shape(())
+                .create(name.as_str())
+                .unwrap()
+                .as_writer()
+                .write_scalar(&0_u8)
+                .unwrap();
+        }
     }
-    drop(file);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_mps(&path, "mps")));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_mps(path.as_str(), "mps")
+    }));
     assert!(result.is_ok(), "reader panicked: {:?}", result.err());
     let error = result.unwrap().unwrap_err().to_string();
     assert!(error.contains("length"), "{error}");
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
@@ -804,6 +828,69 @@ fn test_mps_canonical_form_roundtrip() {
     assert_eq!(loaded.rlim(), mps.rlim());
 
     std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn mps_missing_canonical_form_ignores_many_unrelated_attributes() {
+    let path = TempHdf5Path::new("mps_missing_canonical_form_many_attributes");
+    save_mps(path.as_str(), "mps", &make_test_mps()).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("mps").unwrap();
+        for n in 0..64 {
+            let name = format!("unrelated_{n}");
+            group
+                .new_attr::<i32>()
+                .shape(())
+                .create(name.as_str())
+                .unwrap()
+                .as_writer()
+                .write_scalar(&n)
+                .unwrap();
+        }
+    }
+
+    let loaded = load_mps(path.as_str(), "mps").unwrap();
+    assert_eq!(loaded.canonical_form(), None);
+}
+
+#[test]
+fn mps_invalid_canonical_form_value_is_rejected_with_context() {
+    let error = mps_error("mps_invalid_canonical_form_value", |group| {
+        let attr = group
+            .new_attr::<i32>()
+            .shape(())
+            .create("canonical_form")
+            .unwrap();
+        attr.as_writer().write_scalar(&999_i32).unwrap();
+    });
+    assert!(error.contains("canonical_form"), "{error}");
+    assert!(error.contains("999"), "{error}");
+}
+
+#[test]
+fn mps_invalid_canonical_form_type_is_rejected_with_context() {
+    let error = mps_error("mps_invalid_canonical_form_type", |group| {
+        let attr = group
+            .new_attr::<VarLenUnicode>()
+            .shape(())
+            .create("canonical_form")
+            .unwrap();
+        attr.as_writer()
+            .write_scalar(&VarLenUnicode::from_str("LU").unwrap())
+            .unwrap();
+    });
+    assert!(error.contains("canonical_form"), "{error}");
+    assert!(error.contains("read"), "{error}");
+}
+
+#[test]
+fn mps_reader_does_not_enumerate_attribute_names() {
+    let source = include_str!("../src/mps.rs");
+    assert!(
+        !source.contains("attr_names("),
+        "MPS reader must use constant-space attribute lookup"
+    );
 }
 
 #[test]

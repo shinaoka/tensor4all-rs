@@ -3,7 +3,7 @@
 //! MPS is simply metadata (length, llim, rlim) + a sequence of ITensors,
 //! so this module is a thin wrapper around [`crate::itensor`].
 
-use crate::backend::Group;
+use crate::backend::{self, Group};
 use anyhow::{Context, Result};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
@@ -59,16 +59,16 @@ fn write_canonical_form(group: &Group, tt: &TensorTrain) -> Result<()> {
 }
 
 fn read_canonical_form(group: &Group) -> Result<Option<CanonicalForm>> {
-    if !group
-        .attr_names()?
-        .iter()
-        .any(|name| name == CANONICAL_FORM_ATTR)
+    if !backend::attribute_exists(group, CANONICAL_FORM_ATTR)
+        .context("Failed to check MPS canonical_form attribute existence")?
     {
         return Ok(None);
     }
 
-    let value: i32 = group
-        .attr(CANONICAL_FORM_ATTR)?
+    let attr = group
+        .attr(CANONICAL_FORM_ATTR)
+        .context("Failed to open MPS canonical_form attribute")?;
+    let value: i32 = attr
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS canonical_form")?;

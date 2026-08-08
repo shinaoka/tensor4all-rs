@@ -51,6 +51,7 @@ fn is_expected_member(
 
 fn first_unexpected_member(
     group: &Group,
+    object_kind: &str,
     length: usize,
     prefix: &str,
     closing: Option<char>,
@@ -65,7 +66,7 @@ fn first_unexpected_member(
                 false
             }
         })
-        .with_context(|| "Failed to enumerate HDF5 child members")
+        .with_context(|| format!("Failed to enumerate HDF5 {object_kind} child members"))
 }
 
 /// Validate the exact child-link schema without retaining attacker-controlled members.
@@ -73,6 +74,8 @@ fn first_unexpected_member(
 /// The declared child count is checked against the parent link count before any
 /// caller allocates its result. Each expected child is then opened as a group and
 /// dropped immediately. Callers reopen the validated groups only while reading them.
+/// The allocation bound is a code invariant: this helper uses one-link-at-a-time
+/// iteration and retains at most one unexpected name for diagnostics.
 pub(crate) fn validate_expected_child_groups(
     group: &Group,
     length: usize,
@@ -91,7 +94,8 @@ pub(crate) fn validate_expected_child_groups(
     let member_count = group.len();
 
     if member_count != expected_member_count {
-        if let Some(name) = first_unexpected_member(group, length, prefix, closing, metadata_names)?
+        if let Some(name) =
+            first_unexpected_member(group, object_kind, length, prefix, closing, metadata_names)?
         {
             bail!(
                 "HDF5 {object_kind} child member {name} is outside the exact declared range 1..={length} for declared length {length}"
@@ -101,7 +105,9 @@ pub(crate) fn validate_expected_child_groups(
             "HDF5 dataset length declares {length} {object_kind} children, but found {member_count} parent members instead of {expected_member_count}; expected child groups do not match"
         );
     }
-    if let Some(name) = first_unexpected_member(group, length, prefix, closing, metadata_names)? {
+    if let Some(name) =
+        first_unexpected_member(group, object_kind, length, prefix, closing, metadata_names)?
+    {
         bail!(
             "HDF5 {object_kind} child member {name} is outside the exact declared range 1..={length} for declared length {length}"
         );
