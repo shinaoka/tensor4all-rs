@@ -9,7 +9,7 @@ use std::f64::consts::PI;
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    embed_single_var_mpo, tensortrain_to_linear_operator,
+    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
     tensortrain_to_linear_operator_asymmetric, QuanticsOperator,
 };
 
@@ -105,9 +105,9 @@ pub fn phase_rotation_operator_multivar(
         anyhow::bail!("theta must be finite, got {theta}");
     }
 
+    let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = phase_rotation_mpo(r, theta)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
-    let dim_multi = 1 << nvariables;
     let dims = vec![dim_multi; r];
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }

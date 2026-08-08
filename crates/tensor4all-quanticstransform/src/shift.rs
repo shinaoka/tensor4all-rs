@@ -10,7 +10,7 @@ use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    embed_single_var_mpo, tensortrain_to_linear_operator,
+    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
 
@@ -89,9 +89,9 @@ pub fn shift_operator_multivar(
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
 
+    let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = shift_mpo(r, offset, bc)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
-    let dim_multi = 1 << nvariables;
     let dims = vec![dim_multi; r];
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
@@ -128,7 +128,11 @@ pub(crate) fn shift_mpo(
         return transpose_binary_operator_mpo(&mpo);
     }
 
-    let n_max = 1i64 << r;
+    let shift = u32::try_from(r)
+        .map_err(|_| anyhow::anyhow!("number of sites {r} exceeds signed shift width"))?;
+    let n_max = 1i64
+        .checked_shl(shift)
+        .ok_or_else(|| anyhow::anyhow!("number of sites {r} exceeds signed shift width"))?;
 
     // Normalize offset to [0, 2^R)
     let (nbc, offset_mod) = {

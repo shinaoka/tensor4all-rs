@@ -8,7 +8,7 @@ use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    embed_single_var_mpo, tensortrain_to_linear_operator,
+    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
 
@@ -93,9 +93,9 @@ pub fn flip_operator_multivar(
         ));
     }
 
+    let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = flip_mpo(r, bc)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
-    let dim_multi = 1 << nvariables;
     let dims = vec![dim_multi; r];
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }

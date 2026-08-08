@@ -436,6 +436,26 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     Ok(LinearOperator::new(treetn, input_mapping, output_mapping))
 }
 
+pub(crate) fn checked_pow2(width: usize, name: &str) -> Result<usize> {
+    let shift = u32::try_from(width)
+        .map_err(|_| anyhow::anyhow!("{name} {width} exceeds usize shift width"))?;
+    1usize
+        .checked_shl(shift)
+        .ok_or_else(|| anyhow::anyhow!("{name} {width} exceeds usize shift width"))
+}
+
+pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)> {
+    if nvariables < 2 {
+        anyhow::bail!("nvariables must be at least 2, got {nvariables}");
+    }
+
+    let local_dim = checked_pow2(nvariables, "nvariables")?;
+    let site_dim = local_dim.checked_mul(local_dim).ok_or_else(|| {
+        anyhow::anyhow!("multi-variable site dimension overflows usize for nvariables {nvariables}")
+    })?;
+    Ok((local_dim, site_dim))
+}
+
 /// Embed a single-variable MPO into a multi-variable context.
 ///
 /// The original MPO acts on one variable (site_dim = d*d for d=2, i.e., in/out dim 2).
@@ -462,13 +482,8 @@ pub(crate) fn embed_single_var_mpo(
             nvariables
         ));
     }
-    if nvariables < 2 {
-        return Err(anyhow::anyhow!("nvariables must be at least 2"));
-    }
-
+    let (dim_multi, site_dim_new) = checked_multivar_dims(nvariables)?;
     let r = mpo.len();
-    let dim_multi = 1usize << nvariables; // 2^nvars
-    let site_dim_new = dim_multi * dim_multi;
 
     let mut new_tensors = Vec::with_capacity(r);
 

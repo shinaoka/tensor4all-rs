@@ -19,7 +19,7 @@ use tensor4all_core::LinearizationOrder;
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+    checked_pow2, tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
 use tensor4all_simplett::tensor::Tensor3 as GenericTensor3;
 
@@ -275,13 +275,18 @@ impl AffineParams {
     /// ).is_err());
     /// ```
     pub fn new(a: Vec<Rational64>, b: Vec<Rational64>, m: usize, n: usize) -> Result<Self> {
-        if a.len() != m * n {
+        let expected_a_len = m
+            .checked_mul(n)
+            .ok_or_else(|| anyhow::anyhow!("Affine matrix dimensions overflow usize: {m} × {n}"))?;
+        checked_pow2(m, "output variable count")?;
+        checked_pow2(n, "input variable count")?;
+        if a.len() != expected_a_len {
             return Err(anyhow::anyhow!(
                 "Matrix A has {} elements but expected {}×{}={}",
                 a.len(),
                 m,
                 n,
-                m * n
+                expected_a_len
             ));
         }
         if b.len() != m {
@@ -389,18 +394,30 @@ fn affine_needs_extension(bc: &[BoundaryCondition], b_work: &[i64]) -> bool {
 ///
 /// Internal encoding: `site_idx = y_bits | (x_bits << m)` (y-minor, x-major)
 /// Expected encoding: `s = s_out * in_dim + s_in = y_bits * 2^n + x_bits` (x-minor, y-major)
+fn checked_affine_site_dims(m: usize, n: usize) -> Result<(usize, usize, usize)> {
+    let input_dim = checked_pow2(n, "input variable count")?;
+    let output_dim = checked_pow2(m, "output variable count")?;
+    let site_dim = input_dim.checked_mul(output_dim).ok_or_else(|| {
+        anyhow::anyhow!(
+            "affine site dimension overflows usize for {m} output variables and {n} input variables"
+        )
+    })?;
+    Ok((input_dim, output_dim, site_dim))
+}
+
 fn remap_affine_site_indices(
     mpo: &TensorTrain<Complex64>,
     m: usize,
     n: usize,
     site_dim: usize,
 ) -> Result<TensorTrain<Complex64>> {
-    let input_dim = 1 << n;
+    let input_dim = checked_pow2(n, "input variable count")?;
+    let output_dim = checked_pow2(m, "output variable count")?;
 
     // Build permutation table: perm[old_idx] = remapped index
     let perm: Vec<usize> = (0..site_dim)
         .map(|old_idx| {
-            let y_bits = old_idx & ((1 << m) - 1);
+            let y_bits = old_idx & (output_dim - 1);
             let x_bits = old_idx >> m;
             y_bits * input_dim + x_bits
         })
@@ -500,20 +517,19 @@ pub fn affine_operator(
         ));
     }
 
-    let mpo = affine_transform_mpo(r, params, bc)?;
     // Site dimensions: M output variables, N input variables
     // Input dimension per site: 2^N (N input bits)
     // Output dimension per site: 2^M (M output bits)
     let m = params.m;
     let n = params.n;
-    let input_dim = 1 << n;
-    let output_dim = 1 << m;
+    let (input_dim, output_dim, site_dim) = checked_affine_site_dims(m, n)?;
+
+    let mpo = affine_transform_mpo(r, params, bc)?;
 
     // The internal affine MPO uses site encoding: site_idx = y_bits | (x_bits << m)
     // (y-minor, x-major). But tensortrain_to_linear_operator_asymmetric expects
     // s = s_out * in_dim + s_in = y_bits * 2^N + x_bits (x-minor, y-major).
     // We need to remap the site indices.
-    let site_dim = input_dim * output_dim;
     let remapped_mpo = remap_affine_site_indices(&mpo, m, n, site_dim)?;
 
     let input_dims = vec![input_dim; r];
@@ -648,9 +664,23 @@ pub fn affine_transform_matrix(
     let m = params.m;
     let n = params.n;
 
-    let input_size = 1usize << (r * n); // 2^(R*N)
-    let output_size = 1usize << (r * m); // 2^(R*M)
-    let modulus = 1i64 << r; // 2^R
+    let input_exponent = r.checked_mul(n).ok_or_else(|| {
+        anyhow::anyhow!("affine input dimension exponent overflows usize: {r} * {n}")
+    })?;
+    let output_exponent = r.checked_mul(m).ok_or_else(|| {
+        anyhow::anyhow!("affine output dimension exponent overflows usize: {r} * {m}")
+    })?;
+    let input_size = checked_pow2(input_exponent, "affine input dimension exponent")?;
+    let output_size = checked_pow2(output_exponent, "affine output dimension exponent")?;
+    let modulus_shift = u32::try_from(r)
+        .map_err(|_| anyhow::anyhow!("number of bits {r} exceeds signed modulus width"))?;
+    let modulus = 1i64
+        .checked_shl(modulus_shift)
+        .ok_or_else(|| anyhow::anyhow!("number of bits {r} exceeds signed modulus width"))?;
+    if r >= (i64::BITS - 1) as usize {
+        anyhow::bail!("number of bits {r} exceeds signed modulus width");
+    }
+    let bit_mask = checked_pow2(r, "number of bits")? - 1;
 
     let mut rows = Vec::new();
     let mut cols = Vec::new();
@@ -663,7 +693,7 @@ pub fn affine_transform_matrix(
         // Decode x_flat to N-dimensional x vector
         // x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
         let x: Vec<i64> = (0..n)
-            .map(|var| ((x_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+            .map(|var| ((x_flat >> (var * r)) & bit_mask) as i64)
             .collect();
 
         // Compute v = A*x + b (unscaled)
@@ -678,7 +708,7 @@ pub fn affine_transform_matrix(
         for y_flat in 0..output_size {
             // Decode y_flat to M-dimensional y vector
             let y: Vec<i64> = (0..m)
-                .map(|var| ((y_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+                .map(|var| ((y_flat >> (var * r)) & bit_mask) as i64)
                 .collect();
 
             let mut carry = vec![0i64; m];
@@ -797,6 +827,7 @@ pub fn affine_transform_tensors_unfused(
     let (a_int, b_int, scale) = params.to_integer_scaled();
     let m = params.m;
     let n = params.n;
+    let (_, _, site_dim) = checked_affine_site_dims(m, n)?;
 
     // Compute fused tensors first
     let fused_tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, bc)?;
@@ -814,7 +845,6 @@ pub fn affine_transform_tensors_unfused(
     // unfused[left, y0, y1, ..., yM-1, x0, x1, ..., xN-1, right]
 
     let mut unfused_tensors = Vec::with_capacity(r);
-    let site_dim = 1 << (m + n);
 
     for tensor in fused_tensors.iter() {
         let left_dim = tensor.left_dim();
@@ -992,7 +1022,7 @@ fn affine_transform_tensors(
     n: usize,
     bc: &[BoundaryCondition],
 ) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
-    let site_dim = 1 << (m + n); // 2^(M+N) for fused representation
+    let (_, _, site_dim) = checked_affine_site_dims(m, n)?;
 
     // Track sign separately and work with absolute value
     // so that right-shifting always terminates (Julia PR #45 approach)
@@ -1201,9 +1231,21 @@ fn affine_transform_core(
     activebit: bool,
 ) -> Result<AffineCoreData> {
     let mut carry_out_map: HashMap<Vec<i64>, BoolTensor2> = HashMap::new();
-    let x_range = if activebit { 1 << n } else { 1 };
-    let y_range = if activebit { 1 << m } else { 1 };
-    let site_dim = x_range * y_range;
+    let x_range = if activebit {
+        checked_pow2(n, "input variable count")?
+    } else {
+        1
+    };
+    let y_range = if activebit {
+        checked_pow2(m, "output variable count")?
+    } else {
+        1
+    };
+    let site_dim = x_range.checked_mul(y_range).ok_or_else(|| {
+        anyhow::anyhow!(
+            "affine site dimension overflows usize for {m} output variables and {n} input variables"
+        )
+    })?;
     let num_carry_in = carries_in.len();
 
     // Iterate over all input carries

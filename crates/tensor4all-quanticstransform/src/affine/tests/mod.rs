@@ -161,6 +161,32 @@ fn test_affine_error_bc_mismatch() {
 }
 
 #[test]
+fn test_affine_operator_rejects_variable_shift_width() {
+    let params = AffineParams {
+        a: Vec::new(),
+        b: vec![Rational64::from_integer(0)],
+        m: 1,
+        n: usize::BITS as usize,
+    };
+    let error = affine_operator(1, &params, &[BoundaryCondition::Periodic]).unwrap_err();
+    assert!(error.to_string().contains("input variable count"));
+}
+
+#[test]
+fn test_affine_operator_rejects_site_dimension_overflow() {
+    let width = usize::BITS as usize / 2;
+    let params = AffineParams {
+        a: Vec::new(),
+        b: vec![Rational64::from_integer(0); width],
+        m: width,
+        n: width,
+    };
+    let bc = vec![BoundaryCondition::Periodic; width];
+    let error = affine_operator(1, &params, &bc).unwrap_err();
+    assert!(error.to_string().contains("site dimension"));
+}
+
+#[test]
 fn test_affine_pullback_bc_mismatch_via_transpose() {
     // Boundary-condition length must equal params.m; affine_operator
     // rejects mismatches regardless of whether the caller later transposes.
@@ -191,6 +217,18 @@ fn test_affine_params_dimension_error() {
     let b = vec![Rational64::from_integer(0)]; // 1 element but m=2
     let params = AffineParams::new(a, b, 2, 2);
     assert!(params.is_err());
+
+    let error = AffineParams::new(Vec::new(), Vec::new(), usize::MAX, 2).unwrap_err();
+    assert!(error.to_string().contains("overflow"));
+
+    let error = AffineParams::new(
+        Vec::new(),
+        vec![Rational64::from_integer(0)],
+        1,
+        usize::BITS as usize,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("input variable count"));
 }
 
 #[test]
