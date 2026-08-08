@@ -51,6 +51,12 @@ pub struct Matrix<T> {
     ncols: usize,
 }
 
+fn checked_matrix_len(nrows: usize, ncols: usize) -> usize {
+    nrows
+        .checked_mul(ncols)
+        .unwrap_or_else(|| panic!("matrix shape product overflow: {nrows} rows * {ncols} columns"))
+}
+
 /// Error returned when converting a [`TypedTensor`] into a [`Matrix`].
 ///
 /// Use this when accepting dynamic tensor-shaped values at a dense-matrix
@@ -332,7 +338,7 @@ impl<T> Matrix<T> {
     ///
     /// # Panics
     ///
-    /// Panics if `data.len() != nrows * ncols`.
+    /// Panics if `nrows * ncols` overflows or if `data.len() != nrows * ncols`.
     ///
     /// # Examples
     ///
@@ -346,7 +352,7 @@ impl<T> Matrix<T> {
     /// assert_eq!(m[[1, 1]], 4.0);
     /// ```
     pub fn from_col_major_vec(nrows: usize, ncols: usize, data: Vec<T>) -> Self {
-        assert_eq!(data.len(), nrows * ncols);
+        assert_eq!(data.len(), checked_matrix_len(nrows, ncols));
         Self { data, nrows, ncols }
     }
 
@@ -488,6 +494,16 @@ impl<T> Matrix<T> {
     }
 
     fn offset(&self, row: usize, col: usize) -> usize {
+        assert!(
+            row < self.nrows,
+            "matrix row index {row} out of bounds (bound: {})",
+            self.nrows
+        );
+        assert!(
+            col < self.ncols,
+            "matrix column index {col} out of bounds (bound: {})",
+            self.ncols
+        );
         row + self.nrows * col
     }
 
@@ -768,6 +784,10 @@ fn ensure_eigh_shape(
 impl<T: Clone> Matrix<T> {
     /// Create a new matrix filled with a constant value.
     ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows.
+    ///
     /// # Examples
     ///
     /// ```
@@ -779,7 +799,7 @@ impl<T: Clone> Matrix<T> {
     /// ```
     pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
         Self {
-            data: vec![elem; nrows * ncols],
+            data: vec![elem; checked_matrix_len(nrows, ncols)],
             nrows,
             ncols,
         }
@@ -788,6 +808,10 @@ impl<T: Clone> Matrix<T> {
 
 impl<T: Clone + Zero> Matrix<T> {
     /// Create a zeros matrix
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows.
     ///
     /// # Examples
     ///
@@ -802,7 +826,7 @@ impl<T: Clone + Zero> Matrix<T> {
     /// ```
     pub fn zeros(nrows: usize, ncols: usize) -> Self {
         Self {
-            data: vec![T::zero(); nrows * ncols],
+            data: vec![T::zero(); checked_matrix_len(nrows, ncols)],
             nrows,
             ncols,
         }

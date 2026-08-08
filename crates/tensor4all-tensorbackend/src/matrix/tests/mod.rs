@@ -187,6 +187,82 @@ fn test_matrix_column_major_storage() {
 }
 
 #[test]
+fn matrix_constructors_reject_shape_product_overflow() {
+    let panic =
+        std::panic::catch_unwind(|| Matrix::from_col_major_vec(usize::MAX, 2, Vec::<u8>::new()))
+            .unwrap_err();
+    assert_eq!(
+        *panic
+            .downcast::<String>()
+            .expect("shape overflow should panic with a String message"),
+        format!(
+            "matrix shape product overflow: {} rows * 2 columns",
+            usize::MAX
+        )
+    );
+
+    let panic = std::panic::catch_unwind(|| Matrix::from_elem(usize::MAX, 2, 0_u8)).unwrap_err();
+    assert_eq!(
+        *panic
+            .downcast::<String>()
+            .expect("shape overflow should panic with a String message"),
+        format!(
+            "matrix shape product overflow: {} rows * 2 columns",
+            usize::MAX
+        )
+    );
+
+    let panic = std::panic::catch_unwind(|| Matrix::<u8>::zeros(usize::MAX, 2)).unwrap_err();
+    assert_eq!(
+        *panic
+            .downcast::<String>()
+            .expect("shape overflow should panic with a String message"),
+        format!(
+            "matrix shape product overflow: {} rows * 2 columns",
+            usize::MAX
+        )
+    );
+
+    let zero = Matrix::<u8>::zeros(0, usize::MAX);
+    assert_eq!(zero.nrows(), 0);
+    assert_eq!(zero.ncols(), usize::MAX);
+    assert!(zero.as_col_major_slice().is_empty());
+}
+
+#[test]
+fn matrix_indexing_rejects_each_axis_before_linearization() {
+    let mut matrix = Matrix::from_col_major_vec(2, 2, vec![1, 3, 2, 4]);
+    assert!(std::panic::catch_unwind(|| matrix[[2, 0]]).is_err());
+    assert!(std::panic::catch_unwind(|| matrix[[0, 2]]).is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        matrix[[2, 0]] = 99;
+    }))
+    .is_err());
+    assert_eq!(matrix.as_col_major_slice(), &[1, 3, 2, 4]);
+    matrix[[1, 1]] = 8;
+    assert_eq!(matrix[[1, 1]], 8);
+}
+
+#[test]
+fn matrix_complex64_construction_preserves_column_major_indexing() {
+    let i = Complex64::new(0.0, 1.0);
+    let matrix = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![Complex64::new(1.0, 0.0), i, Complex64::new(2.0, 0.0), -i],
+    );
+
+    assert_eq!(matrix[[0, 0]], Complex64::new(1.0, 0.0));
+    assert_eq!(matrix[[1, 0]], i);
+    assert_eq!(matrix[[0, 1]], Complex64::new(2.0, 0.0));
+    assert_eq!(matrix[[1, 1]], -i);
+    assert_eq!(
+        matrix.as_col_major_slice(),
+        &[Complex64::new(1.0, 0.0), i, Complex64::new(2.0, 0.0), -i]
+    );
+}
+
+#[test]
 fn matrix_into_col_major_vec_consumes_storage() {
     let m = Matrix::from_col_major_vec(2, 2, vec![1.0, 3.0, 2.0, 4.0]);
 
