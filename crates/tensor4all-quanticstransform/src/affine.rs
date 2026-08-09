@@ -1444,8 +1444,6 @@ fn affine_transform_tensors(
     // Process from LSB (site R-1) to MSB (site 0)
     let mut initial_carry = try_vec_with_capacity::<BigInt>("affine initial carry", m)?;
     initial_carry.resize(m, BigInt::zero());
-    let mut carries = try_vec_with_capacity::<Vec<BigInt>>("affine carry list", 1)?;
-    carries.push(initial_carry);
     let mut core_data_list = try_vec_with_capacity::<AffineCoreData>("affine core list", r)?;
 
     for _site in (0..r).rev() {
@@ -1459,8 +1457,21 @@ fn affine_transform_tensors(
             });
         }
 
-        let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, true)?;
-        carries = core_data.carries_out.clone();
+        // Reborrow the previous core's carry vectors instead of cloning every
+        // BigInt-backed carry list between neighboring sites.
+        let core_data = if let Some(previous) = core_data_list.last() {
+            affine_transform_core(a_int, &b_curr, scale, m, n, &previous.carries_out, true)?
+        } else {
+            affine_transform_core(
+                a_int,
+                &b_curr,
+                scale,
+                m,
+                n,
+                std::slice::from_ref(&initial_carry),
+                true,
+            )?
+        };
         core_data_list.push(core_data);
 
         // Shift right
@@ -1486,8 +1497,16 @@ fn affine_transform_tensors(
                 });
             }
 
-            let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, false)?;
-            carries = core_data.carries_out.clone();
+            // Continue from the last main/extension core without cloning its
+            // BigInt-backed carry vectors.
+            let core_data = if let Some(previous) = ext_data_list.last() {
+                affine_transform_core(a_int, &b_curr, scale, m, n, &previous.carries_out, false)?
+            } else {
+                let previous = core_data_list
+                    .last()
+                    .ok_or_else(|| anyhow::anyhow!("affine extension requires a preceding core"))?;
+                affine_transform_core(a_int, &b_curr, scale, m, n, &previous.carries_out, false)?
+            };
             try_reserve_for_push(&mut ext_data_list, "affine extension core list")?;
             ext_data_list.push(core_data);
 
@@ -1502,9 +1521,17 @@ fn affine_transform_tensors(
         // then multiply inward toward the main tensor chain.
 
         // Start with BC weights on the final carries
+        let final_carries: &[Vec<BigInt>] = if let Some(core) = ext_data_list.last() {
+            core.carries_out.as_slice()
+        } else {
+            &core_data_list
+                .last()
+                .ok_or_else(|| anyhow::anyhow!("affine main core list must be non-empty"))?
+                .carries_out
+        };
         let mut bc_weights =
-            try_vec_with_capacity::<f64>("affine boundary weights", carries.len())?;
-        for carry in &carries {
+            try_vec_with_capacity::<f64>("affine boundary weights", final_carries.len())?;
+        for carry in final_carries {
             bc_weights.push(affine_boundary_weight(carry, bc));
         }
 
@@ -1666,8 +1693,14 @@ fn record_affine_core_transition(
 
     let mut data = BoolTensor2::from_elem([num_carry_in, site_dim], false)?;
     data.set([carry_in_idx, site_idx], true);
+    carry_out_map.try_reserve(1).map_err(|err| {
+        anyhow::anyhow!("affine carry transition map allocation failed while growing: {err}")
+    })?;
     carry_out_map.insert(std::mem::take(carry_out), data);
-    carry_out.resize_with(carry_len, BigInt::zero);
+    carry_out.try_reserve_exact(carry_len).map_err(|err| {
+        anyhow::anyhow!("affine carry scratch allocation failed while resetting: {err}")
+    })?;
+    carry_out.resize(carry_len, BigInt::zero());
     Ok(())
 }
 
@@ -1803,18 +1836,22 @@ fn affine_transform_core(
         }
     }
 
-    // Convert to sorted vectors for deterministic ordering
-    let mut carries_out =
-        try_vec_with_capacity::<Vec<BigInt>>("affine outgoing carry list", carry_out_map.len())?;
-    carries_out.extend(carry_out_map.keys().cloned());
-    carries_out.sort();
+    // Move the map entries into a fallibly reserved outer vector. Sorting the
+    // entries keeps deterministic carry ordering without cloning any BigInts.
+    let mut carry_entries = try_vec_with_capacity::<(Vec<BigInt>, BoolTensor2)>(
+        "affine outgoing carry entries",
+        carry_out_map.len(),
+    )?;
+    for entry in carry_out_map {
+        carry_entries.push(entry);
+    }
+    carry_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
 
-    let num_carry_out = carries_out.len();
+    let num_carry_out = carry_entries.len();
 
     // Build 3D tensor: (num_carry_out, num_carry_in, site_dim)
     let mut tensor = BoolTensor3::from_elem([num_carry_out, num_carry_in, site_dim], false)?;
-    for (cout_idx, carry) in carries_out.iter().enumerate() {
-        let data_2d = &carry_out_map[carry];
+    for (cout_idx, (_, data_2d)) in carry_entries.iter().enumerate() {
         for cin_idx in 0..num_carry_in {
             for site_idx in 0..site_dim {
                 tensor.set(
@@ -1823,6 +1860,12 @@ fn affine_transform_core(
                 );
             }
         }
+    }
+
+    let mut carries_out =
+        try_vec_with_capacity::<Vec<BigInt>>("affine outgoing carry list", num_carry_out)?;
+    for (carry, _) in carry_entries {
+        carries_out.push(carry);
     }
 
     Ok(AffineCoreData {

@@ -343,7 +343,8 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         max_bond_dim: options.maxbonddim,
         normalize_error: true,
     };
-    let _ = tt.compress(&compress_options);
+    tt.compress(&compress_options)
+        .map_err(|err| anyhow::anyhow!("Fourier MPO compression failed: {err}"))?;
 
     // Normalize if requested
     if options.normalize {

@@ -1,5 +1,40 @@
 use super::*;
-use tensor4all_core::{IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+
+fn tensor_axis_lookup(template: &TensorDynLen) -> std::collections::HashMap<DynIndex, usize> {
+    template
+        .indices()
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(position, index)| (index, position))
+        .collect()
+}
+
+fn tensor_axis_position(
+    lookup: &std::collections::HashMap<DynIndex, usize>,
+    index: &DynIndex,
+) -> usize {
+    lookup
+        .get(index)
+        .copied()
+        .expect("tensor axis index not found in contracted tensor")
+}
+
+#[test]
+fn tensor_axis_lookup_uses_full_index_identity() {
+    let base = DynIndex::new_dyn(2);
+    let primed = base.prime();
+    let tensor = TensorDynLen::from_dense(
+        vec![base.clone(), primed.clone()],
+        vec![Complex64::new(0.0, 0.0); 4],
+    )
+    .unwrap();
+    let lookup = tensor_axis_lookup(&tensor);
+
+    assert_eq!(lookup.get(&base), Some(&0));
+    assert_eq!(lookup.get(&primed), Some(&1));
+}
 
 #[test]
 fn test_affine_params_new() {
@@ -63,7 +98,7 @@ fn test_affine_extreme_i64_coefficients_are_exact() {
                 ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
             Complex64::new(f64::from((y == expected_y) as u8), 0.0)
         });
-        let maxabs = actual.distance(&expected).unwrap();
+        let maxabs = actual.sub(&expected).unwrap().maxabs();
         assert!(
             maxabs < 1e-12,
             "MPO mismatch for a={coefficient}, b={translation}: {maxabs}"
@@ -606,33 +641,24 @@ fn affine_matrix_to_dense_tensor(
 ) -> TensorDynLen {
     let indices = template.indices().to_vec();
     let dims = template.dims();
-    let mut id_to_pos = std::collections::HashMap::new();
-    for (pos, index) in indices.iter().enumerate() {
-        id_to_pos.insert(*index.id(), pos);
-    }
+    let axis_lookup = tensor_axis_lookup(template);
 
     let output_positions: Vec<usize> = (0..r)
         .map(|site| {
-            let internal_id = *op
+            let internal_index = &op
                 .get_output_mapping(&site)
                 .expect("missing output mapping")
-                .internal_index
-                .id();
-            *id_to_pos
-                .get(&internal_id)
-                .expect("output index not found in contracted tensor")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
         })
         .collect();
     let input_positions: Vec<usize> = (0..r)
         .map(|site| {
-            let internal_id = *op
+            let internal_index = &op
                 .get_input_mapping(&site)
                 .expect("missing input mapping")
-                .internal_index
-                .id();
-            *id_to_pos
-                .get(&internal_id)
-                .expect("input index not found in contracted tensor")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
         })
         .collect();
 
@@ -664,21 +690,14 @@ fn affine_interleaved_matrix_to_dense_tensor(
 ) -> TensorDynLen {
     let indices = template.indices().to_vec();
     let dims = template.dims();
-    let mut id_to_pos = std::collections::HashMap::new();
-    for (pos, index) in indices.iter().enumerate() {
-        id_to_pos.insert(*index.id(), pos);
-    }
+    let axis_lookup = tensor_axis_lookup(template);
 
     let output_positions = (0..r)
         .map(|site| {
             op.get_output_mappings(&site)
                 .expect("missing output mappings")
                 .iter()
-                .map(|mapping| {
-                    *id_to_pos
-                        .get(mapping.internal_index.id())
-                        .expect("output index not found in contracted tensor")
-                })
+                .map(|mapping| tensor_axis_position(&axis_lookup, &mapping.internal_index))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -687,11 +706,7 @@ fn affine_interleaved_matrix_to_dense_tensor(
             op.get_input_mappings(&site)
                 .expect("missing input mappings")
                 .iter()
-                .map(|mapping| {
-                    *id_to_pos
-                        .get(mapping.internal_index.id())
-                        .expect("input index not found in contracted tensor")
-                })
+                .map(|mapping| tensor_axis_position(&axis_lookup, &mapping.internal_index))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -742,33 +757,24 @@ fn affine_operator_expected_dense_tensor(
 ) -> TensorDynLen {
     let indices = template.indices().to_vec();
     let dims = template.dims();
-    let mut id_to_pos = std::collections::HashMap::new();
-    for (pos, index) in indices.iter().enumerate() {
-        id_to_pos.insert(*index.id(), pos);
-    }
+    let axis_lookup = tensor_axis_lookup(template);
 
     let output_positions: Vec<usize> = (0..r)
         .map(|site| {
-            let internal_id = *op
+            let internal_index = &op
                 .get_output_mapping(&site)
                 .expect("missing output mapping")
-                .internal_index
-                .id();
-            *id_to_pos
-                .get(&internal_id)
-                .expect("output index not found in contracted tensor")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
         })
         .collect();
     let input_positions: Vec<usize> = (0..r)
         .map(|site| {
-            let internal_id = *op
+            let internal_index = &op
                 .get_input_mapping(&site)
                 .expect("missing input mapping")
-                .internal_index
-                .id();
-            *id_to_pos
-                .get(&internal_id)
-                .expect("input index not found in contracted tensor")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
         })
         .collect();
 
@@ -804,7 +810,7 @@ fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[Bound
     let op = affine_operator(r, params, bc).unwrap();
     let actual = op.mpo().contract_to_tensor().unwrap();
     let expected = affine_matrix_to_dense_tensor(&matrix, &op, r, m, n, &actual);
-    let maxabs = actual.distance(&expected).unwrap();
+    let maxabs = actual.sub(&expected).unwrap().maxabs();
 
     assert!(
         maxabs < 1e-10,
@@ -1294,7 +1300,7 @@ fn test_affine_operator_interleaved_matches_matrix() {
     let actual = op.mpo().contract_to_tensor().unwrap();
     let expected =
         affine_interleaved_matrix_to_dense_tensor(&matrix, &op, r, params.m(), params.n(), &actual);
-    let maxabs = actual.distance(&expected).unwrap();
+    let maxabs = actual.sub(&expected).unwrap().maxabs();
     assert!(maxabs < 1e-10, "interleaved affine maxabs={maxabs}");
 }
 
@@ -1495,18 +1501,6 @@ fn test_affine_antiperiodic_mpo_applies_outgoing_carry_parity() {
         };
         Complex64::new(if y == expected_y { expected_sign } else { 0.0 }, 0.0)
     });
-    let maxabs = actual.distance(&expected).unwrap();
+    let maxabs = actual.sub(&expected).unwrap().maxabs();
     assert!(maxabs < 1e-12, "anti-periodic MPO mismatch: {maxabs}");
-
-    // x = 7 produces outgoing carry 1 and must receive the anti-periodic sign.
-    let raw = 7i64 + 1;
-    assert_eq!(raw.div_euclid(modulus).rem_euclid(2), 1);
-    assert_eq!(
-        if raw.div_euclid(modulus).rem_euclid(2) == 0 {
-            1.0
-        } else {
-            -1.0
-        },
-        -1.0
-    );
 }
