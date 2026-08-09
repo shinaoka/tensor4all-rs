@@ -1845,7 +1845,7 @@ fn affine_transform_core(
     for entry in carry_out_map {
         carry_entries.push(entry);
     }
-    carry_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    carry_entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
     let num_carry_out = carry_entries.len();
 
