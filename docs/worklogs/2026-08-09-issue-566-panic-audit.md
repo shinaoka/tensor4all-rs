@@ -79,9 +79,36 @@ The panic-audit tool itself adds no Rust library or C API surface. Task 8 also
 carries an API checkpoint (committed as `6add467` and its successors) that
 makes `TensorDynLen` compact-support metrics, scaling, and comparison
 allocation-safe (`tensordynlen.rs`, tensorbackend `storage.rs`); it was
-independently reviewed (PASS, prior findings closed) and validated by workspace
-nextest 2717/2717, doctests 839, mdBook, API dump, workspace clippy, and the
-scanner self-test/audit.
+validated by workspace nextest, doctests, mdBook, API dump, workspace clippy,
+and the scanner self-test/audit.
+
+## Task 8 API checkpoint reviews (2026-08-10)
+
+Two independent reviews were run on the checkpoint. The first (session-default
+DeepSeek V4 Flash) returned PASS with minor notes. A second review on a
+different model family (GPT-5.6 Sol, `reviewer-gpt`) found three Important
+findings, all fixed and re-confirmed:
+
+1. Untracked `Materialized` scaling traversed unreferenced strided-gap backing
+   entries via the whole-backing `Storage::scale` fast path. Fixed by routing
+   all `Eager`/`Compact`/`Materialized` scaling through `scale_eager_payload`,
+   which converts only the compact payload and returns compact storage
+   (commit `53897d3`); the now-unused `TensorDynLenStorage::scale` method and
+   `BackendScalar` import were removed.
+2. Dense logical materialization silently returned an empty buffer when the
+   logical-dim product overflowed. `StructuredStorage::logical_dense_col_major_vec`
+   is now fallible and fails closed via `checked_logical_len`; the public
+   `Storage::to_dense_*_col_major_vec` wrappers propagate the error
+   (commits `53897d3`, `f5a72f3`).
+3. New control-flow branches lacked regression coverage. Added: untracked
+   scale of genuinely gapped storage collapsing to dense compact storage,
+   dense logical-product overflow failing closed, unmatched support compared
+   in both operand orders, exact-mode and structured-payload NaN rejection,
+   and zero-vs-nonzero tolerant comparison.
+
+Final validation after the fixes is green: workspace clippy `-D warnings`,
+nextest 2722/2722 (+14 skipped), doctests 839, `cargo doc`, mdBook exit 0,
+scanner self-test 8/8 and audit 0 unbaselined / 0 stale.
 
 ## Remaining boundary
 
