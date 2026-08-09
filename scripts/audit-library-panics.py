@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Audit production Rust sources for library panic paths.
 
-The audit is deliberately lexical rather than a Rust parser: it masks comments,
-rustdoc, strings, and character literals before matching the small set of
-panic-style calls.  ``assert!`` and ``debug_assert!`` are reported only inside
-lexically public functions; raw panic-style calls are reported everywhere in
-production source.  Exact, normalized baseline entries may suppress reviewed
-public assertions, but never raw panic-style calls, and every baseline entry
-must still exist.
+The audit is lexical rather than a Rust parser.  Comments and literals are
+masked in one source-sized buffer, so every finding keeps its original source
+offset and line mapping while calls may span lines or comments.  Exact,
+normalized baseline entries may suppress reviewed public assertions, but never
+raw panic-style calls, and every baseline entry must still exist.
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import re
 import sys
@@ -24,16 +23,12 @@ from typing import Iterable
 RAW_KINDS = frozenset({"panic", "unreachable", "unwrap", "expect"})
 ENTRY_KINDS = "panic|unreachable|unwrap|expect|assert|debug_assert"
 CFG_TEST_RE = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
-EXTERNAL_MOD_RE = re.compile(r"\bmod\s+([A-Za-z_]\w*)\s*;")
 PATH_ATTR_RE = re.compile(r"#\s*\[\s*path\s*=\s*\"([^\"]+)\"\s*\]")
-PUBLIC_FN_RE = re.compile(
-    r"\bpub(?P<qual>\s*\([^)]*\))?"
-    r"(?:\s+(?:async|unsafe|const|extern)\b)*\s+fn\b"
-)
-RAW_CALL_RE = re.compile(r"\b(panic|unreachable)\s*!\s*(?=[({[])\s*")
+RAW_CALL_RE = re.compile(r"\b(panic|unreachable)\s*!\s*(?=[({\[])\s*")
 METHOD_RE = re.compile(r"\.\s*(unwrap|expect)\s*(?=\()")
-ASSERT_RE = re.compile(r"\b(assert|debug_assert)\s*!\s*(?=[({[])\s*")
+ASSERT_RE = re.compile(r"\b(assert|debug_assert)\s*!\s*(?=[({\[])\s*")
 ENTRY_RE = re.compile(rf"^(.+):([1-9][0-9]*):({ENTRY_KINDS})$")
+IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 @dataclass(frozen=True, order=True)
@@ -47,6 +42,23 @@ class Finding:
     @property
     def entry(self) -> str:
         return f"{self.path}:{self.line}:{self.kind}"
+
+
+@dataclass(frozen=True)
+class Token:
+    """A token in the comment/literal-masked source."""
+
+    value: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class CfgTestItem:
+    """A source range selected by an exact ``#[cfg(test)]`` item."""
+
+    start: int
+    end: int
 
 
 def _mask(chars: list[str], start: int, end: int) -> None:
@@ -77,9 +89,17 @@ def _raw_string_end(source: str, start: int) -> int | None:
 
 
 def _char_literal_end(source: str, start: int) -> int | None:
-    """Return the end of a character literal, not a lifetime label."""
-    if source[start] != "'" or start > 0 and (source[start - 1].isalnum() or source[start - 1] in "_'"):
+    """Return the end of a character or byte-character literal, not a lifetime."""
+    if source[start] != "'":
         return None
+    previous = source[start - 1] if start else ""
+    if previous.isalnum() or previous in "_'":
+        # ``b'x'`` is the one literal form whose quote is preceded by an
+        # identifier character.  A longer identifier followed by a quote is a
+        # lifetime/invalid source, not a byte character.
+        if previous != "b" or start < 2 or source[start - 2].isalnum() or source[start - 2] in "_'":
+            return None
+
     index = start + 1
     if index >= len(source) or source[index] in "\r\n":
         return None
@@ -93,7 +113,7 @@ def _char_literal_end(source: str, start: int) -> int | None:
 
 
 def sanitize_rust(source: str) -> str:
-    """Mask comments and literals without changing line/column offsets."""
+    """Mask comments and literals without changing source offsets or lines."""
     chars = list(source)
     index = 0
     block_depth = 0
@@ -162,9 +182,181 @@ def sanitize_rust(source: str) -> str:
     return "".join(chars)
 
 
-def brace_delta(line: str) -> int:
-    """Return brace balance after comments and literals have been masked."""
-    return line.count("{") - line.count("}")
+def tokenize(clean: str) -> list[Token]:
+    """Tokenize identifiers and punctuation in a masked source buffer."""
+    tokens: list[Token] = []
+    index = 0
+    while index < len(clean):
+        match = IDENT_RE.match(clean, index)
+        if match:
+            tokens.append(Token(match.group(), match.start(), match.end()))
+            index = match.end()
+            continue
+        if clean.startswith("::", index):
+            tokens.append(Token("::", index, index + 2))
+            index += 2
+            continue
+        if clean[index] in "{}()[]<>;:,.!?#+-*=/&|%^~@":
+            tokens.append(Token(clean[index], index, index + 1))
+        index += 1
+    return tokens
+
+
+def _brace_pairs(tokens: list[Token]) -> dict[int, int]:
+    stack: list[int] = []
+    pairs: dict[int, int] = {}
+    for index, token in enumerate(tokens):
+        if token.value == "{":
+            stack.append(index)
+        elif token.value == "}" and stack:
+            opening = stack.pop()
+            pairs[opening] = index
+            pairs[index] = opening
+    return pairs
+
+
+def _line_map(source: str) -> list[int]:
+    return [0] + [index + 1 for index, char in enumerate(source) if char == "\n"]
+
+
+def _line_at(line_starts: list[int], offset: int) -> int:
+    return bisect.bisect_right(line_starts, offset)
+
+
+def _skip_attribute(clean: str, start: int) -> int | None:
+    """Skip one ``#[...]`` attribute and return its exclusive end."""
+    index = start
+    while index < len(clean) and clean[index].isspace():
+        index += 1
+    if index >= len(clean) or clean[index] != "#":
+        return None
+    index += 1
+    while index < len(clean) and clean[index].isspace():
+        index += 1
+    if index >= len(clean) or clean[index] != "[":
+        return None
+    depth = 1
+    for position in range(index + 1, len(clean)):
+        if clean[position] == "[":
+            depth += 1
+        elif clean[position] == "]":
+            depth -= 1
+            if depth == 0:
+                return position + 1
+    return len(clean)
+
+
+def _after_cfg_attributes(clean: str, source: str, cfg_end: int) -> tuple[int, str | None]:
+    """Skip following attributes and return item offset plus optional path."""
+    index = cfg_end
+    path: str | None = None
+    while True:
+        attribute_end = _skip_attribute(clean, index)
+        if attribute_end is None:
+            break
+        attribute = source[index:attribute_end]
+        path_match = PATH_ATTR_RE.search(attribute)
+        if path_match:
+            path = path_match.group(1)
+        index = attribute_end
+    return index, path
+
+
+def _next_token_index(tokens: list[Token], offset: int) -> int:
+    return bisect.bisect_left([token.start for token in tokens], offset)
+
+
+def _item_body(tokens: list[Token], keyword_index: int, pairs: dict[int, int]) -> tuple[int, int | None] | None:
+    """Find an item body or semicolon after an item keyword."""
+    paren = 0
+    bracket = 0
+    for index in range(keyword_index + 1, len(tokens)):
+        value = tokens[index].value
+        if value == "(" or value == "[":
+            if value == "(":
+                paren += 1
+            else:
+                bracket += 1
+            continue
+        if value == ")" and paren:
+            paren -= 1
+            continue
+        if value == "]" and bracket:
+            bracket -= 1
+            continue
+        if paren or bracket:
+            continue
+        if value == "{":
+            closing = pairs.get(index)
+            if closing is not None:
+                return index, closing
+            return None
+        if value == ";":
+            return index, None
+    return None
+
+
+def _cfg_test_items(source: str, clean: str, tokens: list[Token], pairs: dict[int, int]) -> list[CfgTestItem]:
+    """Return exact source ranges belonging to ``#[cfg(test)]`` items."""
+    ranges: list[CfgTestItem] = []
+    for cfg_match in CFG_TEST_RE.finditer(clean):
+        item_offset, _ = _after_cfg_attributes(clean, source, cfg_match.end())
+        item_index = _next_token_index(tokens, item_offset)
+        # Visibility/modifier tokens can precede the actual item keyword.
+        keyword_index = None
+        for index in range(item_index, len(tokens)):
+            if tokens[index].value in {"mod", "fn", "const", "static", "struct", "enum", "trait", "impl"}:
+                keyword_index = index
+                break
+            if tokens[index].value in {";", "{"}:
+                break
+        if keyword_index is None:
+            continue
+        body = _item_body(tokens, keyword_index, pairs)
+        if body is None:
+            continue
+        opening, closing = body
+        end = tokens[opening].end if closing is None else tokens[closing].end
+        ranges.append(CfgTestItem(cfg_match.start(), end))
+    return ranges
+
+
+def _cfg_test_external_files(paths: Iterable[Path]) -> set[Path]:
+    """Resolve external modules guarded by an exact ``#[cfg(test)]`` item."""
+    path_set = set(paths)
+    excluded: set[Path] = set()
+    for parent in sorted(path_set):
+        source = parent.read_text(encoding="utf-8")
+        clean = sanitize_rust(source)
+        tokens = tokenize(clean)
+        pairs = _brace_pairs(tokens)
+        for item in _cfg_test_items(source, clean, tokens, pairs):
+            cfg_match = CFG_TEST_RE.search(clean, item.start, item.end)
+            if cfg_match is None:
+                continue
+            item_offset, path_attr = _after_cfg_attributes(clean, source, cfg_match.end())
+            item_start = _next_token_index(tokens, item_offset)
+            item_end = _next_token_index(tokens, item.end)
+            keyword_index = next(
+                (
+                    index
+                    for index in range(item_start, item_end)
+                    if tokens[index].value == "mod"
+                ),
+                None,
+            )
+            if keyword_index is None or keyword_index + 1 >= item_end:
+                continue
+            module = tokens[keyword_index + 1].value
+            if path_attr is not None:
+                candidate = (parent.parent / path_attr).resolve()
+                if candidate in path_set:
+                    excluded.add(candidate)
+            else:
+                for candidate in _module_candidates(parent, module):
+                    if candidate in path_set:
+                        excluded.add(candidate)
+    return excluded
 
 
 def _is_test_file(path: Path) -> bool:
@@ -185,156 +377,251 @@ def _module_candidates(parent: Path, module: str) -> Iterable[Path]:
     yield base / module / "mod.rs"
 
 
-def _cfg_test_external_files(paths: Iterable[Path]) -> set[Path]:
-    """Resolve external modules guarded by an exact ``cfg(test)`` attribute."""
-    path_set = set(paths)
-    excluded: set[Path] = set()
+def _declaration_start(tokens: list[Token], index: int, brace_depth: list[int]) -> int:
+    depth = brace_depth[index]
+    start = index
+    while start > 0:
+        previous = tokens[start - 1].value
+        if brace_depth[start - 1] != depth or previous in {";", "{", "}"}:
+            break
+        start -= 1
+    return start
 
-    for parent in sorted(path_set):
-        source = parent.read_text(encoding="utf-8")
-        clean = sanitize_rust(source)
-        pending_cfg = False
-        pending_path: str | None = None
 
-        for raw_line, clean_line in zip(source.splitlines(), clean.splitlines()):
-            cfg_match = CFG_TEST_RE.search(clean_line)
-            if cfg_match:
-                pending_cfg = True
-                clean_line = clean_line[: cfg_match.start()] + " " * (cfg_match.end() - cfg_match.start()) + clean_line[cfg_match.end() :]
-                path_match = PATH_ATTR_RE.search(raw_line)
-                if path_match:
-                    pending_path = path_match.group(1)
+def _is_public_visibility(tokens: list[Token], start: int, end: int) -> bool:
+    for index in range(start, end):
+        if tokens[index].value != "pub":
+            continue
+        if index + 1 >= end or tokens[index + 1].value != "(":
+            return True
+    return False
 
-            stripped = clean_line.strip()
-            if not pending_cfg:
+
+def _trait_name_before_for(tokens: list[Token], impl_index: int, for_index: int) -> str | None:
+    """Return the implemented trait's final name, skipping generic arguments."""
+    angle_depth = 0
+    for index in range(for_index - 1, impl_index, -1):
+        value = tokens[index].value
+        if value == ">":
+            angle_depth += 1
+        elif value == "<" and angle_depth:
+            angle_depth -= 1
+        elif angle_depth == 0 and IDENT_RE.fullmatch(value):
+            return value
+    return None
+
+
+def _public_body_ranges(tokens: list[Token], pairs: dict[int, int]) -> list[tuple[int, int]]:
+    """Find public function bodies, including public trait method bodies."""
+    if not tokens:
+        return []
+    brace_depth: list[int] = []
+    depth = 0
+    for token in tokens:
+        brace_depth.append(depth)
+        if token.value == "{":
+            depth += 1
+        elif token.value == "}" and depth:
+            depth -= 1
+
+    public_traits: set[str] = set()
+    trait_blocks: dict[int, int] = {}
+    for index, token in enumerate(tokens):
+        if token.value != "trait":
+            continue
+        declaration_start = _declaration_start(tokens, index, brace_depth)
+        if not _is_public_visibility(tokens, declaration_start, index):
+            continue
+        body = _item_body(tokens, index, pairs)
+        if body is None or body[1] is None:
+            continue
+        name_index = index + 1
+        if name_index < len(tokens) and IDENT_RE.fullmatch(tokens[name_index].value):
+            public_traits.add(tokens[name_index].value)
+        trait_blocks[body[0]] = body[1]  # type: ignore[index]
+
+    public_impl_blocks: set[int] = set()
+    for index, token in enumerate(tokens):
+        if token.value != "impl":
+            continue
+        body = _item_body(tokens, index, pairs)
+        if body is None or body[1] is None:
+            continue
+        opening, _ = body
+        for for_index in range(index + 1, opening):
+            if tokens[for_index].value == "for":
+                trait_name = _trait_name_before_for(tokens, index, for_index)
+                if trait_name in public_traits:
+                    public_impl_blocks.add(opening)
+                break
+
+    ranges: list[tuple[int, int]] = []
+    for index, token in enumerate(tokens):
+        if token.value != "fn":
+            continue
+        body = _item_body(tokens, index, pairs)
+        if body is None or body[1] is None:
+            continue
+        opening, closing = body
+        declaration_start = _declaration_start(tokens, index, brace_depth)
+        public = _is_public_visibility(tokens, declaration_start, index)
+        enclosing_openings = [
+            opening_index
+            for opening_index, closing_index in pairs.items()
+            if opening_index < index and isinstance(closing_index, int) and closing_index > index and tokens[opening_index].value == "{"
+        ]
+        if enclosing_openings:
+            enclosing = max(enclosing_openings)
+            if enclosing in trait_blocks or enclosing in public_impl_blocks:
+                public = True
+        if public:
+            ranges.append((tokens[opening].start, tokens[closing].end))
+    return ranges
+
+
+def _angle_end(tokens: list[Token], start: int) -> int | None:
+    if start >= len(tokens) or tokens[start].value != "<":
+        return None
+    depth = 0
+    for index in range(start, len(tokens)):
+        if tokens[index].value == "<":
+            depth += 1
+        elif tokens[index].value == ">":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _is_known_ufcs_type(tokens: list[Token], index: int, kind: str) -> bool:
+    """Accept only Option/Result paths from the standard type namespaces."""
+    if tokens[index].value != kind:
+        return False
+    expected_module = "option" if kind == "Option" else "result"
+    previous = index - 1
+    if previous < 0 or tokens[previous].value != "::":
+        return True
+    # A qualified path is accepted only for std/core's canonical module.
+    path_start = previous - 3
+    if path_start >= 0 and tokens[previous - 1].value == expected_module and tokens[previous - 2].value == "::":
+        namespace = tokens[path_start].value
+        if namespace not in {"std", "core"}:
+            return False
+        if path_start >= 2 and tokens[path_start - 1].value == "::":
+            return not IDENT_RE.fullmatch(tokens[path_start - 2].value)
+        return True
+    return False
+
+
+def _known_ufcs_kind(path: list[str]) -> str | None:
+    if path == ["Option"] or path in (["std", "option", "Option"], ["core", "option", "Option"]):
+        return "unwrap"
+    if path == ["Result"] or path in (["std", "result", "Result"], ["core", "result", "Result"]):
+        return "expect"
+    return None
+
+
+def _qualified_ufcs_match(tokens: list[Token], start: int) -> tuple[int, str] | None:
+    """Match ``<Option<T>>::unwrap``/``<Result<T>>::expect`` syntax."""
+    if tokens[start].value != "<" or (start and tokens[start - 1].value == "::"):
+        return None
+    index = start + 1
+    if index < len(tokens) and tokens[index].value == "::":
+        index += 1
+    path: list[str] = []
+    while index < len(tokens):
+        value = tokens[index].value
+        if not IDENT_RE.fullmatch(value):
+            break
+        path.append(value)
+        index += 1
+        if index >= len(tokens) or tokens[index].value != "::":
+            break
+        index += 1
+    kind = _known_ufcs_kind(path)
+    if kind is None or not path:
+        return None
+    if index < len(tokens) and tokens[index].value == "::":
+        index += 1
+        if index >= len(tokens) or tokens[index].value != "<":
+            return None
+        angle_end = _angle_end(tokens, index)
+        if angle_end is None:
+            return None
+        index = angle_end + 1
+    elif index < len(tokens) and tokens[index].value == "<":
+        angle_end = _angle_end(tokens, index)
+        if angle_end is None:
+            return None
+        index = angle_end + 1
+    if index >= len(tokens) or tokens[index].value != ">":
+        return None
+    index += 1
+    if index + 1 >= len(tokens) or tokens[index].value != "::":
+        return None
+    index += 1
+    if index + 1 >= len(tokens) or tokens[index].value != kind or tokens[index + 1].value != "(":
+        return None
+    return tokens[start].start, kind
+
+
+def _ufcs_matches(tokens: list[Token]) -> Iterable[tuple[int, str]]:
+    for index, token in enumerate(tokens):
+        if token.value == "<":
+            match = _qualified_ufcs_match(tokens, index)
+            if match is not None:
+                yield match
+            continue
+        if token.value not in {"Option", "Result"}:
+            continue
+        kind = "unwrap" if token.value == "Option" else "expect"
+        if not _is_known_ufcs_type(tokens, index, token.value):
+            continue
+        next_index = index + 1
+        if next_index >= len(tokens) or tokens[next_index].value != "::":
+            continue
+        next_index += 1
+        if next_index < len(tokens) and tokens[next_index].value == "<":
+            angle_end = _angle_end(tokens, next_index)
+            if angle_end is None:
                 continue
-            if not stripped or stripped.startswith("#"):
-                path_match = PATH_ATTR_RE.search(raw_line)
-                if path_match:
-                    pending_path = path_match.group(1)
+            next_index = angle_end + 1
+            if next_index >= len(tokens) or tokens[next_index].value != "::":
                 continue
-
-            module_match = EXTERNAL_MOD_RE.search(clean_line)
-            if module_match:
-                module = module_match.group(1)
-                if pending_path is not None:
-                    candidate = (parent.parent / pending_path).resolve()
-                    if candidate in path_set:
-                        excluded.add(candidate)
-                else:
-                    for candidate in _module_candidates(parent, module):
-                        if candidate in path_set:
-                            excluded.add(candidate)
-                pending_cfg = False
-                pending_path = None
-                continue
-
-            # A different item consumes the attribute; do not guess that it is
-            # test-only. This keeps exclusions structural and conservative.
-            pending_cfg = False
-            pending_path = None
-
-    return excluded
+            next_index += 1
+        if next_index + 1 < len(tokens) and tokens[next_index].value == kind and tokens[next_index + 1].value == "(":
+            yield token.start, kind
 
 
 def _audit_file_with_offsets(path: Path, root: Path, cfg_test_files: set[Path]) -> list[Finding]:
-    """Offset-aware implementation used by ``audit_file``."""
-    # Kept as a separate implementation detail so line/column preservation is
-    # explicit and easy to test; callers use the public ``audit_file`` wrapper.
+    """Scan a complete masked source buffer and map matches back to source lines."""
     if _is_test_file(path) or path in cfg_test_files:
         return []
     source = path.read_text(encoding="utf-8")
     clean = sanitize_rust(source)
+    tokens = tokenize(clean)
+    pairs = _brace_pairs(tokens)
+    cfg_ranges = _cfg_test_items(source, clean, tokens, pairs)
+    public_ranges = _public_body_ranges(tokens, pairs)
+    line_starts = _line_map(source)
     relative = path.relative_to(root).as_posix()
+
+    def excluded(offset: int) -> bool:
+        return any(item.start <= offset < item.end for item in cfg_ranges)
+
     findings: list[Finding] = []
-    depth = 0
-    public_body_depth: int | None = None
-    pending_public_fn = False
-    pending_cfg = False
-    pending_test_item = False
-    test_body_depth: int | None = None
-    offset = 0
-
-    for raw_line, clean_line in zip(source.splitlines(keepends=True), clean.splitlines(keepends=True)):
-        line_text = clean_line.rstrip("\r\n")
-        line_delta = brace_delta(line_text)
-        line_number = source.count("\n", 0, offset) + 1
-
-        if test_body_depth is not None:
-            depth += line_delta
-            if depth < test_body_depth:
-                test_body_depth = None
-            offset += len(raw_line)
-            continue
-
-        cfg_match = CFG_TEST_RE.search(line_text)
-        if cfg_match:
-            pending_cfg = True
-            line_text = line_text[: cfg_match.start()] + " " * (cfg_match.end() - cfg_match.start()) + line_text[cfg_match.end() :]
-            line_delta = brace_delta(line_text)
-
-        stripped = line_text.strip()
-        if pending_cfg or pending_test_item:
-            if pending_cfg and (not stripped or stripped.startswith("#")):
-                depth += line_delta
-                offset += len(raw_line)
-                continue
-            if EXTERNAL_MOD_RE.search(line_text):
-                pending_cfg = False
-                pending_test_item = False
-                depth += line_delta
-                offset += len(raw_line)
-                continue
-            starts_test_item = pending_test_item or re.search(
-                r"\b(?:mod|fn|const|static|struct|enum|trait|impl)\b", line_text
-            )
-            if starts_test_item and "{" in line_text:
-                old_depth = depth
-                depth += line_delta
-                pending_cfg = False
-                pending_test_item = False
-                if depth > old_depth:
-                    test_body_depth = depth
-                offset += len(raw_line)
-                continue
-            if starts_test_item and ";" not in line_text:
-                pending_cfg = False
-                pending_test_item = True
-                depth += line_delta
-                offset += len(raw_line)
-                continue
-            pending_cfg = False
-            pending_test_item = False
-
-        if public_body_depth is not None and depth < public_body_depth:
-            public_body_depth = None
-        if pending_public_fn:
-            if ";" in line_text and "{" not in line_text:
-                pending_public_fn = False
-            elif "{" in line_text:
-                public_body_depth = depth + 1
-                pending_public_fn = False
-
-        public_match = PUBLIC_FN_RE.search(line_text)
-        if public_match and public_match.group("qual") is None:
-            if "{" in line_text[public_match.end() :]:
-                public_body_depth = depth + 1
-                pending_public_fn = False
-            elif ";" not in line_text[public_match.end() :]:
-                pending_public_fn = True
-
-        line_offset = offset
-        for match in RAW_CALL_RE.finditer(line_text):
-            findings.append(Finding(relative, line_number, match.group(1)))
-        for match in METHOD_RE.finditer(line_text):
-            findings.append(Finding(relative, line_number, match.group(1)))
-        if public_body_depth is not None:
-            for match in ASSERT_RE.finditer(line_text):
-                findings.append(Finding(relative, line_number, match.group(1)))
-
-        depth += line_delta
-        offset = line_offset + len(raw_line)
-
+    for match in RAW_CALL_RE.finditer(clean):
+        if not excluded(match.start()):
+            findings.append(Finding(relative, _line_at(line_starts, match.start()), match.group(1)))
+    for match in METHOD_RE.finditer(clean):
+        if not excluded(match.start()):
+            findings.append(Finding(relative, _line_at(line_starts, match.start()), match.group(1)))
+    for offset, kind in _ufcs_matches(tokens):
+        if not excluded(offset):
+            findings.append(Finding(relative, _line_at(line_starts, offset), kind))
+    for match in ASSERT_RE.finditer(clean):
+        if not excluded(match.start()) and any(start <= match.start() < end for start, end in public_ranges):
+            findings.append(Finding(relative, _line_at(line_starts, match.start()), match.group(1)))
     return sorted(findings)
 
 
