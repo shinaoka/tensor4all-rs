@@ -43,7 +43,7 @@ fn parse_args() -> Result<Option<Args>> {
 fn print_help() {
     println!(
         "Usage: library-panic-audit [--root PATH] [--baseline PATH]\n\n\
-         Audit production Rust sources for panic-style paths."
+         Audit Cargo-selected production Rust targets for panic-style paths."
     );
 }
 

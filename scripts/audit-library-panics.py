@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Run the Rust AST-based library panic audit.
+"""Run the compiler-backed production library panic audit.
 
-This compatibility wrapper keeps the historical ``--root``/``--baseline``
-interface and exact tool output while keeping parsing and source reachability
-in the focused ``library-panic-audit`` Rust workspace tool. The audit reports
-literal forbidden constructs in source, macro transcribers, and invocation
-arguments; it intentionally does not expand arbitrary metavariable-built calls.
+This wrapper keeps the historical ``--root``/``--baseline`` interface and
+``T4A_PANIC_AUDIT_BIN`` override. The Rust tool asks Cargo/Clippy to compile
+workspace ``crates/`` library and binary targets, parses only the four exact
+panic-path diagnostics, and uses ``syn`` only for the reviewed public
+``assert!``/``debug_assert!`` baseline.
 """
 
 from __future__ import annotations
