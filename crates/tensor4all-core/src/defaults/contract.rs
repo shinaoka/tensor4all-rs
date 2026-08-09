@@ -11,12 +11,12 @@
 //! - [`contract`]: Contracts one connected tensor network
 //! - [`contract_with_options`]: Contracts one connected tensor network with retained indices
 //!
-//! # Diag Tensor Handling
+//! # Structured Tensor Handling
 //!
-//! Diagonal tensors are materialized as dense native operands for contraction,
-//! so numeric einsum labels must keep uncontracted logical axes distinct.
-//! Diagonal/structured equality metadata is propagated separately onto the
-//! result when the contraction leaves equal axes behind.
+//! Diagonal and structured tensors contract through their compact payload and
+//! equality metadata. Logical dense materialization is reserved for APIs that
+//! explicitly request dense values; contraction itself preserves compact
+//! representation whenever the result remains structured.
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
@@ -489,20 +489,14 @@ fn contract_with_options_impl(
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .any(|structured| structured);
-            if tensors.len() == 2
-                && tensors[0].storage_dtype() == tensors[1].storage_dtype()
-                && has_structured_storage
-            {
+            let has_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
+            if has_structured_storage || has_grad {
                 let mut diag_uf = AxisUnionFind::new();
                 let plan = build_contraction_plan(tensors, options, &mut diag_uf)?;
-                let input_labels: [Vec<usize>; 2] = plan
-                    .input_ids
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("structured contraction requires two operands"))?;
-                return tensors[0].contract_structured_payloads_with_labels(
-                    tensors[1],
+                return TensorDynLen::contract_structured_payloads_nary(
+                    tensors,
                     plan.result_indices,
-                    input_labels,
+                    plan.input_ids,
                     plan.output_ids,
                 );
             }
@@ -668,11 +662,12 @@ pub fn collect_sizes(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> HashM
 
 /// Internal implementation of multi-tensor contraction.
 ///
-/// Diagonal tensors are passed as dense native operands for numeric contraction.
-/// Their compact equality metadata is propagated separately onto the result.
+/// Structured operands use compact payload einsum labels, preserving equality
+/// metadata without materializing logical dense tensors. Dense operands continue
+/// to use the native backend path.
 ///
-/// This implementation preserves storage type: if all inputs are F64, the result
-/// is F64; if any input is C64, the result is C64.
+/// The result keeps the common eager dtype across `f32`, `f64`, `c32`, and
+/// `c64` operands, using the backend's normal mixed-dtype promotion rules.
 fn contract_impl(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,

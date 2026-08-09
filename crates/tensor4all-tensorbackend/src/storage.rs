@@ -674,26 +674,112 @@ impl<T: Copy + Default> StructuredStorage<T> {
             return self.payload_col_major_vec();
         }
 
-        let payload_rank = self.payload_dims.len();
+        let mut payload_index = vec![0usize; self.payload_dims.len()];
         (0..logical_len)
             .map(|linear| {
                 let logical_index = col_major_multi_index(linear, &logical_dims);
-                let mut payload_index = vec![0usize; payload_rank];
-                let mut seen = vec![false; payload_rank];
-                for (&value, &class_id) in logical_index.iter().zip(self.axis_classes.iter()) {
-                    if seen[class_id] {
-                        if payload_index[class_id] != value {
-                            return T::default();
-                        }
-                    } else {
-                        payload_index[class_id] = value;
-                        seen[class_id] = true;
-                    }
-                }
-                let offset = offset_from_strides(&payload_index, &self.strides);
-                self.data[offset]
+                self.value_at_with_dims(&logical_index, &logical_dims, &mut payload_index)
+                    .unwrap_or_default()
             })
             .collect()
+    }
+
+    fn for_each_payload_value(&self, mut f: impl FnMut(T)) {
+        if let Some(view) = self.payload_col_major_view_if_contiguous() {
+            for &value in view {
+                f(value);
+            }
+            return;
+        }
+        let payload_len = self.payload_dims.iter().product::<usize>();
+        let mut payload_index = vec![0usize; self.payload_dims.len()];
+        for _ in 0..payload_len {
+            let offset = offset_from_strides(&payload_index, &self.strides);
+            f(self.data[offset]);
+            let mut carry = true;
+            for (coordinate, &dim) in payload_index.iter_mut().zip(self.payload_dims.iter()) {
+                if !carry {
+                    break;
+                }
+                *coordinate += 1;
+                if *coordinate == dim {
+                    *coordinate = 0;
+                } else {
+                    carry = false;
+                }
+            }
+        }
+    }
+
+    fn value_at(&self, logical_index: &[usize]) -> StorageResult<T> {
+        let logical_dims = self.logical_dims();
+        let mut payload_index = vec![0usize; self.payload_dims.len()];
+        self.value_at_with_dims(logical_index, &logical_dims, &mut payload_index)
+    }
+
+    fn value_at_with_scratch(
+        &self,
+        logical_index: &[usize],
+        payload_index: &mut [usize],
+    ) -> StorageResult<T> {
+        let logical_dims = self.logical_dims();
+        self.value_at_with_dims(logical_index, &logical_dims, payload_index)
+    }
+
+    fn value_at_with_dims(
+        &self,
+        logical_index: &[usize],
+        logical_dims: &[usize],
+        payload_index: &mut [usize],
+    ) -> StorageResult<T> {
+        if logical_index.len() != logical_dims.len() {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "logical index rank {} does not match rank {}",
+                logical_index.len(),
+                logical_dims.len()
+            )));
+        }
+        if payload_index.len() < self.payload_dims.len() {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "payload scratch rank {} is smaller than {}",
+                payload_index.len(),
+                self.payload_dims.len()
+            )));
+        }
+        payload_index[..self.payload_dims.len()].fill(usize::MAX);
+        for ((&value, &dim), &class_id) in logical_index
+            .iter()
+            .zip(logical_dims.iter())
+            .zip(self.axis_classes.iter())
+        {
+            if value >= dim {
+                return Err(StorageError::InvalidStructuredStorage(format!(
+                    "logical index {value} is out of bounds for dim {dim}"
+                )));
+            }
+            if payload_index[class_id] == usize::MAX {
+                payload_index[class_id] = value;
+            } else if payload_index[class_id] != value {
+                return Ok(T::default());
+            }
+        }
+        let offset = payload_index[..self.payload_dims.len()]
+            .iter()
+            .zip(self.strides.iter())
+            .try_fold(0usize, |offset, (&value, &stride)| {
+                let stride = usize::try_from(stride).map_err(|_| {
+                    StorageError::InvalidStructuredStorage("negative stride".into())
+                })?;
+                let term = value.checked_mul(stride).ok_or_else(|| {
+                    StorageError::InvalidStructuredStorage("payload offset overflow".into())
+                })?;
+                offset.checked_add(term).ok_or_else(|| {
+                    StorageError::InvalidStructuredStorage("payload offset overflow".into())
+                })
+            })?;
+        self.data.get(offset).copied().ok_or_else(|| {
+            StorageError::InvalidStructuredStorage("payload offset outside storage".into())
+        })
     }
 }
 
@@ -1499,6 +1585,171 @@ impl Storage {
                     z.re.hypot(z.im)
                 }
             })),
+        }
+    }
+
+    /// Scan the compact payload without copying it.
+    ///
+    /// The returned flags describe the stored payload, not the logical dense
+    /// tensor. Structural zeros cannot introduce non-finite values, so this is
+    /// sufficient for metric validation while preserving compact memory use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let storage = Storage::from_dense_col_major(vec![1.0_f64, f64::INFINITY], &[2]).unwrap();
+    /// assert_eq!(storage.payload_nonfinite_flags(), (false, true));
+    /// ```
+    pub fn payload_nonfinite_flags(&self) -> (bool, bool) {
+        match &self.0 {
+            StorageRepr::F64(value) => {
+                let mut flags = (false, false);
+                value.for_each_payload_value(|value| {
+                    flags.0 |= value.is_nan();
+                    flags.1 |= value.is_infinite();
+                });
+                flags
+            }
+            StorageRepr::C64(value) => {
+                let mut flags = (false, false);
+                value.for_each_payload_value(|value| {
+                    flags.0 |= value.re.is_nan() || value.im.is_nan();
+                    flags.1 |= value.re.is_infinite() || value.im.is_infinite();
+                });
+                flags
+            }
+        }
+    }
+
+    /// Return one logical value from the compact payload without materializing
+    /// the logical tensor. Repeated axis classes represent equality constraints;
+    /// violating coordinates return structural zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the storage is complex, the coordinate rank or
+    /// bounds are invalid, or the compact payload metadata is inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let storage = Storage::from_diag_col_major(vec![2.0_f64, 3.0], 2).unwrap();
+    /// assert_eq!(storage.value_f64_at(&[1, 1]).unwrap(), 3.0);
+    /// assert_eq!(storage.value_f64_at(&[0, 1]).unwrap(), 0.0);
+    /// ```
+    pub fn value_f64_at(&self, logical_index: &[usize]) -> StorageResult<f64> {
+        match &self.0 {
+            StorageRepr::F64(value) => value.value_at(logical_index),
+            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "f64",
+                actual: "Complex64",
+                operation: "reading a logical compact value",
+            }),
+        }
+    }
+
+    /// Return one logical real value using caller-provided scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the storage is complex, the coordinate rank or
+    /// bounds are invalid, or `payload_index` is too small.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let storage = Storage::from_diag_col_major(vec![2.0_f64, 3.0], 2).unwrap();
+    /// let mut scratch = [0usize; 1];
+    /// assert_eq!(storage.value_f64_at_with_scratch(&[1, 1], &mut scratch).unwrap(), 3.0);
+    /// ```
+    pub fn value_f64_at_with_scratch(
+        &self,
+        logical_index: &[usize],
+        payload_index: &mut [usize],
+    ) -> StorageResult<f64> {
+        match &self.0 {
+            StorageRepr::F64(value) => value.value_at_with_scratch(logical_index, payload_index),
+            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "f64",
+                actual: "Complex64",
+                operation: "reading a logical compact value",
+            }),
+        }
+    }
+
+    /// Return one logical complex value using caller-provided scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the storage is real, the coordinate rank or
+    /// bounds are invalid, or `payload_index` is too small.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let storage = Storage::from_diag_col_major(
+    ///     vec![Complex64::new(2.0, 1.0), Complex64::new(3.0, -1.0)],
+    ///     2,
+    /// ).unwrap();
+    /// let mut scratch = [0usize; 1];
+    /// assert_eq!(
+    ///     storage.value_c64_at_with_scratch(&[1, 1], &mut scratch).unwrap(),
+    ///     Complex64::new(3.0, -1.0),
+    /// );
+    /// ```
+    pub fn value_c64_at_with_scratch(
+        &self,
+        logical_index: &[usize],
+        payload_index: &mut [usize],
+    ) -> StorageResult<Complex64> {
+        match &self.0 {
+            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "Complex64",
+                actual: "f64",
+                operation: "reading a logical compact value",
+            }),
+            StorageRepr::C64(value) => value.value_at_with_scratch(logical_index, payload_index),
+        }
+    }
+
+    /// Return one logical complex value from the compact payload without
+    /// materializing the logical tensor. Repeated axis classes represent
+    /// equality constraints; violating coordinates return structural zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the storage is real, the coordinate rank or
+    /// bounds are invalid, or the compact payload metadata is inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let storage = Storage::from_diag_col_major(
+    ///     vec![Complex64::new(2.0, 1.0), Complex64::new(3.0, -1.0)],
+    ///     2,
+    /// ).unwrap();
+    /// assert_eq!(storage.value_c64_at(&[0, 0]).unwrap(), Complex64::new(2.0, 1.0));
+    /// ```
+    pub fn value_c64_at(&self, logical_index: &[usize]) -> StorageResult<Complex64> {
+        match &self.0 {
+            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "Complex64",
+                actual: "f64",
+                operation: "reading a logical compact value",
+            }),
+            StorageRepr::C64(value) => value.value_at(logical_index),
         }
     }
 

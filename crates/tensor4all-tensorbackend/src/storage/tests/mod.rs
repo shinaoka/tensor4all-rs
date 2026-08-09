@@ -16,6 +16,26 @@ fn extract_c64(storage: &Storage) -> Vec<Complex64> {
     }
 }
 
+#[test]
+fn payload_nonfinite_flags_ignore_unreferenced_stride_gaps() {
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, f64::NAN, 3.0, 4.0],
+        vec![2, 2],
+        vec![3, 1],
+        vec![0, 1],
+    )
+    .unwrap();
+
+    assert_eq!(storage.payload_nonfinite_flags(), (false, false));
+    let mut scratch = [0usize; 2];
+    assert_eq!(
+        storage
+            .value_f64_at_with_scratch(&[1, 0], &mut scratch)
+            .unwrap(),
+        3.0
+    );
+}
+
 // ===== Type inspection tests =====
 
 #[test]

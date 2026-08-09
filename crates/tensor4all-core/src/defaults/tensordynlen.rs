@@ -23,7 +23,7 @@ use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
     native_tensor_primal_to_diag_f64, scale_native_tensor, storage_payload_native_read_input,
-    storage_to_native_tensor, AnyScalar as BackendScalar, TensorElement,
+    storage_to_native_tensor, AnyScalar as BackendScalar, NativeTensorReadInput, TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -441,12 +441,6 @@ impl TensorDynLenError {
             source: Self::boxed(error),
         }
     }
-
-    fn subtraction(error: anyhow::Error) -> Self {
-        Self::Subtraction {
-            source: Self::boxed(error),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -456,6 +450,8 @@ pub(crate) enum TensorDynLenStorage {
         inner: Arc<EagerTensor>,
         axis_classes: Vec<usize>,
     },
+    /// One authoritative compact eager payload and its logical layout.
+    Compact(Arc<StructuredPayload>),
     /// A storage representation whose eager operation failed before the
     /// infallible tensor API could return an error.
     Deferred {
@@ -480,6 +476,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(_) => None,
             Self::Eager { inner, .. } => Some(inner.as_ref()),
+            Self::Compact(payload) => Some(payload.payload.as_ref()),
             Self::Deferred { source, .. } => source.eager(),
         }
     }
@@ -506,6 +503,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.axis_classes(),
             Self::Eager { axis_classes, .. } => axis_classes,
+            Self::Compact(payload) => &payload.axis_classes,
             Self::Deferred { source, .. } => source.axis_classes(),
         }
     }
@@ -514,6 +512,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.payload_dims(),
             Self::Eager { inner, .. } => inner.data().shape(),
+            Self::Compact(payload) => &payload.payload_dims,
             Self::Deferred { source, .. } => source.payload_dims(),
         }
     }
@@ -522,17 +521,10 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.payload_strides().to_vec(),
             Self::Eager { inner, .. } => {
-                let mut stride = 1isize;
-                inner
-                    .data()
-                    .shape()
-                    .iter()
-                    .map(|&dim| {
-                        let current = stride;
-                        stride *= isize::try_from(dim).unwrap_or(isize::MAX);
-                        current
-                    })
-                    .collect()
+                TensorDynLen::col_major_strides(inner.data().shape()).unwrap_or_default()
+            }
+            Self::Compact(payload) => {
+                TensorDynLen::col_major_strides(&payload.payload_dims).unwrap_or_default()
             }
             Self::Deferred { source, .. } => source.payload_strides_vec(),
         }
@@ -542,6 +534,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_f64(),
             Self::Eager { inner, .. } => inner.data().dtype() == DType::F64,
+            Self::Compact(payload) => payload.payload.data().dtype() == DType::F64,
             Self::Deferred { source, .. } => source.is_f64(),
         }
     }
@@ -550,6 +543,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_c64(),
             Self::Eager { inner, .. } => inner.data().dtype() == DType::C64,
+            Self::Compact(payload) => payload.payload.data().dtype() == DType::C64,
             Self::Deferred { source, .. } => source.is_c64(),
         }
     }
@@ -562,6 +556,7 @@ impl TensorDynLenStorage {
                 DType::F64
             }),
             Self::Eager { inner, .. } => Some(inner.data().dtype()),
+            Self::Compact(payload) => Some(payload.payload.data().dtype()),
             Self::Deferred { source, .. } => source.dtype(),
         }
     }
@@ -570,6 +565,9 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_complex(),
             Self::Eager { inner, .. } => matches!(inner.data().dtype(), DType::C32 | DType::C64),
+            Self::Compact(payload) => {
+                matches!(payload.payload.data().dtype(), DType::C32 | DType::C64)
+            }
             Self::Deferred { source, .. } => source.is_complex(),
         }
     }
@@ -578,6 +576,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_diag(),
             Self::Eager { axis_classes, .. } => TensorDynLen::is_diag_axis_classes(axis_classes),
+            Self::Compact(payload) => TensorDynLen::is_diag_axis_classes(&payload.axis_classes),
             Self::Deferred { source, .. } => source.is_diag(),
         }
     }
@@ -589,6 +588,20 @@ impl TensorDynLenStorage {
                 if axis_classes.iter().copied().eq(0..axis_classes.len()) {
                     StorageKind::Dense
                 } else if TensorDynLen::is_diag_axis_classes(axis_classes) {
+                    StorageKind::Diagonal
+                } else {
+                    StorageKind::Structured
+                }
+            }
+            Self::Compact(payload) => {
+                if payload
+                    .axis_classes
+                    .iter()
+                    .copied()
+                    .eq(0..payload.axis_classes.len())
+                {
+                    StorageKind::Dense
+                } else if TensorDynLen::is_diag_axis_classes(&payload.axis_classes) {
                     StorageKind::Diagonal
                 } else {
                     StorageKind::Structured
@@ -624,6 +637,23 @@ impl TensorDynLenStorage {
                     source: Arc::from(source.into_boxed_dyn_error()),
                 })
             }
+            Self::Compact(payload) => {
+                let dtype = payload.payload.data().dtype();
+                if matches!(dtype, DType::F32 | DType::C32) {
+                    return Err(TensorStorageError::UnsupportedDtype {
+                        dtype: TensorDynLen::dtype_name(dtype),
+                    });
+                }
+                TensorDynLen::storage_from_native_with_axis_classes(
+                    payload.payload.data(),
+                    &payload.axis_classes,
+                    logical_rank,
+                )
+                .map(Arc::new)
+                .map_err(|source| TensorStorageError::Materialization {
+                    source: Arc::from(source.into_boxed_dyn_error()),
+                })
+            }
             Self::Deferred { error, .. } => Err((**error).clone()),
         }
     }
@@ -652,7 +682,32 @@ impl TensorDynLenStorage {
                     axis_classes: axis_classes.clone(),
                 })
                 .map_err(|source| TensorStorageError::Conjugation { source }),
+            Self::Compact(payload) => conjugate(payload.payload.as_ref())
+                .map(|conjugated| {
+                    Self::Compact(Arc::new(StructuredPayload {
+                        payload: Arc::new(conjugated),
+                        payload_dims: payload.payload_dims.clone(),
+                        axis_classes: payload.axis_classes.clone(),
+                    }))
+                })
+                .map_err(|source| TensorStorageError::Conjugation { source }),
             Self::Deferred { error, .. } => Err((**error).clone()),
+        }
+    }
+
+    fn sum_scalar(&self) -> Result<AnyScalar> {
+        match self {
+            Self::Materialized(storage) => {
+                if storage.is_f64() {
+                    Ok(AnyScalar::new_real(storage.sum::<f64>()))
+                } else {
+                    let value = storage.sum::<Complex64>();
+                    Ok(AnyScalar::new_complex(value.re, value.im))
+                }
+            }
+            Self::Eager { inner, .. } => TensorDynLen::native_sum_scalar(inner.data()),
+            Self::Compact(payload) => TensorDynLen::native_sum_scalar(payload.payload.data()),
+            Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
     }
 
@@ -660,7 +715,125 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => Ok(storage.max_abs()),
             Self::Eager { inner, .. } => TensorDynLen::native_max_abs(inner.data()),
+            Self::Compact(payload) => TensorDynLen::native_max_abs(payload.payload.data()),
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
+        }
+    }
+
+    fn nonfinite_flags(&self) -> Result<(bool, bool)> {
+        match self {
+            Self::Materialized(storage) => Ok(storage.payload_nonfinite_flags()),
+            Self::Eager { inner, .. } => TensorDynLen::native_nonfinite_flags(inner.data()),
+            Self::Compact(payload) => TensorDynLen::native_nonfinite_flags(payload.payload.data()),
+            Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
+        }
+    }
+
+    fn eager_value_at(inner: &EagerTensor, linear: usize) -> Option<Complex64> {
+        match inner.data().dtype() {
+            DType::F32 => inner
+                .data()
+                .as_slice::<f32>()
+                .and_then(|values| values.get(linear).copied())
+                .map(|value| Complex64::new(f64::from(value), 0.0)),
+            DType::F64 => inner
+                .data()
+                .as_slice::<f64>()
+                .and_then(|values| values.get(linear).copied())
+                .map(|value| Complex64::new(value, 0.0)),
+            DType::C32 => inner
+                .data()
+                .as_slice::<Complex32>()
+                .and_then(|values| values.get(linear).copied())
+                .map(|value| Complex64::new(f64::from(value.re), f64::from(value.im))),
+            DType::C64 => inner
+                .data()
+                .as_slice::<Complex64>()
+                .and_then(|values| values.get(linear).copied()),
+            _ => None,
+        }
+    }
+
+    fn compact_payload_is_contiguous(&self) -> bool {
+        let payload_len = self
+            .payload_dims()
+            .iter()
+            .try_fold(1usize, |length, &dim| length.checked_mul(dim));
+        matches!(payload_len, Some(0))
+            || payload_len.is_some_and(|length| {
+                length > 0 && self.compact_value_at_contiguous(0).ok().flatten().is_some()
+            })
+    }
+
+    fn compact_value_at_contiguous(&self, linear: usize) -> Result<Option<Complex64>> {
+        match self {
+            Self::Materialized(storage) => {
+                if storage.is_f64() {
+                    Ok(storage
+                        .payload_f64_col_major_view_if_contiguous()
+                        .map_err(anyhow::Error::msg)?
+                        .and_then(|values| values.get(linear).copied())
+                        .map(|value| Complex64::new(value, 0.0)))
+                } else {
+                    Ok(storage
+                        .payload_c64_col_major_view_if_contiguous()
+                        .map_err(anyhow::Error::msg)?
+                        .and_then(|values| values.get(linear).copied()))
+                }
+            }
+            Self::Eager { inner, .. } => Ok(Self::eager_value_at(inner, linear)),
+            Self::Compact(payload) => Ok(Self::eager_value_at(&payload.payload, linear)),
+            Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
+        }
+    }
+
+    fn semantic_value_at(
+        &self,
+        logical_index: &[usize],
+        logical_dims: &[usize],
+        payload_index: &mut [usize],
+    ) -> Result<Complex64> {
+        match self {
+            Self::Materialized(storage) => {
+                if storage.is_f64() {
+                    Ok(Complex64::new(
+                        storage
+                            .value_f64_at_with_scratch(logical_index, payload_index)
+                            .map_err(anyhow::Error::msg)?,
+                        0.0,
+                    ))
+                } else {
+                    storage
+                        .value_c64_at_with_scratch(logical_index, payload_index)
+                        .map_err(anyhow::Error::msg)
+                }
+            }
+            Self::Eager {
+                inner,
+                axis_classes,
+            } => TensorDynLen::native_complex_value_at(
+                inner.data(),
+                axis_classes,
+                logical_dims,
+                logical_index,
+                payload_index,
+            ),
+            Self::Compact(payload) => TensorDynLen::native_complex_value_at(
+                payload.payload.data(),
+                &payload.axis_classes,
+                logical_dims,
+                logical_index,
+                payload_index,
+            ),
+            Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
+        }
+    }
+
+    fn compact_payload(&self) -> Option<&StructuredPayload> {
+        match self {
+            Self::Compact(payload) => Some(payload.as_ref()),
+            Self::Deferred { source, .. } => source.compact_payload(),
+            _ => None,
         }
     }
 }
@@ -797,11 +970,6 @@ pub struct TensorDynLen {
     /// dtype is supported by [`Storage`]; otherwise this retains an eager
     /// payload without promotion.
     pub(crate) storage: TensorDynLenStorage,
-    /// Optional retained compact eager payload for structured layouts. It is
-    /// present for tracked and untracked structured results; `payload.tracks_grad()`
-    /// is the sole tracking marker. The `Arc` owns the payload graph independently
-    /// of compact storage snapshots.
-    pub(crate) structured_payload: Option<Arc<StructuredPayload>>,
     /// Lazily materialized logical-dense eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor>>>,
 }
@@ -1167,10 +1335,7 @@ impl TensorDynLen {
     }
 
     fn compact_payload_inner(&self) -> Result<EagerTensor> {
-        if let Some(value) = self.structured_payload.as_deref() {
-            self.ensure_storage_ready()?;
-            return Ok(value.payload.as_ref().clone());
-        }
+        self.ensure_storage_ready()?;
         if let Some(inner) = self.storage.eager() {
             return Ok(inner.clone());
         }
@@ -1239,7 +1404,7 @@ impl TensorDynLen {
         self.storage
             .deferred_error()
             .is_none()
-            .then_some(self.structured_payload.as_deref())
+            .then_some(self.storage.compact_payload())
             .flatten()
             .filter(|value| value.payload.tracks_grad())
     }
@@ -1381,31 +1546,6 @@ impl TensorDynLen {
         None
     }
 
-    fn binary_structured_contraction_plan(
-        &self,
-        other: &Self,
-        axes_a: &[usize],
-        axes_b: &[usize],
-    ) -> Result<(StructuredContractionPlan, Vec<Vec<usize>>, Vec<usize>)> {
-        let (lhs_labels, rhs_labels, output_labels) = Self::build_binary_contraction_labels(
-            self.indices.len(),
-            axes_a,
-            other.indices.len(),
-            axes_b,
-        )?;
-        let operands = vec![
-            OperandLayout::new(self.dims(), self.storage.axis_classes().to_vec())?,
-            OperandLayout::new(other.dims(), other.storage.axis_classes().to_vec())?,
-        ];
-        let spec = StructuredContractionSpec {
-            input_labels: vec![lhs_labels, rhs_labels],
-            output_labels,
-            retained_labels: Default::default(),
-        };
-        let plan = StructuredContractionPlan::new(&operands, &spec)?;
-        Ok((plan, spec.input_labels, spec.output_labels))
-    }
-
     fn from_structured_payload_inner(
         indices: Vec<DynIndex>,
         payload_inner: EagerTensor,
@@ -1423,32 +1563,14 @@ impl TensorDynLen {
         if axis_classes == Self::dense_axis_classes(indices.len()) {
             return Self::from_inner_with_axis_classes(indices, payload_inner, axis_classes);
         }
-        let structured_payload = Some(Arc::new(StructuredPayload {
-            payload: Arc::new(payload_inner.clone()),
-            payload_dims: payload_dims.clone(),
-            axis_classes: axis_classes.clone(),
-        }));
-        if matches!(payload_inner.data().dtype(), DType::F32 | DType::C32) {
-            return Ok(Self {
-                indices,
-                storage: TensorDynLenStorage::Eager {
-                    inner: Arc::new(payload_inner),
-                    axis_classes,
-                },
-                structured_payload,
-                eager_cache: Self::empty_eager_cache(),
-            });
-        }
-        let storage = storage_from_payload_native(
-            payload_inner.data().clone(),
-            &payload_dims,
-            axis_classes.clone(),
-        )?;
-        Self::validate_storage_matches_indices(&indices, &storage)?;
+        let structured_payload = Arc::new(StructuredPayload {
+            payload: Arc::new(payload_inner),
+            payload_dims,
+            axis_classes,
+        });
         Ok(Self {
             indices,
-            storage: TensorDynLenStorage::from_storage(Arc::new(storage)),
-            structured_payload,
+            storage: TensorDynLenStorage::Compact(structured_payload),
             eager_cache: Self::empty_eager_cache(),
         })
     }
@@ -1460,69 +1582,81 @@ impl TensorDynLen {
         axes_a: &[usize],
         axes_b: &[usize],
     ) -> Result<Self> {
-        let (plan, _, _) = self.binary_structured_contraction_plan(other, axes_a, axes_b)?;
-        self.contract_structured_payloads_with_plan(other, result_indices, plan)
+        let (lhs_labels, rhs_labels, output_labels) = Self::build_binary_contraction_labels(
+            self.indices.len(),
+            axes_a,
+            other.indices.len(),
+            axes_b,
+        )?;
+        Self::contract_structured_payloads_nary(
+            &[self, other],
+            result_indices,
+            vec![lhs_labels, rhs_labels],
+            output_labels,
+        )
     }
 
-    pub(crate) fn contract_structured_payloads_with_labels(
-        &self,
-        other: &Self,
+    pub(crate) fn contract_structured_payloads_nary(
+        operands: &[&Self],
         result_indices: Vec<DynIndex>,
-        input_labels: [Vec<usize>; 2],
+        input_labels: Vec<Vec<usize>>,
         output_labels: Vec<usize>,
     ) -> Result<Self> {
-        let operands = vec![
-            OperandLayout::new(self.dims(), self.storage.axis_classes().to_vec())?,
-            OperandLayout::new(other.dims(), other.storage.axis_classes().to_vec())?,
-        ];
+        anyhow::ensure!(
+            !operands.is_empty(),
+            "structured contraction needs operands"
+        );
+        for operand in operands {
+            operand.ensure_storage_ready()?;
+        }
+        let layouts = operands
+            .iter()
+            .map(|operand| {
+                OperandLayout::new(operand.dims(), operand.storage.axis_classes().to_vec())
+            })
+            .collect::<Result<Vec<_>>>()?;
         let spec = StructuredContractionSpec {
-            input_labels: input_labels.to_vec(),
+            input_labels,
             output_labels,
             retained_labels: Default::default(),
         };
-        let plan = StructuredContractionPlan::new(&operands, &spec)?;
-        self.contract_structured_payloads_with_plan(other, result_indices, plan)
-    }
+        let plan = StructuredContractionPlan::new(&layouts, &spec)?;
+        let any_grad = operands.iter().any(|operand| operand.tracks_grad());
 
-    fn contract_structured_payloads_with_plan(
-        &self,
-        other: &Self,
-        result_indices: Vec<DynIndex>,
-        plan: StructuredContractionPlan,
-    ) -> Result<Self> {
-        let lhs_roots = plan.operand_plans[0].class_roots.clone();
-        let rhs_roots = plan.operand_plans[1].class_roots.clone();
-        let scalar_multiply =
-            lhs_roots.is_empty() && rhs_roots.is_empty() && plan.output_payload_roots.is_empty();
-
-        if let (Some(lhs_ad), Some(rhs_ad)) = (
-            self.tracked_compact_payload_value(),
-            other.tracked_compact_payload_value(),
-        ) {
-            if lhs_ad.payload.data().dtype() != rhs_ad.payload.data().dtype() {
-                return Err(anyhow::anyhow!(
-                    "structured AD contraction requires matching payload dtypes"
-                ));
+        if any_grad {
+            let dtypes = operands
+                .iter()
+                .map(|operand| {
+                    operand.storage.dtype().ok_or_else(|| {
+                        anyhow::anyhow!("structured contraction operand has no scalar dtype")
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let target = Self::common_eager_dtype(&dtypes)?;
+            let mut payloads = Vec::with_capacity(operands.len());
+            for operand in operands {
+                let payload = operand.compact_payload_inner()?;
+                payloads.push(if payload.data().dtype() == target {
+                    payload
+                } else {
+                    payload.convert(target)?
+                });
             }
-            let (lhs_normalized, lhs_labels) =
-                Self::normalize_eager_payload_for_roots(lhs_ad.payload.as_ref(), &lhs_roots)?;
-            let (rhs_normalized, rhs_labels) =
-                Self::normalize_eager_payload_for_roots(rhs_ad.payload.as_ref(), &rhs_roots)?;
-            let lhs_payload = lhs_normalized
-                .as_ref()
-                .unwrap_or_else(|| lhs_ad.payload.as_ref());
-            let rhs_payload = rhs_normalized
-                .as_ref()
-                .unwrap_or_else(|| rhs_ad.payload.as_ref());
-            let payload = if scalar_multiply {
-                lhs_payload.mul(rhs_payload)?
-            } else {
-                let subscripts = Self::build_payload_einsum_subscripts(
-                    &[lhs_labels, rhs_labels],
-                    &plan.output_payload_roots,
-                )?;
-                eager_einsum_ad(&[lhs_payload, rhs_payload], &subscripts)?
-            };
+
+            let mut normalized = Vec::with_capacity(payloads.len());
+            let mut labels = Vec::with_capacity(payloads.len());
+            for (operand_idx, (payload, operand_plan)) in
+                payloads.iter().zip(plan.operand_plans.iter()).enumerate()
+            {
+                let (payload, roots) =
+                    Self::normalize_eager_payload_for_roots(payload, &operand_plan.class_roots)?;
+                normalized.push(payload.unwrap_or_else(|| payloads[operand_idx].clone()));
+                labels.push(roots);
+            }
+            let refs = normalized.iter().collect::<Vec<_>>();
+            let subscripts =
+                Self::build_payload_einsum_subscripts(&labels, &plan.output_payload_roots)?;
+            let payload = eager_einsum_ad(&refs, &subscripts)?;
             return Self::from_structured_payload_inner(
                 result_indices,
                 payload,
@@ -1531,122 +1665,88 @@ impl TensorDynLen {
             );
         }
 
-        if self.tracked_compact_payload_value().is_some()
-            || other.tracked_compact_payload_value().is_some()
-        {
-            let lhs_owned = if self.tracked_compact_payload_value().is_some() {
-                None
+        // The native backend borrows contiguous compact payloads and promotes
+        // only operands whose compact dtype differs. No logical dense tensor is
+        // constructed on this path.
+        let storage_owners = operands
+            .iter()
+            .map(|operand| match &operand.storage {
+                TensorDynLenStorage::Materialized(storage) => Some(Arc::clone(storage)),
+                TensorDynLenStorage::Deferred { source, .. } => match source.as_ref() {
+                    TensorDynLenStorage::Materialized(storage) => Some(Arc::clone(storage)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut inputs = Vec::with_capacity(operands.len());
+        for (operand_idx, operand) in operands.iter().enumerate() {
+            if let Some(storage) = storage_owners[operand_idx].as_ref() {
+                inputs.push(storage_payload_native_read_input(storage.as_ref())?);
             } else {
-                Some(self.compact_payload_inner()?)
-            };
-            let rhs_owned = if other.tracked_compact_payload_value().is_some() {
-                None
-            } else {
-                Some(other.compact_payload_inner()?)
-            };
-            let lhs = if let Some(value) = self.tracked_compact_payload_value() {
-                value.payload.as_ref()
-            } else {
-                lhs_owned
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("missing untracked left compact payload"))?
-            };
-            let rhs = if let Some(value) = other.tracked_compact_payload_value() {
-                value.payload.as_ref()
-            } else {
-                rhs_owned
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("missing untracked right compact payload"))?
-            };
-            if lhs.data().dtype() != rhs.data().dtype() {
-                return Err(anyhow::anyhow!(
-                    "structured AD contraction requires matching payload dtypes"
+                let inner = operand
+                    .storage
+                    .eager()
+                    .ok_or_else(|| anyhow::anyhow!("structured operand has no compact payload"))?;
+                inputs.push(NativeTensorReadInput::Borrowed(
+                    tenferro::TensorRead::from_tensor(inner.data()),
                 ));
             }
-            let (lhs_normalized, lhs_labels) =
-                Self::normalize_eager_payload_for_roots(lhs, &lhs_roots)?;
-            let (rhs_normalized, rhs_labels) =
-                Self::normalize_eager_payload_for_roots(rhs, &rhs_roots)?;
-            let lhs_payload = lhs_normalized.as_ref().unwrap_or(lhs);
-            let rhs_payload = rhs_normalized.as_ref().unwrap_or(rhs);
-            let payload = if scalar_multiply {
-                lhs_payload.mul(rhs_payload)?
-            } else {
-                let subscripts = Self::build_payload_einsum_subscripts(
-                    &[lhs_labels, rhs_labels],
-                    &plan.output_payload_roots,
-                )?;
-                eager_einsum_ad(&[lhs_payload, rhs_payload], &subscripts)?
-            };
-            return Self::from_structured_payload_inner(
-                result_indices,
-                payload,
-                plan.output_payload_dims,
-                plan.output_axis_classes,
-            );
         }
-
-        if self.storage.eager().is_some() || other.storage.eager().is_some() {
-            let lhs_owned = self.compact_payload_inner()?;
-            let rhs_owned = other.compact_payload_inner()?;
-            if lhs_owned.data().dtype() != rhs_owned.data().dtype() {
-                return Err(anyhow::anyhow!(
-                    "structured payload contraction requires matching payload dtypes"
-                ));
-            }
-            let (lhs_normalized, lhs_labels) =
-                Self::normalize_eager_payload_for_roots(&lhs_owned, &lhs_roots)?;
-            let (rhs_normalized, rhs_labels) =
-                Self::normalize_eager_payload_for_roots(&rhs_owned, &rhs_roots)?;
-            let lhs_payload = lhs_normalized.as_ref().unwrap_or(&lhs_owned);
-            let rhs_payload = rhs_normalized.as_ref().unwrap_or(&rhs_owned);
-            let payload = if scalar_multiply {
-                lhs_payload.mul(rhs_payload)?
-            } else {
-                let subscripts = Self::build_payload_einsum_subscripts(
-                    &[lhs_labels, rhs_labels],
-                    &plan.output_payload_roots,
-                )?;
-                eager_einsum_ad(&[lhs_payload, rhs_payload], &subscripts)?
-            };
-            return Self::from_structured_payload_inner(
-                result_indices,
-                payload,
-                plan.output_payload_dims,
-                plan.output_axis_classes,
-            );
+        let mut normalized = Vec::with_capacity(inputs.len());
+        let mut labels = Vec::with_capacity(inputs.len());
+        for (input, operand_plan) in inputs.into_iter().zip(plan.operand_plans.iter()) {
+            let (input, roots) =
+                normalize_payload_read_for_roots(input, &operand_plan.class_roots)?;
+            normalized.push(input);
+            labels.push(roots);
         }
-
-        let lhs_storage = self.storage.materialize(self.indices.len())?;
-        let rhs_storage = other.storage.materialize(other.indices.len())?;
-        let lhs = storage_payload_native_read_input(lhs_storage.as_ref())?;
-        let rhs = storage_payload_native_read_input(rhs_storage.as_ref())?;
-        if lhs.dtype() != rhs.dtype() {
-            return Err(anyhow::anyhow!(
-                "structured payload contraction requires matching payload dtypes"
-            ));
-        }
-        let (lhs, lhs_labels) = normalize_payload_read_for_roots(lhs, &lhs_roots)?;
-        let (rhs, rhs_labels) = normalize_payload_read_for_roots(rhs, &rhs_roots)?;
+        let refs = normalized
+            .iter()
+            .zip(labels.iter())
+            .map(|(input, labels)| (input, labels.as_slice()))
+            .collect::<Vec<_>>();
         let payload = tensor4all_tensorbackend::einsum_native_tensor_reads(
-            &[(&lhs, lhs_labels.as_slice()), (&rhs, rhs_labels.as_slice())],
+            &refs,
             &plan.output_payload_roots,
         )?;
-        let storage = storage_from_payload_native(
-            payload,
-            &plan.output_payload_dims,
+        let payload_inner = EagerTensor::from_tensor_in(payload, default_eager_ctx()?);
+        Self::from_structured_payload_inner(
+            result_indices,
+            payload_inner,
+            plan.output_payload_dims,
             plan.output_axis_classes,
-        )?;
-        Self::from_storage(result_indices, Arc::new(storage))
+        )
+    }
+
+    fn common_eager_dtype(dtypes: &[DType]) -> Result<DType> {
+        let target = if dtypes.contains(&DType::C64)
+            || (dtypes.contains(&DType::C32) && dtypes.contains(&DType::F64))
+        {
+            DType::C64
+        } else if dtypes.contains(&DType::F64) || dtypes.contains(&DType::C32) {
+            if dtypes.contains(&DType::C32) {
+                DType::C32
+            } else {
+                DType::F64
+            }
+        } else {
+            DType::F32
+        };
+        anyhow::ensure!(
+            dtypes.iter().all(|dtype| {
+                matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
+            }),
+            "structured contraction supports only f32, f64, c32, and c64 operands"
+        );
+        Ok(target)
     }
 
     fn should_use_structured_payload_contract(&self, other: &Self) -> bool {
-        let same_payload_dtype = self.storage.dtype() == other.storage.dtype();
-        same_payload_dtype
-            && (self.tracked_compact_payload_value().is_some()
-                || other.tracked_compact_payload_value().is_some()
-                || self.storage.axis_classes() != Self::dense_axis_classes(self.indices.len())
-                || other.storage.axis_classes() != Self::dense_axis_classes(other.indices.len()))
+        self.tracks_grad()
+            || other.tracks_grad()
+            || self.storage.axis_classes() != Self::dense_axis_classes(self.indices.len())
+            || other.storage.axis_classes() != Self::dense_axis_classes(other.indices.len())
     }
 
     fn storage_from_native_with_axis_classes(
@@ -2487,7 +2587,6 @@ impl TensorDynLen {
         Ok(Self {
             indices,
             storage: TensorDynLenStorage::from_storage(storage),
-            structured_payload: None,
             eager_cache: Self::empty_eager_cache(),
         })
     }
@@ -2839,57 +2938,21 @@ impl TensorDynLen {
                 Self::validate_diag_dims(&dims)
             })?;
         }
-        let (storage, eager_cache, structured_payload) =
-            if axis_classes == Self::dense_axis_classes(indices.len()) {
-                (
-                    TensorDynLenStorage::from_eager_dense(inner, indices.len()),
-                    Self::empty_eager_cache(),
-                    None,
-                )
-            } else {
-                let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
-                let payload_dims = payload.data().shape().to_vec();
-                let structured_payload = Some(Arc::new(StructuredPayload {
-                    payload: Arc::new(payload.clone()),
-                    payload_dims,
-                    axis_classes: axis_classes.clone(),
-                }));
-                if matches!(inner.data().dtype(), DType::F32 | DType::C32) {
-                    (
-                        TensorDynLenStorage::Eager {
-                            inner: Arc::new(payload),
-                            axis_classes,
-                        },
-                        Self::empty_eager_cache(),
-                        structured_payload,
-                    )
-                } else {
-                    let storage =
-                        profile_pairwise_contract_section("from_inner_storage_snapshot", || {
-                            Self::storage_from_native_with_axis_classes(
-                                payload.data(),
-                                &axis_classes,
-                                indices.len(),
-                            )
-                        })?;
-                    record_pairwise_contract_profile_bytes(
-                        "from_inner_storage_snapshot",
-                        native_tensor_profile_bytes(payload.data()),
-                    );
-                    (
-                        TensorDynLenStorage::from_storage(Arc::new(storage)),
-                        profile_pairwise_contract_section("from_inner_eager_cache", || {
-                            Self::eager_cache_with(inner)
-                        }),
-                        structured_payload,
-                    )
-                }
-            };
+        let storage = if axis_classes == Self::dense_axis_classes(indices.len()) {
+            TensorDynLenStorage::from_eager_dense(inner, indices.len())
+        } else {
+            let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
+            let payload_dims = payload.data().shape().to_vec();
+            TensorDynLenStorage::Compact(Arc::new(StructuredPayload {
+                payload: Arc::new(payload),
+                payload_dims,
+                axis_classes,
+            }))
+        };
         Ok(Self {
             indices,
             storage,
-            structured_payload,
-            eager_cache,
+            eager_cache: Self::empty_eager_cache(),
         })
     }
 
@@ -2902,10 +2965,6 @@ impl TensorDynLen {
         self.storage.axis_classes()
     }
 
-    pub(crate) fn storage_dtype(&self) -> Option<DType> {
-        self.storage.dtype()
-    }
-
     /// Borrow the native payload.
     pub(crate) fn as_native(&self) -> Result<&NativeTensor> {
         Ok(self.try_materialized_inner()?.data())
@@ -2913,6 +2972,7 @@ impl TensorDynLen {
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     pub fn enable_grad(self) -> Result<Self> {
+        self.ensure_storage_ready()?;
         // Keep the eager payload when available: compact Storage currently
         // stores only f64/C64 and must not promote f32/C32 leaves before AD.
         let eager_payload = self
@@ -2930,24 +2990,29 @@ impl TensorDynLen {
         };
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
-        Ok(Self {
-            indices: self.indices,
-            storage: self.storage,
-            structured_payload: Some(Arc::new(StructuredPayload {
-                payload: Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx()?)),
+        let tracked = Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx()?));
+        let storage = if axis_classes == Self::dense_axis_classes(self.indices.len()) {
+            TensorDynLenStorage::Eager {
+                inner: tracked,
+                axis_classes,
+            }
+        } else {
+            TensorDynLenStorage::Compact(Arc::new(StructuredPayload {
+                payload: tracked,
                 payload_dims,
                 axis_classes,
-            })),
+            }))
+        };
+        Ok(Self {
+            indices: self.indices,
+            storage,
             eager_cache: Self::empty_eager_cache(),
         })
     }
 
     /// Report whether this tensor participates in gradient tracking.
     pub fn tracks_grad(&self) -> bool {
-        self.structured_payload
-            .as_ref()
-            .is_some_and(|value| value.payload.tracks_grad())
-            || self.storage.eager().is_some_and(EagerTensor::tracks_grad)
+        self.storage.eager().is_some_and(EagerTensor::tracks_grad)
             || self
                 .eager_cache
                 .get()
@@ -2968,32 +3033,20 @@ impl TensorDynLen {
                             value.axis_classes.clone(),
                         );
                     }
-                    if matches!(grad.as_ref().dtype(), DType::F32 | DType::C32) {
-                        anyhow::ensure!(
-                            grad.as_ref().shape() == value.payload_dims,
-                            "gradient payload dims {:?} do not match {:?}",
-                            grad.as_ref().shape(),
-                            value.payload_dims
-                        );
-                        return Ok(Self {
-                            indices: self.indices.clone(),
-                            storage: TensorDynLenStorage::Eager {
-                                inner: Arc::new(EagerTensor::from_tensor_in(
-                                    grad.as_ref().clone(),
-                                    default_eager_ctx()?,
-                                )),
-                                axis_classes: value.axis_classes.clone(),
-                            },
-                            structured_payload: None,
-                            eager_cache: Self::empty_eager_cache(),
-                        });
-                    }
-                    let storage = storage_from_payload_native(
-                        grad.as_ref().clone(),
-                        &value.payload_dims,
+                    anyhow::ensure!(
+                        grad.as_ref().shape() == value.payload_dims,
+                        "gradient payload dims {:?} do not match {:?}",
+                        grad.as_ref().shape(),
+                        value.payload_dims
+                    );
+                    let gradient =
+                        EagerTensor::from_tensor_in(grad.as_ref().clone(), default_eager_ctx()?);
+                    Self::from_structured_payload_inner(
+                        self.indices.clone(),
+                        gradient,
+                        value.payload_dims.clone(),
                         value.axis_classes.clone(),
-                    )?;
-                    Self::from_storage(self.indices.clone(), Arc::new(storage))
+                    )
                 })
                 .transpose();
         }
@@ -3130,12 +3183,16 @@ impl TensorDynLen {
     /// assert!((s.real() - 6.0).abs() < 1e-12);
     /// ```
     pub fn sum(&self) -> Result<AnyScalar> {
+        self.ensure_storage_ready()?;
         if self.indices.is_empty() {
             return AnyScalar::from_tensor(self.clone());
         }
-        let axes: Vec<usize> = (0..self.indices.len()).collect();
-        let reduced = self.try_materialized_inner()?.reduce_sum(&axes)?;
-        AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?)
+        if let Some(payload) = self.storage.eager().filter(|payload| payload.tracks_grad()) {
+            let axes: Vec<usize> = (0..payload.data().shape().len()).collect();
+            let reduced = payload.reduce_sum(&axes)?;
+            return AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?);
+        }
+        self.storage.sum_scalar()
     }
 
     /// Extract the scalar value from a 0-dimensional tensor (or 1-element tensor).
@@ -3207,7 +3264,6 @@ impl TensorDynLen {
             return Ok(Self {
                 indices: new_indices.to_vec(),
                 storage: self.storage.clone(),
-                structured_payload: self.structured_payload.clone(),
                 eager_cache: Arc::clone(&self.eager_cache),
             });
         }
@@ -4030,7 +4086,6 @@ impl TensorDynLen {
         Ok(Self {
             indices: new_indices,
             storage: self.storage.clone(),
-            structured_payload: self.structured_payload.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         })
     }
@@ -4108,7 +4163,6 @@ impl TensorDynLen {
         Ok(Self {
             indices: new_indices_vec,
             storage: self.storage.clone(),
-            structured_payload: self.structured_payload.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         })
     }
@@ -4168,31 +4222,11 @@ impl TensorDynLen {
             Ok(storage) => storage,
             Err(error) => self.storage.clone().with_deferred_error(error),
         };
-        let mut structured_payload = self.structured_payload.clone();
         let mut eager_cache = if storage.deferred_error().is_some() {
             Arc::clone(&self.eager_cache)
         } else {
             Self::empty_eager_cache()
         };
-
-        if storage.deferred_error().is_none() {
-            if let Some(value) = self.structured_payload.as_deref() {
-                match conjugate(value.payload.as_ref()) {
-                    Ok(payload) => {
-                        structured_payload = Some(Arc::new(StructuredPayload {
-                            payload: Arc::new(payload),
-                            payload_dims: value.payload_dims.clone(),
-                            axis_classes: value.axis_classes.clone(),
-                        }));
-                    }
-                    Err(source) => {
-                        storage =
-                            storage.with_deferred_error(TensorStorageError::Conjugation { source });
-                        eager_cache = Arc::clone(&self.eager_cache);
-                    }
-                }
-            }
-        }
 
         if storage.deferred_error().is_none() {
             if let Some(inner) = self.eager_cache.get() {
@@ -4201,8 +4235,8 @@ impl TensorDynLen {
                     Err(source) => {
                         storage =
                             storage.with_deferred_error(TensorStorageError::Conjugation { source });
-                        // Keep the original cache alive so tracks_grad() does
-                        // not report a detached tensor after a deferred error.
+                        // Keep the original cache alive so a deferred failure
+                        // retains its graph until a fallible consumer reports it.
                         eager_cache = Arc::clone(&self.eager_cache);
                     }
                 }
@@ -4212,7 +4246,6 @@ impl TensorDynLen {
         Self {
             indices: new_indices,
             storage,
-            structured_payload,
             eager_cache,
         }
     }
@@ -4355,6 +4388,146 @@ impl TensorDynLen {
         Ok(value)
     }
 
+    fn native_complex_value_at(
+        native: &NativeTensor,
+        axis_classes: &[usize],
+        logical_dims: &[usize],
+        logical_index: &[usize],
+        payload_index: &mut [usize],
+    ) -> Result<Complex64> {
+        anyhow::ensure!(
+            logical_dims.len() == logical_index.len() && axis_classes.len() == logical_index.len(),
+            "semantic value rank does not match tensor layout"
+        );
+        let payload_rank = axis_classes
+            .iter()
+            .copied()
+            .max()
+            .map(|class_id| class_id + 1)
+            .unwrap_or(0);
+        anyhow::ensure!(
+            payload_index.len() >= payload_rank,
+            "semantic value scratch is too small for payload rank {payload_rank}"
+        );
+        payload_index[..payload_rank].fill(usize::MAX);
+        for ((&value, &dim), &class_id) in logical_index
+            .iter()
+            .zip(logical_dims.iter())
+            .zip(axis_classes.iter())
+        {
+            anyhow::ensure!(value < dim, "semantic coordinate {value} is out of bounds");
+            if payload_index[class_id] == usize::MAX {
+                payload_index[class_id] = value;
+            } else if payload_index[class_id] != value {
+                return Ok(Complex64::new(0.0, 0.0));
+            }
+        }
+        let mut offset = 0usize;
+        let mut stride = 1usize;
+        for (&value, &dim) in payload_index[..payload_rank]
+            .iter()
+            .zip(native.shape().iter())
+        {
+            anyhow::ensure!(value < dim, "payload coordinate {value} is out of bounds");
+            offset = offset
+                .checked_add(
+                    value
+                        .checked_mul(stride)
+                        .ok_or_else(|| anyhow::anyhow!("semantic payload offset overflow"))?,
+                )
+                .ok_or_else(|| anyhow::anyhow!("semantic payload offset overflow"))?;
+            stride = stride
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow::anyhow!("semantic payload stride overflow"))?;
+        }
+        match native.dtype() {
+            DType::F32 => native
+                .as_slice::<f32>()
+                .and_then(|values| values.get(offset).copied())
+                .map(|value| Complex64::new(f64::from(value), 0.0))
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 semantic value")),
+            DType::F64 => native
+                .as_slice::<f64>()
+                .and_then(|values| values.get(offset).copied())
+                .map(|value| Complex64::new(value, 0.0))
+                .ok_or_else(|| anyhow::anyhow!("failed to read f64 semantic value")),
+            DType::C32 => native
+                .as_slice::<Complex32>()
+                .and_then(|values| values.get(offset).copied())
+                .map(|value| Complex64::new(f64::from(value.re), f64::from(value.im)))
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 semantic value")),
+            DType::C64 => native
+                .as_slice::<Complex64>()
+                .and_then(|values| values.get(offset).copied())
+                .ok_or_else(|| anyhow::anyhow!("failed to read c64 semantic value")),
+            dtype => Err(anyhow::anyhow!("unsupported semantic dtype {dtype:?}")),
+        }
+    }
+
+    fn compact_layout_compatible(&self, other: &Self, other_positions: &[usize]) -> bool {
+        let other_classes = other
+            .storage
+            .axis_classes()
+            .iter()
+            .enumerate()
+            .map(|(axis, &class_id)| (axis, class_id))
+            .collect::<Vec<_>>();
+        let mapped = self
+            .indices
+            .iter()
+            .map(|index| {
+                let other_axis = other_positions
+                    .get(
+                        self.indices
+                            .iter()
+                            .position(|candidate| candidate == index)
+                            .unwrap_or(usize::MAX),
+                    )
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                other_classes
+                    .get(other_axis)
+                    .map(|(_, class_id)| *class_id)
+                    .unwrap_or(usize::MAX)
+            })
+            .collect::<Vec<_>>();
+        Self::canonicalize_axis_classes(&mapped) == self.storage.axis_classes()
+            && self.storage.payload_dims() == other.storage.payload_dims()
+            && self.storage.payload_strides_vec() == other.storage.payload_strides_vec()
+            && self.storage.compact_payload_is_contiguous()
+            && other.storage.compact_payload_is_contiguous()
+    }
+
+    fn native_sum_scalar(native: &NativeTensor) -> Result<AnyScalar> {
+        match native.dtype() {
+            DType::F32 => native
+                .as_slice::<f32>()
+                .map(|values| AnyScalar::new_real(values.iter().map(|&value| value as f64).sum()))
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 payload")),
+            DType::F64 => native
+                .as_slice::<f64>()
+                .map(|values| AnyScalar::new_real(values.iter().sum()))
+                .ok_or_else(|| anyhow::anyhow!("failed to read f64 payload")),
+            DType::C32 => native
+                .as_slice::<Complex32>()
+                .map(|values| {
+                    let value = values.iter().fold(Complex64::new(0.0, 0.0), |sum, value| {
+                        sum + Complex64::new(f64::from(value.re), f64::from(value.im))
+                    });
+                    AnyScalar::new_complex(value.re, value.im)
+                })
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 payload")),
+            DType::C64 => native
+                .as_slice::<Complex64>()
+                .map(|values| {
+                    let value: Complex64 = values.iter().copied().sum();
+                    AnyScalar::new_complex(value.re, value.im)
+                })
+                .ok_or_else(|| anyhow::anyhow!("failed to read c64 payload")),
+            dtype => Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
+        }
+    }
+
     fn native_nonfinite_flags(native: &NativeTensor) -> Result<(bool, bool)> {
         let mut has_nan = false;
         let mut has_infinity = false;
@@ -4401,79 +4574,7 @@ impl TensorDynLen {
     }
 
     fn compact_nonfinite_flags(&self) -> Result<(bool, bool)> {
-        let payload = self.compact_payload_inner()?;
-        Self::native_nonfinite_flags(payload.data())
-    }
-
-    fn native_complex_values(native: &NativeTensor) -> Result<Vec<Complex64>> {
-        match native.dtype() {
-            DType::F32 => Ok(native
-                .as_slice::<f32>()
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 tensor"))?
-                .iter()
-                .map(|&value| Complex64::new(f64::from(value), 0.0))
-                .collect()),
-            DType::F64 => Ok(native
-                .as_slice::<f64>()
-                .ok_or_else(|| anyhow::anyhow!("failed to read f64 tensor"))?
-                .iter()
-                .map(|&value| Complex64::new(value, 0.0))
-                .collect()),
-            DType::C32 => Ok(native
-                .as_slice::<Complex32>()
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 tensor"))?
-                .iter()
-                .map(|&value| Complex64::new(f64::from(value.re), f64::from(value.im)))
-                .collect()),
-            DType::C64 => Ok(native
-                .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow::anyhow!("failed to read c64 tensor"))?
-                .to_vec()),
-            dtype => Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
-        }
-    }
-
-    fn isapprox_with_infinities(
-        lhs: &NativeTensor,
-        rhs: &NativeTensor,
-        atol: f64,
-        rtol: f64,
-    ) -> Result<bool> {
-        anyhow::ensure!(
-            lhs.shape() == rhs.shape(),
-            "isapprox nonfinite comparison shape mismatch: {:?} != {:?}",
-            lhs.shape(),
-            rhs.shape()
-        );
-        let lhs_values = Self::native_complex_values(lhs)?;
-        let rhs_values = Self::native_complex_values(rhs)?;
-        let mut diff_squared = 0.0;
-        let mut lhs_squared = 0.0;
-        let mut rhs_squared = 0.0;
-        for (lhs, rhs) in lhs_values.into_iter().zip(rhs_values) {
-            let lhs_nan = lhs.re.is_nan() || lhs.im.is_nan();
-            let rhs_nan = rhs.re.is_nan() || rhs.im.is_nan();
-            anyhow::ensure!(!lhs_nan && !rhs_nan, "isapprox encountered NaN input");
-            let lhs_infinite = lhs.re.is_infinite() || lhs.im.is_infinite();
-            let rhs_infinite = rhs.re.is_infinite() || rhs.im.is_infinite();
-            if lhs_infinite || rhs_infinite {
-                if lhs != rhs {
-                    return Ok(false);
-                }
-                continue;
-            }
-
-            let lhs_abs = lhs.re.hypot(lhs.im);
-            let rhs_abs = rhs.re.hypot(rhs.im);
-            let diff = lhs - rhs;
-            let diff_abs = diff.re.hypot(diff.im);
-            diff_squared += diff_abs * diff_abs;
-            lhs_squared += lhs_abs * lhs_abs;
-            rhs_squared += rhs_abs * rhs_abs;
-        }
-        let diff_norm = diff_squared.sqrt();
-        let scale = lhs_squared.max(rhs_squared).sqrt();
-        Ok(diff_norm <= atol.max(rtol * scale))
+        self.storage.nonfinite_flags()
     }
 
     /// Element-wise subtraction with index alignment.
@@ -4515,49 +4616,157 @@ impl TensorDynLen {
                 return Err(TensorDynLenError::InvalidTolerance { name, value });
             }
         }
-        let self_set: HashSet<_> = self.indices.iter().collect();
-        let other_set: HashSet<_> = other.indices.iter().collect();
-        if self.indices.len() != other.indices.len() || self_set != other_set {
+        if self.indices.len() != other.indices.len() {
             return Err(TensorDynLenError::ShapeMismatch {
-                operation: "isapprox subtraction",
+                operation: "isapprox",
                 expected: format!("indices {:?}", self.indices),
                 actual: format!("indices {:?}", other.indices),
             });
         }
-        let (self_nan, self_infinite) = self
-            .compact_nonfinite_flags()
-            .map_err(TensorDynLenError::materialization)?;
-        let (other_nan, other_infinite) = other
-            .compact_nonfinite_flags()
-            .map_err(TensorDynLenError::materialization)?;
-        if self_nan || other_nan {
-            return Err(TensorDynLenError::NaNInput {
-                operation: "isapprox",
-            });
+        let other_positions = self
+            .indices
+            .iter()
+            .map(|index| {
+                other
+                    .indices
+                    .iter()
+                    .position(|candidate| candidate == index)
+                    .ok_or_else(|| TensorDynLenError::ShapeMismatch {
+                        operation: "isapprox",
+                        expected: format!("indices {:?}", self.indices),
+                        actual: format!("indices {:?}", other.indices),
+                    })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let self_dims = self.dims();
+        let other_dims = other.dims();
+        for (axis, &other_axis) in other_positions.iter().enumerate() {
+            if self_dims[axis] != other_dims[other_axis] {
+                return Err(TensorDynLenError::ShapeMismatch {
+                    operation: "isapprox",
+                    expected: format!("dims {:?}", self_dims),
+                    actual: format!("dims {:?}", other_dims),
+                });
+            }
         }
-        if self_infinite || other_infinite {
-            let aligned_other = other
-                .permute_indices(&self.indices)
-                .map_err(TensorDynLenError::subtraction)?;
-            return Self::isapprox_with_infinities(
-                self.try_materialized_inner()
-                    .map_err(TensorDynLenError::materialization)?
-                    .data(),
-                aligned_other
-                    .try_materialized_inner()
-                    .map_err(TensorDynLenError::materialization)?
-                    .data(),
-                atol,
-                rtol,
-            )
-            .map_err(TensorDynLenError::materialization);
+        for tensor in [self, other] {
+            if tensor
+                .compact_nonfinite_flags()
+                .map_err(TensorDynLenError::materialization)?
+                .0
+            {
+                return Err(TensorDynLenError::NaNInput {
+                    operation: "isapprox",
+                });
+            }
         }
 
-        let diff = self.sub(other).map_err(TensorDynLenError::subtraction)?;
-        let diff_norm = diff.norm()?;
-        let self_norm = self.norm()?;
-        let other_norm = other.norm()?;
-        Ok(diff_norm <= atol.max(rtol * self_norm.max(other_norm)))
+        let mut diff_squared = 0.0_f64;
+        let mut lhs_squared = 0.0_f64;
+        let mut rhs_squared = 0.0_f64;
+        let mut compare = |lhs: Complex64, rhs: Complex64| -> Result<bool> {
+            let lhs_nan = lhs.re.is_nan() || lhs.im.is_nan();
+            let rhs_nan = rhs.re.is_nan() || rhs.im.is_nan();
+            if lhs_nan || rhs_nan {
+                return Err(anyhow::anyhow!("isapprox encountered NaN input"));
+            }
+            let lhs_infinite = lhs.re.is_infinite() || lhs.im.is_infinite();
+            let rhs_infinite = rhs.re.is_infinite() || rhs.im.is_infinite();
+            if lhs_infinite || rhs_infinite {
+                return Ok(lhs == rhs);
+            }
+            let lhs_abs = lhs.re.hypot(lhs.im);
+            let rhs_abs = rhs.re.hypot(rhs.im);
+            let diff = lhs - rhs;
+            let diff_abs = diff.re.hypot(diff.im);
+            diff_squared += diff_abs * diff_abs;
+            lhs_squared += lhs_abs * lhs_abs;
+            rhs_squared += rhs_abs * rhs_abs;
+            Ok(true)
+        };
+
+        let direct_compact = self.compact_layout_compatible(other, &other_positions);
+        if direct_compact {
+            let payload_len =
+                self.storage
+                    .payload_dims()
+                    .iter()
+                    .try_fold(1usize, |acc, &dim| {
+                        acc.checked_mul(dim)
+                            .ok_or_else(|| TensorDynLenError::Operation {
+                                operation: "isapprox",
+                                source: Arc::from(
+                                    anyhow::anyhow!("compact payload size overflow")
+                                        .into_boxed_dyn_error(),
+                                ),
+                            })
+                    })?;
+            for linear in 0..payload_len {
+                let lhs = self
+                    .storage
+                    .compact_value_at_contiguous(linear)
+                    .map_err(TensorDynLenError::materialization)?
+                    .ok_or_else(|| {
+                        TensorDynLenError::materialization(anyhow::anyhow!(
+                            "non-contiguous compact payload"
+                        ))
+                    })?;
+                let rhs = other
+                    .storage
+                    .compact_value_at_contiguous(linear)
+                    .map_err(TensorDynLenError::materialization)?
+                    .ok_or_else(|| {
+                        TensorDynLenError::materialization(anyhow::anyhow!(
+                            "non-contiguous compact payload"
+                        ))
+                    })?;
+                if !compare(lhs, rhs).map_err(TensorDynLenError::materialization)? {
+                    return Ok(false);
+                }
+            }
+        } else {
+            let total = checked_product(&self_dims).map_err(TensorDynLenError::materialization)?;
+            let payload_rank = self
+                .storage
+                .payload_dims()
+                .len()
+                .max(other.storage.payload_dims().len());
+            let mut lhs_index = vec![0usize; self_dims.len()];
+            let mut rhs_index = vec![0usize; other_dims.len()];
+            let mut lhs_payload_index = vec![0usize; payload_rank];
+            let mut rhs_payload_index = vec![0usize; payload_rank];
+            for _ in 0..total {
+                for (axis, &other_axis) in other_positions.iter().enumerate() {
+                    rhs_index[other_axis] = lhs_index[axis];
+                }
+                let lhs = self
+                    .storage
+                    .semantic_value_at(&lhs_index, &self_dims, &mut lhs_payload_index)
+                    .map_err(TensorDynLenError::materialization)?;
+                let rhs = other
+                    .storage
+                    .semantic_value_at(&rhs_index, &other_dims, &mut rhs_payload_index)
+                    .map_err(TensorDynLenError::materialization)?;
+                if !compare(lhs, rhs).map_err(TensorDynLenError::materialization)? {
+                    return Ok(false);
+                }
+                let mut carry = true;
+                for (coordinate, &dim) in lhs_index.iter_mut().zip(self_dims.iter()) {
+                    if !carry {
+                        break;
+                    }
+                    *coordinate += 1;
+                    if *coordinate == dim {
+                        *coordinate = 0;
+                    } else {
+                        carry = false;
+                    }
+                }
+            }
+        }
+        let diff_norm = diff_squared.sqrt();
+        let scale = lhs_squared.max(rhs_squared).sqrt();
+        Ok(diff_norm <= atol.max(rtol * scale))
     }
 
     /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
@@ -5935,8 +6144,76 @@ fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_complex::Complex64;
+    use num_complex::{Complex32, Complex64};
     use std::cell::Cell;
+
+    #[test]
+    fn structured_contraction_does_not_install_logical_dense_cache() {
+        let n = 8;
+        let left = DynIndex::new_dyn(n);
+        let site = DynIndex::new_dyn(3);
+        let right = DynIndex::new_dyn(n);
+        let far = DynIndex::new_dyn(n);
+        let end = DynIndex::new_dyn(n);
+        let a = TensorDynLen::from_copy_selector(left, site.clone(), right.clone(), 1, 1.0_f64)
+            .unwrap();
+        let b =
+            TensorDynLen::from_copy_selector(right, site.clone(), far.clone(), 1, 2.0_f64).unwrap();
+        let c = TensorDynLen::from_copy_selector(far, site.clone(), end, 1, 3.0_f64).unwrap();
+        let result = crate::defaults::contract::contract_with_options(
+            &[&a, &b, &c],
+            crate::defaults::contract::ContractionOptions::new()
+                .with_retain_indices(std::slice::from_ref(&site)),
+        )
+        .unwrap();
+
+        assert_eq!(result.storage_kind(), StorageKind::Structured);
+        assert!(result.eager_cache.get().is_none());
+        assert_eq!(result.storage().unwrap().payload_len(), n * 3);
+    }
+
+    #[test]
+    fn structured_metrics_use_authoritative_compact_payload_for_all_dtypes() {
+        fn check(tensor: TensorDynLen, expected_sum: f64, expected_norm_squared: f64) {
+            assert!(matches!(tensor.storage, TensorDynLenStorage::Compact(_)));
+            assert!(tensor.eager_cache.get().is_none());
+            assert!((tensor.sum().unwrap().real() - expected_sum).abs() < 1.0e-6);
+            assert!((tensor.norm_squared().unwrap() - expected_norm_squared).abs() < 1.0e-6);
+            assert!((tensor.maxabs().unwrap() - 2.0).abs() < 1.0e-6);
+            assert!(tensor.isapprox(&tensor, 0.0, 0.0).unwrap());
+            assert!(tensor.eager_cache.get().is_none());
+        }
+
+        let indices = || vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+        check(
+            TensorDynLen::from_diag(indices(), vec![1.0_f32, 2.0]).unwrap(),
+            3.0,
+            5.0,
+        );
+        check(
+            TensorDynLen::from_diag(indices(), vec![1.0_f64, 2.0]).unwrap(),
+            3.0,
+            5.0,
+        );
+        check(
+            TensorDynLen::from_diag(
+                indices(),
+                vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
+            )
+            .unwrap(),
+            3.0,
+            5.0,
+        );
+        check(
+            TensorDynLen::from_diag(
+                indices(),
+                vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+            )
+            .unwrap(),
+            3.0,
+            5.0,
+        );
+    }
 
     #[test]
     fn materialization_error_retains_backend_source() {
@@ -5995,6 +6272,7 @@ mod tests {
         let tensor = TensorDynLen::from_inner(vec![i], inner).unwrap();
         let source = match &tensor.storage {
             TensorDynLenStorage::Eager { inner, .. } => Arc::clone(inner),
+            TensorDynLenStorage::Compact(payload) => Arc::clone(&payload.payload),
             TensorDynLenStorage::Materialized(_) | TensorDynLenStorage::Deferred { .. } => {
                 panic!("tracked eager source expected")
             }
@@ -6032,7 +6310,13 @@ mod tests {
         .enable_grad()
         .unwrap();
 
-        let target = Arc::as_ptr(&tensor.structured_payload.as_ref().unwrap().payload);
+        let target = Arc::as_ptr(
+            &tensor
+                .storage
+                .compact_payload()
+                .expect("tracked compact payload")
+                .payload,
+        );
         let conjugated = assert_unwrapped_conjugation_error(
             tensor,
             target,
