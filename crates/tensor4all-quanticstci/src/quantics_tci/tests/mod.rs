@@ -126,6 +126,18 @@ fn test_from_arrays_empty_inputs() {
 }
 
 #[test]
+fn discrete_interpolation_rejects_empty_size_without_panicking() {
+    let f = |_point: &[i64]| 1.0_f64;
+    let result = quanticscrossinterpolate_discrete::<f64, _>(&[], f, None, QtciOptions::default());
+    assert!(result.is_err());
+    let error = result.err().unwrap().to_string();
+    assert!(
+        error.contains("at least one grid dimension"),
+        "got: {error}"
+    );
+}
+
+#[test]
 fn test_from_arrays_empty_dimension() {
     let f = |_coords: &[f64]| 1.0_f64;
     let xvals = vec![vec![], vec![0.0, 1.0]];

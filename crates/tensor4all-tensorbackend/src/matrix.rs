@@ -1182,6 +1182,7 @@ fn dot_general_matrices<T>(
     b_tensor: Tensor,
     m: usize,
     n: usize,
+    expected_len: usize,
 ) -> Result<Matrix<T>>
 where
     T: TensorScalar,
@@ -1211,7 +1212,7 @@ where
         n
     );
     ensure!(
-        result.as_col_major_slice().len() == m * n,
+        result.as_col_major_slice().len() == expected_len,
         "matrix multiplication returned {} values for expected shape {}x{}",
         result.as_col_major_slice().len(),
         m,
@@ -1236,10 +1237,17 @@ macro_rules! impl_blas_mul {
                     b.nrows(),
                     n
                 );
+                // Reject an overflowing output element count before any tensor
+                // conversion or backend call, matching the constructor contract.
+                let expected_len = m.checked_mul(n).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "matrix multiplication output shape {m}x{n} overflows usize"
+                    )
+                })?;
 
                 let a_tensor: Tensor = a.to_typed_tensor().into();
                 let b_tensor: Tensor = b.to_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n)
+                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
             }
 
             fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
@@ -1254,10 +1262,15 @@ macro_rules! impl_blas_mul {
                     b.nrows(),
                     n
                 );
+                let expected_len = m.checked_mul(n).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "matrix multiplication output shape {m}x{n} overflows usize"
+                    )
+                })?;
 
                 let a_tensor: Tensor = a.into_typed_tensor().into();
                 let b_tensor: Tensor = b.into_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n)
+                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
             }
         }
         )*

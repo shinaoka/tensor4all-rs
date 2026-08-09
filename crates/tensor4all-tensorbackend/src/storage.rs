@@ -263,26 +263,8 @@ impl<T> StructuredStorage<T> {
         strides: Vec<isize>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
-        validate_canonical_axis_classes(&axis_classes)?;
-        let payload_rank = axis_classes.iter().try_fold(0usize, |rank, &class_id| {
-            let required_rank = class_id
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("axis class index overflow"))?;
-            Ok::<_, anyhow::Error>(rank.max(required_rank))
-        })?;
-        ensure!(
-            payload_dims.len() == payload_rank,
-            "payload rank {} does not match axis_classes {:?}",
-            payload_dims.len(),
-            axis_classes
-        );
-        ensure!(
-            strides.len() == payload_dims.len(),
-            "payload dims {:?} and strides {:?} must have the same rank",
-            payload_dims,
-            strides
-        );
-        let required_len = required_storage_len(&payload_dims, &strides)?;
+        let required_len =
+            Storage::validate_structured_metadata(&payload_dims, &strides, &axis_classes)?;
         ensure!(
             data.len() == required_len,
             "payload storage len {} does not match required len {} for dims {:?} and strides {:?}",
@@ -1168,6 +1150,61 @@ impl Storage {
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
         T::build_structured_storage(data, payload_dims, strides, axis_classes)
+    }
+
+    /// Validate structured-storage metadata and return the required payload length.
+    ///
+    /// The metadata must be internally consistent: canonical axis classes, a
+    /// payload rank implied by the axis classes, matching dim/stride ranks,
+    /// non-negative strides, and size products that fit in `usize`. The
+    /// returned length is exactly what a constructed [`Storage`] would
+    /// require, so untrusted payload lengths can be rejected before any
+    /// allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metadata is inconsistent or its size products
+    /// overflow `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let required = Storage::validate_structured_metadata(
+    ///     &[2],
+    ///     &[1],
+    ///     &[0, 0],
+    /// ).unwrap();
+    /// assert_eq!(required, 2);
+    ///
+    /// assert!(Storage::validate_structured_metadata(&[2], &[-1], &[0]).is_err());
+    /// ```
+    pub fn validate_structured_metadata(
+        payload_dims: &[usize],
+        strides: &[isize],
+        axis_classes: &[usize],
+    ) -> Result<usize> {
+        validate_canonical_axis_classes(axis_classes)?;
+        let payload_rank = axis_classes.iter().try_fold(0usize, |rank, &class_id| {
+            let required_rank = class_id
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("axis class index overflow"))?;
+            Ok::<_, anyhow::Error>(rank.max(required_rank))
+        })?;
+        ensure!(
+            payload_dims.len() == payload_rank,
+            "payload rank {} does not match axis_classes {:?}",
+            payload_dims.len(),
+            axis_classes
+        );
+        ensure!(
+            strides.len() == payload_dims.len(),
+            "payload dims {:?} and strides {:?} must have the same rank",
+            payload_dims,
+            strides
+        );
+        required_storage_len(payload_dims, strides)
     }
 
     /// Create dense f64 storage from column-major logical values.

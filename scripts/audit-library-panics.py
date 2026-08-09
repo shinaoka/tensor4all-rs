@@ -5,7 +5,7 @@ This wrapper keeps the historical ``--root``/``--baseline`` interface and
 ``T4A_PANIC_AUDIT_BIN`` override. The Rust tool asks Cargo/Clippy to compile
 workspace ``crates/`` library and binary targets, parses only the four exact
 panic-path diagnostics, and uses ``syn`` only for the reviewed public
-``assert!``/``debug_assert!`` baseline.
+``assert!``-family baseline.
 """
 
 from __future__ import annotations

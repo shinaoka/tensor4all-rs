@@ -462,6 +462,156 @@ fn raw_slice_accepts_positive_length_zst() {
 }
 
 #[test]
+fn index_pointer_array_rejects_impossible_byte_length_before_use() {
+    let dangling = std::ptr::NonNull::<*const t4a_index>::dangling().as_ptr();
+    let error = read_indices_from_ptrs(usize::MAX, dangling).unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("byte length overflows isize::MAX"));
+
+    // A null pointer still takes precedence over the length bound.
+    let error = read_indices_from_ptrs(2, std::ptr::null()).unwrap_err();
+    assert_eq!(error.0, T4A_NULL_POINTER);
+}
+
+#[test]
+fn structured_constructor_rejects_payload_length_mismatch_before_allocation() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    // An inconsistent attacker-sized payload length must be rejected from the
+    // metadata alone, before the payload is copied.
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            10_000,
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match structured payload length"));
+    t4a_index_release(i);
+    t4a_index_release(j);
+    t4a_index_release(k);
+}
+
+#[test]
+fn structured_constructor_rejects_inconsistent_metadata_before_allocation() {
+    let i = new_index(2);
+    let index_ptrs = [i as *const t4a_index];
+    let payload_dims = [2usize];
+    let payload_strides = [-1isize];
+    let axis_classes = [0usize];
+    let payload = [1.0f64, 2.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            1,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("negative strides"));
+    t4a_index_release(i);
+}
+
+#[test]
+fn structured_c64_constructor_rejects_interleaved_length_mismatch() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_c64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            10_000,
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match structured payload length"));
+    t4a_index_release(i);
+    t4a_index_release(j);
+    t4a_index_release(k);
+}
+
+#[test]
+fn diag_constructor_rejects_payload_length_mismatch_before_allocation() {
+    let i = new_index(2);
+    let index_ptrs = [i as *const t4a_index];
+    let diag = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_f64(1, index_ptrs.as_ptr(), diag.as_ptr(), 10_000, &mut tensor),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match index dimension"));
+    t4a_index_release(i);
+}
+
+#[test]
+fn diag_c64_constructor_rejects_interleaved_length_mismatch() {
+    let i = new_index(2);
+    let index_ptrs = [i as *const t4a_index];
+    let diag = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_c64(1, index_ptrs.as_ptr(), diag.as_ptr(), 10_000, &mut tensor),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match index dimension"));
+    t4a_index_release(i);
+}
+
+#[test]
 fn test_tensor_select_indices_f64_drops_selected_axes() {
     let i = new_index(2);
     let j = new_index(3);

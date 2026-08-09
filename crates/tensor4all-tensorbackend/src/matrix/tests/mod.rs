@@ -279,6 +279,21 @@ fn matrix_indexing_rejects_each_axis_before_linearization() {
 }
 
 #[test]
+fn matrix_multiplication_rejects_output_shape_overflow_before_backend() {
+    // A zero-column matrix may legitimately have an arbitrary row count (the
+    // checked shape product is 0). Multiplying it by a 0 x 2 matrix would
+    // produce an overflowing usize::MAX x 2 output; the multiplication must
+    // reject the output element count before any backend call.
+    let left = Matrix::<f64>::from_col_major_vec(usize::MAX, 0, Vec::new());
+    let right = Matrix::<f64>::from_col_major_vec(0, 2, Vec::new());
+    let error = mat_mul(&left, &right).unwrap_err().to_string();
+    assert!(error.contains("overflows"), "got: {error}");
+
+    let error = mat_mul_owned(left, right).unwrap_err().to_string();
+    assert!(error.contains("overflows"), "got: {error}");
+}
+
+#[test]
 fn matrix_complex64_construction_preserves_column_major_indexing() {
     let i = Complex64::new(0.0, 1.0);
     let matrix = Matrix::from_col_major_vec(

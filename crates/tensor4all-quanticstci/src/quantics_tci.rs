@@ -743,6 +743,11 @@ where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     F: Fn(&[i64]) -> V + 'static,
 {
+    if size.is_empty() {
+        return Err(anyhow!(
+            "This method requires at least one grid dimension, got an empty size"
+        ));
+    }
     // Validate sizes are powers of 2
     let dimensions: Vec<f64> = size.iter().map(|&s| (s as f64).log2()).collect();
 

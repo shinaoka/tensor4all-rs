@@ -7,10 +7,14 @@
 //! target and feature configuration. Dep-info can also list `.rs` files used as
 //! `include!`, `include_str!`, or `include_bytes!` data rather than complete
 //! modules: complete files use the public visitor, while parse failures are
-//! conservatively token-scanned for literal `assert!`/`debug_assert!` calls.
-//! Macro invocation arguments and `macro_rules!` transcribers are likewise
-//! scanned only for those literal assertion calls; no semantic macro resolver
-//! is attempted.
+//! conservatively token-scanned for literal `assert!`-family calls (`assert!`,
+//! `assert_eq!`, `assert_ne!`, `debug_assert!`, `debug_assert_eq!`,
+//! `debug_assert_ne!`). Macro invocation arguments and `macro_rules!`
+//! transcribers are likewise scanned only for those literal assertion calls;
+//! no semantic macro resolver is attempted. The public-path assertion scanner
+//! covers public free functions, public inherent methods, trait defaults, and
+//! trait-implementation methods; assertions in private helpers are classified
+//! as outside that surface.
 
 use anyhow::{anyhow, bail, Context, Result};
 use proc_macro2::{TokenStream, TokenTree};
@@ -34,7 +38,14 @@ const RAW_CODES: [(&str, &str); 4] = [
     ("clippy::expect_used", "expect"),
 ];
 const RAW_KINDS: [&str; 4] = ["panic", "unreachable", "unwrap", "expect"];
-const ASSERTION_KINDS: [&str; 2] = ["assert", "debug_assert"];
+const ASSERTION_KINDS: [&str; 6] = [
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+];
 const PRODUCTION_KINDS: [&str; 7] = [
     "lib",
     "rlib",
@@ -1138,7 +1149,11 @@ fn cfg_attr_definitely_false(meta: &Meta) -> Result<bool> {
 fn assertion_kind(name: &str) -> Option<&'static str> {
     match name.strip_prefix("r#").unwrap_or(name) {
         "assert" => Some("assert"),
+        "assert_eq" => Some("assert_eq"),
+        "assert_ne" => Some("assert_ne"),
         "debug_assert" => Some("debug_assert"),
+        "debug_assert_eq" => Some("debug_assert_eq"),
+        "debug_assert_ne" => Some("debug_assert_ne"),
         _ => None,
     }
 }

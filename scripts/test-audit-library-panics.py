@@ -358,6 +358,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
                 for line in (34, 42, 48, 92, 116, 123, 130, 137)
             ],
             "crates/demo/src/lib.rs:93:debug_assert",
+            "crates/demo/src/lib.rs:94:assert_eq",
+            "crates/demo/src/lib.rs:95:debug_assert_eq",
             f"crates/demo/src/nested.rs:{_line(FIXTURE_BIN_NESTED, 'assert!(true);')}:assert",
             f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, 'assert!(true);')}:assert",
             f"crates/demo/src/shared/nested.rs:{_line(FIXTURE_LIB_NESTED, 'assert!(true);')}:assert",
@@ -426,6 +428,85 @@ def test_unknown_cfg_assertion_is_included_conservatively() -> None:
         result = _run_audit(fixture, [entry])
     assert result.returncode == 1
     assert f"Baseline matched: {entry}" in result.stdout
+
+
+def _write_minimal_fixture(root: Path, lib: str) -> None:
+    """Write a single-crate fixture with only a lib target and no bin."""
+    manifest = '[workspace]\nmembers = ["crates/demo"]\nresolver = "2"\n'
+    package = (
+        '[package]\n'
+        'name = "demo"\n'
+        'version = "0.1.0"\n'
+        'edition = "2021"\n\n'
+        '[lib]\n'
+        'crate-type = ["cdylib", "rlib"]\n'
+    )
+    (root / "Cargo.toml").write_text(manifest, encoding="utf-8")
+    lib_path = root / "crates/demo/src/lib.rs"
+    lib_path.parent.mkdir(parents=True, exist_ok=True)
+    (root / "crates/demo/Cargo.toml").write_text(package, encoding="utf-8")
+    lib_path.write_text(lib, encoding="utf-8")
+
+
+def test_comment_and_rustdoc_assertion_text_is_excluded() -> None:
+    lib = (
+        '#![allow(dead_code)]\n'
+        '//! Module doc comment: assert!(true); debug_assert_eq!(1, 1);\n'
+        '// Line comment: assert!(true); panic!("not real");\n'
+        '/// Function doc comment: assert_eq!(1, 1);\n'
+        'pub fn documented(value: usize) -> usize {\n'
+        '    //! Inner attribute doc: debug_assert!(true);\n'
+        '    assert!(value > 0);\n'
+        '    value\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_minimal_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 1, result.stderr
+    findings = result.stdout.splitlines()
+    # Only the real assertion is reported; comment and rustdoc text is not.
+    assert (
+        f"crates/demo/src/lib.rs:{_line(lib, 'assert!(value > 0);')}:assert" in findings
+    )
+    assert all(not finding.endswith(":panic") for finding in findings)
+    assert all(not finding.endswith(":assert_eq") for finding in findings)
+    assert all(not finding.endswith(":debug_assert") for finding in findings)
+
+
+def test_private_helper_assertions_are_classified_outside_the_surface() -> None:
+    # The scanner covers public free functions/methods and trait impls; an
+    # assertion in a private helper is classified as outside the scanned
+    # public-path surface and must not be reported.
+    lib = (
+        '#![allow(dead_code)]\n'
+        'pub fn api() {\n'
+        '    helper();\n'
+        '}\n\n'
+        'fn helper() {\n'
+        '    assert!(true);\n'
+        '    debug_assert_eq!(1, 1);\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_minimal_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 0, result.stderr
+    assert "Audit passed" in result.stdout
+
+
+def test_stale_baseline_entry_fails() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        result = _run_audit(fixture, ["crates/demo/src/lib.rs:999999:assert"])
+    assert result.returncode == 1
+    assert (
+        "Stale baseline: crates/demo/src/lib.rs:999999:assert" in result.stdout
+    )
+    assert "1 stale baseline entry" in result.stderr
 
 
 def test_missing_build_finished_fails_closed() -> None:
@@ -545,6 +626,9 @@ def main() -> int:
     tests = [
         test_dep_info_selects_each_production_source_once,
         test_unknown_cfg_assertion_is_included_conservatively,
+        test_comment_and_rustdoc_assertion_text_is_excluded,
+        test_private_helper_assertions_are_classified_outside_the_surface,
+        test_stale_baseline_entry_fails,
         test_macro_assertion_arguments_and_transcribers_are_reported,
         test_timeout_nesting_leaves_margin_for_ci,
         test_missing_build_finished_fails_closed,

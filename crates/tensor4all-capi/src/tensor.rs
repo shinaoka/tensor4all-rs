@@ -82,6 +82,9 @@ fn read_indices_from_ptrs(
     if index_ptrs.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, "index_ptrs is null"));
     }
+    // Reject an impossible pointer-array byte length before any allocation
+    // or pointer arithmetic, matching the scalar raw-slice contract.
+    validate_raw_slice_len::<*const t4a_index>("index_ptrs", rank)?;
 
     let mut indices = Vec::with_capacity(rank);
     for i in 0..rank {
@@ -985,11 +988,30 @@ pub extern "C" fn t4a_tensor_new_structured_f64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let values = read_plain_slice("data", data, data_len)?;
+        // Validate compact metadata and the exact required payload length
+        // BEFORE copying the payload, so an inconsistent or attacker-sized
+        // length is rejected without a large allocation.
         let payload_dims = read_plain_slice("payload_dims", payload_dims, payload_rank)?;
         let payload_strides =
             read_plain_slice("payload_strides", payload_strides, payload_strides_len)?;
         let axis_classes = read_plain_slice("axis_classes", axis_classes, axis_classes_len)?;
+        let required_len =
+            Storage::validate_structured_metadata(&payload_dims, &payload_strides, &axis_classes)
+                .map_err(|err| {
+                capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    format!("structured payload metadata invalid: {err}"),
+                )
+            })?;
+        if data_len != required_len {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "data length {data_len} does not match structured payload length {required_len}"
+                ),
+            ));
+        }
+        let values = read_plain_slice("data", data, data_len)?;
         let storage = Storage::new_structured(values, payload_dims, payload_strides, axis_classes)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let tensor = InternalTensor::from_structured_storage(indices, Arc::new(storage))
@@ -1015,11 +1037,27 @@ pub extern "C" fn t4a_tensor_new_structured_c64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
         let payload_dims = read_plain_slice("payload_dims", payload_dims, payload_rank)?;
         let payload_strides =
             read_plain_slice("payload_strides", payload_strides, payload_strides_len)?;
         let axis_classes = read_plain_slice("axis_classes", axis_classes, axis_classes_len)?;
+        let required_len =
+            Storage::validate_structured_metadata(&payload_dims, &payload_strides, &axis_classes)
+                .map_err(|err| {
+                capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    format!("structured payload metadata invalid: {err}"),
+                )
+            })?;
+        if n_complex != required_len {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "data length {n_complex} does not match structured payload length {required_len}"
+                ),
+            ));
+        }
+        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
         let storage = Storage::new_structured(values, payload_dims, payload_strides, axis_classes)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let tensor = InternalTensor::from_structured_storage(indices, Arc::new(storage))
@@ -1039,6 +1077,18 @@ pub extern "C" fn t4a_tensor_new_diag_f64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        // The diagonal payload must match the declared index dimension; reject
+        // a mismatched length BEFORE copying the payload. The diagonal
+        // constructor remains the authority on index-dimension equality.
+        let expected = indices.first().map(|index| index.size()).unwrap_or(0);
+        if diag_len != expected {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "diagonal data length {diag_len} does not match index dimension {expected}"
+                ),
+            ));
+        }
         let values = read_plain_slice("diag_data", diag_data, diag_len)?;
         let tensor = InternalTensor::from_diag(indices, values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
@@ -1057,6 +1107,15 @@ pub extern "C" fn t4a_tensor_new_diag_c64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        let expected = indices.first().map(|index| index.size()).unwrap_or(0);
+        if n_complex != expected {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "diagonal data length {n_complex} does not match index dimension {expected}"
+                ),
+            ));
+        }
         let values = read_c64_slice("diag_data_interleaved", diag_data_interleaved, n_complex)?;
         let tensor = InternalTensor::from_diag(indices, values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;

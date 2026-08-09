@@ -63,7 +63,13 @@ impl<'a, T: Scalar> DenseMatrixSource<'a, T> {
     /// Create a dense source from a column-major slice.
     #[allow(dead_code)]
     pub fn from_column_major(data: &'a [T], nrows: usize, ncols: usize) -> Self {
-        assert_eq!(data.len(), nrows * ncols);
+        let expected = nrows.checked_mul(ncols);
+        assert!(
+            expected.is_some(),
+            "dense matrix source shape product overflow"
+        );
+        let expected = expected.map_or(0, |expected| expected);
+        assert_eq!(data.len(), expected);
         Self { data, nrows, ncols }
     }
 }
@@ -93,7 +99,13 @@ impl<T: Scalar> CandidateMatrixSource<T> for DenseMatrixSource<'_, T> {
     }
 
     fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
-        assert_eq!(out.len(), rows.len() * cols.len());
+        let expected = rows.len().checked_mul(cols.len());
+        assert!(
+            expected.is_some(),
+            "dense matrix block shape product overflow"
+        );
+        let expected = expected.map_or(0, |expected| expected);
+        assert_eq!(out.len(), expected);
         for (j, &col) in cols.iter().enumerate() {
             for (i, &row) in rows.iter().enumerate() {
                 out[i + rows.len() * j] = self.data[row + self.nrows * col];
@@ -119,7 +131,13 @@ where
     }
 
     fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
-        assert_eq!(out.len(), rows.len() * cols.len());
+        let expected = rows.len().checked_mul(cols.len());
+        assert!(
+            expected.is_some(),
+            "lazy matrix block shape product overflow"
+        );
+        let expected = expected.map_or(0, |expected| expected);
+        assert_eq!(out.len(), expected);
         (self.fill_block)(rows, cols, out);
     }
 }
