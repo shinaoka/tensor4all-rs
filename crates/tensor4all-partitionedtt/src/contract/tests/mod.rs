@@ -224,7 +224,7 @@ fn test_proj_contract_projector_filtering() {
     let proj = Projector::from_pairs([(s0.clone(), 0)]);
 
     // Project should work since m1 has empty projector (compatible with anything)
-    let projected = m1.project(&proj);
+    let projected = m1.project(&proj).unwrap();
     assert!(projected.is_some());
     assert!(projected.unwrap().projector().is_projected_at(&s0));
 }

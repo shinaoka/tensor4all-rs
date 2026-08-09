@@ -419,6 +419,33 @@ fn exported_payload_function_preserves_status_and_last_error_message() {
     t4a_index_release(index);
 }
 
+#[cfg(feature = "test-support")]
+#[test]
+fn exported_dense_function_preserves_real_deferred_backend_diagnostic() {
+    let index = new_index(2);
+    let core_index = unsafe { (*index).inner().clone() };
+    let internal = InternalTensor::from_dense(vec![core_index], vec![1.0_f64, 2.0])
+        .unwrap()
+        .with_deferred_storage_error_for_testing(TensorStorageError::Materialization {
+            source: Arc::new(std::io::Error::other(
+                "forced deferred C API backend failure",
+            )),
+        });
+    let tensor = Box::into_raw(Box::new(t4a_tensor::new(internal)));
+    let mut out_len = 0usize;
+
+    assert_eq!(
+        t4a_tensor_copy_dense_f64(tensor, std::ptr::null_mut(), 0, &mut out_len),
+        T4A_INTERNAL_ERROR
+    );
+    let error = last_error();
+    assert!(error.contains("forced deferred C API backend failure"));
+    assert!(error.contains("tensor dense f64 materialization failed"));
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(index);
+}
+
 #[test]
 fn raw_slice_null_pointer_precedes_byte_length_validation() {
     let error = read_plain_slice::<f64>("data", std::ptr::null(), 1).unwrap_err();

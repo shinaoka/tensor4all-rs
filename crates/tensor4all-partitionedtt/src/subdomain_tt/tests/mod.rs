@@ -1,5 +1,9 @@
 use super::*;
+#[cfg(feature = "test-support")]
+use std::sync::Arc;
 use tensor4all_core::index::Index;
+#[cfg(feature = "test-support")]
+use tensor4all_core::TensorStorageError;
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
 }
@@ -52,7 +56,7 @@ fn test_subdomain_tt_project() {
 
     // Project to fix site 0 to value 1
     let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    let projected = subdomain.project(&projector);
+    let projected = subdomain.project(&projector).unwrap();
 
     assert!(projected.is_some());
     let projected = projected.unwrap();
@@ -68,7 +72,7 @@ fn test_subdomain_tt_project_value_one_numeric() {
 
     let subdomain = SubDomainTT::from_tt(tt);
     let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    let projected = subdomain.project(&projector).unwrap();
+    let projected = subdomain.project(&projector).unwrap().unwrap();
     let projected_full = projected.data().to_dense().unwrap();
     let projected_data = projected_full.to_vec::<f64>().unwrap();
 
@@ -87,7 +91,7 @@ fn test_subdomain_tt_project_incompatible() {
 
     // Try to project with incompatible projector (different value at same site)
     let projector2 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    let projected = subdomain.project(&projector2);
+    let projected = subdomain.project(&projector2).unwrap();
 
     assert!(projected.is_none());
 }
@@ -125,4 +129,23 @@ fn test_subdomain_tt_trim_projector() {
     assert!(subdomain.is_projected_at(&site_inds[0]));
     assert!(!subdomain.is_projected_at(&fake_index));
     assert_eq!(subdomain.projector().len(), 1);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn project_propagates_deferred_materialization_error() {
+    let site = make_index(2);
+    let tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0_f64, 2.0])
+        .unwrap()
+        .with_deferred_storage_error_for_testing(TensorStorageError::Materialization {
+            source: Arc::new(std::io::Error::other("forced deferred projection failure")),
+        });
+    let tt = TensorTrain::new(vec![tensor]).unwrap();
+    let subdomain = SubDomainTT::from_tt(tt);
+    let projector = Projector::from_pairs([(site, 0)]);
+
+    let error = subdomain.project(&projector).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("forced deferred projection failure"));
 }

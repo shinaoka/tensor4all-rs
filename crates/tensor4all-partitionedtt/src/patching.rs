@@ -494,7 +494,7 @@ fn projected_subdomain(subdomain: &SubDomainTT) -> Result<SubDomainTT> {
     if subdomain.projector().is_empty() {
         return Ok(subdomain.clone());
     }
-    subdomain.project(subdomain.projector()).ok_or_else(|| {
+    subdomain.project(subdomain.projector())?.ok_or_else(|| {
         PartitionedTTError::IncompatibleProjectors(
             "subdomain projector was incompatible with itself".to_string(),
         )
@@ -676,7 +676,7 @@ fn split_subdomain(subdomain: &SubDomainTT, index: &DynIndex) -> Result<Vec<SubD
     let mut children = Vec::with_capacity(index.dim);
     for value in 0..index.dim {
         let projector = Projector::from_pairs([(index.clone(), value)]);
-        let child = subdomain.project(&projector).ok_or_else(|| {
+        let child = subdomain.project(&projector)?.ok_or_else(|| {
             PartitionedTTError::IncompatibleProjectors(
                 "split projector was incompatible with subdomain projector".to_string(),
             )

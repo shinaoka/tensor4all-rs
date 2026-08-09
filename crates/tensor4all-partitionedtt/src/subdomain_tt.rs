@@ -135,35 +135,47 @@ impl SubDomainTT {
 
     /// Project to a more restrictive projector.
     ///
-    /// Returns `None` if the projectors are incompatible (conflicting values).
-    /// The resulting SubDomainTT has tensor values zeroed out where the
-    /// projection doesn't match.
-    pub fn project(&self, projector: &Projector) -> Option<Self> {
+    /// Returns `Ok(None)` if the projectors are incompatible (conflicting
+    /// values). The resulting SubDomainTT has tensor values zeroed out where
+    /// the projection does not match.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PartitionedTTError::TensorTrainError`] if a source tensor
+    /// cannot be materialized or the projected tensor train cannot be built.
+    pub fn project(&self, projector: &Projector) -> Result<Option<Self>> {
         // Check if projectors are compatible
         if !self.projector.is_compatible_with(projector) {
-            return None;
+            return Ok(None);
         }
 
         // Merge projectors
-        let merged_projector = self.projector.intersection(projector)?;
+        let merged_projector = self
+            .projector
+            .intersection(projector)
+            .ok_or(PartitionedTTError::ProjectorConflict)?;
 
         // Project tensor data
         let projected_data = self.project_tensor_data(projector)?;
 
-        Some(Self {
+        Ok(Some(Self {
             data: projected_data,
             projector: merged_projector,
             budget_squared: self.budget_squared,
-        })
+        }))
     }
 
     /// Project the tensor data by zeroing out non-matching slices.
-    fn project_tensor_data(&self, projector: &Projector) -> Option<TensorTrain> {
+    fn project_tensor_data(&self, projector: &Projector) -> Result<TensorTrain> {
         let siteinds = self.data.siteinds();
         let mut new_tensors = Vec::with_capacity(self.data.len());
 
         for (site, site_indices) in siteinds.iter().enumerate() {
-            let tensor = self.data.tensor(site).ok()?;
+            let tensor = self.data.tensor(site).map_err(|error| {
+                PartitionedTTError::TensorTrainError(format!(
+                    "Projection failed to read site tensor {site}: {error}"
+                ))
+            })?;
 
             // Check if any site index is projected
             let mut projected_tensor = tensor.clone();
@@ -176,7 +188,11 @@ impl SubDomainTT {
             new_tensors.push(projected_tensor);
         }
 
-        TensorTrain::new(new_tensors).ok()
+        TensorTrain::new(new_tensors).map_err(|error| {
+            PartitionedTTError::TensorTrainError(format!(
+                "Projection failed to build tensor train: {error}"
+            ))
+        })
     }
 
     /// Project a single tensor by zeroing out all slices except the specified one.
@@ -184,7 +200,7 @@ impl SubDomainTT {
         tensor: &TensorDynLen,
         index: &DynIndex,
         projected_value: usize,
-    ) -> Option<TensorDynLen> {
+    ) -> Result<TensorDynLen> {
         use num_complex::Complex64;
 
         // Find the axis corresponding to this index
@@ -194,47 +210,86 @@ impl SubDomainTT {
         if let Some(axis) = axis {
             let dim = indices[axis].dim;
             let shape: Vec<usize> = indices.iter().map(|i| i.dim).collect();
-            let total_size: usize = shape.iter().product();
-            let axis_stride = shape[..axis].iter().copied().product::<usize>().max(1);
+            let total_size = shape.iter().try_fold(1usize, |size, &dim| {
+                size.checked_mul(dim).ok_or_else(|| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "Projection tensor shape {:?} overflows usize",
+                        shape
+                    ))
+                })
+            })?;
+            let axis_stride = shape[..axis].iter().try_fold(1usize, |stride, &dim| {
+                stride.checked_mul(dim).ok_or_else(|| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "Projection tensor stride overflows usize for shape {:?}",
+                        shape
+                    ))
+                })
+            })?;
 
             if projected_value >= dim {
                 // Invalid projection - zero out entire tensor
                 if tensor.is_f64() {
-                    return TensorDynLen::zeros::<f64>(indices.to_vec()).ok();
+                    return TensorDynLen::zeros::<f64>(indices.to_vec()).map_err(|error| {
+                        PartitionedTTError::TensorTrainError(format!(
+                            "Projection zero tensor construction failed: {error}"
+                        ))
+                    });
                 } else {
-                    return TensorDynLen::zeros::<num_complex::Complex64>(indices.to_vec()).ok();
+                    return TensorDynLen::zeros::<num_complex::Complex64>(indices.to_vec())
+                        .map_err(|error| {
+                            PartitionedTTError::TensorTrainError(format!(
+                                "Projection zero tensor construction failed: {error}"
+                            ))
+                        });
                 }
             }
 
             // Create result tensor based on scalar type
             if tensor.is_f64() {
-                let src_data = tensor.to_vec::<f64>().unwrap_or_default();
+                let src_data = tensor.to_vec::<f64>().map_err(|error| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "Projection tensor materialization failed: {error}"
+                    ))
+                })?;
                 let mut result_data = vec![0.0_f64; total_size];
 
                 for flat_idx in 0..total_size {
                     let axis_value = (flat_idx / axis_stride) % dim;
-                    if axis_value == projected_value && flat_idx < src_data.len() {
+                    if axis_value == projected_value {
                         result_data[flat_idx] = src_data[flat_idx];
                     }
                 }
 
-                TensorDynLen::from_dense(indices.to_vec(), result_data).ok()
+                TensorDynLen::from_dense(indices.to_vec(), result_data).map_err(|error| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "Projection tensor construction failed: {error}"
+                    ))
+                })
             } else {
-                let src_data = tensor.to_vec::<Complex64>().unwrap_or_default();
+                let src_data = tensor.to_vec::<Complex64>().map_err(|error| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "Projection tensor materialization failed: {error}"
+                    ))
+                })?;
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
 
                 for flat_idx in 0..total_size {
                     let axis_value = (flat_idx / axis_stride) % dim;
-                    if axis_value == projected_value && flat_idx < src_data.len() {
+                    if axis_value == projected_value {
                         result_data[flat_idx] = src_data[flat_idx];
                     }
                 }
 
-                TensorDynLen::from_dense(indices.to_vec(), result_data).ok()
+                TensorDynLen::from_dense(indices.to_vec(), result_data).map_err(|error| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "Projection tensor construction failed: {error}"
+                    ))
+                })
             }
         } else {
             // Index not found - return tensor unchanged
-            Some(tensor.clone())
+            Ok(tensor.clone())
         }
     }
 
@@ -272,8 +327,8 @@ impl SubDomainTT {
 
         // Project both inputs to their subdomains before contraction
         // This ensures values outside the subdomain are zeroed out
-        let self_projected = self.apply_projection();
-        let other_projected = other.apply_projection();
+        let self_projected = self.apply_projection()?;
+        let other_projected = other.apply_projection()?;
 
         let contracted_data = self_projected
             .contract(&other_projected, options)
@@ -290,15 +345,12 @@ impl SubDomainTT {
     /// Apply the projector to the tensor data, zeroing out values outside the subdomain.
     ///
     /// Returns the TensorTrain with projection applied.
-    fn apply_projection(&self) -> TensorTrain {
+    fn apply_projection(&self) -> Result<TensorTrain> {
         if self.projector.is_empty() {
-            return self.data.clone();
+            return Ok(self.data.clone());
         }
 
-        match self.project_tensor_data(&self.projector) {
-            Some(tt) => tt,
-            None => self.data.clone(),
-        }
+        self.project_tensor_data(&self.projector)
     }
 
     /// Compute the projector after contracting two SubDomainTTs.

@@ -31,11 +31,11 @@ pub fn proj_contract(
     options: &ContractOptions,
 ) -> Result<Option<SubDomainTT>> {
     // Project both inputs
-    let m1_proj = match m1.project(proj) {
+    let m1_proj = match m1.project(proj)? {
         Some(m) => m,
         None => return Ok(None),
     };
-    let m2_proj = match m2.project(proj) {
+    let m2_proj = match m2.project(proj)? {
         Some(m) => m,
         None => return Ok(None),
     };
