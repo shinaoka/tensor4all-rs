@@ -644,6 +644,9 @@ enum t4a_status_code t4a_tensor_contract_retain(const struct t4a_tensor *a,
 
 /**
  * Copy dense `Complex64` data as interleaved doubles in column-major order.
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
+ * diagnostic is available through `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,
                                                double *buf_interleaved,
@@ -652,6 +655,9 @@ enum t4a_status_code t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,
 
 /**
  * Copy dense `f64` data in column-major order.
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
+ * diagnostic is available through `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
                                                double *buf,
@@ -660,6 +666,9 @@ enum t4a_status_code t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
 
 /**
  * Copy compact payload `Complex64` data as interleaved doubles.
+ *
+ * Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
+ * diagnostic preserved in `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_copy_payload_c64(const struct t4a_tensor *ptr,
                                                  double *buf_interleaved,
@@ -668,6 +677,9 @@ enum t4a_status_code t4a_tensor_copy_payload_c64(const struct t4a_tensor *ptr,
 
 /**
  * Copy compact payload `f64` data in payload column-major order.
+ *
+ * Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
+ * diagnostic preserved in `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_copy_payload_f64(const struct t4a_tensor *ptr,
                                                  double *buf,

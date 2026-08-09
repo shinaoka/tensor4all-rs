@@ -1,4 +1,5 @@
 use num_complex::{Complex32, Complex64};
+use std::error::Error;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index::DynIndex;
@@ -46,6 +47,27 @@ fn tensor_storage_has_typed_error_contract() {
         result.unwrap().to_dense_f64_col_major_vec(&[2]).unwrap(),
         vec![1.0, 2.0]
     );
+}
+
+#[test]
+fn tensor_storage_error_preserves_source_chain() {
+    let source = std::io::Error::other("forced storage failure");
+    let error = TensorStorageError::Materialization {
+        source: Arc::new(source),
+    };
+
+    assert!(error.source().is_some());
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "forced storage failure"
+    );
+}
+
+#[test]
+fn to_storage_uses_typed_storage_error() {
+    let tensor = make_tensor_f64(vec![Index::new_dyn(2)], vec![1.0, 2.0]);
+    let result: std::result::Result<Arc<Storage>, TensorStorageError> = tensor.to_storage();
+    assert_eq!(result.unwrap().payload_len(), 2);
 }
 
 #[test]

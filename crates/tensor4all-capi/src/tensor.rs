@@ -6,9 +6,9 @@ use std::sync::Arc;
 use num_complex::Complex64;
 use tensor4all_core::{
     contract_pair, contract_pair_with_options, contract_with_options, qr_with, svd_with,
-    ContractionOptions, QrOptions, SvdOptions, SvdTruncationPolicy,
+    ContractionOptions, QrOptions, SvdOptions, SvdTruncationPolicy, TensorStorageError,
 };
-use tensor4all_tensorbackend::Storage;
+use tensor4all_tensorbackend::{Storage, StorageError};
 
 use crate::types::{
     t4a_index, t4a_scalar_kind, t4a_storage_kind, t4a_svd_truncation_policy, t4a_tensor,
@@ -99,6 +99,24 @@ fn read_indices_from_ptrs(
 
 fn dims_from_indices(indices: &[InternalIndex]) -> Vec<usize> {
     indices.iter().map(|index| index.size()).collect()
+}
+
+fn tensor_storage_error(error: TensorStorageError) -> (t4a_status_code, String) {
+    capi_error(
+        T4A_INTERNAL_ERROR,
+        format!("tensor storage materialization failed: {error}"),
+    )
+}
+
+fn storage_payload_error(error: StorageError) -> (t4a_status_code, String) {
+    let status = match error {
+        StorageError::ScalarKindMismatch { .. } => T4A_INVALID_ARGUMENT,
+        _ => T4A_INTERNAL_ERROR,
+    };
+    capi_error(
+        status,
+        format!("tensor storage payload operation failed: {error}"),
+    )
 }
 
 fn checked_dims_product(name: &str, dims: &[usize]) -> CapiResult<usize> {
@@ -426,10 +444,7 @@ pub extern "C" fn t4a_tensor_storage_kind(
             return Err(capi_error(T4A_NULL_POINTER, "out_kind is null"));
         }
         unsafe {
-            let storage = tensor
-                .inner()
-                .storage()
-                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
             *out_kind = t4a_storage_kind::from(storage.storage_kind());
         }
         Ok(())
@@ -448,10 +463,7 @@ pub extern "C" fn t4a_tensor_payload_rank(
             return Err(capi_error(T4A_NULL_POINTER, "out_rank is null"));
         }
         unsafe {
-            let storage = tensor
-                .inner()
-                .storage()
-                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
             *out_rank = storage.payload_dims().len();
         }
         Ok(())
@@ -470,10 +482,7 @@ pub extern "C" fn t4a_tensor_payload_len(
             return Err(capi_error(T4A_NULL_POINTER, "out_len is null"));
         }
         unsafe {
-            let storage = tensor
-                .inner()
-                .storage()
-                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
             *out_len = storage.payload_len();
         }
         Ok(())
@@ -490,10 +499,7 @@ pub extern "C" fn t4a_tensor_payload_dims(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor
-            .inner()
-            .storage()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
         copy_plain_slice(
             "payload_dims",
             storage.payload_dims(),
@@ -514,10 +520,7 @@ pub extern "C" fn t4a_tensor_payload_strides(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor
-            .inner()
-            .storage()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
         copy_plain_slice(
             "payload_strides",
             storage.payload_strides(),
@@ -538,10 +541,7 @@ pub extern "C" fn t4a_tensor_axis_classes(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor
-            .inner()
-            .storage()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
         copy_plain_slice(
             "axis_classes",
             storage.axis_classes(),
@@ -553,6 +553,9 @@ pub extern "C" fn t4a_tensor_axis_classes(
 }
 
 /// Copy dense `f64` data in column-major order.
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
+/// diagnostic is available through `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_f64(
     ptr: *const t4a_tensor,
@@ -566,11 +569,22 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
     if out_len.is_null() {
         return err_null_pointer("out_len");
     }
+    if unsafe { !(*ptr).inner().is_f64() } {
+        return crate::err_status(
+            "tensor dense f64 copy requires an f64 tensor",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         let data = match (*ptr).inner().as_slice_f64() {
             Ok(data) => data,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+            Err(e) => {
+                return crate::err_status(
+                    format!("tensor dense f64 materialization failed: {e}"),
+                    T4A_INTERNAL_ERROR,
+                )
+            }
         };
         *out_len = data.len();
 
@@ -589,6 +603,9 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
 }
 
 /// Copy dense `Complex64` data as interleaved doubles in column-major order.
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
+/// diagnostic is available through `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_c64(
     ptr: *const t4a_tensor,
@@ -602,11 +619,22 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
     if out_len.is_null() {
         return err_null_pointer("out_len");
     }
+    if unsafe { !(*ptr).inner().is_complex() } {
+        return crate::err_status(
+            "tensor dense c64 copy requires a complex tensor",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         let data = match (*ptr).inner().as_slice_c64() {
             Ok(data) => data,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+            Err(e) => {
+                return crate::err_status(
+                    format!("tensor dense c64 materialization failed: {e}"),
+                    T4A_INTERNAL_ERROR,
+                )
+            }
         };
         *out_len = data.len();
 
@@ -628,6 +656,9 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
 }
 
 /// Copy compact payload `f64` data in payload column-major order.
+///
+/// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
+/// diagnostic preserved in `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_payload_f64(
     ptr: *const t4a_tensor,
@@ -640,14 +671,17 @@ pub extern "C" fn t4a_tensor_copy_payload_f64(
         let data = tensor
             .inner()
             .storage()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?
+            .map_err(tensor_storage_error)?
             .payload_f64_col_major_vec()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            .map_err(storage_payload_error)?;
         copy_plain_slice("payload_f64", &data, buf, buf_len, out_len)
     })
 }
 
 /// Copy compact payload `Complex64` data as interleaved doubles.
+///
+/// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
+/// diagnostic preserved in `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_payload_c64(
     ptr: *const t4a_tensor,
@@ -660,9 +694,9 @@ pub extern "C" fn t4a_tensor_copy_payload_c64(
         let data = tensor
             .inner()
             .storage()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?
+            .map_err(tensor_storage_error)?
             .payload_c64_col_major_vec()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            .map_err(storage_payload_error)?;
         copy_c64_interleaved("payload_c64", &data, buf_interleaved, n_complex, out_len)
     })
 }

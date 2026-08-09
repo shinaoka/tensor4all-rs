@@ -5,7 +5,8 @@ use crate::types::{
 };
 use num_complex::Complex64;
 use std::ffi::CStr;
-use tensor4all_core::{AnyScalar, TensorContractionLike};
+use std::sync::Arc;
+use tensor4all_core::{AnyScalar, TensorContractionLike, TensorStorageError};
 
 fn last_error() -> String {
     let mut len = 0usize;
@@ -386,6 +387,19 @@ fn c64_reader_rejects_interleaved_byte_length_overflow() {
     .unwrap_err();
     assert_eq!(error.0, T4A_INVALID_ARGUMENT);
     assert!(error.1.contains("byte length"));
+}
+
+#[test]
+fn tensor_storage_materialization_failure_maps_to_internal_error_with_diagnostic() {
+    let error = TensorStorageError::Materialization {
+        source: Arc::new(std::io::Error::other(
+            "forced backend materialization failure",
+        )),
+    };
+    let (status, message) = tensor_storage_error(error);
+
+    assert_eq!(status, T4A_INTERNAL_ERROR);
+    assert!(message.contains("forced backend materialization failure"));
 }
 
 #[test]

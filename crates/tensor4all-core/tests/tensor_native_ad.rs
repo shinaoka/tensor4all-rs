@@ -1,3 +1,4 @@
+use num_complex::Complex64;
 use tensor4all_core::{
     contract, contract_with_options, ContractionOptions, Index, TensorContractionLike, TensorDynLen,
 };
@@ -50,6 +51,30 @@ fn contraction_without_grad_returns_rank_zero_scalar() {
 
     assert!(result.indices().is_empty());
     assert_eq!(result.to_vec::<f64>().unwrap(), vec![6.0]);
+}
+
+#[test]
+fn tracked_complex_conjugation_preserves_values_and_gradient_path() {
+    let i = Index::new_dyn(2);
+    let x = TensorDynLen::from_dense(
+        vec![i.clone()],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+
+    let conjugated = x.conj();
+    assert!(conjugated.tracks_grad());
+    assert_eq!(
+        conjugated.to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(1.0, -2.0), Complex64::new(-3.0, -4.0)]
+    );
+
+    let loss = conjugated.sum().unwrap();
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+    assert!(x.grad().unwrap().is_some());
 }
 
 #[test]

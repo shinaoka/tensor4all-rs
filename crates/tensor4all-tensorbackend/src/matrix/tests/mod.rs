@@ -2,6 +2,20 @@ use super::*;
 use num_complex::Complex64;
 use tenferro::TypedTensor;
 
+#[test]
+fn hermitian_backend_error_preserves_source_chain() {
+    let source = std::io::Error::other("forced eigensolver failure");
+    let error = HermitianEigenError::Backend {
+        source: Box::new(source),
+    };
+
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(
+        std::error::Error::source(&error).unwrap().to_string(),
+        "forced eigensolver failure"
+    );
+}
+
 fn real_eigen_residual_norm(matrix: &Matrix<f64>, eigenvalue: f64, vector: &[f64]) -> f64 {
     let mut max_abs = 0.0_f64;
     for row in 0..matrix.nrows() {

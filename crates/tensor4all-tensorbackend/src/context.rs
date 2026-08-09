@@ -20,23 +20,30 @@ static DEFAULT_GRAPH_COMPILER: OnceLock<Mutex<GraphCompiler>> = OnceLock::new();
 static DEFAULT_GRAPH_EXECUTOR: OnceLock<Mutex<GraphExecutor<CpuBackend>>> = OnceLock::new();
 /// Error returned when the process-global eager AD runtime cannot be initialized.
 ///
+/// The original backend error is retained as the [`std::error::Error::source`]
+/// so callers can inspect the registration failure without parsing a string.
+///
 /// # Examples
 ///
 /// ```
+/// use std::error::Error;
+/// use std::sync::Arc;
 /// use tensor4all_tensorbackend::EagerContextError;
 ///
 /// let error = EagerContextError::Registration {
-///     message: "registration failed".to_string(),
+///     source: Arc::new(std::io::Error::other("registration failed")),
 /// };
+/// assert!(error.source().is_some());
 /// assert!(error.to_string().contains("registration failed"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum EagerContextError {
     /// The tenferro linalg AD extension rule could not be registered.
-    #[error("failed to register tenferro linalg AD rule: {message}")]
+    #[error("failed to register tenferro linalg AD rule: {source}")]
     Registration {
-        /// Diagnostic returned by tenferro.
-        message: String,
+        /// Original diagnostic returned by tenferro.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
 
@@ -153,8 +160,8 @@ pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContex
             .map(|_| {
                 EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
             })
-            .map_err(|error| EagerContextError::Registration {
-                message: error.to_string(),
+            .map_err(|source| EagerContextError::Registration {
+                source: Arc::new(source),
             })
     }) {
         Ok(context) => Ok(Arc::clone(context)),
@@ -165,6 +172,20 @@ pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eager_context_error_preserves_source_chain() {
+        let source = std::io::Error::other("forced registration failure");
+        let error = EagerContextError::Registration {
+            source: Arc::new(source),
+        };
+
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(
+            std::error::Error::source(&error).unwrap().to_string(),
+            "forced registration failure"
+        );
+    }
 
     #[test]
     fn eager_context_has_typed_error_contract() {

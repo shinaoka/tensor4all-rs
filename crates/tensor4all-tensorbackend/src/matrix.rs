@@ -124,12 +124,11 @@ pub enum MatrixShapeError {
 
 /// Error returned by [`lowest_hermitian_eigenpair`].
 ///
-/// The eigensolver is intended for small Rayleigh-Ritz projected matrices. It
-/// validates shape and Hermitian structure before calling the backend Hermitian
+/// The eigensolver is intended for small Rayleigh-Ritz projected matrices; it validates shape and Hermitian structure before calling the backend Hermitian
 /// eigendecomposition, symmetrizing only roundoff that is within the requested
 /// tolerance. Non-Hermitian effective operators are rejected explicitly instead
 /// of silently taking a real part.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum HermitianEigenError {
     /// The matrix has zero rows and columns, so it has no eigenpair.
     #[error("Hermitian eigenpair requires a non-empty matrix")]
@@ -195,10 +194,11 @@ pub enum HermitianEigenError {
         tolerance: f64,
     },
     /// The tenferro backend rejected or failed the eigendecomposition.
-    #[error("Hermitian eigendecomposition failed: {message}")]
+    #[error("Hermitian eigendecomposition failed: {source}")]
     Backend {
-        /// Backend error message.
-        message: String,
+        /// Original backend diagnostic.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
 
@@ -628,12 +628,12 @@ where
     let n = matrix.nrows();
     let input_tensor = T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec());
     let eager_ctx = crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
-        message: source.to_string(),
+        source: Box::new(source),
     })?;
     let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx);
     let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&input).map_err(|source| {
         HermitianEigenError::Backend {
-            message: source.to_string(),
+            source: Box::new(source),
         }
     })?;
 
@@ -1104,7 +1104,7 @@ pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
 ///
 /// # Panics
 ///
-/// Panics if either range is empty.
+/// Panics if either range is empty or either end is out of bounds (`rows.end > a.nrows()` or `cols.end > a.ncols()`).
 ///
 /// # Examples
 ///
