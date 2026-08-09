@@ -223,6 +223,33 @@ fn tracked_scale_from_public_structured_storage_stays_compact() {
 }
 
 #[test]
+fn untracked_scale_from_public_structured_storage_stays_compact() {
+    let bond_dim = 10;
+    let site_dim = 3;
+    let left = DynIndex::new_dyn(bond_dim);
+    let site = DynIndex::new_dyn(site_dim);
+    let right = DynIndex::new_dyn(bond_dim);
+    let storage = Storage::new_structured(
+        vec![2.0_f64; bond_dim * site_dim],
+        vec![bond_dim, site_dim],
+        vec![1, bond_dim as isize],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    let tensor = TensorDynLen::from_storage(vec![left, site, right], Arc::new(storage)).unwrap();
+    assert!(!tensor.tracks_grad());
+    let scaled = tensor
+        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    assert!(!scaled.tracks_grad());
+    let scaled_storage = scaled.storage().unwrap();
+    assert_eq!(scaled_storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(scaled_storage.payload_dims(), &[bond_dim, site_dim]);
+    assert_eq!(scaled_storage.payload_len(), bond_dim * site_dim);
+    assert_eq!(scaled_storage.scalar_at(&[0, 1]).unwrap().real(), 6.0);
+}
+
+#[test]
 fn mixed_complex_nonfinite_components_are_typed_nan_inputs() {
     for value in [
         Complex64::new(f64::INFINITY, f64::NAN),

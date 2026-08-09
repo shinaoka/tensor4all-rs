@@ -703,6 +703,21 @@ impl<T: Copy> StructuredStorage<T> {
 }
 
 impl<T: Copy + Default> StructuredStorage<T> {
+    /// Returns the checked product of the logical dimensions, rejecting
+    /// overflow. The fallible dense exporters rely on this so that a logical
+    /// product that overflows `usize` fails closed instead of being treated
+    /// as an empty tensor.
+    fn checked_logical_len(&self) -> StorageResult<usize> {
+        let dims = self.logical_dims();
+        dims.iter()
+            .try_fold(1usize, |length, &dim| length.checked_mul(dim))
+            .ok_or_else(|| {
+                StorageError::InvalidStructuredStorage(format!(
+                    "logical dims product overflow for {dims:?}"
+                ))
+            })
+    }
+
     /// Materializes the logical tensor as a contiguous column-major dense buffer.
     ///
     /// Repeated entries in `axis_classes` encode equality constraints between
@@ -1756,6 +1771,7 @@ impl Storage {
                         logical_dims, structured_dims
                     )));
                 }
+                v.checked_logical_len()?;
                 Ok(v.logical_dense_col_major_vec())
             }
             StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
@@ -1797,6 +1813,7 @@ impl Storage {
                         logical_dims, structured_dims
                     )));
                 }
+                v.checked_logical_len()?;
                 Ok(v.logical_dense_col_major_vec())
             }
             StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {

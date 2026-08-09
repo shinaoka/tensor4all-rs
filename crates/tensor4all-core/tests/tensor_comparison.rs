@@ -220,11 +220,45 @@ fn test_isapprox_rejects_nan_input() {
     let lhs = TensorDynLen::scalar(f64::NAN).unwrap();
     let rhs = TensorDynLen::scalar(1.0).unwrap();
     assert!(lhs.isapprox(&rhs, 1.0e-12, 1.0e-12).is_err());
+    // The NaN preflight must also apply in exact comparison mode.
+    assert!(lhs.isapprox(&rhs, 0.0, 0.0).is_err());
 
     let index = Index::new_dyn(2);
     let nan_tensor = TensorDynLen::from_dense(vec![index.clone()], vec![1.0, f64::NAN]).unwrap();
     let finite = TensorDynLen::from_dense(vec![index], vec![1.0, 1.0]).unwrap();
     assert!(nan_tensor.isapprox(&finite, 1.0e-12, 1.0e-12).is_err());
+}
+
+#[test]
+fn test_isapprox_rejects_nan_in_structured_payload() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let nan_diag = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, f64::NAN]).unwrap();
+    let dense = TensorDynLen::from_dense(vec![i.clone(), j], vec![1.0, 0.0, 0.0, 2.0]).unwrap();
+    assert!(nan_diag.isapprox(&dense, 1.0e-12, 1.0e-12).is_err());
+}
+
+#[test]
+fn test_isapprox_unmatched_support_is_compared_in_both_orders() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let diag = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, 2.0]).unwrap();
+    // The off-diagonal entry (1,0) lies outside the diagonal compact support;
+    // it must be compared against the structural zero in both operand orders.
+    let off_diag =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 10.0, 0.0, 2.0]).unwrap();
+    assert!(!diag.isapprox(&off_diag, 0.0, 0.5).unwrap());
+    assert!(!off_diag.isapprox(&diag, 0.0, 0.5).unwrap());
+}
+
+#[test]
+fn test_isapprox_zero_vs_nonzero_tolerant() {
+    let zero = TensorDynLen::scalar(0.0).unwrap();
+    let small = TensorDynLen::scalar(1.0e-8).unwrap();
+    // One side has a zero reference norm; the unit ratio must only pass at
+    // rtol >= 1 and never in exact mode.
+    assert!(!zero.isapprox(&small, 0.0, 0.5).unwrap());
+    assert!(zero.isapprox(&small, 0.0, 1.0).unwrap());
 }
 
 #[test]

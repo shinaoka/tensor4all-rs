@@ -23,7 +23,7 @@ use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
     native_tensor_primal_to_diag_f64, scale_native_tensor, storage_payload_native_read_input,
-    storage_to_native_tensor, AnyScalar as BackendScalar, NativeTensorReadInput, TensorElement,
+    storage_to_native_tensor, NativeTensorReadInput, TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -656,10 +656,6 @@ impl TensorDynLenStorage {
             }
             Self::Deferred { error, .. } => Err((**error).clone()),
         }
-    }
-
-    fn scale(&self, scalar: &BackendScalar) -> Result<Storage> {
-        Ok(self.materialize(self.axis_classes().len())?.scale(scalar))
     }
 
     fn scale_eager_payload(&self, scalar: &AnyScalar) -> Result<Self> {
@@ -3898,20 +3894,16 @@ impl TensorDynLen {
     /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        if matches!(&self.storage, TensorDynLenStorage::Materialized(_))
-            && !self.tracks_grad()
-            && !scalar.tracks_grad()
-        {
-            let scaled = self.storage.scale(&scalar.to_backend_scalar())?;
-            return Self::from_storage(self.indices.clone(), Arc::new(scaled));
-        }
-
         if matches!(
             &self.storage,
             TensorDynLenStorage::Eager { .. }
                 | TensorDynLenStorage::Compact(_)
                 | TensorDynLenStorage::Materialized(_)
         ) {
+            // Scale via the compact payload only. Materialized structured
+            // storage is converted payload-coordinate by payload-coordinate
+            // (never the logical domain) and returned as compact storage, so
+            // scaling never touches unreferenced strided-gap backing entries.
             let storage = self.storage.scale_eager_payload(&scalar)?;
             return Ok(Self {
                 indices: self.indices.clone(),

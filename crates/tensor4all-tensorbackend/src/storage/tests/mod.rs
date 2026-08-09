@@ -82,6 +82,31 @@ fn structured_storage_rejects_payload_length_product_overflow() {
 }
 
 #[test]
+fn to_dense_rejects_logical_product_overflow_fail_closed() {
+    // axis_classes [0,0,0,0] make the logical dims [n,n,n,n]; n = 2^17 gives
+    // a 1 MiB payload while n^4 overflows usize, so dense materialization
+    // must fail closed instead of returning an empty buffer.
+    let n = 1 << 17;
+    let structured =
+        StructuredStorage::<f64>::new(vec![1.0; n], vec![n], vec![1], vec![0, 0, 0, 0]).unwrap();
+    let storage = Storage::from_repr(StorageRepr::F64(structured));
+    let error = storage
+        .to_dense_f64_col_major_vec(&[n, n, n, n])
+        .unwrap_err();
+    assert!(error.to_string().contains("overflow"));
+
+    let structured = StructuredStorage::<Complex64>::new(
+        vec![Complex64::new(1.0, 0.0); n],
+        vec![n],
+        vec![1],
+        vec![0, 0, 0, 0],
+    )
+    .unwrap();
+    let storage = Storage::from_repr(StorageRepr::C64(structured));
+    assert!(storage.to_dense_c64_col_major_vec(&[n, n, n, n]).is_err());
+}
+
+#[test]
 fn scalar_at_reads_compact_payload_coordinates_directly() {
     let storage = Storage::new_structured(
         vec![10.0_f64, 20.0, -1.0, 30.0, 40.0],
