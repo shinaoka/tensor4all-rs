@@ -51,19 +51,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run rustdoc tests
-        run: cargo test --doc --release --workspace -j 8
+        run: cargo test --doc --profile ci --workspace -j 8
 
       - name: Run mdBook tests
-        run: ./scripts/test-mdbook.sh
+        run: TENSOR4ALL_CARGO_PROFILE=ci ./scripts/test-mdbook.sh
+
+      - name: Report Cargo artifact size
+        if: always()
+        run: |
+          if [[ -d target ]]; then
+            du -sh target
+          else
+            echo "target directory was not created"
+          fi
 
   # testジョブ全体を無効化
   # test:
   #   name: Test
   #   runs-on: ubuntu-22.04
-  #   env:
-  #     # CI release tests don't need DWARF debug info, and disabling it keeps
-  #     # target artifacts small enough to avoid runner disk exhaustion on cache misses.
-  #     CARGO_PROFILE_RELEASE_DEBUG: 0
   #   steps:
   #     - uses: actions/checkout@v4
 
@@ -80,10 +85,19 @@ jobs:
   #     # tensor4all-hdf5 is kept out of nextest because its dlopen-based tests
   #     # fail under nextest's per-process execution model.
   #     - name: Run tests (non-HDF5)
-  #       run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
+  #       run: cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
 
   #     - name: Run HDF5 tests
-  #       run: cargo test --release -p tensor4all-hdf5
+  #       run: cargo test --profile ci -p tensor4all-hdf5
+
+  #     - name: Report Cargo artifact size
+  #       if: always()
+  #       run: |
+  #         if [[ -d target ]]; then
+  #           du -sh target
+  #         else
+  #           echo "target directory was not created"
+  #         fi
 
   scripts:
     name: Maintenance scripts

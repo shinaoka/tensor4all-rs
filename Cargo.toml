@@ -50,6 +50,13 @@ debug = 0
 inherits = "release"
 debug = true
 
+# Comprehensive CI keeps release-mode semantics while avoiding artifacts that
+# are not reused after the job and symbols that are not needed to run checks.
+[profile.ci]
+inherits = "release"
+incremental = false
+strip = "symbols"
+
 [workspace.dependencies]
 num-complex = "0.4"
 num-traits = "0.2"
