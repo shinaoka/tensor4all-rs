@@ -107,6 +107,7 @@ jobs:
         run: python3 scripts/test-audit-library-panics.py
 
       - name: Audit library panic paths
+        # Rust tool: 10m, Python wrapper: 20m, CI job: 25m.
         timeout-minutes: 25
         run: python3 scripts/audit-library-panics.py
 

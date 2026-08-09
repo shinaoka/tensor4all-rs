@@ -1,26 +1,24 @@
 //! Compiler-backed production panic audit.
 //!
 //! Raw panic findings come from Clippy diagnostics emitted while Cargo checks
-//! the workspace's production library and binary targets. `syn` is retained
-//! only for the reviewed public assertion baseline; it does not resolve names,
-//! types, imports, or macros.
+//! the workspace's production library and binary targets. Assertion findings
+//! are scanned only in the source files selected by rustc's dep-info for those
+//! same compiler runs; the source visitor does not resolve modules or evaluate
+//! target and feature configuration.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
-use std::process::{Output, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
-use syn::{
-    Attribute, Expr, ExprLit, ImplItem, Item, Lit, Meta, Stmt, Token, TraitItem, Visibility,
-};
+use syn::{Arm, Attribute, Expr, ImplItem, Item, Meta, Stmt, Token, TraitItem, Visibility};
 
 const RAW_CODES: [(&str, &str); 4] = [
     ("clippy::panic", "panic"),
@@ -39,6 +37,7 @@ const PRODUCTION_KINDS: [&str; 7] = [
     "proc-macro",
     "bin",
 ];
+// Keep this inner compiler timeout below the Python wrapper and CI job limits.
 const CLIPPY_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -119,9 +118,6 @@ struct ProductionTarget {
     package_name: String,
     target_name: String,
     kind: String,
-    source_path: PathBuf,
-    features: BTreeSet<String>,
-    default_features: BTreeSet<String>,
 }
 
 impl ProductionTarget {
@@ -140,6 +136,9 @@ struct TargetKey {
     target_name: String,
     kind: String,
 }
+
+type CompilerArtifacts = BTreeMap<TargetKey, BTreeSet<PathBuf>>;
+type ClippyParse = (HashSet<TargetKey>, CompilerArtifacts, BTreeSet<Finding>);
 
 #[derive(Debug)]
 struct ProductionSelection {
@@ -186,6 +185,7 @@ impl ProductionSelection {
         let crates_root = root.join("crates");
         let mut targets = Vec::new();
         let mut all_workspace_packages = Vec::new();
+        let mut all_features = false;
         for package in packages {
             let package_id = package
                 .get("id")
@@ -203,8 +203,7 @@ impl ProductionSelection {
                 .get("features")
                 .and_then(Value::as_object)
                 .ok_or_else(|| anyhow!("cargo metadata package omitted features"))?;
-            let features = feature_map.keys().cloned().collect::<BTreeSet<_>>();
-            let default_features = cargo_default_features(feature_map)?;
+            let package_has_nondefault_features = feature_map.keys().any(|name| name != "default");
             let manifest = package
                 .get("manifest_path")
                 .and_then(Value::as_str)
@@ -222,27 +221,19 @@ impl ProductionSelection {
                     .get("kind")
                     .and_then(Value::as_array)
                     .ok_or_else(|| anyhow!("cargo metadata target omitted kind"))?;
-                let kind = cargo_target_kind(target_kind)?;
-                let Some(kind) = kind else {
+                let Some(kind) = cargo_target_kind(target_kind)? else {
                     continue;
                 };
                 let target_name = target
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("cargo metadata target omitted name"))?;
-                let source_path = target
-                    .get("src_path")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow!("cargo metadata target omitted src_path"))?;
-                let source_path = ensure_inside(&root, Path::new(source_path), "target source")?;
+                all_features |= package_has_nondefault_features;
                 targets.push(ProductionTarget {
                     package_id: package_id.to_owned(),
                     package_name: package_name.to_owned(),
                     target_name: target_name.to_owned(),
-                    kind: kind.to_owned(),
-                    source_path,
-                    features: features.clone(),
-                    default_features: default_features.clone(),
+                    kind,
                 });
             }
         }
@@ -258,9 +249,6 @@ impl ProductionSelection {
             .into_iter()
             .filter(|name| !selected_package_names.contains(name.as_str()))
             .collect::<Vec<_>>();
-        let all_features = targets
-            .iter()
-            .any(|target| target.features.iter().any(|name| name != "default"));
 
         Ok(Self {
             root,
@@ -275,49 +263,21 @@ impl ProductionSelection {
     }
 }
 
-fn cargo_default_features(
-    feature_map: &serde_json::Map<String, Value>,
-) -> Result<BTreeSet<String>> {
-    let mut enabled = BTreeSet::new();
-    let Some(_) = feature_map.get("default") else {
-        return Ok(enabled);
-    };
-    let mut pending = vec!["default".to_owned()];
-    enabled.insert("default".to_owned());
-    while let Some(feature) = pending.pop() {
-        let values = feature_map
-            .get(&feature)
-            .and_then(Value::as_array)
-            .ok_or_else(|| anyhow!("cargo metadata feature {feature:?} was not an array"))?;
-        for value in values {
-            let value = value
-                .as_str()
-                .ok_or_else(|| anyhow!("cargo metadata feature value was not a string"))?;
-            let value = value.strip_prefix("dep:").unwrap_or(value);
-            let candidate = value.split('/').next().unwrap_or(value);
-            if feature_map.contains_key(candidate) && enabled.insert(candidate.to_owned()) {
-                pending.push(candidate.to_owned());
-            }
-        }
-    }
-    Ok(enabled)
-}
-
 fn cargo_target_kind(kinds: &[Value]) -> Result<Option<String>> {
     if kinds.is_empty() {
-        bail!("cargo JSON target omitted kind entries");
+        bail!("Cargo target omitted kind entries");
     }
     let kinds = kinds
         .iter()
         .map(|kind| {
             kind.as_str()
-                .ok_or_else(|| anyhow!("cargo JSON target kind was not a string"))
+                .ok_or_else(|| anyhow!("Cargo target kind was not a string"))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(PRODUCTION_KINDS
-        .iter()
-        .find(|candidate| kinds.contains(candidate))
-        .map(|kind| (*kind).to_owned()))
+    Ok(kinds
+        .into_iter()
+        .find(|kind| PRODUCTION_KINDS.contains(kind))
+        .map(str::to_owned))
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf> {
@@ -354,7 +314,10 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
     String::from_utf8_lossy(stdout).trim().to_string()
 }
 
-fn run_clippy(selection: &ProductionSelection, all_features: bool) -> Result<BTreeSet<Finding>> {
+fn run_clippy(
+    selection: &ProductionSelection,
+    all_features: bool,
+) -> Result<(BTreeSet<PathBuf>, BTreeSet<Finding>)> {
     let mut command = Command::new("cargo");
     command.args(["clippy", "--workspace"]);
     for package in &selection.excluded_packages {
@@ -388,8 +351,9 @@ fn run_clippy(selection: &ProductionSelection, all_features: bool) -> Result<BTr
     }
 
     let expected = selection.expected_keys();
-    let (_, findings) = parse_clippy_output(&output.stdout, &selection.root, &expected)?;
-    Ok(findings)
+    let (_, artifacts, findings) = parse_clippy_output(&output.stdout, &selection.root, &expected)?;
+    let source_files = dep_info_sources(&selection.root, &artifacts, &expected)?;
+    Ok((source_files, findings))
 }
 
 fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output> {
@@ -446,9 +410,10 @@ fn parse_clippy_output(
     stdout: &[u8],
     root: &Path,
     expected: &HashSet<TargetKey>,
-) -> Result<(HashSet<TargetKey>, BTreeSet<Finding>)> {
+) -> Result<ClippyParse> {
     let stdout = std::str::from_utf8(stdout).context("cargo clippy emitted invalid UTF-8")?;
     let mut seen_targets = HashSet::new();
+    let mut artifacts = CompilerArtifacts::new();
     let mut findings = BTreeSet::new();
     let mut build_finished = false;
     for (line_number, line) in stdout.lines().enumerate() {
@@ -474,6 +439,25 @@ fn parse_clippy_output(
         match reason {
             "compiler-artifact" => {
                 if let Some(key) = selected_target_key(&message, expected)? {
+                    let filenames = message
+                        .get("filenames")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| {
+                            anyhow!("selected compiler-artifact record omitted filenames")
+                        })?;
+                    if filenames.is_empty() {
+                        bail!("selected compiler-artifact record omitted artifact filenames");
+                    }
+                    let paths = artifacts.entry(key.clone()).or_default();
+                    for filename in filenames {
+                        let filename = filename.as_str().ok_or_else(|| {
+                            anyhow!("compiler-artifact filename was not a string")
+                        })?;
+                        if filename.is_empty() {
+                            bail!("compiler-artifact filename was empty");
+                        }
+                        paths.insert(PathBuf::from(filename));
+                    }
                     seen_targets.insert(key);
                 }
             }
@@ -515,7 +499,15 @@ fn parse_clippy_output(
             .collect::<Vec<_>>();
         bail!("cargo clippy did not compile every production target: {missing:?}");
     }
-    Ok((seen_targets, findings))
+    let missing_artifacts = expected
+        .iter()
+        .filter(|key| !artifacts.contains_key(*key))
+        .map(|key| format!("{}:{}", key.target_name, key.kind))
+        .collect::<Vec<_>>();
+    if !missing_artifacts.is_empty() {
+        bail!("Cargo omitted compiler artifacts for production targets: {missing_artifacts:?}");
+    }
+    Ok((seen_targets, artifacts, findings))
 }
 
 fn selected_target_key(
@@ -635,98 +627,360 @@ fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)
     Ok(Some((relative, line)))
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct VisitKey {
-    target: TargetKey,
-    path: PathBuf,
-    module_dir: PathBuf,
+fn dep_info_sources(
+    root: &Path,
+    artifacts: &CompilerArtifacts,
+    expected: &HashSet<TargetKey>,
+) -> Result<BTreeSet<PathBuf>> {
+    let mut sources = BTreeSet::new();
+    for key in expected {
+        let filenames = artifacts.get(key).ok_or_else(|| {
+            anyhow!(
+                "missing compiler artifact for {}:{}",
+                key.target_name,
+                key.kind
+            )
+        })?;
+        let dep_info = locate_dep_info(root, key, filenames)?;
+        let selected = parse_make_dep_info(&dep_info, root)?;
+        if selected.is_empty() {
+            bail!(
+                "dep-info {} contained no workspace-local Rust sources for {}:{}",
+                dep_info.display(),
+                key.target_name,
+                key.kind
+            );
+        }
+        sources.extend(selected);
+    }
+    Ok(sources)
 }
 
-struct AssertionScanner {
-    root: PathBuf,
-    visited: BTreeSet<VisitKey>,
-    findings: BTreeSet<Finding>,
-}
-
-impl AssertionScanner {
-    fn scan(
-        root: &Path,
-        targets: &[ProductionTarget],
-        all_features: bool,
-    ) -> Result<BTreeSet<Finding>> {
-        let mut scanner = Self {
-            root: root.to_owned(),
-            visited: BTreeSet::new(),
-            findings: BTreeSet::new(),
+fn locate_dep_info(root: &Path, key: &TargetKey, filenames: &BTreeSet<PathBuf>) -> Result<PathBuf> {
+    for filename in filenames {
+        let artifact = if filename.is_absolute() {
+            filename.clone()
+        } else {
+            root.join(filename)
         };
-        let mut targets = targets.to_vec();
-        targets.sort_by_key(ProductionTarget::key);
-        for target in targets {
-            let features = if all_features {
-                target.features.clone()
+        for candidate in dep_info_candidates(&artifact) {
+            if candidate.is_file() {
+                return fs::canonicalize(&candidate).with_context(|| {
+                    format!(
+                        "failed to canonicalize dep-info candidate {}",
+                        candidate.display()
+                    )
+                });
+            }
+        }
+    }
+    let artifacts = filenames
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    bail!(
+        "no dep-info file found for production target {}:{} from compiler artifacts {artifacts:?}",
+        key.target_name,
+        key.kind
+    )
+}
+
+fn dep_info_candidates(artifact: &Path) -> Vec<PathBuf> {
+    let Some(file_name) = artifact.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let stem = artifact
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name);
+    let without_lib = stem.strip_prefix("lib").unwrap_or(stem);
+    let mut candidates = Vec::new();
+    for name in [format!("{without_lib}.d"), format!("{stem}.d")] {
+        let candidate = artifact.with_file_name(name);
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+fn parse_make_dep_info(path: &Path, root: &Path) -> Result<BTreeSet<PathBuf>> {
+    let bytes =
+        fs::read(path).with_context(|| format!("failed to read dep-info {}", path.display()))?;
+    let source = std::str::from_utf8(&bytes)
+        .with_context(|| format!("dep-info is not UTF-8: {}", path.display()))?;
+    let source = join_make_lines(source)?;
+    let mut saw_rule = false;
+    let mut selected = BTreeSet::new();
+    for (line_number, line) in source.split('\n').enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let separator = make_rule_separator(line).with_context(|| {
+            format!(
+                "dep-info line {} has no Make rule separator",
+                line_number + 1
+            )
+        })?;
+        saw_rule = true;
+        for dependency in parse_make_words(&line[separator + 1..]).with_context(|| {
+            format!(
+                "dep-info line {} has invalid Make dependencies",
+                line_number + 1
+            )
+        })? {
+            if Path::new(&dependency)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                != Some("rs")
+            {
+                continue;
+            }
+            let candidate = Path::new(&dependency);
+            let candidate = if candidate.is_absolute() {
+                candidate.to_path_buf()
             } else {
-                target.default_features.clone()
+                root.join(candidate)
             };
-            let target_key = target.key();
-            let module_dir = module_directory(&target.source_path, true);
-            scanner.scan_file(&target.source_path, &module_dir, &target_key, &features)?;
+            let canonical = match fs::canonicalize(&candidate) {
+                Ok(path) => path,
+                Err(error) if candidate.starts_with(root) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "workspace source from dep-info does not exist: {}",
+                            candidate.display()
+                        )
+                    });
+                }
+                Err(_) => continue,
+            };
+            if canonical.starts_with(root) && canonical.is_file() {
+                selected.insert(canonical);
+            }
         }
-        Ok(scanner.findings)
     }
+    if !saw_rule {
+        bail!("dep-info contained no Make rules: {}", path.display());
+    }
+    Ok(selected)
+}
 
-    fn scan_file(
-        &mut self,
-        path: &Path,
-        module_dir: &Path,
-        target: &TargetKey,
-        features: &BTreeSet<String>,
-    ) -> Result<()> {
-        let path = ensure_inside(&self.root, path, "production source")?;
-        let module_dir = lexical_inside(&self.root, module_dir, "module directory")?;
-        let visit_key = VisitKey {
-            target: target.clone(),
-            path: path.clone(),
-            module_dir: module_dir.clone(),
-        };
-        if !self.visited.insert(visit_key) {
-            return Ok(());
+fn join_make_lines(source: &str) -> Result<String> {
+    let mut joined = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            match chars.peek().copied() {
+                Some('\n') => {
+                    chars.next();
+                }
+                Some('\r') => {
+                    chars.next();
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                }
+                _ => joined.push(character),
+            }
+        } else {
+            joined.push(character);
         }
-        let source = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read production source {}", path.display()))?;
-        let file = syn::parse_file(&source)
-            .with_context(|| format!("failed to parse production source {}", path.display()))?;
-        let relative = path
-            .strip_prefix(&self.root)
-            .map_err(|_| anyhow!("production source escaped audit root"))?
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/");
-        self.scan_items(&file.items, &module_dir, &relative, target, features)
     }
+    Ok(joined)
+}
 
-    fn scan_items(
-        &mut self,
-        items: &[Item],
-        module_dir: &Path,
-        source_path: &str,
-        target: &TargetKey,
-        features: &BTreeSet<String>,
-    ) -> Result<()> {
+fn make_rule_separator(line: &str) -> Result<usize> {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if bytes[index] == b':'
+            && (index + 1 == bytes.len() || bytes[index + 1].is_ascii_whitespace())
+        {
+            return Ok(index);
+        }
+        index += 1;
+    }
+    bail!("missing unescaped rule colon")
+}
+
+fn parse_make_words(source: &str) -> Result<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = source.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character.is_whitespace() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else if character == '\\' {
+            let escaped = chars
+                .next()
+                .ok_or_else(|| anyhow!("Make dependency ended with an escape"))?;
+            word.push(escaped);
+        } else if character == '#' {
+            bail!("unescaped Make comment marker in dependency list");
+        } else {
+            word.push(character);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    Ok(words)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CfgState {
+    False,
+    Unknown,
+    True,
+}
+
+impl CfgState {
+    fn not(self) -> Self {
+        match self {
+            Self::False => Self::True,
+            Self::Unknown => Self::Unknown,
+            Self::True => Self::False,
+        }
+    }
+}
+
+fn cfg_state(meta: &Meta) -> Result<CfgState> {
+    match meta {
+        Meta::Path(path) if path.is_ident("test") => Ok(CfgState::False),
+        Meta::List(list) if list.path.is_ident("all") => {
+            let metas = parse_meta_list(list)?;
+            if metas.is_empty() {
+                return Ok(CfgState::True);
+            }
+            let mut unknown = false;
+            for meta in metas {
+                match cfg_state(&meta)? {
+                    CfgState::False => return Ok(CfgState::False),
+                    CfgState::Unknown => unknown = true,
+                    CfgState::True => {}
+                }
+            }
+            Ok(if unknown {
+                CfgState::Unknown
+            } else {
+                CfgState::True
+            })
+        }
+        Meta::List(list) if list.path.is_ident("any") => {
+            let metas = parse_meta_list(list)?;
+            if metas.is_empty() {
+                return Ok(CfgState::False);
+            }
+            let mut unknown = false;
+            for meta in metas {
+                match cfg_state(&meta)? {
+                    CfgState::True => return Ok(CfgState::True),
+                    CfgState::Unknown => unknown = true,
+                    CfgState::False => {}
+                }
+            }
+            Ok(if unknown {
+                CfgState::Unknown
+            } else {
+                CfgState::False
+            })
+        }
+        Meta::List(list) if list.path.is_ident("not") => {
+            let metas = parse_meta_list(list)?;
+            if metas.len() != 1 {
+                return Ok(CfgState::Unknown);
+            }
+            Ok(cfg_state(&metas[0])?.not())
+        }
+        _ => Ok(CfgState::Unknown),
+    }
+}
+
+fn parse_meta_list(list: &syn::MetaList) -> Result<Vec<Meta>> {
+    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        .map(|metas| metas.into_iter().collect())
+        .context("cfg attribute has invalid predicate syntax")
+}
+
+fn definitely_test_only(attrs: &[Attribute]) -> Result<bool> {
+    for attr in attrs {
+        if attr.path().is_ident("cfg") {
+            let Meta::List(list) = &attr.meta else {
+                continue;
+            };
+            let metas = parse_meta_list(list)?;
+            if metas.len() == 1 && cfg_state(&metas[0])? == CfgState::False {
+                return Ok(true);
+            }
+        } else if attr.path().is_ident("cfg_attr") && cfg_attr_definitely_false(&attr.meta)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn cfg_attr_definitely_false(meta: &Meta) -> Result<bool> {
+    let Meta::List(list) = meta else {
+        return Ok(false);
+    };
+    if !list.path.is_ident("cfg_attr") {
+        return Ok(false);
+    }
+    let metas = parse_meta_list(list)?;
+    let Some(predicate) = metas.first() else {
+        return Ok(false);
+    };
+    if cfg_state(predicate)? != CfgState::True {
+        return Ok(false);
+    }
+    for generated in metas.iter().skip(1) {
+        if generated.path().is_ident("cfg") {
+            let Meta::List(list) = generated else {
+                continue;
+            };
+            let predicates = parse_meta_list(list)?;
+            if predicates.len() == 1 && cfg_state(&predicates[0])? == CfgState::False {
+                return Ok(true);
+            }
+        } else if generated.path().is_ident("cfg_attr") && cfg_attr_definitely_false(generated)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+struct PublicAssertionVisitor<'a> {
+    path: &'a str,
+    findings: &'a mut BTreeSet<Finding>,
+    in_public_context: bool,
+    error: Option<anyhow::Error>,
+}
+
+impl PublicAssertionVisitor<'_> {
+    fn scan_items(&mut self, items: &[Item]) -> Result<()> {
         for item in items {
-            if !cfg_enabled(item_attrs(item), features)? {
+            if definitely_test_only(item_attrs(item))? {
                 continue;
             }
             match item {
                 Item::Fn(function) if is_public(&function.vis) => {
-                    self.scan_block(&function.block, source_path, features)?;
+                    self.scan_block(&function.block)?;
                 }
                 Item::Trait(trait_item) if is_public(&trait_item.vis) => {
                     for trait_item in &trait_item.items {
-                        if !cfg_enabled(trait_item_attrs(trait_item), features)? {
+                        if definitely_test_only(trait_item_attrs(trait_item))? {
                             continue;
                         }
                         if let TraitItem::Fn(function) = trait_item {
                             if let Some(block) = &function.default {
-                                self.scan_block(block, source_path, features)?;
+                                self.scan_block(block)?;
                             }
                         }
                     }
@@ -734,66 +988,41 @@ impl AssertionScanner {
                 Item::Impl(impl_item) => {
                     let trait_impl = impl_item.trait_.is_some();
                     for impl_item in &impl_item.items {
-                        if !cfg_enabled(impl_item_attrs(impl_item), features)? {
+                        if definitely_test_only(impl_item_attrs(impl_item))? {
                             continue;
                         }
                         if let ImplItem::Fn(function) = impl_item {
                             if trait_impl || is_public(&function.vis) {
-                                self.scan_block(&function.block, source_path, features)?;
+                                self.scan_block(&function.block)?;
                             }
                         }
                     }
                 }
                 Item::Mod(module) => {
-                    let child_dir = module_dir.join(module.ident.to_string());
                     if let Some((_, items)) = &module.content {
-                        self.scan_items(items, &child_dir, source_path, target, features)?;
-                    } else if let Some(path) =
-                        resolve_module_file(&self.root, module_dir, module, features)?
-                    {
-                        self.scan_file(&path, &child_dir, target, features)?;
+                        self.scan_items(items)?;
                     }
                 }
-                // Macro definitions and invocations are intentionally opaque:
-                // Clippy is the production expansion boundary for raw paths.
-                Item::Macro(_) => {}
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn scan_block(
-        &mut self,
-        block: &syn::Block,
-        source_path: &str,
-        features: &BTreeSet<String>,
-    ) -> Result<()> {
-        let mut visitor = AssertionVisitor {
-            path: source_path,
-            findings: &mut self.findings,
-            features,
-            error: None,
-        };
-        visitor.visit_block(block);
-        if let Some(error) = visitor.error {
+    fn scan_block(&mut self, block: &syn::Block) -> Result<()> {
+        let previous = self.in_public_context;
+        self.in_public_context = true;
+        self.visit_block(block);
+        self.in_public_context = previous;
+        if let Some(error) = self.error.take() {
             return Err(error);
         }
         Ok(())
     }
-}
 
-struct AssertionVisitor<'a> {
-    path: &'a str,
-    findings: &'a mut BTreeSet<Finding>,
-    features: &'a BTreeSet<String>,
-    error: Option<anyhow::Error>,
-}
-
-impl AssertionVisitor<'_> {
     fn skip_attrs(&mut self, attrs: &[Attribute]) -> bool {
-        match cfg_enabled(attrs, self.features) {
-            Ok(enabled) => !enabled,
+        match definitely_test_only(attrs) {
+            Ok(skip) => skip,
             Err(error) => {
                 if self.error.is_none() {
                     self.error = Some(error);
@@ -804,7 +1033,7 @@ impl AssertionVisitor<'_> {
     }
 }
 
-impl<'ast> Visit<'ast> for AssertionVisitor<'_> {
+impl<'ast> Visit<'ast> for PublicAssertionVisitor<'_> {
     fn visit_item(&mut self, node: &'ast Item) {
         if self.skip_attrs(item_attrs(node)) {
             return;
@@ -832,11 +1061,21 @@ impl<'ast> Visit<'ast> for AssertionVisitor<'_> {
         syn::visit::visit_expr(self, node);
     }
 
+    fn visit_arm(&mut self, node: &'ast Arm) {
+        if self.skip_attrs(&node.attrs) {
+            return;
+        }
+        syn::visit::visit_arm(self, node);
+    }
+
     fn visit_item_macro(&mut self, _node: &'ast syn::ItemMacro) {
         // Do not inspect dormant macro token text.
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if !self.in_public_context {
+            return;
+        }
         let Some(segment) = node.path.segments.last() else {
             return;
         };
@@ -856,6 +1095,33 @@ impl<'ast> Visit<'ast> for AssertionVisitor<'_> {
             kind: kind.to_owned(),
         });
     }
+}
+
+fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTreeSet<Finding>> {
+    let mut findings = BTreeSet::new();
+    for path in source_files {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("failed to read production source {}", path.display()))?;
+        let file = syn::parse_file(&source)
+            .with_context(|| format!("failed to parse production source {}", path.display()))?;
+        if definitely_test_only(&file.attrs)? {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| anyhow!("production source escaped audit root"))?
+            .to_str()
+            .ok_or_else(|| anyhow!("production source path is not UTF-8"))?
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let mut visitor = PublicAssertionVisitor {
+            path: &relative,
+            findings: &mut findings,
+            in_public_context: false,
+            error: None,
+        };
+        visitor.scan_items(&file.items)?;
+    }
+    Ok(findings)
 }
 
 fn expr_attrs(expr: &Expr) -> &[Attribute] {
@@ -902,291 +1168,6 @@ fn expr_attrs(expr: &Expr) -> &[Attribute] {
         Expr::Verbatim(_) => &[],
         _ => &[],
     }
-}
-
-fn module_directory(path: &Path, crate_root: bool) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new("/")).to_owned();
-    if crate_root || path.file_name().and_then(|name| name.to_str()) == Some("mod.rs") {
-        parent
-    } else {
-        parent.join(path.file_stem().unwrap_or_default())
-    }
-}
-
-fn resolve_module_file(
-    root: &Path,
-    module_dir: &Path,
-    module: &syn::ItemMod,
-    features: &BTreeSet<String>,
-) -> Result<Option<PathBuf>> {
-    let path = path_attribute(&module.attrs, features)?;
-    let relative = path
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(module.ident.to_string()));
-    let candidate = lexical_inside(root, &module_dir.join(relative), "module source")?;
-    if path.is_some() {
-        return if candidate.is_file() {
-            Ok(Some(ensure_inside(root, &candidate, "module source")?))
-        } else {
-            Ok(None)
-        };
-    }
-    let file = candidate.with_extension("rs");
-    if file.is_file() {
-        return Ok(Some(ensure_inside(root, &file, "module source")?));
-    }
-    let nested = candidate.join("mod.rs");
-    if nested.is_file() {
-        return Ok(Some(ensure_inside(root, &nested, "module source")?));
-    }
-    Ok(None)
-}
-
-fn lexical_inside(root: &Path, path: &Path, description: &str) -> Result<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    bail!("{description} is outside audit root: {}", path.display());
-                }
-            }
-            Component::Normal(value) => normalized.push(value),
-        }
-    }
-    if !normalized.starts_with(root) {
-        bail!("{description} is outside audit root: {}", path.display());
-    }
-    Ok(normalized)
-}
-
-fn parse_meta_list(list: &syn::MetaList) -> Result<Vec<Meta>> {
-    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-        .map(|metas| metas.into_iter().collect())
-        .context("cfg attribute has invalid predicate syntax")
-}
-
-fn cfg_enabled(attrs: &[Attribute], features: &BTreeSet<String>) -> Result<bool> {
-    for attr in attrs {
-        if attr.path().is_ident("cfg") {
-            let Meta::List(list) = &attr.meta else {
-                bail!("cfg attribute must have a predicate");
-            };
-            let metas = parse_meta_list(list)?;
-            if metas.len() != 1 {
-                bail!("cfg attribute must have exactly one predicate");
-            }
-            if !eval_cfg_meta(&metas[0], features)? {
-                return Ok(false);
-            }
-        } else if attr.path().is_ident("cfg_attr") {
-            let Meta::List(list) = &attr.meta else {
-                bail!("cfg_attr attribute must have a predicate");
-            };
-            let metas = parse_meta_list(list)?;
-            let Some(predicate) = metas.first() else {
-                bail!("cfg_attr attribute omitted its predicate");
-            };
-            let active = match eval_cfg_meta(predicate, features) {
-                Ok(active) => active,
-                Err(_) if !metas[1..].iter().any(meta_affects_cfg) => continue,
-                Err(error) => {
-                    return Err(anyhow!("cannot evaluate cfg_attr predicate: {error}"));
-                }
-            };
-            if active {
-                for generated in &metas[1..] {
-                    if generated.path().is_ident("cfg") {
-                        let Meta::List(list) = generated else {
-                            bail!("cfg_attr generated cfg must have a predicate");
-                        };
-                        let predicates = parse_meta_list(list)?;
-                        if predicates.len() != 1 {
-                            bail!("cfg_attr generated cfg must have one predicate");
-                        }
-                        if !eval_cfg_meta(&predicates[0], features)? {
-                            return Ok(false);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(true)
-}
-
-fn syn_path_name(path: &syn::Path) -> String {
-    path.segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>()
-        .join("::")
-}
-
-fn eval_cfg_meta(meta: &Meta, features: &BTreeSet<String>) -> Result<bool> {
-    match meta {
-        Meta::Path(path) if path.is_ident("test") || path.is_ident("doctest") => Ok(false),
-        Meta::Path(path) if path.is_ident("debug_assertions") => Ok(true),
-        Meta::Path(path) if path.is_ident("unix") => Ok(cfg!(unix)),
-        Meta::Path(path) if path.is_ident("windows") => Ok(cfg!(windows)),
-        Meta::Path(path) if path.is_ident("target_os") => {
-            bail!("cfg target_os requires a string value")
-        }
-        Meta::Path(path) => bail!("unsupported cfg predicate: {}", syn_path_name(path)),
-        Meta::NameValue(name_value) => {
-            let value = match &name_value.value {
-                Expr::Lit(ExprLit {
-                    lit: Lit::Str(value),
-                    ..
-                }) => value.value(),
-                _ => bail!("cfg predicate value must be a string literal"),
-            };
-            let path = &name_value.path;
-            if path.is_ident("feature") {
-                return Ok(features.contains(&value));
-            }
-            if path.is_ident("target_os") {
-                return Ok(std::env::consts::OS == value);
-            }
-            if path.is_ident("target_arch") {
-                return Ok(std::env::consts::ARCH == value);
-            }
-            if path.is_ident("target_family") {
-                return Ok((cfg!(unix) && value == "unix") || (cfg!(windows) && value == "windows"));
-            }
-            if path.is_ident("target_endian") {
-                return Ok((cfg!(target_endian = "little") && value == "little")
-                    || (cfg!(target_endian = "big") && value == "big"));
-            }
-            if path.is_ident("target_pointer_width") {
-                return Ok(value == usize::BITS.to_string());
-            }
-            bail!(
-                "unsupported cfg predicate: {} = {value:?}",
-                syn_path_name(path)
-            )
-        }
-        Meta::List(list) => {
-            let metas = parse_meta_list(list)?;
-            if list.path.is_ident("all") {
-                return metas
-                    .iter()
-                    .map(|meta| eval_cfg_meta(meta, features))
-                    .collect::<Result<Vec<_>>>()
-                    .map(|values| values.into_iter().all(|value| value));
-            }
-            if list.path.is_ident("any") {
-                return metas
-                    .iter()
-                    .map(|meta| eval_cfg_meta(meta, features))
-                    .collect::<Result<Vec<_>>>()
-                    .map(|values| values.into_iter().any(|value| value));
-            }
-            if list.path.is_ident("not") {
-                if metas.len() != 1 {
-                    bail!("cfg not predicate must have one argument");
-                }
-                return Ok(!eval_cfg_meta(&metas[0], features)?);
-            }
-            bail!("unsupported cfg predicate: {}", syn_path_name(&list.path))
-        }
-    }
-}
-
-fn meta_affects_cfg(meta: &Meta) -> bool {
-    if meta.path().is_ident("cfg") {
-        return true;
-    }
-    if !meta.path().is_ident("cfg_attr") {
-        return false;
-    }
-    let Meta::List(list) = meta else {
-        return false;
-    };
-    parse_meta_list(list)
-        .ok()
-        .is_some_and(|metas| metas.iter().skip(1).any(meta_affects_cfg))
-}
-
-fn meta_affects_path(meta: &Meta) -> bool {
-    if meta.path().is_ident("path") {
-        return true;
-    }
-    if !meta.path().is_ident("cfg_attr") {
-        return false;
-    }
-    let Meta::List(list) = meta else {
-        return false;
-    };
-    parse_meta_list(list)
-        .ok()
-        .is_some_and(|metas| metas.iter().skip(1).any(meta_affects_path))
-}
-
-fn path_meta_value(meta: &Meta, features: &BTreeSet<String>) -> Result<Option<String>> {
-    if meta.path().is_ident("path") {
-        let Meta::NameValue(name_value) = meta else {
-            bail!("#[path] must have a string value");
-        };
-        let Expr::Lit(ExprLit {
-            lit: Lit::Str(value),
-            ..
-        }) = &name_value.value
-        else {
-            bail!("#[path] must have a string value");
-        };
-        return Ok(Some(value.value()));
-    }
-    if !meta.path().is_ident("cfg_attr") {
-        return Ok(None);
-    }
-    let Meta::List(list) = meta else {
-        bail!("cfg_attr attribute must have a predicate");
-    };
-    let metas = parse_meta_list(list)?;
-    let Some(predicate) = metas.first() else {
-        bail!("cfg_attr attribute omitted its predicate");
-    };
-    let active = match eval_cfg_meta(predicate, features) {
-        Ok(active) => active,
-        Err(error) if metas[1..].iter().any(meta_affects_path) => {
-            return Err(anyhow!("cannot evaluate cfg_attr path predicate: {error}"));
-        }
-        Err(_) => return Ok(None),
-    };
-    if !active {
-        return Ok(None);
-    }
-    let mut path = None;
-    for generated in &metas[1..] {
-        if let Some(value) = path_meta_value(generated, features)? {
-            if path.replace(value).is_some() {
-                bail!("cfg_attr supplied multiple active path attributes");
-            }
-        }
-    }
-    Ok(path)
-}
-
-fn path_attribute(attrs: &[Attribute], features: &BTreeSet<String>) -> Result<Option<String>> {
-    let mut path = None;
-    for attr in attrs {
-        let candidate = if attr.path().is_ident("path") || attr.path().is_ident("cfg_attr") {
-            path_meta_value(&attr.meta, features)?
-        } else {
-            None
-        };
-        if let Some(candidate) = candidate {
-            if path.replace(candidate).is_some() {
-                bail!("module has multiple active path attributes");
-            }
-        }
-    }
-    Ok(path)
 }
 
 fn item_attrs(item: &Item) -> &[Attribute] {
@@ -1310,22 +1291,14 @@ fn build_report(actual: &BTreeSet<Finding>, baseline: &BTreeSet<Finding>) -> Aud
 pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport> {
     let selection = ProductionSelection::load(root_arg)?;
     let baseline = load_baseline(baseline_path)?;
-    let mut actual = run_clippy(&selection, false)?;
+    let (default_sources, mut actual) = run_clippy(&selection, false)?;
+    let mut source_files = default_sources;
     if selection.all_features {
-        actual.extend(run_clippy(&selection, true)?);
+        let (all_feature_sources, all_feature_findings) = run_clippy(&selection, true)?;
+        source_files.extend(all_feature_sources);
+        actual.extend(all_feature_findings);
     }
-    actual.extend(AssertionScanner::scan(
-        &selection.root,
-        &selection.targets,
-        false,
-    )?);
-    if selection.all_features {
-        actual.extend(AssertionScanner::scan(
-            &selection.root,
-            &selection.targets,
-            true,
-        )?);
-    }
+    actual.extend(scan_assertions(&selection.root, &source_files)?);
     Ok(build_report(&actual, &baseline))
 }
 
@@ -1378,44 +1351,49 @@ mod tests {
         })
     }
 
+    fn artifact() -> Value {
+        json!({
+            "reason": "compiler-artifact",
+            "package_id": "pkg",
+            "target": {"name": "demo", "kind": ["cdylib", "rlib"]},
+            "filenames": ["target/debug/deps/libdemo-hash.rmeta"]
+        })
+    }
+
     #[test]
     fn cargo_json_boundary_is_strict_and_tracks_lib_like_targets() {
         let root = TempRoot::new();
         let expected = HashSet::from([TargetKey {
             package_id: "pkg".to_owned(),
             target_name: "demo".to_owned(),
-            kind: "rlib".to_owned(),
+            kind: "cdylib".to_owned(),
         }]);
-        let artifact = json!({
-            "reason": "compiler-artifact",
-            "package_id": "pkg",
-            "target": {"name": "demo", "kind": ["cdylib", "rlib"]}
-        });
         let finished = json!({"reason": "build-finished", "success": true});
-        let output = format!("{}\n{}\n", artifact, finished);
-        let (seen, findings) = parse_clippy_output(output.as_bytes(), &root.path, &expected)
-            .expect("valid Cargo JSON");
+        let output = format!("{}\n{}\n", artifact(), finished);
+        let (seen, artifacts, findings) =
+            parse_clippy_output(output.as_bytes(), &root.path, &expected)
+                .expect("valid Cargo JSON");
         assert_eq!(seen, expected);
+        assert_eq!(artifacts.len(), 1);
         assert!(findings.is_empty());
 
         for malformed in [
             b"\xff".as_slice(),
             b"null\n".as_slice(),
             b"{}\n".as_slice(),
-            br#"{"reason":null}\n"#.as_slice(),
-            br#"{"reason":"unknown"}\n"#.as_slice(),
-            br#"{"reason":"build-finished","success":null}\n"#.as_slice(),
+            b"{\"reason\":null}\n".as_slice(),
+            b"{\"reason\":\"unknown\"}\n".as_slice(),
+            b"{\"reason\":\"build-finished\",\"success\":null}\n".as_slice(),
         ] {
             assert!(parse_clippy_output(malformed, &root.path, &HashSet::new()).is_err());
         }
 
         let missing_message =
-            br#"{"reason":"compiler-message","package_id":"pkg","target":{"name":"demo","kind":["rlib"]},"message":null}\n"#;
+            br#"{"reason":"compiler-message","package_id":"pkg","target":{"name":"demo","kind":["cdylib"]},"message":null}
+"#;
         assert!(parse_clippy_output(missing_message, &root.path, &HashSet::new()).is_err());
-        assert!(
-            parse_clippy_output(format!("{}\n", finished).as_bytes(), &root.path, &expected,)
-                .is_err()
-        );
+        let missing_finished = serde_json::to_vec(&artifact()).expect("serialize artifact");
+        assert!(parse_clippy_output(&missing_finished, &root.path, &expected).is_err());
     }
 
     #[test]
@@ -1463,6 +1441,78 @@ mod tests {
             let message = diagnostic("clippy::expect_used", span);
             assert!(parse_compiler_message(&message, &root.path).is_err());
         }
+    }
+
+    #[test]
+    fn dep_info_parser_handles_make_escapes_and_filters_external_sources() {
+        let root = TempRoot::new();
+        let spaced = root.path.join("crates/demo/src/with space.rs");
+        let hashed = root.path.join("crates/demo/src/with#hash.rs");
+        fs::write(&spaced, "pub fn spaced() {}\n").expect("write spaced source");
+        fs::write(&hashed, "pub fn hashed() {}\n").expect("write hashed source");
+        let dep_info = root.path.join("demo.d");
+        fs::write(
+            &dep_info,
+            "demo: crates/demo/src/lib.rs crates/demo/src/with\\ space.rs \\\n crates/demo/src/with\\#hash.rs /outside/external.rs Cargo.toml\n",
+        )
+        .expect("write dep-info");
+        let sources = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
+        assert_eq!(sources.len(), 3);
+        assert!(sources.contains(&fs::canonicalize(spaced).unwrap()));
+        assert!(sources.contains(&fs::canonicalize(hashed).unwrap()));
+    }
+
+    #[test]
+    fn dep_info_mapping_covers_hashed_artifact_kinds() {
+        let root = TempRoot::new();
+        for artifact_name in [
+            "libdemo-hash.rlib",
+            "libdemo-hash.rmeta",
+            "libdemo-hash.so",
+            "demo-hash",
+            "libdemo-hash.dll",
+        ] {
+            let artifact = root.path.join(artifact_name);
+            let candidates = dep_info_candidates(&artifact);
+            assert!(candidates.iter().any(|candidate| {
+                candidate.file_name().and_then(|name| name.to_str()) == Some("demo-hash.d")
+            }));
+        }
+    }
+
+    #[test]
+    fn dep_info_parser_and_artifact_lookup_fail_closed() {
+        let root = TempRoot::new();
+        let malformed = root.path.join("malformed.d");
+        fs::write(&malformed, b"target crates/demo/src/lib.rs\n")
+            .expect("write malformed dep-info");
+        assert!(parse_make_dep_info(&malformed, &root.path).is_err());
+        fs::write(&malformed, b"target: crates/demo/src/lib.rs \\").expect("write dangling escape");
+        assert!(parse_make_dep_info(&malformed, &root.path).is_err());
+
+        let key = TargetKey {
+            package_id: "pkg".to_owned(),
+            target_name: "demo".to_owned(),
+            kind: "rlib".to_owned(),
+        };
+        let artifacts = BTreeMap::from([(
+            key.clone(),
+            BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-missing.rmeta")]),
+        )]);
+        let expected = HashSet::from([key]);
+        let error = dep_info_sources(&root.path, &artifacts, &expected).unwrap_err();
+        assert!(error.to_string().contains("no dep-info"));
+    }
+
+    #[test]
+    fn cfg_evaluator_only_skips_definitely_test_only_content() {
+        let parse = |source: &str| syn::parse_file(source).expect("parse source");
+        assert!(definitely_test_only(&parse("#![cfg(test)]\npub fn f() {}\n").attrs).unwrap());
+        let nested =
+            parse("#[cfg_attr(not(test), cfg_attr(not(test), cfg(test)))]\npub fn f() {}\n");
+        assert!(definitely_test_only(item_attrs(&nested.items[0])).unwrap());
+        let unknown = parse("#[cfg(target_arch = \"never\")]\npub fn f() {}\n");
+        assert!(!definitely_test_only(item_attrs(&unknown.items[0])).unwrap());
     }
 
     #[test]

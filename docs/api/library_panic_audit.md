@@ -14,8 +14,6 @@
 
 ### ` fn expected_keys(&self) -> HashSet < TargetKey >` (impl ProductionSelection)
 
-### ` fn cargo_default_features(feature_map: & serde_json :: Map < String , Value >) -> Result < BTreeSet < String > >`
-
 ### ` fn cargo_target_kind(kinds: & [Value]) -> Result < Option < String > >`
 
 ### ` fn canonical_root(root: & Path) -> Result < PathBuf >`
@@ -24,11 +22,11 @@
 
 ### ` fn command_detail(stdout: & [u8], stderr: & [u8]) -> String`
 
-### ` fn run_clippy(selection: & ProductionSelection, all_features: bool) -> Result < BTreeSet < Finding > >`
+### ` fn run_clippy(selection: & ProductionSelection, all_features: bool) -> Result < (BTreeSet < PathBuf > , BTreeSet < Finding >) >`
 
 ### ` fn command_output_with_timeout(command: & mut Command, timeout: Duration) -> Result < Output >`
 
-### ` fn parse_clippy_output(stdout: & [u8], root: & Path, expected: & HashSet < TargetKey >) -> Result < (HashSet < TargetKey > , BTreeSet < Finding >) >`
+### ` fn parse_clippy_output(stdout: & [u8], root: & Path, expected: & HashSet < TargetKey >) -> Result < ClippyParse >`
 
 ### ` fn selected_target_key(message: & Value, expected: & HashSet < TargetKey >) -> Result < Option < TargetKey > >`
 
@@ -36,49 +34,51 @@
 
 ### ` fn resolve_call_site(span: & Value, root: & Path) -> Result < Option < (String , usize) > >`
 
-### ` fn scan(root: & Path, targets: & [ProductionTarget], all_features: bool) -> Result < BTreeSet < Finding > >` (impl AssertionScanner)
+### ` fn dep_info_sources(root: & Path, artifacts: & CompilerArtifacts, expected: & HashSet < TargetKey >) -> Result < BTreeSet < PathBuf > >`
 
-### ` fn scan_file(&mut self, path: & Path, module_dir: & Path, target: & TargetKey, features: & BTreeSet < String >) -> Result < () >` (impl AssertionScanner)
+### ` fn locate_dep_info(root: & Path, key: & TargetKey, filenames: & BTreeSet < PathBuf >) -> Result < PathBuf >`
 
-### ` fn scan_items(&mut self, items: & [Item], module_dir: & Path, source_path: & str, target: & TargetKey, features: & BTreeSet < String >) -> Result < () >` (impl AssertionScanner)
+### ` fn dep_info_candidates(artifact: & Path) -> Vec < PathBuf >`
 
-### ` fn scan_block(&mut self, block: & syn :: Block, source_path: & str, features: & BTreeSet < String >) -> Result < () >` (impl AssertionScanner)
+### ` fn parse_make_dep_info(path: & Path, root: & Path) -> Result < BTreeSet < PathBuf > >`
 
-### ` fn skip_attrs(&mut self, attrs: & [Attribute]) -> bool` (impl AssertionVisitor < '_ >)
+### ` fn join_make_lines(source: & str) -> Result < String >`
 
-### ` fn visit_item(&mut self, node: & 'ast Item)` (impl AssertionVisitor < '_ >)
+### ` fn make_rule_separator(line: & str) -> Result < usize >`
 
-### ` fn visit_stmt(&mut self, node: & 'ast Stmt)` (impl AssertionVisitor < '_ >)
+### ` fn parse_make_words(source: & str) -> Result < Vec < String > >`
 
-### ` fn visit_expr(&mut self, node: & 'ast Expr)` (impl AssertionVisitor < '_ >)
+### ` fn not(self) -> Self` (impl CfgState)
 
-### ` fn visit_item_macro(&mut self, _node: & 'ast syn :: ItemMacro)` (impl AssertionVisitor < '_ >)
-
-### ` fn visit_macro(&mut self, node: & 'ast syn :: Macro)` (impl AssertionVisitor < '_ >)
-
-### ` fn expr_attrs(expr: & Expr) -> & [Attribute]`
-
-### ` fn module_directory(path: & Path, crate_root: bool) -> PathBuf`
-
-### ` fn resolve_module_file(root: & Path, module_dir: & Path, module: & syn :: ItemMod, features: & BTreeSet < String >) -> Result < Option < PathBuf > >`
-
-### ` fn lexical_inside(root: & Path, path: & Path, description: & str) -> Result < PathBuf >`
+### ` fn cfg_state(meta: & Meta) -> Result < CfgState >`
 
 ### ` fn parse_meta_list(list: & syn :: MetaList) -> Result < Vec < Meta > >`
 
-### ` fn cfg_enabled(attrs: & [Attribute], features: & BTreeSet < String >) -> Result < bool >`
+### ` fn definitely_test_only(attrs: & [Attribute]) -> Result < bool >`
 
-### ` fn syn_path_name(path: & syn :: Path) -> String`
+### ` fn cfg_attr_definitely_false(meta: & Meta) -> Result < bool >`
 
-### ` fn eval_cfg_meta(meta: & Meta, features: & BTreeSet < String >) -> Result < bool >`
+### ` fn scan_items(&mut self, items: & [Item]) -> Result < () >` (impl PublicAssertionVisitor < '_ >)
 
-### ` fn meta_affects_cfg(meta: & Meta) -> bool`
+### ` fn scan_block(&mut self, block: & syn :: Block) -> Result < () >` (impl PublicAssertionVisitor < '_ >)
 
-### ` fn meta_affects_path(meta: & Meta) -> bool`
+### ` fn skip_attrs(&mut self, attrs: & [Attribute]) -> bool` (impl PublicAssertionVisitor < '_ >)
 
-### ` fn path_meta_value(meta: & Meta, features: & BTreeSet < String >) -> Result < Option < String > >`
+### ` fn visit_item(&mut self, node: & 'ast Item)` (impl PublicAssertionVisitor < '_ >)
 
-### ` fn path_attribute(attrs: & [Attribute], features: & BTreeSet < String >) -> Result < Option < String > >`
+### ` fn visit_stmt(&mut self, node: & 'ast Stmt)` (impl PublicAssertionVisitor < '_ >)
+
+### ` fn visit_expr(&mut self, node: & 'ast Expr)` (impl PublicAssertionVisitor < '_ >)
+
+### ` fn visit_arm(&mut self, node: & 'ast Arm)` (impl PublicAssertionVisitor < '_ >)
+
+### ` fn visit_item_macro(&mut self, _node: & 'ast syn :: ItemMacro)` (impl PublicAssertionVisitor < '_ >)
+
+### ` fn visit_macro(&mut self, node: & 'ast syn :: Macro)` (impl PublicAssertionVisitor < '_ >)
+
+### ` fn scan_assertions(root: & Path, source_files: & BTreeSet < PathBuf >) -> Result < BTreeSet < Finding > >`
+
+### ` fn expr_attrs(expr: & Expr) -> & [Attribute]`
 
 ### ` fn item_attrs(item: & Item) -> & [Attribute]`
 
@@ -104,6 +104,8 @@
 
 ### ` fn local_span(file_name: & str, line: u64) -> Value`
 
+### ` fn artifact() -> Value`
+
 ### ` fn cargo_json_boundary_is_strict_and_tracks_lib_like_targets()`
 
 ### ` fn compiler_json_accepts_only_exact_codes()`
@@ -111,6 +113,14 @@
 ### ` fn compiler_json_follows_expansion_to_local_call_site()`
 
 ### ` fn compiler_json_rejects_missing_or_outside_local_span()`
+
+### ` fn dep_info_parser_handles_make_escapes_and_filters_external_sources()`
+
+### ` fn dep_info_mapping_covers_hashed_artifact_kinds()`
+
+### ` fn dep_info_parser_and_artifact_lookup_fail_closed()`
+
+### ` fn cfg_evaluator_only_skips_definitely_test_only_content()`
 
 ### ` fn baseline_lines_reject_noncanonical_numbers()`
 

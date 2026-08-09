@@ -20,6 +20,8 @@ from pathlib import Path
 
 TOOL_ENV = "T4A_PANIC_AUDIT_BIN"
 TOOL_PACKAGE = "library-panic-audit"
+# Keep the wrapper timeout above the Rust tool's 10-minute Clippy timeout;
+# CI allows another five minutes for process startup and teardown.
 BUILD_TIMEOUT_SECONDS = 600
 AUDIT_TIMEOUT_SECONDS = 1200
 KNOWN_CARGO_REASONS = {
