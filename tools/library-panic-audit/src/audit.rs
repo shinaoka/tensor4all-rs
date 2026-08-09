@@ -2249,6 +2249,24 @@ pub fn nested_use() { assert!(true); }
     }
 
     #[test]
+    fn assertion_kind_recognizes_all_macro_variants() {
+        for name in [
+            "assert",
+            "assert_eq",
+            "assert_ne",
+            "debug_assert",
+            "debug_assert_eq",
+            "debug_assert_ne",
+        ] {
+            assert_eq!(assertion_kind(name), Some(name));
+            // Raw identifiers keep the same classification.
+            assert_eq!(assertion_kind(&format!("r#{name}")), Some(name));
+        }
+        assert_eq!(assertion_kind("assert_ge"), None);
+        assert_eq!(assertion_kind("unwrap"), None);
+    }
+
+    #[test]
     fn baseline_lines_reject_noncanonical_numbers() {
         assert!(parse_entry("crates/demo/src/lib.rs:01:assert").is_err());
         assert!(parse_entry("crates/demo/src/lib.rs:0:assert").is_err());

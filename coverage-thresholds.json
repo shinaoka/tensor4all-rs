@@ -1,8 +1,11 @@
 {
   "_comment": "Per-file line coverage thresholds (%). Files not listed default to 'default'.",
+  "_comment_tooling": "tools/library-panic-audit/*: the panic audit binary's CLI entry point and the bulk of its parsing/error-handling surface are exercised deterministically by scripts/test-audit-library-panics.py (subprocess fixtures run the compiled binary), which llvm-cov cannot attribute to the crate's unit tests. audit.rs is pinned at 60 (currently ~61%), main.rs at 0 (binary main is only reachable via subprocess). Reassess when the self-test suite is wired into an in-process harness.",
   "default": 75,
   "files": {
     "tools/api-dump/src/main.rs": 0,
+    "tools/library-panic-audit/src/main.rs": 0,
+    "tools/library-panic-audit/src/audit.rs": 60,
     "xtask/src/main.rs": 0,
     "crates/tensor4all-partitionedtt/src/test_utils.rs": 0,
     "crates/tensor4all-capi/src/hdf5.rs": 0,

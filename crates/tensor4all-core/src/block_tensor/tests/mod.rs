@@ -312,6 +312,26 @@ fn test_norm_squared() {
 }
 
 #[test]
+fn test_isapprox_uses_trait_default_with_error_propagation() {
+    let idx = DynIndex::new_dyn(2);
+    let a = BlockTensor::new(vec![make_vector_with_index(vec![1.0, 2.0], &idx)], (1, 1)).unwrap();
+    let b = BlockTensor::new(
+        vec![make_vector_with_index(vec![1.0 + 1.0e-13, 2.0], &idx)],
+        (1, 1),
+    )
+    .unwrap();
+    assert!(TensorVectorSpace::isapprox(&a, &b, 1.0e-12, 0.0).unwrap());
+
+    // A NaN block makes the default norm fail; the trait default propagates it.
+    let nan = BlockTensor::new(vec![TensorDynLen::scalar(f64::NAN).unwrap()], (1, 1)).unwrap();
+    assert!(TensorVectorSpace::isapprox(&nan, &a, 1.0e-12, 1.0e-12).is_err());
+
+    // A shape mismatch makes the default sub fail before any norm is taken.
+    let wide = BlockTensor::new(vec![TensorDynLen::scalar(1.0).unwrap(); 2], (2, 1)).unwrap();
+    assert!(TensorVectorSpace::isapprox(&a, &wide, 1.0e-12, 1.0e-12).is_err());
+}
+
+#[test]
 fn test_scale() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);

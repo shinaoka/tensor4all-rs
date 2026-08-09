@@ -103,6 +103,23 @@ fn tensor_contraction_and_construction_default_methods_cover_paths() {
 }
 
 #[test]
+fn tensor_vector_space_fallible_metrics_propagate_nan_inputs() {
+    // NaN payloads make norm_squared/norm/maxabs fail closed through the
+    // trait's fallible surface; the errors must propagate, not wrap.
+    let nan = TensorDynLen::scalar(f64::NAN).unwrap();
+    let finite = TensorDynLen::scalar(1.0).unwrap();
+    assert!(TensorVectorSpace::norm_squared(&nan).is_err());
+    assert!(TensorVectorSpace::norm(&nan).is_err());
+    assert!(TensorVectorSpace::maxabs(&nan).is_err());
+    assert!(TensorVectorSpace::isapprox(&nan, &finite, 1.0e-12, 1.0e-12).is_err());
+    // Finite inputs still succeed on the same trait surface.
+    let value = TensorVectorSpace::norm_squared(&finite).unwrap();
+    assert!((value - 1.0).abs() < 1.0e-12);
+    assert!((TensorVectorSpace::norm(&finite).unwrap() - 1.0).abs() < 1.0e-12);
+    assert!(TensorVectorSpace::isapprox(&finite, &finite, 0.0, 0.0).unwrap());
+}
+
+#[test]
 fn test_contract_three_tensor_chain() {
     // Create three tensors: A(i,j), B(j,k), C(k,l)
     // j is shared between A and B, k is shared between B and C.
