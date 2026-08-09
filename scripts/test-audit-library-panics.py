@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "audit-library-panics.py"
-TOOL_ENV = "TENSOR4ALL_LIBRARY_PANIC_AUDIT"
+TOOL_ENV = "T4A_PANIC_AUDIT_BIN"
 TOOL_PACKAGE = "library-panic-audit"
 
 
@@ -86,13 +86,30 @@ def assert_exact_output(
     assert actual_stderr == expected_stderr, f"stderr differs:\nexpected {expected_stderr!r}\nactual {actual_stderr!r}"
 
 
-def test_wrong_root_fails_closed() -> None:
+def test_wrong_and_empty_roots_fail_closed() -> None:
     with tempfile.TemporaryDirectory() as directory:
         fixture = Path(directory)
-        result = run_audit_at_root(fixture)
-    assert result.returncode == 2
-    assert result.stdout == ""
-    assert result.stderr.startswith("library panic audit configuration error:")
+        results = [run_audit_at_root(fixture)]
+        (fixture / "crates").mkdir()
+        results.append(run_audit_at_root(fixture))
+        results.append(
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--root",
+                    str(fixture / "missing"),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        )
+    for result in results:
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert result.stderr.startswith("library panic audit configuration error:")
 
 
 def test_parse_failure_fails_closed() -> None:
@@ -229,6 +246,53 @@ pub fn production() {
     assert_exact_output(
         result,
         ["crates/demo/src/lib.rs:7:assert"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
+def test_macro_arguments_and_production_definitions_are_scanned_without_expansion() -> None:
+    source = r'''macro_rules! literal {
+    () => { panic!("definition"); };
+}
+macro_rules! passthrough {
+    ($panic:ident) => { $panic!(); };
+}
+fn calls(value: Option<bool>) {
+    wrapper!(panic!("statement argument"));
+    dbg!(value.unwrap());
+    wrapper!(Option::expect(value, "associated argument"));
+}
+wrapper! {
+    fn generated() {
+        unreachable!("item body");
+    }
+}
+'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/lib.rs:2:panic",
+            "crates/demo/src/lib.rs:8:panic",
+            "crates/demo/src/lib.rs:9:unwrap",
+            "crates/demo/src/lib.rs:10:expect",
+            "crates/demo/src/lib.rs:14:unreachable",
+        ],
+        ["Audit failed: 5 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_macro_definitions_scan_generic_associated_calls_with_metavariables() -> None:
+    source = r'''macro_rules! generic {
+    ($value:expr) => { Option::<bool>::unwrap($value); };
+}
+'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/src/lib.rs:2:unwrap"],
         ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
     )
 
@@ -407,12 +471,12 @@ where
 def test_cfg_test_external_modules_are_order_independent_and_transitive() -> None:
     result = run_audit(
         {
-            "crates/demo/src/lib.rs": """#[path = "root_tests.rs"]
+            "crates/demo/src/lib.rs": """#[path = r"root_tests.rs"]
 #[cfg(test)]
 mod root_tests;
 #[cfg(test)]
 mod inline_tests {
-    #[path = "inline_helper.rs"]
+    #[path = r"custom/inline_helper.rs"]
     mod helper;
 }
 """,
@@ -420,7 +484,7 @@ mod inline_tests {
 pub fn test_only() { panic!("root"); }
 """,
             "crates/demo/src/root_tests/nested_tests.rs": 'pub fn test_only() { unreachable!("nested"); }\n',
-            "crates/demo/src/inline_helper.rs": 'pub fn test_only() { panic!("inline helper"); }\n',
+            "crates/demo/src/inline_tests/custom/inline_helper.rs": 'pub fn test_only() { panic!("inline helper"); }\n',
         }
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -428,6 +492,31 @@ pub fn test_only() { panic!("root"); }
         result,
         ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
     )
+
+
+def test_graph_referenced_production_paths_outside_src_are_scanned() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": '#[path = r"../shared.rs"] mod shared;\n',
+            "crates/demo/shared.rs": 'pub fn bad() { panic!("outside src"); }\n',
+        }
+    )
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/shared.rs:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+    escaping = run_audit(
+        {
+            "crates/demo/src/lib.rs": '#[path = r"../../../../outside.rs"] mod outside;\n',
+            "outside.rs": 'pub fn bad() { panic!("escape"); }\n',
+        }
+    )
+    assert escaping.returncode == 2
+    assert escaping.stdout == ""
+    assert escaping.stderr.startswith("library panic audit configuration error:")
 
 
 def test_production_reference_overrides_test_only_alias() -> None:
@@ -535,6 +624,31 @@ def test_in_root_symlink_is_canonicalized_and_reported_once() -> None:
     )
 
 
+def test_logical_rs_symlink_discovers_extensionless_in_root_target() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(
+            fixture,
+            {
+                "crates/demo/src/lib.rs": "pub fn root() {}\n",
+                "crates/demo/shared_target": 'pub fn bad() { panic!("target"); }\n',
+            },
+        )
+        link = fixture / "crates/demo/src/bin/tool.rs"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(fixture / "crates/demo/shared_target")
+        except OSError as error:
+            raise AssertionError(f"symlink fixture unavailable: {error}") from error
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/shared_target:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
 def test_large_fixture_stays_within_subprocess_timeout() -> None:
     source = "\n".join(
         f"pub fn function_{index}() {{ assert!(true); }}" for index in range(2_500)
@@ -548,6 +662,57 @@ def test_large_fixture_stays_within_subprocess_timeout() -> None:
     assert result.stderr.splitlines() == [
         "Audit failed: 2500 unbaselined findings, 0 stale baseline entries."
     ]
+
+
+def test_method_heavy_fixture_stays_within_subprocess_timeout() -> None:
+    source = "\n".join(
+        f"fn function_{index}(value: Option<bool>) {{\n    let _ = value\n        .unwrap();\n}}"
+        for index in range(6_000)
+    )
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    lines = result.stdout.splitlines()
+    assert len(lines) == 6_000
+    assert lines[0] == "crates/demo/src/lib.rs:3:unwrap"
+    assert lines[-1] == "crates/demo/src/lib.rs:23999:unwrap"
+    assert result.stderr.splitlines() == [
+        "Audit failed: 6000 unbaselined findings, 0 stale baseline entries."
+    ]
+
+
+def test_ufcs_aliases_and_local_type_shadowing() -> None:
+    source = r'''use std::option::Option as Maybe;
+use core::result::Result as R;
+use user::Option as LocalOption;
+type Alias<T> = Maybe<T>;
+mod local {
+    struct Option<T>(T);
+    fn shadow(value: Option<bool>) {
+        let _ = Option::unwrap(value);
+    }
+}
+fn calls(value: Maybe<bool>, result: R<bool, ()>) {
+    let _ = Maybe::unwrap(value);
+    let _ = R::r#expect(result, "missing");
+    let _ = Alias::<bool>::unwrap(value);
+    let _ = <Maybe<bool>>::unwrap(value);
+    let _ = <Alias<bool>>::r#expect(value, "missing");
+    let _ = LocalOption::unwrap(value);
+}
+'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/lib.rs:12:unwrap",
+            "crates/demo/src/lib.rs:13:expect",
+            "crates/demo/src/lib.rs:14:unwrap",
+            "crates/demo/src/lib.rs:15:unwrap",
+            "crates/demo/src/lib.rs:16:expect",
+        ],
+        ["Audit failed: 5 unbaselined findings, 0 stale baseline entries."],
+    )
 
 
 def test_public_trait_defaults_impls_and_signature_modifiers_are_public_paths() -> None:
@@ -811,6 +976,7 @@ def test_malformed_and_non_normalized_baselines_fail_configuration() -> None:
         (["crates/../demo/src/lib.rs:1:assert"], "baseline path is not normalized"),
         (["demo/src/lib.rs:1:assert"], "baseline path is not normalized"),
         (["crates/demo/src/lib.rs:0:assert"], "invalid baseline entry"),
+        (["crates/demo/src/lib.rs:01:assert"], "invalid baseline entry"),
     ]:
         result = run_audit(source, baseline)
         assert result.returncode == 2, (baseline, result.stdout, result.stderr)
@@ -872,7 +1038,7 @@ def main() -> int:
     _build_tool_once()
     tests = [
         test_round3_ast_edges_are_not_lexically_approximated,
-        test_wrong_root_fails_closed,
+        test_wrong_and_empty_roots_fail_closed,
         test_parse_failure_fails_closed,
         test_production_hit_fails_with_normalized_kind,
         test_all_raw_panic_kinds_fail,
@@ -880,17 +1046,23 @@ def main() -> int:
         test_test_support_is_not_excluded_without_cfg_test,
         test_comments_rustdoc_strings_and_macros_are_ignored,
         test_masking_handles_bytes_nested_comments_and_scope_corruption,
+        test_macro_arguments_and_production_definitions_are_scanned_without_expansion,
+        test_macro_definitions_scan_generic_associated_calls_with_metavariables,
         test_multiline_calls_and_known_ufcs_are_reported_without_user_function_false_matches,
         test_ufcs_reports_both_option_result_methods_and_rejects_collisions,
         test_public_trait_defaults_and_external_impls_are_public_conservatively,
         test_const_generic_where_body_and_attribute_visibility_are_structural,
         test_cfg_test_external_modules_are_order_independent_and_transitive,
+        test_graph_referenced_production_paths_outside_src_are_scanned,
         test_production_reference_overrides_test_only_alias,
         test_cfg_test_macro_rules_range_is_excluded,
         test_source_names_and_checkout_ancestors_do_not_exclude_production_files,
         test_outside_root_symlink_is_rejected_safely,
         test_in_root_symlink_is_canonicalized_and_reported_once,
+        test_logical_rs_symlink_discovers_extensionless_in_root_target,
         test_large_fixture_stays_within_subprocess_timeout,
+        test_method_heavy_fixture_stays_within_subprocess_timeout,
+        test_ufcs_aliases_and_local_type_shadowing,
         test_public_trait_defaults_impls_and_signature_modifiers_are_public_paths,
         test_generic_public_trait_impl_and_qualified_ufcs_are_detected,
         test_cfg_test_attributes_do_not_leak_to_following_items,

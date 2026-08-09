@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 
-TOOL_ENV = "TENSOR4ALL_LIBRARY_PANIC_AUDIT"
+TOOL_ENV = "T4A_PANIC_AUDIT_BIN"
 TOOL_PACKAGE = "library-panic-audit"
 TIMEOUT_SECONDS = 120
 
@@ -28,11 +28,8 @@ def _tool_path(root: Path) -> Path:
             return path
         raise RuntimeError(f"{TOOL_ENV} does not point to a file: {configured}")
 
-    for profile in ("release", "debug"):
-        path = root / "target" / profile / TOOL_PACKAGE
-        if path.is_file():
-            return path
-
+    # Always ask Cargo to build. Cargo performs the freshness check; reusing a
+    # discovered target binary would let a standalone audit run stale code.
     command = ["cargo", "build", "--release", "-p", TOOL_PACKAGE]
     result = subprocess.run(
         command,

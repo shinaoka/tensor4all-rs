@@ -1,8 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
-use proc_macro2::{Ident, Span};
+use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
@@ -435,12 +437,11 @@ fn collect_source_files(
         ensure_inside(root, &canonical, "source path")?;
         if canonical.is_dir() {
             collect_source_files(root, crate_src, &logical, sources, visited_dirs)?;
-        } else if canonical.is_file()
-            && canonical
-                .extension()
-                .and_then(|extension| extension.to_str())
-                == Some("rs")
+        } else if logical.extension().and_then(|extension| extension.to_str()) == Some("rs")
+            && canonical.is_file()
         {
+            // Rust follows the logical directory entry. A `.rs` symlink is a
+            // source even when its in-root target has no `.rs` suffix.
             let crate_root = is_crate_root_source(crate_src, &logical);
             sources
                 .entry(canonical)
@@ -505,7 +506,9 @@ fn collect_module_items(
         let test_only = inherited_test_only || has_exact_cfg_test(&module.attrs);
         let child_dir = module_dir.join(ident_name(&module.ident));
         if let Some((_, inner)) = &module.content {
-            collect_module_items(inner, &child_dir, source_dir, test_only, root, edges)?;
+            // Inline modules contribute to the path ancestry used by both
+            // implicit children and explicit `#[path]` attributes.
+            collect_module_items(inner, &child_dir, &child_dir, test_only, root, edges)?;
             continue;
         }
 
@@ -629,94 +632,293 @@ fn macro_kind(path: &syn::Path) -> Option<PanicKind> {
     PanicKind::from_name(&name)
 }
 
-fn standard_type_path(path: &syn::Path) -> Option<StandardType> {
-    let names: Vec<String> = path
-        .segments
-        .iter()
-        .map(|segment| ident_name(&segment.ident))
-        .collect();
-    match names.as_slice() {
-        [name] if path.leading_colon.is_none() && name == "Option" => Some(StandardType::Option),
-        [name] if path.leading_colon.is_none() && name == "Result" => Some(StandardType::Result),
+#[derive(Clone, Default)]
+struct TypeScope {
+    bindings: BTreeMap<String, Option<StandardType>>,
+    aliases: BTreeMap<String, Type>,
+}
+
+fn canonical_standard_type(names: &[String]) -> Option<StandardType> {
+    match names {
         [root, module, name]
             if (root == "std" || root == "core")
                 && ((module == "option" && name == "Option")
                     || (module == "result" && name == "Result")) =>
         {
-            if name == "Option" {
-                Some(StandardType::Option)
-            } else {
-                Some(StandardType::Result)
-            }
+            (name == "Option")
+                .then_some(StandardType::Option)
+                .or_else(|| (name == "Result").then_some(StandardType::Result))
         }
         _ => None,
     }
 }
 
-fn standard_type(ty: &Type) -> Option<StandardType> {
-    match ty {
-        Type::Path(type_path) => standard_type_path(&type_path.path),
+fn resolve_alias(
+    scope_index: usize,
+    name: &str,
+    scopes: &[TypeScope],
+    visiting: &mut BTreeSet<(usize, String)>,
+) -> Option<StandardType> {
+    if !visiting.insert((scope_index, name.to_owned())) {
+        return None;
+    }
+    let result = scopes
+        .get(scope_index)
+        .and_then(|scope| scope.aliases.get(name))
+        .and_then(|ty| standard_type(ty, scopes, visiting));
+    visiting.remove(&(scope_index, name.to_owned()));
+    result
+}
+
+fn resolve_type_name(
+    name: &str,
+    scopes: &[TypeScope],
+    visiting: &mut BTreeSet<(usize, String)>,
+) -> Option<StandardType> {
+    for index in (0..scopes.len()).rev() {
+        let scope = &scopes[index];
+        if scope.aliases.contains_key(name) {
+            return resolve_alias(index, name, scopes, visiting);
+        }
+        if let Some(binding) = scope.bindings.get(name) {
+            return *binding;
+        }
+    }
+    match name {
+        "Option" => Some(StandardType::Option),
+        "Result" => Some(StandardType::Result),
         _ => None,
     }
 }
 
-fn associated_method(path: &ExprPath) -> Option<PanicKind> {
+fn standard_type_names(
+    names: &[String],
+    leading_colon: bool,
+    scopes: &[TypeScope],
+    visiting: &mut BTreeSet<(usize, String)>,
+) -> Option<StandardType> {
+    if leading_colon {
+        return canonical_standard_type(names);
+    }
+    match names {
+        [name] => resolve_type_name(name, scopes, visiting),
+        [prefix, name] if prefix == "self" => scopes.last().and_then(|scope| {
+            if scope.aliases.contains_key(name) {
+                resolve_alias(scopes.len() - 1, name, scopes, visiting)
+            } else {
+                scope.bindings.get(name).copied().flatten()
+            }
+        }),
+        [prefix, name] if prefix == "super" => {
+            scopes
+                .get(scopes.len().saturating_sub(2))
+                .and_then(|scope| {
+                    if scope.aliases.contains_key(name) {
+                        resolve_alias(scopes.len().saturating_sub(2), name, scopes, visiting)
+                    } else {
+                        scope.bindings.get(name).copied().flatten()
+                    }
+                })
+        }
+        _ => canonical_standard_type(names),
+    }
+}
+
+fn standard_type(
+    ty: &Type,
+    scopes: &[TypeScope],
+    visiting: &mut BTreeSet<(usize, String)>,
+) -> Option<StandardType> {
+    match ty {
+        Type::Path(type_path) if type_path.qself.is_none() => standard_type_names(
+            &type_path
+                .path
+                .segments
+                .iter()
+                .map(|segment| ident_name(&segment.ident))
+                .collect::<Vec<_>>(),
+            type_path.path.leading_colon.is_some(),
+            scopes,
+            visiting,
+        ),
+        Type::Paren(type_paren) => standard_type(&type_paren.elem, scopes, visiting),
+        Type::Group(type_group) => standard_type(&type_group.elem, scopes, visiting),
+        _ => None,
+    }
+}
+
+fn associated_method(path: &ExprPath, scopes: &[TypeScope]) -> Option<PanicKind> {
     let method = path.path.segments.last()?;
     let method_name = ident_name(&method.ident);
     let kind = PanicKind::from_name(&method_name)?;
-    if !kind.is_raw() || !matches!(kind, PanicKind::Unwrap | PanicKind::Expect) {
+    if !matches!(kind, PanicKind::Unwrap | PanicKind::Expect) {
         return None;
     }
 
     let standard = if let Some(qself) = &path.qself {
-        standard_type(&qself.ty)
+        standard_type(&qself.ty, scopes, &mut BTreeSet::new())
     } else {
-        let mut names = Vec::new();
-        for segment in &path.path.segments {
-            names.push(ident_name(&segment.ident));
-        }
-        if names.len() < 2 || (path.path.leading_colon.is_some() && names.len() == 2) {
+        let names: Vec<String> = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| ident_name(&segment.ident))
+            .collect();
+        if names.len() < 2 {
             None
         } else {
-            let type_path = &names[..names.len() - 1];
-            match type_path {
-                [name] if name == "Option" => Some(StandardType::Option),
-                [name] if name == "Result" => Some(StandardType::Result),
-                [root, module, name]
-                    if (root == "std" || root == "core")
-                        && ((module == "option" && name == "Option")
-                            || (module == "result" && name == "Result")) =>
-                {
-                    if *name == "Option" {
-                        Some(StandardType::Option)
-                    } else {
-                        Some(StandardType::Result)
-                    }
-                }
-                _ => None,
-            }
+            standard_type_names(
+                &names[..names.len() - 1],
+                path.path.leading_colon.is_some(),
+                scopes,
+                &mut BTreeSet::new(),
+            )
         }
     }?;
     let _ = standard;
     Some(kind)
 }
 
+fn collect_use_tree(
+    tree: &syn::UseTree,
+    prefix: &[String],
+    bindings: &mut BTreeMap<String, Option<StandardType>>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut next = prefix.to_vec();
+            next.push(ident_name(&path.ident));
+            collect_use_tree(&path.tree, &next, bindings);
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix.to_vec();
+            path.push(ident_name(&name.ident));
+            bindings.insert(ident_name(&name.ident), canonical_standard_type(&path));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix.to_vec();
+            path.push(ident_name(&rename.ident));
+            bindings.insert(ident_name(&rename.rename), canonical_standard_type(&path));
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_tree(item, prefix, bindings);
+            }
+        }
+        syn::UseTree::Glob { .. } => {}
+    }
+}
+
+fn collect_scope_binding(item: &Item, scope: &mut TypeScope) {
+    match item {
+        Item::Use(item) => collect_use_tree(&item.tree, &[], &mut scope.bindings),
+        Item::Type(item) => {
+            scope
+                .aliases
+                .insert(ident_name(&item.ident), (*item.ty).clone());
+        }
+        Item::Enum(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        Item::Struct(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        Item::Union(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        Item::Trait(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        Item::TraitAlias(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        Item::Mod(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        Item::ExternCrate(item) => {
+            scope.bindings.insert(ident_name(&item.ident), None);
+        }
+        _ => {}
+    }
+}
+
+fn collect_scope_bindings(items: &[Item]) -> TypeScope {
+    let mut scope = TypeScope::default();
+    for item in items {
+        collect_scope_binding(item, &mut scope);
+    }
+    scope
+}
+
+fn collect_block_bindings(block: &syn::Block) -> TypeScope {
+    let mut scope = TypeScope::default();
+    for statement in &block.stmts {
+        if let syn::Stmt::Item(item) = statement {
+            collect_scope_binding(item, &mut scope);
+        }
+    }
+    scope
+}
+
+fn sanitize_macro_variables(tokens: TokenStream) -> TokenStream {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut result = TokenStream::new();
+    let mut index = 0;
+    while index < trees.len() {
+        if matches!(&trees[index], TokenTree::Punct(punct) if punct.as_char() == '$')
+            && matches!(trees.get(index + 1), Some(TokenTree::Ident(_)))
+        {
+            if let TokenTree::Ident(ident) = &trees[index + 1] {
+                result.extend([TokenTree::Ident(Ident::new(
+                    "__t4a_macro_variable",
+                    ident.span(),
+                ))]);
+            }
+            index += 2;
+            continue;
+        }
+        let tree = match &trees[index] {
+            TokenTree::Group(group) => {
+                let mut replacement =
+                    Group::new(group.delimiter(), sanitize_macro_variables(group.stream()));
+                replacement.set_span(group.span());
+                TokenTree::Group(replacement)
+            }
+            other => other.clone(),
+        };
+        result.extend([tree]);
+        index += 1;
+    }
+    result
+}
+
 struct SourceVisitor<'source> {
     path: String,
     source: &'source str,
+    line_starts: Vec<usize>,
     findings: BTreeSet<Finding>,
     public_context: bool,
     trait_impl_context: bool,
+    type_scopes: Vec<TypeScope>,
 }
 
 impl<'source> SourceVisitor<'source> {
     fn new(path: String, source: &'source str) -> Self {
+        let mut line_starts = vec![0];
+        line_starts.extend(
+            source
+                .bytes()
+                .enumerate()
+                .filter_map(|(offset, byte)| (byte == b'\n').then_some(offset + 1)),
+        );
         Self {
             path,
             source,
+            line_starts,
             findings: BTreeSet::new(),
             public_context: false,
             trait_impl_context: false,
+            type_scopes: Vec::new(),
         }
     }
 
@@ -728,13 +930,33 @@ impl<'source> SourceVisitor<'source> {
         });
     }
 
+    fn push_scope(&mut self, scope: TypeScope) {
+        self.type_scopes.push(scope);
+    }
+
+    fn push_generic_scope(&mut self, generics: &syn::Generics) {
+        let mut scope = TypeScope::default();
+        for parameter in &generics.params {
+            if let syn::GenericParam::Type(parameter) = parameter {
+                scope.bindings.insert(ident_name(&parameter.ident), None);
+            }
+        }
+        self.push_scope(scope);
+    }
+
     fn method_call_line(&self, node: &ExprMethodCall) -> usize {
         let receiver_end = node.receiver.span().end();
         let method_start = node.method.span().start();
         for line in receiver_end.line..=method_start.line {
-            let Some(text) = self.source.lines().nth(line.saturating_sub(1)) else {
+            let Some(&line_start) = self.line_starts.get(line.saturating_sub(1)) else {
                 continue;
             };
+            let line_end = self
+                .line_starts
+                .get(line)
+                .copied()
+                .unwrap_or(self.source.len());
+            let text = &self.source[line_start..line_end];
             let start = if line == receiver_end.line {
                 receiver_end.column.min(text.len())
             } else {
@@ -751,14 +973,162 @@ impl<'source> SourceVisitor<'source> {
         }
         node.span().start().line
     }
+
+    fn try_parse_macro_stream(&mut self, tokens: TokenStream) -> bool {
+        if let Ok(expression) = syn::parse2::<Expr>(tokens.clone()) {
+            self.visit_expr(&expression);
+            return true;
+        }
+        if let Ok(expressions) =
+            Punctuated::<Expr, syn::Token![,]>::parse_terminated.parse2(tokens.clone())
+        {
+            if !expressions.is_empty() {
+                for expression in expressions {
+                    self.visit_expr(&expression);
+                }
+                return true;
+            }
+        }
+        let mut wrapped = Group::new(Delimiter::Brace, tokens.clone());
+        wrapped.set_span(Span::call_site());
+        if let Ok(block) = syn::parse2::<syn::Block>(TokenStream::from(TokenTree::Group(wrapped))) {
+            self.visit_block(&block);
+            return true;
+        }
+        if let Ok(file) = syn::parse2::<File>(tokens) {
+            self.visit_file(&file);
+            return true;
+        }
+        false
+    }
+
+    fn scan_literal_token_patterns(&mut self, tokens: &TokenStream) {
+        let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
+        for index in 0..trees.len() {
+            if let TokenTree::Ident(ident) = &trees[index] {
+                let name = ident_name(ident);
+                let metavariable = index > 0
+                    && matches!(&trees[index - 1], TokenTree::Punct(punct) if punct.as_char() == '$');
+                if !metavariable
+                    && RAW_KINDS.contains(&name.as_str())
+                    && matches!(trees.get(index + 1), Some(TokenTree::Punct(punct)) if punct.as_char() == '!')
+                {
+                    if let Some(kind) = PanicKind::from_name(&name) {
+                        self.add(kind, ident.span());
+                    }
+                }
+                if matches!(name.as_str(), "unwrap" | "expect")
+                    && index >= 3
+                    && matches!(&trees[index - 1], TokenTree::Punct(punct) if punct.as_char() == ':')
+                    && matches!(&trees[index - 2], TokenTree::Punct(punct) if punct.as_char() == ':')
+                {
+                    let mut names = Vec::new();
+                    let mut cursor = index;
+                    while cursor >= 3
+                        && matches!(&trees[cursor - 1], TokenTree::Punct(punct) if punct.as_char() == ':')
+                        && matches!(&trees[cursor - 2], TokenTree::Punct(punct) if punct.as_char() == ':')
+                    {
+                        let Some(TokenTree::Ident(base)) = trees.get(cursor - 3) else {
+                            break;
+                        };
+                        names.push(ident_name(base));
+                        cursor -= 3;
+                    }
+                    names.reverse();
+                    if !names.is_empty()
+                        && standard_type_names(
+                            &names,
+                            false,
+                            &self.type_scopes,
+                            &mut BTreeSet::new(),
+                        )
+                        .is_some()
+                    {
+                        let kind = PanicKind::from_name(&name).expect("method name checked");
+                        self.add(kind, ident.span());
+                    }
+                }
+            }
+            if let TokenTree::Punct(dot) = &trees[index] {
+                if dot.as_char() == '.'
+                    && matches!(
+                        trees.get(index + 1),
+                        Some(TokenTree::Ident(ident))
+                            if matches!(ident_name(ident).as_str(), "unwrap" | "expect")
+                    )
+                {
+                    if let Some(TokenTree::Ident(method)) = trees.get(index + 1) {
+                        let kind =
+                            PanicKind::from_name(&ident_name(method)).expect("method name checked");
+                        self.add(kind, dot.span());
+                    }
+                }
+            }
+            if let TokenTree::Group(group) = &trees[index] {
+                self.scan_literal_token_patterns(&group.stream());
+            }
+        }
+    }
+
+    fn scan_macro_groups(&mut self, tokens: &TokenStream) {
+        for tree in tokens.clone() {
+            let TokenTree::Group(group) = tree else {
+                continue;
+            };
+            let inner = group.stream();
+            let parsed = self.try_parse_macro_stream(inner.clone())
+                || self.try_parse_macro_stream(sanitize_macro_variables(inner.clone()));
+            if !parsed {
+                self.scan_literal_token_patterns(&inner);
+                self.scan_macro_groups(&inner);
+            }
+        }
+    }
+
+    /// Scan literal macro tokens without attempting expansion. Metavariables
+    /// are replaced only for parsing (`$panic!` is not a literal call), while
+    /// literal calls in invocation arguments and macro definitions remain
+    /// visible. Full macro name resolution/expansion is intentionally outside
+    /// this audit's conservative, source-only boundary.
+    fn scan_macro_tokens(&mut self, tokens: TokenStream) {
+        let parsed = self.try_parse_macro_stream(tokens.clone())
+            || self.try_parse_macro_stream(sanitize_macro_variables(tokens.clone()));
+        if !parsed {
+            self.scan_literal_token_patterns(&tokens);
+            self.scan_macro_groups(&tokens);
+        }
+    }
 }
 
 impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
+    fn visit_file(&mut self, node: &'ast File) {
+        self.push_scope(collect_scope_bindings(&node.items));
+        visit::visit_file(self, node);
+        self.type_scopes.pop();
+    }
+
     fn visit_item(&mut self, node: &'ast Item) {
         if has_exact_cfg_test(item_attrs(node)) {
             return;
         }
         visit::visit_item(self, node);
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        let Some((_, items)) = &node.content else {
+            return;
+        };
+        self.push_scope(collect_scope_bindings(items));
+        for item in items {
+            self.visit_item(item);
+        }
+        self.type_scopes.pop();
+    }
+
+    fn visit_block(&mut self, node: &'ast syn::Block) {
+        self.push_scope(collect_block_bindings(node));
+        visit::visit_block(self, node);
+        self.type_scopes.pop();
     }
 
     fn visit_trait_item(&mut self, node: &'ast TraitItem) {
@@ -778,28 +1148,36 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
         let previous = self.public_context;
         self.public_context |= is_public(&node.vis);
+        self.push_generic_scope(&node.sig.generics);
         visit::visit_item_fn(self, node);
+        self.type_scopes.pop();
         self.public_context = previous;
     }
 
     fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
         let previous = self.public_context;
         self.public_context |= is_public(&node.vis);
+        self.push_generic_scope(&node.generics);
         visit::visit_item_trait(self, node);
+        self.type_scopes.pop();
         self.public_context = previous;
     }
 
     fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
         let previous = self.trait_impl_context;
         self.trait_impl_context |= node.trait_.is_some();
+        self.push_generic_scope(&node.generics);
         visit::visit_item_impl(self, node);
+        self.type_scopes.pop();
         self.trait_impl_context = previous;
     }
 
     fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
         let previous = self.public_context;
         self.public_context |= self.trait_impl_context || is_public(&node.vis);
+        self.push_generic_scope(&node.sig.generics);
         visit::visit_impl_item_fn(self, node);
+        self.type_scopes.pop();
         self.public_context = previous;
     }
 
@@ -816,7 +1194,7 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
                 );
             }
         }
-        visit::visit_macro(self, node);
+        self.scan_macro_tokens(node.tokens.clone());
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
@@ -836,7 +1214,7 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
 
     fn visit_expr_call(&mut self, node: &'ast ExprCall) {
         if let Expr::Path(path) = node.func.as_ref() {
-            if let Some(kind) = associated_method(path) {
+            if let Some(kind) = associated_method(path, &self.type_scopes) {
                 self.add(kind, node.span());
             }
         }
@@ -856,6 +1234,12 @@ fn parse_entry(value: &str) -> Result<Finding> {
     let Some(kind) = PanicKind::from_name(kind) else {
         bail!("invalid baseline entry: {}", quoted(value));
     };
+    if line.is_empty()
+        || !line.bytes().all(|byte| byte.is_ascii_digit())
+        || (line.len() > 1 && line.starts_with('0'))
+    {
+        bail!("invalid baseline entry: {}", quoted(value));
+    }
     let line = line
         .parse::<usize>()
         .ok()
@@ -997,6 +1381,127 @@ panic!();
     }
 
     #[test]
+    fn macro_token_streams_scan_nested_calls_and_ignore_metavariables() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "crates/demo/src/lib.rs",
+            r#"macro_rules! literal {
+    () => { panic!("definition"); };
+}
+macro_rules! passthrough {
+    ($panic:ident) => { $panic!(); };
+}
+fn calls(value: Option<bool>) {
+    wrapper!(panic!("statement argument"));
+    dbg!(value.unwrap());
+    wrapper!(Option::expect(value, "associated argument"));
+}
+wrapper! {
+    fn generated() {
+        unreachable!("item body");
+    }
+}
+"#,
+        );
+        assert_eq!(
+            fixture.scan(),
+            vec![
+                "crates/demo/src/lib.rs:2:panic",
+                "crates/demo/src/lib.rs:8:panic",
+                "crates/demo/src/lib.rs:9:unwrap",
+                "crates/demo/src/lib.rs:10:expect",
+                "crates/demo/src/lib.rs:14:unreachable",
+            ]
+        );
+    }
+
+    #[test]
+    fn macro_definitions_scan_generic_associated_calls_with_metavariables() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "crates/demo/src/lib.rs",
+            r#"macro_rules! generic {
+    ($value:expr) => { Option::<bool>::unwrap($value); };
+}
+"#,
+        );
+        assert_eq!(fixture.scan(), vec!["crates/demo/src/lib.rs:2:unwrap"]);
+    }
+
+    #[test]
+    fn ufcs_aliases_resolve_and_local_type_shadows_are_not_reported() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "crates/demo/src/lib.rs",
+            r#"use std::option::Option as Maybe;
+use core::result::Result as R;
+use user::Option as LocalOption;
+type Alias<T> = Maybe<T>;
+mod local {
+    struct Option<T>(T);
+    fn shadow(value: Option<bool>) {
+        let _ = Option::unwrap(value);
+    }
+}
+fn calls(value: Maybe<bool>, result: R<bool, ()>) {
+    let _ = Maybe::unwrap(value);
+    let _ = R::r#expect(result, "missing");
+    let _ = Alias::<bool>::unwrap(value);
+    let _ = <Maybe<bool>>::unwrap(value);
+    let _ = <Alias<bool>>::r#expect(value, "missing");
+    let _ = LocalOption::unwrap(value);
+}
+"#,
+        );
+        assert_eq!(
+            fixture.scan(),
+            vec![
+                "crates/demo/src/lib.rs:12:unwrap",
+                "crates/demo/src/lib.rs:13:expect",
+                "crates/demo/src/lib.rs:14:unwrap",
+                "crates/demo/src/lib.rs:15:unwrap",
+                "crates/demo/src/lib.rs:16:expect",
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_inline_path_attributes_use_ancestry_and_raw_strings() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "crates/demo/src/lib.rs",
+            r#"#[path = r"tests_root.rs"]
+#[cfg(test)]
+mod tests_root;
+#[cfg(test)]
+mod inline_tests {
+    #[path = r"custom/helper.rs"]
+    mod helper;
+}
+"#,
+        );
+        fixture.write(
+            "crates/demo/src/tests_root.rs",
+            "pub fn test_only() { panic!(\"test\"); }\n",
+        );
+        fixture.write(
+            "crates/demo/src/inline_tests/custom/helper.rs",
+            "pub fn test_only() { unreachable!(\"test\"); }\n",
+        );
+        assert!(fixture.scan().is_empty());
+    }
+
+    #[test]
+    fn baseline_line_numbers_must_be_canonical_decimal() {
+        for line in ["01", "001", "+1", " 1"] {
+            assert!(
+                parse_entry(&format!("crates/demo/src/lib.rs:{line}:assert")).is_err(),
+                "accepted non-canonical baseline line {line:?}"
+            );
+        }
+    }
+
+    #[test]
     fn production_alias_overrides_test_alias_and_inline_paths_are_ancestral() {
         let fixture = Fixture::new();
         fixture.write(
@@ -1114,6 +1619,22 @@ impl std::fmt::Display for T {
         let result = audit(&wrong, &wrong.join("baseline.json"));
         assert!(result.is_err());
         let _ = fs::remove_dir_all(wrong);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn logical_rs_symlink_entry_discovers_extensionless_target() {
+        let fixture = Fixture::new();
+        fixture.write("crates/demo/src/lib.rs", "pub fn root() {}\n");
+        fixture.write(
+            "crates/demo/shared_target",
+            "pub fn bad() { panic!(\"extensionless target\"); }\n",
+        );
+        let link = fixture.root.join("crates/demo/src/bin/tool.rs");
+        fs::create_dir_all(link.parent().expect("parent")).expect("bin dir");
+        std::os::unix::fs::symlink(fixture.root.join("crates/demo/shared_target"), &link)
+            .expect("symlink");
+        assert_eq!(fixture.scan(), vec!["crates/demo/shared_target:1:panic"]);
     }
 
     #[cfg(unix)]

@@ -93,6 +93,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 
