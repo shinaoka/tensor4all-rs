@@ -22,9 +22,8 @@ use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
-    native_tensor_primal_to_diag_f64, native_tensor_primal_to_storage, scale_native_tensor,
-    storage_payload_native_read_input, storage_to_native_tensor, AnyScalar as BackendScalar,
-    TensorElement,
+    native_tensor_primal_to_diag_f64, scale_native_tensor, storage_payload_native_read_input,
+    storage_to_native_tensor, AnyScalar as BackendScalar, TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -259,8 +258,13 @@ pub fn compute_permutation_from_indices(
     Ok(perm)
 }
 
+/// Compact structured payload kept in the authoritative eager representation.
+///
+/// The payload may use any supported eager dtype (`f32`, `f64`, `c32`, or
+/// `c64`) and may be either tracked or untracked. Tracking is a property of
+/// `payload`, never of the presence of this metadata container.
 #[derive(Clone)]
-pub(crate) struct StructuredAdValue {
+pub(crate) struct StructuredPayload {
     payload: Arc<EagerTensor>,
     payload_dims: Vec<usize>,
     axis_classes: Vec<usize>,
@@ -793,9 +797,11 @@ pub struct TensorDynLen {
     /// dtype is supported by [`Storage`]; otherwise this retains an eager
     /// payload without promotion.
     pub(crate) storage: TensorDynLenStorage,
-    /// Optional retained eager payload for tracked structured layouts. The
-    /// `Arc` owns the payload graph independently of compact storage snapshots.
-    pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
+    /// Optional retained compact eager payload for structured layouts. It is
+    /// present for tracked and untracked structured results; `payload.tracks_grad()`
+    /// is the sole tracking marker. The `Arc` owns the payload graph independently
+    /// of compact storage snapshots.
+    pub(crate) structured_payload: Option<Arc<StructuredPayload>>,
     /// Lazily materialized logical-dense eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor>>>,
 }
@@ -839,11 +845,27 @@ impl TensorDynLen {
                 .ok_or_else(|| anyhow::anyhow!("failed to read f64 tensor for maxabs")),
             DType::C32 => native
                 .as_slice::<Complex32>()
-                .map(|values| fold(values.iter().map(|value| f64::from(value.norm()))))
+                .map(|values| {
+                    fold(values.iter().map(|value| {
+                        if value.re.is_nan() || value.im.is_nan() {
+                            f64::NAN
+                        } else {
+                            f64::from(value.re).hypot(f64::from(value.im))
+                        }
+                    }))
+                })
                 .ok_or_else(|| anyhow::anyhow!("failed to read c32 tensor for maxabs")),
             DType::C64 => native
                 .as_slice::<Complex64>()
-                .map(|values| fold(values.iter().map(|value| value.norm())))
+                .map(|values| {
+                    fold(values.iter().map(|value| {
+                        if value.re.is_nan() || value.im.is_nan() {
+                            f64::NAN
+                        } else {
+                            value.re.hypot(value.im)
+                        }
+                    }))
+                })
                 .ok_or_else(|| anyhow::anyhow!("failed to read c64 tensor for maxabs")),
             dtype => Err(anyhow::anyhow!(
                 "TensorDynLen maxabs does not support dtype {dtype:?}"
@@ -1145,6 +1167,10 @@ impl TensorDynLen {
     }
 
     fn compact_payload_inner(&self) -> Result<EagerTensor> {
+        if let Some(value) = self.structured_payload.as_deref() {
+            self.ensure_storage_ready()?;
+            return Ok(value.payload.as_ref().clone());
+        }
         if let Some(inner) = self.storage.eager() {
             return Ok(inner.clone());
         }
@@ -1209,12 +1235,13 @@ impl TensorDynLen {
         Ok(dense)
     }
 
-    fn tracked_compact_payload_value(&self) -> Option<&StructuredAdValue> {
+    fn tracked_compact_payload_value(&self) -> Option<&StructuredPayload> {
         self.storage
             .deferred_error()
             .is_none()
-            .then_some(self.structured_ad.as_deref())
+            .then_some(self.structured_payload.as_deref())
             .flatten()
+            .filter(|value| value.payload.tracks_grad())
     }
 
     fn ensure_storage_ready(&self) -> Result<()> {
@@ -1396,18 +1423,19 @@ impl TensorDynLen {
         if axis_classes == Self::dense_axis_classes(indices.len()) {
             return Self::from_inner_with_axis_classes(indices, payload_inner, axis_classes);
         }
+        let structured_payload = Some(Arc::new(StructuredPayload {
+            payload: Arc::new(payload_inner.clone()),
+            payload_dims: payload_dims.clone(),
+            axis_classes: axis_classes.clone(),
+        }));
         if matches!(payload_inner.data().dtype(), DType::F32 | DType::C32) {
             return Ok(Self {
                 indices,
                 storage: TensorDynLenStorage::Eager {
-                    inner: Arc::new(payload_inner.clone()),
-                    axis_classes: axis_classes.clone(),
-                },
-                structured_ad: Some(Arc::new(StructuredAdValue {
-                    payload: Arc::new(payload_inner),
-                    payload_dims,
+                    inner: Arc::new(payload_inner),
                     axis_classes,
-                })),
+                },
+                structured_payload,
                 eager_cache: Self::empty_eager_cache(),
             });
         }
@@ -1420,11 +1448,7 @@ impl TensorDynLen {
         Ok(Self {
             indices,
             storage: TensorDynLenStorage::from_storage(Arc::new(storage)),
-            structured_ad: Some(Arc::new(StructuredAdValue {
-                payload: Arc::new(payload_inner),
-                payload_dims,
-                axis_classes,
-            })),
+            structured_payload,
             eager_cache: Self::empty_eager_cache(),
         })
     }
@@ -1437,6 +1461,35 @@ impl TensorDynLen {
         axes_b: &[usize],
     ) -> Result<Self> {
         let (plan, _, _) = self.binary_structured_contraction_plan(other, axes_a, axes_b)?;
+        self.contract_structured_payloads_with_plan(other, result_indices, plan)
+    }
+
+    pub(crate) fn contract_structured_payloads_with_labels(
+        &self,
+        other: &Self,
+        result_indices: Vec<DynIndex>,
+        input_labels: [Vec<usize>; 2],
+        output_labels: Vec<usize>,
+    ) -> Result<Self> {
+        let operands = vec![
+            OperandLayout::new(self.dims(), self.storage.axis_classes().to_vec())?,
+            OperandLayout::new(other.dims(), other.storage.axis_classes().to_vec())?,
+        ];
+        let spec = StructuredContractionSpec {
+            input_labels: input_labels.to_vec(),
+            output_labels,
+            retained_labels: Default::default(),
+        };
+        let plan = StructuredContractionPlan::new(&operands, &spec)?;
+        self.contract_structured_payloads_with_plan(other, result_indices, plan)
+    }
+
+    fn contract_structured_payloads_with_plan(
+        &self,
+        other: &Self,
+        result_indices: Vec<DynIndex>,
+        plan: StructuredContractionPlan,
+    ) -> Result<Self> {
         let lhs_roots = plan.operand_plans[0].class_roots.clone();
         let rhs_roots = plan.operand_plans[1].class_roots.clone();
         let scalar_multiply =
@@ -1623,7 +1676,7 @@ impl TensorDynLen {
                 )),
             }
         } else {
-            native_tensor_primal_to_storage(native)
+            storage_from_payload_native(native.clone(), native.shape(), axis_classes.to_vec())
         }
     }
 
@@ -2434,7 +2487,7 @@ impl TensorDynLen {
         Ok(Self {
             indices,
             storage: TensorDynLenStorage::from_storage(storage),
-            structured_ad: None,
+            structured_payload: None,
             eager_cache: Self::empty_eager_cache(),
         })
     }
@@ -2559,7 +2612,7 @@ impl TensorDynLen {
                     bond_dim: left.dim,
                     site_dim: site.dim,
                 })?;
-        let site_stride = isize::try_from(left.dim)
+        let _site_stride = isize::try_from(left.dim)
             .map_err(|_| StructuredSelectorError::StrideOverflow { bond_dim: left.dim })?;
         let selected_offset = left.dim.checked_mul(selected_value).ok_or(
             StructuredSelectorError::PayloadSizeOverflow {
@@ -2588,65 +2641,20 @@ impl TensorDynLen {
                 message: error.to_string(),
             })?,
         );
+        let payload_dims = vec![left.dim, site.dim];
         let indices = vec![left, site, right];
-        match payload_native.dtype() {
-            DType::F32 | DType::C32 => Self::from_structured_payload_inner(
-                indices,
-                payload_inner,
-                vec![payload_native.shape()[0], payload_native.shape()[1]],
-                vec![0, 1, 0],
-            )
+        if !matches!(
+            payload_native.dtype(),
+            DType::F32 | DType::F64 | DType::C32 | DType::C64
+        ) {
+            return Err(StructuredSelectorError::InvalidStorage {
+                message: format!("unsupported selector dtype {:?}", payload_native.dtype()),
+            });
+        }
+        Self::from_structured_payload_inner(indices, payload_inner, payload_dims, vec![0, 1, 0])
             .map_err(|error| StructuredSelectorError::InvalidStorage {
                 message: error.to_string(),
-            }),
-            DType::F64 => {
-                let payload = payload_native
-                    .as_slice::<f64>()
-                    .ok_or_else(|| StructuredSelectorError::InvalidStorage {
-                        message: "failed to read f64 selector payload".to_string(),
-                    })?
-                    .to_vec();
-                let storage = Storage::new_structured(
-                    payload,
-                    vec![indices[0].dim(), indices[1].dim()],
-                    vec![1, site_stride],
-                    vec![0, 1, 0],
-                )
-                .map_err(|error| StructuredSelectorError::InvalidStorage {
-                    message: error.to_string(),
-                })?;
-                Self::from_structured_storage(indices, Arc::new(storage)).map_err(|error| {
-                    StructuredSelectorError::InvalidStorage {
-                        message: error.to_string(),
-                    }
-                })
-            }
-            DType::C64 => {
-                let payload = payload_native
-                    .as_slice::<Complex64>()
-                    .ok_or_else(|| StructuredSelectorError::InvalidStorage {
-                        message: "failed to read c64 selector payload".to_string(),
-                    })?
-                    .to_vec();
-                let storage = Storage::new_structured(
-                    payload,
-                    vec![indices[0].dim(), indices[1].dim()],
-                    vec![1, site_stride],
-                    vec![0, 1, 0],
-                )
-                .map_err(|error| StructuredSelectorError::InvalidStorage {
-                    message: error.to_string(),
-                })?;
-                Self::from_structured_storage(indices, Arc::new(storage)).map_err(|error| {
-                    StructuredSelectorError::InvalidStorage {
-                        message: error.to_string(),
-                    }
-                })
-            }
-            dtype => Err(StructuredSelectorError::InvalidStorage {
-                message: format!("unsupported selector dtype {dtype:?}"),
-            }),
-        }
+            })
     }
 
     /// Create a tensor from a native tenferro payload.
@@ -2831,43 +2839,56 @@ impl TensorDynLen {
                 Self::validate_diag_dims(&dims)
             })?;
         }
-        let (storage, eager_cache) = if axis_classes == Self::dense_axis_classes(indices.len()) {
-            (
-                TensorDynLenStorage::from_eager_dense(inner, indices.len()),
-                Self::empty_eager_cache(),
-            )
-        } else if matches!(inner.data().dtype(), DType::F32 | DType::C32) {
-            let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
-            (
-                TensorDynLenStorage::Eager {
-                    inner: Arc::new(payload),
-                    axis_classes,
-                },
-                Self::empty_eager_cache(),
-            )
-        } else {
-            let storage = profile_pairwise_contract_section("from_inner_storage_snapshot", || {
-                Self::storage_from_native_with_axis_classes(
-                    inner.data(),
-                    &axis_classes,
-                    indices.len(),
+        let (storage, eager_cache, structured_payload) =
+            if axis_classes == Self::dense_axis_classes(indices.len()) {
+                (
+                    TensorDynLenStorage::from_eager_dense(inner, indices.len()),
+                    Self::empty_eager_cache(),
+                    None,
                 )
-            })?;
-            record_pairwise_contract_profile_bytes(
-                "from_inner_storage_snapshot",
-                native_tensor_profile_bytes(inner.data()),
-            );
-            (
-                TensorDynLenStorage::from_storage(Arc::new(storage)),
-                profile_pairwise_contract_section("from_inner_eager_cache", || {
-                    Self::eager_cache_with(inner)
-                }),
-            )
-        };
+            } else {
+                let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
+                let payload_dims = payload.data().shape().to_vec();
+                let structured_payload = Some(Arc::new(StructuredPayload {
+                    payload: Arc::new(payload.clone()),
+                    payload_dims,
+                    axis_classes: axis_classes.clone(),
+                }));
+                if matches!(inner.data().dtype(), DType::F32 | DType::C32) {
+                    (
+                        TensorDynLenStorage::Eager {
+                            inner: Arc::new(payload),
+                            axis_classes,
+                        },
+                        Self::empty_eager_cache(),
+                        structured_payload,
+                    )
+                } else {
+                    let storage =
+                        profile_pairwise_contract_section("from_inner_storage_snapshot", || {
+                            Self::storage_from_native_with_axis_classes(
+                                payload.data(),
+                                &axis_classes,
+                                indices.len(),
+                            )
+                        })?;
+                    record_pairwise_contract_profile_bytes(
+                        "from_inner_storage_snapshot",
+                        native_tensor_profile_bytes(payload.data()),
+                    );
+                    (
+                        TensorDynLenStorage::from_storage(Arc::new(storage)),
+                        profile_pairwise_contract_section("from_inner_eager_cache", || {
+                            Self::eager_cache_with(inner)
+                        }),
+                        structured_payload,
+                    )
+                }
+            };
         Ok(Self {
             indices,
             storage,
-            structured_ad: None,
+            structured_payload,
             eager_cache,
         })
     }
@@ -2879,6 +2900,10 @@ impl TensorDynLen {
 
     pub(crate) fn axis_classes(&self) -> &[usize] {
         self.storage.axis_classes()
+    }
+
+    pub(crate) fn storage_dtype(&self) -> Option<DType> {
+        self.storage.dtype()
     }
 
     /// Borrow the native payload.
@@ -2908,7 +2933,7 @@ impl TensorDynLen {
         Ok(Self {
             indices: self.indices,
             storage: self.storage,
-            structured_ad: Some(Arc::new(StructuredAdValue {
+            structured_payload: Some(Arc::new(StructuredPayload {
                 payload: Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx()?)),
                 payload_dims,
                 axis_classes,
@@ -2919,7 +2944,7 @@ impl TensorDynLen {
 
     /// Report whether this tensor participates in gradient tracking.
     pub fn tracks_grad(&self) -> bool {
-        self.structured_ad
+        self.structured_payload
             .as_ref()
             .is_some_and(|value| value.payload.tracks_grad())
             || self.storage.eager().is_some_and(EagerTensor::tracks_grad)
@@ -2959,7 +2984,7 @@ impl TensorDynLen {
                                 )),
                                 axis_classes: value.axis_classes.clone(),
                             },
-                            structured_ad: None,
+                            structured_payload: None,
                             eager_cache: Self::empty_eager_cache(),
                         });
                     }
@@ -3028,7 +3053,10 @@ impl TensorDynLen {
         true
     }
 
-    /// Materialize the primal snapshot as compact storage.
+    /// Materialize the primal payload as a compact storage snapshot.
+    ///
+    /// The eager payload remains authoritative for `f32`/`c32` and tracked
+    /// structured tensors; this method is a fallible bridge to compact storage.
     ///
     /// # Errors
     ///
@@ -3039,13 +3067,16 @@ impl TensorDynLen {
         self.storage.materialize(self.indices.len())
     }
 
-    /// Returns the authoritative compact storage.
+    /// Materializes and returns a compact storage snapshot.
     ///
     /// # Errors
     ///
-    /// Returns an error when an eager backend payload cannot be converted to
-    /// compact storage, when its dtype is `f32`/`c32` (compact storage supports
-    /// only `f64`/`c64`), or when a deferred eager operation failed.
+    /// The authoritative payload remains eager for `f32`/`c32` and for tracked
+    /// tensors; this method is a fallible snapshot bridge to the compact
+    /// `Storage` representation. It returns an error when an eager backend
+    /// payload cannot be converted to compact storage, when its dtype is
+    /// `f32`/`c32` (compact storage supports only `f64`/`c64`), or when a
+    /// deferred eager operation failed.
     ///
     /// # Examples
     ///
@@ -3176,7 +3207,7 @@ impl TensorDynLen {
             return Ok(Self {
                 indices: new_indices.to_vec(),
                 storage: self.storage.clone(),
-                structured_ad: self.structured_ad.clone(),
+                structured_payload: self.structured_payload.clone(),
                 eager_cache: Arc::clone(&self.eager_cache),
             });
         }
@@ -3999,7 +4030,7 @@ impl TensorDynLen {
         Ok(Self {
             indices: new_indices,
             storage: self.storage.clone(),
-            structured_ad: self.structured_ad.clone(),
+            structured_payload: self.structured_payload.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         })
     }
@@ -4077,7 +4108,7 @@ impl TensorDynLen {
         Ok(Self {
             indices: new_indices_vec,
             storage: self.storage.clone(),
-            structured_ad: self.structured_ad.clone(),
+            structured_payload: self.structured_payload.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         })
     }
@@ -4137,7 +4168,7 @@ impl TensorDynLen {
             Ok(storage) => storage,
             Err(error) => self.storage.clone().with_deferred_error(error),
         };
-        let mut structured_ad = self.structured_ad.clone();
+        let mut structured_payload = self.structured_payload.clone();
         let mut eager_cache = if storage.deferred_error().is_some() {
             Arc::clone(&self.eager_cache)
         } else {
@@ -4145,10 +4176,10 @@ impl TensorDynLen {
         };
 
         if storage.deferred_error().is_none() {
-            if let Some(value) = self.structured_ad.as_deref() {
+            if let Some(value) = self.structured_payload.as_deref() {
                 match conjugate(value.payload.as_ref()) {
                     Ok(payload) => {
-                        structured_ad = Some(Arc::new(StructuredAdValue {
+                        structured_payload = Some(Arc::new(StructuredPayload {
                             payload: Arc::new(payload),
                             payload_dims: value.payload_dims.clone(),
                             axis_classes: value.axis_classes.clone(),
@@ -4181,7 +4212,7 @@ impl TensorDynLen {
         Self {
             indices: new_indices,
             storage,
-            structured_ad,
+            structured_payload,
             eager_cache,
         }
     }
@@ -4222,6 +4253,14 @@ impl TensorDynLen {
             return Err(TensorDynLenError::ScalarTypeMismatch {
                 expected: "f32, f64, c32, or c64",
                 actual: Self::dtype_name(dtype).to_string(),
+            });
+        }
+        let (has_nan, _) = self
+            .compact_nonfinite_flags()
+            .map_err(TensorDynLenError::materialization)?;
+        if has_nan {
+            return Err(TensorDynLenError::NaNInput {
+                operation: "norm_squared",
             });
         }
         let value = if self.indices.is_empty() {
@@ -4316,6 +4355,127 @@ impl TensorDynLen {
         Ok(value)
     }
 
+    fn native_nonfinite_flags(native: &NativeTensor) -> Result<(bool, bool)> {
+        let mut has_nan = false;
+        let mut has_infinity = false;
+        match native.dtype() {
+            DType::F32 => {
+                let values = native
+                    .as_slice::<f32>()
+                    .ok_or_else(|| anyhow::anyhow!("failed to read f32 payload"))?;
+                for &value in values {
+                    has_nan |= value.is_nan();
+                    has_infinity |= value.is_infinite();
+                }
+            }
+            DType::F64 => {
+                let values = native
+                    .as_slice::<f64>()
+                    .ok_or_else(|| anyhow::anyhow!("failed to read f64 payload"))?;
+                for &value in values {
+                    has_nan |= value.is_nan();
+                    has_infinity |= value.is_infinite();
+                }
+            }
+            DType::C32 => {
+                let values = native
+                    .as_slice::<Complex32>()
+                    .ok_or_else(|| anyhow::anyhow!("failed to read c32 payload"))?;
+                for value in values {
+                    has_nan |= value.re.is_nan() || value.im.is_nan();
+                    has_infinity |= value.re.is_infinite() || value.im.is_infinite();
+                }
+            }
+            DType::C64 => {
+                let values = native
+                    .as_slice::<Complex64>()
+                    .ok_or_else(|| anyhow::anyhow!("failed to read c64 payload"))?;
+                for value in values {
+                    has_nan |= value.re.is_nan() || value.im.is_nan();
+                    has_infinity |= value.re.is_infinite() || value.im.is_infinite();
+                }
+            }
+            dtype => return Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
+        }
+        Ok((has_nan, has_infinity))
+    }
+
+    fn compact_nonfinite_flags(&self) -> Result<(bool, bool)> {
+        let payload = self.compact_payload_inner()?;
+        Self::native_nonfinite_flags(payload.data())
+    }
+
+    fn native_complex_values(native: &NativeTensor) -> Result<Vec<Complex64>> {
+        match native.dtype() {
+            DType::F32 => Ok(native
+                .as_slice::<f32>()
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 tensor"))?
+                .iter()
+                .map(|&value| Complex64::new(f64::from(value), 0.0))
+                .collect()),
+            DType::F64 => Ok(native
+                .as_slice::<f64>()
+                .ok_or_else(|| anyhow::anyhow!("failed to read f64 tensor"))?
+                .iter()
+                .map(|&value| Complex64::new(value, 0.0))
+                .collect()),
+            DType::C32 => Ok(native
+                .as_slice::<Complex32>()
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 tensor"))?
+                .iter()
+                .map(|&value| Complex64::new(f64::from(value.re), f64::from(value.im)))
+                .collect()),
+            DType::C64 => Ok(native
+                .as_slice::<Complex64>()
+                .ok_or_else(|| anyhow::anyhow!("failed to read c64 tensor"))?
+                .to_vec()),
+            dtype => Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
+        }
+    }
+
+    fn isapprox_with_infinities(
+        lhs: &NativeTensor,
+        rhs: &NativeTensor,
+        atol: f64,
+        rtol: f64,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            lhs.shape() == rhs.shape(),
+            "isapprox nonfinite comparison shape mismatch: {:?} != {:?}",
+            lhs.shape(),
+            rhs.shape()
+        );
+        let lhs_values = Self::native_complex_values(lhs)?;
+        let rhs_values = Self::native_complex_values(rhs)?;
+        let mut diff_squared = 0.0;
+        let mut lhs_squared = 0.0;
+        let mut rhs_squared = 0.0;
+        for (lhs, rhs) in lhs_values.into_iter().zip(rhs_values) {
+            let lhs_nan = lhs.re.is_nan() || lhs.im.is_nan();
+            let rhs_nan = rhs.re.is_nan() || rhs.im.is_nan();
+            anyhow::ensure!(!lhs_nan && !rhs_nan, "isapprox encountered NaN input");
+            let lhs_infinite = lhs.re.is_infinite() || lhs.im.is_infinite();
+            let rhs_infinite = rhs.re.is_infinite() || rhs.im.is_infinite();
+            if lhs_infinite || rhs_infinite {
+                if lhs != rhs {
+                    return Ok(false);
+                }
+                continue;
+            }
+
+            let lhs_abs = lhs.re.hypot(lhs.im);
+            let rhs_abs = rhs.re.hypot(rhs.im);
+            let diff = lhs - rhs;
+            let diff_abs = diff.re.hypot(diff.im);
+            diff_squared += diff_abs * diff_abs;
+            lhs_squared += lhs_abs * lhs_abs;
+            rhs_squared += rhs_abs * rhs_abs;
+        }
+        let diff_norm = diff_squared.sqrt();
+        let scale = lhs_squared.max(rhs_squared).sqrt();
+        Ok(diff_norm <= atol.max(rtol * scale))
+    }
+
     /// Element-wise subtraction with index alignment.
     ///
     /// This computes `self - other` using the same vector-space semantics as
@@ -4364,6 +4524,35 @@ impl TensorDynLen {
                 actual: format!("indices {:?}", other.indices),
             });
         }
+        let (self_nan, self_infinite) = self
+            .compact_nonfinite_flags()
+            .map_err(TensorDynLenError::materialization)?;
+        let (other_nan, other_infinite) = other
+            .compact_nonfinite_flags()
+            .map_err(TensorDynLenError::materialization)?;
+        if self_nan || other_nan {
+            return Err(TensorDynLenError::NaNInput {
+                operation: "isapprox",
+            });
+        }
+        if self_infinite || other_infinite {
+            let aligned_other = other
+                .permute_indices(&self.indices)
+                .map_err(TensorDynLenError::subtraction)?;
+            return Self::isapprox_with_infinities(
+                self.try_materialized_inner()
+                    .map_err(TensorDynLenError::materialization)?
+                    .data(),
+                aligned_other
+                    .try_materialized_inner()
+                    .map_err(TensorDynLenError::materialization)?
+                    .data(),
+                atol,
+                rtol,
+            )
+            .map_err(TensorDynLenError::materialization);
+        }
+
         let diff = self.sub(other).map_err(TensorDynLenError::subtraction)?;
         let diff_norm = diff.norm()?;
         let self_norm = self.norm()?;
@@ -5547,7 +5736,7 @@ impl TensorDynLen {
     /// ```
     pub fn into_dense_col_major_parts<T: TensorElement>(self) -> Result<(Vec<DynIndex>, Vec<T>)> {
         anyhow::ensure!(
-            self.structured_ad.is_none() && !self.tracks_grad(),
+            !self.tracks_grad(),
             "TensorDynLen::into_dense_col_major_parts cannot consume tensors with tracked autodiff state"
         );
         let data = self.to_vec::<T>()?;
@@ -5832,7 +6021,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_ad_conjugation_failure_retains_graph_and_blocks_detached_primal() {
+    fn structured_payload_conjugation_failure_retains_graph_and_blocks_detached_primal() {
         let i = DynIndex::new_dyn(2);
         let j = DynIndex::new_dyn(2);
         let tensor = TensorDynLen::from_diag(
@@ -5843,7 +6032,7 @@ mod tests {
         .enable_grad()
         .unwrap();
 
-        let target = Arc::as_ptr(&tensor.structured_ad.as_ref().unwrap().payload);
+        let target = Arc::as_ptr(&tensor.structured_payload.as_ref().unwrap().payload);
         let conjugated = assert_unwrapped_conjugation_error(
             tensor,
             target,

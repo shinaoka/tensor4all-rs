@@ -482,6 +482,31 @@ fn contract_with_options_impl(
                     components.len()
                 ));
             }
+
+            let has_structured_storage = tensors
+                .iter()
+                .map(|tensor| has_dense_axis_classes(tensor).map(|dense| !dense))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .any(|structured| structured);
+            if tensors.len() == 2
+                && tensors[0].storage_dtype() == tensors[1].storage_dtype()
+                && has_structured_storage
+            {
+                let mut diag_uf = AxisUnionFind::new();
+                let plan = build_contraction_plan(tensors, options, &mut diag_uf)?;
+                let input_labels: [Vec<usize>; 2] = plan
+                    .input_ids
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("structured contraction requires two operands"))?;
+                return tensors[0].contract_structured_payloads_with_labels(
+                    tensors[1],
+                    plan.result_indices,
+                    input_labels,
+                    plan.output_ids,
+                );
+            }
+
             // Connectivity verified - skip check in impl
             contract_impl(tensors, options)
         }

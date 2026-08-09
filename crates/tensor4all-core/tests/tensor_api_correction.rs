@@ -174,6 +174,123 @@ fn tensor_dyn_len_norm_rejects_nan_and_preserves_infinity() {
 }
 
 #[test]
+fn mixed_complex_nonfinite_components_are_typed_nan_inputs() {
+    for value in [
+        Complex64::new(f64::INFINITY, f64::NAN),
+        Complex64::new(f64::NAN, f64::INFINITY),
+    ] {
+        let tensor = TensorDynLen::scalar(value).unwrap();
+        assert!(matches!(
+            tensor.norm_squared(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "norm_squared"
+            })
+        ));
+        assert!(matches!(
+            tensor.maxabs(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "maxabs"
+            })
+        ));
+    }
+    for value in [
+        Complex32::new(f32::INFINITY, f32::NAN),
+        Complex32::new(f32::NAN, f32::INFINITY),
+    ] {
+        let tensor = TensorDynLen::scalar(value).unwrap();
+        assert!(matches!(
+            tensor.norm_squared(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "norm_squared"
+            })
+        ));
+        assert!(matches!(
+            tensor.maxabs(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "maxabs"
+            })
+        ));
+    }
+
+    let index = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(
+        vec![index],
+        vec![
+            Complex64::new(f64::INFINITY, f64::NAN),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .unwrap();
+    assert!(matches!(
+        tensor.maxabs(),
+        Err(TensorDynLenError::NaNInput {
+            operation: "maxabs"
+        })
+    ));
+}
+
+#[test]
+fn isapprox_handles_nonfinite_values_like_julia() {
+    let scalar_inf = TensorDynLen::scalar(f64::INFINITY).unwrap();
+    let scalar_inf_same = TensorDynLen::scalar(f64::INFINITY).unwrap();
+    let scalar_finite = TensorDynLen::scalar(1.0_f64).unwrap();
+    assert!(scalar_inf
+        .isapprox(&scalar_inf_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!scalar_inf
+        .isapprox(&scalar_finite, 1.0e-12, 1.0e-12)
+        .unwrap());
+
+    let real_index = DynIndex::new_dyn(2);
+    let real_tensor =
+        TensorDynLen::from_dense(vec![real_index.clone()], vec![f64::INFINITY, 2.0]).unwrap();
+    let real_tensor_same =
+        TensorDynLen::from_dense(vec![real_index.clone()], vec![f64::INFINITY, 2.0]).unwrap();
+    let real_tensor_different =
+        TensorDynLen::from_dense(vec![real_index], vec![f64::NEG_INFINITY, 2.0]).unwrap();
+    assert!(real_tensor
+        .isapprox(&real_tensor_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!real_tensor
+        .isapprox(&real_tensor_different, 1.0e-12, 1.0e-12)
+        .unwrap());
+
+    let complex_scalar = TensorDynLen::scalar(Complex64::new(0.0, f64::INFINITY)).unwrap();
+    let complex_scalar_same = TensorDynLen::scalar(Complex64::new(0.0, f64::INFINITY)).unwrap();
+    let complex_scalar_different =
+        TensorDynLen::scalar(Complex64::new(f64::INFINITY, 0.0)).unwrap();
+    assert!(complex_scalar
+        .isapprox(&complex_scalar_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!complex_scalar
+        .isapprox(&complex_scalar_different, 1.0e-12, 1.0e-12)
+        .unwrap());
+
+    let index = DynIndex::new_dyn(2);
+    let complex_inf = TensorDynLen::from_dense(
+        vec![index.clone()],
+        vec![Complex64::new(f64::INFINITY, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let complex_inf_same = TensorDynLen::from_dense(
+        vec![index.clone()],
+        vec![Complex64::new(f64::INFINITY, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let complex_inf_different = TensorDynLen::from_dense(
+        vec![index],
+        vec![Complex64::new(0.0, f64::INFINITY), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    assert!(complex_inf
+        .isapprox(&complex_inf_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!complex_inf
+        .isapprox(&complex_inf_different, 1.0e-12, 1.0e-12)
+        .unwrap());
+}
+
+#[test]
 fn tensor_dyn_len_distance_uses_typed_metric_error() {
     let tensor = TensorDynLen::scalar(f64::NAN).unwrap();
     let result: Result<f64, TensorDynLenError> = tensor.distance(&tensor);

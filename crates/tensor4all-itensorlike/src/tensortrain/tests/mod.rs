@@ -1,4 +1,6 @@
 use super::*;
+use std::error::Error;
+use std::io;
 use std::time::Duration;
 use tensor4all_core::{DynId, Index, LinearizationOrder, TensorContractionLike, TensorVectorSpace};
 
@@ -23,6 +25,14 @@ fn test_empty_tt() {
     assert_eq!(tt.llim(), -1);
     assert_eq!(tt.rlim(), 1);
     assert!(!tt.isortho());
+}
+
+#[test]
+fn tensor_train_error_from_anyhow_retains_source_chain() {
+    let source = anyhow::Error::new(io::Error::other("typed backend failure"));
+    let error = TensorTrainError::from(source);
+    assert!(error.source().is_some());
+    assert!(error.to_string().contains("typed backend failure"));
 }
 
 #[test]

@@ -46,7 +46,10 @@ fn mask_index_preserves_compact_diagonal_storage() {
     let source = TensorDynLen::from_diag(vec![i.clone(), j], vec![3.0_f64, 4.0]).unwrap();
 
     let masked = source.mask_index(&i, 1).unwrap();
+    let storage = masked.storage().unwrap();
     assert!(masked.is_diag());
+    assert_eq!(storage.payload_dims(), &[2]);
+    assert_eq!(storage.axis_classes(), &[0, 0]);
     assert_eq!(masked.to_vec::<f64>().unwrap(), vec![0.0, 0.0, 0.0, 4.0]);
 }
 
@@ -260,3 +263,66 @@ assert_compact_mask_index_dtype_and_grad!(
     compact_expected(num_complex::Complex64::new(2.0, -0.5)),
     compact_expected(num_complex::Complex64::new(1.0, 0.0))
 );
+
+#[test]
+fn untracked_structured_32_bit_tensors_can_be_consumed_as_dense_parts() {
+    let left = DynIndex::new_dyn(2);
+    let site = DynIndex::new_dyn(3);
+    let right = DynIndex::new_dyn(2);
+    let f32_tensor =
+        TensorDynLen::from_copy_selector(left.clone(), site.clone(), right.clone(), 1, 2.0_f32)
+            .unwrap();
+    assert!(!f32_tensor.tracks_grad());
+    let (indices, values) = f32_tensor.into_dense_col_major_parts::<f32>().unwrap();
+    assert_eq!(indices, vec![left, site, right]);
+    assert_eq!(values, compact_expected(2.0_f32));
+
+    let c32_tensor = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+        DynIndex::new_dyn(2),
+        1,
+        num_complex::Complex32::new(2.0, -0.5),
+    )
+    .unwrap();
+    assert!(!c32_tensor.tracks_grad());
+    let (_, values) = c32_tensor
+        .into_dense_col_major_parts::<num_complex::Complex32>()
+        .unwrap();
+    assert_eq!(
+        values,
+        compact_expected(num_complex::Complex32::new(2.0, -0.5))
+    );
+}
+
+#[test]
+fn structured_mask_retains_compact_payload_for_large_copy_selector() {
+    let bond_dim = 100_000;
+    let left = DynIndex::new_dyn(bond_dim);
+    let site = DynIndex::new_dyn(3);
+    let right = DynIndex::new_dyn(bond_dim);
+    let source = TensorDynLen::from_copy_selector(left, site.clone(), right, 1, 2.0_f64).unwrap();
+
+    let masked = source.mask_index(&site, 1).unwrap();
+    let storage = masked.storage().unwrap();
+    assert_eq!(storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(storage.payload_dims(), &[bond_dim, 3]);
+    assert_eq!(storage.payload_len(), bond_dim * 3);
+
+    let tracked = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(bond_dim),
+        site.clone(),
+        DynIndex::new_dyn(bond_dim),
+        1,
+        2.0_f64,
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+    let tracked_masked = tracked.mask_index(&site, 1).unwrap();
+    let tracked_storage = tracked_masked.storage().unwrap();
+    assert!(tracked_masked.tracks_grad());
+    assert_eq!(tracked_storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(tracked_storage.payload_dims(), &[bond_dim, 3]);
+    assert_eq!(tracked_storage.payload_len(), bond_dim * 3);
+}

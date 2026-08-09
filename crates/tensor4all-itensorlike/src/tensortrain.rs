@@ -10,7 +10,7 @@ use num_complex::Complex64;
 use std::any::TypeId;
 use std::env;
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tensor4all_core::{
     common_inds, contract_pair, contract_pair_with_operand_options, hascommoninds, DynIndex,
@@ -19,8 +19,8 @@ use tensor4all_core::{
 use tensor4all_core::{
     AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg, FactorizeError,
     FactorizeOptions, FactorizeResult, LinearizationOrder, TensorConstructionLike,
-    TensorContractionLike, TensorDynLen, TensorElement, TensorFactorizationLike, TensorIndex,
-    TensorVectorSpace,
+    TensorContractionLike, TensorDynLen, TensorDynLenError, TensorElement, TensorFactorizationLike,
+    TensorIndex, TensorVectorSpace,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
@@ -702,9 +702,10 @@ impl TensorTrain {
             let mut new_tensor = tensor.clone();
             for (old_idx, new_idx) in &replacements {
                 new_tensor = new_tensor.replaceind(old_idx, new_idx).map_err(|err| {
-                    TensorTrainError::OperationError {
-                        message: format!("failed to replace simulated link index: {err}"),
-                    }
+                    TensorTrainError::operation_source(
+                        "failed to replace simulated link index",
+                        err,
+                    )
                 })?;
             }
             new_tensors.push(new_tensor);
@@ -774,13 +775,13 @@ impl TensorTrain {
                 let fused_link = DynIndex::new_dyn(fused_dim);
                 tensors[site] = tensors[site]
                     .fuse_indices(&common, fused_link.clone(), LinearizationOrder::ColumnMajor)
-                    .map_err(|e| TensorTrainError::OperationError {
-                        message: format!("failed to fuse parallel TT links: {e}"),
+                    .map_err(|e| {
+                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
                     })?;
                 tensors[site + 1] = tensors[site + 1]
                     .fuse_indices(&common, fused_link, LinearizationOrder::ColumnMajor)
-                    .map_err(|e| TensorTrainError::OperationError {
-                        message: format!("failed to fuse parallel TT links: {e}"),
+                    .map_err(|e| {
+                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
                     })?;
                 continue;
             }
@@ -791,25 +792,25 @@ impl TensorTrain {
             let link = DynIndex::new_dyn(1);
             let left_link =
                 <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&link))
-                    .map_err(|e| TensorTrainError::OperationError {
-                        message: format!("failed to build implicit unit link tensor: {e}"),
+                    .map_err(|e| {
+                        TensorTrainError::operation_source(
+                            "failed to build implicit unit link tensor",
+                            e,
+                        )
                     })?;
             tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
-                TensorTrainError::OperationError {
-                    message: format!("failed to attach implicit unit link: {e}"),
-                }
+                TensorTrainError::operation_source("failed to attach implicit unit link", e)
             })?;
 
             let right_link =
                 <TensorDynLen as TensorConstructionLike>::ones(&[link]).map_err(|e| {
-                    TensorTrainError::OperationError {
-                        message: format!("failed to build implicit unit link tensor: {e}"),
-                    }
+                    TensorTrainError::operation_source(
+                        "failed to build implicit unit link tensor",
+                        e,
+                    )
                 })?;
             tensors[site + 1] = tensors[site + 1].outer_product(&right_link).map_err(|e| {
-                TensorTrainError::OperationError {
-                    message: format!("failed to attach implicit unit link: {e}"),
-                }
+                TensorTrainError::operation_source("failed to attach implicit unit link", e)
             })?;
         }
 
@@ -1266,8 +1267,8 @@ impl TensorTrain {
                     &b0,
                     PairwiseContractionOptions::new().with_lhs_conj(true),
                 )
-                .map_err(|err| TensorTrainError::OperationError {
-                    message: format!("failed to contract leftmost tensors: {err}"),
+                .map_err(|err| {
+                    TensorTrainError::operation_source("failed to contract leftmost tensors", err)
                 })
             })?
         };
@@ -1296,14 +1297,20 @@ impl TensorTrain {
                     ai,
                     PairwiseContractionOptions::new().with_rhs_conj(true),
                 )
-                .map_err(|err| TensorTrainError::OperationError {
-                    message: format!("failed to contract environment with site {i}: {err}"),
+                .map_err(|err| {
+                    TensorTrainError::operation_source(
+                        format!("failed to contract environment with site {i}"),
+                        err,
+                    )
                 })
             })?;
             // Contract: result * B_i (over other's link index and site indices)
             env = profile_tt_inner_section(profile_enabled, &mut profile.contract, || {
-                contract_pair(&env, bi).map_err(|err| TensorTrainError::OperationError {
-                    message: format!("failed to contract right operand at site {i}: {err}"),
+                contract_pair(&env, bi).map_err(|err| {
+                    TensorTrainError::operation_source(
+                        format!("failed to contract right operand at site {i}"),
+                        err,
+                    )
                 })
             })?;
         }
@@ -1325,8 +1332,8 @@ impl TensorTrain {
             });
         }
         let result = profile_tt_inner_section(profile_enabled, &mut profile.sum, || {
-            env.sum().map_err(|err| TensorTrainError::OperationError {
-                message: format!("failed to sum scalar inner-product tensor: {err}"),
+            env.sum().map_err(|err| {
+                TensorTrainError::operation_source("failed to sum scalar inner-product tensor", err)
             })
         });
         if profile_enabled {
@@ -1364,8 +1371,24 @@ impl TensorTrain {
     /// so the returned value is clamped to be non-negative.
     pub fn norm_squared(&self) -> Result<f64> {
         match self.norm_squared_fast_path()? {
+            Some(value) if value.is_nan() => Err(TensorTrainError::TensorDynLen {
+                source: TensorDynLenError::NaNInput {
+                    operation: "norm_squared",
+                },
+            }),
             Some(value) => Ok(value),
-            None => self.inner(self).map(|value| value.real().max(0.0)),
+            None => self.inner(self).and_then(|value| {
+                let value = value.real();
+                if value.is_nan() {
+                    Err(TensorTrainError::TensorDynLen {
+                        source: TensorDynLenError::NaNInput {
+                            operation: "norm_squared",
+                        },
+                    })
+                } else {
+                    Ok(value.max(0.0))
+                }
+            }),
         }
     }
 
@@ -1471,8 +1494,10 @@ impl TensorTrain {
                 right_dim,
                 data: tensor
                     .to_vec::<T>()
-                    .map_err(|err| TensorTrainError::OperationError {
-                        message: format!("failed to materialize normalized site tensor: {err}"),
+                    .map_err(|err| TensorTrainError::TensorDynLen {
+                        source: TensorDynLenError::Materialization {
+                            source: Arc::from(err.into_boxed_dyn_error()),
+                        },
                     })?,
             });
         }
@@ -1605,9 +1630,7 @@ impl TensorTrain {
     pub fn dense_maxabs(&self) -> Result<f64> {
         self.to_dense()?
             .maxabs()
-            .map_err(|error| TensorTrainError::OperationError {
-                message: format!("failed to compute dense maximum absolute value: {error}"),
-            })
+            .map_err(|source| TensorTrainError::TensorDynLen { source })
     }
 
     /// Add two tensor trains using direct-sum construction.
@@ -1776,12 +1799,9 @@ impl TensorTrain {
             let tensor = self.tensor_checked(site)?;
             if site == 0 {
                 // Scale only the first tensor
-                let scaled =
-                    tensor
-                        .scale(scalar.clone())
-                        .map_err(|e| TensorTrainError::OperationError {
-                            message: format!("Failed to scale tensor at site 0: {}", e),
-                        })?;
+                let scaled = tensor.scale(scalar.clone()).map_err(|e| {
+                    TensorTrainError::operation_source("failed to scale tensor at site 0", e)
+                })?;
                 tensors.push(scaled);
             } else {
                 tensors.push(tensor.clone());
@@ -1843,12 +1863,12 @@ impl TensorIndex for TensorTrain {
         // Delegate to the internal TreeTN's replaceind
         // After replacement, canonical form may be invalid, so set to None
         let treetn = self.treetn.replaceind(old, new)?;
-        Self::from_inner(treetn, None).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
     }
 
     fn replaceinds(&self, old: &[Self::Index], new: &[Self::Index]) -> anyhow::Result<Self> {
         let treetn = self.treetn.replaceinds(old, new)?;
-        Self::from_inner(treetn, None).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
     }
 }
 
@@ -1864,15 +1884,15 @@ impl TensorVectorSpace for TensorTrain {
     // ========================================================================
 
     fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::axpby(self, a, other, b).map_err(|e| anyhow::anyhow!("{}", e))
+        TensorTrain::axpby(self, a, other, b).map_err(anyhow::Error::new)
     }
 
     fn scale(&self, scalar: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::scale(self, scalar).map_err(|e| anyhow::anyhow!("{}", e))
+        TensorTrain::scale(self, scalar).map_err(anyhow::Error::new)
     }
 
     fn inner_product(&self, other: &Self) -> anyhow::Result<AnyScalar> {
-        self.inner(other).map_err(|e| anyhow::anyhow!("{}", e))
+        self.inner(other).map_err(anyhow::Error::new)
     }
 
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
@@ -1959,22 +1979,22 @@ impl TensorConstructionLike for TensorTrain {
     fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
         // Create a single-site TensorTrain with an identity tensor
         let delta = TensorDynLen::diagonal(input, output)?;
-        Self::new(vec![delta]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![delta]).map_err(anyhow::Error::new)
     }
 
     fn scalar_one() -> anyhow::Result<Self> {
         // Empty tensor train represents scalar 1
-        Self::new(vec![]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![]).map_err(anyhow::Error::new)
     }
 
     fn ones(indices: &[Self::Index]) -> anyhow::Result<Self> {
         let t = TensorDynLen::ones(indices)?;
-        Self::new(vec![t]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![t]).map_err(anyhow::Error::new)
     }
 
     fn onehot(index_vals: &[(Self::Index, usize)]) -> anyhow::Result<Self> {
         let t = TensorDynLen::onehot(index_vals)?;
-        Self::new(vec![t]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![t]).map_err(anyhow::Error::new)
     }
 }
 

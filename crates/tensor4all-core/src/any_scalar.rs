@@ -45,8 +45,20 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value.abs() as f64,
             Self::F64(value) => value.abs(),
-            Self::C32(value) => value.norm() as f64,
-            Self::C64(value) => value.norm(),
+            Self::C32(value) => {
+                if value.re.is_nan() || value.im.is_nan() {
+                    f64::NAN
+                } else {
+                    f64::from(value.re).hypot(f64::from(value.im))
+                }
+            }
+            Self::C64(value) => {
+                if value.re.is_nan() || value.im.is_nan() {
+                    f64::NAN
+                } else {
+                    value.re.hypot(value.im)
+                }
+            }
         }
     }
 
@@ -336,7 +348,9 @@ impl AnyScalar {
     ///
     /// # Returns
     ///
-    /// A rank-0 `AnyScalar` containing `value`.
+    /// A rank-0 `AnyScalar` containing `value`. The supported scalar types are
+    /// `f32`, `f64`, `Complex32`, and `Complex64`; the dtype is retained without
+    /// promotion.
     ///
     /// Tensor initialization is attempted eagerly. Because this constructor is
     /// infallible, an initialization failure is retained and returned by later

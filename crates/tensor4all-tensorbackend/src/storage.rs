@@ -1,5 +1,5 @@
 use anyhow::{anyhow, ensure, Result};
-use num_complex::{Complex64, ComplexFloat};
+use num_complex::Complex64;
 use std::ops::Mul;
 use std::sync::Arc;
 
@@ -1467,7 +1467,8 @@ impl Storage {
     /// Maximum absolute value over all stored elements.
     ///
     /// For real storage this is `max(|x|)`, and for complex storage this is
-    /// `max(norm(z))`. NaN payloads propagate to a NaN result; positive
+    /// `max(hypot(re, im))`. NaN payloads, including a NaN real or imaginary
+    /// component paired with infinity, propagate to a NaN result; positive
     /// infinity is preserved.
     ///
     /// # Examples
@@ -1491,7 +1492,13 @@ impl Storage {
 
         match &self.0 {
             StorageRepr::F64(v) => fold_nan_propagating(v.data().iter().map(|x| x.abs())),
-            StorageRepr::C64(v) => fold_nan_propagating(v.data().iter().map(|z| z.norm())),
+            StorageRepr::C64(v) => fold_nan_propagating(v.data().iter().map(|z| {
+                if z.re.is_nan() || z.im.is_nan() {
+                    f64::NAN
+                } else {
+                    z.re.hypot(z.im)
+                }
+            })),
         }
     }
 

@@ -728,6 +728,14 @@ fn storage_max_abs_propagates_nan_and_infinity() {
     .unwrap();
     assert!(nan_complex.max_abs().is_nan());
 
+    for value in [
+        Complex64::new(f64::INFINITY, f64::NAN),
+        Complex64::new(f64::NAN, f64::INFINITY),
+    ] {
+        let mixed = Storage::from_dense_col_major(vec![value], &[1]).unwrap();
+        assert!(mixed.max_abs().is_nan());
+    }
+
     let infinity = Storage::from_dense_col_major(vec![1.0, f64::INFINITY], &[2]).unwrap();
     assert!(infinity.max_abs().is_infinite());
 }

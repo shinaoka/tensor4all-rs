@@ -1,5 +1,7 @@
 //! Error types for TensorTrain operations.
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
 /// Result type for TensorTrain operations.
@@ -52,18 +54,43 @@ pub enum TensorTrainError {
     #[error("Factorization error: {0}")]
     Factorize(#[from] tensor4all_core::FactorizeError),
 
+    /// A typed TensorDynLen metric or materialization error.
+    #[error("TensorDynLen operation error: {source}")]
+    TensorDynLen {
+        /// The typed tensor diagnostic.
+        #[source]
+        source: tensor4all_core::TensorDynLenError,
+    },
+
     /// General operation error.
     #[error("Operation error: {message}")]
     OperationError {
         /// A description of the operation error.
         message: String,
     },
+
+    /// An operation error retaining an owned backend source diagnostic.
+    #[error("Operation error: {message}: {source}")]
+    OperationErrorSource {
+        /// Context describing the failed operation.
+        message: String,
+        /// Original operation diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
 }
 
 impl From<anyhow::Error> for TensorTrainError {
     fn from(source: anyhow::Error) -> Self {
-        Self::OperationError {
-            message: source.to_string(),
+        Self::operation_source("TensorTrain operation failed", source)
+    }
+}
+
+impl TensorTrainError {
+    pub(crate) fn operation_source(message: impl Into<String>, source: anyhow::Error) -> Self {
+        Self::OperationErrorSource {
+            message: message.into(),
+            source: Arc::from(source.into_boxed_dyn_error()),
         }
     }
 }
