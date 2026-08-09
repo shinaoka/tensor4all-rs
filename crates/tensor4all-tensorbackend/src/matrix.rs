@@ -959,6 +959,11 @@ pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
 
 /// Get a submatrix by selecting specific rows and columns.
 ///
+/// # Panics
+///
+/// Panics if any row is not less than `m.nrows()` or any column is not less
+/// than `m.ncols()`.
+///
 /// # Examples
 ///
 /// ```
@@ -1003,6 +1008,10 @@ pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize])
 ///
 /// No-op if `a == b`.
 ///
+/// # Panics
+///
+/// Panics if `a` or `b` is not less than `m.nrows()` when they differ.
+///
 /// # Examples
 ///
 /// ```
@@ -1030,6 +1039,10 @@ pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
 /// Swap two columns in a matrix in-place.
 ///
 /// No-op if `a == b`.
+///
+/// # Panics
+///
+/// Panics if `a` or `b` is not less than `m.ncols()` when they differ.
 ///
 /// # Examples
 ///

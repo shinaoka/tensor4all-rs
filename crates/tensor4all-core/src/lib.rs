@@ -77,7 +77,7 @@ pub use defaults::tensordynlen as tensor;
 pub use any_scalar::AnyScalar;
 pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, StructuredSelectorError,
-    TensorDynLen,
+    TensorDynLen, TensorStorageError,
 };
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{

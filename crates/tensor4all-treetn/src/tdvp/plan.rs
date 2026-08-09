@@ -229,6 +229,18 @@ mod tests {
     }
 
     #[test]
+    fn reverse_regions_rejects_empty_nodes() {
+        let step = TdvpRegionStep {
+            nodes: Vec::<&str>::new(),
+            new_center: "unused",
+            exponent_step: Complex64::new(0.0, -0.2),
+            kind: TdvpRegionKind::OneSite,
+        };
+
+        assert!(reverse_regions(&[step]).is_none());
+    }
+
+    #[test]
     fn applyexp_sub_steps_match_itensornetworks_orders() {
         assert_eq!(applyexp_sub_steps(1).unwrap(), vec![1.0]);
         assert_eq!(applyexp_sub_steps(2).unwrap(), vec![0.5, 0.5]);

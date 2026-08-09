@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index::DynIndex;
-use tensor4all_core::{AnyScalar, TensorDynLen, TensorElement};
+use tensor4all_core::{AnyScalar, TensorDynLen, TensorElement, TensorStorageError};
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
 /// Helper to create DenseF64 storage with shape information
@@ -35,6 +35,41 @@ where
     assert_eq!(
         tensor.storage().unwrap().storage_kind(),
         StorageKind::Diagonal
+    );
+}
+
+#[test]
+fn tensor_storage_has_typed_error_contract() {
+    let tensor = make_tensor_f64(vec![Index::new_dyn(2)], vec![1.0, 2.0]);
+    let result: std::result::Result<Arc<Storage>, TensorStorageError> = tensor.storage();
+    assert_eq!(
+        result.unwrap().to_dense_f64_col_major_vec(&[2]).unwrap(),
+        vec![1.0, 2.0]
+    );
+}
+
+#[test]
+fn eager_complex_conjugation_materializes_conjugated_values() {
+    let tensor = make_tensor_c64(
+        vec![Index::new_dyn(2)],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
+    );
+
+    // `from_dense` keeps a dense eager payload. Conjugation must retain the
+    // operation until this first fallible materialization instead of silently
+    // returning the original eager values.
+    let conjugated = tensor.conj();
+    assert_eq!(
+        conjugated.to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(1.0, -2.0), Complex64::new(-3.0, -4.0)]
+    );
+    assert_eq!(
+        conjugated
+            .storage()
+            .unwrap()
+            .to_dense_c64_col_major_vec(&[2])
+            .unwrap(),
+        vec![Complex64::new(1.0, -2.0), Complex64::new(-3.0, -4.0)]
     );
 }
 

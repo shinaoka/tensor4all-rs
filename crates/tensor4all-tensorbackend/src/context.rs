@@ -10,7 +10,6 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use anyhow::Result;
 use tenferro::{GraphCompiler, GraphExecutor};
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::{buffer_pool::BufferPoolStats, CpuBackend, CpuContext};
@@ -19,7 +18,29 @@ static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
 static DEFAULT_GRAPH_COMPILER: OnceLock<Mutex<GraphCompiler>> = OnceLock::new();
 static DEFAULT_GRAPH_EXECUTOR: OnceLock<Mutex<GraphExecutor<CpuBackend>>> = OnceLock::new();
-static DEFAULT_EAGER_RUNTIME: OnceLock<std::result::Result<Arc<EagerRuntime>, String>> =
+/// Error returned when the process-global eager AD runtime cannot be initialized.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::EagerContextError;
+///
+/// let error = EagerContextError::Registration {
+///     message: "registration failed".to_string(),
+/// };
+/// assert!(error.to_string().contains("registration failed"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EagerContextError {
+    /// The tenferro linalg AD extension rule could not be registered.
+    #[error("failed to register tenferro linalg AD rule: {message}")]
+    Registration {
+        /// Diagnostic returned by tenferro.
+        message: String,
+    },
+}
+
+static DEFAULT_EAGER_RUNTIME: OnceLock<std::result::Result<Arc<EagerRuntime>, EagerContextError>> =
     OnceLock::new();
 
 fn default_cpu_context() -> Arc<CpuContext> {
@@ -113,23 +134,43 @@ pub(crate) fn reset_default_engine() {
 ///
 /// # Errors
 ///
-/// Returns an error if the tenferro linalg AD rule cannot be registered.
-pub fn default_eager_ctx() -> Result<Arc<EagerRuntime>> {
+/// Returns [`EagerContextError::Registration`] if the tenferro linalg AD rule
+/// cannot be registered.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::default_eager_ctx;
+/// use std::sync::Arc;
+///
+/// let first = default_eager_ctx().unwrap();
+/// let second = default_eager_ctx().unwrap();
+/// assert!(Arc::ptr_eq(&first, &second));
+/// ```
+pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContextError> {
     match DEFAULT_EAGER_RUNTIME.get_or_init(|| {
         tenferro_linalg::register_extension_rule()
             .map(|_| {
                 EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
             })
-            .map_err(|error| error.to_string())
+            .map_err(|error| EagerContextError::Registration {
+                message: error.to_string(),
+            })
     }) {
         Ok(context) => Ok(Arc::clone(context)),
-        Err(error) => Err(anyhow::anyhow!(error.clone())),
+        Err(error) => Err(error.clone()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eager_context_has_typed_error_contract() {
+        let result: std::result::Result<Arc<EagerRuntime>, EagerContextError> = default_eager_ctx();
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn eager_context_is_process_global() {

@@ -260,6 +260,32 @@ pub(crate) struct StructuredAdValue {
     axis_classes: Vec<usize>,
 }
 
+/// Error returned when [`TensorDynLen::storage`] cannot materialize its
+/// authoritative compact storage snapshot.
+///
+/// The error preserves the backend diagnostic while keeping the public
+/// `TensorDynLen` API independent of the internal `anyhow` plumbing.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::TensorStorageError;
+///
+/// let error = TensorStorageError::Materialization {
+///     message: "backend unavailable".to_string(),
+/// };
+/// assert!(error.to_string().contains("backend unavailable"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TensorStorageError {
+    /// The eager or structured payload could not be converted to compact storage.
+    #[error("failed to materialize TensorDynLen storage: {message}")]
+    Materialization {
+        /// Diagnostic returned by the backend or storage conversion seam.
+        message: String,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) enum TensorDynLenStorage {
     Materialized(Arc<Storage>),
@@ -267,6 +293,12 @@ pub(crate) enum TensorDynLenStorage {
         inner: Arc<EagerTensor>,
         axis_classes: Vec<usize>,
     },
+    /// A lazy conjugation of another storage representation.
+    ///
+    /// Keeping this operation lazy is important for the infallible tensor
+    /// conjugation API: eager backend conjugation can fail, but returning the
+    /// original payload with conjugated indices would silently corrupt values.
+    Conjugated(Box<Self>),
 }
 
 impl TensorDynLenStorage {
@@ -283,7 +315,7 @@ impl TensorDynLenStorage {
 
     fn eager(&self) -> Option<&EagerTensor> {
         match self {
-            Self::Materialized(_) => None,
+            Self::Materialized(_) | Self::Conjugated(_) => None,
             Self::Eager { inner, .. } => Some(inner.as_ref()),
         }
     }
@@ -292,6 +324,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.axis_classes(),
             Self::Eager { axis_classes, .. } => axis_classes,
+            Self::Conjugated(storage) => storage.axis_classes(),
         }
     }
 
@@ -299,6 +332,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.payload_dims(),
             Self::Eager { inner, .. } => inner.data().shape(),
+            Self::Conjugated(storage) => storage.payload_dims(),
         }
     }
 
@@ -318,6 +352,7 @@ impl TensorDynLenStorage {
                     })
                     .collect()
             }
+            Self::Conjugated(storage) => storage.payload_strides_vec(),
         }
     }
 
@@ -325,6 +360,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_f64(),
             Self::Eager { inner, .. } => inner.data().dtype() == DType::F64,
+            Self::Conjugated(storage) => storage.is_f64(),
         }
     }
 
@@ -332,6 +368,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_c64(),
             Self::Eager { inner, .. } => inner.data().dtype() == DType::C64,
+            Self::Conjugated(storage) => storage.is_c64(),
         }
     }
 
@@ -339,6 +376,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_complex(),
             Self::Eager { inner, .. } => matches!(inner.data().dtype(), DType::C32 | DType::C64),
+            Self::Conjugated(storage) => storage.is_complex(),
         }
     }
 
@@ -346,6 +384,7 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.is_diag(),
             Self::Eager { axis_classes, .. } => TensorDynLen::is_diag_axis_classes(axis_classes),
+            Self::Conjugated(storage) => storage.is_diag(),
         }
     }
 
@@ -361,6 +400,7 @@ impl TensorDynLenStorage {
                     StorageKind::Structured
                 }
             }
+            Self::Conjugated(storage) => storage.storage_kind(),
         }
     }
 
@@ -377,6 +417,7 @@ impl TensorDynLenStorage {
                     logical_rank,
                 )?,
             )),
+            Self::Conjugated(storage) => Ok(Arc::new(storage.materialize(logical_rank)?.conj())),
         }
     }
 
@@ -384,16 +425,11 @@ impl TensorDynLenStorage {
         Ok(self.materialize(self.axis_classes().len())?.scale(scalar))
     }
 
-    fn conj(&self) -> Result<Self> {
+    fn conj(&self) -> Self {
         match self {
-            Self::Materialized(storage) => Ok(Self::Materialized(Arc::new(storage.conj()))),
-            Self::Eager {
-                inner,
-                axis_classes,
-            } => Ok(Self::Eager {
-                inner: Arc::new(inner.conj()?),
-                axis_classes: axis_classes.clone(),
-            }),
+            Self::Materialized(storage) => Self::Materialized(Arc::new(storage.conj())),
+            Self::Eager { .. } => Self::Conjugated(Box::new(self.clone())),
+            Self::Conjugated(storage) => storage.as_ref().clone(),
         }
     }
 
@@ -2353,8 +2389,26 @@ impl TensorDynLen {
     ///
     /// Returns an error when an eager backend payload cannot be converted to
     /// compact storage.
-    pub fn storage(&self) -> Result<Arc<Storage>> {
-        self.storage.materialize(self.indices.len())
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::StorageKind;
+    ///
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![1.0_f64, 2.0],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.storage().unwrap().storage_kind(), StorageKind::Dense);
+    /// ```
+    pub fn storage(&self) -> std::result::Result<Arc<Storage>, TensorStorageError> {
+        self.storage
+            .materialize(self.indices.len())
+            .map_err(|source| TensorStorageError::Materialization {
+                message: source.to_string(),
+            })
     }
 
     /// Sum all elements, returning `AnyScalar`.
@@ -3307,7 +3361,9 @@ impl TensorDynLen {
     /// For real (f64) tensors, returns a copy (conjugate of real is identity).
     /// For complex (Complex64) tensors, conjugates each element.
     ///
-    /// The indices and dimensions remain unchanged.
+    /// The indices and dimensions remain unchanged. Eager payloads may defer
+    /// conjugation until a fallible materialization operation so a backend
+    /// failure cannot pair conjugated indices with unconjugated values.
     ///
     /// This is inspired by the `conj` operation in ITensorMPS.jl.
     ///
@@ -3322,7 +3378,10 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i], data).unwrap();
     ///
     /// let conj_tensor = tensor.conj();
-    /// // Elements are now conjugated: 1-2i, 3+4i
+    /// assert_eq!(
+    ///     conj_tensor.to_vec::<Complex64>().unwrap(),
+    ///     vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
+    /// );
     /// ```
     pub fn conj(&self) -> Self {
         // Conjugate tensor: conjugate storage data and map indices via IndexLike::conj()
@@ -3346,14 +3405,10 @@ impl TensorDynLen {
             .unwrap_or_else(Self::empty_eager_cache);
         Self {
             indices: new_indices,
-            // Preserve the existing infallible conjugation API if a tracked
-            // eager payload cannot be converted back to compact storage.
-            storage: self.storage.conj().unwrap_or_else(|_| {
-                self.storage
-                    .materialize(self.indices.len())
-                    .map(|storage| TensorDynLenStorage::from_storage(Arc::new(storage.conj())))
-                    .unwrap_or_else(|_| self.storage.clone())
-            }),
+            // Eager conjugation is represented lazily so a backend failure can
+            // be reported by the next fallible materialization operation; it
+            // must never leave conjugated indices paired with original values.
+            storage: self.storage.conj(),
             structured_ad,
             eager_cache,
         }

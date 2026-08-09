@@ -34,7 +34,7 @@ pub use backend::{
     triangular_solve_matrix_owned, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
     MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
 };
-pub use context::{default_eager_ctx, with_default_backend};
+pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 pub use matrix::{
     batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d,
     hermitian_eigendecomposition, hermitian_exponential_first_column, lowest_hermitian_eigenpair,

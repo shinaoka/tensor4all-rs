@@ -350,6 +350,39 @@ fn from_vec2d_panics_with_shape_error_for_ragged_rows() {
 }
 
 #[test]
+fn matrix_public_precondition_assertions_reject_invalid_axes() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
+
+    assert!(std::panic::catch_unwind(|| submatrix(&matrix, &[2], &[0])).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix(&matrix, &[0], &[2])).is_err());
+
+    let mut rows = matrix.clone();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_rows(&mut rows, 2, 0);
+    }))
+    .is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_rows(&mut rows, 0, 2);
+    }))
+    .is_err());
+
+    let mut cols = matrix.clone();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_cols(&mut cols, 2, 0);
+    }))
+    .is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_cols(&mut cols, 0, 2);
+    }))
+    .is_err());
+
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..0, 0..2)).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..2, 0..0)).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..3, 0..2)).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..2, 0..3)).is_err());
+}
+
+#[test]
 fn test_matrix_transpose() {
     let m = from_vec2d(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
     let mt = transpose(&m);
