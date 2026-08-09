@@ -4,11 +4,18 @@
 //! the workspace's production library and binary targets. Assertion findings
 //! are scanned only in the source files selected by rustc's dep-info for those
 //! same compiler runs; the source visitor does not resolve modules or evaluate
-//! target and feature configuration.
+//! target and feature configuration. Dep-info can also list `.rs` files used as
+//! `include!`, `include_str!`, or `include_bytes!` data rather than complete
+//! modules: complete files use the public visitor, while parse failures are
+//! conservatively token-scanned for literal `assert!`/`debug_assert!` calls.
+//! Macro invocation arguments and `macro_rules!` transcribers are likewise
+//! scanned only for those literal assertion calls; no semantic macro resolver
+//! is attempted.
 
 use anyhow::{anyhow, bail, Context, Result};
+use proc_macro2::{TokenStream, TokenTree};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -37,7 +44,8 @@ const PRODUCTION_KINDS: [&str; 7] = [
     "proc-macro",
     "bin",
 ];
-// Keep this inner compiler timeout below the Python wrapper and CI job limits.
+// Each feature pass gets ten minutes; the wrapper allows both passes and the
+// CI step leaves room for the wrapper build and process teardown.
 const CLIPPY_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -137,7 +145,15 @@ struct TargetKey {
     kind: String,
 }
 
-type CompilerArtifacts = BTreeMap<TargetKey, BTreeSet<PathBuf>>;
+#[derive(Clone, Debug)]
+struct CompilerArtifact {
+    key: TargetKey,
+    filenames: BTreeSet<PathBuf>,
+    target: Value,
+    profile: Value,
+}
+
+type CompilerArtifacts = Vec<CompilerArtifact>;
 type ClippyParse = (HashSet<TargetKey>, CompilerArtifacts, BTreeSet<Finding>);
 
 #[derive(Debug)]
@@ -448,16 +464,35 @@ fn parse_clippy_output(
                     if filenames.is_empty() {
                         bail!("selected compiler-artifact record omitted artifact filenames");
                     }
-                    let paths = artifacts.entry(key.clone()).or_default();
-                    for filename in filenames {
-                        let filename = filename.as_str().ok_or_else(|| {
-                            anyhow!("compiler-artifact filename was not a string")
-                        })?;
-                        if filename.is_empty() {
-                            bail!("compiler-artifact filename was empty");
-                        }
-                        paths.insert(PathBuf::from(filename));
+                    let filenames = filenames
+                        .iter()
+                        .map(|filename| {
+                            let filename = filename.as_str().ok_or_else(|| {
+                                anyhow!("compiler-artifact filename was not a string")
+                            })?;
+                            if filename.is_empty() {
+                                bail!("compiler-artifact filename was empty");
+                            }
+                            Ok(PathBuf::from(filename))
+                        })
+                        .collect::<Result<BTreeSet<_>>>()?;
+                    let target = message
+                        .get("target")
+                        .cloned()
+                        .ok_or_else(|| anyhow!("compiler-artifact record omitted target"))?;
+                    let profile = message
+                        .get("profile")
+                        .cloned()
+                        .ok_or_else(|| anyhow!("compiler-artifact record omitted profile"))?;
+                    if !profile.is_object() {
+                        bail!("compiler-artifact profile was not an object");
                     }
+                    artifacts.push(CompilerArtifact {
+                        key: key.clone(),
+                        filenames,
+                        target,
+                        profile,
+                    });
                     seen_targets.insert(key);
                 }
             }
@@ -501,7 +536,7 @@ fn parse_clippy_output(
     }
     let missing_artifacts = expected
         .iter()
-        .filter(|key| !artifacts.contains_key(*key))
+        .filter(|key| !artifacts.iter().any(|artifact| artifact.key == **key))
         .map(|key| format!("{}:{}", key.target_name, key.kind))
         .collect::<Vec<_>>();
     if !missing_artifacts.is_empty() {
@@ -627,62 +662,172 @@ fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)
     Ok(Some((relative, line)))
 }
 
+#[derive(Debug, Default)]
+struct ParsedDepInfo {
+    outputs: BTreeSet<PathBuf>,
+    sources: BTreeSet<PathBuf>,
+}
+
 fn dep_info_sources(
     root: &Path,
     artifacts: &CompilerArtifacts,
     expected: &HashSet<TargetKey>,
 ) -> Result<BTreeSet<PathBuf>> {
     let mut sources = BTreeSet::new();
-    for key in expected {
-        let filenames = artifacts.get(key).ok_or_else(|| {
-            anyhow!(
-                "missing compiler artifact for {}:{}",
-                key.target_name,
-                key.kind
-            )
-        })?;
-        let dep_info = locate_dep_info(root, key, filenames)?;
-        let selected = parse_make_dep_info(&dep_info, root)?;
-        if selected.is_empty() {
-            bail!(
-                "dep-info {} contained no workspace-local Rust sources for {}:{}",
-                dep_info.display(),
-                key.target_name,
-                key.kind
-            );
+    let mut accounted = HashSet::new();
+    for artifact in artifacts {
+        if !expected.contains(&artifact.key) {
+            continue;
         }
-        sources.extend(selected);
+        let dep_infos = locate_dep_infos(root, artifact)?;
+        let mut artifact_sources = BTreeSet::new();
+        for (dep_info, parsed) in dep_infos {
+            if parsed.sources.is_empty() {
+                bail!(
+                    "dep-info {} contained no workspace-local Rust sources for {}:{}",
+                    dep_info.display(),
+                    artifact.key.target_name,
+                    artifact.key.kind
+                );
+            }
+            artifact_sources.extend(parsed.sources);
+        }
+        sources.extend(artifact_sources);
+        accounted.insert(artifact.key.clone());
+    }
+    let missing = expected
+        .difference(&accounted)
+        .map(|key| format!("{}:{}", key.target_name, key.kind))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!("missing compiler artifacts for production targets: {missing:?}");
     }
     Ok(sources)
 }
 
-fn locate_dep_info(root: &Path, key: &TargetKey, filenames: &BTreeSet<PathBuf>) -> Result<PathBuf> {
-    for filename in filenames {
-        let artifact = if filename.is_absolute() {
+fn artifact_identity(artifact: &CompilerArtifact) -> String {
+    let source = artifact
+        .target
+        .get("src_path")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown source>");
+    let profile = artifact
+        .profile
+        .get("opt_level")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown profile>");
+    format!(
+        "{}:{} ({source}, opt-level {profile})",
+        artifact.key.target_name, artifact.key.kind
+    )
+}
+
+fn locate_dep_infos(
+    root: &Path,
+    artifact: &CompilerArtifact,
+) -> Result<Vec<(PathBuf, ParsedDepInfo)>> {
+    let expected_outputs = artifact_output_names(root, &artifact.filenames);
+    let mut candidates = BTreeSet::new();
+    for filename in &artifact.filenames {
+        let artifact_path = if filename.is_absolute() {
             filename.clone()
         } else {
             root.join(filename)
         };
-        for candidate in dep_info_candidates(&artifact) {
-            if candidate.is_file() {
-                return fs::canonicalize(&candidate).with_context(|| {
-                    format!(
-                        "failed to canonicalize dep-info candidate {}",
-                        candidate.display()
-                    )
-                });
+        candidates.extend(dep_info_candidates(&artifact_path));
+    }
+
+    let mut matching = Vec::new();
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let canonical = fs::canonicalize(&candidate).with_context(|| {
+            format!(
+                "failed to canonicalize dep-info candidate {}",
+                candidate.display()
+            )
+        })?;
+        let parsed = parse_make_dep_info(&canonical, root)?;
+        if parsed
+            .outputs
+            .iter()
+            .any(|output| expected_outputs.contains(output))
+        {
+            matching.push((canonical, parsed));
+        }
+    }
+    if matching.is_empty() {
+        let filenames = artifact
+            .filenames
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        bail!(
+            "no dep-info rule matched production artifact {} from compiler artifacts {filenames:?}",
+            artifact_identity(artifact)
+        );
+    }
+    Ok(matching)
+}
+
+fn normalize_path(root: &Path, path: &Path) -> PathBuf {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR_STR),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            std::path::Component::Normal(value) => normalized.push(value),
+        }
+    }
+    normalized
+}
+
+fn artifact_output_names(root: &Path, filenames: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
+    const KINDS: [&str; 10] = [
+        "", "d", "rmeta", "rlib", "so", "dylib", "dll", "a", "lib", "exe",
+    ];
+    let mut outputs = BTreeSet::new();
+    for filename in filenames {
+        let artifact = normalize_path(root, filename);
+        outputs.insert(artifact.clone());
+        let Some(file_name) = artifact.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let stem = artifact
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(file_name);
+        let mut stems = BTreeSet::from([stem.to_owned()]);
+        if let Some(without_lib) = stem.strip_prefix("lib") {
+            stems.insert(without_lib.to_owned());
+        } else {
+            stems.insert(format!("lib{stem}"));
+        }
+        let parent = artifact.parent().unwrap_or_else(|| Path::new("/"));
+        for stem in stems {
+            for kind in KINDS {
+                let name = if kind.is_empty() {
+                    stem.clone()
+                } else {
+                    format!("{stem}.{kind}")
+                };
+                outputs.insert(normalize_path(root, &parent.join(name)));
             }
         }
     }
-    let artifacts = filenames
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    bail!(
-        "no dep-info file found for production target {}:{} from compiler artifacts {artifacts:?}",
-        key.target_name,
-        key.kind
-    )
+    outputs
 }
 
 fn dep_info_candidates(artifact: &Path) -> Vec<PathBuf> {
@@ -695,6 +840,9 @@ fn dep_info_candidates(artifact: &Path) -> Vec<PathBuf> {
         .unwrap_or(file_name);
     let without_lib = stem.strip_prefix("lib").unwrap_or(stem);
     let mut candidates = Vec::new();
+    if artifact.extension().and_then(|ext| ext.to_str()) == Some("d") {
+        candidates.push(artifact.to_path_buf());
+    }
     for name in [format!("{without_lib}.d"), format!("{stem}.d")] {
         let candidate = artifact.with_file_name(name);
         if !candidates.contains(&candidate) {
@@ -704,14 +852,14 @@ fn dep_info_candidates(artifact: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-fn parse_make_dep_info(path: &Path, root: &Path) -> Result<BTreeSet<PathBuf>> {
+fn parse_make_dep_info(path: &Path, root: &Path) -> Result<ParsedDepInfo> {
     let bytes =
         fs::read(path).with_context(|| format!("failed to read dep-info {}", path.display()))?;
     let source = std::str::from_utf8(&bytes)
         .with_context(|| format!("dep-info is not UTF-8: {}", path.display()))?;
     let source = join_make_lines(source)?;
     let mut saw_rule = false;
-    let mut selected = BTreeSet::new();
+    let mut parsed = ParsedDepInfo::default();
     for (line_number, line) in source.split('\n').enumerate() {
         let trimmed = line.trim_start();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -724,6 +872,13 @@ fn parse_make_dep_info(path: &Path, root: &Path) -> Result<BTreeSet<PathBuf>> {
             )
         })?;
         saw_rule = true;
+        for output in parse_make_words(&line[..separator]).with_context(|| {
+            format!("dep-info line {} has invalid Make outputs", line_number + 1)
+        })? {
+            parsed
+                .outputs
+                .insert(normalize_path(root, Path::new(&output)));
+        }
         for dependency in parse_make_words(&line[separator + 1..]).with_context(|| {
             format!(
                 "dep-info line {} has invalid Make dependencies",
@@ -756,14 +911,14 @@ fn parse_make_dep_info(path: &Path, root: &Path) -> Result<BTreeSet<PathBuf>> {
                 Err(_) => continue,
             };
             if canonical.starts_with(root) && canonical.is_file() {
-                selected.insert(canonical);
+                parsed.sources.insert(canonical);
             }
         }
     }
     if !saw_rule {
         bail!("dep-info contained no Make rules: {}", path.display());
     }
-    Ok(selected)
+    Ok(parsed)
 }
 
 fn join_make_lines(source: &str) -> Result<String> {
@@ -798,9 +953,7 @@ fn make_rule_separator(line: &str) -> Result<usize> {
             index = index.saturating_add(2);
             continue;
         }
-        if bytes[index] == b':'
-            && (index + 1 == bytes.len() || bytes[index + 1].is_ascii_whitespace())
-        {
+        if bytes[index] == b':' {
             return Ok(index);
         }
         index += 1;
@@ -820,11 +973,16 @@ fn parse_make_words(source: &str) -> Result<Vec<String>> {
         } else if character == '\\' {
             let escaped = chars
                 .next()
-                .ok_or_else(|| anyhow!("Make dependency ended with an escape"))?;
+                .ok_or_else(|| anyhow!("Make word ended with an escape"))?;
             word.push(escaped);
-        } else if character == '#' {
-            bail!("unescaped Make comment marker in dependency list");
+        } else if character == '$' {
+            if chars.peek() == Some(&'$') {
+                chars.next();
+            }
+            word.push('$');
         } else {
+            // rustc emits unescaped '#' in source names; unlike a general
+            // Make parser, dep-info must preserve it as ordinary path data.
             word.push(character);
         }
     }
@@ -956,6 +1114,194 @@ fn cfg_attr_definitely_false(meta: &Meta) -> Result<bool> {
     Ok(false)
 }
 
+fn assertion_kind(name: &str) -> Option<&'static str> {
+    match name.strip_prefix("r#").unwrap_or(name) {
+        "assert" => Some("assert"),
+        "debug_assert" => Some("debug_assert"),
+        _ => None,
+    }
+}
+
+fn record_assertion(path: &str, line: usize, kind: &str, findings: &mut BTreeSet<Finding>) {
+    if line != 0 {
+        findings.insert(Finding {
+            path: path.to_owned(),
+            line,
+            kind: kind.to_owned(),
+        });
+    }
+}
+
+fn scan_assertion_tokens(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Finding>) {
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    for (index, token) in tokens.iter().enumerate() {
+        match token {
+            TokenTree::Ident(ident) => {
+                if let Some(kind) = assertion_kind(&ident.to_string()) {
+                    if matches!(tokens.get(index + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+                    {
+                        record_assertion(path, ident.span().start().line, kind, findings);
+                    }
+                }
+            }
+            TokenTree::Group(group) => {
+                scan_assertion_tokens(path, group.stream(), findings);
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+}
+
+fn line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (offset, byte) in source.as_bytes().iter().enumerate() {
+        if *byte == b'\n' {
+            starts.push(offset + 1);
+        }
+    }
+    starts
+}
+
+fn source_line(starts: &[usize], offset: usize) -> usize {
+    starts.partition_point(|start| *start <= offset)
+}
+
+fn skip_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = index.saturating_add(2),
+            value if value == quote => return index + 1,
+            b'\n' if quote == b'\'' => return index,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start;
+    if bytes.get(index) == Some(&b'b') {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b'r') {
+        return None;
+    }
+    index += 1;
+    while bytes.get(index) == Some(&b'#') {
+        index += 1;
+    }
+    let hashes = index - start - 1 - usize::from(bytes.get(start) == Some(&b'b'));
+    if bytes.get(index) != Some(&b'"') {
+        return None;
+    }
+    index += 1;
+    while index < bytes.len() {
+        if bytes[index] == b'"'
+            && bytes.get(index + 1..index + 1 + hashes) == Some(&vec![b'#'; hashes][..])
+        {
+            return Some(index + 1 + hashes);
+        }
+        index += 1;
+    }
+    Some(bytes.len())
+}
+
+fn skip_block_comment(bytes: &[u8], start: usize) -> usize {
+    let mut depth = 1;
+    let mut index = start + 2;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'/' && bytes[index + 1] == b'*' {
+            depth += 1;
+            index += 2;
+        } else if bytes[index] == b'*' && bytes[index + 1] == b'/' {
+            depth -= 1;
+            index += 2;
+            if depth == 0 {
+                return index;
+            }
+        } else {
+            index += 1;
+        }
+    }
+    bytes.len()
+}
+
+fn skip_space_and_comments(bytes: &[u8], mut index: usize) -> usize {
+    loop {
+        while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+            index += 1;
+        }
+        if bytes.get(index..index + 2) == Some(b"//") {
+            index += 2;
+            while bytes.get(index).is_some_and(|byte| *byte != b'\n') {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes.get(index..index + 2) == Some(b"/*") {
+            index = skip_block_comment(bytes, index);
+            continue;
+        }
+        return index;
+    }
+}
+
+fn scan_literal_assertions_text(source: &str, path: &str, findings: &mut BTreeSet<Finding>) {
+    let bytes = source.as_bytes();
+    let starts = line_starts(source);
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes.get(index..index + 2) == Some(b"//") {
+            index += 2;
+            while bytes.get(index).is_some_and(|byte| *byte != b'\n') {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes.get(index..index + 2) == Some(b"/*") {
+            index = skip_block_comment(bytes, index);
+            continue;
+        }
+        if let Some(end) = raw_string_end(bytes, index) {
+            index = end;
+            continue;
+        }
+        if bytes[index] == b'"' {
+            index = skip_quoted(bytes, index, b'"');
+            continue;
+        }
+        if bytes[index] == b'\'' {
+            let end = skip_quoted(bytes, index, b'\'');
+            index = if end > index + 1 { end } else { index + 1 };
+            continue;
+        }
+        if bytes[index] == b'b' && matches!(bytes.get(index + 1), Some(b'"' | b'\'')) {
+            index = skip_quoted(bytes, index + 1, bytes[index + 1]);
+            continue;
+        }
+        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while bytes
+                .get(index)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                index += 1;
+            }
+            let name = &source[start..index];
+            if let Some(kind) = assertion_kind(name) {
+                let bang = skip_space_and_comments(bytes, index);
+                if bytes.get(bang) == Some(&b'!') {
+                    record_assertion(path, source_line(&starts, start), kind, findings);
+                }
+            }
+            continue;
+        }
+        index += 1;
+    }
+}
+
 struct PublicAssertionVisitor<'a> {
     path: &'a str,
     findings: &'a mut BTreeSet<Finding>,
@@ -997,6 +1343,9 @@ impl PublicAssertionVisitor<'_> {
                             }
                         }
                     }
+                }
+                Item::Macro(item_macro) => {
+                    scan_assertion_tokens(self.path, item_macro.mac.tokens.clone(), self.findings);
                 }
                 Item::Mod(module) => {
                     if let Some((_, items)) = &module.content {
@@ -1068,58 +1417,61 @@ impl<'ast> Visit<'ast> for PublicAssertionVisitor<'_> {
         syn::visit::visit_arm(self, node);
     }
 
-    fn visit_item_macro(&mut self, _node: &'ast syn::ItemMacro) {
-        // Do not inspect dormant macro token text.
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        scan_assertion_tokens(self.path, node.mac.tokens.clone(), self.findings);
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
         if !self.in_public_context {
             return;
         }
-        let Some(segment) = node.path.segments.last() else {
-            return;
-        };
-        let name = segment.ident.to_string();
-        let kind = match name.as_str() {
-            "assert" => "assert",
-            "debug_assert" => "debug_assert",
-            _ => return,
-        };
-        let line = node.span().start().line;
-        if line == 0 {
-            return;
+        if let Some(segment) = node.path.segments.last() {
+            if let Some(kind) = assertion_kind(&segment.ident.to_string()) {
+                record_assertion(self.path, node.span().start().line, kind, self.findings);
+            }
         }
-        self.findings.insert(Finding {
-            path: self.path.to_owned(),
-            line,
-            kind: kind.to_owned(),
-        });
+        scan_assertion_tokens(self.path, node.tokens.clone(), self.findings);
     }
 }
 
 fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTreeSet<Finding>> {
     let mut findings = BTreeSet::new();
     for path in source_files {
-        let source = fs::read_to_string(path)
+        let bytes = fs::read(path)
             .with_context(|| format!("failed to read production source {}", path.display()))?;
-        let file = syn::parse_file(&source)
-            .with_context(|| format!("failed to parse production source {}", path.display()))?;
-        if definitely_test_only(&file.attrs)? {
-            continue;
-        }
+        let source = String::from_utf8_lossy(&bytes);
         let relative = path
             .strip_prefix(root)
             .map_err(|_| anyhow!("production source escaped audit root"))?
             .to_str()
             .ok_or_else(|| anyhow!("production source path is not UTF-8"))?
             .replace(std::path::MAIN_SEPARATOR, "/");
-        let mut visitor = PublicAssertionVisitor {
-            path: &relative,
-            findings: &mut findings,
-            in_public_context: false,
-            error: None,
-        };
-        visitor.scan_items(&file.items)?;
+        match syn::parse_file(&source) {
+            Ok(file) => {
+                if definitely_test_only(&file.attrs)? {
+                    continue;
+                }
+                let mut visitor = PublicAssertionVisitor {
+                    path: &relative,
+                    findings: &mut findings,
+                    in_public_context: false,
+                    error: None,
+                };
+                visitor.scan_items(&file.items)?;
+            }
+            Err(_) => {
+                // Dep-info includes include! fragments and .rs data files in
+                // addition to complete modules. They are part of a successful
+                // compiler build, so parse failure is not a configuration error.
+                // Scan tokens when possible and fall back to a string/comment
+                // aware lexical check for incomplete fragments.
+                if let Ok(tokens) = source.parse::<TokenStream>() {
+                    scan_assertion_tokens(&relative, tokens, &mut findings);
+                } else {
+                    scan_literal_assertions_text(&source, &relative, &mut findings);
+                }
+            }
+        }
     }
     Ok(findings)
 }
@@ -1356,6 +1708,7 @@ mod tests {
             "reason": "compiler-artifact",
             "package_id": "pkg",
             "target": {"name": "demo", "kind": ["cdylib", "rlib"]},
+            "profile": {"opt_level": "0"},
             "filenames": ["target/debug/deps/libdemo-hash.rmeta"]
         })
     }
@@ -1453,13 +1806,36 @@ mod tests {
         let dep_info = root.path.join("demo.d");
         fs::write(
             &dep_info,
-            "demo: crates/demo/src/lib.rs crates/demo/src/with\\ space.rs \\\n crates/demo/src/with\\#hash.rs /outside/external.rs Cargo.toml\n",
+            "demo: crates/demo/src/lib.rs crates/demo/src/with\\ space.rs \\\n crates/demo/src/with#hash.rs /outside/external.rs Cargo.toml\n",
         )
         .expect("write dep-info");
-        let sources = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
-        assert_eq!(sources.len(), 3);
-        assert!(sources.contains(&fs::canonicalize(spaced).unwrap()));
-        assert!(sources.contains(&fs::canonicalize(hashed).unwrap()));
+        let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
+        assert_eq!(parsed.sources.len(), 3);
+        assert!(parsed.sources.contains(&fs::canonicalize(spaced).unwrap()));
+        assert!(parsed.sources.contains(&fs::canonicalize(hashed).unwrap()));
+    }
+
+    #[test]
+    fn dep_info_parser_handles_rustc_encoded_paths() {
+        let root = TempRoot::new();
+        let dollar = root.path.join("crates/demo/src/with$dollar.rs");
+        let colon = root.path.join("crates/demo/src/with:colon.rs");
+        let hashed = root.path.join("crates/demo/src/with#hash.rs");
+        for path in [&dollar, &colon, &hashed] {
+            fs::write(path, "pub fn selected() {}\n").expect("write selected source");
+        }
+        let dep_info = root.path.join("demo.d");
+        // This is rustc's Make encoding: '$' is written as '$$', while '#'
+        // is an ordinary path character and spaces/colons are backslash escaped.
+        fs::write(
+            &dep_info,
+            "demo: crates/demo/src/with$$dollar.rs crates/demo/src/with\\:colon.rs crates/demo/src/with#hash.rs\\\n",
+        )
+        .expect("write rustc-style dep-info");
+        let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
+        assert!(parsed.sources.contains(&fs::canonicalize(dollar).unwrap()));
+        assert!(parsed.sources.contains(&fs::canonicalize(colon).unwrap()));
+        assert!(parsed.sources.contains(&fs::canonicalize(hashed).unwrap()));
     }
 
     #[test]
@@ -1481,6 +1857,95 @@ mod tests {
     }
 
     #[test]
+    fn dep_info_lookup_rejects_stale_heuristic_targets() {
+        let root = TempRoot::new();
+        let stale_source = root.path.join("crates/demo/src/stale.rs");
+        let valid_source = root.path.join("crates/demo/src/valid.rs");
+        fs::write(&stale_source, "pub fn stale() {}\n").expect("write stale source");
+        fs::write(&valid_source, "pub fn valid() {}\n").expect("write valid source");
+        let deps = root.path.join("target/debug/deps");
+        fs::create_dir_all(&deps).expect("create target deps");
+        fs::write(
+            deps.join("demo-hash.d"),
+            "target/debug/deps/demo-other.d: crates/demo/src/stale.rs\n",
+        )
+        .expect("write stale dep-info");
+        fs::write(
+            deps.join("libdemo-hash.d"),
+            "target/debug/deps/libdemo-hash.d: crates/demo/src/valid.rs\n",
+        )
+        .expect("write valid dep-info");
+        let key = TargetKey {
+            package_id: "pkg".to_owned(),
+            target_name: "demo".to_owned(),
+            kind: "rlib".to_owned(),
+        };
+        let artifacts = vec![CompilerArtifact {
+            key: key.clone(),
+            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-hash.rlib")]),
+            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/lib.rs"}),
+            profile: json!({"opt_level": "0"}),
+        }];
+        let sources = dep_info_sources(&root.path, &artifacts, &HashSet::from([key]))
+            .expect("select matching dep-info");
+        assert!(sources.contains(&fs::canonicalize(valid_source).unwrap()));
+        assert!(!sources.contains(&fs::canonicalize(stale_source).unwrap()));
+    }
+
+    #[test]
+    fn cargo_json_preserves_each_artifact_record() {
+        let root = TempRoot::new();
+        let expected = HashSet::from([TargetKey {
+            package_id: "pkg".to_owned(),
+            target_name: "demo".to_owned(),
+            kind: "cdylib".to_owned(),
+        }]);
+        let first = json!({
+            "reason": "compiler-artifact",
+            "package_id": "pkg",
+            "target": {"name": "demo", "kind": ["cdylib", "rlib"], "src_path": "crates/demo/src/lib.rs"},
+            "profile": {"opt_level": "0"},
+            "filenames": ["target/debug/deps/libdemo-debug.rmeta"]
+        });
+        let second = json!({
+            "reason": "compiler-artifact",
+            "package_id": "pkg",
+            "target": {"name": "demo", "kind": ["cdylib", "rlib"], "src_path": "crates/demo/src/lib.rs"},
+            "profile": {"opt_level": "3"},
+            "filenames": ["target/release/deps/libdemo-release.rmeta"]
+        });
+        let debug_source = root.path.join("crates/demo/src/debug.rs");
+        let release_source = root.path.join("crates/demo/src/release.rs");
+        fs::write(&debug_source, "pub fn debug() {}\n").expect("write debug source");
+        fs::write(&release_source, "pub fn release() {}\n").expect("write release source");
+        fs::create_dir_all(root.path.join("target/debug/deps")).expect("create debug deps");
+        fs::create_dir_all(root.path.join("target/release/deps")).expect("create release deps");
+        fs::write(
+            root.path.join("target/debug/deps/libdemo-debug.d"),
+            "target/debug/deps/libdemo-debug.d: crates/demo/src/debug.rs\n",
+        )
+        .expect("write debug dep-info");
+        fs::write(
+            root.path.join("target/release/deps/libdemo-release.d"),
+            "target/release/deps/libdemo-release.d: crates/demo/src/release.rs\n",
+        )
+        .expect("write release dep-info");
+        let output = format!(
+            "{}\n{}\n{}\n",
+            first,
+            second,
+            json!({"reason": "build-finished", "success": true})
+        );
+        let (_, artifacts, _) = parse_clippy_output(output.as_bytes(), &root.path, &expected)
+            .expect("valid duplicate-key artifact records");
+        assert_eq!(artifacts.len(), 2);
+        let sources =
+            dep_info_sources(&root.path, &artifacts, &expected).expect("union dep-info sources");
+        assert!(sources.contains(&fs::canonicalize(debug_source).unwrap()));
+        assert!(sources.contains(&fs::canonicalize(release_source).unwrap()));
+    }
+
+    #[test]
     fn dep_info_parser_and_artifact_lookup_fail_closed() {
         let root = TempRoot::new();
         let malformed = root.path.join("malformed.d");
@@ -1495,13 +1960,42 @@ mod tests {
             target_name: "demo".to_owned(),
             kind: "rlib".to_owned(),
         };
-        let artifacts = BTreeMap::from([(
-            key.clone(),
-            BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-missing.rmeta")]),
-        )]);
+        let artifacts = vec![CompilerArtifact {
+            key: key.clone(),
+            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-missing.rmeta")]),
+            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/lib.rs"}),
+            profile: json!({"opt_level": "0"}),
+        }];
         let expected = HashSet::from([key]);
         let error = dep_info_sources(&root.path, &artifacts, &expected).unwrap_err();
         assert!(error.to_string().contains("no dep-info"));
+    }
+
+    #[test]
+    fn assertion_scan_handles_fragments_and_macro_tokens() {
+        let root = TempRoot::new();
+        let parsed = root.path.join("crates/demo/src/lib.rs");
+        let fragment = root.path.join("crates/demo/src/fragment.rs");
+        fs::write(
+            &parsed,
+            r#"macro_rules! transcriber { () => { assert!(true); } }
+macro_rules! passthrough { ($value:expr) => { $value }; }
+pub fn public() { passthrough!(assert!(true)); }
+"#,
+        )
+        .expect("write parsed source");
+        fs::write(&fragment, "let value = assert!(true);\n").expect("write included fragment");
+        let sources = BTreeSet::from([
+            fs::canonicalize(parsed).unwrap(),
+            fs::canonicalize(fragment).unwrap(),
+        ]);
+        let findings = scan_assertions(&root.path, &sources).expect("scan selected sources");
+        assert!(findings
+            .iter()
+            .any(|finding| finding.path.ends_with("lib.rs") && finding.kind == "assert"));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.path.ends_with("fragment.rs") && finding.kind == "assert"));
     }
 
     #[test]

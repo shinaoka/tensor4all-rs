@@ -20,10 +20,11 @@ from pathlib import Path
 
 TOOL_ENV = "T4A_PANIC_AUDIT_BIN"
 TOOL_PACKAGE = "library-panic-audit"
-# Keep the wrapper timeout above the Rust tool's 10-minute Clippy timeout;
-# CI allows another five minutes for process startup and teardown.
+# Each Rust Clippy pass has a 10-minute timeout. The Rust tool gets 25
+# minutes for both passes; the wrapper gets 10 minutes to build plus 25
+# minutes to audit, and CI allows 40 minutes for startup/teardown.
 BUILD_TIMEOUT_SECONDS = 600
-AUDIT_TIMEOUT_SECONDS = 1200
+AUDIT_TIMEOUT_SECONDS = 1500
 KNOWN_CARGO_REASONS = {
     "build-finished",
     "build-script-executed",

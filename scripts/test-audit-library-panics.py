@@ -211,6 +211,9 @@ mod tests {
 pub fn feature_production() {
     panic!("all-features production");
 }
+
+#[path = "macro_fixture.rs"]
+mod macro_fixture;
 '''
 
 FIXTURE_SHARED = r'''#[path = "shared/nested.rs"]
@@ -229,6 +232,17 @@ FIXTURE_SELECTED = 'pub fn default_selected_assertion() { assert!(true); }\n'
 FIXTURE_FEATURE_SELECTED = 'pub fn feature_selected_assertion() { assert!(true); }\n'
 FIXTURE_BIN_NESTED = 'pub fn bin_root_assertion() { assert!(true); }\n'
 FIXTURE_LIB_NESTED = 'pub fn lib_module_assertion() { assert!(true); }\n'
+FIXTURE_MACRO = r'''macro_rules! transcribed_assertion {
+    () => { assert!(true); };
+}
+macro_rules! passthrough_assertion {
+    ($value:expr) => { $value };
+}
+pub fn macro_assertions() {
+    passthrough_assertion!(assert!(true));
+    transcribed_assertion!();
+}
+'''
 FIXTURE_FILE_LEVEL_TEST = '''#![cfg(test)]
 pub fn file_level_test_only() {
     assert!(true);
@@ -274,6 +288,7 @@ def _write_fixture(root: Path) -> None:
         "crates/demo/src/feature_selected.rs": FIXTURE_FEATURE_SELECTED,
         "crates/demo/src/nested.rs": FIXTURE_BIN_NESTED,
         "crates/demo/src/shared/nested.rs": FIXTURE_LIB_NESTED,
+        "crates/demo/src/macro_fixture.rs": FIXTURE_MACRO,
         "crates/demo/src/file_level.rs": FIXTURE_FILE_LEVEL_TEST,
         "crates/demo/tests/ignored.rs": 'pub fn ignored() { panic!("integration test"); }\n',
         "crates/demo/examples/ignored.rs": 'fn main() { panic!("example"); }\n',
@@ -339,7 +354,7 @@ def test_dep_info_selects_each_production_source_once() -> None:
 
     assert result.returncode == 1, result.stderr
     assert result.stderr.splitlines() == [
-        "Audit failed: 11 unbaselined findings, 0 stale baseline entries."
+        "Audit failed: 13 unbaselined findings, 0 stale baseline entries."
     ]
     findings = result.stdout.splitlines()
     assert findings[: len(baseline)] == [
@@ -357,6 +372,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(option.unwrap());')}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(panic!(\"invoked macro argument\"));')}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"all-features production\");')}:panic",
+        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '() => { assert!(true); }')}:assert",
+        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'passthrough_assertion!(assert!(true));')}:assert",
         f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, '    std::panic!(\"production binary\");')}:panic",
     ]
     assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :]} >= {
@@ -368,6 +385,16 @@ def test_dep_info_selects_each_production_source_once() -> None:
     assert all("ignored" not in finding for finding in findings)
     assert all("test_only" not in finding for finding in findings)
     assert all("file_level" not in finding for finding in findings)
+
+
+def test_macro_assertion_arguments_and_transcribers_are_reported() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        result = _run_audit(fixture)
+    assert result.returncode == 1, result.stderr
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '() => { assert!(true); }')}:assert" in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'passthrough_assertion!(assert!(true));')}:assert" in result.stdout
 
 
 def test_unknown_cfg_assertion_is_included_conservatively() -> None:
@@ -461,6 +488,16 @@ def test_missing_manifest_fails_closed() -> None:
     assert result.stderr.startswith("library panic audit configuration error:")
 
 
+def test_timeout_nesting_leaves_margin_for_ci() -> None:
+    wrapper_spec = importlib.util.spec_from_file_location("panic_wrapper", SCRIPT)
+    assert wrapper_spec and wrapper_spec.loader
+    wrapper = importlib.util.module_from_spec(wrapper_spec)
+    wrapper_spec.loader.exec_module(wrapper)
+    assert wrapper.BUILD_TIMEOUT_SECONDS == 600
+    assert wrapper.AUDIT_TIMEOUT_SECONDS == 1500
+    assert wrapper.BUILD_TIMEOUT_SECONDS + wrapper.AUDIT_TIMEOUT_SECONDS < 40 * 60
+
+
 def test_wrapper_rejects_missing_override() -> None:
     old_override = os.environ.get(TOOL_ENV)
     os.environ[TOOL_ENV] = "/does/not/exist"
@@ -487,6 +524,8 @@ def main() -> int:
     tests = [
         test_dep_info_selects_each_production_source_once,
         test_unknown_cfg_assertion_is_included_conservatively,
+        test_macro_assertion_arguments_and_transcribers_are_reported,
+        test_timeout_nesting_leaves_margin_for_ci,
         test_missing_build_finished_fails_closed,
         test_wrapper_discovers_custom_target_artifact,
         test_missing_manifest_fails_closed,

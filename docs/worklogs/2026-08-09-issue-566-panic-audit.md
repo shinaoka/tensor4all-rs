@@ -15,11 +15,12 @@ The Cargo JSON boundary is fail-closed. Invalid UTF-8, malformed/non-object
 records, missing or non-string reasons, unknown reasons, unsuccessful or
 missing `build-finished` records, unsupported targeted Clippy codes, or
 incomplete production-target compiler-artifact coverage are configuration
-errors. Clippy runs have a ten-minute timeout; the wrapper allows both feature
-runs without the old combined 120-second limit. Local paths are canonicalized,
-normalized, deduplicated, and sorted. Macro expansion definitions and external
-dependency spans are not findings; the local expansion call site is used when
-present.
+errors. Each Clippy pass has a ten-minute timeout; the Rust tool allows 25
+minutes for both feature passes, the Python wrapper allows 10 minutes to build
+plus 25 minutes to audit, and the CI step allows 40 minutes. Local paths are
+canonicalized, normalized, deduplicated, and sorted. Macro expansion
+definitions and external dependency spans are not findings; the local
+expansion call site is used when present.
 
 `syn` remains only for the reviewed public `assert!`/`debug_assert!` baseline;
 it does not resolve names, types, imports, or macros. Assertion traversal follows
@@ -30,6 +31,24 @@ attribute cannot be evaluated. `#[cfg(test)]` statements, nested items, and
 expressions inside public bodies are skipped while production `cfg(not(test))`
 code is retained. The reviewed baseline remains exactly the 14 existing matrix
 assertions.
+
+## Final dep-info corrections
+
+Each Cargo compiler-artifact JSON record is retained independently, including
+its full filenames, target object, and profile object. Every candidate dep-info
+file is parsed and accepted only when a Make-rule output matches a normalized
+artifact filename; unrelated or stale heuristic `.d` files are ignored, and
+every expected production target must have an accounted artifact. The parser
+implements rustc's Make encoding (`$$`, escaped spaces/colons/backslashes,
+continuations, and unescaped `#` path characters).
+
+A dep-info `.rs` dependency is not necessarily a Rust module: it may be an
+`include!` fragment or `include_str!`/`include_bytes!` data. Parseable files use
+the public assertion visitor. Parse failures do not invalidate a successful
+compiler build; they receive a conservative literal assertion token scan.
+Public macro invocation arguments and `macro_rules!` transcribers are scanned
+for literal `assert!`/`debug_assert!` calls without attempting name or hygiene
+resolution.
 
 ## Verification
 

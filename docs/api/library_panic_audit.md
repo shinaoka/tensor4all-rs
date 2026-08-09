@@ -36,11 +36,17 @@
 
 ### ` fn dep_info_sources(root: & Path, artifacts: & CompilerArtifacts, expected: & HashSet < TargetKey >) -> Result < BTreeSet < PathBuf > >`
 
-### ` fn locate_dep_info(root: & Path, key: & TargetKey, filenames: & BTreeSet < PathBuf >) -> Result < PathBuf >`
+### ` fn artifact_identity(artifact: & CompilerArtifact) -> String`
+
+### ` fn locate_dep_infos(root: & Path, artifact: & CompilerArtifact) -> Result < Vec < (PathBuf , ParsedDepInfo) > >`
+
+### ` fn normalize_path(root: & Path, path: & Path) -> PathBuf`
+
+### ` fn artifact_output_names(root: & Path, filenames: & BTreeSet < PathBuf >) -> BTreeSet < PathBuf >`
 
 ### ` fn dep_info_candidates(artifact: & Path) -> Vec < PathBuf >`
 
-### ` fn parse_make_dep_info(path: & Path, root: & Path) -> Result < BTreeSet < PathBuf > >`
+### ` fn parse_make_dep_info(path: & Path, root: & Path) -> Result < ParsedDepInfo >`
 
 ### ` fn join_make_lines(source: & str) -> Result < String >`
 
@@ -58,6 +64,26 @@
 
 ### ` fn cfg_attr_definitely_false(meta: & Meta) -> Result < bool >`
 
+### ` fn assertion_kind(name: & str) -> Option < & 'static str >`
+
+### ` fn record_assertion(path: & str, line: usize, kind: & str, findings: & mut BTreeSet < Finding >)`
+
+### ` fn scan_assertion_tokens(path: & str, tokens: TokenStream, findings: & mut BTreeSet < Finding >)`
+
+### ` fn line_starts(source: & str) -> Vec < usize >`
+
+### ` fn source_line(starts: & [usize], offset: usize) -> usize`
+
+### ` fn skip_quoted(bytes: & [u8], start: usize, quote: u8) -> usize`
+
+### ` fn raw_string_end(bytes: & [u8], start: usize) -> Option < usize >`
+
+### ` fn skip_block_comment(bytes: & [u8], start: usize) -> usize`
+
+### ` fn skip_space_and_comments(bytes: & [u8], index: usize) -> usize`
+
+### ` fn scan_literal_assertions_text(source: & str, path: & str, findings: & mut BTreeSet < Finding >)`
+
 ### ` fn scan_items(&mut self, items: & [Item]) -> Result < () >` (impl PublicAssertionVisitor < '_ >)
 
 ### ` fn scan_block(&mut self, block: & syn :: Block) -> Result < () >` (impl PublicAssertionVisitor < '_ >)
@@ -72,7 +98,7 @@
 
 ### ` fn visit_arm(&mut self, node: & 'ast Arm)` (impl PublicAssertionVisitor < '_ >)
 
-### ` fn visit_item_macro(&mut self, _node: & 'ast syn :: ItemMacro)` (impl PublicAssertionVisitor < '_ >)
+### ` fn visit_item_macro(&mut self, node: & 'ast syn :: ItemMacro)` (impl PublicAssertionVisitor < '_ >)
 
 ### ` fn visit_macro(&mut self, node: & 'ast syn :: Macro)` (impl PublicAssertionVisitor < '_ >)
 
@@ -116,9 +142,17 @@
 
 ### ` fn dep_info_parser_handles_make_escapes_and_filters_external_sources()`
 
+### ` fn dep_info_parser_handles_rustc_encoded_paths()`
+
 ### ` fn dep_info_mapping_covers_hashed_artifact_kinds()`
 
+### ` fn dep_info_lookup_rejects_stale_heuristic_targets()`
+
+### ` fn cargo_json_preserves_each_artifact_record()`
+
 ### ` fn dep_info_parser_and_artifact_lookup_fail_closed()`
+
+### ` fn assertion_scan_handles_fragments_and_macro_tokens()`
 
 ### ` fn cfg_evaluator_only_skips_definitely_test_only_content()`
 
