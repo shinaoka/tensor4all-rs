@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -23,7 +24,14 @@ def _build_tool_once() -> None:
     if configured and Path(configured).is_file():
         return
     result = subprocess.run(
-        ["cargo", "build", "--release", "-p", TOOL_PACKAGE],
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--message-format=json-render-diagnostics",
+            "-p",
+            TOOL_PACKAGE,
+        ],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -31,9 +39,26 @@ def _build_tool_once() -> None:
         timeout=120,
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    tool = ROOT / "target" / "release" / TOOL_PACKAGE
-    assert tool.is_file(), tool
-    os.environ[TOOL_ENV] = str(tool)
+    executable = None
+    for line in result.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        target = message.get("target", {})
+        if (
+            message.get("reason") == "compiler-artifact"
+            and target.get("name") == TOOL_PACKAGE
+            and "bin" in target.get("kind", [])
+            and message.get("executable")
+        ):
+            executable = Path(message["executable"])
+            if not executable.is_absolute():
+                executable = (ROOT / executable).resolve()
+            break
+    assert executable is not None, result.stdout
+    assert executable.is_file(), executable
+    os.environ[TOOL_ENV] = str(executable)
 
 
 def _write_fixture(root: Path, files: dict[str, str]) -> None:
@@ -84,6 +109,47 @@ def assert_exact_output(
     actual_stderr = result.stderr.splitlines()
     assert actual_stdout == stdout, f"stdout differs:\nexpected {stdout!r}\nactual {actual_stdout!r}"
     assert actual_stderr == expected_stderr, f"stderr differs:\nexpected {expected_stderr!r}\nactual {actual_stderr!r}"
+
+
+def test_wrapper_discovers_json_compiler_artifact_path() -> None:
+    wrapper_spec = importlib.util.spec_from_file_location("panic_wrapper", SCRIPT)
+    assert wrapper_spec and wrapper_spec.loader
+    wrapper = importlib.util.module_from_spec(wrapper_spec)
+    wrapper_spec.loader.exec_module(wrapper)
+    with tempfile.TemporaryDirectory() as directory:
+        fake_bin = Path(directory) / "cargo"
+        artifact = Path(directory) / "custom-target" / "release" / TOOL_PACKAGE
+        artifact.parent.mkdir(parents=True)
+        fake_bin.write_text(
+            "#!/bin/sh\n"
+            f"touch {artifact}\n"
+            "printf '%s\\n' "
+            + repr(
+                json.dumps(
+                    {
+                        "reason": "compiler-artifact",
+                        "target": {"name": TOOL_PACKAGE, "kind": ["bin"]},
+                        "executable": str(artifact),
+                    }
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        fake_bin.chmod(0o755)
+        old_path = os.environ.get("PATH")
+        old_override = os.environ.pop(TOOL_ENV, None)
+        os.environ["PATH"] = f"{directory}{os.pathsep}{old_path or ''}"
+        try:
+            discovered = wrapper._tool_path(ROOT)
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+            if old_override is not None:
+                os.environ[TOOL_ENV] = old_override
+        assert discovered == artifact.resolve()
 
 
 def test_wrong_and_empty_roots_fail_closed() -> None:
@@ -297,6 +363,67 @@ def test_macro_definitions_scan_generic_associated_calls_with_metavariables() ->
     )
 
 
+def test_macro_rules_scan_only_transcribers_and_recurse_repetitions() -> None:
+    source = r'''macro_rules! mixed {
+    (panic!() Option::<bool>::unwrap($value:expr) $($ty:ty),+; $panic:ident) => {
+        $($(
+            Option::<($($ty,)+)>::unwrap($value);
+            Option::<bool>::unwrap($value);
+            panic!("literal transcriber");
+            $panic!();
+        )+)+
+    };
+}
+fn expression(value: Option<bool>) {
+    wrapper!(panic!("expression argument"));
+    let _ = dbg!(value.unwrap());
+}
+wrapper! {
+    fn item() {
+        unreachable!("item argument");
+    }
+}
+'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    with tempfile.TemporaryDirectory() as directory:
+        source_path = Path(directory) / "lib.rs"
+        source_path.write_text(
+            source.split("fn expression", 1)[0] + "fn main() {}\n", encoding="utf-8"
+        )
+        compiled = subprocess.run(
+            ["rustc", "--crate-type", "lib", str(source_path), "-o", str(Path(directory) / "lib.rlib")],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        assert compiled.returncode == 0, compiled.stderr
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/lib.rs:4:unwrap",
+            "crates/demo/src/lib.rs:5:unwrap",
+            "crates/demo/src/lib.rs:6:panic",
+            "crates/demo/src/lib.rs:12:panic",
+            "crates/demo/src/lib.rs:13:unwrap",
+            "crates/demo/src/lib.rs:17:unreachable",
+        ],
+        ["Audit failed: 6 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_imported_panic_macro_aliases_are_detected() -> None:
+    source = '''use std::panic as fail;\n\nfn production() {\n    fail!("aliased panic");\n}\n'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/src/lib.rs:4:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
 def test_multiline_calls_and_known_ufcs_are_reported_without_user_function_false_matches() -> None:
     source = '''fn user_unwrap(value: Option<bool>) -> bool { value.unwrap_or(false) }
 fn unwrap(value: bool) -> bool { value }
@@ -494,6 +621,49 @@ pub fn test_only() { panic!("root"); }
     )
 
 
+def test_inline_path_parent_changes_external_child_base() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": '''#[path = "alt"]
+mod production {
+    mod child;
+}
+''',
+            "crates/demo/src/alt/child.rs": 'pub fn bad() { panic!("alt child"); }\n',
+        }
+    )
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/src/alt/child.rs:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
+def test_graph_referenced_paths_follow_logical_symlinked_crate_root() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(
+            fixture,
+            {
+                "crates/demo/real_root.rs": "mod child;\n",
+                "crates/demo/src/child.rs": 'pub fn bad() { panic!("logical child"); }\n',
+            },
+        )
+        logical_root = fixture / "crates/demo/src/lib.rs"
+        try:
+            logical_root.symlink_to(fixture / "crates/demo/real_root.rs")
+        except OSError as error:
+            raise AssertionError(f"symlink fixture unavailable: {error}") from error
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/src/child.rs:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
 def test_graph_referenced_production_paths_outside_src_are_scanned() -> None:
     result = run_audit(
         {
@@ -522,11 +692,11 @@ def test_graph_referenced_production_paths_outside_src_are_scanned() -> None:
 def test_production_reference_overrides_test_only_alias() -> None:
     result = run_audit(
         {
-            "crates/demo/src/lib.rs": """#[path = "shared.rs"]
-mod production_shared;
-#[cfg(test)]
+            "crates/demo/src/lib.rs": """#[cfg(test)]
 #[path = "shared.rs"]
 mod test_shared;
+#[path = "shared.rs"]
+mod production_shared;
 """,
             "crates/demo/src/shared.rs": 'pub fn production() { panic!("shared"); }\n',
         }
@@ -699,6 +869,12 @@ fn calls(value: Maybe<bool>, result: R<bool, ()>) {
     let _ = <Alias<bool>>::r#expect(value, "missing");
     let _ = LocalOption::unwrap(value);
 }
+fn local_shadow(value: Maybe<bool>) {
+    type Maybe = LocalOption<bool>;
+    let _ = Maybe::unwrap(value);
+}
+#[cfg(test)]
+type Maybe = LocalOption<bool>;
 '''
     result = run_audit({"crates/demo/src/lib.rs": source})
     assert result.returncode == 1
@@ -712,6 +888,38 @@ fn calls(value: Maybe<bool>, result: R<bool, ()>) {
             "crates/demo/src/lib.rs:16:expect",
         ],
         ["Audit failed: 5 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_module_declared_aliases_resolve_through_crate_self_super_and_groups() -> None:
+    source = r'''mod aliases {
+    pub use std::option::Option as Maybe;
+    pub type ResultAlias<T, E> = core::result::Result<T, E>;
+    mod nested {
+        use super::{Maybe as InnerMaybe, ResultAlias as InnerResult};
+        fn calls(option: InnerMaybe<bool>, result: InnerResult<bool, ()>) {
+            let _ = InnerMaybe::unwrap(option);
+            let _ = InnerResult::r#expect(result, "missing");
+        }
+    }
+}
+use crate::aliases::{Maybe as ChainedMaybe, ResultAlias as ChainedResult};
+fn production(option: ChainedMaybe<bool>, result: ChainedResult<bool, ()>) {
+    let _ = ChainedMaybe::unwrap(option);
+    let _ = ChainedResult::expect(result, "missing");
+}
+'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/lib.rs:7:unwrap",
+            "crates/demo/src/lib.rs:8:expect",
+            "crates/demo/src/lib.rs:14:unwrap",
+            "crates/demo/src/lib.rs:15:expect",
+        ],
+        ["Audit failed: 4 unbaselined findings, 0 stale baseline entries."],
     )
 
 
@@ -1038,6 +1246,7 @@ def main() -> int:
     _build_tool_once()
     tests = [
         test_round3_ast_edges_are_not_lexically_approximated,
+        test_wrapper_discovers_json_compiler_artifact_path,
         test_wrong_and_empty_roots_fail_closed,
         test_parse_failure_fails_closed,
         test_production_hit_fails_with_normalized_kind,
@@ -1048,11 +1257,15 @@ def main() -> int:
         test_masking_handles_bytes_nested_comments_and_scope_corruption,
         test_macro_arguments_and_production_definitions_are_scanned_without_expansion,
         test_macro_definitions_scan_generic_associated_calls_with_metavariables,
+        test_macro_rules_scan_only_transcribers_and_recurse_repetitions,
+        test_imported_panic_macro_aliases_are_detected,
         test_multiline_calls_and_known_ufcs_are_reported_without_user_function_false_matches,
         test_ufcs_reports_both_option_result_methods_and_rejects_collisions,
         test_public_trait_defaults_and_external_impls_are_public_conservatively,
         test_const_generic_where_body_and_attribute_visibility_are_structural,
         test_cfg_test_external_modules_are_order_independent_and_transitive,
+        test_inline_path_parent_changes_external_child_base,
+        test_graph_referenced_paths_follow_logical_symlinked_crate_root,
         test_graph_referenced_production_paths_outside_src_are_scanned,
         test_production_reference_overrides_test_only_alias,
         test_cfg_test_macro_rules_range_is_excluded,
@@ -1063,6 +1276,7 @@ def main() -> int:
         test_large_fixture_stays_within_subprocess_timeout,
         test_method_heavy_fixture_stays_within_subprocess_timeout,
         test_ufcs_aliases_and_local_type_shadowing,
+        test_module_declared_aliases_resolve_through_crate_self_super_and_groups,
         test_public_trait_defaults_impls_and_signature_modifiers_are_public_paths,
         test_generic_public_trait_impl_and_qualified_ufcs_are_detected,
         test_cfg_test_attributes_do_not_leak_to_following_items,

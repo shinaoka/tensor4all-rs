@@ -3,12 +3,15 @@
 
 This compatibility wrapper keeps the historical ``--root``/``--baseline``
 interface and exact tool output while keeping parsing and source reachability
-in the focused ``library-panic-audit`` Rust workspace tool.
+in the focused ``library-panic-audit`` Rust workspace tool. The audit reports
+literal forbidden constructs in source, macro transcribers, and invocation
+arguments; it intentionally does not expand arbitrary metavariable-built calls.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -20,6 +23,25 @@ TOOL_PACKAGE = "library-panic-audit"
 TIMEOUT_SECONDS = 120
 
 
+def _artifact_executable(output: str, root: Path) -> Path | None:
+    for line in output.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        target = message.get("target", {})
+        executable = message.get("executable")
+        if (
+            message.get("reason") == "compiler-artifact"
+            and target.get("name") == TOOL_PACKAGE
+            and "bin" in target.get("kind", [])
+            and executable
+        ):
+            path = Path(executable)
+            return path if path.is_absolute() else (root / path).resolve()
+    return None
+
+
 def _tool_path(root: Path) -> Path:
     configured = os.environ.get(TOOL_ENV)
     if configured:
@@ -28,9 +50,18 @@ def _tool_path(root: Path) -> Path:
             return path
         raise RuntimeError(f"{TOOL_ENV} does not point to a file: {configured}")
 
-    # Always ask Cargo to build. Cargo performs the freshness check; reusing a
-    # discovered target binary would let a standalone audit run stale code.
-    command = ["cargo", "build", "--release", "-p", TOOL_PACKAGE]
+    # Cargo is the source of truth for freshness and target layout. The JSON
+    # artifact message handles CARGO_TARGET_DIR, build.target-dir,
+    # CARGO_BUILD_TARGET, and target-specific executable suffixes without
+    # guessing a fixed target path.
+    command = [
+        "cargo",
+        "build",
+        "--release",
+        "--message-format=json-render-diagnostics",
+        "-p",
+        TOOL_PACKAGE,
+    ]
     result = subprocess.run(
         command,
         cwd=root,
@@ -42,9 +73,11 @@ def _tool_path(root: Path) -> Path:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise RuntimeError(f"failed to build {TOOL_PACKAGE}: {detail}")
-    path = root / "target" / "release" / TOOL_PACKAGE
-    if not path.is_file():
-        raise RuntimeError(f"cargo build did not produce {path}")
+    path = _artifact_executable(result.stdout, root)
+    if path is None or not path.is_file():
+        raise RuntimeError(
+            f"cargo build produced no executable artifact for {TOOL_PACKAGE}"
+        )
     return path
 
 

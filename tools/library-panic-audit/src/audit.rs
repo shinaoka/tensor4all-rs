@@ -136,6 +136,12 @@ enum StandardType {
 struct SourceNode {
     source: String,
     file: File,
+    /// Canonical identity is the key in `Project::nodes`; this logical path is
+    /// retained for Rust's relative module resolution through symlink entries.
+    logical_path: PathBuf,
+    crate_id: PathBuf,
+    module_path: Vec<String>,
+    module_test_only: bool,
     initial_source: bool,
     crate_root: bool,
     edges: Vec<ModuleEdge>,
@@ -143,19 +149,28 @@ struct SourceNode {
 
 #[derive(Clone, Debug)]
 struct ModuleEdge {
+    /// Canonical read/containment identity.
     target: PathBuf,
+    /// The path as written through the containing module's logical ancestry.
+    logical_target: PathBuf,
+    module_path: Vec<String>,
     test_only: bool,
 }
 
 #[derive(Clone, Debug)]
 struct DiscoveredSource {
-    path: PathBuf,
+    /// Canonical read/containment identity.
+    identity: PathBuf,
+    /// Logical directory-entry path used by Rust module lookup.
+    logical_path: PathBuf,
+    crate_id: PathBuf,
     crate_root: bool,
 }
 
 struct Project {
     root: PathBuf,
     nodes: BTreeMap<PathBuf, SourceNode>,
+    modules: ModuleRegistry,
 }
 
 impl Project {
@@ -170,30 +185,50 @@ impl Project {
 
         let mut nodes = BTreeMap::new();
         for source in discovered {
-            let (source_text, file) = parse_source(&source.path)?;
+            let (source_text, file) = parse_source(&source.identity)?;
             nodes
-                .entry(source.path.clone())
+                .entry(source.identity.clone())
                 .and_modify(|node: &mut SourceNode| {
                     node.crate_root |= source.crate_root;
                 })
                 .or_insert(SourceNode {
                     source: source_text,
                     file,
+                    logical_path: source.logical_path,
+                    crate_id: source.crate_id,
+                    module_path: Vec::new(),
+                    module_test_only: !source.crate_root,
                     initial_source: true,
                     crate_root: source.crate_root,
                     edges: Vec::new(),
                 });
         }
 
-        let mut queue: VecDeque<PathBuf> = nodes.keys().cloned().collect();
+        // Resolve crate roots before orphan sources so an initially
+        // discovered child receives its production module ancestry before its
+        // own `mod` declarations are expanded.
+        let mut queue: VecDeque<PathBuf> = nodes
+            .iter()
+            .filter_map(|(path, node)| node.crate_root.then_some(path.clone()))
+            .collect();
+        queue.extend(
+            nodes
+                .iter()
+                .filter_map(|(path, node)| (!node.crate_root).then_some(path.clone())),
+        );
         while let Some(path) = queue.pop_front() {
             let edges = {
                 let node = nodes
                     .get(&path)
                     .ok_or_else(|| anyhow!("internal source graph error for {}", path.display()))?;
-                collect_module_edges(&node.file, &path, root)?
+                collect_module_edges(&node.file, &node.logical_path, &node.module_path, root)?
             };
             for edge in edges {
+                let parent_crate_id = nodes
+                    .get(&path)
+                    .ok_or_else(|| anyhow!("internal source graph error for {}", path.display()))?
+                    .crate_id
+                    .clone();
                 if !nodes.contains_key(&edge.target) {
                     let (source_text, file) = parse_source(&edge.target)?;
                     nodes.insert(
@@ -201,12 +236,29 @@ impl Project {
                         SourceNode {
                             source: source_text,
                             file,
+                            logical_path: edge.logical_target.clone(),
+                            crate_id: parent_crate_id,
+                            module_path: edge.module_path.clone(),
+                            module_test_only: edge.test_only,
                             initial_source: false,
                             crate_root: false,
                             edges: Vec::new(),
                         },
                     );
                     queue.push_back(edge.target.clone());
+                } else if let Some(node) = nodes.get_mut(&edge.target) {
+                    // A source discovered as an orphan may later be reached
+                    // through a module edge; attach its declaration path for
+                    // module-scope alias resolution.
+                    if !node.crate_root
+                        && (node.module_path.is_empty()
+                            || (node.module_test_only && !edge.test_only))
+                    {
+                        node.module_path = edge.module_path.clone();
+                        node.module_test_only = edge.test_only;
+                        node.crate_id = parent_crate_id;
+                        node.logical_path = edge.logical_target.clone();
+                    }
                 }
                 nodes
                     .get_mut(&path)
@@ -216,9 +268,11 @@ impl Project {
             }
         }
 
+        let modules = ModuleRegistry::build(&nodes);
         Ok(Self {
             root: root.to_owned(),
             nodes,
+            modules,
         })
     }
 
@@ -287,7 +341,8 @@ impl Project {
                 continue;
             }
             let relative = relative_path(&self.root, path);
-            let mut visitor = SourceVisitor::new(relative, &node.source);
+            let key = module_key(&node.crate_id, &node.module_path);
+            let mut visitor = SourceVisitor::new(relative, &node.source, &self.modules, key);
             visitor.visit_file(&node.file);
             findings.extend(visitor.findings);
         }
@@ -376,7 +431,7 @@ fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>> {
         );
     }
 
-    let mut sources = BTreeMap::<PathBuf, bool>::new();
+    let mut sources = BTreeMap::<PathBuf, (PathBuf, bool, PathBuf)>::new();
     for entry in
         fs::read_dir(&crates).with_context(|| format!("cannot read {}", crates.display()))?
     {
@@ -404,12 +459,20 @@ fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>> {
             &logical_src,
             &mut sources,
             &mut BTreeSet::new(),
+            &crate_path,
         )?;
     }
 
     Ok(sources
         .into_iter()
-        .map(|(path, crate_root)| DiscoveredSource { path, crate_root })
+        .map(
+            |(identity, (logical_path, crate_root, crate_id))| DiscoveredSource {
+                identity,
+                logical_path,
+                crate_id,
+                crate_root,
+            },
+        )
         .collect())
 }
 
@@ -417,8 +480,9 @@ fn collect_source_files(
     root: &Path,
     crate_src: &Path,
     logical_dir: &Path,
-    sources: &mut BTreeMap<PathBuf, bool>,
+    sources: &mut BTreeMap<PathBuf, (PathBuf, bool, PathBuf)>,
     visited_dirs: &mut BTreeSet<PathBuf>,
+    crate_id: &Path,
 ) -> Result<()> {
     let canonical_dir = fs::canonicalize(logical_dir)
         .with_context(|| format!("cannot resolve source directory {}", logical_dir.display()))?;
@@ -436,7 +500,7 @@ fn collect_source_files(
             .with_context(|| format!("cannot resolve source path {}", logical.display()))?;
         ensure_inside(root, &canonical, "source path")?;
         if canonical.is_dir() {
-            collect_source_files(root, crate_src, &logical, sources, visited_dirs)?;
+            collect_source_files(root, crate_src, &logical, sources, visited_dirs, crate_id)?;
         } else if logical.extension().and_then(|extension| extension.to_str()) == Some("rs")
             && canonical.is_file()
         {
@@ -445,8 +509,8 @@ fn collect_source_files(
             let crate_root = is_crate_root_source(crate_src, &logical);
             sources
                 .entry(canonical)
-                .and_modify(|is_root| *is_root |= crate_root)
-                .or_insert(crate_root);
+                .and_modify(|(_, is_root, _)| *is_root |= crate_root)
+                .or_insert((logical, crate_root, crate_id.to_owned()));
         }
     }
     Ok(())
@@ -478,12 +542,19 @@ fn module_base_for_file(path: &Path) -> PathBuf {
     }
 }
 
-fn collect_module_edges(file: &File, path: &Path, root: &Path) -> Result<Vec<ModuleEdge>> {
+fn collect_module_edges(
+    file: &File,
+    logical_path: &Path,
+    module_path: &[String],
+    root: &Path,
+) -> Result<Vec<ModuleEdge>> {
     let mut edges = Vec::new();
+    let source_dir = logical_path.parent().unwrap_or_else(|| Path::new("/"));
     collect_module_items(
         &file.items,
-        &module_base_for_file(path),
-        path.parent().unwrap_or_else(|| Path::new("/")),
+        &module_base_for_file(logical_path),
+        source_dir,
+        module_path.to_vec(),
         false,
         root,
         &mut edges,
@@ -494,7 +565,8 @@ fn collect_module_edges(file: &File, path: &Path, root: &Path) -> Result<Vec<Mod
 fn collect_module_items(
     items: &[Item],
     module_dir: &Path,
-    source_dir: &Path,
+    path_base: &Path,
+    module_path: Vec<String>,
     inherited_test_only: bool,
     root: &Path,
     edges: &mut Vec<ModuleEdge>,
@@ -504,40 +576,72 @@ fn collect_module_items(
             continue;
         };
         let test_only = inherited_test_only || has_exact_cfg_test(&module.attrs);
-        let child_dir = module_dir.join(ident_name(&module.ident));
+        let name = ident_name(&module.ident);
+        let mut child_module_path = module_path.clone();
+        child_module_path.push(name.clone());
+        let path_attr = path_attribute(&module.attrs)?;
+        let default_child_dir = module_dir.join(&name);
         if let Some((_, inner)) = &module.content {
-            // Inline modules contribute to the path ancestry used by both
-            // implicit children and explicit `#[path]` attributes.
-            collect_module_items(inner, &child_dir, &child_dir, test_only, root, edges)?;
+            // An inline `#[path]` changes the logical module directory used by
+            // nested external declarations, just like an external module
+            // source would. The virtual source path also handles `alt.rs`.
+            let child_dir = if let Some(path_attr) = path_attr {
+                let virtual_source =
+                    logical_join(path_base, &path_attr, root, "inline module path")?;
+                module_base_for_file(&virtual_source)
+            } else {
+                default_child_dir
+            };
+            collect_module_items(
+                inner,
+                &child_dir,
+                &child_dir,
+                child_module_path,
+                test_only,
+                root,
+                edges,
+            )?;
             continue;
         }
 
-        let path_attr = path_attribute(&module.attrs)?;
-        let target = if let Some(path_attr) = path_attr {
-            let candidate = if Path::new(&path_attr).is_absolute() {
-                PathBuf::from(path_attr)
-            } else {
-                source_dir.join(path_attr)
-            };
-            canonical_module_path(root, &candidate, "module path")?
+        let logical_target = if let Some(path_attr) = path_attr {
+            logical_join(path_base, &path_attr, root, "module path")?
         } else {
-            let candidates = [child_dir.with_extension("rs"), child_dir.join("mod.rs")];
+            let candidates = [
+                default_child_dir.with_extension("rs"),
+                default_child_dir.join("mod.rs"),
+            ];
             let existing = candidates
                 .iter()
                 .find(|candidate| fs::symlink_metadata(candidate).is_ok());
-            let candidate = existing.ok_or_else(|| {
+            existing.cloned().ok_or_else(|| {
                 anyhow!(
                     "module {} source not found (looked for {} and {})",
                     module.ident,
                     candidates[0].display(),
                     candidates[1].display()
                 )
-            })?;
-            canonical_module_path(root, candidate, "module path")?
+            })?
         };
-        edges.push(ModuleEdge { target, test_only });
+        let target = canonical_module_path(root, &logical_target, "module path")?;
+        edges.push(ModuleEdge {
+            target,
+            logical_target,
+            module_path: child_module_path,
+            test_only,
+        });
     }
     Ok(())
+}
+
+fn logical_join(base: &Path, value: &str, root: &Path, description: &str) -> Result<PathBuf> {
+    let candidate = if Path::new(value).is_absolute() {
+        PathBuf::from(value)
+    } else {
+        base.join(value)
+    };
+    let normalized = normalize_absolute(&candidate);
+    ensure_inside(root, &normalized, description)
 }
 
 fn path_attribute(attrs: &[Attribute]) -> Result<Option<String>> {
@@ -626,16 +730,29 @@ fn ident_name(ident: &Ident) -> String {
     name.strip_prefix("r#").unwrap_or(&name).to_owned()
 }
 
-fn macro_kind(path: &syn::Path) -> Option<PanicKind> {
-    let ident = &path.segments.last()?.ident;
-    let name = ident_name(ident);
-    PanicKind::from_name(&name)
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ModuleKey {
+    crate_id: PathBuf,
+    path: Vec<String>,
+}
+
+#[derive(Clone)]
+enum ModuleBinding {
+    Unknown,
+    Alias(Box<Type>),
+    Path(Vec<String>),
 }
 
 #[derive(Clone, Default)]
-struct TypeScope {
-    bindings: BTreeMap<String, Option<StandardType>>,
-    aliases: BTreeMap<String, Type>,
+struct ModuleScope {
+    bindings: BTreeMap<String, ModuleBinding>,
+    macro_bindings: BTreeMap<String, ModuleBinding>,
+    children: BTreeMap<String, ModuleKey>,
+}
+
+#[derive(Default)]
+struct ModuleRegistry {
+    scopes: BTreeMap<ModuleKey, ModuleScope>,
 }
 
 fn canonical_standard_type(names: &[String]) -> Option<StandardType> {
@@ -653,110 +770,424 @@ fn canonical_standard_type(names: &[String]) -> Option<StandardType> {
     }
 }
 
-fn resolve_alias(
-    scope_index: usize,
-    name: &str,
-    scopes: &[TypeScope],
-    visiting: &mut BTreeSet<(usize, String)>,
-) -> Option<StandardType> {
-    if !visiting.insert((scope_index, name.to_owned())) {
-        return None;
-    }
-    let result = scopes
-        .get(scope_index)
-        .and_then(|scope| scope.aliases.get(name))
-        .and_then(|ty| standard_type(ty, scopes, visiting));
-    visiting.remove(&(scope_index, name.to_owned()));
-    result
-}
-
-fn resolve_type_name(
-    name: &str,
-    scopes: &[TypeScope],
-    visiting: &mut BTreeSet<(usize, String)>,
-) -> Option<StandardType> {
-    for index in (0..scopes.len()).rev() {
-        let scope = &scopes[index];
-        if scope.aliases.contains_key(name) {
-            return resolve_alias(index, name, scopes, visiting);
-        }
-        if let Some(binding) = scope.bindings.get(name) {
-            return *binding;
-        }
-    }
-    match name {
-        "Option" => Some(StandardType::Option),
-        "Result" => Some(StandardType::Result),
-        _ => None,
+fn module_key(crate_id: &Path, path: &[String]) -> ModuleKey {
+    ModuleKey {
+        crate_id: crate_id.to_owned(),
+        path: path.to_vec(),
     }
 }
 
-fn standard_type_names(
-    names: &[String],
-    leading_colon: bool,
-    scopes: &[TypeScope],
-    visiting: &mut BTreeSet<(usize, String)>,
-) -> Option<StandardType> {
-    if leading_colon {
-        return canonical_standard_type(names);
-    }
-    match names {
-        [name] => resolve_type_name(name, scopes, visiting),
-        [prefix, name] if prefix == "self" => scopes.last().and_then(|scope| {
-            if scope.aliases.contains_key(name) {
-                resolve_alias(scopes.len() - 1, name, scopes, visiting)
-            } else {
-                scope.bindings.get(name).copied().flatten()
+fn collect_use_paths(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut next = prefix.to_vec();
+            next.push(ident_name(&path.ident));
+            collect_use_paths(&path.tree, &next, out);
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix.to_vec();
+            let name = ident_name(&name.ident);
+            path.push(name.clone());
+            out.push((name, path));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix.to_vec();
+            path.push(ident_name(&rename.ident));
+            out.push((ident_name(&rename.rename), path));
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_paths(item, prefix, out);
             }
-        }),
-        [prefix, name] if prefix == "super" => {
-            scopes
-                .get(scopes.len().saturating_sub(2))
-                .and_then(|scope| {
-                    if scope.aliases.contains_key(name) {
-                        resolve_alias(scopes.len().saturating_sub(2), name, scopes, visiting)
-                    } else {
-                        scope.bindings.get(name).copied().flatten()
-                    }
-                })
         }
-        _ => canonical_standard_type(names),
+        syn::UseTree::Glob { .. } => {}
     }
 }
 
-fn standard_type(
-    ty: &Type,
-    scopes: &[TypeScope],
-    visiting: &mut BTreeSet<(usize, String)>,
-) -> Option<StandardType> {
-    match ty {
-        Type::Path(type_path) if type_path.qself.is_none() => standard_type_names(
-            &type_path
-                .path
-                .segments
-                .iter()
-                .map(|segment| ident_name(&segment.ident))
-                .collect::<Vec<_>>(),
-            type_path.path.leading_colon.is_some(),
-            scopes,
-            visiting,
-        ),
-        Type::Paren(type_paren) => standard_type(&type_paren.elem, scopes, visiting),
-        Type::Group(type_group) => standard_type(&type_group.elem, scopes, visiting),
-        _ => None,
+fn insert_module_binding(
+    bindings: &mut BTreeMap<String, ModuleBinding>,
+    name: String,
+    binding: ModuleBinding,
+) {
+    match bindings.get(&name) {
+        None => {
+            bindings.insert(name, binding);
+        }
+        Some(ModuleBinding::Unknown) => {}
+        Some(existing) if std::mem::discriminant(existing) == std::mem::discriminant(&binding) => {
+            // Duplicate imports are harmless; conflicting declarations are
+            // conservatively rejected below.
+            if !matches!(existing, ModuleBinding::Path(left) if matches!(&binding, ModuleBinding::Path(right) if left == right))
+            {
+                bindings.insert(name, ModuleBinding::Unknown);
+            }
+        }
+        Some(_) => {
+            bindings.insert(name, ModuleBinding::Unknown);
+        }
     }
 }
 
-fn associated_method(path: &ExprPath, scopes: &[TypeScope]) -> Option<PanicKind> {
+fn module_scope_from_items(items: &[Item]) -> ModuleScope {
+    let mut scope = ModuleScope::default();
+    // First reserve all production declarations. A cfg(test) item is skipped
+    // before binding collection so test-only shadows cannot affect production.
+    for item in items {
+        if has_exact_cfg_test(item_attrs(item)) {
+            continue;
+        }
+        let name = match item {
+            Item::Const(item) => Some(ident_name(&item.ident)),
+            Item::Enum(item) => Some(ident_name(&item.ident)),
+            Item::Fn(item) => Some(ident_name(&item.sig.ident)),
+            Item::Impl(_) | Item::ForeignMod(_) | Item::Macro(_) | Item::Static(_) => None,
+            Item::Mod(item) => Some(ident_name(&item.ident)),
+            Item::Struct(item) => Some(ident_name(&item.ident)),
+            Item::Trait(item) => Some(ident_name(&item.ident)),
+            Item::TraitAlias(item) => Some(ident_name(&item.ident)),
+            Item::Type(item) => Some(ident_name(&item.ident)),
+            Item::Union(item) => Some(ident_name(&item.ident)),
+            Item::ExternCrate(item) => Some(ident_name(&item.ident)),
+            Item::Use(_) | Item::Verbatim(_) => None,
+            _ => None,
+        };
+        if let Some(name) = name {
+            match item {
+                Item::Type(item) => insert_module_binding(
+                    &mut scope.bindings,
+                    name,
+                    ModuleBinding::Alias(Box::new((*item.ty).clone())),
+                ),
+                _ => insert_module_binding(&mut scope.bindings, name, ModuleBinding::Unknown),
+            }
+        }
+        if let Item::Macro(item) = item {
+            if let Some(name) = &item.ident {
+                insert_module_binding(
+                    &mut scope.macro_bindings,
+                    ident_name(name),
+                    ModuleBinding::Unknown,
+                );
+            }
+        }
+    }
+    for item in items {
+        if has_exact_cfg_test(item_attrs(item)) {
+            continue;
+        }
+        if let Item::Use(item) = item {
+            let mut imports = Vec::new();
+            collect_use_paths(&item.tree, &[], &mut imports);
+            for (name, path) in imports {
+                insert_module_binding(
+                    &mut scope.bindings,
+                    name.clone(),
+                    ModuleBinding::Path(path.clone()),
+                );
+                insert_module_binding(&mut scope.macro_bindings, name, ModuleBinding::Path(path));
+            }
+        }
+    }
+    scope
+}
+
+impl ModuleRegistry {
+    fn build(nodes: &BTreeMap<PathBuf, SourceNode>) -> Self {
+        let mut registry = Self::default();
+        for node in nodes.values() {
+            let key = module_key(&node.crate_id, &node.module_path);
+            registry
+                .scopes
+                .entry(key.clone())
+                .or_insert_with(|| module_scope_from_items(&node.file.items));
+            register_inline_modules(&mut registry.scopes, &key, &node.file.items);
+        }
+        for node in nodes.values() {
+            for edge in &node.edges {
+                let Some(name) = edge.module_path.last() else {
+                    continue;
+                };
+                let owner = module_key(
+                    &node.crate_id,
+                    &edge.module_path[..edge.module_path.len() - 1],
+                );
+                let child = module_key(&node.crate_id, &edge.module_path);
+                registry
+                    .scopes
+                    .entry(owner)
+                    .or_default()
+                    .children
+                    .insert(name.clone(), child);
+            }
+        }
+        registry
+    }
+
+    fn scope(&self, key: &ModuleKey) -> Option<&ModuleScope> {
+        self.scopes.get(key)
+    }
+
+    fn child(&self, key: &ModuleKey, name: &str) -> Option<ModuleKey> {
+        self.scope(key)?.children.get(name).cloned()
+    }
+
+    fn resolve_standard(
+        &self,
+        current: &ModuleKey,
+        names: &[String],
+        leading_colon: bool,
+        lexical_shadow: &BTreeSet<String>,
+    ) -> Option<StandardType> {
+        if names.is_empty() {
+            return None;
+        }
+        if leading_colon {
+            return canonical_standard_type(names);
+        }
+        if names.len() == 1 {
+            if lexical_shadow.contains(&names[0]) {
+                return None;
+            }
+            return self.resolve_binding(current, &names[0], &mut BTreeSet::new());
+        }
+        if let Some(standard) = canonical_standard_type(names) {
+            if self
+                .scope(current)
+                .and_then(|scope| scope.bindings.get(&names[0]))
+                .is_none()
+            {
+                return Some(standard);
+            }
+            return None;
+        }
+        let (module, name) = self.resolve_module_prefix(current, names)?;
+        self.resolve_binding(&module, name, &mut BTreeSet::new())
+    }
+
+    fn resolve_module_prefix<'a>(
+        &self,
+        current: &ModuleKey,
+        names: &'a [String],
+    ) -> Option<(ModuleKey, &'a str)> {
+        if names.len() < 2 {
+            return None;
+        }
+        let mut index = 0;
+        let mut module = current.clone();
+        match names[0].as_str() {
+            "crate" => {
+                module.path.clear();
+                index = 1;
+            }
+            "self" => index = 1,
+            "super" => {
+                while index < names.len() && names[index] == "super" {
+                    module.path.pop();
+                    index += 1;
+                }
+            }
+            _ => {}
+        }
+        while index + 1 < names.len() {
+            module = self.child(&module, &names[index])?;
+            index += 1;
+        }
+        Some((module, &names[index]))
+    }
+
+    fn resolve_binding(
+        &self,
+        module: &ModuleKey,
+        name: &str,
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<StandardType> {
+        if !visiting.insert((module.clone(), name.to_owned())) {
+            return None;
+        }
+        let binding = self.scope(module)?.bindings.get(name).cloned();
+        let result = match binding {
+            Some(ModuleBinding::Unknown) => None,
+            Some(ModuleBinding::Alias(ty)) => {
+                self.resolve_type(module, &ty, visiting, &BTreeSet::new())
+            }
+            Some(ModuleBinding::Path(path)) => {
+                if let Some(standard) = canonical_standard_type(&path) {
+                    Some(standard)
+                } else if path.len() == 1 {
+                    self.resolve_binding(module, &path[0], visiting)
+                } else {
+                    let (target, last) = self.resolve_module_prefix(module, &path)?;
+                    self.resolve_binding(&target, last, visiting)
+                }
+            }
+            None => match name {
+                "Option" => Some(StandardType::Option),
+                "Result" => Some(StandardType::Result),
+                _ => None,
+            },
+        };
+        visiting.remove(&(module.clone(), name.to_owned()));
+        result
+    }
+
+    fn resolve_type(
+        &self,
+        module: &ModuleKey,
+        ty: &Type,
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+        lexical_shadow: &BTreeSet<String>,
+    ) -> Option<StandardType> {
+        match ty {
+            Type::Path(type_path) if type_path.qself.is_none() => {
+                let names: Vec<String> = type_path
+                    .path
+                    .segments
+                    .iter()
+                    .map(|segment| ident_name(&segment.ident))
+                    .collect();
+                if names.len() == 1 {
+                    if lexical_shadow.contains(&names[0]) {
+                        None
+                    } else {
+                        self.resolve_binding(module, &names[0], visiting)
+                    }
+                } else if let Some(standard) = canonical_standard_type(&names) {
+                    Some(standard)
+                } else {
+                    let (target, name) = self.resolve_module_prefix(module, &names)?;
+                    self.resolve_binding(&target, name, visiting)
+                }
+            }
+            Type::Paren(type_paren) => {
+                self.resolve_type(module, &type_paren.elem, visiting, lexical_shadow)
+            }
+            Type::Group(type_group) => {
+                self.resolve_type(module, &type_group.elem, visiting, lexical_shadow)
+            }
+            _ => None,
+        }
+    }
+
+    fn resolve_macro(&self, current: &ModuleKey, path: &syn::Path) -> Option<PanicKind> {
+        let names: Vec<String> = path
+            .segments
+            .iter()
+            .map(|segment| ident_name(&segment.ident))
+            .collect();
+        if names.len() == 1 {
+            return self.resolve_macro_name(current, &names[0], 1);
+        }
+        if names.as_slice() == ["std", "panic"] || names.as_slice() == ["core", "panic"] {
+            return Some(PanicKind::Panic);
+        }
+        let (module, last) = self.resolve_module_prefix(current, &names)?;
+        self.resolve_macro_binding(&module, last, &mut BTreeSet::new())
+    }
+
+    fn resolve_macro_name(
+        &self,
+        current: &ModuleKey,
+        name: &str,
+        path_len: usize,
+    ) -> Option<PanicKind> {
+        if path_len != 1 {
+            return None;
+        }
+        if let Some(kind) = PanicKind::from_name(name) {
+            return Some(kind);
+        }
+        self.resolve_macro_binding(current, name, &mut BTreeSet::new())
+    }
+
+    fn resolve_macro_binding(
+        &self,
+        current: &ModuleKey,
+        name: &str,
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<PanicKind> {
+        if !visiting.insert((current.clone(), name.to_owned())) {
+            return None;
+        }
+        let binding = self.scope(current)?.macro_bindings.get(name).cloned();
+        let result = match binding {
+            Some(ModuleBinding::Path(target))
+                if target.as_slice() == ["std", "panic"]
+                    || target.as_slice() == ["core", "panic"] =>
+            {
+                Some(PanicKind::Panic)
+            }
+            Some(ModuleBinding::Path(target)) if target.len() == 1 => {
+                self.resolve_macro_binding(current, &target[0], visiting)
+            }
+            Some(ModuleBinding::Path(target)) => {
+                let (module, last) = self.resolve_module_prefix(current, &target)?;
+                self.resolve_macro_binding(&module, last, visiting)
+            }
+            _ => None,
+        };
+        visiting.remove(&(current.clone(), name.to_owned()));
+        result
+    }
+}
+
+fn collect_block_names(block: &syn::Block) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for statement in &block.stmts {
+        let syn::Stmt::Item(item) = statement else {
+            continue;
+        };
+        if has_exact_cfg_test(item_attrs(item)) {
+            continue;
+        }
+        let scope = module_scope_from_items(std::slice::from_ref(item));
+        names.extend(scope.bindings.into_keys());
+        names.extend(scope.macro_bindings.into_keys());
+    }
+    names
+}
+
+fn register_inline_modules(
+    scopes: &mut BTreeMap<ModuleKey, ModuleScope>,
+    parent: &ModuleKey,
+    items: &[Item],
+) {
+    for item in items {
+        let Item::Mod(module) = item else {
+            continue;
+        };
+        if has_exact_cfg_test(&module.attrs) {
+            continue;
+        }
+        let mut path = parent.path.clone();
+        let name = ident_name(&module.ident);
+        path.push(name.clone());
+        let key = module_key(&parent.crate_id, &path);
+        if let Some((_, inner)) = &module.content {
+            scopes
+                .entry(key.clone())
+                .or_insert_with(|| module_scope_from_items(inner));
+            if let Some(scope) = scopes.get_mut(parent) {
+                scope.children.insert(name, key.clone());
+            }
+            register_inline_modules(scopes, &key, inner);
+        }
+    }
+}
+
+fn associated_method(
+    path: &ExprPath,
+    registry: &ModuleRegistry,
+    current: &ModuleKey,
+    lexical_shadow: &BTreeSet<String>,
+) -> Option<PanicKind> {
     let method = path.path.segments.last()?;
     let method_name = ident_name(&method.ident);
     let kind = PanicKind::from_name(&method_name)?;
     if !matches!(kind, PanicKind::Unwrap | PanicKind::Expect) {
         return None;
     }
-
     let standard = if let Some(qself) = &path.qself {
-        standard_type(&qself.ty, scopes, &mut BTreeSet::new())
+        registry.resolve_type(current, &qself.ty, &mut BTreeSet::new(), lexical_shadow)
     } else {
         let names: Vec<String> = path
             .path
@@ -767,11 +1198,11 @@ fn associated_method(path: &ExprPath, scopes: &[TypeScope]) -> Option<PanicKind>
         if names.len() < 2 {
             None
         } else {
-            standard_type_names(
+            registry.resolve_standard(
+                current,
                 &names[..names.len() - 1],
                 path.path.leading_colon.is_some(),
-                scopes,
-                &mut BTreeSet::new(),
+                lexical_shadow,
             )
         }
     }?;
@@ -779,117 +1210,56 @@ fn associated_method(path: &ExprPath, scopes: &[TypeScope]) -> Option<PanicKind>
     Some(kind)
 }
 
-fn collect_use_tree(
-    tree: &syn::UseTree,
-    prefix: &[String],
-    bindings: &mut BTreeMap<String, Option<StandardType>>,
-) {
-    match tree {
-        syn::UseTree::Path(path) => {
-            let mut next = prefix.to_vec();
-            next.push(ident_name(&path.ident));
-            collect_use_tree(&path.tree, &next, bindings);
-        }
-        syn::UseTree::Name(name) => {
-            let mut path = prefix.to_vec();
-            path.push(ident_name(&name.ident));
-            bindings.insert(ident_name(&name.ident), canonical_standard_type(&path));
-        }
-        syn::UseTree::Rename(rename) => {
-            let mut path = prefix.to_vec();
-            path.push(ident_name(&rename.ident));
-            bindings.insert(ident_name(&rename.rename), canonical_standard_type(&path));
-        }
-        syn::UseTree::Group(group) => {
-            for item in &group.items {
-                collect_use_tree(item, prefix, bindings);
+fn is_punct(tree: Option<&TokenTree>, expected: char) -> bool {
+    matches!(tree, Some(TokenTree::Punct(punct)) if punct.as_char() == expected)
+}
+
+/// Return the literal base path immediately before an associated `unwrap` or
+/// `expect` token. Generic arguments are skipped as one source-level segment;
+/// their contents may contain repetitions and are not name-resolved.
+fn token_ufcs_path(trees: &[TokenTree], method_index: usize) -> Option<(Vec<String>, bool, usize)> {
+    if method_index < 2
+        || !is_punct(trees.get(method_index - 1), ':')
+        || !is_punct(trees.get(method_index - 2), ':')
+    {
+        return None;
+    }
+    let mut cursor = method_index - 3;
+    if is_punct(trees.get(cursor), '>') {
+        let mut open = None;
+        for index in (0..cursor).rev() {
+            if is_punct(trees.get(index), '<')
+                && is_punct(trees.get(index.checked_sub(2)?), ':')
+                && is_punct(trees.get(index.checked_sub(1)?), ':')
+            {
+                open = Some(index);
+                break;
             }
         }
-        syn::UseTree::Glob { .. } => {}
+        cursor = open?.checked_sub(3)?;
     }
-}
-
-fn collect_scope_binding(item: &Item, scope: &mut TypeScope) {
-    match item {
-        Item::Use(item) => collect_use_tree(&item.tree, &[], &mut scope.bindings),
-        Item::Type(item) => {
-            scope
-                .aliases
-                .insert(ident_name(&item.ident), (*item.ty).clone());
-        }
-        Item::Enum(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        Item::Struct(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        Item::Union(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        Item::Trait(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        Item::TraitAlias(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        Item::Mod(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        Item::ExternCrate(item) => {
-            scope.bindings.insert(ident_name(&item.ident), None);
-        }
-        _ => {}
-    }
-}
-
-fn collect_scope_bindings(items: &[Item]) -> TypeScope {
-    let mut scope = TypeScope::default();
-    for item in items {
-        collect_scope_binding(item, &mut scope);
-    }
-    scope
-}
-
-fn collect_block_bindings(block: &syn::Block) -> TypeScope {
-    let mut scope = TypeScope::default();
-    for statement in &block.stmts {
-        if let syn::Stmt::Item(item) = statement {
-            collect_scope_binding(item, &mut scope);
-        }
-    }
-    scope
-}
-
-fn sanitize_macro_variables(tokens: TokenStream) -> TokenStream {
-    let trees: Vec<TokenTree> = tokens.into_iter().collect();
-    let mut result = TokenStream::new();
-    let mut index = 0;
-    while index < trees.len() {
-        if matches!(&trees[index], TokenTree::Punct(punct) if punct.as_char() == '$')
-            && matches!(trees.get(index + 1), Some(TokenTree::Ident(_)))
-        {
-            if let TokenTree::Ident(ident) = &trees[index + 1] {
-                result.extend([TokenTree::Ident(Ident::new(
-                    "__t4a_macro_variable",
-                    ident.span(),
-                ))]);
-            }
-            index += 2;
-            continue;
-        }
-        let tree = match &trees[index] {
-            TokenTree::Group(group) => {
-                let mut replacement =
-                    Group::new(group.delimiter(), sanitize_macro_variables(group.stream()));
-                replacement.set_span(group.span());
-                TokenTree::Group(replacement)
-            }
-            other => other.clone(),
+    let mut names = Vec::new();
+    let mut indices = Vec::new();
+    loop {
+        let Some(TokenTree::Ident(ident)) = trees.get(cursor) else {
+            return None;
         };
-        result.extend([tree]);
-        index += 1;
+        names.push(ident_name(ident));
+        indices.push(cursor);
+        if cursor < 2
+            || !is_punct(trees.get(cursor - 1), ':')
+            || !is_punct(trees.get(cursor - 2), ':')
+        {
+            break;
+        }
+        cursor -= 3;
     }
-    result
+    names.reverse();
+    indices.reverse();
+    let leading_colon = indices.first().copied().is_some_and(|index| {
+        index >= 2 && is_punct(trees.get(index - 1), ':') && is_punct(trees.get(index - 2), ':')
+    });
+    Some((names, leading_colon, *indices.first()?))
 }
 
 struct SourceVisitor<'source> {
@@ -899,11 +1269,18 @@ struct SourceVisitor<'source> {
     findings: BTreeSet<Finding>,
     public_context: bool,
     trait_impl_context: bool,
-    type_scopes: Vec<TypeScope>,
+    registry: &'source ModuleRegistry,
+    module_stack: Vec<ModuleKey>,
+    lexical_scopes: Vec<BTreeSet<String>>,
 }
 
 impl<'source> SourceVisitor<'source> {
-    fn new(path: String, source: &'source str) -> Self {
+    fn new(
+        path: String,
+        source: &'source str,
+        registry: &'source ModuleRegistry,
+        module: ModuleKey,
+    ) -> Self {
         let mut line_starts = vec![0];
         line_starts.extend(
             source
@@ -918,7 +1295,9 @@ impl<'source> SourceVisitor<'source> {
             findings: BTreeSet::new(),
             public_context: false,
             trait_impl_context: false,
-            type_scopes: Vec::new(),
+            registry,
+            module_stack: vec![module],
+            lexical_scopes: Vec::new(),
         }
     }
 
@@ -930,18 +1309,31 @@ impl<'source> SourceVisitor<'source> {
         });
     }
 
-    fn push_scope(&mut self, scope: TypeScope) {
-        self.type_scopes.push(scope);
+    fn current_module(&self) -> &ModuleKey {
+        self.module_stack
+            .last()
+            .expect("source visitor always has a module")
+    }
+
+    fn lexical_shadow(&self) -> BTreeSet<String> {
+        self.lexical_scopes
+            .iter()
+            .flat_map(|scope| scope.iter().cloned())
+            .collect()
+    }
+
+    fn push_lexical_scope(&mut self, names: BTreeSet<String>) {
+        self.lexical_scopes.push(names);
     }
 
     fn push_generic_scope(&mut self, generics: &syn::Generics) {
-        let mut scope = TypeScope::default();
+        let mut names = BTreeSet::new();
         for parameter in &generics.params {
             if let syn::GenericParam::Type(parameter) = parameter {
-                scope.bindings.insert(ident_name(&parameter.ident), None);
+                names.insert(ident_name(&parameter.ident));
             }
         }
-        self.push_scope(scope);
+        self.push_lexical_scope(names);
     }
 
     fn method_call_line(&self, node: &ExprMethodCall) -> usize {
@@ -1007,45 +1399,41 @@ impl<'source> SourceVisitor<'source> {
         for index in 0..trees.len() {
             if let TokenTree::Ident(ident) = &trees[index] {
                 let name = ident_name(ident);
-                let metavariable = index > 0
-                    && matches!(&trees[index - 1], TokenTree::Punct(punct) if punct.as_char() == '$');
-                if !metavariable
-                    && RAW_KINDS.contains(&name.as_str())
-                    && matches!(trees.get(index + 1), Some(TokenTree::Punct(punct)) if punct.as_char() == '!')
-                {
-                    if let Some(kind) = PanicKind::from_name(&name) {
-                        self.add(kind, ident.span());
+                let metavariable = index > 0 && is_punct(trees.get(index - 1), '$');
+                if !metavariable && is_punct(trees.get(index + 1), '!') {
+                    if let Some(kind) =
+                        self.registry
+                            .resolve_macro_name(self.current_module(), &name, 1)
+                    {
+                        if kind.is_raw() || self.public_context {
+                            self.add(kind, ident.span());
+                        }
                     }
                 }
-                if matches!(name.as_str(), "unwrap" | "expect")
-                    && index >= 3
-                    && matches!(&trees[index - 1], TokenTree::Punct(punct) if punct.as_char() == ':')
-                    && matches!(&trees[index - 2], TokenTree::Punct(punct) if punct.as_char() == ':')
-                {
-                    let mut names = Vec::new();
-                    let mut cursor = index;
-                    while cursor >= 3
-                        && matches!(&trees[cursor - 1], TokenTree::Punct(punct) if punct.as_char() == ':')
-                        && matches!(&trees[cursor - 2], TokenTree::Punct(punct) if punct.as_char() == ':')
+                if matches!(name.as_str(), "unwrap" | "expect") {
+                    if let Some((names, leading_colon, first_index)) =
+                        token_ufcs_path(&trees, index)
                     {
-                        let Some(TokenTree::Ident(base)) = trees.get(cursor - 3) else {
-                            break;
-                        };
-                        names.push(ident_name(base));
-                        cursor -= 3;
-                    }
-                    names.reverse();
-                    if !names.is_empty()
-                        && standard_type_names(
-                            &names,
-                            false,
-                            &self.type_scopes,
-                            &mut BTreeSet::new(),
-                        )
-                        .is_some()
-                    {
-                        let kind = PanicKind::from_name(&name).expect("method name checked");
-                        self.add(kind, ident.span());
+                        // A path assembled from `$` is intentionally outside
+                        // this scanner's conservative literal boundary.
+                        if first_index > 0 && is_punct(trees.get(first_index - 1), '$') {
+                            continue;
+                        }
+                        let lexical_shadow = self.lexical_shadow();
+                        if self
+                            .registry
+                            .resolve_standard(
+                                self.current_module(),
+                                &names,
+                                leading_colon,
+                                &lexical_shadow,
+                            )
+                            .is_some()
+                        {
+                            let kind =
+                                PanicKind::from_name(&name).expect("method name checked above");
+                            self.add(kind, ident.span());
+                        }
                     }
                 }
             }
@@ -1070,41 +1458,46 @@ impl<'source> SourceVisitor<'source> {
         }
     }
 
-    fn scan_macro_groups(&mut self, tokens: &TokenStream) {
-        for tree in tokens.clone() {
-            let TokenTree::Group(group) = tree else {
+    fn scan_macro_rules(&mut self, tokens: TokenStream) {
+        let trees: Vec<TokenTree> = tokens.into_iter().collect();
+        let mut index = 0;
+        while index < trees.len() {
+            if !matches!(trees.get(index), Some(TokenTree::Group(_))) {
+                index += 1;
                 continue;
-            };
-            let inner = group.stream();
-            let parsed = self.try_parse_macro_stream(inner.clone())
-                || self.try_parse_macro_stream(sanitize_macro_variables(inner.clone()));
-            if !parsed {
-                self.scan_literal_token_patterns(&inner);
-                self.scan_macro_groups(&inner);
+            }
+            index += 1;
+            if is_punct(trees.get(index), '=') && is_punct(trees.get(index + 1), '>') {
+                index += 2;
+                if let Some(TokenTree::Group(group)) = trees.get(index) {
+                    // Matchers describe input and are never executable. Only
+                    // the transcriber RHS is inspected.
+                    self.scan_literal_token_patterns(&group.stream());
+                }
+                index += 1;
+            }
+            while index < trees.len() && is_punct(trees.get(index), ';') {
+                index += 1;
             }
         }
     }
 
-    /// Scan literal macro tokens without attempting expansion. Metavariables
-    /// are replaced only for parsing (`$panic!` is not a literal call), while
-    /// literal calls in invocation arguments and macro definitions remain
-    /// visible. Full macro name resolution/expansion is intentionally outside
-    /// this audit's conservative, source-only boundary.
+    /// Scan literal forbidden constructs in source macro arguments and macro
+    /// transcribers. This does not expand arbitrary metavariable calls:
+    /// `$panic!` and `$ty::unwrap` are intentionally outside the boundary.
     fn scan_macro_tokens(&mut self, tokens: TokenStream) {
-        let parsed = self.try_parse_macro_stream(tokens.clone())
-            || self.try_parse_macro_stream(sanitize_macro_variables(tokens.clone()));
-        if !parsed {
-            self.scan_literal_token_patterns(&tokens);
-            self.scan_macro_groups(&tokens);
+        if self.try_parse_macro_stream(tokens.clone()) {
+            return;
         }
+        self.scan_literal_token_patterns(&tokens);
     }
 }
 
 impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
     fn visit_file(&mut self, node: &'ast File) {
-        self.push_scope(collect_scope_bindings(&node.items));
+        // Module declarations were collected before traversal. Lexical
+        // function/block scopes are intentionally kept separate below.
         visit::visit_file(self, node);
-        self.type_scopes.pop();
     }
 
     fn visit_item(&mut self, node: &'ast Item) {
@@ -1118,17 +1511,24 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
         let Some((_, items)) = &node.content else {
             return;
         };
-        self.push_scope(collect_scope_bindings(items));
+        let parent = self.current_module().clone();
+        let name = ident_name(&node.ident);
+        let child = self.registry.child(&parent, &name).unwrap_or_else(|| {
+            let mut path = parent.path.clone();
+            path.push(name);
+            module_key(&parent.crate_id, &path)
+        });
+        self.module_stack.push(child);
         for item in items {
             self.visit_item(item);
         }
-        self.type_scopes.pop();
+        self.module_stack.pop();
     }
 
     fn visit_block(&mut self, node: &'ast syn::Block) {
-        self.push_scope(collect_block_bindings(node));
+        self.push_lexical_scope(collect_block_names(node));
         visit::visit_block(self, node);
-        self.type_scopes.pop();
+        self.lexical_scopes.pop();
     }
 
     fn visit_trait_item(&mut self, node: &'ast TraitItem) {
@@ -1150,7 +1550,7 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
         self.public_context |= is_public(&node.vis);
         self.push_generic_scope(&node.sig.generics);
         visit::visit_item_fn(self, node);
-        self.type_scopes.pop();
+        self.lexical_scopes.pop();
         self.public_context = previous;
     }
 
@@ -1159,7 +1559,7 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
         self.public_context |= is_public(&node.vis);
         self.push_generic_scope(&node.generics);
         visit::visit_item_trait(self, node);
-        self.type_scopes.pop();
+        self.lexical_scopes.pop();
         self.public_context = previous;
     }
 
@@ -1168,7 +1568,7 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
         self.trait_impl_context |= node.trait_.is_some();
         self.push_generic_scope(&node.generics);
         visit::visit_item_impl(self, node);
-        self.type_scopes.pop();
+        self.lexical_scopes.pop();
         self.trait_impl_context = previous;
     }
 
@@ -1177,12 +1577,23 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
         self.public_context |= self.trait_impl_context || is_public(&node.vis);
         self.push_generic_scope(&node.sig.generics);
         visit::visit_impl_item_fn(self, node);
-        self.type_scopes.pop();
+        self.lexical_scopes.pop();
         self.public_context = previous;
     }
 
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if node.ident.is_some() && node.mac.path.is_ident("macro_rules") {
+            self.scan_macro_rules(node.mac.tokens.clone());
+            return;
+        }
+        visit::visit_item_macro(self, node);
+    }
+
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if let Some(kind) = macro_kind(&node.path) {
+        if let Some(kind) = self
+            .registry
+            .resolve_macro(self.current_module(), &node.path)
+        {
             if kind.is_raw() || self.public_context {
                 self.add(
                     kind,
@@ -1214,7 +1625,10 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
 
     fn visit_expr_call(&mut self, node: &'ast ExprCall) {
         if let Expr::Path(path) = node.func.as_ref() {
-            if let Some(kind) = associated_method(path, &self.type_scopes) {
+            let lexical_shadow = self.lexical_shadow();
+            if let Some(kind) =
+                associated_method(path, self.registry, self.current_module(), &lexical_shadow)
+            {
                 self.add(kind, node.span());
             }
         }
