@@ -133,16 +133,31 @@ enum StandardType {
     Result,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct NodeKey {
+    /// Canonical read/containment identity.
+    identity: PathBuf,
+    /// Logical root identity. Cargo targets and orphan source roots each get
+    /// their own value, even when they read the same canonical file.
+    root_id: PathBuf,
+    /// Logical directory-entry path used by Rust module lookup.
+    logical_path: PathBuf,
+    module_path: Vec<String>,
+}
+
 struct SourceNode {
+    identity: PathBuf,
     source: String,
     file: File,
-    /// Canonical identity is the key in `Project::nodes`; this logical path is
-    /// retained for Rust's relative module resolution through symlink entries.
     logical_path: PathBuf,
-    crate_id: PathBuf,
+    root_id: PathBuf,
     module_path: Vec<String>,
-    module_test_only: bool,
+    /// True for an initially discovered source. Orphan sources retain their
+    /// own registry identity but use Rust's file-stem module base.
     initial_source: bool,
+    /// True when this context is a Cargo target root and therefore resolves
+    /// child modules from its containing directory.
+    logical_root: bool,
     crate_root: bool,
     edges: Vec<ModuleEdge>,
 }
@@ -153,6 +168,7 @@ struct ModuleEdge {
     target: PathBuf,
     /// The path as written through the containing module's logical ancestry.
     logical_target: PathBuf,
+    root_id: PathBuf,
     module_path: Vec<String>,
     test_only: bool,
 }
@@ -163,13 +179,13 @@ struct DiscoveredSource {
     identity: PathBuf,
     /// Logical directory-entry path used by Rust module lookup.
     logical_path: PathBuf,
-    crate_id: PathBuf,
+    root_id: PathBuf,
     crate_root: bool,
 }
 
 struct Project {
     root: PathBuf,
-    nodes: BTreeMap<PathBuf, SourceNode>,
+    nodes: BTreeMap<NodeKey, SourceNode>,
     modules: ModuleRegistry,
 }
 
@@ -183,88 +199,139 @@ impl Project {
             );
         }
 
+        let mut parsed = BTreeMap::<PathBuf, (String, File)>::new();
         let mut nodes = BTreeMap::new();
+        let mut queue = VecDeque::new();
+        let mut orphan_queue = VecDeque::new();
         for source in discovered {
-            let (source_text, file) = parse_source(&source.identity)?;
-            nodes
-                .entry(source.identity.clone())
-                .and_modify(|node: &mut SourceNode| {
-                    node.crate_root |= source.crate_root;
-                })
-                .or_insert(SourceNode {
+            let (source_text, file) = if let Some((text, file)) = parsed.get(&source.identity) {
+                (text.clone(), file.clone())
+            } else {
+                let parsed_source = parse_source(&source.identity)?;
+                parsed.insert(source.identity.clone(), parsed_source.clone());
+                parsed_source
+            };
+            let key = NodeKey {
+                identity: source.identity.clone(),
+                root_id: source.root_id.clone(),
+                logical_path: source.logical_path.clone(),
+                module_path: Vec::new(),
+            };
+            nodes.insert(
+                key.clone(),
+                SourceNode {
+                    identity: source.identity,
                     source: source_text,
                     file,
                     logical_path: source.logical_path,
-                    crate_id: source.crate_id,
+                    root_id: source.root_id,
                     module_path: Vec::new(),
-                    module_test_only: !source.crate_root,
                     initial_source: true,
+                    logical_root: source.crate_root,
                     crate_root: source.crate_root,
                     edges: Vec::new(),
-                });
+                },
+            );
+            if source.crate_root {
+                queue.push_back(key);
+            } else {
+                orphan_queue.push_back(key);
+            }
         }
 
-        // Resolve crate roots before orphan sources so an initially
-        // discovered child receives its production module ancestry before its
-        // own `mod` declarations are expanded.
-        let mut queue: VecDeque<PathBuf> = nodes
-            .iter()
-            .filter_map(|(path, node)| node.crate_root.then_some(path.clone()))
-            .collect();
-        queue.extend(
-            nodes
-                .iter()
-                .filter_map(|(path, node)| (!node.crate_root).then_some(path.clone())),
-        );
-        while let Some(path) = queue.pop_front() {
+        // Keep every logical root as a separate graph context. Canonical
+        // paths deduplicate reads, not module ancestry or registry identity.
+        let mut expanded = BTreeSet::<(PathBuf, PathBuf, PathBuf)>::new();
+        let mut referenced_test = BTreeSet::new();
+        let mut referenced_production = BTreeSet::new();
+        let mut root_phase = true;
+        loop {
+            if queue.is_empty() {
+                if root_phase {
+                    root_phase = false;
+                    queue = std::mem::take(&mut orphan_queue);
+                    continue;
+                }
+                break;
+            }
+            let key = queue.pop_front().expect("queue checked non-empty");
+            let (skip_orphan, expansion_key) = {
+                let node = nodes
+                    .get(&key)
+                    .ok_or_else(|| anyhow!("internal source graph error"))?;
+                (
+                    !node.crate_root
+                        && node.initial_source
+                        && referenced_test.contains(&node.identity)
+                        && !referenced_production.contains(&node.identity),
+                    (
+                        node.root_id.clone(),
+                        node.identity.clone(),
+                        node.logical_path.clone(),
+                    ),
+                )
+            };
+            if skip_orphan {
+                continue;
+            }
+            if !expanded.insert(expansion_key) {
+                continue;
+            }
             let edges = {
                 let node = nodes
-                    .get(&path)
-                    .ok_or_else(|| anyhow!("internal source graph error for {}", path.display()))?;
-                collect_module_edges(&node.file, &node.logical_path, &node.module_path, root)?
+                    .get(&key)
+                    .ok_or_else(|| anyhow!("internal source graph error"))?;
+                collect_module_edges(
+                    &node.file,
+                    &node.logical_path,
+                    &node.module_path,
+                    &node.root_id,
+                    node.logical_root,
+                    root,
+                )?
             };
             for edge in edges {
-                let parent_crate_id = nodes
-                    .get(&path)
-                    .ok_or_else(|| anyhow!("internal source graph error for {}", path.display()))?
-                    .crate_id
-                    .clone();
-                if !nodes.contains_key(&edge.target) {
-                    let (source_text, file) = parse_source(&edge.target)?;
+                if edge.test_only {
+                    referenced_test.insert(edge.target.clone());
+                } else {
+                    referenced_production.insert(edge.target.clone());
+                }
+                let child_key = NodeKey {
+                    identity: edge.target.clone(),
+                    root_id: edge.root_id.clone(),
+                    logical_path: edge.logical_target.clone(),
+                    module_path: edge.module_path.clone(),
+                };
+                if !nodes.contains_key(&child_key) {
+                    let (source_text, file) = if let Some((text, file)) = parsed.get(&edge.target) {
+                        (text.clone(), file.clone())
+                    } else {
+                        let parsed_source = parse_source(&edge.target)?;
+                        parsed.insert(edge.target.clone(), parsed_source.clone());
+                        parsed_source
+                    };
                     nodes.insert(
-                        edge.target.clone(),
+                        child_key.clone(),
                         SourceNode {
+                            identity: edge.target.clone(),
                             source: source_text,
                             file,
                             logical_path: edge.logical_target.clone(),
-                            crate_id: parent_crate_id,
+                            root_id: edge.root_id.clone(),
                             module_path: edge.module_path.clone(),
-                            module_test_only: edge.test_only,
                             initial_source: false,
+                            logical_root: false,
                             crate_root: false,
                             edges: Vec::new(),
                         },
                     );
-                    queue.push_back(edge.target.clone());
-                } else if let Some(node) = nodes.get_mut(&edge.target) {
-                    // A source discovered as an orphan may later be reached
-                    // through a module edge; attach its declaration path for
-                    // module-scope alias resolution.
-                    if !node.crate_root
-                        && (node.module_path.is_empty()
-                            || (node.module_test_only && !edge.test_only))
-                    {
-                        node.module_path = edge.module_path.clone();
-                        node.module_test_only = edge.test_only;
-                        node.crate_id = parent_crate_id;
-                        node.logical_path = edge.logical_target.clone();
-                    }
                 }
                 nodes
-                    .get_mut(&path)
-                    .ok_or_else(|| anyhow!("internal source graph error for {}", path.display()))?
+                    .get_mut(&key)
+                    .ok_or_else(|| anyhow!("internal source graph error"))?
                     .edges
                     .push(edge);
+                queue.push_back(child_key);
             }
         }
 
@@ -276,32 +343,43 @@ impl Project {
         })
     }
 
-    fn production_reachable(&self) -> BTreeSet<PathBuf> {
-        let mut incoming = BTreeMap::<PathBuf, usize>::new();
-        for path in self.nodes.keys() {
-            incoming.insert(path.clone(), 0);
+    fn production_reachable(&self) -> BTreeSet<NodeKey> {
+        let mut incoming = BTreeMap::<NodeKey, usize>::new();
+        for key in self.nodes.keys() {
+            incoming.insert(key.clone(), 0);
         }
         for node in self.nodes.values() {
             for edge in &node.edges {
-                *incoming.entry(edge.target.clone()).or_default() += 1;
+                let target = NodeKey {
+                    identity: edge.target.clone(),
+                    root_id: edge.root_id.clone(),
+                    logical_path: edge.logical_target.clone(),
+                    module_path: edge.module_path.clone(),
+                };
+                *incoming.entry(target).or_default() += 1;
             }
         }
 
         let mut reachable = BTreeSet::new();
         let mut queue = VecDeque::new();
-        for (path, node) in &self.nodes {
-            if node.crate_root || (node.initial_source && incoming[path] == 0) {
-                queue.push_back(path.clone());
+        for (key, node) in &self.nodes {
+            if node.crate_root || (node.initial_source && incoming[key] == 0) {
+                queue.push_back(key.clone());
             }
         }
-        while let Some(path) = queue.pop_front() {
-            if !reachable.insert(path.clone()) {
+        while let Some(key) = queue.pop_front() {
+            if !reachable.insert(key.clone()) {
                 continue;
             }
-            if let Some(node) = self.nodes.get(&path) {
+            if let Some(node) = self.nodes.get(&key) {
                 for edge in &node.edges {
                     if !edge.test_only {
-                        queue.push_back(edge.target.clone());
+                        queue.push_back(NodeKey {
+                            identity: edge.target.clone(),
+                            root_id: edge.root_id.clone(),
+                            logical_path: edge.logical_target.clone(),
+                            module_path: edge.module_path.clone(),
+                        });
                     }
                 }
             }
@@ -309,23 +387,33 @@ impl Project {
         reachable
     }
 
-    fn test_reachable(&self) -> BTreeSet<PathBuf> {
+    fn test_reachable(&self) -> BTreeSet<NodeKey> {
         let mut reachable = BTreeSet::new();
         let mut queue = VecDeque::new();
         for node in self.nodes.values() {
             for edge in &node.edges {
                 if edge.test_only {
-                    queue.push_back(edge.target.clone());
+                    queue.push_back(NodeKey {
+                        identity: edge.target.clone(),
+                        root_id: edge.root_id.clone(),
+                        logical_path: edge.logical_target.clone(),
+                        module_path: edge.module_path.clone(),
+                    });
                 }
             }
         }
-        while let Some(path) = queue.pop_front() {
-            if !reachable.insert(path.clone()) {
+        while let Some(key) = queue.pop_front() {
+            if !reachable.insert(key.clone()) {
                 continue;
             }
-            if let Some(node) = self.nodes.get(&path) {
+            if let Some(node) = self.nodes.get(&key) {
                 for edge in &node.edges {
-                    queue.push_back(edge.target.clone());
+                    queue.push_back(NodeKey {
+                        identity: edge.target.clone(),
+                        root_id: edge.root_id.clone(),
+                        logical_path: edge.logical_target.clone(),
+                        module_path: edge.module_path.clone(),
+                    });
                 }
             }
         }
@@ -335,14 +423,28 @@ impl Project {
     fn scan(&self) -> BTreeSet<Finding> {
         let production = self.production_reachable();
         let test = self.test_reachable();
+        let production_identities: BTreeSet<_> = production
+            .iter()
+            .filter_map(|key| self.nodes.get(key))
+            .filter(|node| node.crate_root || !node.initial_source)
+            .map(|node| node.identity.clone())
+            .collect();
+        let test_identities: BTreeSet<_> = test
+            .iter()
+            .filter_map(|key| self.nodes.get(key).map(|node| node.identity.clone()))
+            .collect();
         let mut findings = BTreeSet::new();
-        for (path, node) in &self.nodes {
-            if test.contains(path) && !production.contains(path) {
+        for (key, node) in &self.nodes {
+            let orphan_test_only = node.initial_source
+                && !node.crate_root
+                && test_identities.contains(&node.identity)
+                && !production_identities.contains(&node.identity);
+            if (test.contains(key) && !production.contains(key)) || orphan_test_only {
                 continue;
             }
-            let relative = relative_path(&self.root, path);
-            let key = module_key(&node.crate_id, &node.module_path);
-            let mut visitor = SourceVisitor::new(relative, &node.source, &self.modules, key);
+            let relative = relative_path(&self.root, &node.identity);
+            let module = module_key(&node.root_id, &node.module_path);
+            let mut visitor = SourceVisitor::new(relative, &node.source, &self.modules, module);
             visitor.visit_file(&node.file);
             findings.extend(visitor.findings);
         }
@@ -431,11 +533,12 @@ fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>> {
         );
     }
 
-    let mut sources = BTreeMap::<PathBuf, (PathBuf, bool, PathBuf)>::new();
-    for entry in
-        fs::read_dir(&crates).with_context(|| format!("cannot read {}", crates.display()))?
-    {
-        let entry = entry?;
+    let mut crate_entries = fs::read_dir(&crates)
+        .with_context(|| format!("cannot read {}", crates.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    crate_entries.sort_by_key(|entry| entry.path());
+    let mut sources = Vec::new();
+    for entry in crate_entries {
         let logical_crate = entry.path();
         let metadata = fs::symlink_metadata(&logical_crate)?;
         if !metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
@@ -459,60 +562,69 @@ fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>> {
             &logical_src,
             &mut sources,
             &mut BTreeSet::new(),
-            &crate_path,
+            &mut BTreeSet::new(),
         )?;
     }
-
-    Ok(sources
-        .into_iter()
-        .map(
-            |(identity, (logical_path, crate_root, crate_id))| DiscoveredSource {
-                identity,
-                logical_path,
-                crate_id,
-                crate_root,
-            },
-        )
-        .collect())
+    sources.sort_by(|left, right| {
+        left.logical_path
+            .cmp(&right.logical_path)
+            .then_with(|| left.identity.cmp(&right.identity))
+    });
+    Ok(sources)
 }
 
 fn collect_source_files(
     root: &Path,
     crate_src: &Path,
     logical_dir: &Path,
-    sources: &mut BTreeMap<PathBuf, (PathBuf, bool, PathBuf)>,
+    sources: &mut Vec<DiscoveredSource>,
     visited_dirs: &mut BTreeSet<PathBuf>,
-    crate_id: &Path,
+    active_dirs: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
+    let logical_key = normalize_absolute(logical_dir);
+    if !visited_dirs.insert(logical_key) {
+        return Ok(());
+    }
     let canonical_dir = fs::canonicalize(logical_dir)
         .with_context(|| format!("cannot resolve source directory {}", logical_dir.display()))?;
     ensure_inside(root, &canonical_dir, "source path")?;
-    if !visited_dirs.insert(canonical_dir.clone()) {
+    if !active_dirs.insert(canonical_dir.clone()) {
         return Ok(());
     }
 
-    for entry in fs::read_dir(logical_dir)
+    let mut entries = fs::read_dir(logical_dir)
         .with_context(|| format!("cannot read source directory {}", logical_dir.display()))?
-    {
-        let entry = entry?;
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
         let logical = entry.path();
         let canonical = fs::canonicalize(&logical)
             .with_context(|| format!("cannot resolve source path {}", logical.display()))?;
         ensure_inside(root, &canonical, "source path")?;
         if canonical.is_dir() {
-            collect_source_files(root, crate_src, &logical, sources, visited_dirs, crate_id)?;
+            collect_source_files(
+                root,
+                crate_src,
+                &logical,
+                sources,
+                visited_dirs,
+                active_dirs,
+            )?;
         } else if logical.extension().and_then(|extension| extension.to_str()) == Some("rs")
             && canonical.is_file()
         {
-            // Rust follows the logical directory entry. A `.rs` symlink is a
-            // source even when its in-root target has no `.rs` suffix.
-            let crate_root = is_crate_root_source(crate_src, &logical);
-            sources
-                .entry(canonical)
-                .and_modify(|(_, is_root, _)| *is_root |= crate_root)
-                .or_insert((logical, crate_root, crate_id.to_owned()));
+            // Rust follows the logical directory entry. Keep the logical path
+            // even when several entries canonicalize to one source file.
+            let logical_path = normalize_absolute(&logical);
+            sources.push(DiscoveredSource {
+                identity: canonical,
+                root_id: logical_path.clone(),
+                crate_root: is_crate_root_source(crate_src, &logical),
+                logical_path,
+            });
         }
     }
+    active_dirs.remove(&canonical_dir);
     Ok(())
 }
 
@@ -533,30 +645,41 @@ fn is_crate_root_source(src: &Path, logical: &Path) -> bool {
     }
 }
 
-fn module_base_for_file(path: &Path) -> PathBuf {
+fn module_base_for_file(path: &Path, logical_root: bool) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+    if logical_root {
+        return parent.to_owned();
+    }
     match path.file_name().and_then(|name| name.to_str()) {
-        Some("lib.rs") | Some("main.rs") | Some("mod.rs") => parent.to_owned(),
+        Some("mod.rs") => parent.to_owned(),
         Some(name) => parent.join(name.trim_end_matches(".rs")),
         None => parent.to_owned(),
     }
+}
+
+struct ModuleCollection<'a> {
+    root_id: &'a Path,
+    root: &'a Path,
 }
 
 fn collect_module_edges(
     file: &File,
     logical_path: &Path,
     module_path: &[String],
+    root_id: &Path,
+    logical_root: bool,
     root: &Path,
 ) -> Result<Vec<ModuleEdge>> {
     let mut edges = Vec::new();
     let source_dir = logical_path.parent().unwrap_or_else(|| Path::new("/"));
+    let context = ModuleCollection { root_id, root };
     collect_module_items(
         &file.items,
-        &module_base_for_file(logical_path),
+        &module_base_for_file(logical_path, logical_root),
         source_dir,
         module_path.to_vec(),
         false,
-        root,
+        &context,
         &mut edges,
     )?;
     Ok(edges)
@@ -568,7 +691,7 @@ fn collect_module_items(
     path_base: &Path,
     module_path: Vec<String>,
     inherited_test_only: bool,
-    root: &Path,
+    context: &ModuleCollection<'_>,
     edges: &mut Vec<ModuleEdge>,
 ) -> Result<()> {
     for item in items {
@@ -587,8 +710,8 @@ fn collect_module_items(
             // source would. The virtual source path also handles `alt.rs`.
             let child_dir = if let Some(path_attr) = path_attr {
                 let virtual_source =
-                    logical_join(path_base, &path_attr, root, "inline module path")?;
-                module_base_for_file(&virtual_source)
+                    logical_join(path_base, &path_attr, context.root, "inline module path")?;
+                module_base_for_file(&virtual_source, false)
             } else {
                 default_child_dir
             };
@@ -598,14 +721,14 @@ fn collect_module_items(
                 &child_dir,
                 child_module_path,
                 test_only,
-                root,
+                context,
                 edges,
             )?;
             continue;
         }
 
         let logical_target = if let Some(path_attr) = path_attr {
-            logical_join(path_base, &path_attr, root, "module path")?
+            logical_join(path_base, &path_attr, context.root, "module path")?
         } else {
             let candidates = [
                 default_child_dir.with_extension("rs"),
@@ -623,10 +746,11 @@ fn collect_module_items(
                 )
             })?
         };
-        let target = canonical_module_path(root, &logical_target, "module path")?;
+        let target = canonical_module_path(context.root, &logical_target, "module path")?;
         edges.push(ModuleEdge {
             target,
             logical_target,
+            root_id: context.root_id.to_owned(),
             module_path: child_module_path,
             test_only,
         });
@@ -770,6 +894,46 @@ fn canonical_standard_type(names: &[String]) -> Option<StandardType> {
     }
 }
 
+fn builtin_macro_path(names: &[String]) -> bool {
+    matches!(
+        names,
+        [root, name]
+            if (root == "std" || root == "core")
+                && matches!(
+                    name.as_str(),
+                    "assert"
+                        | "assert_eq"
+                        | "assert_ne"
+                        | "debug_assert"
+                        | "debug_assert_eq"
+                        | "debug_assert_ne"
+                        | "eprint"
+                        | "eprintln"
+                        | "format"
+                        | "panic"
+                        | "print"
+                        | "println"
+                        | "unreachable"
+                        | "unimplemented"
+                        | "vec"
+                        | "write"
+                        | "writeln"
+                )
+    )
+}
+
+fn canonical_macro(names: &[String]) -> Option<PanicKind> {
+    match names {
+        [root, name] if (root == "std" || root == "core") && name == "panic" => {
+            Some(PanicKind::Panic)
+        }
+        [root, name] if (root == "std" || root == "core") && name == "unreachable" => {
+            Some(PanicKind::Unreachable)
+        }
+        _ => None,
+    }
+}
+
 fn module_key(crate_id: &Path, path: &[String]) -> ModuleKey {
     ModuleKey {
         crate_id: crate_id.to_owned(),
@@ -836,19 +1000,17 @@ fn module_scope_from_items(items: &[Item]) -> ModuleScope {
         if has_exact_cfg_test(item_attrs(item)) {
             continue;
         }
+        // Only the type namespace can shadow the prelude's Option/Result.
+        // Functions, constants, statics, modules, and other value bindings
+        // live in separate Rust namespaces.
         let name = match item {
-            Item::Const(item) => Some(ident_name(&item.ident)),
             Item::Enum(item) => Some(ident_name(&item.ident)),
-            Item::Fn(item) => Some(ident_name(&item.sig.ident)),
-            Item::Impl(_) | Item::ForeignMod(_) | Item::Macro(_) | Item::Static(_) => None,
-            Item::Mod(item) => Some(ident_name(&item.ident)),
+            Item::ExternCrate(item) => Some(ident_name(&item.ident)),
             Item::Struct(item) => Some(ident_name(&item.ident)),
             Item::Trait(item) => Some(ident_name(&item.ident)),
             Item::TraitAlias(item) => Some(ident_name(&item.ident)),
             Item::Type(item) => Some(ident_name(&item.ident)),
             Item::Union(item) => Some(ident_name(&item.ident)),
-            Item::ExternCrate(item) => Some(ident_name(&item.ident)),
-            Item::Use(_) | Item::Verbatim(_) => None,
             _ => None,
         };
         if let Some(name) = name {
@@ -879,11 +1041,13 @@ fn module_scope_from_items(items: &[Item]) -> ModuleScope {
             let mut imports = Vec::new();
             collect_use_paths(&item.tree, &[], &mut imports);
             for (name, path) in imports {
-                insert_module_binding(
-                    &mut scope.bindings,
-                    name.clone(),
-                    ModuleBinding::Path(path.clone()),
-                );
+                if !builtin_macro_path(&path) {
+                    insert_module_binding(
+                        &mut scope.bindings,
+                        name.clone(),
+                        ModuleBinding::Path(path.clone()),
+                    );
+                }
                 insert_module_binding(&mut scope.macro_bindings, name, ModuleBinding::Path(path));
             }
         }
@@ -892,10 +1056,10 @@ fn module_scope_from_items(items: &[Item]) -> ModuleScope {
 }
 
 impl ModuleRegistry {
-    fn build(nodes: &BTreeMap<PathBuf, SourceNode>) -> Self {
+    fn build(nodes: &BTreeMap<NodeKey, SourceNode>) -> Self {
         let mut registry = Self::default();
         for node in nodes.values() {
-            let key = module_key(&node.crate_id, &node.module_path);
+            let key = module_key(&node.root_id, &node.module_path);
             registry
                 .scopes
                 .entry(key.clone())
@@ -908,10 +1072,10 @@ impl ModuleRegistry {
                     continue;
                 };
                 let owner = module_key(
-                    &node.crate_id,
+                    &node.root_id,
                     &edge.module_path[..edge.module_path.len() - 1],
                 );
-                let child = module_key(&node.crate_id, &edge.module_path);
+                let child = module_key(&node.root_id, &edge.module_path);
                 registry
                     .scopes
                     .entry(owner)
@@ -931,12 +1095,44 @@ impl ModuleRegistry {
         self.scope(key)?.children.get(name).cloned()
     }
 
+    fn canonical_standard_in_scope(
+        &self,
+        current: &ModuleKey,
+        names: &[String],
+    ) -> Option<StandardType> {
+        let standard = canonical_standard_type(names)?;
+        let root = names.first()?;
+        let shadowed = self
+            .scope(current)
+            .map(|scope| scope.bindings.contains_key(root) || scope.children.contains_key(root))
+            .unwrap_or(false);
+        (!shadowed).then_some(standard)
+    }
+
+    fn canonical_macro_in_scope(
+        &self,
+        current: &ModuleKey,
+        names: &[String],
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
+    ) -> Option<PanicKind> {
+        let kind = canonical_macro(names)?;
+        let root = names.first()?;
+        if lexical_bindings.contains_key(root) {
+            return None;
+        }
+        let shadowed = self
+            .scope(current)
+            .map(|scope| scope.bindings.contains_key(root) || scope.children.contains_key(root))
+            .unwrap_or(false);
+        (!shadowed).then_some(kind)
+    }
+
     fn resolve_standard(
         &self,
         current: &ModuleKey,
         names: &[String],
         leading_colon: bool,
-        lexical_shadow: &BTreeSet<String>,
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
     ) -> Option<StandardType> {
         if names.is_empty() {
             return None;
@@ -944,36 +1140,48 @@ impl ModuleRegistry {
         if leading_colon {
             return canonical_standard_type(names);
         }
-        if names.len() == 1 {
-            if lexical_shadow.contains(&names[0]) {
-                return None;
+        let mut visiting = BTreeSet::new();
+        if let Some(binding) = lexical_bindings.get(&names[0]) {
+            if names.len() == 1 {
+                return self.resolve_binding_value(
+                    current,
+                    binding,
+                    &mut visiting,
+                    lexical_bindings,
+                );
             }
-            return self.resolve_binding(current, &names[0], &mut BTreeSet::new());
+            let module = self.resolve_module_binding(current, binding, &mut BTreeSet::new())?;
+            return self.resolve_standard_in_module(&module, &names[1..], &mut visiting);
         }
-        if let Some(standard) = canonical_standard_type(names) {
-            if self
-                .scope(current)
-                .and_then(|scope| scope.bindings.get(&names[0]))
-                .is_none()
-            {
-                return Some(standard);
-            }
-            return None;
-        }
-        let (module, name) = self.resolve_module_prefix(current, names)?;
-        self.resolve_binding(&module, name, &mut BTreeSet::new())
+        self.resolve_standard_in_module(current, names, &mut visiting)
     }
 
-    fn resolve_module_prefix<'a>(
+    fn resolve_standard_in_module(
         &self,
         current: &ModuleKey,
-        names: &'a [String],
-    ) -> Option<(ModuleKey, &'a str)> {
-        if names.len() < 2 {
+        names: &[String],
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<StandardType> {
+        if names.len() == 1 {
+            return self.resolve_binding(current, &names[0], visiting, &BTreeMap::new());
+        }
+        if let Some(standard) = self.canonical_standard_in_scope(current, names) {
+            return Some(standard);
+        }
+        let (module, name) = self.resolve_module_prefix(current, names)?;
+        self.resolve_binding(&module, name, visiting, &BTreeMap::new())
+    }
+
+    fn module_path_start(
+        &self,
+        current: &ModuleKey,
+        names: &[String],
+    ) -> Option<(ModuleKey, usize)> {
+        if names.is_empty() {
             return None;
         }
-        let mut index = 0;
         let mut module = current.clone();
+        let mut index = 0;
         match names[0].as_str() {
             "crate" => {
                 module.path.clear();
@@ -988,8 +1196,68 @@ impl ModuleRegistry {
             }
             _ => {}
         }
+        Some((module, index))
+    }
+
+    fn resolve_module_binding(
+        &self,
+        current: &ModuleKey,
+        binding: &ModuleBinding,
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<ModuleKey> {
+        let ModuleBinding::Path(path) = binding else {
+            return None;
+        };
+        self.resolve_module_path(current, path, visiting)
+    }
+
+    fn resolve_module_path(
+        &self,
+        current: &ModuleKey,
+        names: &[String],
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<ModuleKey> {
+        let (mut module, mut index) = self.module_path_start(current, names)?;
+        while index < names.len() {
+            let name = &names[index];
+            if let Some(child) = self.child(&module, name) {
+                module = child;
+                index += 1;
+                continue;
+            }
+            let key = (module.clone(), name.clone());
+            if !visiting.insert(key.clone()) {
+                return None;
+            }
+            let binding = self.scope(&module)?.bindings.get(name).cloned();
+            let next = match binding {
+                Some(binding) => self.resolve_module_binding(&module, &binding, visiting),
+                None => None,
+            };
+            visiting.remove(&key);
+            module = next?;
+            index += 1;
+        }
+        Some(module)
+    }
+
+    fn resolve_module_prefix<'a>(
+        &self,
+        current: &ModuleKey,
+        names: &'a [String],
+    ) -> Option<(ModuleKey, &'a str)> {
+        if names.len() < 2 {
+            return None;
+        }
+        let (mut module, mut index) = self.module_path_start(current, names)?;
         while index + 1 < names.len() {
-            module = self.child(&module, &names[index])?;
+            if let Some(child) = self.child(&module, &names[index]) {
+                module = child;
+            } else {
+                let mut visiting = BTreeSet::new();
+                let binding = self.scope(&module)?.bindings.get(&names[index]).cloned()?;
+                module = self.resolve_module_binding(&module, &binding, &mut visiting)?;
+            }
             index += 1;
         }
         Some((module, &names[index]))
@@ -1000,26 +1268,17 @@ impl ModuleRegistry {
         module: &ModuleKey,
         name: &str,
         visiting: &mut BTreeSet<(ModuleKey, String)>,
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
     ) -> Option<StandardType> {
         if !visiting.insert((module.clone(), name.to_owned())) {
             return None;
         }
         let binding = self.scope(module)?.bindings.get(name).cloned();
         let result = match binding {
-            Some(ModuleBinding::Unknown) => None,
-            Some(ModuleBinding::Alias(ty)) => {
-                self.resolve_type(module, &ty, visiting, &BTreeSet::new())
+            Some(binding) => {
+                self.resolve_binding_value(module, &binding, visiting, lexical_bindings)
             }
-            Some(ModuleBinding::Path(path)) => {
-                if let Some(standard) = canonical_standard_type(&path) {
-                    Some(standard)
-                } else if path.len() == 1 {
-                    self.resolve_binding(module, &path[0], visiting)
-                } else {
-                    let (target, last) = self.resolve_module_prefix(module, &path)?;
-                    self.resolve_binding(&target, last, visiting)
-                }
-            }
+            None if self.child(module, name).is_some() => None,
             None => match name {
                 "Option" => Some(StandardType::Option),
                 "Result" => Some(StandardType::Result),
@@ -1030,12 +1289,39 @@ impl ModuleRegistry {
         result
     }
 
+    fn resolve_binding_value(
+        &self,
+        module: &ModuleKey,
+        binding: &ModuleBinding,
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
+    ) -> Option<StandardType> {
+        match binding {
+            ModuleBinding::Unknown => None,
+            ModuleBinding::Alias(ty) => self.resolve_type(module, ty, visiting, lexical_bindings),
+            ModuleBinding::Path(path) => {
+                if let Some(standard) = self.canonical_standard_in_scope(module, path) {
+                    Some(standard)
+                } else if path.len() == 1 {
+                    if let Some(local) = lexical_bindings.get(&path[0]) {
+                        self.resolve_binding_value(module, local, visiting, lexical_bindings)
+                    } else {
+                        self.resolve_binding(module, &path[0], visiting, lexical_bindings)
+                    }
+                } else {
+                    let (target, last) = self.resolve_module_prefix(module, path)?;
+                    self.resolve_binding(&target, last, visiting, &BTreeMap::new())
+                }
+            }
+        }
+    }
+
     fn resolve_type(
         &self,
         module: &ModuleKey,
         ty: &Type,
         visiting: &mut BTreeSet<(ModuleKey, String)>,
-        lexical_shadow: &BTreeSet<String>,
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
     ) -> Option<StandardType> {
         match ty {
             Type::Path(type_path) if type_path.qself.is_none() => {
@@ -1046,57 +1332,121 @@ impl ModuleRegistry {
                     .map(|segment| ident_name(&segment.ident))
                     .collect();
                 if names.len() == 1 {
-                    if lexical_shadow.contains(&names[0]) {
-                        None
+                    if let Some(binding) = lexical_bindings.get(&names[0]) {
+                        self.resolve_binding_value(module, binding, visiting, lexical_bindings)
                     } else {
-                        self.resolve_binding(module, &names[0], visiting)
+                        self.resolve_binding(module, &names[0], visiting, lexical_bindings)
                     }
-                } else if let Some(standard) = canonical_standard_type(&names) {
+                } else if type_path.path.leading_colon.is_some() {
+                    canonical_standard_type(&names)
+                } else if let Some(standard) = self.canonical_standard_in_scope(module, &names) {
                     Some(standard)
                 } else {
                     let (target, name) = self.resolve_module_prefix(module, &names)?;
-                    self.resolve_binding(&target, name, visiting)
+                    self.resolve_binding(&target, name, visiting, &BTreeMap::new())
                 }
             }
             Type::Paren(type_paren) => {
-                self.resolve_type(module, &type_paren.elem, visiting, lexical_shadow)
+                self.resolve_type(module, &type_paren.elem, visiting, lexical_bindings)
             }
             Type::Group(type_group) => {
-                self.resolve_type(module, &type_group.elem, visiting, lexical_shadow)
+                self.resolve_type(module, &type_group.elem, visiting, lexical_bindings)
             }
             _ => None,
         }
     }
 
-    fn resolve_macro(&self, current: &ModuleKey, path: &syn::Path) -> Option<PanicKind> {
+    fn resolve_macro(
+        &self,
+        current: &ModuleKey,
+        path: &syn::Path,
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
+    ) -> Option<PanicKind> {
         let names: Vec<String> = path
             .segments
             .iter()
             .map(|segment| ident_name(&segment.ident))
             .collect();
-        if names.len() == 1 {
-            return self.resolve_macro_name(current, &names[0], 1);
-        }
-        if names.as_slice() == ["std", "panic"] || names.as_slice() == ["core", "panic"] {
-            return Some(PanicKind::Panic);
-        }
-        let (module, last) = self.resolve_module_prefix(current, &names)?;
-        self.resolve_macro_binding(&module, last, &mut BTreeSet::new())
+        self.resolve_macro_names(
+            current,
+            &names,
+            path.leading_colon.is_some(),
+            lexical_bindings,
+        )
     }
 
-    fn resolve_macro_name(
+    fn resolve_macro_names(
         &self,
         current: &ModuleKey,
-        name: &str,
-        path_len: usize,
+        names: &[String],
+        leading_colon: bool,
+        lexical_bindings: &BTreeMap<String, ModuleBinding>,
     ) -> Option<PanicKind> {
-        if path_len != 1 {
+        if names.is_empty() {
             return None;
         }
-        if let Some(kind) = PanicKind::from_name(name) {
+        if let Some(kind) = self.canonical_macro_in_scope(current, names, lexical_bindings) {
             return Some(kind);
         }
-        self.resolve_macro_binding(current, name, &mut BTreeSet::new())
+        let mut visiting = BTreeSet::new();
+        if names.len() == 1 {
+            if let Some(binding) = lexical_bindings.get(&names[0]) {
+                return self.resolve_macro_value(current, binding, &mut visiting);
+            }
+            return self.resolve_macro_name(current, &names[0]);
+        }
+        if leading_colon && canonical_macro(names).is_none() {
+            return None;
+        }
+        if let Some(binding) = lexical_bindings.get(&names[0]) {
+            let module = self.resolve_module_binding(current, binding, &mut BTreeSet::new())?;
+            return self.resolve_macro_tail(&module, &names[1..], &mut visiting);
+        }
+        let (module, last) = self.resolve_module_prefix(current, names)?;
+        self.resolve_macro_binding(&module, last, &mut visiting)
+    }
+
+    fn resolve_macro_tail(
+        &self,
+        current: &ModuleKey,
+        names: &[String],
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<PanicKind> {
+        if names.len() == 1 {
+            return self.resolve_macro_binding(current, &names[0], visiting);
+        }
+        let (module, last) = self.resolve_module_prefix(current, names)?;
+        self.resolve_macro_binding(&module, last, visiting)
+    }
+
+    fn resolve_macro_name(&self, current: &ModuleKey, name: &str) -> Option<PanicKind> {
+        if self
+            .scope(current)
+            .and_then(|scope| scope.macro_bindings.get(name))
+            .is_some()
+        {
+            return self.resolve_macro_binding(current, name, &mut BTreeSet::new());
+        }
+        PanicKind::from_name(name)
+    }
+
+    fn resolve_macro_value(
+        &self,
+        current: &ModuleKey,
+        binding: &ModuleBinding,
+        visiting: &mut BTreeSet<(ModuleKey, String)>,
+    ) -> Option<PanicKind> {
+        let ModuleBinding::Path(path) = binding else {
+            return None;
+        };
+        if let Some(kind) = self.canonical_macro_in_scope(current, path, &BTreeMap::new()) {
+            return Some(kind);
+        }
+        if path.len() == 1 {
+            return self.resolve_macro_binding(current, &path[0], visiting);
+        }
+        let (module, last) = self.resolve_module_prefix(current, path)?;
+        self.resolve_macro_binding(&module, last, visiting)
     }
 
     fn resolve_macro_binding(
@@ -1110,40 +1460,35 @@ impl ModuleRegistry {
         }
         let binding = self.scope(current)?.macro_bindings.get(name).cloned();
         let result = match binding {
-            Some(ModuleBinding::Path(target))
-                if target.as_slice() == ["std", "panic"]
-                    || target.as_slice() == ["core", "panic"] =>
-            {
-                Some(PanicKind::Panic)
-            }
-            Some(ModuleBinding::Path(target)) if target.len() == 1 => {
-                self.resolve_macro_binding(current, &target[0], visiting)
-            }
-            Some(ModuleBinding::Path(target)) => {
-                let (module, last) = self.resolve_module_prefix(current, &target)?;
-                self.resolve_macro_binding(&module, last, visiting)
-            }
-            _ => None,
+            Some(binding) => self.resolve_macro_value(current, &binding, visiting),
+            None => None,
         };
         visiting.remove(&(current.clone(), name.to_owned()));
         result
     }
 }
 
-fn collect_block_names(block: &syn::Block) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+#[derive(Clone, Default)]
+struct LexicalScope {
+    bindings: BTreeMap<String, ModuleBinding>,
+    macro_bindings: BTreeMap<String, ModuleBinding>,
+}
+
+fn collect_block_scope(block: &syn::Block) -> LexicalScope {
+    let mut items = Vec::new();
     for statement in &block.stmts {
         let syn::Stmt::Item(item) = statement else {
             continue;
         };
-        if has_exact_cfg_test(item_attrs(item)) {
-            continue;
+        if !has_exact_cfg_test(item_attrs(item)) {
+            items.push(item.clone());
         }
-        let scope = module_scope_from_items(std::slice::from_ref(item));
-        names.extend(scope.bindings.into_keys());
-        names.extend(scope.macro_bindings.into_keys());
     }
-    names
+    let scope = module_scope_from_items(&items);
+    LexicalScope {
+        bindings: scope.bindings,
+        macro_bindings: scope.macro_bindings,
+    }
 }
 
 fn register_inline_modules(
@@ -1178,7 +1523,7 @@ fn associated_method(
     path: &ExprPath,
     registry: &ModuleRegistry,
     current: &ModuleKey,
-    lexical_shadow: &BTreeSet<String>,
+    lexical_bindings: &BTreeMap<String, ModuleBinding>,
 ) -> Option<PanicKind> {
     let method = path.path.segments.last()?;
     let method_name = ident_name(&method.ident);
@@ -1187,7 +1532,7 @@ fn associated_method(
         return None;
     }
     let standard = if let Some(qself) = &path.qself {
-        registry.resolve_type(current, &qself.ty, &mut BTreeSet::new(), lexical_shadow)
+        registry.resolve_type(current, &qself.ty, &mut BTreeSet::new(), lexical_bindings)
     } else {
         let names: Vec<String> = path
             .path
@@ -1202,7 +1547,7 @@ fn associated_method(
                 current,
                 &names[..names.len() - 1],
                 path.path.leading_colon.is_some(),
-                lexical_shadow,
+                lexical_bindings,
             )
         }
     }?;
@@ -1214,9 +1559,117 @@ fn is_punct(tree: Option<&TokenTree>, expected: char) -> bool {
     matches!(tree, Some(TokenTree::Punct(punct)) if punct.as_char() == expected)
 }
 
+fn matching_angle_open(trees: &[TokenTree], close: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for index in (0..=close).rev() {
+        if is_punct(trees.get(index), '>') {
+            depth += 1;
+        } else if is_punct(trees.get(index), '<') {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn matching_angle_close(trees: &[TokenTree], open: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for index in open..end {
+        if is_punct(trees.get(index), '<') {
+            depth += 1;
+        } else if is_punct(trees.get(index), '>') {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn token_path_range(
+    trees: &[TokenTree],
+    start: usize,
+    end: usize,
+) -> Option<(Vec<String>, bool, usize)> {
+    if start >= end {
+        return None;
+    }
+    let mut index = start;
+    let leading_colon =
+        index + 1 < end && is_punct(trees.get(index), ':') && is_punct(trees.get(index + 1), ':');
+    if leading_colon {
+        index += 2;
+    }
+    let first_index = index;
+    let mut names = Vec::new();
+    loop {
+        let Some(TokenTree::Ident(ident)) = trees.get(index) else {
+            return None;
+        };
+        names.push(ident_name(ident));
+        index += 1;
+        if index < end && is_punct(trees.get(index), '<') {
+            let close = matching_angle_close(trees, index, end)?;
+            index = close + 1;
+        }
+        if index == end {
+            break;
+        }
+        if index + 1 >= end
+            || !is_punct(trees.get(index), ':')
+            || !is_punct(trees.get(index + 1), ':')
+        {
+            return None;
+        }
+        index += 2;
+    }
+    Some((names, leading_colon, first_index))
+}
+
+fn token_call_group_after(trees: &[TokenTree], method_index: usize) -> bool {
+    let mut next = method_index + 1;
+    if is_punct(trees.get(next), '<') {
+        let Some(close) = matching_angle_close(trees, next, trees.len()) else {
+            return false;
+        };
+        next = close + 1;
+    }
+    matches!(
+        trees.get(next),
+        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis
+    )
+}
+
+fn token_path_start(trees: &[TokenTree], end: usize) -> Option<usize> {
+    let mut cursor = end.checked_sub(1)?;
+    loop {
+        let Some(TokenTree::Ident(_)) = trees.get(cursor) else {
+            return None;
+        };
+        if cursor >= 3
+            && is_punct(trees.get(cursor - 1), ':')
+            && is_punct(trees.get(cursor - 2), ':')
+            && matches!(trees.get(cursor - 3), Some(TokenTree::Ident(_)))
+        {
+            cursor -= 3;
+            continue;
+        }
+        if cursor >= 2
+            && is_punct(trees.get(cursor - 1), ':')
+            && is_punct(trees.get(cursor - 2), ':')
+        {
+            return Some(cursor - 2);
+        }
+        return Some(cursor);
+    }
+}
+
 /// Return the literal base path immediately before an associated `unwrap` or
-/// `expect` token. Generic arguments are skipped as one source-level segment;
-/// their contents may contain repetitions and are not name-resolved.
+/// `expect` token. Balanced angle groups cover both turbofish and QSelf forms;
+/// their contents are skipped without expanding metavariables.
 fn token_ufcs_path(trees: &[TokenTree], method_index: usize) -> Option<(Vec<String>, bool, usize)> {
     if method_index < 2
         || !is_punct(trees.get(method_index - 1), ':')
@@ -1224,42 +1677,65 @@ fn token_ufcs_path(trees: &[TokenTree], method_index: usize) -> Option<(Vec<Stri
     {
         return None;
     }
-    let mut cursor = method_index - 3;
-    if is_punct(trees.get(cursor), '>') {
-        let mut open = None;
-        for index in (0..cursor).rev() {
-            if is_punct(trees.get(index), '<')
-                && is_punct(trees.get(index.checked_sub(2)?), ':')
-                && is_punct(trees.get(index.checked_sub(1)?), ':')
-            {
-                open = Some(index);
-                break;
-            }
+    let end = method_index - 2;
+    let last = end.checked_sub(1)?;
+    if is_punct(trees.get(last), '>') {
+        let open = matching_angle_open(trees, last)?;
+        if open >= 2 && is_punct(trees.get(open - 1), ':') && is_punct(trees.get(open - 2), ':') {
+            // `Option::<T>::unwrap`: parse the path before its turbofish.
+            let path_end = open - 2;
+            token_path_range(trees, token_path_start(trees, path_end)?, path_end)
+        } else {
+            // `<Option<T>>::unwrap`: parse the path inside the outer QSelf.
+            token_path_range(trees, open + 1, last)
         }
-        cursor = open?.checked_sub(3)?;
+    } else {
+        token_path_range(trees, token_path_start(trees, end)?, end)
     }
+}
+
+fn token_macro_path(trees: &[TokenTree], macro_index: usize) -> Option<(Vec<String>, bool, usize)> {
+    let mut first_ident = macro_index;
+    while first_ident >= 3
+        && is_punct(trees.get(first_ident - 1), ':')
+        && is_punct(trees.get(first_ident - 2), ':')
+    {
+        first_ident -= 3;
+        if !matches!(trees.get(first_ident), Some(TokenTree::Ident(_))) {
+            return None;
+        }
+    }
+    let leading_colon = first_ident >= 2
+        && is_punct(trees.get(first_ident - 1), ':')
+        && is_punct(trees.get(first_ident - 2), ':');
+    let first_index = if leading_colon {
+        first_ident - 2
+    } else {
+        first_ident
+    };
+    let mut index = if leading_colon {
+        first_index + 2
+    } else {
+        first_index
+    };
     let mut names = Vec::new();
-    let mut indices = Vec::new();
     loop {
-        let Some(TokenTree::Ident(ident)) = trees.get(cursor) else {
+        let Some(TokenTree::Ident(ident)) = trees.get(index) else {
             return None;
         };
         names.push(ident_name(ident));
-        indices.push(cursor);
-        if cursor < 2
-            || !is_punct(trees.get(cursor - 1), ':')
-            || !is_punct(trees.get(cursor - 2), ':')
-        {
+        if index == macro_index {
             break;
         }
-        cursor -= 3;
+        if index + 2 > macro_index
+            || !is_punct(trees.get(index + 1), ':')
+            || !is_punct(trees.get(index + 2), ':')
+        {
+            return None;
+        }
+        index += 3;
     }
-    names.reverse();
-    indices.reverse();
-    let leading_colon = indices.first().copied().is_some_and(|index| {
-        index >= 2 && is_punct(trees.get(index - 1), ':') && is_punct(trees.get(index - 2), ':')
-    });
-    Some((names, leading_colon, *indices.first()?))
+    Some((names, leading_colon, first_index))
 }
 
 struct SourceVisitor<'source> {
@@ -1271,7 +1747,7 @@ struct SourceVisitor<'source> {
     trait_impl_context: bool,
     registry: &'source ModuleRegistry,
     module_stack: Vec<ModuleKey>,
-    lexical_scopes: Vec<BTreeSet<String>>,
+    lexical_scopes: Vec<LexicalScope>,
 }
 
 impl<'source> SourceVisitor<'source> {
@@ -1315,25 +1791,40 @@ impl<'source> SourceVisitor<'source> {
             .expect("source visitor always has a module")
     }
 
-    fn lexical_shadow(&self) -> BTreeSet<String> {
-        self.lexical_scopes
-            .iter()
-            .flat_map(|scope| scope.iter().cloned())
-            .collect()
+    fn lexical_bindings(&self) -> BTreeMap<String, ModuleBinding> {
+        let mut bindings = BTreeMap::new();
+        for scope in &self.lexical_scopes {
+            for (name, binding) in &scope.bindings {
+                bindings.insert(name.clone(), binding.clone());
+            }
+        }
+        bindings
     }
 
-    fn push_lexical_scope(&mut self, names: BTreeSet<String>) {
-        self.lexical_scopes.push(names);
+    fn lexical_macro_bindings(&self) -> BTreeMap<String, ModuleBinding> {
+        let mut bindings = BTreeMap::new();
+        for scope in &self.lexical_scopes {
+            for (name, binding) in &scope.macro_bindings {
+                bindings.insert(name.clone(), binding.clone());
+            }
+        }
+        bindings
+    }
+
+    fn push_lexical_scope(&mut self, scope: LexicalScope) {
+        self.lexical_scopes.push(scope);
     }
 
     fn push_generic_scope(&mut self, generics: &syn::Generics) {
-        let mut names = BTreeSet::new();
+        let mut scope = LexicalScope::default();
         for parameter in &generics.params {
             if let syn::GenericParam::Type(parameter) = parameter {
-                names.insert(ident_name(&parameter.ident));
+                scope
+                    .bindings
+                    .insert(ident_name(&parameter.ident), ModuleBinding::Unknown);
             }
         }
-        self.push_lexical_scope(names);
+        self.push_lexical_scope(scope);
     }
 
     fn method_call_line(&self, node: &ExprMethodCall) -> usize {
@@ -1396,21 +1887,39 @@ impl<'source> SourceVisitor<'source> {
 
     fn scan_literal_token_patterns(&mut self, tokens: &TokenStream) {
         let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
+        let lexical_bindings = self.lexical_bindings();
+        let lexical_macros = self.lexical_macro_bindings();
         for index in 0..trees.len() {
             if let TokenTree::Ident(ident) = &trees[index] {
                 let name = ident_name(ident);
-                let metavariable = index > 0 && is_punct(trees.get(index - 1), '$');
-                if !metavariable && is_punct(trees.get(index + 1), '!') {
-                    if let Some(kind) =
-                        self.registry
-                            .resolve_macro_name(self.current_module(), &name, 1)
+                if is_punct(trees.get(index + 1), '!') {
+                    if let Some((names, leading_colon, first_index)) =
+                        token_macro_path(&trees, index)
                     {
-                        if kind.is_raw() || self.public_context {
-                            self.add(kind, ident.span());
+                        // A path assembled from `$` is intentionally outside
+                        // this scanner's conservative literal boundary.
+                        let has_metavariable = (first_index > 0
+                            && is_punct(trees.get(first_index - 1), '$'))
+                            || trees[first_index..=index].iter().any(
+                                |tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == '$'),
+                            );
+                        if !has_metavariable {
+                            if let Some(kind) = self.registry.resolve_macro_names(
+                                self.current_module(),
+                                &names,
+                                leading_colon,
+                                &lexical_macros,
+                            ) {
+                                if kind.is_raw() || self.public_context {
+                                    self.add(kind, ident.span());
+                                }
+                            }
                         }
                     }
                 }
-                if matches!(name.as_str(), "unwrap" | "expect") {
+                if matches!(name.as_str(), "unwrap" | "expect")
+                    && token_call_group_after(&trees, index)
+                {
                     if let Some((names, leading_colon, first_index)) =
                         token_ufcs_path(&trees, index)
                     {
@@ -1419,14 +1928,13 @@ impl<'source> SourceVisitor<'source> {
                         if first_index > 0 && is_punct(trees.get(first_index - 1), '$') {
                             continue;
                         }
-                        let lexical_shadow = self.lexical_shadow();
                         if self
                             .registry
                             .resolve_standard(
                                 self.current_module(),
                                 &names,
                                 leading_colon,
-                                &lexical_shadow,
+                                &lexical_bindings,
                             )
                             .is_some()
                         {
@@ -1444,6 +1952,7 @@ impl<'source> SourceVisitor<'source> {
                         Some(TokenTree::Ident(ident))
                             if matches!(ident_name(ident).as_str(), "unwrap" | "expect")
                     )
+                    && token_call_group_after(&trees, index + 1)
                 {
                     if let Some(TokenTree::Ident(method)) = trees.get(index + 1) {
                         let kind =
@@ -1526,7 +2035,7 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
     }
 
     fn visit_block(&mut self, node: &'ast syn::Block) {
-        self.push_lexical_scope(collect_block_names(node));
+        self.push_lexical_scope(collect_block_scope(node));
         visit::visit_block(self, node);
         self.lexical_scopes.pop();
     }
@@ -1590,9 +2099,10 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if let Some(kind) = self
-            .registry
-            .resolve_macro(self.current_module(), &node.path)
+        let lexical_macros = self.lexical_macro_bindings();
+        if let Some(kind) =
+            self.registry
+                .resolve_macro(self.current_module(), &node.path, &lexical_macros)
         {
             if kind.is_raw() || self.public_context {
                 self.add(
@@ -1625,10 +2135,13 @@ impl<'ast, 'source> Visit<'ast> for SourceVisitor<'source> {
 
     fn visit_expr_call(&mut self, node: &'ast ExprCall) {
         if let Expr::Path(path) = node.func.as_ref() {
-            let lexical_shadow = self.lexical_shadow();
-            if let Some(kind) =
-                associated_method(path, self.registry, self.current_module(), &lexical_shadow)
-            {
+            let lexical_bindings = self.lexical_bindings();
+            if let Some(kind) = associated_method(
+                path,
+                self.registry,
+                self.current_module(),
+                &lexical_bindings,
+            ) {
                 self.add(kind, node.span());
             }
         }

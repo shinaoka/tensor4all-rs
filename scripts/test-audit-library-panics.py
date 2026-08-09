@@ -99,6 +99,30 @@ def run_audit(
         return run_audit_at_root(fixture, baseline)
 
 
+def compile_fixture_source(fixture: Path, relative: str, crate_type: str = "lib") -> None:
+    source = fixture / relative
+    output = fixture / (relative.replace("/", "_") + ".out")
+    result = subprocess.run(
+        [
+            "rustc",
+            "--edition=2021",
+            "--crate-type",
+            crate_type,
+            str(source),
+            "-o",
+            str(output),
+        ],
+        cwd=fixture,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"fixture {relative} did not compile:\n{result.stdout}\n{result.stderr}"
+    )
+
+
 def assert_exact_output(
     result: subprocess.CompletedProcess[str],
     stdout: list[str],
@@ -1216,6 +1240,90 @@ def test_report_claims_include_exact_sorted_findings_matches_and_stale_entries()
     )
 
 
+def test_each_target_and_orphan_root_has_an_independent_registry() -> None:
+    files = {
+        "crates/demo/src/lib.rs": """use std::option::Option as LibMaybe;
+pub fn library(value: LibMaybe<bool>) {
+    let _ = LibMaybe::unwrap(value);
+}
+""",
+        "crates/demo/src/main.rs": """use std::option::Option as MainMaybe;
+fn main() {
+    let _ = MainMaybe::unwrap(Some(true));
+}
+""",
+        "crates/demo/src/bin/tool.rs": """use std::option::Option as BinMaybe;
+fn main() {
+    let _ = BinMaybe::unwrap(Some(true));
+}
+""",
+        "crates/demo/src/orphan.rs": """use std::option::Option as OrphanMaybe;
+fn orphan(value: OrphanMaybe<bool>) {
+    let _ = OrphanMaybe::unwrap(value);
+}
+""",
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture, files)
+        compile_fixture_source(fixture, "crates/demo/src/lib.rs")
+        compile_fixture_source(fixture, "crates/demo/src/main.rs", "bin")
+        compile_fixture_source(fixture, "crates/demo/src/bin/tool.rs", "bin")
+        compile_fixture_source(fixture, "crates/demo/src/orphan.rs")
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/bin/tool.rs:3:unwrap",
+            "crates/demo/src/lib.rs:3:unwrap",
+            "crates/demo/src/main.rs:3:unwrap",
+            "crates/demo/src/orphan.rs:3:unwrap",
+        ],
+        ["Audit failed: 4 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_canonical_duplicate_symlink_roots_keep_logical_module_bases() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(
+            fixture,
+            {
+                "crates/demo/shared/root.rs": "mod child;\nfn main() {}\n",
+                "crates/demo/src/child.rs": """use std::option::Option as LibMaybe;
+fn child(value: LibMaybe<bool>) {
+    let _ = LibMaybe::unwrap(value);
+}
+""",
+                "crates/demo/src/bin/child.rs": """use std::option::Option as BinMaybe;
+fn child(value: BinMaybe<bool>) {
+    let _ = BinMaybe::unwrap(value);
+}
+""",
+            },
+        )
+        lib_root = fixture / "crates/demo/src/lib.rs"
+        bin_root = fixture / "crates/demo/src/bin/tool.rs"
+        try:
+            lib_root.symlink_to(fixture / "crates/demo/shared/root.rs")
+            bin_root.symlink_to(fixture / "crates/demo/shared/root.rs")
+        except OSError as error:
+            raise AssertionError(f"symlink fixture unavailable: {error}") from error
+        compile_fixture_source(fixture, "crates/demo/src/lib.rs")
+        compile_fixture_source(fixture, "crates/demo/src/bin/tool.rs", "bin")
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/bin/child.rs:3:unwrap",
+            "crates/demo/src/child.rs:3:unwrap",
+        ],
+        ["Audit failed: 2 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
 def test_round3_ast_edges_are_not_lexically_approximated() -> None:
     source = '''
 fn raw_ident(value: Option<bool>) {
@@ -1242,9 +1350,119 @@ trait Bound<const N: usize> {}
     )
 
 
+def test_compiling_adversarial_fixture_covers_macro_alias_and_namespace_resolution() -> None:
+    source = r'''use std::option::Option as RootMaybe;
+use std::result::Result as RootResult;
+
+fn Option() {}
+const Result: usize = 0;
+static VALUE: usize = 0;
+
+macro_rules! panic {
+    ($($arg:tt)*) => { println!($($arg)*); };
+}
+mod user {
+    macro_rules! panic {
+        ($($arg:tt)*) => { println!($($arg)*); };
+    }
+    pub(crate) use panic;
+    pub(crate) use std::println as print_alias;
+}
+mod aliases {
+    pub(crate) use std::option::Option as Maybe;
+    pub(crate) use std::result::Result as R;
+    pub(crate) use std::panic as fail;
+    pub(crate) use std::unreachable as stop;
+    pub(crate) mod nested {
+        pub(crate) use super::Maybe as DeepMaybe;
+        pub(crate) use super::fail as deep_fail;
+    }
+}
+use crate::aliases as a;
+
+macro_rules! transcribe {
+    ($option:expr, $result:expr) => {
+        let _ = <Option<Option<bool>>>::unwrap($option);
+        let _ = <Result<bool, ()>>::expect($result, "missing");
+        let _ = <Option<Vec<Option<bool>>>>::unwrap(Some(vec![Some(true)]));
+    };
+}
+macro_rules! field_access {
+    ($v:expr) => { $v.unwrap };
+}
+
+struct Fields { unwrap: bool }
+
+fn root_calls(option: RootMaybe<bool>, result: RootResult<bool, ()>) {
+    let _ = RootMaybe::unwrap(option);
+    let _ = RootResult::expect(result, "missing");
+    let _ = Option::unwrap(Some(true));
+    let _ = Result::expect(Ok::<_, ()>(true), "missing");
+    let _ = a::Maybe::unwrap(Some(true));
+    let _ = a::R::expect(Ok::<_, ()>(true), "missing");
+    let _ = a::nested::DeepMaybe::unwrap(Some(true));
+    a::fail!("builtin");
+    a::stop!("builtin");
+    a::nested::deep_fail!("builtin");
+    user::panic!("not builtin");
+    user::print_alias!("not builtin");
+    panic!("local shadow");
+    let fields = Fields { unwrap: true };
+    field_access!(fields);
+    transcribe!(Some(Some(true)), Ok::<bool, ()>(true));
+}
+
+fn local_aliases(option: Option<bool>, result: Result<bool, ()>) {
+    type Maybe = Option<bool>;
+    use std::result::Result as LocalResult;
+    let _ = Maybe::unwrap(option);
+    let _ = LocalResult::expect(result, "missing");
+    fn generic<Maybe>() {}
+    let _ = Maybe::unwrap(Some(true));
+}
+
+fn shadowed() {
+    struct Option<T>(T);
+    impl<T> Option<T> { fn unwrap(self) {} }
+    let _ = Option::unwrap(Option(true));
+}
+'''
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture, {"crates/demo/src/lib.rs": source})
+        compile_fixture_source(fixture, "crates/demo/src/lib.rs")
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/lib.rs:32:unwrap",
+            "crates/demo/src/lib.rs:33:expect",
+            "crates/demo/src/lib.rs:34:unwrap",
+            "crates/demo/src/lib.rs:44:unwrap",
+            "crates/demo/src/lib.rs:45:expect",
+            "crates/demo/src/lib.rs:46:unwrap",
+            "crates/demo/src/lib.rs:47:expect",
+            "crates/demo/src/lib.rs:48:unwrap",
+            "crates/demo/src/lib.rs:49:expect",
+            "crates/demo/src/lib.rs:50:unwrap",
+            "crates/demo/src/lib.rs:51:panic",
+            "crates/demo/src/lib.rs:52:unreachable",
+            "crates/demo/src/lib.rs:53:panic",
+            "crates/demo/src/lib.rs:65:unwrap",
+            "crates/demo/src/lib.rs:66:expect",
+            "crates/demo/src/lib.rs:68:unwrap",
+        ],
+        ["Audit failed: 16 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
 def main() -> int:
     _build_tool_once()
     tests = [
+        test_compiling_adversarial_fixture_covers_macro_alias_and_namespace_resolution,
+        test_each_target_and_orphan_root_has_an_independent_registry,
+        test_canonical_duplicate_symlink_roots_keep_logical_module_bases,
         test_round3_ast_edges_are_not_lexically_approximated,
         test_wrapper_discovers_json_compiler_artifact_path,
         test_wrong_and_empty_roots_fail_closed,
