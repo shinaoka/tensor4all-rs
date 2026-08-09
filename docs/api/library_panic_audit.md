@@ -38,11 +38,11 @@
 
 ### ` fn artifact_identity(artifact: & CompilerArtifact) -> String`
 
+### ` fn artifact_source_path(root: & Path, artifact: & CompilerArtifact) -> Result < Option < PathBuf > >`
+
 ### ` fn locate_dep_infos(root: & Path, artifact: & CompilerArtifact) -> Result < Vec < (PathBuf , ParsedDepInfo) > >`
 
 ### ` fn normalize_path(root: & Path, path: & Path) -> PathBuf`
-
-### ` fn artifact_output_names(root: & Path, filenames: & BTreeSet < PathBuf >) -> BTreeSet < PathBuf >`
 
 ### ` fn dep_info_candidates(artifact: & Path) -> Vec < PathBuf >`
 
@@ -69,6 +69,10 @@
 ### ` fn record_assertion(path: & str, line: usize, kind: & str, findings: & mut BTreeSet < Finding >)`
 
 ### ` fn scan_assertion_tokens(path: & str, tokens: TokenStream, findings: & mut BTreeSet < Finding >)`
+
+### ` fn scan_macro_rules(path: & str, tokens: TokenStream, findings: & mut BTreeSet < Finding >)`
+
+### ` fn scan_item_macro(path: & str, item: & syn :: ItemMacro, findings: & mut BTreeSet < Finding >)`
 
 ### ` fn line_starts(source: & str) -> Vec < usize >`
 
@@ -144,9 +148,13 @@
 
 ### ` fn dep_info_parser_handles_rustc_encoded_paths()`
 
-### ` fn dep_info_mapping_covers_hashed_artifact_kinds()`
+### ` fn dep_info_continuation_separates_adjacent_paths_without_spaces()`
+
+### ` fn dep_info_candidates_cover_hashed_artifact_names()`
 
 ### ` fn dep_info_lookup_rejects_stale_heuristic_targets()`
+
+### ` fn dep_info_lookup_requires_artifact_source_in_selected_sources()`
 
 ### ` fn cargo_json_preserves_each_artifact_record()`
 

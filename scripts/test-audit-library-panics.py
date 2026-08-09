@@ -232,15 +232,20 @@ FIXTURE_SELECTED = 'pub fn default_selected_assertion() { assert!(true); }\n'
 FIXTURE_FEATURE_SELECTED = 'pub fn feature_selected_assertion() { assert!(true); }\n'
 FIXTURE_BIN_NESTED = 'pub fn bin_root_assertion() { assert!(true); }\n'
 FIXTURE_LIB_NESTED = 'pub fn lib_module_assertion() { assert!(true); }\n'
-FIXTURE_MACRO = r'''macro_rules! transcribed_assertion {
-    () => { assert!(true); };
+FIXTURE_MACRO = r'''macro_rules! matcher_only {
+    (assert!($($argument:tt)*)) => { () };
+}
+macro_rules! transcribed_assertion {
+    ($assert:ident) => {
+        $assert!();
+        assert!(true);
+    };
 }
 macro_rules! passthrough_assertion {
     ($value:expr) => { $value };
 }
 pub fn macro_assertions() {
     passthrough_assertion!(assert!(true));
-    transcribed_assertion!();
 }
 '''
 FIXTURE_FILE_LEVEL_TEST = '''#![cfg(test)]
@@ -372,8 +377,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(option.unwrap());')}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(panic!(\"invoked macro argument\"));')}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"all-features production\");')}:panic",
-        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '() => { assert!(true); }')}:assert",
-        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'passthrough_assertion!(assert!(true));')}:assert",
+        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        assert!(true);')}:assert",
+        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert",
         f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, '    std::panic!(\"production binary\");')}:panic",
     ]
     assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :]} >= {
@@ -393,8 +398,10 @@ def test_macro_assertion_arguments_and_transcribers_are_reported() -> None:
         _write_fixture(fixture)
         result = _run_audit(fixture)
     assert result.returncode == 1, result.stderr
-    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '() => { assert!(true); }')}:assert" in result.stdout
-    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'passthrough_assertion!(assert!(true));')}:assert" in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        assert!(true);')}:assert" in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert" in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    (assert!($($argument:tt)*)) => { () };')}:assert" not in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        $assert!();')}:assert" not in result.stdout
 
 
 def test_unknown_cfg_assertion_is_included_conservatively() -> None:
