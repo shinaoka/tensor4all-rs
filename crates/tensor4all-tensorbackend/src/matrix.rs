@@ -51,10 +51,8 @@ pub struct Matrix<T> {
     ncols: usize,
 }
 
-fn checked_matrix_len(nrows: usize, ncols: usize) -> usize {
-    nrows
-        .checked_mul(ncols)
-        .unwrap_or_else(|| panic!("matrix shape product overflow: {nrows} rows * {ncols} columns"))
+fn checked_matrix_len(nrows: usize, ncols: usize) -> Option<usize> {
+    nrows.checked_mul(ncols)
 }
 
 /// Error returned when converting a [`TypedTensor`] into a [`Matrix`].
@@ -352,7 +350,13 @@ impl<T> Matrix<T> {
     /// assert_eq!(m[[1, 1]], 4.0);
     /// ```
     pub fn from_col_major_vec(nrows: usize, ncols: usize, data: Vec<T>) -> Self {
-        assert_eq!(data.len(), checked_matrix_len(nrows, ncols));
+        let expected = checked_matrix_len(nrows, ncols);
+        assert!(
+            expected.is_some(),
+            "matrix shape product overflow: {nrows} rows * {ncols} columns"
+        );
+        let expected = expected.map_or(0, |expected| expected);
+        assert_eq!(data.len(), expected);
         Self { data, nrows, ncols }
     }
 
@@ -623,7 +627,10 @@ where
 
     let n = matrix.nrows();
     let input_tensor = T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec());
-    let input = EagerTensor::from_tensor_in(input_tensor, crate::default_eager_ctx());
+    let eager_ctx = crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
+        message: source.to_string(),
+    })?;
+    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx);
     let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&input).map_err(|source| {
         HermitianEigenError::Backend {
             message: source.to_string(),
@@ -798,8 +805,14 @@ impl<T: Clone> Matrix<T> {
     /// assert_eq!(m[[1, 2]], 7.0);
     /// ```
     pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
+        let len = checked_matrix_len(nrows, ncols);
+        assert!(
+            len.is_some(),
+            "matrix shape product overflow: {nrows} rows * {ncols} columns"
+        );
+        let len = len.map_or(0, |len| len);
         Self {
-            data: vec![elem; checked_matrix_len(nrows, ncols)],
+            data: vec![elem; len],
             nrows,
             ncols,
         }
@@ -825,8 +838,14 @@ impl<T: Clone + Zero> Matrix<T> {
     /// assert_eq!(m[[1, 2]], 0.0);
     /// ```
     pub fn zeros(nrows: usize, ncols: usize) -> Self {
+        let len = checked_matrix_len(nrows, ncols);
+        assert!(
+            len.is_some(),
+            "matrix shape product overflow: {nrows} rows * {ncols} columns"
+        );
+        let len = len.map_or(0, |len| len);
         Self {
-            data: vec![T::zero(); checked_matrix_len(nrows, ncols)],
+            data: vec![T::zero(); len],
             nrows,
             ncols,
         }
@@ -922,7 +941,20 @@ pub fn try_from_vec2d<T: Clone + Zero>(
 /// assert_eq!(m[[1, 0]], 3.0);
 /// ```
 pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
-    try_from_vec2d(data).unwrap_or_else(|err| panic!("{err}"))
+    let result = try_from_vec2d(data);
+    let error_message = match &result {
+        Ok(_) => String::new(),
+        Err(error) => error.to_string(),
+    };
+    assert!(result.is_ok(), "{error_message}");
+    match result {
+        Ok(matrix) => matrix,
+        Err(_) => Matrix {
+            data: Vec::new(),
+            nrows: 0,
+            ncols: 0,
+        },
+    }
 }
 
 /// Get a submatrix by selecting specific rows and columns.

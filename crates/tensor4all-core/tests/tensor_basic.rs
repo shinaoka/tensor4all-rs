@@ -32,7 +32,10 @@ where
     let tensor = TensorDynLen::from_diag(vec![i, j], data).unwrap();
     assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(tensor.is_diag());
-    assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
+    assert_eq!(
+        tensor.storage().unwrap().storage_kind(),
+        StorageKind::Diagonal
+    );
 }
 
 #[test]
@@ -133,7 +136,7 @@ fn tensor_from_structured_storage_preserves_compact_payload() {
     );
 
     let tensor = TensorDynLen::from_storage(vec![i, j, k], Arc::clone(&storage)).unwrap();
-    let snapshot = tensor.storage();
+    let snapshot = tensor.storage().unwrap();
 
     assert_eq!(snapshot.storage_kind(), StorageKind::Structured);
     assert_eq!(snapshot.payload_dims(), &[2, 3]);
@@ -154,9 +157,12 @@ fn copy_selector_is_compact_and_numerically_correct() {
 
     let tensor = TensorDynLen::from_copy_selector(left, site, right, 1, 2.5_f64).unwrap();
 
-    assert_eq!(tensor.storage().storage_kind(), StorageKind::Structured);
-    assert_eq!(tensor.storage().payload_len(), 6);
-    assert_eq!(tensor.storage().axis_classes(), &[0, 1, 0]);
+    assert_eq!(
+        tensor.storage().unwrap().storage_kind(),
+        StorageKind::Structured
+    );
+    assert_eq!(tensor.storage().unwrap().payload_len(), 6);
+    assert_eq!(tensor.storage().unwrap().axis_classes(), &[0, 1, 0]);
     assert_eq!(
         tensor.to_vec::<f64>().unwrap(),
         vec![0.0, 0.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.5, 0.0, 0.0]
@@ -233,11 +239,18 @@ fn structured_select_indices_preserves_copy_structure_when_possible() {
     let selected = tensor.select_indices(&[j], &[1]).unwrap();
 
     assert_eq!(selected.dims(), vec![2, 2]);
-    assert_eq!(selected.storage().storage_kind(), StorageKind::Diagonal);
-    assert_eq!(selected.storage().payload_dims(), &[2]);
-    assert_eq!(selected.storage().axis_classes(), &[0, 0]);
     assert_eq!(
-        selected.storage().payload_f64_col_major_vec().unwrap(),
+        selected.storage().unwrap().storage_kind(),
+        StorageKind::Diagonal
+    );
+    assert_eq!(selected.storage().unwrap().payload_dims(), &[2]);
+    assert_eq!(selected.storage().unwrap().axis_classes(), &[0, 0]);
+    assert_eq!(
+        selected
+            .storage()
+            .unwrap()
+            .payload_f64_col_major_vec()
+            .unwrap(),
         vec![3.0, 4.0]
     );
     assert_eq!(selected.to_vec::<f64>().unwrap(), vec![3.0, 0.0, 0.0, 4.0]);
@@ -266,7 +279,10 @@ fn structured_select_indices_handles_fixed_copy_class() {
         .select_indices(std::slice::from_ref(&k), &[1])
         .unwrap();
     assert_eq!(selected.dims(), vec![2, 3]);
-    assert_eq!(selected.storage().storage_kind(), StorageKind::Dense);
+    assert_eq!(
+        selected.storage().unwrap().storage_kind(),
+        StorageKind::Dense
+    );
     assert_eq!(
         selected.to_vec::<f64>().unwrap(),
         vec![0.0, 2.0, 0.0, 4.0, 0.0, 6.0]
@@ -316,7 +332,7 @@ fn same_layout_axpby_preserves_structured_metadata() {
     let result = a
         .axpby(AnyScalar::new_real(2.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    let storage = result.storage();
+    let storage = result.storage().unwrap();
 
     assert_eq!(storage.storage_kind(), StorageKind::Structured);
     assert_eq!(storage.axis_classes(), &[0, 1, 0]);
@@ -345,7 +361,7 @@ fn test_tensor_shared_storage() {
     );
 
     // Check that both tensors have the expected storage
-    assert!(tensor1.storage().is_dense());
+    assert!(tensor1.storage().unwrap().is_dense());
     assert_eq!(tensor1.dims(), vec![2]);
 }
 

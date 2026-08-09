@@ -268,9 +268,12 @@ fn projected_middle_sites_use_compact_structured_storage() {
     let tt = embed_active_tt(active_tt, &sites, &active, &projector).unwrap();
     let middle = tt.tensor(1).unwrap();
 
-    assert_eq!(middle.storage().storage_kind(), StorageKind::Structured);
-    assert_eq!(middle.storage().payload_len(), 4);
-    assert_eq!(middle.storage().axis_classes(), &[0, 1, 0]);
+    assert_eq!(
+        middle.storage().unwrap().storage_kind(),
+        StorageKind::Structured
+    );
+    assert_eq!(middle.storage().unwrap().payload_len(), 4);
+    assert_eq!(middle.storage().unwrap().axis_classes(), &[0, 1, 0]);
 
     let tensors: Vec<_> = (0..tt.len())
         .map(|position| tt.tensor(position).unwrap())

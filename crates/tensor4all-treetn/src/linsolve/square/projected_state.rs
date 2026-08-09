@@ -91,7 +91,9 @@ where
             // the reference-side link remains as the output local vector space.
             self.envs.clear();
             reference_storage = Some(reference_state.sim_linkinds()?);
-            reference_storage.as_ref().unwrap()
+            reference_storage
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("simulated reference storage was not initialized"))?
         } else {
             reference_state
         };

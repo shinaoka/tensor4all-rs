@@ -161,7 +161,7 @@ impl AnyScalar {
     }
 
     fn scalar_value_from_tensor(tensor: &TensorDynLen) -> Result<ScalarValue> {
-        let storage = tensor.storage();
+        let storage = tensor.storage()?;
         if storage.is_c64() {
             let values = storage
                 .payload_c64_col_major_vec()

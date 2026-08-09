@@ -183,10 +183,17 @@ fn general_structured_contract_preserves_output_axis_classes() {
     let result = structured.contract_pair(&dense).unwrap();
 
     assert_eq!(result.indices, vec![i, k, l]);
-    assert_eq!(result.storage().storage_kind(), StorageKind::Structured);
-    assert_eq!(result.storage().axis_classes(), &[0, 0, 1]);
     assert_eq!(
-        result.storage().payload_f64_col_major_vec().unwrap(),
+        result.storage().unwrap().storage_kind(),
+        StorageKind::Structured
+    );
+    assert_eq!(result.storage().unwrap().axis_classes(), &[0, 0, 1]);
+    assert_eq!(
+        result
+            .storage()
+            .unwrap()
+            .payload_f64_col_major_vec()
+            .unwrap(),
         vec![220.0, 280.0, 2200.0, 2800.0]
     );
     assert_eq!(

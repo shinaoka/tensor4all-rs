@@ -93,6 +93,12 @@ jobs:
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 
+      - name: Test library panic audit
+        run: python3 scripts/test-audit-library-panics.py
+
+      - name: Audit library panic paths
+        run: python3 scripts/audit-library-panics.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-22.04

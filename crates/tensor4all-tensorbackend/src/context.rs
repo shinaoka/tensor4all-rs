@@ -10,6 +10,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use anyhow::Result;
 use tenferro::{GraphCompiler, GraphExecutor};
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::{buffer_pool::BufferPoolStats, CpuBackend, CpuContext};
@@ -18,7 +19,8 @@ static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
 static DEFAULT_GRAPH_COMPILER: OnceLock<Mutex<GraphCompiler>> = OnceLock::new();
 static DEFAULT_GRAPH_EXECUTOR: OnceLock<Mutex<GraphExecutor<CpuBackend>>> = OnceLock::new();
-static DEFAULT_EAGER_RUNTIME: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
+static DEFAULT_EAGER_RUNTIME: OnceLock<std::result::Result<Arc<EagerRuntime>, String>> =
+    OnceLock::new();
 
 fn default_cpu_context() -> Arc<CpuContext> {
     DEFAULT_CPU_CONTEXT
@@ -108,14 +110,21 @@ pub(crate) fn reset_default_engine() {
 /// This context owns a separate `CpuBackend` from [`with_default_backend`] and
 /// the cached graph executor, but all backends share the same process-global
 /// tenferro CPU context.
-pub fn default_eager_ctx() -> Arc<EagerRuntime> {
-    DEFAULT_EAGER_RUNTIME
-        .get_or_init(|| {
-            tenferro_linalg::register_extension_rule()
-                .expect("tenferro linalg AD rule should register once");
-            EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
-        })
-        .clone()
+///
+/// # Errors
+///
+/// Returns an error if the tenferro linalg AD rule cannot be registered.
+pub fn default_eager_ctx() -> Result<Arc<EagerRuntime>> {
+    match DEFAULT_EAGER_RUNTIME.get_or_init(|| {
+        tenferro_linalg::register_extension_rule()
+            .map(|_| {
+                EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
+            })
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(context) => Ok(Arc::clone(context)),
+        Err(error) => Err(anyhow::anyhow!(error.clone())),
+    }
 }
 
 #[cfg(test)]
@@ -124,16 +133,16 @@ mod tests {
 
     #[test]
     fn eager_context_is_process_global() {
-        let first = default_eager_ctx();
-        let second = default_eager_ctx();
+        let first = default_eager_ctx().unwrap();
+        let second = default_eager_ctx().unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]
     fn eager_context_is_shared_across_threads() {
-        let main_context = default_eager_ctx();
-        let worker_context = std::thread::spawn(default_eager_ctx)
+        let main_context = default_eager_ctx().unwrap();
+        let worker_context = std::thread::spawn(|| default_eager_ctx().unwrap())
             .join()
             .expect("worker thread should complete");
 

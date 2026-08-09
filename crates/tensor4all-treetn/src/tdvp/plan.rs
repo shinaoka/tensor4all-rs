@@ -61,7 +61,7 @@ where
                 })
                 .collect::<Vec<_>>();
             if (substep + 1) % 2 == 0 {
-                region_plan = reverse_regions(&region_plan);
+                region_plan = reverse_regions(&region_plan)?;
             }
             steps.extend(region_plan);
         }
@@ -161,28 +161,23 @@ where
     }
 }
 
-fn reverse_regions<V>(steps: &[TdvpRegionStep<V>]) -> Vec<TdvpRegionStep<V>>
+fn reverse_regions<V>(steps: &[TdvpRegionStep<V>]) -> Option<Vec<TdvpRegionStep<V>>>
 where
     V: Clone,
 {
-    steps
-        .iter()
-        .rev()
-        .map(|step| {
-            let mut nodes = step.nodes.clone();
-            nodes.reverse();
-            let new_center = nodes
-                .last()
-                .expect("TDVP region steps are never empty")
-                .clone();
-            TdvpRegionStep {
-                nodes,
-                new_center,
-                exponent_step: step.exponent_step,
-                kind: step.kind,
-            }
-        })
-        .collect()
+    let mut reversed = Vec::with_capacity(steps.len());
+    for step in steps.iter().rev() {
+        let mut nodes = step.nodes.clone();
+        nodes.reverse();
+        let new_center = nodes.last()?.clone();
+        reversed.push(TdvpRegionStep {
+            nodes,
+            new_center,
+            exponent_step: step.exponent_step,
+            kind: step.kind,
+        });
+    }
+    Some(reversed)
 }
 
 /// Tree edges as `(parent, child)` pairs in a parents-before-children order

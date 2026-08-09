@@ -100,10 +100,13 @@ fn general_structured_grad_preserves_input_axis_classes() {
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
-    assert_eq!(grad.storage().axis_classes(), &[0, 1, 0]);
-    assert_eq!(grad.storage().storage_kind(), StorageKind::Structured);
+    assert_eq!(grad.storage().unwrap().axis_classes(), &[0, 1, 0]);
     assert_eq!(
-        grad.storage().payload_f64_col_major_vec().unwrap(),
+        grad.storage().unwrap().storage_kind(),
+        StorageKind::Structured
+    );
+    assert_eq!(
+        grad.storage().unwrap().payload_f64_col_major_vec().unwrap(),
         vec![1.0; 6]
     );
 }

@@ -821,7 +821,7 @@ impl TensorDynLen {
     fn compact_payload_inner(&self) -> Result<EagerTensor> {
         Ok(EagerTensor::from_tensor_in(
             storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
-            default_eager_ctx(),
+            default_eager_ctx()?,
         ))
     }
 
@@ -1483,7 +1483,7 @@ impl TensorDynLen {
             );
             let _ = self.eager_cache.set(Arc::new(EagerTensor::from_tensor_in(
                 native,
-                default_eager_ctx(),
+                default_eager_ctx()?,
             )));
         }
         self.eager_cache
@@ -1649,7 +1649,7 @@ impl TensorDynLen {
 
         let starts_tensor = EagerTensor::from_tensor_in(
             NativeTensor::from_vec_col_major(vec![rank], starts),
-            default_eager_ctx(),
+            default_eager_ctx()?,
         );
         let sliced = self
             .try_materialized_inner()?
@@ -1892,7 +1892,7 @@ impl TensorDynLen {
     /// let j = DynIndex::new_dyn(2);
     /// let storage = Arc::new(Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap());
     /// let tensor = TensorDynLen::from_structured_storage(vec![i, j], storage).unwrap();
-    /// assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
+    /// assert_eq!(tensor.storage().unwrap().storage_kind(), StorageKind::Diagonal);
     /// ```
     pub fn from_structured_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
         Self::from_storage(indices, storage)
@@ -1942,8 +1942,8 @@ impl TensorDynLen {
     ///     2.5_f64,
     /// ).unwrap();
     ///
-    /// assert_eq!(tensor.storage().storage_kind(), StorageKind::Structured);
-    /// assert_eq!(tensor.storage().payload_len(), 6);
+    /// assert_eq!(tensor.storage().unwrap().storage_kind(), StorageKind::Structured);
+    /// assert_eq!(tensor.storage().unwrap().payload_len(), 6);
     /// assert_eq!(
     ///     tensor.to_vec::<f64>().unwrap(),
     ///     vec![0.0, 0.0, 2.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.5, 0.0, 0.0],
@@ -2036,7 +2036,7 @@ impl TensorDynLen {
     ) -> Result<Self> {
         Self::from_inner_with_axis_classes(
             indices,
-            EagerTensor::from_tensor_in(native, default_eager_ctx()),
+            EagerTensor::from_tensor_in(native, default_eager_ctx()?),
             axis_classes,
         )
     }
@@ -2245,7 +2245,7 @@ impl TensorDynLen {
             indices: self.indices,
             storage: self.storage,
             structured_ad: Some(Arc::new(StructuredAdValue {
-                payload: Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx())),
+                payload: Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx()?)),
                 payload_dims,
                 axis_classes,
             })),
@@ -2348,10 +2348,13 @@ impl TensorDynLen {
     }
 
     /// Returns the authoritative compact storage.
-    pub fn storage(&self) -> Arc<Storage> {
-        self.storage
-            .materialize(self.indices.len())
-            .expect("TensorDynLen storage materialization failed")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an eager backend payload cannot be converted to
+    /// compact storage.
+    pub fn storage(&self) -> Result<Arc<Storage>> {
+        self.storage.materialize(self.indices.len())
     }
 
     /// Sum all elements, returning `AnyScalar`.
@@ -3343,8 +3346,13 @@ impl TensorDynLen {
             .unwrap_or_else(Self::empty_eager_cache);
         Self {
             indices: new_indices,
+            // Preserve the existing infallible conjugation API if a tracked
+            // eager payload cannot be converted back to compact storage.
             storage: self.storage.conj().unwrap_or_else(|_| {
-                TensorDynLenStorage::from_storage(Arc::new(self.storage().conj()))
+                self.storage
+                    .materialize(self.indices.len())
+                    .map(|storage| TensorDynLenStorage::from_storage(Arc::new(storage.conj())))
+                    .unwrap_or_else(|_| self.storage.clone())
             }),
             structured_ad,
             eager_cache,

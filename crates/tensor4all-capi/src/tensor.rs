@@ -426,7 +426,11 @@ pub extern "C" fn t4a_tensor_storage_kind(
             return Err(capi_error(T4A_NULL_POINTER, "out_kind is null"));
         }
         unsafe {
-            *out_kind = t4a_storage_kind::from(tensor.inner().storage().storage_kind());
+            let storage = tensor
+                .inner()
+                .storage()
+                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            *out_kind = t4a_storage_kind::from(storage.storage_kind());
         }
         Ok(())
     })
@@ -444,7 +448,11 @@ pub extern "C" fn t4a_tensor_payload_rank(
             return Err(capi_error(T4A_NULL_POINTER, "out_rank is null"));
         }
         unsafe {
-            *out_rank = tensor.inner().storage().payload_dims().len();
+            let storage = tensor
+                .inner()
+                .storage()
+                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            *out_rank = storage.payload_dims().len();
         }
         Ok(())
     })
@@ -462,7 +470,11 @@ pub extern "C" fn t4a_tensor_payload_len(
             return Err(capi_error(T4A_NULL_POINTER, "out_len is null"));
         }
         unsafe {
-            *out_len = tensor.inner().storage().payload_len();
+            let storage = tensor
+                .inner()
+                .storage()
+                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            *out_len = storage.payload_len();
         }
         Ok(())
     })
@@ -478,7 +490,10 @@ pub extern "C" fn t4a_tensor_payload_dims(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor.inner().storage();
+        let storage = tensor
+            .inner()
+            .storage()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         copy_plain_slice(
             "payload_dims",
             storage.payload_dims(),
@@ -499,7 +514,10 @@ pub extern "C" fn t4a_tensor_payload_strides(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor.inner().storage();
+        let storage = tensor
+            .inner()
+            .storage()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         copy_plain_slice(
             "payload_strides",
             storage.payload_strides(),
@@ -520,7 +538,10 @@ pub extern "C" fn t4a_tensor_axis_classes(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor.inner().storage();
+        let storage = tensor
+            .inner()
+            .storage()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         copy_plain_slice(
             "axis_classes",
             storage.axis_classes(),
@@ -619,6 +640,7 @@ pub extern "C" fn t4a_tensor_copy_payload_f64(
         let data = tensor
             .inner()
             .storage()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?
             .payload_f64_col_major_vec()
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         copy_plain_slice("payload_f64", &data, buf, buf_len, out_len)
@@ -638,6 +660,7 @@ pub extern "C" fn t4a_tensor_copy_payload_c64(
         let data = tensor
             .inner()
             .storage()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?
             .payload_c64_col_major_vec()
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         copy_c64_interleaved("payload_c64", &data, buf_interleaved, n_complex, out_len)

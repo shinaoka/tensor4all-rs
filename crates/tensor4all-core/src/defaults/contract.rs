@@ -408,10 +408,14 @@ fn contract_owned_with_options_impl(
                 return Ok(tensor);
             }
 
-            let requires_borrowed_path = tensor_refs.iter().any(|tensor| tensor.tracks_grad())
-                || tensor_refs
-                    .iter()
-                    .any(|tensor| !has_dense_axis_classes(tensor));
+            let has_structured_storage = tensor_refs
+                .iter()
+                .map(|tensor| has_dense_axis_classes(tensor).map(|dense| !dense))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .any(|structured| structured);
+            let requires_borrowed_path =
+                tensor_refs.iter().any(|tensor| tensor.tracks_grad()) || has_structured_storage;
             if requires_borrowed_path {
                 return contract_with_options(&tensor_refs, options);
             }
@@ -449,13 +453,13 @@ fn contract_owned_with_options_impl(
     }
 }
 
-fn has_dense_axis_classes(tensor: &TensorDynLen) -> bool {
-    let storage = tensor.storage();
-    storage
+fn has_dense_axis_classes(tensor: &TensorDynLen) -> Result<bool> {
+    let storage = tensor.storage()?;
+    Ok(storage
         .axis_classes()
         .iter()
         .copied()
-        .eq(0..tensor.indices().len())
+        .eq(0..tensor.indices().len()))
 }
 
 fn contract_with_options_impl(
@@ -723,15 +727,20 @@ fn execute_contraction_plan(
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .all(|same| same);
-    let has_non_dense_axis_classes = tensors.iter().any(|tensor| {
-        tensor
-            .storage()
-            .axis_classes()
-            .iter()
-            .copied()
-            .enumerate()
-            .any(|(axis, class)| axis != class)
-    });
+    let has_non_dense_axis_classes = tensors
+        .iter()
+        .map(|tensor| {
+            Ok(tensor
+                .storage()?
+                .axis_classes()
+                .iter()
+                .copied()
+                .enumerate()
+                .any(|(axis, class)| axis != class))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .any(|non_dense| non_dense);
 
     if any_grad && same_dtype && has_non_dense_axis_classes {
         if has_retained_indices {
@@ -866,7 +875,7 @@ fn build_contraction_plan(
         .collect();
     validate_unique_output_indices(&result_indices)?;
     let result_axis_classes =
-        output_axis_classes(tensors, &input_ids, &output_ids, &internal_id_to_original);
+        output_axis_classes(tensors, &input_ids, &output_ids, &internal_id_to_original)?;
 
     Ok(ContractionPlan {
         input_ids,
@@ -911,7 +920,7 @@ fn output_axis_classes(
     ixs: &[Vec<usize>],
     output: &[usize],
     internal_id_to_original: &HashMap<usize, (usize, usize)>,
-) -> Vec<usize> {
+) -> Result<Vec<usize>> {
     fn find(parent: &mut [usize], value: usize) -> usize {
         if parent[value] != value {
             parent[value] = find(parent, parent[value]);
@@ -932,7 +941,7 @@ fn output_axis_classes(
     for tensor in tensors {
         class_offsets.push(next_node);
         let payload_rank = tensor
-            .storage()
+            .storage()?
             .axis_classes()
             .iter()
             .copied()
@@ -946,7 +955,7 @@ fn output_axis_classes(
 
     for (tensor_idx, tensor) in tensors.iter().enumerate() {
         for (axis, &internal_id) in ixs[tensor_idx].iter().enumerate() {
-            let class_id = tensor.storage().axis_classes()[axis];
+            let class_id = tensor.storage()?.axis_classes()[axis];
             let node = class_offsets[tensor_idx] + class_id;
             axes_by_internal_id
                 .entry(internal_id)
@@ -969,16 +978,16 @@ fn output_axis_classes(
         .iter()
         .map(|internal_id| {
             let (tensor_idx, axis) = internal_id_to_original[internal_id];
-            let class_id = tensors[tensor_idx].storage().axis_classes()[axis];
+            let class_id = tensors[tensor_idx].storage()?.axis_classes()[axis];
             let node = class_offsets[tensor_idx] + class_id;
             let root = find(&mut parent, node);
-            *root_to_class.entry(root).or_insert_with(|| {
+            Ok(*root_to_class.entry(root).or_insert_with(|| {
                 let class = next_class;
                 next_class += 1;
                 class
-            })
+            }))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Build internal IDs for numeric contraction.
