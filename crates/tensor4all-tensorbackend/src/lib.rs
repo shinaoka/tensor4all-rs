@@ -11,7 +11,7 @@
 //!
 //! - `backend-tenferro` (default): Use tenferro backend for linalg/einsum
 
-/// Dynamic scalar types supporting f64 and Complex64.
+/// Dynamic scalar types supporting f32, f64, Complex32, and Complex64.
 mod any_scalar;
 /// Backend dispatch for dense linear algebra operations.
 mod backend;

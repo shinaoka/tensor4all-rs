@@ -2,7 +2,8 @@
 
 > This is an internal crate. Most users should use `tensor4all-core` instead.
 
-Scalar types (`f64`, `Complex64`), storage backends, and tensor algebra primitives
+Compact storage backends for `f64`/`Complex64`, eager tensor algebra primitives
+for all four core scalar types (`f32`, `f64`, `Complex32`, `Complex64`)
 backed by tenferro-rs.
 
 ## Key Types

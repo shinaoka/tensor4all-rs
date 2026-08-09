@@ -1857,6 +1857,8 @@ impl TensorIndex for TensorTrain {
 // ============================================================================
 
 impl TensorVectorSpace for TensorTrain {
+    type Error = TensorTrainError;
+
     // ========================================================================
     // GMRES-required methods (fully supported)
     // ========================================================================
@@ -1873,14 +1875,14 @@ impl TensorVectorSpace for TensorTrain {
         self.inner(other).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
-    fn norm_squared(&self) -> anyhow::Result<f64> {
-        TensorTrain::norm_squared(self).map_err(anyhow::Error::new)
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
+        TensorTrain::norm_squared(self)
     }
 
-    fn maxabs(&self) -> anyhow::Result<f64> {
-        anyhow::bail!(
-            "TensorTrain does not support TensorVectorSpace::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains"
-        )
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support TensorVectorSpace::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains".to_string(),
+        })
     }
 }
 

@@ -454,8 +454,7 @@ fn contract_owned_with_options_impl(
 }
 
 fn has_dense_axis_classes(tensor: &TensorDynLen) -> Result<bool> {
-    let storage = tensor.storage()?;
-    Ok(storage
+    Ok(tensor
         .axis_classes()
         .iter()
         .copied()
@@ -731,7 +730,6 @@ fn execute_contraction_plan(
         .iter()
         .map(|tensor| {
             Ok(tensor
-                .storage()?
                 .axis_classes()
                 .iter()
                 .copied()
@@ -742,13 +740,7 @@ fn execute_contraction_plan(
         .into_iter()
         .any(|non_dense| non_dense);
 
-    if any_grad && same_dtype && has_non_dense_axis_classes {
-        if has_retained_indices {
-            return Err(anyhow::anyhow!(
-                "Retained AD contraction with structured storage is not yet supported"
-            ));
-        }
-
+    if any_grad && same_dtype && has_non_dense_axis_classes && !has_retained_indices {
         // Structured payload AD still relies on the existing pairwise structured
         // path until structured N-ary planning is implemented.
         let mut iter = tensors.iter();
@@ -941,7 +933,6 @@ fn output_axis_classes(
     for tensor in tensors {
         class_offsets.push(next_node);
         let payload_rank = tensor
-            .storage()?
             .axis_classes()
             .iter()
             .copied()
@@ -955,7 +946,7 @@ fn output_axis_classes(
 
     for (tensor_idx, tensor) in tensors.iter().enumerate() {
         for (axis, &internal_id) in ixs[tensor_idx].iter().enumerate() {
-            let class_id = tensor.storage()?.axis_classes()[axis];
+            let class_id = tensor.axis_classes()[axis];
             let node = class_offsets[tensor_idx] + class_id;
             axes_by_internal_id
                 .entry(internal_id)
@@ -978,7 +969,7 @@ fn output_axis_classes(
         .iter()
         .map(|internal_id| {
             let (tensor_idx, axis) = internal_id_to_original[internal_id];
-            let class_id = tensors[tensor_idx].storage()?.axis_classes()[axis];
+            let class_id = tensors[tensor_idx].axis_classes()[axis];
             let node = class_offsets[tensor_idx] + class_id;
             let root = find(&mut parent, node);
             Ok(*root_to_class.entry(root).or_insert_with(|| {

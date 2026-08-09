@@ -716,6 +716,22 @@ fn test_storage_max_abs_structured() {
     assert!((s_c64.max_abs() - 5.0).abs() < 1e-10);
 }
 
+#[test]
+fn storage_max_abs_propagates_nan_and_infinity() {
+    let nan = Storage::from_dense_col_major(vec![1.0, f64::NAN], &[2]).unwrap();
+    assert!(nan.max_abs().is_nan());
+
+    let nan_complex = Storage::from_dense_col_major(
+        vec![Complex64::new(1.0, 0.0), Complex64::new(f64::NAN, 0.0)],
+        &[2],
+    )
+    .unwrap();
+    assert!(nan_complex.max_abs().is_nan());
+
+    let infinity = Storage::from_dense_col_major(vec![1.0, f64::INFINITY], &[2]).unwrap();
+    assert!(infinity.max_abs().is_infinite());
+}
+
 // ===== Storage permute_storage for structured variants =====
 
 #[test]

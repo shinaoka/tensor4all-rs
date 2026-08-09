@@ -31,7 +31,7 @@ layer used by language bindings.
 
 | Crate | Description |
 |-------|-------------|
-| **tensorbackend** | *Internal.* Scalar types (`f64`, `Complex64`), storage backends, and the tenferro-rs bridge. Users do not need to depend on this crate directly. |
+| **tensorbackend** | *Internal.* Compact `f64`/`Complex64` storage, all-four-dtype eager tensor bridges, and tenferro-backed primitives. Users do not need to depend on this crate directly. |
 | **core** | Foundation for everything else. Provides the `Index` system, dynamic-rank `Tensor`, contraction, and SVD/QR/LU factorizations. |
 
 ### Tensor Train & Tree Tensor Networks

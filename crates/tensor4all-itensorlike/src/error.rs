@@ -59,3 +59,11 @@ pub enum TensorTrainError {
         message: String,
     },
 }
+
+impl From<anyhow::Error> for TensorTrainError {
+    fn from(source: anyhow::Error) -> Self {
+        Self::OperationError {
+            message: source.to_string(),
+        }
+    }
+}

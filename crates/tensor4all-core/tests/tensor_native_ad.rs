@@ -200,7 +200,7 @@ fn retained_multi_contraction_preserves_grad_path() {
 }
 
 #[test]
-fn structured_retained_multi_contraction_errors_before_detaching_grad() {
+fn structured_retained_multi_contraction_preserves_grad_path() {
     let batch = Index::new_dyn(2);
     let i = Index::new_dyn(3);
     let k = Index::new_dyn(2);
@@ -222,10 +222,18 @@ fn structured_retained_multi_contraction_errors_before_detaching_grad() {
     let retain_indices = [batch.clone()];
     let options = ContractionOptions::new().with_retain_indices(&retain_indices);
 
-    let err = contract_with_options(&[&x, &y], options).unwrap_err();
-    let message = err.to_string();
-    assert!(
-        message.contains("structured storage") || message.contains("not yet supported"),
-        "{message}"
+    let result = contract_with_options(&[&x, &y], options).unwrap();
+    assert_eq!(result.dims(), vec![2, 3, 2]);
+    assert_eq!(
+        result.to_vec::<f64>().unwrap(),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+
+    let ones = TensorDynLen::from_dense(result.indices().to_vec(), vec![1.0; 12]).unwrap();
+    let loss = contract(&[&result, &ones]).unwrap();
+    loss.backward().unwrap();
+    assert_eq!(
+        x.grad().unwrap().unwrap().to_vec::<f64>().unwrap(),
+        vec![2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0],
     );
 }

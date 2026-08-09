@@ -4,7 +4,7 @@ use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contra
 use crate::tensor_like::LinearizationOrder;
 use crate::AnyScalar;
 use anyhow::{Context, Result};
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
@@ -24,7 +24,7 @@ use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
     native_tensor_primal_to_diag_f64, native_tensor_primal_to_storage, scale_native_tensor,
     storage_payload_native_read_input, storage_to_native_tensor, AnyScalar as BackendScalar,
-    StorageScalar, TensorElement,
+    TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -267,8 +267,8 @@ pub(crate) struct StructuredAdValue {
 }
 
 /// Error returned when [`TensorDynLen::storage`] or
-/// [`TensorDynLen::to_storage`] cannot materialize its authoritative compact
-/// storage snapshot.
+/// [`TensorDynLen::to_storage`] cannot produce a compact `f64`/`Complex64`
+/// storage snapshot from the authoritative payload.
 ///
 /// Backend diagnostics remain available through [`std::error::Error::source`]
 /// instead of being erased into a display string. The error is cloneable so a
@@ -297,6 +297,14 @@ pub enum TensorStorageError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+    /// An eager payload uses a scalar dtype that compact [`Storage`] cannot hold.
+    #[error(
+        "compact TensorDynLen storage does not support dtype {dtype}; the eager payload remains authoritative"
+    )]
+    UnsupportedDtype {
+        /// Native scalar dtype retained by the eager representation.
+        dtype: &'static str,
+    },
     /// An eager conjugation operation failed and was deferred by the infallible
     /// [`TensorDynLen::conj`] API.
     #[error("failed to conjugate TensorDynLen storage: {source}")]
@@ -305,6 +313,136 @@ pub enum TensorStorageError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+/// Errors returned by the fallible numerical and comparison methods on
+/// [`TensorDynLen`].
+///
+/// The enum is intentionally owned by `tensor4all-core`: callers can match
+/// storage, shape, scalar, subtraction, and invalid-value failures without
+/// depending on the internal `anyhow` plumbing. Wrapped backend diagnostics
+/// retain their complete [`std::error::Error::source`] chain.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::TensorDynLenError;
+///
+/// let error = TensorDynLenError::NaNInput {
+///     operation: "norm_squared",
+/// };
+/// assert!(error.to_string().contains("NaN"));
+/// ```
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum TensorDynLenError {
+    /// Compact storage or deferred storage materialization failed.
+    #[error("TensorDynLen storage operation failed: {source}")]
+    Storage {
+        /// Original storage diagnostic, including its backend source chain.
+        #[source]
+        source: TensorStorageError,
+    },
+    /// A native eager payload could not be materialized for a numerical operation.
+    #[error("TensorDynLen materialization failed: {source}")]
+    Materialization {
+        /// Original backend or eager-runtime diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// A rank-zero scalar could not be extracted from a reduction result.
+    #[error("TensorDynLen scalar extraction failed: {source}")]
+    ScalarExtraction {
+        /// Original scalar-wrapper or backend diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// The reduction result has a scalar dtype that this real-valued operation
+    /// cannot interpret.
+    #[error("TensorDynLen scalar type mismatch: expected {expected}, got {actual}")]
+    ScalarTypeMismatch {
+        /// Scalar dtype required by the operation.
+        expected: &'static str,
+        /// Scalar dtype returned by the reduction.
+        actual: String,
+    },
+    /// Tensor shapes or index spaces cannot be aligned for comparison.
+    #[error("TensorDynLen shape mismatch during {operation}: expected {expected}, got {actual}")]
+    ShapeMismatch {
+        /// Operation that attempted the alignment.
+        operation: &'static str,
+        /// Expected index/dimension description.
+        expected: String,
+        /// Actual index/dimension description.
+        actual: String,
+    },
+    /// Tensor subtraction failed while evaluating a comparison.
+    #[error("TensorDynLen subtraction failed: {source}")]
+    Subtraction {
+        /// Original arithmetic or backend diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// An input contained a NaN and the operation rejected it rather than
+    /// silently converting it to zero.
+    #[error("TensorDynLen {operation} received NaN input")]
+    NaNInput {
+        /// Numerical operation that observed the NaN.
+        operation: &'static str,
+    },
+    /// A comparison tolerance was NaN, infinite, or negative.
+    #[error("TensorDynLen tolerance {name} is invalid: {value}")]
+    InvalidTolerance {
+        /// Name of the invalid tolerance.
+        name: &'static str,
+        /// Supplied tolerance value.
+        value: f64,
+    },
+    /// Another eager tensor operation failed while preparing a comparison.
+    #[error("TensorDynLen {operation} failed: {source}")]
+    Operation {
+        /// Name of the eager operation that failed.
+        operation: &'static str,
+        /// Original backend or tensor diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+impl From<anyhow::Error> for TensorDynLenError {
+    fn from(source: anyhow::Error) -> Self {
+        Self::operation("TensorDynLen", source)
+    }
+}
+
+impl TensorDynLenError {
+    fn boxed(error: anyhow::Error) -> Arc<dyn std::error::Error + Send + Sync + 'static> {
+        Arc::from(error.into_boxed_dyn_error())
+    }
+
+    fn materialization(error: anyhow::Error) -> Self {
+        Self::Materialization {
+            source: Self::boxed(error),
+        }
+    }
+
+    fn scalar_extraction(error: anyhow::Error) -> Self {
+        Self::ScalarExtraction {
+            source: Self::boxed(error),
+        }
+    }
+
+    fn operation(operation: &'static str, error: anyhow::Error) -> Self {
+        Self::Operation {
+            operation,
+            source: Self::boxed(error),
+        }
+    }
+
+    fn subtraction(error: anyhow::Error) -> Self {
+        Self::Subtraction {
+            source: Self::boxed(error),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -412,6 +550,18 @@ impl TensorDynLenStorage {
         }
     }
 
+    fn dtype(&self) -> Option<DType> {
+        match self {
+            Self::Materialized(storage) => Some(if storage.is_c64() {
+                DType::C64
+            } else {
+                DType::F64
+            }),
+            Self::Eager { inner, .. } => Some(inner.data().dtype()),
+            Self::Deferred { source, .. } => source.dtype(),
+        }
+    }
+
     fn is_complex(&self) -> bool {
         match self {
             Self::Materialized(storage) => storage.is_complex(),
@@ -453,15 +603,23 @@ impl TensorDynLenStorage {
             Self::Eager {
                 inner,
                 axis_classes,
-            } => TensorDynLen::storage_from_native_with_axis_classes(
-                inner.data(),
-                axis_classes,
-                logical_rank,
-            )
-            .map(Arc::new)
-            .map_err(|source| TensorStorageError::Materialization {
-                source: Arc::from(source.into_boxed_dyn_error()),
-            }),
+            } => {
+                let dtype = inner.data().dtype();
+                if matches!(dtype, DType::F32 | DType::C32) {
+                    return Err(TensorStorageError::UnsupportedDtype {
+                        dtype: TensorDynLen::dtype_name(dtype),
+                    });
+                }
+                TensorDynLen::storage_from_native_with_axis_classes(
+                    inner.data(),
+                    axis_classes,
+                    logical_rank,
+                )
+                .map(Arc::new)
+                .map_err(|source| TensorStorageError::Materialization {
+                    source: Arc::from(source.into_boxed_dyn_error()),
+                })
+            }
             Self::Deferred { error, .. } => Err((**error).clone()),
         }
     }
@@ -495,7 +653,11 @@ impl TensorDynLenStorage {
     }
 
     fn max_abs(&self) -> Result<f64> {
-        Ok(self.materialize(self.axis_classes().len())?.max_abs())
+        match self {
+            Self::Materialized(storage) => Ok(storage.max_abs()),
+            Self::Eager { inner, .. } => TensorDynLen::native_max_abs(inner.data()),
+            Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
+        }
     }
 }
 
@@ -574,8 +736,11 @@ pub enum StructuredSelectorError {
 ///
 /// `TensorDynLen` stores a logical multi-dimensional tensor of supported scalar
 /// values (`f32`, `f64`, `Complex32`, or `Complex64`) together with a list of
-/// [`DynIndex`] labels. The authoritative payload is compact [`Storage`], which
-/// may be dense, diagonal, or explicitly structured. The indices carry unique
+/// [`DynIndex`] labels. `f64`/`Complex64` tensors may use compact [`Storage`]
+/// snapshots; `f32`/`Complex32` tensors retain an eager payload as the
+/// authoritative representation because compact storage supports only the
+/// 64-bit dtypes. The logical layout may be dense, diagonal, or explicitly
+/// structured. The indices carry unique
 /// identities (UUIDs) so that contraction, addition, and other binary
 /// operations can automatically match legs by identity rather than position.
 ///
@@ -624,17 +789,66 @@ pub enum StructuredSelectorError {
 pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
-    /// Authoritative compact payload storage.
+    /// Authoritative payload representation. Compact storage is used when the
+    /// dtype is supported by [`Storage`]; otherwise this retains an eager
+    /// payload without promotion.
     pub(crate) storage: TensorDynLenStorage,
-    /// Optional tracked compact payload used to preserve structured AD layouts.
+    /// Optional retained eager payload for tracked structured layouts. The
+    /// `Arc` owns the payload graph independently of compact storage snapshots.
     pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
-    /// Lazily materialized eager payload for native execution and AD.
+    /// Lazily materialized logical-dense eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor>>>,
 }
 
 impl TensorDynLen {
     fn dense_axis_classes(rank: usize) -> Vec<usize> {
         (0..rank).collect()
+    }
+
+    fn dtype_name(dtype: DType) -> &'static str {
+        match dtype {
+            DType::F32 => "f32",
+            DType::F64 => "f64",
+            DType::C32 => "c32",
+            DType::C64 => "c64",
+            DType::I32 => "i32",
+            DType::I64 => "i64",
+            DType::Bool => "bool",
+        }
+    }
+
+    fn native_max_abs(native: &NativeTensor) -> Result<f64> {
+        fn fold(values: impl IntoIterator<Item = f64>) -> f64 {
+            values.into_iter().fold(0.0, |current, value| {
+                if current.is_nan() || value.is_nan() {
+                    f64::NAN
+                } else {
+                    current.max(value)
+                }
+            })
+        }
+
+        match native.dtype() {
+            DType::F32 => native
+                .as_slice::<f32>()
+                .map(|values| fold(values.iter().map(|value| f64::from(value.abs()))))
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 tensor for maxabs")),
+            DType::F64 => native
+                .as_slice::<f64>()
+                .map(|values| fold(values.iter().map(|value| value.abs())))
+                .ok_or_else(|| anyhow::anyhow!("failed to read f64 tensor for maxabs")),
+            DType::C32 => native
+                .as_slice::<Complex32>()
+                .map(|values| fold(values.iter().map(|value| f64::from(value.norm()))))
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 tensor for maxabs")),
+            DType::C64 => native
+                .as_slice::<Complex64>()
+                .map(|values| fold(values.iter().map(|value| value.norm())))
+                .ok_or_else(|| anyhow::anyhow!("failed to read c64 tensor for maxabs")),
+            dtype => Err(anyhow::anyhow!(
+                "TensorDynLen maxabs does not support dtype {dtype:?}"
+            )),
+        }
     }
 
     fn scalar_dtype(&self) -> Result<DType> {
@@ -931,10 +1145,68 @@ impl TensorDynLen {
     }
 
     fn compact_payload_inner(&self) -> Result<EagerTensor> {
+        if let Some(inner) = self.storage.eager() {
+            return Ok(inner.clone());
+        }
         Ok(EagerTensor::from_tensor_in(
             storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
             default_eager_ctx()?,
         ))
+    }
+
+    fn dense_inner_from_payload(
+        payload: &EagerTensor,
+        axis_classes: &[usize],
+        logical_dims: &[usize],
+    ) -> Result<EagerTensor> {
+        let payload_rank = axis_classes
+            .iter()
+            .copied()
+            .max()
+            .map(|class_id| class_id + 1)
+            .unwrap_or(0);
+        anyhow::ensure!(
+            payload.data().shape().len() == payload_rank,
+            "structured payload rank {} does not match axis classes {:?}",
+            payload.data().shape().len(),
+            axis_classes
+        );
+        anyhow::ensure!(
+            logical_dims.len() == axis_classes.len(),
+            "logical rank {} does not match axis class rank {}",
+            logical_dims.len(),
+            axis_classes.len()
+        );
+
+        if axis_classes == Self::dense_axis_classes(logical_dims.len()) {
+            anyhow::ensure!(
+                payload.data().shape() == logical_dims,
+                "dense payload dims {:?} do not match logical dims {:?}",
+                payload.data().shape(),
+                logical_dims
+            );
+            return Ok(payload.clone());
+        }
+
+        let mut first_axis_by_class = vec![None; payload_rank];
+        let mut dense = payload.clone();
+        for (logical_axis, &class_id) in axis_classes.iter().enumerate() {
+            let first_axis = match first_axis_by_class[class_id] {
+                Some(first_axis) => first_axis,
+                None => {
+                    first_axis_by_class[class_id] = Some(logical_axis);
+                    continue;
+                }
+            };
+            dense = dense.embed_diag(first_axis, logical_axis)?;
+        }
+        anyhow::ensure!(
+            dense.data().shape() == logical_dims,
+            "expanded structured payload dims {:?} do not match logical dims {:?}",
+            dense.data().shape(),
+            logical_dims
+        );
+        Ok(dense)
     }
 
     fn tracked_compact_payload_value(&self) -> Option<&StructuredAdValue> {
@@ -1124,6 +1396,21 @@ impl TensorDynLen {
         if axis_classes == Self::dense_axis_classes(indices.len()) {
             return Self::from_inner_with_axis_classes(indices, payload_inner, axis_classes);
         }
+        if matches!(payload_inner.data().dtype(), DType::F32 | DType::C32) {
+            return Ok(Self {
+                indices,
+                storage: TensorDynLenStorage::Eager {
+                    inner: Arc::new(payload_inner.clone()),
+                    axis_classes: axis_classes.clone(),
+                },
+                structured_ad: Some(Arc::new(StructuredAdValue {
+                    payload: Arc::new(payload_inner),
+                    payload_dims,
+                    axis_classes,
+                })),
+                eager_cache: Self::empty_eager_cache(),
+            });
+        }
         let storage = storage_from_payload_native(
             payload_inner.data().clone(),
             &payload_dims,
@@ -1246,6 +1533,37 @@ impl TensorDynLen {
             );
         }
 
+        if self.storage.eager().is_some() || other.storage.eager().is_some() {
+            let lhs_owned = self.compact_payload_inner()?;
+            let rhs_owned = other.compact_payload_inner()?;
+            if lhs_owned.data().dtype() != rhs_owned.data().dtype() {
+                return Err(anyhow::anyhow!(
+                    "structured payload contraction requires matching payload dtypes"
+                ));
+            }
+            let (lhs_normalized, lhs_labels) =
+                Self::normalize_eager_payload_for_roots(&lhs_owned, &lhs_roots)?;
+            let (rhs_normalized, rhs_labels) =
+                Self::normalize_eager_payload_for_roots(&rhs_owned, &rhs_roots)?;
+            let lhs_payload = lhs_normalized.as_ref().unwrap_or(&lhs_owned);
+            let rhs_payload = rhs_normalized.as_ref().unwrap_or(&rhs_owned);
+            let payload = if scalar_multiply {
+                lhs_payload.mul(rhs_payload)?
+            } else {
+                let subscripts = Self::build_payload_einsum_subscripts(
+                    &[lhs_labels, rhs_labels],
+                    &plan.output_payload_roots,
+                )?;
+                eager_einsum_ad(&[lhs_payload, rhs_payload], &subscripts)?
+            };
+            return Self::from_structured_payload_inner(
+                result_indices,
+                payload,
+                plan.output_payload_dims,
+                plan.output_axis_classes,
+            );
+        }
+
         let lhs_storage = self.storage.materialize(self.indices.len())?;
         let rhs_storage = other.storage.materialize(other.indices.len())?;
         let lhs = storage_payload_native_read_input(lhs_storage.as_ref())?;
@@ -1270,8 +1588,7 @@ impl TensorDynLen {
     }
 
     fn should_use_structured_payload_contract(&self, other: &Self) -> bool {
-        let same_payload_dtype = self.storage.is_f64() == other.storage.is_f64()
-            && self.storage.is_complex() == other.storage.is_complex();
+        let same_payload_dtype = self.storage.dtype() == other.storage.dtype();
         same_payload_dtype
             && (self.tracked_compact_payload_value().is_some()
                 || other.tracked_compact_payload_value().is_some()
@@ -1284,18 +1601,26 @@ impl TensorDynLen {
         axis_classes: &[usize],
         logical_rank: usize,
     ) -> Result<Storage> {
+        if matches!(native.dtype(), DType::F32 | DType::C32) {
+            return Err(anyhow::anyhow!(
+                "compact TensorDynLen storage does not support dtype {:?}; retain the eager payload",
+                native.dtype()
+            ));
+        }
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
-                DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
-                    Storage::from_diag_col_major(
-                        native_tensor_primal_to_diag_f64(native)?,
-                        logical_rank,
-                    )
-                }
-                DType::C32 | DType::C64 => Storage::from_diag_col_major(
+                DType::F64 | DType::I32 | DType::I64 | DType::Bool => Storage::from_diag_col_major(
+                    native_tensor_primal_to_diag_f64(native)?,
+                    logical_rank,
+                ),
+                DType::C64 => Storage::from_diag_col_major(
                     native_tensor_primal_to_diag_c64(native)?,
                     logical_rank,
                 ),
+                DType::F32 | DType::C32 => Err(anyhow::anyhow!(
+                    "compact TensorDynLen storage does not support dtype {:?}",
+                    native.dtype()
+                )),
             }
         } else {
             native_tensor_primal_to_storage(native)
@@ -1356,6 +1681,24 @@ impl TensorDynLen {
                 .map_err(anyhow::Error::msg)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
             Self::from_dense(kept_indices, data)
+        } else if self.storage.dtype() == Some(DType::F32) {
+            let payload = self
+                .storage
+                .eager()
+                .and_then(|inner| inner.data().as_slice::<f32>())
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?
+                .to_vec();
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            Self::from_dense(kept_indices, data)
+        } else if self.storage.dtype() == Some(DType::C32) {
+            let payload = self
+                .storage
+                .eager()
+                .and_then(|inner| inner.data().as_slice::<Complex32>())
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?
+                .to_vec();
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            Self::from_dense(kept_indices, data)
         } else {
             Err(anyhow::anyhow!("unsupported diagonal storage scalar type"))
         }
@@ -1386,33 +1729,51 @@ impl TensorDynLen {
         Self::from_dense(kept_indices, vec![T::zero(); output_len])
     }
 
-    fn select_structured_indices_typed<T>(
-        &self,
-        payload: Vec<T>,
-        kept_axes: &[usize],
-        kept_indices: Vec<DynIndex>,
-        kept_dims: Vec<usize>,
+    fn selected_structured_class_positions(
+        axis_classes: &[usize],
+        payload_rank: usize,
         selected_axes: &[usize],
         positions: &[usize],
-    ) -> Result<Self>
-    where
-        T: TensorElement + StorageScalar + Zero,
-    {
-        let payload_dims = self.storage.payload_dims();
-        let axis_classes = self.storage.axis_classes();
-        let payload_rank = payload_dims.len();
+    ) -> Option<Vec<Option<usize>>> {
         let mut selected_class_positions = vec![None; payload_rank];
-
         for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
             let class_id = axis_classes[axis];
             if let Some(existing) = selected_class_positions[class_id] {
                 if existing != position {
-                    return Self::zero_structured_selection::<T>(kept_indices, &kept_dims);
+                    return None;
                 }
             } else {
                 selected_class_positions[class_id] = Some(position);
             }
         }
+        Some(selected_class_positions)
+    }
+
+    fn select_structured_indices_typed<T, F>(
+        &self,
+        payload: Vec<T>,
+        kept_axes: &[usize],
+        kept_indices: Vec<DynIndex>,
+        kept_dims: Vec<usize>,
+        selected: (&[usize], &[usize]),
+        make_output: F,
+    ) -> Result<Self>
+    where
+        T: TensorElement + Zero,
+        F: FnOnce(Vec<T>, Vec<usize>, Vec<isize>, Vec<usize>) -> Result<Self>,
+    {
+        let (selected_axes, positions) = selected;
+        let payload_dims = self.storage.payload_dims();
+        let axis_classes = self.storage.axis_classes();
+        let payload_rank = payload_dims.len();
+        let Some(selected_class_positions) = Self::selected_structured_class_positions(
+            axis_classes,
+            payload_rank,
+            selected_axes,
+            positions,
+        ) else {
+            return Self::zero_structured_selection::<T>(kept_indices, &kept_dims);
+        };
 
         let selected_class_kept = kept_axes
             .iter()
@@ -1466,13 +1827,12 @@ impl TensorDynLen {
         }
 
         let output_strides = Self::col_major_strides(&output_payload_dims)?;
-        let storage = Storage::new_structured(
+        make_output(
             output_payload,
             output_payload_dims,
             output_strides,
             output_axis_classes,
-        )?;
-        Self::from_storage(kept_indices, Arc::new(storage))
+        )
     }
 
     fn select_structured_indices_dense<T>(
@@ -1544,26 +1904,74 @@ impl TensorDynLen {
             let payload = storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::msg)?;
+            let output_indices = kept_indices.clone();
             self.select_structured_indices_typed(
                 payload,
                 kept_axes,
                 kept_indices,
                 kept_dims,
-                selected_axes,
-                positions,
+                (selected_axes, positions),
+                move |payload, dims, strides, classes| {
+                    let storage = Storage::new_structured(payload, dims, strides, classes)?;
+                    Self::from_storage(output_indices, Arc::new(storage))
+                },
             )
         } else if self.storage.is_c64() {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::msg)?;
+            let output_indices = kept_indices.clone();
             self.select_structured_indices_typed(
                 payload,
                 kept_axes,
                 kept_indices,
                 kept_dims,
-                selected_axes,
-                positions,
+                (selected_axes, positions),
+                move |payload, dims, strides, classes| {
+                    let storage = Storage::new_structured(payload, dims, strides, classes)?;
+                    Self::from_storage(output_indices, Arc::new(storage))
+                },
+            )
+        } else if self.storage.dtype() == Some(DType::F32) {
+            let payload = self
+                .storage
+                .eager()
+                .and_then(|inner| inner.data().as_slice::<f32>())
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 structured payload"))?
+                .to_vec();
+            let output_indices = kept_indices.clone();
+            self.select_structured_indices_typed(
+                payload,
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                (selected_axes, positions),
+                move |payload, dims, _strides, classes| {
+                    let native = dense_native_tensor_from_col_major(&payload, &dims)?;
+                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?);
+                    Self::from_structured_payload_inner(output_indices, inner, dims, classes)
+                },
+            )
+        } else if self.storage.dtype() == Some(DType::C32) {
+            let payload = self
+                .storage
+                .eager()
+                .and_then(|inner| inner.data().as_slice::<Complex32>())
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 structured payload"))?
+                .to_vec();
+            let output_indices = kept_indices.clone();
+            self.select_structured_indices_typed(
+                payload,
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                (selected_axes, positions),
+                move |payload, dims, _strides, classes| {
+                    let native = dense_native_tensor_from_col_major(&payload, &dims)?;
+                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?);
+                    Self::from_structured_payload_inner(output_indices, inner, dims, classes)
+                },
             )
         } else {
             Err(anyhow::anyhow!(
@@ -1590,19 +1998,51 @@ impl TensorDynLen {
 
     fn try_materialized_inner(&self) -> Result<&EagerTensor> {
         self.ensure_storage_ready()?;
+        let logical_dims = self.dims();
         if let Some(value) = self.tracked_compact_payload_value() {
             if self.compact_payload_is_logical_dense(&value.payload_dims) {
                 return Ok(value.payload.as_ref());
             }
+            if self.eager_cache.get().is_none() {
+                let dense = Self::dense_inner_from_payload(
+                    value.payload.as_ref(),
+                    &value.axis_classes,
+                    &logical_dims,
+                )?;
+                let _ = self.eager_cache.set(Arc::new(dense));
+            }
+            return self
+                .eager_cache
+                .get()
+                .map(|inner| inner.as_ref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("TensorDynLen structured AD cache was not initialized")
+                });
         }
         if let Some(inner) = self.storage.eager() {
-            return Ok(inner);
+            if self.storage.axis_classes() == Self::dense_axis_classes(self.indices.len()) {
+                return Ok(inner);
+            }
+            if self.eager_cache.get().is_none() {
+                let dense = Self::dense_inner_from_payload(
+                    inner,
+                    self.storage.axis_classes(),
+                    &logical_dims,
+                )?;
+                let _ = self.eager_cache.set(Arc::new(dense));
+            }
+            return self
+                .eager_cache
+                .get()
+                .map(|inner| inner.as_ref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("TensorDynLen structured eager cache was not initialized")
+                });
         }
         if self.eager_cache.get().is_none() {
-            let dims = self.dims();
             let native = profile_pairwise_contract_section("materialize_storage_to_native", || {
                 let storage = self.storage.materialize(self.indices.len())?;
-                Self::seed_native_payload(storage.as_ref(), &dims)
+                Self::seed_native_payload(storage.as_ref(), &logical_dims)
             })
             .context("TensorDynLen materialization failed")?;
             record_pairwise_contract_profile_bytes(
@@ -2044,7 +2484,10 @@ impl TensorDynLen {
     ///
     /// # Returns
     ///
-    /// A compact structured tensor with axis classes `[0, 1, 0]`.
+    /// A structured tensor with axis classes `[0, 1, 0]`. For `f64` and
+    /// `Complex64`, compact storage is retained; `f32` and `Complex32` keep
+    /// an eager authoritative payload because compact storage has no 32-bit
+    /// scalar representation.
     ///
     /// # Errors
     ///
@@ -2085,7 +2528,7 @@ impl TensorDynLen {
         scale: T,
     ) -> std::result::Result<Self, StructuredSelectorError>
     where
-        T: TensorElement + StorageScalar + Copy + Zero,
+        T: TensorElement + Copy + Zero,
     {
         if left.dim == 0 {
             return Err(StructuredSelectorError::ZeroDimension { axis: "left" });
@@ -2135,20 +2578,75 @@ impl TensorDynLen {
         for bond in 0..left.dim {
             payload[selected_offset + bond] = scale;
         }
-        let storage = Storage::new_structured(
-            payload,
-            vec![left.dim, site.dim],
-            vec![1, site_stride],
-            vec![0, 1, 0],
-        )
-        .map_err(|error| StructuredSelectorError::InvalidStorage {
-            message: error.to_string(),
-        })?;
-        Self::from_structured_storage(vec![left, site, right], Arc::new(storage)).map_err(|error| {
-            StructuredSelectorError::InvalidStorage {
+        let payload_native = dense_native_tensor_from_col_major(&payload, &[left.dim, site.dim])
+            .map_err(|error| StructuredSelectorError::InvalidStorage {
                 message: error.to_string(),
+            })?;
+        let payload_inner = EagerTensor::from_tensor_in(
+            payload_native.clone(),
+            default_eager_ctx().map_err(|error| StructuredSelectorError::InvalidStorage {
+                message: error.to_string(),
+            })?,
+        );
+        let indices = vec![left, site, right];
+        match payload_native.dtype() {
+            DType::F32 | DType::C32 => Self::from_structured_payload_inner(
+                indices,
+                payload_inner,
+                vec![payload_native.shape()[0], payload_native.shape()[1]],
+                vec![0, 1, 0],
+            )
+            .map_err(|error| StructuredSelectorError::InvalidStorage {
+                message: error.to_string(),
+            }),
+            DType::F64 => {
+                let payload = payload_native
+                    .as_slice::<f64>()
+                    .ok_or_else(|| StructuredSelectorError::InvalidStorage {
+                        message: "failed to read f64 selector payload".to_string(),
+                    })?
+                    .to_vec();
+                let storage = Storage::new_structured(
+                    payload,
+                    vec![indices[0].dim(), indices[1].dim()],
+                    vec![1, site_stride],
+                    vec![0, 1, 0],
+                )
+                .map_err(|error| StructuredSelectorError::InvalidStorage {
+                    message: error.to_string(),
+                })?;
+                Self::from_structured_storage(indices, Arc::new(storage)).map_err(|error| {
+                    StructuredSelectorError::InvalidStorage {
+                        message: error.to_string(),
+                    }
+                })
             }
-        })
+            DType::C64 => {
+                let payload = payload_native
+                    .as_slice::<Complex64>()
+                    .ok_or_else(|| StructuredSelectorError::InvalidStorage {
+                        message: "failed to read c64 selector payload".to_string(),
+                    })?
+                    .to_vec();
+                let storage = Storage::new_structured(
+                    payload,
+                    vec![indices[0].dim(), indices[1].dim()],
+                    vec![1, site_stride],
+                    vec![0, 1, 0],
+                )
+                .map_err(|error| StructuredSelectorError::InvalidStorage {
+                    message: error.to_string(),
+                })?;
+                Self::from_structured_storage(indices, Arc::new(storage)).map_err(|error| {
+                    StructuredSelectorError::InvalidStorage {
+                        message: error.to_string(),
+                    }
+                })
+            }
+            dtype => Err(StructuredSelectorError::InvalidStorage {
+                message: format!("unsupported selector dtype {dtype:?}"),
+            }),
+        }
     }
 
     /// Create a tensor from a native tenferro payload.
@@ -2297,6 +2795,19 @@ impl TensorDynLen {
         Self::from_inner_with_axis_classes(indices, diag_inner, axis_classes)
     }
 
+    fn compact_inner_from_logical(
+        inner: &EagerTensor,
+        axis_classes: &[usize],
+    ) -> Result<EagerTensor> {
+        let mut payload = inner.clone();
+        let mut classes = axis_classes.to_vec();
+        while let Some((axis_a, axis_b)) = Self::first_duplicate_pair(&classes) {
+            payload = payload.extract_diag(axis_a, axis_b)?;
+            classes.remove(axis_b);
+        }
+        Ok(payload)
+    }
+
     pub(crate) fn from_inner_with_axis_classes(
         indices: Vec<DynIndex>,
         inner: EagerTensor,
@@ -2323,6 +2834,15 @@ impl TensorDynLen {
         let (storage, eager_cache) = if axis_classes == Self::dense_axis_classes(indices.len()) {
             (
                 TensorDynLenStorage::from_eager_dense(inner, indices.len()),
+                Self::empty_eager_cache(),
+            )
+        } else if matches!(inner.data().dtype(), DType::F32 | DType::C32) {
+            let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
+            (
+                TensorDynLenStorage::Eager {
+                    inner: Arc::new(payload),
+                    axis_classes,
+                },
                 Self::empty_eager_cache(),
             )
         } else {
@@ -2357,6 +2877,10 @@ impl TensorDynLen {
         &self.indices
     }
 
+    pub(crate) fn axis_classes(&self) -> &[usize] {
+        self.storage.axis_classes()
+    }
+
     /// Borrow the native payload.
     pub(crate) fn as_native(&self) -> Result<&NativeTensor> {
         Ok(self.try_materialized_inner()?.data())
@@ -2364,9 +2888,8 @@ impl TensorDynLen {
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     pub fn enable_grad(self) -> Result<Self> {
-        let materialized = self.storage.materialize(self.indices.len())?;
         // Keep the eager payload when available: compact Storage currently
-        // stores only f64/C64 and would promote f32/C32 leaves before AD.
+        // stores only f64/C64 and must not promote f32/C32 leaves before AD.
         let eager_payload = self
             .storage
             .eager()
@@ -2374,8 +2897,11 @@ impl TensorDynLen {
             .filter(|inner| inner.data().shape() == self.storage.payload_dims());
         let payload = match eager_payload {
             Some(inner) => inner.data().clone(),
-            None => storage_payload_native(materialized.as_ref())
-                .context("TensorDynLen::enable_grad failed")?,
+            None => {
+                let materialized = self.storage.materialize(self.indices.len())?;
+                storage_payload_native(materialized.as_ref())
+                    .context("TensorDynLen::enable_grad failed")?
+            }
         };
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
@@ -2416,6 +2942,26 @@ impl TensorDynLen {
                             grad.as_ref().clone(),
                             value.axis_classes.clone(),
                         );
+                    }
+                    if matches!(grad.as_ref().dtype(), DType::F32 | DType::C32) {
+                        anyhow::ensure!(
+                            grad.as_ref().shape() == value.payload_dims,
+                            "gradient payload dims {:?} do not match {:?}",
+                            grad.as_ref().shape(),
+                            value.payload_dims
+                        );
+                        return Ok(Self {
+                            indices: self.indices.clone(),
+                            storage: TensorDynLenStorage::Eager {
+                                inner: Arc::new(EagerTensor::from_tensor_in(
+                                    grad.as_ref().clone(),
+                                    default_eager_ctx()?,
+                                )),
+                                axis_classes: value.axis_classes.clone(),
+                            },
+                            structured_ad: None,
+                            eager_cache: Self::empty_eager_cache(),
+                        });
                     }
                     let storage = storage_from_payload_native(
                         grad.as_ref().clone(),
@@ -2470,12 +3016,6 @@ impl TensorDynLen {
 
     /// Detach this tensor from the reverse graph.
     pub fn detach(&self) -> Result<Self> {
-        if self.tracked_compact_payload_value().is_some() {
-            return Self::from_storage(
-                self.indices.clone(),
-                self.storage.materialize(self.indices.len())?,
-            );
-        }
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
             self.try_materialized_inner()?.detach(),
@@ -2493,7 +3033,8 @@ impl TensorDynLen {
     /// # Errors
     ///
     /// Returns [`TensorStorageError`] when an eager backend payload cannot be
-    /// converted to compact storage or when a deferred eager operation failed.
+    /// converted to compact storage, when its dtype is `f32`/`c32`, or when a
+    /// deferred eager operation failed.
     pub fn to_storage(&self) -> std::result::Result<Arc<Storage>, TensorStorageError> {
         self.storage.materialize(self.indices.len())
     }
@@ -2503,7 +3044,8 @@ impl TensorDynLen {
     /// # Errors
     ///
     /// Returns an error when an eager backend payload cannot be converted to
-    /// compact storage or when a deferred eager operation failed.
+    /// compact storage, when its dtype is `f32`/`c32` (compact storage supports
+    /// only `f64`/`c64`), or when a deferred eager operation failed.
     ///
     /// # Examples
     ///
@@ -2520,6 +3062,28 @@ impl TensorDynLen {
     /// ```
     pub fn storage(&self) -> std::result::Result<Arc<Storage>, TensorStorageError> {
         self.storage.materialize(self.indices.len())
+    }
+
+    /// Return the logical storage layout without materializing compact storage.
+    ///
+    /// For `f32` and `c32`, the eager representation is authoritative because
+    /// compact [`Storage`] supports only `f64` and `c64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::StorageKind;
+    ///
+    /// let tensor = TensorDynLen::from_diag(
+    ///     vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)],
+    ///     vec![1.0_f32, 2.0],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.storage_kind(), StorageKind::Diagonal);
+    /// ```
+    pub fn storage_kind(&self) -> StorageKind {
+        self.storage.storage_kind()
     }
 
     /// Sum all elements, returning `AnyScalar`.
@@ -3170,6 +3734,8 @@ impl TensorDynLen {
             && self.storage.payload_strides_vec() == other_aligned.storage.payload_strides_vec()
             && self.storage.axis_classes() == other_aligned.storage.axis_classes();
         if same_compact_layout
+            && matches!(&self.storage, TensorDynLenStorage::Materialized(_))
+            && matches!(&other_aligned.storage, TensorDynLenStorage::Materialized(_))
             && !self.tracks_grad()
             && !other_aligned.tracks_grad()
             && !a.tracks_grad()
@@ -3191,6 +3757,22 @@ impl TensorDynLen {
 
         let self_native = self.as_native()?;
         let other_native = other_aligned.as_native()?;
+        if self_native.dtype() == other_native.dtype()
+            && matches!(self_native.dtype(), DType::F32 | DType::C32)
+        {
+            let lhs = self.scale(a)?;
+            let rhs = other_aligned.scale(b)?;
+            let combined = lhs
+                .try_materialized_inner()?
+                .add(rhs.try_materialized_inner()?)
+                .map_err(|e| anyhow::anyhow!("tensor addition failed: {e}"))?;
+            return Self::from_inner_with_axis_classes(
+                self.indices.clone(),
+                combined,
+                axis_classes,
+            );
+        }
+
         let a_native = a.as_tensor()?.as_native()?;
         let b_native = b.as_tensor()?.as_native()?;
         if self_native.dtype() != other_native.dtype()
@@ -3234,13 +3816,52 @@ impl TensorDynLen {
     /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        if !self.tracks_grad() && !scalar.tracks_grad() {
+        if matches!(&self.storage, TensorDynLenStorage::Materialized(_))
+            && !self.tracks_grad()
+            && !scalar.tracks_grad()
+        {
             let scaled = self.storage.scale(&scalar.to_backend_scalar())?;
             return Self::from_storage(self.indices.clone(), Arc::new(scaled));
         }
 
         let self_native = self.as_native()?;
         let scalar_native = scalar.as_tensor()?.as_native()?;
+        if matches!(self_native.dtype(), DType::F32 | DType::C32)
+            && self_native.dtype() != scalar_native.dtype()
+        {
+            let target_dtype = match (self_native.dtype(), scalar_native.dtype()) {
+                (DType::F32, DType::F64) => DType::F32,
+                (DType::F32, DType::C32 | DType::C64) => DType::C32,
+                (DType::C32, DType::F32 | DType::F64 | DType::C32 | DType::C64) => DType::C32,
+                (dtype, _) => dtype,
+            };
+            let self_inner = self.try_materialized_inner()?;
+            let self_inner = if self_inner.data().dtype() == target_dtype {
+                self_inner.clone()
+            } else {
+                self_inner.convert(target_dtype)?
+            };
+            let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
+            let scalar_inner = if scalar_inner.data().dtype() == target_dtype {
+                scalar_inner.clone()
+            } else {
+                scalar_inner.convert(target_dtype)?
+            };
+            let scaled = if self.indices.is_empty() {
+                self_inner
+                    .mul(&scalar_inner)
+                    .map_err(|e| anyhow::anyhow!("scalar multiplication failed: {e}"))?
+            } else {
+                let subscripts = Self::scale_subscripts(self.indices.len())?;
+                eager_einsum_ad(&[&self_inner, &scalar_inner], &subscripts)
+                    .map_err(|e| anyhow::anyhow!("tensor scaling failed: {e}"))?
+            };
+            return Self::from_inner_with_axis_classes(
+                self.indices.clone(),
+                scaled,
+                self.storage.axis_classes().to_vec(),
+            );
+        }
         if self_native.dtype() != scalar_native.dtype() {
             let scaled = scale_native_tensor(self_native, &scalar.to_backend_scalar())?;
             return Self::from_native_with_axis_classes(
@@ -3577,7 +4198,9 @@ impl TensorDynLen {
     /// For complex tensors: sum of |z|² = z * conj(z) for all elements.
     ///
     /// # Errors
-    /// Returns an error if conjugation, contraction, or scalar extraction fails.
+    /// Returns [`TensorDynLenError`] when storage/materialization, contraction,
+    /// or scalar extraction fails, or when the input produces NaN. Finite tiny
+    /// negative roundoff is clamped to zero; positive infinity is preserved.
     ///
     /// # Example
     /// ```
@@ -3591,28 +4214,46 @@ impl TensorDynLen {
     ///
     /// assert!((tensor.norm_squared().unwrap() - 91.0).abs() < 1e-10);
     /// ```
-    pub fn norm_squared(&self) -> Result<f64> {
-        // Special case: scalar tensor (no indices)
-        if self.indices.is_empty() {
-            // For a scalar, ||T||² = |value|²
-            let value = self.sum()?;
-            let abs_val = value.abs();
-            return Ok(abs_val * abs_val);
+    pub fn norm_squared(&self) -> std::result::Result<f64, TensorDynLenError> {
+        let dtype = self
+            .scalar_dtype()
+            .map_err(TensorDynLenError::scalar_extraction)?;
+        if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+            return Err(TensorDynLenError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: Self::dtype_name(dtype).to_string(),
+            });
         }
-
-        // Contract tensor with its conjugate over all indices → scalar
-        // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
-        let conj = self.conj();
-        let scalar = super::contract::contract_pair(self, &conj)?;
-        // The mathematical result is nonnegative and real. Clamp tiny negative
-        // roundoff so downstream `sqrt` stays well-defined for complex tensors.
-        Ok(scalar.sum()?.real().max(0.0))
+        let value = if self.indices.is_empty() {
+            let scalar = self.sum().map_err(TensorDynLenError::scalar_extraction)?;
+            let value = scalar.abs();
+            value * value
+        } else {
+            let conj = self.conj();
+            let scalar = super::contract::contract_pair(self, &conj)
+                .map_err(TensorDynLenError::materialization)?
+                .sum()
+                .map_err(TensorDynLenError::scalar_extraction)?;
+            if scalar.real().is_nan() || scalar.imag().is_nan() {
+                return Err(TensorDynLenError::NaNInput {
+                    operation: "norm_squared",
+                });
+            }
+            scalar.real()
+        };
+        if value.is_nan() {
+            return Err(TensorDynLenError::NaNInput {
+                operation: "norm_squared",
+            });
+        }
+        Ok(value.max(0.0))
     }
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
     ///
     /// # Errors
-    /// Returns an error if norm evaluation fails.
+    /// Returns [`TensorDynLenError`] when norm evaluation fails or when the
+    /// input contains NaN. Positive infinity is preserved.
     ///
     /// # Example
     /// ```
@@ -3625,14 +4266,15 @@ impl TensorDynLen {
     ///
     /// assert!((tensor.norm().unwrap() - 5.0).abs() < 1e-10);
     /// ```
-    pub fn norm(&self) -> Result<f64> {
+    pub fn norm(&self) -> std::result::Result<f64, TensorDynLenError> {
         Ok(self.norm_squared()?.sqrt())
     }
 
     /// Maximum absolute value of all elements (L-infinity norm).
     ///
     /// # Errors
-    /// Returns an error if authoritative storage cannot be materialized.
+    /// Returns [`TensorDynLenError`] when authoritative storage or eager
+    /// materialization cannot be read, or when the input contains NaN.
     ///
     /// # Examples
     ///
@@ -3643,8 +4285,35 @@ impl TensorDynLen {
     /// let t = TensorDynLen::from_dense(vec![i], vec![-5.0, 1.0, 3.0, -2.0]).unwrap();
     /// assert!((t.maxabs().unwrap() - 5.0).abs() < 1e-12);
     /// ```
-    pub fn maxabs(&self) -> Result<f64> {
-        self.storage.max_abs()
+    pub fn maxabs(&self) -> std::result::Result<f64, TensorDynLenError> {
+        if let Some(error) = self.storage.deferred_error() {
+            return Err(TensorDynLenError::Storage {
+                source: error.clone(),
+            });
+        }
+        let dtype = self
+            .storage
+            .dtype()
+            .ok_or_else(|| TensorDynLenError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: "unknown".to_string(),
+            })?;
+        if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+            return Err(TensorDynLenError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: Self::dtype_name(dtype).to_string(),
+            });
+        }
+        let value = self
+            .storage
+            .max_abs()
+            .map_err(TensorDynLenError::materialization)?;
+        if value.is_nan() {
+            return Err(TensorDynLenError::NaNInput {
+                operation: "maxabs",
+            });
+        }
+        Ok(value)
     }
 
     /// Element-wise subtraction with index alignment.
@@ -3672,11 +4341,34 @@ impl TensorDynLen {
     /// max(||self||, ||other||))`.
     ///
     /// # Errors
-    /// Returns an error when subtraction or norm evaluation fails.
-    pub fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> Result<bool> {
-        let diff = self.sub(other)?;
+    /// Returns [`TensorDynLenError`] when tolerances are invalid, the index
+    /// spaces cannot be aligned, subtraction/materialization fails, or either
+    /// input contains NaN.
+    pub fn isapprox(
+        &self,
+        other: &Self,
+        atol: f64,
+        rtol: f64,
+    ) -> std::result::Result<bool, TensorDynLenError> {
+        for (name, value) in [("atol", atol), ("rtol", rtol)] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(TensorDynLenError::InvalidTolerance { name, value });
+            }
+        }
+        let self_set: HashSet<_> = self.indices.iter().collect();
+        let other_set: HashSet<_> = other.indices.iter().collect();
+        if self.indices.len() != other.indices.len() || self_set != other_set {
+            return Err(TensorDynLenError::ShapeMismatch {
+                operation: "isapprox subtraction",
+                expected: format!("indices {:?}", self.indices),
+                actual: format!("indices {:?}", other.indices),
+            });
+        }
+        let diff = self.sub(other).map_err(TensorDynLenError::subtraction)?;
         let diff_norm = diff.norm()?;
-        Ok(diff_norm <= atol.max(rtol * self.norm()?.max(other.norm()?)))
+        let self_norm = self.norm()?;
+        let other_norm = other.norm()?;
+        Ok(diff_norm <= atol.max(rtol * self_norm.max(other_norm)))
     }
 
     /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
@@ -3836,6 +4528,10 @@ impl TensorDynLen {
     /// # Arguments
     /// * `other` - The other tensor to compare with
     ///
+    /// # Errors
+    /// Returns [`TensorDynLenError`] when either norm contains NaN, or when
+    /// scaling and subtracting the tensors fails.
+    ///
     /// # Returns
     /// The relative distance as a f64 value.
     ///
@@ -3856,12 +4552,16 @@ impl TensorDynLen {
     ///
     /// assert!(tensor_a.distance(&tensor_b).unwrap() < 1e-10);  // Zero distance
     /// ```
-    pub fn distance(&self, other: &Self) -> Result<f64> {
+    pub fn distance(&self, other: &Self) -> std::result::Result<f64, TensorDynLenError> {
         let norm_self = self.norm()?;
 
         // Compute A - B = A + (-1) * B
-        let neg_other = other.scale(AnyScalar::new_real(-1.0))?;
-        let diff = self.add(&neg_other)?;
+        let neg_other = other
+            .scale(AnyScalar::new_real(-1.0))
+            .map_err(|error| TensorDynLenError::operation("distance", error))?;
+        let diff = self
+            .add(&neg_other)
+            .map_err(|error| TensorDynLenError::operation("distance", error))?;
         let norm_diff = diff.norm()?;
 
         if norm_self > 0.0 {
@@ -4094,12 +4794,23 @@ use crate::tensor_like::{
 };
 
 impl TensorVectorSpace for TensorDynLen {
-    fn norm_squared(&self) -> Result<f64> {
+    type Error = TensorDynLenError;
+
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         TensorDynLen::norm_squared(self)
     }
 
-    fn maxabs(&self) -> Result<f64> {
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
         TensorDynLen::maxabs(self)
+    }
+
+    fn isapprox(
+        &self,
+        other: &Self,
+        atol: f64,
+        rtol: f64,
+    ) -> std::result::Result<bool, Self::Error> {
+        TensorDynLen::isapprox(self, other, atol, rtol)
     }
 
     fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
@@ -4341,14 +5052,15 @@ impl TensorDynLen {
     /// It avoids direct access to `Storage` internals.
     ///
     /// # Type Parameters
-    /// * `T` - Scalar type (`f64` or `Complex64`)
+    /// * `T` - Scalar type (`f32`, `f64`, `Complex32`, or `Complex64`)
     ///
     /// # Arguments
     /// * `indices` - Vector of indices for the tensor
     /// * `data` - Tensor data in column-major order
     ///
-    /// # Panics
-    /// Panics if data length doesn't match the product of index dimensions.
+    /// # Errors
+    /// Returns an error if indices are duplicated, or if data length does not
+    /// match the checked product of index dimensions.
     ///
     /// # Example
     /// ```
@@ -4408,9 +5120,14 @@ impl TensorDynLen {
     /// that dimension. The resulting tensor has nonzero entries only on
     /// the multi-index diagonal (`T[i,i,...,i] = data[i]`).
     ///
-    /// The returned tensor preserves compact diagonal payload metadata; use
-    /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
-    /// representation.
+    /// The returned tensor preserves diagonal metadata; use
+    /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage_kind`] to inspect
+    /// that representation. `f32` and `Complex32` values remain eager and are
+    /// never promoted into compact `f64`/`Complex64` storage.
+    ///
+    /// # Errors
+    /// Returns an error if indices are duplicated, if no indices are supplied,
+    /// if dimensions differ, or if the diagonal payload length is incorrect.
     ///
     /// # Examples
     ///
@@ -4767,7 +5484,8 @@ impl TensorDynLen {
     /// Extract tensor data as a column-major `Vec<T>`.
     ///
     /// # Type Parameters
-    /// * `T` - The scalar element type (`f64` or `Complex64`).
+    /// * `T` - The scalar element type (`f32`, `f64`, `Complex32`, or
+    ///   `Complex64`).
     ///
     /// # Returns
     /// A vector of the tensor data in column-major order.
@@ -4776,7 +5494,7 @@ impl TensorDynLen {
     /// Returns an error if the tensor's scalar type does not match `T`, if a
     /// deferred eager operation failed, if authoritative storage cannot be
     /// materialized, or if the eager backend context cannot be initialized for
-    /// materialization.
+    /// materialization. Extraction preserves all four supported dtypes.
     ///
     /// # Example
     /// ```
@@ -4800,8 +5518,8 @@ impl TensorDynLen {
     /// storage is materialized into dense logical values.
     ///
     /// # Type Parameters
-    /// * `T` - The scalar element type to extract. Use `f64` for real tensors
-    ///   and `Complex64` for complex tensors.
+    /// * `T` - The scalar element type to extract: `f32`, `f64`, `Complex32`,
+    ///   or `Complex64`.
     ///
     /// # Returns
     /// The tensor's original indices and dense column-major flat data.
@@ -4852,7 +5570,7 @@ impl TensorDynLen {
         self.to_vec::<Complex64>()
     }
 
-    /// Check if the tensor has f64 storage.
+    /// Check if the tensor has `f64` storage.
     ///
     /// # Example
     /// ```
@@ -4865,7 +5583,44 @@ impl TensorDynLen {
     /// assert!(!tensor.is_complex());
     /// ```
     pub fn is_f64(&self) -> bool {
-        self.storage.is_f64()
+        self.storage.dtype() == Some(DType::F64)
+    }
+
+    /// Check if the tensor has `f32` storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![1.0_f32, 2.0],
+    /// )
+    /// .unwrap();
+    /// assert!(tensor.is_f32());
+    /// ```
+    pub fn is_f32(&self) -> bool {
+        self.storage.dtype() == Some(DType::F32)
+    }
+
+    /// Check if the tensor has complex-32 storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex32;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![Complex32::new(1.0, 0.0), Complex32::new(0.0, 1.0)],
+    /// )
+    /// .unwrap();
+    /// assert!(tensor.is_c32());
+    /// ```
+    pub fn is_c32(&self) -> bool {
+        self.storage.dtype() == Some(DType::C32)
     }
 
     /// Check if the tensor has complex-64 storage.

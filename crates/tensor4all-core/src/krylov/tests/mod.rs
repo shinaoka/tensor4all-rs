@@ -2,7 +2,7 @@ use super::*;
 use crate::defaults::tensordynlen::TensorDynLen;
 use crate::defaults::DynIndex;
 use crate::tensor_index::TensorIndex;
-use crate::TensorVectorSpace;
+use crate::{TensorVectorSpace, TensorVectorSpaceError};
 use num_complex::Complex64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -60,7 +60,9 @@ impl TensorIndex for PlainVector {
 }
 
 impl TensorVectorSpace for PlainVector {
-    fn norm_squared(&self) -> Result<f64> {
+    type Error = TensorVectorSpaceError;
+
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|x| x * x).sum())
     }
 
@@ -106,7 +108,7 @@ impl TensorVectorSpace for PlainVector {
         ))
     }
 
-    fn maxabs(&self) -> Result<f64> {
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|x| x.abs()).fold(0.0, f64::max))
     }
 }

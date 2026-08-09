@@ -2453,7 +2453,7 @@ where
         &lambda_v,
         AnyScalar::new_real(-1.0),
     )?;
-    residual.norm()
+    Ok(residual.norm()?)
 }
 
 fn finalize_hermitian_lanczos_result<T, F>(

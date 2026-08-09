@@ -38,17 +38,21 @@ rtol = sqrt(cutoff)
 |-------------|---------------|
 | `Index{Int}` | `Index<Id, NoSymmSpace>` |
 | `ITensor` | `TensorDynLen` |
-| `Dense` | `Storage::StructuredF64/C64` |
-| `Diag` | `Storage::StructuredF64/C64` (diagonal `axis_classes`) |
+| `Dense` | eager dense payload; `Storage` snapshot for `f64`/`Complex64` |
+| `Diag` | compact `Storage` for `f64`/`Complex64`, eager diagonal payload for `f32`/`Complex32` |
 | `A * B` | `a.contract(&b)` |
 
 ## Scalar Types
 
-tensor4all-rs supports two scalar types:
+`TensorDynLen` supports four scalar types:
 
+- `f32` — single-precision real
 - `f64` — double-precision real
+- `Complex32` — single-precision complex
 - `Complex64` — double-precision complex (from the `num-complex` crate)
 
-Generic APIs handle both types. Prefer writing generic code over scalar-specific variants (`*_f64`
-/ `*_c64`) in library and test code. The C API uses scalar-specific names at the FFI boundary
-where generic dispatch is not available.
+Generic APIs handle all four types. Compact `Storage` snapshots are limited to
+`f64`/`Complex64`; 32-bit tensors retain eager payloads rather than silently
+promoting their values. Prefer generic code over scalar-specific variants
+(`*_f64` / `*_c64`) in library and test code. The C API uses scalar-specific
+names at the FFI boundary where generic dispatch is not available.

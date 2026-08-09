@@ -1467,7 +1467,8 @@ impl Storage {
     /// Maximum absolute value over all stored elements.
     ///
     /// For real storage this is `max(|x|)`, and for complex storage this is
-    /// `max(norm(z))`.
+    /// `max(norm(z))`. NaN payloads propagate to a NaN result; positive
+    /// infinity is preserved.
     ///
     /// # Examples
     ///
@@ -1478,9 +1479,19 @@ impl Storage {
     /// assert!((s.max_abs() - 3.0).abs() < 1e-10);
     /// ```
     pub fn max_abs(&self) -> f64 {
+        fn fold_nan_propagating(values: impl IntoIterator<Item = f64>) -> f64 {
+            values.into_iter().fold(0.0_f64, |current, value| {
+                if current.is_nan() || value.is_nan() {
+                    f64::NAN
+                } else {
+                    current.max(value)
+                }
+            })
+        }
+
         match &self.0 {
-            StorageRepr::F64(v) => v.data().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
-            StorageRepr::C64(v) => v.data().iter().map(|z| z.norm()).fold(0.0_f64, f64::max),
+            StorageRepr::F64(v) => fold_nan_propagating(v.data().iter().map(|x| x.abs())),
+            StorageRepr::C64(v) => fold_nan_propagating(v.data().iter().map(|z| z.norm())),
         }
     }
 

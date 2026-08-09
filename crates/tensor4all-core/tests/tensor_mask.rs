@@ -1,4 +1,12 @@
+use num_traits::Zero;
 use tensor4all_core::{DynIndex, TensorDynLen};
+
+fn compact_expected<T: Copy + Zero>(value: T) -> Vec<T> {
+    let mut expected = vec![T::zero(); 12];
+    expected[2] = value;
+    expected[9] = value;
+    expected
+}
 
 #[test]
 fn mask_index_preserves_values_indices_and_reverse_mode_graph() {
@@ -121,4 +129,134 @@ assert_mask_index_dtype_and_grad!(
         num_complex::Complex64::new(1.0, 0.0),
     ],
     num_complex::Complex32
+);
+
+macro_rules! assert_structured_mask_index_dtype_and_grad {
+    ($name:ident, $ty:ty, $values:expr, $expected:expr, $expected_gradient:expr) => {
+        #[test]
+        fn $name() {
+            let i = DynIndex::new_dyn(2);
+            let j = DynIndex::new_dyn(2);
+            let source = TensorDynLen::from_diag(vec![i.clone(), j], $values)
+                .unwrap()
+                .enable_grad()
+                .unwrap();
+            let masked = source.mask_index(&i, 1).unwrap();
+            assert_eq!(masked.to_vec::<$ty>().unwrap(), $expected);
+            assert!(masked.tracks_grad());
+
+            masked.sum().unwrap().backward().unwrap();
+            let gradient = source.grad().unwrap().unwrap().to_vec::<$ty>().unwrap();
+            assert_eq!(gradient, $expected_gradient);
+        }
+    };
+}
+
+assert_structured_mask_index_dtype_and_grad!(
+    mask_index_preserves_structured_f32_gradient,
+    f32,
+    vec![1.0_f32, 2.0_f32],
+    vec![0.0_f32, 0.0, 0.0, 2.0],
+    vec![0.0_f32, 0.0, 0.0, 1.0]
+);
+assert_structured_mask_index_dtype_and_grad!(
+    mask_index_preserves_structured_f64_gradient,
+    f64,
+    vec![1.0_f64, 2.0_f64],
+    vec![0.0_f64, 0.0, 0.0, 2.0],
+    vec![0.0_f64, 0.0, 0.0, 1.0]
+);
+assert_structured_mask_index_dtype_and_grad!(
+    mask_index_preserves_structured_c32_gradient,
+    num_complex::Complex32,
+    vec![
+        num_complex::Complex32::new(1.0, 0.5),
+        num_complex::Complex32::new(2.0, -0.25),
+    ],
+    vec![
+        num_complex::Complex32::new(0.0, 0.0),
+        num_complex::Complex32::new(0.0, 0.0),
+        num_complex::Complex32::new(0.0, 0.0),
+        num_complex::Complex32::new(2.0, -0.25),
+    ],
+    vec![
+        num_complex::Complex32::new(0.0, 0.0),
+        num_complex::Complex32::new(0.0, 0.0),
+        num_complex::Complex32::new(0.0, 0.0),
+        num_complex::Complex32::new(1.0, 0.0),
+    ]
+);
+assert_structured_mask_index_dtype_and_grad!(
+    mask_index_preserves_structured_c64_gradient,
+    num_complex::Complex64,
+    vec![
+        num_complex::Complex64::new(1.0, 0.5),
+        num_complex::Complex64::new(2.0, -0.25),
+    ],
+    vec![
+        num_complex::Complex64::new(0.0, 0.0),
+        num_complex::Complex64::new(0.0, 0.0),
+        num_complex::Complex64::new(0.0, 0.0),
+        num_complex::Complex64::new(2.0, -0.25),
+    ],
+    vec![
+        num_complex::Complex64::new(0.0, 0.0),
+        num_complex::Complex64::new(0.0, 0.0),
+        num_complex::Complex64::new(0.0, 0.0),
+        num_complex::Complex64::new(1.0, 0.0),
+    ]
+);
+
+macro_rules! assert_compact_mask_index_dtype_and_grad {
+    ($name:ident, $ty:ty, $scale:expr, $expected:expr, $expected_gradient:expr) => {
+        #[test]
+        fn $name() {
+            let left = DynIndex::new_dyn(2);
+            let site = DynIndex::new_dyn(3);
+            let right = DynIndex::new_dyn(2);
+            let source =
+                TensorDynLen::from_copy_selector(left.clone(), site.clone(), right, 1, $scale)
+                    .unwrap()
+                    .enable_grad()
+                    .unwrap();
+            let masked = source.mask_index(&site, 1).unwrap();
+            assert_eq!(masked.to_vec::<$ty>().unwrap(), $expected);
+            assert!(masked.tracks_grad());
+
+            masked.sum().unwrap().backward().unwrap();
+            assert_eq!(
+                source.grad().unwrap().unwrap().to_vec::<$ty>().unwrap(),
+                $expected_gradient,
+            );
+        }
+    };
+}
+
+assert_compact_mask_index_dtype_and_grad!(
+    mask_index_preserves_compact_f32_gradient,
+    f32,
+    2.0_f32,
+    compact_expected(2.0_f32),
+    compact_expected(1.0_f32)
+);
+assert_compact_mask_index_dtype_and_grad!(
+    mask_index_preserves_compact_f64_gradient,
+    f64,
+    2.0_f64,
+    compact_expected(2.0_f64),
+    compact_expected(1.0_f64)
+);
+assert_compact_mask_index_dtype_and_grad!(
+    mask_index_preserves_compact_c32_gradient,
+    num_complex::Complex32,
+    num_complex::Complex32::new(2.0, -0.5),
+    compact_expected(num_complex::Complex32::new(2.0, -0.5)),
+    compact_expected(num_complex::Complex32::new(1.0, 0.0))
+);
+assert_compact_mask_index_dtype_and_grad!(
+    mask_index_preserves_compact_c64_gradient,
+    num_complex::Complex64,
+    num_complex::Complex64::new(2.0, -0.5),
+    compact_expected(num_complex::Complex64::new(2.0, -0.5)),
+    compact_expected(num_complex::Complex64::new(1.0, 0.0))
 );

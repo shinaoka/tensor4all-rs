@@ -77,7 +77,7 @@ pub use defaults::tensordynlen as tensor;
 pub use any_scalar::AnyScalar;
 pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, StructuredSelectorError,
-    TensorDynLen, TensorStorageError,
+    TensorDynLen, TensorDynLenError, TensorStorageError,
 };
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{
@@ -86,7 +86,7 @@ pub use tensor4all_tensorbackend::{
 pub use tensor_like::{
     Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
     LinearizationOrder, TensorConstructionLike, TensorContractionLike, TensorFactorizationLike,
-    TensorLike, TensorVectorSpace,
+    TensorLike, TensorVectorSpace, TensorVectorSpaceError,
 };
 
 pub use defaults::contract::{

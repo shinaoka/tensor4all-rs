@@ -33,10 +33,18 @@ where
     let tensor = TensorDynLen::from_diag(vec![i, j], data).unwrap();
     assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(tensor.is_diag());
-    assert_eq!(
-        tensor.storage().unwrap().storage_kind(),
-        StorageKind::Diagonal
-    );
+    assert_eq!(tensor.storage_kind(), StorageKind::Diagonal);
+    if tensor.is_f32() || tensor.is_c32() {
+        assert!(matches!(
+            tensor.storage(),
+            Err(TensorStorageError::UnsupportedDtype { .. })
+        ));
+    } else {
+        assert_eq!(
+            tensor.storage().unwrap().storage_kind(),
+            StorageKind::Diagonal
+        );
+    }
 }
 
 #[test]
