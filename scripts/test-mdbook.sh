@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+cargo_profile="${TENSOR4ALL_CARGO_PROFILE:-release}"
+
 probe_log="$(mktemp)"
 rustdoc_wrapper_dir="$(mktemp -d)"
 trap 'rm -f "$probe_log"; rm -rf "$rustdoc_wrapper_dir"' EXIT
@@ -11,7 +13,7 @@ trap 'rm -f "$probe_log"; rm -rf "$rustdoc_wrapper_dir"' EXIT
 # Force a fresh book-tests rustc invocation so cargo prints the exact --extern
 # paths that its doctest harness resolves for the guide snippets.
 probe_metadata="mdbook_probe_$(date +%s%N)"
-cargo rustc -p book-tests --release --lib -vv -- -Cmetadata="$probe_metadata" >"$probe_log" 2>&1
+cargo rustc -p book-tests --profile "$cargo_profile" --lib -vv -- -Cmetadata="$probe_metadata" >"$probe_log" 2>&1
 
 rustc_line="$(grep -- '--crate-name book_tests' "$probe_log" | tail -n 1 || true)"
 if [[ -z "$rustc_line" ]]; then
@@ -48,4 +50,4 @@ real_rustdoc="$(rustup which rustdoc)"
 } > "$rustdoc_wrapper_dir/rustdoc"
 chmod +x "$rustdoc_wrapper_dir/rustdoc"
 
-PATH="$rustdoc_wrapper_dir:$PATH" mdbook test docs/book -L "$repo_root/target/release/deps" "$@"
+PATH="$rustdoc_wrapper_dir:$PATH" mdbook test docs/book -L "$repo_root/target/$cargo_profile/deps" "$@"

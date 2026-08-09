@@ -39,11 +39,35 @@ Set `RUST_BACKTRACE=1` or `full` when running the Tensor4all.jl/C API caller. Ke
 
 One-command dev/test debugger overrides remain available through `CARGO_PROFILE_DEV_DEBUG=2` and `CARGO_PROFILE_TEST_DEBUG=2`.
 
+Comprehensive CI uses release optimization without retaining incremental state
+or linker symbols:
+
+```toml
+[profile.ci]
+inherits = "release"
+incremental = false
+strip = "symbols"
+```
+
+Run release-equivalent CI tests locally with `cargo test --profile ci` or
+`cargo nextest run --cargo-profile ci`. Coverage remains on its
+instrumentation-owned profile and does not use `ci`.
+
 ## Rationale
 
 The repository normally runs tests, documentation examples, tutorials, and benchmarks in release mode. Full debuginfo or line tables are therefore multiplied across many independently linked test and example executables. A controlled full-workspace measurement found that changing ordinary release from line tables to `debug = 0` reduced allocated target output from 14,759,100,416 to 3,354,374,144 bytes (77.27%); see `docs/worklogs/2026-08-09-release-debug-info-reduction.md`.
 
 Most development does not debug Rust through Tensor4all.jl or the C API and does not benefit from this metadata. The named profile preserves the diagnostic capability without imposing its storage cost on every release build.
+
+## Artifact cleanup
+
+Profile changes prevent new oversized outputs but do not delete artifacts from
+older dependency revisions, feature sets, or profile settings. Inspect the
+workspace target with `du -sh target`. When stale output dominates and a cold
+rebuild is acceptable, remove only the relevant profile with, for example,
+`cargo clean --profile release`; use `cargo clean` when all historical variants
+should be discarded. Persistent self-hosted targets should be cleaned
+periodically based on available disk space rather than on every CI run.
 
 ## Compatibility and non-goals
 

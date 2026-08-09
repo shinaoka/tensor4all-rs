@@ -17,10 +17,6 @@ jobs:
     name: CI (fork PR / github-hosted)
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-22.04
-    env:
-      # CI release tests don't need DWARF debug info, and disabling it keeps
-      # target artifacts small enough to avoid runner disk exhaustion on cache misses.
-      CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
       - uses: actions/checkout@v6
 
@@ -37,10 +33,19 @@ jobs:
       # tensor4all-hdf5 is kept out of nextest because its dlopen-based tests
       # fail under nextest's per-process execution model.
       - name: Run tests (non-HDF5)
-        run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
+        run: cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
 
       - name: Run HDF5 tests
-        run: cargo test --release -p tensor4all-hdf5
+        run: cargo test --profile ci -p tensor4all-hdf5
+
+      - name: Report Cargo artifact size
+        if: always()
+        run: |
+          if [[ -d target ]]; then
+            du -sh target
+          else
+            echo "target directory was not created"
+          fi
 
   # PRs from the same repository: run heavy CI on self-hosted runner
   ci-maintainer:
@@ -50,7 +55,6 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../target
-      CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -65,7 +69,16 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       - name: Run tests (non-HDF5)
-        run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
+        run: cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
 
       - name: Run HDF5 tests
-        run: cargo test --release -p tensor4all-hdf5
+        run: cargo test --profile ci -p tensor4all-hdf5
+
+      - name: Report Cargo artifact size
+        if: always()
+        run: |
+          if [[ -d "$CARGO_TARGET_DIR" ]]; then
+            du -sh "$CARGO_TARGET_DIR"
+          else
+            echo "target directory was not created"
+          fi
