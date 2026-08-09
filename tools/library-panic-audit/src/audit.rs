@@ -664,8 +664,27 @@ fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)
 
 #[derive(Debug, Default)]
 struct ParsedDepInfo {
+    rules: Vec<MakeRule>,
+}
+
+/// A single Make rule: outputs are associated only with the sources on the
+/// same rule line. Stale or synthesized dep-infos may split an artifact
+/// output from its real dependencies across rules, so sources are resolved
+/// per rule against the artifact output and never flattened.
+#[derive(Debug, Default)]
+struct MakeRule {
     outputs: BTreeSet<PathBuf>,
     sources: BTreeSet<PathBuf>,
+}
+
+#[cfg(test)]
+impl ParsedDepInfo {
+    fn all_sources(&self) -> BTreeSet<PathBuf> {
+        self.rules
+            .iter()
+            .flat_map(|rule| rule.sources.iter().cloned())
+            .collect()
+    }
 }
 
 fn dep_info_sources(
@@ -681,16 +700,16 @@ fn dep_info_sources(
         }
         let dep_infos = locate_dep_infos(root, artifact)?;
         let mut artifact_sources = BTreeSet::new();
-        for (dep_info, parsed) in dep_infos {
-            if parsed.sources.is_empty() {
+        for (dep_info, rule_sources) in dep_infos {
+            if rule_sources.is_empty() {
                 bail!(
-                    "dep-info {} contained no workspace-local Rust sources for {}:{}",
+                    "dep-info {} contained no workspace-local Rust sources for the artifact output {}:{}",
                     dep_info.display(),
                     artifact.key.target_name,
                     artifact.key.kind
                 );
             }
-            artifact_sources.extend(parsed.sources);
+            artifact_sources.extend(rule_sources);
         }
         if let Some(src_path) = artifact_source_path(root, artifact)? {
             if !artifact_sources.contains(&src_path) {
@@ -745,7 +764,7 @@ fn artifact_source_path(root: &Path, artifact: &CompilerArtifact) -> Result<Opti
 fn locate_dep_infos(
     root: &Path,
     artifact: &CompilerArtifact,
-) -> Result<Vec<(PathBuf, ParsedDepInfo)>> {
+) -> Result<Vec<(PathBuf, BTreeSet<PathBuf>)>> {
     let expected_outputs = artifact
         .filenames
         .iter()
@@ -773,12 +792,23 @@ fn locate_dep_infos(
             )
         })?;
         let parsed = parse_make_dep_info(&canonical, root)?;
-        if parsed
-            .outputs
-            .iter()
-            .any(|output| expected_outputs.contains(output))
-        {
-            matching.push((canonical, parsed));
+        // Only sources listed on rules whose outputs include an artifact
+        // output belong to this artifact; an unrelated rule must never
+        // satisfy the artifact's source validation.
+        let mut rule_sources = BTreeSet::new();
+        let mut matched = false;
+        for rule in &parsed.rules {
+            if rule
+                .outputs
+                .iter()
+                .any(|output| expected_outputs.contains(output))
+            {
+                matched = true;
+                rule_sources.extend(rule.sources.iter().cloned());
+            }
+        }
+        if matched {
+            matching.push((canonical, rule_sources));
         }
     }
     if matching.is_empty() {
@@ -860,11 +890,11 @@ fn parse_make_dep_info(path: &Path, root: &Path) -> Result<ParsedDepInfo> {
             )
         })?;
         saw_rule = true;
+        let mut rule = MakeRule::default();
         for output in parse_make_words(&line[..separator]).with_context(|| {
             format!("dep-info line {} has invalid Make outputs", line_number + 1)
         })? {
-            parsed
-                .outputs
+            rule.outputs
                 .insert(normalize_path(root, Path::new(&output)));
         }
         for dependency in parse_make_words(&line[separator + 1..]).with_context(|| {
@@ -899,9 +929,10 @@ fn parse_make_dep_info(path: &Path, root: &Path) -> Result<ParsedDepInfo> {
                 Err(_) => continue,
             };
             if canonical.starts_with(root) && canonical.is_file() {
-                parsed.sources.insert(canonical);
+                rule.sources.insert(canonical);
             }
         }
+        parsed.rules.push(rule);
     }
     if !saw_rule {
         bail!("dep-info contained no Make rules: {}", path.display());
@@ -1156,12 +1187,63 @@ fn scan_macro_rules(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Fin
         );
         if arrow {
             if let Some(TokenTree::Group(transcriber)) = tokens.get(index + 2) {
-                scan_assertion_tokens(path, transcriber.stream(), findings);
+                scan_macro_transcriber(path, transcriber.stream(), findings);
                 index += 3;
                 continue;
             }
         }
         index += 1;
+    }
+}
+
+/// Scan a `macro_rules!` transcriber for actual assertion invocations while
+/// recognizing nested `macro_rules!` definitions: a nested name in matcher
+/// position is a pattern, not a call, so only the nested rules' transcribers
+/// are scanned.
+fn scan_macro_transcriber(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Finding>) {
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < tokens.len() {
+        match &tokens[index] {
+            TokenTree::Ident(ident) if ident == "macro_rules" => {
+                if let (
+                    Some(TokenTree::Punct(bang)),
+                    Some(TokenTree::Ident(_)),
+                    Some(TokenTree::Group(body)),
+                ) = (
+                    tokens.get(index + 1),
+                    tokens.get(index + 2),
+                    tokens.get(index + 3),
+                ) {
+                    if bang.as_char() == '!' {
+                        scan_macro_rules(path, body.stream(), findings);
+                        index += 4;
+                        continue;
+                    }
+                }
+                index += 1;
+            }
+            TokenTree::Group(group) => {
+                scan_macro_transcriber(path, group.stream(), findings);
+                index += 1;
+            }
+            TokenTree::Ident(ident) => {
+                let metavariable = matches!(
+                    tokens.get(index.wrapping_sub(1)),
+                    Some(TokenTree::Punct(p)) if p.as_char() == '$'
+                );
+                if !metavariable {
+                    if let Some(kind) = assertion_kind(&ident.to_string()) {
+                        if matches!(tokens.get(index + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+                        {
+                            record_assertion(path, ident.span().start().line, kind, findings);
+                        }
+                    }
+                }
+                index += 1;
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => index += 1,
+        }
     }
 }
 
@@ -1837,9 +1919,10 @@ mod tests {
         )
         .expect("write dep-info");
         let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
-        assert_eq!(parsed.sources.len(), 3);
-        assert!(parsed.sources.contains(&fs::canonicalize(spaced).unwrap()));
-        assert!(parsed.sources.contains(&fs::canonicalize(hashed).unwrap()));
+        let sources = parsed.all_sources();
+        assert_eq!(sources.len(), 3);
+        assert!(sources.contains(&fs::canonicalize(spaced).unwrap()));
+        assert!(sources.contains(&fs::canonicalize(hashed).unwrap()));
     }
 
     #[test]
@@ -1860,9 +1943,10 @@ mod tests {
         )
         .expect("write rustc-style dep-info");
         let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
-        assert!(parsed.sources.contains(&fs::canonicalize(dollar).unwrap()));
-        assert!(parsed.sources.contains(&fs::canonicalize(colon).unwrap()));
-        assert!(parsed.sources.contains(&fs::canonicalize(hashed).unwrap()));
+        let sources = parsed.all_sources();
+        assert!(sources.contains(&fs::canonicalize(dollar).unwrap()));
+        assert!(sources.contains(&fs::canonicalize(colon).unwrap()));
+        assert!(sources.contains(&fs::canonicalize(hashed).unwrap()));
     }
 
     #[test]
@@ -1881,7 +1965,7 @@ mod tests {
 
         let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
         assert_eq!(
-            parsed.sources,
+            parsed.all_sources(),
             BTreeSet::from([
                 fs::canonicalize(first).unwrap(),
                 fs::canonicalize(second).unwrap(),
@@ -1941,6 +2025,39 @@ mod tests {
             .expect("select matching dep-info");
         assert!(sources.contains(&fs::canonicalize(valid_source).unwrap()));
         assert!(!sources.contains(&fs::canonicalize(stale_source).unwrap()));
+    }
+
+    #[test]
+    fn dep_info_rejects_artifact_output_without_its_own_sources() {
+        // The rule whose output matches the artifact carries no sources, and
+        // the real origins live only on an unrelated self-rule. The unrelated
+        // rule must not satisfy the artifact's source validation.
+        let root = TempRoot::new();
+        let unrelated = root.path.join("crates/demo/src/unrelated.rs");
+        fs::write(&unrelated, "pub fn unrelated() {}\n").expect("write unrelated source");
+        let deps = root.path.join("target/debug/deps");
+        fs::create_dir_all(&deps).expect("create target deps");
+        fs::write(
+            deps.join("libdemo-hash.d"),
+            "target/debug/deps/libdemo-hash.rlib:\ntarget/debug/deps/demo-hash.d: crates/demo/src/unrelated.rs\n",
+        )
+        .expect("write flattened dep-info");
+        let key = TargetKey {
+            package_id: "pkg".to_owned(),
+            target_name: "demo".to_owned(),
+            kind: "rlib".to_owned(),
+        };
+        let artifacts = vec![CompilerArtifact {
+            key: key.clone(),
+            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-hash.rlib")]),
+            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/lib.rs"}),
+            profile: json!({"opt_level": "0"}),
+        }];
+        let error = dep_info_sources(&root.path, &artifacts, &HashSet::from([key]))
+            .expect_err("artifact rule with no sources must fail closed");
+        assert!(error
+            .to_string()
+            .contains("contained no workspace-local Rust sources"));
     }
 
     #[test]
@@ -2070,6 +2187,14 @@ macro_rules! transcriber {
 }
 macro_rules! passthrough { ($value:expr) => { $value }; }
 pub fn public() { passthrough!(assert!(true)); }
+macro_rules! nested_outer {
+    () => {
+        macro_rules! nested_inner {
+            (assert!($value:expr)) => { assert!($value); };
+        }
+    };
+}
+pub fn nested_use() { assert!(true); }
 "#;
         fs::write(&parsed, source).expect("write parsed source");
         fs::write(&fragment, "let value = assert!(true);\n").expect("write included fragment");
@@ -2088,6 +2213,8 @@ pub fn public() { passthrough!(assert!(true)); }
             vec![
                 "crates/demo/src/lib.rs:7:assert",
                 "crates/demo/src/lib.rs:11:assert",
+                "crates/demo/src/lib.rs:15:assert",
+                "crates/demo/src/lib.rs:19:assert",
             ]
         );
         assert!(findings

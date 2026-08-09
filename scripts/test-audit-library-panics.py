@@ -247,6 +247,15 @@ macro_rules! passthrough_assertion {
 pub fn macro_assertions() {
     passthrough_assertion!(assert!(true));
 }
+macro_rules! nested_outer {
+    () => {
+        macro_rules! nested_inner {
+            (assert!($value:expr)) => {};
+            (_unused:expr) => { assert!(true); };
+        }
+    };
+}
+pub fn nested_macro_use() { assert!(true); }
 '''
 FIXTURE_FILE_LEVEL_TEST = '''#![cfg(test)]
 pub fn file_level_test_only() {
@@ -359,7 +368,7 @@ def test_dep_info_selects_each_production_source_once() -> None:
 
     assert result.returncode == 1, result.stderr
     assert result.stderr.splitlines() == [
-        "Audit failed: 13 unbaselined findings, 0 stale baseline entries."
+        "Audit failed: 15 unbaselined findings, 0 stale baseline entries."
     ]
     findings = result.stdout.splitlines()
     assert findings[: len(baseline)] == [
@@ -379,6 +388,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"all-features production\");')}:panic",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        assert!(true);')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert",
+        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '            (_unused:expr) => { assert!(true); };')}:assert",
+        f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'pub fn nested_macro_use() { assert!(true); }')}:assert",
         f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, '    std::panic!(\"production binary\");')}:panic",
     ]
     assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :]} >= {
@@ -402,6 +413,9 @@ def test_macro_assertion_arguments_and_transcribers_are_reported() -> None:
     assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert" in result.stdout
     assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    (assert!($($argument:tt)*)) => { () };')}:assert" not in result.stdout
     assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        $assert!();')}:assert" not in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '            (assert!($value:expr)) => {};')}:assert" not in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '            (_unused:expr) => { assert!(true); };')}:assert" in result.stdout
+    assert f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'pub fn nested_macro_use() { assert!(true); }')}:assert" in result.stdout
 
 
 def test_unknown_cfg_assertion_is_included_conservatively() -> None:
