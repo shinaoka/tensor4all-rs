@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "audit-library-panics.py"
+TOOL_ENV = "TENSOR4ALL_LIBRARY_PANIC_AUDIT"
+TOOL_PACKAGE = "library-panic-audit"
+
+
+def _build_tool_once() -> None:
+    configured = os.environ.get(TOOL_ENV)
+    if configured and Path(configured).is_file():
+        return
+    result = subprocess.run(
+        ["cargo", "build", "--release", "-p", TOOL_PACKAGE],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    tool = ROOT / "target" / "release" / TOOL_PACKAGE
+    assert tool.is_file(), tool
+    os.environ[TOOL_ENV] = str(tool)
 
 
 def _write_fixture(root: Path, files: dict[str, str]) -> None:
@@ -63,6 +84,22 @@ def assert_exact_output(
     actual_stderr = result.stderr.splitlines()
     assert actual_stdout == stdout, f"stdout differs:\nexpected {stdout!r}\nactual {actual_stdout!r}"
     assert actual_stderr == expected_stderr, f"stderr differs:\nexpected {expected_stderr!r}\nactual {actual_stderr!r}"
+
+
+def test_wrong_root_fails_closed() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.startswith("library panic audit configuration error:")
+
+
+def test_parse_failure_fails_closed() -> None:
+    result = run_audit({"crates/demo/src/lib.rs": "pub fn broken( {\n"})
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "cannot parse Rust source" in result.stderr
 
 
 def test_production_hit_fails_with_normalized_kind() -> None:
@@ -461,7 +498,7 @@ def test_source_names_and_checkout_ancestors_do_not_exclude_production_files() -
     )
 
 
-def test_outside_root_symlink_is_skipped_safely() -> None:
+def test_outside_root_symlink_is_rejected_safely() -> None:
     with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
         fixture = Path(directory)
         outside_source = Path(outside) / "outside.rs"
@@ -473,11 +510,9 @@ def test_outside_root_symlink_is_skipped_safely() -> None:
         except OSError as error:
             raise AssertionError(f"symlink fixture unavailable: {error}") from error
         result = run_audit_at_root(fixture)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert_exact_output(
-        result,
-        ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
-    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.startswith("library panic audit configuration error:")
 
 
 def test_in_root_symlink_is_canonicalized_and_reported_once() -> None:
@@ -807,8 +842,38 @@ def test_report_claims_include_exact_sorted_findings_matches_and_stale_entries()
     )
 
 
+def test_round3_ast_edges_are_not_lexically_approximated() -> None:
+    source = '''
+fn raw_ident(value: Option<bool>) {
+    let _ = value.r#unwrap();
+    let _ = Option::r#expect(value, "missing");
+    let _ = Option::<fn() -> bool>::unwrap(value);
+}
+pub fn const_generic<T: Bound<{ 1 < 2 }>>() {
+    assert!(true);
+}
+trait Bound<const N: usize> {}
+'''
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/lib.rs:3:unwrap",
+            "crates/demo/src/lib.rs:4:expect",
+            "crates/demo/src/lib.rs:5:unwrap",
+            "crates/demo/src/lib.rs:8:assert",
+        ],
+        ["Audit failed: 4 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
 def main() -> int:
+    _build_tool_once()
     tests = [
+        test_round3_ast_edges_are_not_lexically_approximated,
+        test_wrong_root_fails_closed,
+        test_parse_failure_fails_closed,
         test_production_hit_fails_with_normalized_kind,
         test_all_raw_panic_kinds_fail,
         test_structurally_test_only_modules_and_inline_items_are_excluded,
@@ -823,7 +888,7 @@ def main() -> int:
         test_production_reference_overrides_test_only_alias,
         test_cfg_test_macro_rules_range_is_excluded,
         test_source_names_and_checkout_ancestors_do_not_exclude_production_files,
-        test_outside_root_symlink_is_skipped_safely,
+        test_outside_root_symlink_is_rejected_safely,
         test_in_root_symlink_is_canonicalized_and_reported_once,
         test_large_fixture_stays_within_subprocess_timeout,
         test_public_trait_defaults_impls_and_signature_modifiers_are_public_paths,

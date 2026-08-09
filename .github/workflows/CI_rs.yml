@@ -90,6 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 
