@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Audit production Rust sources for library panic paths.
 
-The audit is lexical rather than a Rust parser.  Comments and literals are
-masked in one source-sized buffer, so every finding keeps its original source
-offset and line mapping while calls may span lines or comments.  Exact,
-normalized baseline entries may suppress reviewed public assertions, but never
-raw panic-style calls, and every baseline entry must still exist.
+The audit is lexical rather than a Rust parser. Comments and literals are
+masked in source-sized buffers, and the small amount of item structure needed
+for reachability and public-path classification comes from masked tokens.
+External modules are excluded only when they are reachable exclusively through
+``#[cfg(test)]`` module declarations; file names and directory names never
+change audit coverage.
+
+Trait implementation methods are conservatively treated as public paths. A
+trait can be declared in another file or crate, and resolving that visibility
+lexically is less safe than reporting an assertion in every trait impl method.
+Trait default methods are reported when their containing trait is public.
 """
 
 from __future__ import annotations
@@ -28,7 +34,11 @@ RAW_CALL_RE = re.compile(r"\b(panic|unreachable)\s*!\s*(?=[({\[])\s*")
 METHOD_RE = re.compile(r"\.\s*(unwrap|expect)\s*(?=\()")
 ASSERT_RE = re.compile(r"\b(assert|debug_assert)\s*!\s*(?=[({\[])\s*")
 ENTRY_RE = re.compile(rf"^(.+):([1-9][0-9]*):({ENTRY_KINDS})$")
-IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ITEM_KEYWORDS = frozenset(
+    {"mod", "fn", "const", "static", "struct", "enum", "trait", "impl", "macro_rules"}
+)
+UFCS_METHODS = frozenset({"unwrap", "expect"})
 
 
 @dataclass(frozen=True, order=True)
@@ -54,11 +64,72 @@ class Token:
 
 
 @dataclass(frozen=True)
+class Attribute:
+    """One source attribute and its masked representation."""
+
+    start: int
+    end: int
+    source: str
+    clean: str
+
+
+@dataclass(frozen=True)
 class CfgTestItem:
     """A source range selected by an exact ``#[cfg(test)]`` item."""
 
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class ModuleDecl:
+    """An external module declaration and its test-only condition."""
+
+    name: str
+    cfg_test: bool
+    path_attr: str | None
+
+
+@dataclass(frozen=True)
+class IntervalIndex:
+    """Merged source intervals queried in logarithmic time."""
+
+    starts: tuple[int, ...]
+    ends: tuple[int, ...]
+
+    @classmethod
+    def from_ranges(cls, ranges: Iterable[tuple[int, int]]) -> "IntervalIndex":
+        ordered = sorted((start, end) for start, end in ranges if start < end)
+        merged: list[list[int]] = []
+        for start, end in ordered:
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return cls(
+            tuple(start for start, _ in merged),
+            tuple(end for _, end in merged),
+        )
+
+    def contains(self, offset: int) -> bool:
+        index = bisect.bisect_right(self.starts, offset) - 1
+        return index >= 0 and offset < self.ends[index]
+
+
+@dataclass(frozen=True)
+class ParsedSource:
+    """Token and source metadata reused by all scans for one file."""
+
+    source: str
+    clean: str
+    tokens: tuple[Token, ...]
+    token_starts: tuple[int, ...]
+    pairs: dict[int, int]
+    enclosing_braces: tuple[int | None, ...]
+    brace_depth: tuple[int, ...]
+    attributes: tuple[Attribute, ...]
+    attribute_starts: tuple[int, ...]
+    cfg_ranges: tuple[tuple[int, int], ...]
 
 
 def _mask(chars: list[str], start: int, end: int) -> None:
@@ -95,9 +166,12 @@ def _char_literal_end(source: str, start: int) -> int | None:
     previous = source[start - 1] if start else ""
     if previous.isalnum() or previous in "_'":
         # ``b'x'`` is the one literal form whose quote is preceded by an
-        # identifier character.  A longer identifier followed by a quote is a
+        # identifier character. A longer identifier followed by a quote is a
         # lifetime/invalid source, not a byte character.
-        if previous != "b" or start < 2 or source[start - 2].isalnum() or source[start - 2] in "_'":
+        if previous != "b" or (
+            start >= 2
+            and (source[start - 2].isalnum() or source[start - 2] in "_'")
+        ):
             return None
 
     index = start + 1
@@ -196,23 +270,27 @@ def tokenize(clean: str) -> list[Token]:
             tokens.append(Token("::", index, index + 2))
             index += 2
             continue
-        if clean[index] in "{}()[]<>;:,.!?#+-*=/&|%^~@":
+        if clean[index] in "{}()[]<>;:,.!?#+-*=/&|%^~@$'":
             tokens.append(Token(clean[index], index, index + 1))
         index += 1
     return tokens
 
 
-def _brace_pairs(tokens: list[Token]) -> dict[int, int]:
+def _brace_structure(tokens: list[Token]) -> tuple[dict[int, int], list[int | None], list[int]]:
     stack: list[int] = []
     pairs: dict[int, int] = {}
+    enclosing: list[int | None] = []
+    depths: list[int] = []
     for index, token in enumerate(tokens):
+        enclosing.append(stack[-1] if stack else None)
+        depths.append(len(stack))
         if token.value == "{":
             stack.append(index)
         elif token.value == "}" and stack:
             opening = stack.pop()
             pairs[opening] = index
             pairs[index] = opening
-    return pairs
+    return pairs, enclosing, depths
 
 
 def _line_map(source: str) -> list[int]:
@@ -246,45 +324,83 @@ def _skip_attribute(clean: str, start: int) -> int | None:
     return len(clean)
 
 
-def _after_cfg_attributes(clean: str, source: str, cfg_end: int) -> tuple[int, str | None]:
-    """Skip following attributes and return item offset plus optional path."""
-    index = cfg_end
-    path: str | None = None
-    while True:
-        attribute_end = _skip_attribute(clean, index)
-        if attribute_end is None:
+def _find_attributes(source: str, clean: str) -> list[Attribute]:
+    attributes: list[Attribute] = []
+    search = 0
+    while search < len(clean):
+        start = clean.find("#", search)
+        if start < 0:
             break
-        attribute = source[index:attribute_end]
-        path_match = PATH_ATTR_RE.search(attribute)
-        if path_match:
-            path = path_match.group(1)
-        index = attribute_end
-    return index, path
+        end = _skip_attribute(clean, start)
+        if end is None:
+            search = start + 1
+            continue
+        attributes.append(Attribute(start, end, source[start:end], clean[start:end]))
+        search = end
+    return attributes
 
 
-def _next_token_index(tokens: list[Token], offset: int) -> int:
-    return bisect.bisect_left([token.start for token in tokens], offset)
+def _is_cfg_test_attribute(attribute: Attribute) -> bool:
+    return CFG_TEST_RE.fullmatch(attribute.clean.strip()) is not None
 
 
-def _item_body(tokens: list[Token], keyword_index: int, pairs: dict[int, int]) -> tuple[int, int | None] | None:
-    """Find an item body or semicolon after an item keyword."""
+def _attribute_block_bounds(
+    attributes: list[Attribute], clean: str
+) -> tuple[list[int], list[int]]:
+    """Precompute contiguous attribute-block bounds in one sweep."""
+    first = list(range(len(attributes)))
+    last = list(range(len(attributes)))
+    for index in range(1, len(attributes)):
+        if clean[attributes[index - 1].end : attributes[index].start].strip() == "":
+            first[index] = first[index - 1]
+    for index in range(len(attributes) - 2, -1, -1):
+        if clean[attributes[index].end : attributes[index + 1].start].strip() == "":
+            last[index] = last[index + 1]
+    return first, last
+
+
+def _attribute_index(attributes: list[Attribute]) -> IntervalIndex:
+    return IntervalIndex.from_ranges((attribute.start, attribute.end) for attribute in attributes)
+
+
+def _next_token_index(token_starts: tuple[int, ...] | list[int], offset: int) -> int:
+    return bisect.bisect_left(token_starts, offset)
+
+
+def _item_body(
+    tokens: list[Token], keyword_index: int, pairs: dict[int, int]
+) -> tuple[int, int | None] | None:
+    """Find an item body or semicolon after an item keyword.
+
+    Angle tokens are tracked alongside parentheses and brackets. This matters
+    for const-generic expressions such as ``Bound<{ 1 }>``, whose braces are
+    not the function or impl body. The same tracking keeps ``where`` clauses
+    from ending a range at a generic bound.
+    """
     paren = 0
     bracket = 0
+    angle = 0
     for index in range(keyword_index + 1, len(tokens)):
         value = tokens[index].value
-        if value == "(" or value == "[":
-            if value == "(":
-                paren += 1
-            else:
-                bracket += 1
+        if value == "(":
+            paren += 1
             continue
         if value == ")" and paren:
             paren -= 1
             continue
+        if value == "[":
+            bracket += 1
+            continue
         if value == "]" and bracket:
             bracket -= 1
             continue
-        if paren or bracket:
+        if value == "<" and not paren and not bracket:
+            angle += 1
+            continue
+        if value == ">" and angle and not paren and not bracket:
+            angle -= 1
+            continue
+        if paren or bracket or angle:
             continue
         if value == "{":
             closing = pairs.get(index)
@@ -294,87 +410,6 @@ def _item_body(tokens: list[Token], keyword_index: int, pairs: dict[int, int]) -
         if value == ";":
             return index, None
     return None
-
-
-def _cfg_test_items(source: str, clean: str, tokens: list[Token], pairs: dict[int, int]) -> list[CfgTestItem]:
-    """Return exact source ranges belonging to ``#[cfg(test)]`` items."""
-    ranges: list[CfgTestItem] = []
-    for cfg_match in CFG_TEST_RE.finditer(clean):
-        item_offset, _ = _after_cfg_attributes(clean, source, cfg_match.end())
-        item_index = _next_token_index(tokens, item_offset)
-        # Visibility/modifier tokens can precede the actual item keyword.
-        keyword_index = None
-        for index in range(item_index, len(tokens)):
-            if tokens[index].value in {"mod", "fn", "const", "static", "struct", "enum", "trait", "impl"}:
-                keyword_index = index
-                break
-            if tokens[index].value in {";", "{"}:
-                break
-        if keyword_index is None:
-            continue
-        body = _item_body(tokens, keyword_index, pairs)
-        if body is None:
-            continue
-        opening, closing = body
-        end = tokens[opening].end if closing is None else tokens[closing].end
-        ranges.append(CfgTestItem(cfg_match.start(), end))
-    return ranges
-
-
-def _cfg_test_external_files(paths: Iterable[Path]) -> set[Path]:
-    """Resolve external modules guarded by an exact ``#[cfg(test)]`` item."""
-    path_set = set(paths)
-    excluded: set[Path] = set()
-    for parent in sorted(path_set):
-        source = parent.read_text(encoding="utf-8")
-        clean = sanitize_rust(source)
-        tokens = tokenize(clean)
-        pairs = _brace_pairs(tokens)
-        for item in _cfg_test_items(source, clean, tokens, pairs):
-            cfg_match = CFG_TEST_RE.search(clean, item.start, item.end)
-            if cfg_match is None:
-                continue
-            item_offset, path_attr = _after_cfg_attributes(clean, source, cfg_match.end())
-            item_start = _next_token_index(tokens, item_offset)
-            item_end = _next_token_index(tokens, item.end)
-            keyword_index = next(
-                (
-                    index
-                    for index in range(item_start, item_end)
-                    if tokens[index].value == "mod"
-                ),
-                None,
-            )
-            if keyword_index is None or keyword_index + 1 >= item_end:
-                continue
-            module = tokens[keyword_index + 1].value
-            if path_attr is not None:
-                candidate = (parent.parent / path_attr).resolve()
-                if candidate in path_set:
-                    excluded.add(candidate)
-            else:
-                for candidate in _module_candidates(parent, module):
-                    if candidate in path_set:
-                        excluded.add(candidate)
-    return excluded
-
-
-def _is_test_file(path: Path) -> bool:
-    """Recognize conventional test files without hiding production helpers."""
-    return (
-        "tests" in path.parts
-        or path.name in {"tests.rs", "test_utils.rs"}
-        or path.name.endswith("_tests.rs")
-    )
-
-
-def _module_candidates(parent: Path, module: str) -> Iterable[Path]:
-    if parent.name in {"lib.rs", "main.rs", "mod.rs"}:
-        base = parent.parent
-    else:
-        base = parent.parent / parent.stem
-    yield base / f"{module}.rs"
-    yield base / module / "mod.rs"
 
 
 def _declaration_start(tokens: list[Token], index: int, brace_depth: list[int]) -> int:
@@ -388,95 +423,294 @@ def _declaration_start(tokens: list[Token], index: int, brace_depth: list[int]) 
     return start
 
 
-def _is_public_visibility(tokens: list[Token], start: int, end: int) -> bool:
+def _attributes_between(
+    attributes: list[Attribute], starts: tuple[int, ...] | list[int], start: int, end: int
+) -> list[Attribute]:
+    left = bisect.bisect_left(starts, start)
+    right = bisect.bisect_left(starts, end)
+    return [attribute for attribute in attributes[left:right] if attribute.end <= end]
+
+
+def _is_public_visibility(
+    tokens: list[Token], start: int, end: int, attributes: IntervalIndex
+) -> bool:
     for index in range(start, end):
-        if tokens[index].value != "pub":
+        token = tokens[index]
+        if attributes.contains(token.start):
             continue
-        if index + 1 >= end or tokens[index + 1].value != "(":
-            return True
+        if token.value == "pub":
+            return index + 1 >= end or tokens[index + 1].value != "("
     return False
 
 
-def _trait_name_before_for(tokens: list[Token], impl_index: int, for_index: int) -> str | None:
-    """Return the implemented trait's final name, skipping generic arguments."""
-    angle_depth = 0
-    for index in range(for_index - 1, impl_index, -1):
+def _find_item_keyword(tokens: list[Token], start: int) -> int | None:
+    for index in range(start, len(tokens)):
         value = tokens[index].value
-        if value == ">":
-            angle_depth += 1
-        elif value == "<" and angle_depth:
-            angle_depth -= 1
-        elif angle_depth == 0 and IDENT_RE.fullmatch(value):
-            return value
+        if value in ITEM_KEYWORDS:
+            return index
+        if value in {";", "{", "}"}:
+            return None
     return None
 
 
-def _public_body_ranges(tokens: list[Token], pairs: dict[int, int]) -> list[tuple[int, int]]:
-    """Find public function bodies, including public trait method bodies."""
-    if not tokens:
-        return []
-    brace_depth: list[int] = []
-    depth = 0
-    for token in tokens:
-        brace_depth.append(depth)
-        if token.value == "{":
-            depth += 1
-        elif token.value == "}" and depth:
-            depth -= 1
-
-    public_traits: set[str] = set()
-    trait_blocks: dict[int, int] = {}
-    for index, token in enumerate(tokens):
-        if token.value != "trait":
+def _cfg_test_items(
+    clean: str,
+    tokens: list[Token],
+    pairs: dict[int, int],
+    token_starts: tuple[int, ...],
+    attributes: list[Attribute],
+) -> list[CfgTestItem]:
+    """Return exact source ranges belonging to ``#[cfg(test)]`` items."""
+    ranges: list[CfgTestItem] = []
+    block_first, block_last = _attribute_block_bounds(attributes, clean)
+    for attribute_index, attribute in enumerate(attributes):
+        if not _is_cfg_test_attribute(attribute):
             continue
-        declaration_start = _declaration_start(tokens, index, brace_depth)
-        if not _is_public_visibility(tokens, declaration_start, index):
+        first, last = block_first[attribute_index], block_last[attribute_index]
+        item_index = _find_item_keyword(
+            tokens, _next_token_index(token_starts, attributes[last].end)
+        )
+        if item_index is None:
+            continue
+        body = _item_body(tokens, item_index, pairs)
+        if body is None:
+            continue
+        opening, closing = body
+        end = tokens[opening].end if closing is None else tokens[closing].end
+        ranges.append(CfgTestItem(attributes[first].start, end))
+    return ranges
+
+
+def _module_declarations(
+    tokens: list[Token],
+    pairs: dict[int, int],
+    brace_depth: list[int],
+    attributes: list[Attribute],
+    attribute_starts: tuple[int, ...] | list[int],
+    attribute_index: IntervalIndex,
+    cfg_ranges: IntervalIndex,
+) -> list[ModuleDecl]:
+    declarations: list[ModuleDecl] = []
+    for index, token in enumerate(tokens):
+        if token.value != "mod" or attribute_index.contains(token.start):
+            continue
+        if index + 1 >= len(tokens) or not IDENT_RE.fullmatch(tokens[index + 1].value):
             continue
         body = _item_body(tokens, index, pairs)
-        if body is None or body[1] is None:
+        if body is None or body[1] is not None:
             continue
-        name_index = index + 1
-        if name_index < len(tokens) and IDENT_RE.fullmatch(tokens[name_index].value):
-            public_traits.add(tokens[name_index].value)
-        trait_blocks[body[0]] = body[1]  # type: ignore[index]
+        start = _declaration_start(tokens, index, brace_depth)
+        attrs = _attributes_between(
+            attributes, attribute_starts, tokens[start].start, token.start
+        )
+        path_attr = next(
+            (
+                match.group(1)
+                for attr in attrs
+                if (match := PATH_ATTR_RE.search(attr.source))
+            ),
+            None,
+        )
+        declarations.append(
+            ModuleDecl(
+                tokens[index + 1].value,
+                cfg_ranges.contains(token.start)
+                or any(_is_cfg_test_attribute(attr) for attr in attrs),
+                path_attr,
+            )
+        )
+    return declarations
 
-    public_impl_blocks: set[int] = set()
+
+def _parse_source(source: str) -> ParsedSource:
+    clean = sanitize_rust(source)
+    tokens = tokenize(clean)
+    pairs, enclosing, brace_depth = _brace_structure(tokens)
+    token_starts = tuple(token.start for token in tokens)
+    attributes = _find_attributes(source, clean)
+    cfg_items = _cfg_test_items(
+        clean, tokens, pairs, token_starts, attributes
+    )
+    return ParsedSource(
+        source=source,
+        clean=clean,
+        tokens=tuple(tokens),
+        token_starts=token_starts,
+        pairs=pairs,
+        enclosing_braces=tuple(enclosing),
+        brace_depth=tuple(brace_depth),
+        attributes=tuple(attributes),
+        attribute_starts=tuple(attribute.start for attribute in attributes),
+        cfg_ranges=tuple((item.start, item.end) for item in cfg_items),
+    )
+
+
+def _module_candidates(parent: Path, module: str, path_attr: str | None) -> Iterable[Path]:
+    if path_attr is not None:
+        path = Path(path_attr)
+        yield path if path.is_absolute() else parent.parent / path
+        return
+    if parent.name in {"lib.rs", "main.rs", "mod.rs"}:
+        base = parent.parent
+    else:
+        base = parent.parent / parent.stem
+    yield base / f"{module}.rs"
+    yield base / module / "mod.rs"
+
+
+def _resolve_inside(root: Path, path: Path) -> Path | None:
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def _cfg_test_external_files(
+    root: Path, paths: Iterable[Path], parsed: dict[Path, ParsedSource]
+) -> set[Path]:
+    """Return external modules with no production-reachable path.
+
+    A production edge always wins over a test-only edge to the same canonical
+    file. Edges inside a test-only external module remain unreachable from a
+    production root, so exclusion is transitive without relying on filenames.
+    """
+    path_set = set(paths)
+    production_edges: dict[Path, set[Path]] = {path: set() for path in path_set}
+    incoming_production: set[Path] = set()
+    incoming_test: set[Path] = set()
+
+    for parent in sorted(path_set):
+        metadata = parsed[parent]
+        attributes = list(metadata.attributes)
+        attribute_index = _attribute_index(attributes)
+        cfg_ranges = IntervalIndex.from_ranges(metadata.cfg_ranges)
+        declarations = _module_declarations(
+            list(metadata.tokens),
+            metadata.pairs,
+            list(metadata.brace_depth),
+            attributes,
+            metadata.attribute_starts,
+            attribute_index,
+            cfg_ranges,
+        )
+        for declaration in declarations:
+            target = next(
+                (
+                    resolved
+                    for candidate in _module_candidates(
+                        parent, declaration.name, declaration.path_attr
+                    )
+                    if (resolved := _resolve_inside(root, candidate)) in path_set
+                ),
+                None,
+            )
+            if target is None:
+                continue
+            if declaration.cfg_test:
+                incoming_test.add(target)
+            else:
+                production_edges[parent].add(target)
+                incoming_production.add(target)
+
+    roots = {
+        path
+        for path in path_set
+        if path not in incoming_production and path not in incoming_test
+    }
+    # Explicit crate entry points remain roots even in malformed/cyclic fixture
+    # graphs. Bin targets are also independent production roots.
+    for path in path_set:
+        relative = path.relative_to(root)
+        if (
+            len(relative.parts) >= 4
+            and relative.parts[0] == "crates"
+            and relative.parts[2] == "src"
+        ):
+            if relative.parts[3] in {"lib.rs", "main.rs"} or (
+                relative.parts[3] == "bin" and len(relative.parts) == 5
+            ):
+                roots.add(path)
+
+    reachable: set[Path] = set()
+    stack = sorted(roots, reverse=True)
+    while stack:
+        current = stack.pop()
+        if current in reachable:
+            continue
+        reachable.add(current)
+        stack.extend(sorted(production_edges[current] - reachable, reverse=True))
+
+    return path_set - reachable
+
+
+def _is_trait_impl(tokens: list[Token], impl_index: int, opening: int) -> bool:
+    angle = paren = bracket = 0
+    for index in range(impl_index + 1, opening):
+        value = tokens[index].value
+        if not angle and not paren and not bracket and value == "where":
+            break
+        if not angle and not paren and not bracket and value == "for":
+            return True
+        if value == "<" and not paren and not bracket:
+            angle += 1
+        elif value == ">" and angle and not paren and not bracket:
+            angle -= 1
+        elif value == "(":
+            paren += 1
+        elif value == ")" and paren:
+            paren -= 1
+        elif value == "[":
+            bracket += 1
+        elif value == "]" and bracket:
+            bracket -= 1
+    return False
+
+
+def _public_body_ranges(metadata: ParsedSource) -> IntervalIndex:
+    """Find public function bodies, including conservative trait impl paths."""
+    tokens = list(metadata.tokens)
+    pairs = metadata.pairs
+    attributes = _attribute_index(list(metadata.attributes))
+    brace_depth = list(metadata.brace_depth)
+    public_trait_blocks: set[int] = set()
+    trait_impl_blocks: set[int] = set()
+
     for index, token in enumerate(tokens):
-        if token.value != "impl":
-            continue
-        body = _item_body(tokens, index, pairs)
-        if body is None or body[1] is None:
-            continue
-        opening, _ = body
-        for for_index in range(index + 1, opening):
-            if tokens[for_index].value == "for":
-                trait_name = _trait_name_before_for(tokens, index, for_index)
-                if trait_name in public_traits:
-                    public_impl_blocks.add(opening)
-                break
+        if token.value == "trait" and not attributes.contains(token.start):
+            body = _item_body(tokens, index, pairs)
+            if body is None or body[1] is None:
+                continue
+            start = _declaration_start(tokens, index, brace_depth)
+            if _is_public_visibility(tokens, start, index, attributes):
+                public_trait_blocks.add(body[0])
+        elif token.value == "impl" and not attributes.contains(token.start):
+            body = _item_body(tokens, index, pairs)
+            if body is not None and body[1] is not None and _is_trait_impl(tokens, index, body[0]):
+                trait_impl_blocks.add(body[0])
 
     ranges: list[tuple[int, int]] = []
     for index, token in enumerate(tokens):
-        if token.value != "fn":
+        if token.value != "fn" or attributes.contains(token.start):
             continue
         body = _item_body(tokens, index, pairs)
         if body is None or body[1] is None:
             continue
-        opening, closing = body
-        declaration_start = _declaration_start(tokens, index, brace_depth)
-        public = _is_public_visibility(tokens, declaration_start, index)
-        enclosing_openings = [
-            opening_index
-            for opening_index, closing_index in pairs.items()
-            if opening_index < index and isinstance(closing_index, int) and closing_index > index and tokens[opening_index].value == "{"
-        ]
-        if enclosing_openings:
-            enclosing = max(enclosing_openings)
-            if enclosing in trait_blocks or enclosing in public_impl_blocks:
-                public = True
+        start = _declaration_start(tokens, index, brace_depth)
+        public = _is_public_visibility(tokens, start, index, attributes)
+        enclosing = metadata.enclosing_braces[index]
+        if enclosing in public_trait_blocks or enclosing in trait_impl_blocks:
+            # Every trait impl method is public by policy. This intentionally
+            # avoids a cross-file trait-name table and errs toward detection.
+            public = True
         if public:
+            opening, closing = body
             ranges.append((tokens[opening].start, tokens[closing].end))
-    return ranges
+    return IntervalIndex.from_ranges(ranges)
 
 
 def _angle_end(tokens: list[Token], start: int) -> int | None:
@@ -493,75 +727,87 @@ def _angle_end(tokens: list[Token], start: int) -> int | None:
     return None
 
 
-def _is_known_ufcs_type(tokens: list[Token], index: int, kind: str) -> bool:
-    """Accept only Option/Result paths from the standard type namespaces."""
-    if tokens[index].value != kind:
-        return False
-    expected_module = "option" if kind == "Option" else "result"
-    previous = index - 1
-    if previous < 0 or tokens[previous].value != "::":
-        return True
-    # A qualified path is accepted only for std/core's canonical module.
-    path_start = previous - 3
-    if path_start >= 0 and tokens[previous - 1].value == expected_module and tokens[previous - 2].value == "::":
-        namespace = tokens[path_start].value
-        if namespace not in {"std", "core"}:
-            return False
-        if path_start >= 2 and tokens[path_start - 1].value == "::":
-            return not IDENT_RE.fullmatch(tokens[path_start - 2].value)
-        return True
-    return False
+def _known_type_path(tokens: list[Token], start: int) -> tuple[str, int] | None:
+    """Match only canonical Option/Result paths at identifier boundaries."""
+    if start >= len(tokens):
+        return None
+    value = tokens[start].value
+    if value in {"Option", "Result"}:
+        if start and tokens[start - 1].value == "::":
+            return None
+        return value, start + 1
+
+    leading_path = value == "::"
+    if leading_path:
+        if start and (
+            IDENT_RE.fullmatch(tokens[start - 1].value)
+            or tokens[start - 1].value in {")", "]", "}"}
+        ):
+            return None
+        start += 1
+        if start >= len(tokens):
+            return None
+        value = tokens[start].value
+    if value not in {"std", "core"}:
+        return None
+    if not leading_path and start and tokens[start - 1].value == "::":
+        return None
+    if start + 4 >= len(tokens):
+        return None
+    if tokens[start + 1].value != "::" or tokens[start + 3].value != "::":
+        return None
+    module = tokens[start + 2].value
+    type_name = tokens[start + 4].value
+    if module not in {"option", "result"} or type_name not in {"Option", "Result"}:
+        return None
+    if (module == "option") != (type_name == "Option"):
+        return None
+    return type_name, start + 5
 
 
-def _known_ufcs_kind(path: list[str]) -> str | None:
-    if path == ["Option"] or path in (["std", "option", "Option"], ["core", "option", "Option"]):
-        return "unwrap"
-    if path == ["Result"] or path in (["std", "result", "Result"], ["core", "result", "Result"]):
-        return "expect"
-    return None
+def _skip_optional_generic(tokens: list[Token], index: int) -> int | None:
+    if index < len(tokens) and tokens[index].value == "::":
+        if index + 1 >= len(tokens) or tokens[index + 1].value != "<":
+            return index
+        index += 1
+    if index < len(tokens) and tokens[index].value == "<":
+        end = _angle_end(tokens, index)
+        return None if end is None else end + 1
+    return index
+
+
+def _method_after_type(tokens: list[Token], index: int) -> tuple[int, str] | None:
+    if index >= len(tokens) or tokens[index].value != "::":
+        return None
+    method_index = index + 1
+    if method_index >= len(tokens) or tokens[method_index].value not in UFCS_METHODS:
+        return None
+    after_method = method_index + 1
+    if after_method < len(tokens) and tokens[after_method].value == "<":
+        end = _angle_end(tokens, after_method)
+        if end is None:
+            return None
+        after_method = end + 1
+    if after_method >= len(tokens) or tokens[after_method].value != "(":
+        return None
+    return method_index, tokens[method_index].value
 
 
 def _qualified_ufcs_match(tokens: list[Token], start: int) -> tuple[int, str] | None:
-    """Match ``<Option<T>>::unwrap``/``<Result<T>>::expect`` syntax."""
-    if tokens[start].value != "<" or (start and tokens[start - 1].value == "::"):
+    """Match ``<Option<T>>::unwrap`` and equivalent Result syntax."""
+    if tokens[start].value != "<":
         return None
-    index = start + 1
-    if index < len(tokens) and tokens[index].value == "::":
-        index += 1
-    path: list[str] = []
-    while index < len(tokens):
-        value = tokens[index].value
-        if not IDENT_RE.fullmatch(value):
-            break
-        path.append(value)
-        index += 1
-        if index >= len(tokens) or tokens[index].value != "::":
-            break
-        index += 1
-    kind = _known_ufcs_kind(path)
-    if kind is None or not path:
+    known = _known_type_path(tokens, start + 1)
+    if known is None:
         return None
-    if index < len(tokens) and tokens[index].value == "::":
-        index += 1
-        if index >= len(tokens) or tokens[index].value != "<":
-            return None
-        angle_end = _angle_end(tokens, index)
-        if angle_end is None:
-            return None
-        index = angle_end + 1
-    elif index < len(tokens) and tokens[index].value == "<":
-        angle_end = _angle_end(tokens, index)
-        if angle_end is None:
-            return None
-        index = angle_end + 1
-    if index >= len(tokens) or tokens[index].value != ">":
+    _, index = known
+    index = _skip_optional_generic(tokens, index)
+    if index is None or index >= len(tokens) or tokens[index].value != ">":
         return None
-    index += 1
-    if index + 1 >= len(tokens) or tokens[index].value != "::":
+    method = _method_after_type(tokens, index + 1)
+    if method is None:
         return None
-    index += 1
-    if index + 1 >= len(tokens) or tokens[index].value != kind or tokens[index + 1].value != "(":
-        return None
+    _, kind = method
     return tokens[start].start, kind
 
 
@@ -572,75 +818,85 @@ def _ufcs_matches(tokens: list[Token]) -> Iterable[tuple[int, str]]:
             if match is not None:
                 yield match
             continue
-        if token.value not in {"Option", "Result"}:
+        known = _known_type_path(tokens, index)
+        if known is None:
             continue
-        kind = "unwrap" if token.value == "Option" else "expect"
-        if not _is_known_ufcs_type(tokens, index, token.value):
+        _, after_type = known
+        after_type = _skip_optional_generic(tokens, after_type)
+        if after_type is None:
             continue
-        next_index = index + 1
-        if next_index >= len(tokens) or tokens[next_index].value != "::":
-            continue
-        next_index += 1
-        if next_index < len(tokens) and tokens[next_index].value == "<":
-            angle_end = _angle_end(tokens, next_index)
-            if angle_end is None:
-                continue
-            next_index = angle_end + 1
-            if next_index >= len(tokens) or tokens[next_index].value != "::":
-                continue
-            next_index += 1
-        if next_index + 1 < len(tokens) and tokens[next_index].value == kind and tokens[next_index + 1].value == "(":
-            yield token.start, kind
+        method = _method_after_type(tokens, after_type)
+        if method is not None:
+            yield token.start, method[1]
 
 
-def _audit_file_with_offsets(path: Path, root: Path, cfg_test_files: set[Path]) -> list[Finding]:
-    """Scan a complete masked source buffer and map matches back to source lines."""
-    if _is_test_file(path) or path in cfg_test_files:
+def _audit_file_with_offsets(
+    path: Path,
+    root: Path,
+    test_only_files: set[Path],
+    metadata: ParsedSource,
+) -> list[Finding]:
+    """Scan one complete masked source buffer and map matches to source lines."""
+    if path in test_only_files:
         return []
-    source = path.read_text(encoding="utf-8")
-    clean = sanitize_rust(source)
-    tokens = tokenize(clean)
-    pairs = _brace_pairs(tokens)
-    cfg_ranges = _cfg_test_items(source, clean, tokens, pairs)
-    public_ranges = _public_body_ranges(tokens, pairs)
-    line_starts = _line_map(source)
+    tokens = list(metadata.tokens)
+    cfg_ranges = IntervalIndex.from_ranges(metadata.cfg_ranges)
+    public_ranges = _public_body_ranges(metadata)
+    line_starts = _line_map(metadata.source)
     relative = path.relative_to(root).as_posix()
 
     def excluded(offset: int) -> bool:
-        return any(item.start <= offset < item.end for item in cfg_ranges)
+        return cfg_ranges.contains(offset)
 
     findings: list[Finding] = []
-    for match in RAW_CALL_RE.finditer(clean):
+    for match in RAW_CALL_RE.finditer(metadata.clean):
         if not excluded(match.start()):
             findings.append(Finding(relative, _line_at(line_starts, match.start()), match.group(1)))
-    for match in METHOD_RE.finditer(clean):
+    for match in METHOD_RE.finditer(metadata.clean):
         if not excluded(match.start()):
             findings.append(Finding(relative, _line_at(line_starts, match.start()), match.group(1)))
     for offset, kind in _ufcs_matches(tokens):
         if not excluded(offset):
             findings.append(Finding(relative, _line_at(line_starts, offset), kind))
-    for match in ASSERT_RE.finditer(clean):
-        if not excluded(match.start()) and any(start <= match.start() < end for start, end in public_ranges):
+    for match in ASSERT_RE.finditer(metadata.clean):
+        if not excluded(match.start()) and public_ranges.contains(match.start()):
             findings.append(Finding(relative, _line_at(line_starts, match.start()), match.group(1)))
     return sorted(findings)
 
 
-def audit_file(path: Path, root: Path, cfg_test_files: set[Path]) -> list[Finding]:
+def audit_file(path: Path, root: Path, test_only_files: set[Path]) -> list[Finding]:
     """Scan one production file for normalized panic-style findings."""
-    return _audit_file_with_offsets(path, root, cfg_test_files)
+    source = path.read_text(encoding="utf-8")
+    return _audit_file_with_offsets(path, root, test_only_files, _parse_source(source))
 
 
 def discover_source_files(root: Path) -> list[Path]:
+    """Discover canonical in-root crate sources without trusting symlink names."""
+    root = root.resolve()
     source_root = root / "crates"
-    return sorted(source_root.glob("*/src/**/*.rs"))
+    candidates = sorted(source_root.glob("*/src/**/*.rs"), key=lambda path: path.as_posix())
+    discovered: set[Path] = set()
+    for candidate in candidates:
+        resolved = _resolve_inside(root, candidate)
+        if resolved is None or not resolved.is_file():
+            continue
+        relative = resolved.relative_to(root)
+        if len(relative.parts) < 3 or relative.parts[0] != "crates" or relative.parts[2] != "src":
+            continue
+        discovered.add(resolved)
+    return sorted(discovered, key=lambda path: path.relative_to(root).as_posix())
 
 
 def scan_tree(root: Path) -> list[Finding]:
+    root = root.resolve()
     paths = discover_source_files(root)
-    cfg_test_files = _cfg_test_external_files(paths)
+    parsed: dict[Path, ParsedSource] = {}
+    for path in paths:
+        parsed[path] = _parse_source(path.read_text(encoding="utf-8"))
+    test_only_files = _cfg_test_external_files(root, paths, parsed)
     findings: list[Finding] = []
     for path in paths:
-        findings.extend(_audit_file_with_offsets(path, root, cfg_test_files))
+        findings.extend(_audit_file_with_offsets(path, root, test_only_files, parsed[path]))
     return sorted(findings)
 
 
@@ -681,11 +937,15 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, help="repository root (defaults to this script's repository)")
+    parser.add_argument(
+        "--root", type=Path, help="repository root (defaults to this script's repository)"
+    )
     parser.add_argument("--baseline", type=Path, help="exact JSON baseline path")
     args = parser.parse_args(argv)
     root = (args.root or Path(__file__).resolve().parent.parent).resolve()
-    baseline_path = (args.baseline or root / "scripts" / "library-panics-baseline.json").resolve()
+    baseline_path = (
+        args.baseline or root / "scripts" / "library-panics-baseline.json"
+    ).resolve()
 
     try:
         findings = set(scan_tree(root))

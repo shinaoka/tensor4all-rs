@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,40 +15,64 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "audit-library-panics.py"
 
 
-def run_audit(files: dict[str, str], baseline: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+def _write_fixture(root: Path, files: dict[str, str]) -> None:
+    for name, source in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+
+
+def run_audit_at_root(
+    fixture: Path,
+    baseline: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    baseline_path = fixture / "baseline.json"
+    baseline_path.write_text(json.dumps(baseline or []), encoding="utf-8")
+    return subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(fixture),
+            "--baseline",
+            str(baseline_path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+
+
+def run_audit(
+    files: dict[str, str], baseline: list[str] | None = None
+) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as directory:
         fixture = Path(directory)
-        for name, source in files.items():
-            path = fixture / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(source, encoding="utf-8")
-        baseline_path = fixture / "baseline.json"
-        baseline_path.write_text(json.dumps(baseline or []), encoding="utf-8")
-        return subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "--root",
-                str(fixture),
-                "--baseline",
-                str(baseline_path),
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        _write_fixture(fixture, files)
+        return run_audit_at_root(fixture, baseline)
 
 
-def assert_output(result: subprocess.CompletedProcess[str], *lines: str) -> None:
-    output = result.stdout + result.stderr
-    for line in lines:
-        assert line in output, f"missing {line!r} in output:\n{output}"
+def assert_exact_output(
+    result: subprocess.CompletedProcess[str],
+    stdout: list[str],
+    stderr: list[str] | None = None,
+) -> None:
+    expected_stderr = [] if stderr is None else stderr
+    actual_stdout = result.stdout.splitlines()
+    actual_stderr = result.stderr.splitlines()
+    assert actual_stdout == stdout, f"stdout differs:\nexpected {stdout!r}\nactual {actual_stdout!r}"
+    assert actual_stderr == expected_stderr, f"stderr differs:\nexpected {expected_stderr!r}\nactual {actual_stderr!r}"
 
 
 def test_production_hit_fails_with_normalized_kind() -> None:
     result = run_audit({"crates/demo/src/lib.rs": 'pub fn bad() { panic!("boom"); }\n'})
     assert result.returncode == 1
-    assert_output(result, "crates/demo/src/lib.rs:1:panic")
+    assert_exact_output(
+        result,
+        ["crates/demo/src/lib.rs:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
 
 
 def test_all_raw_panic_kinds_fail() -> None:
@@ -63,15 +88,18 @@ fn bad() {
         }
     )
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:3:unreachable",
-        "crates/demo/src/lib.rs:4:unwrap",
-        "crates/demo/src/lib.rs:5:expect",
+        [
+            "crates/demo/src/lib.rs:3:unreachable",
+            "crates/demo/src/lib.rs:4:unwrap",
+            "crates/demo/src/lib.rs:5:expect",
+        ],
+        ["Audit failed: 3 unbaselined findings, 0 stale baseline entries."],
     )
 
 
-def test_test_modules_and_files_are_excluded() -> None:
+def test_structurally_test_only_modules_and_inline_items_are_excluded() -> None:
     result = run_audit(
         {
             "crates/demo/src/lib.rs": """
@@ -90,6 +118,12 @@ fn test_function() {
 }
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+#[path = "tests.rs"]
+mod named_tests;
+#[path = "tests/file.rs"]
+#[cfg(test)]
+mod directory_tests;
 """,
             "crates/demo/src/test_support.rs": 'pub fn bad() { unreachable!("external"); }\n',
             "crates/demo/src/tests.rs": 'pub fn bad() { panic!("file"); }\n',
@@ -98,7 +132,10 @@ mod test_support;
         }
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert_output(result, "Audit passed: 0 unbaselined findings, 0 stale baseline entries")
+    assert_exact_output(
+        result,
+        ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
+    )
 
 
 def test_test_support_is_not_excluded_without_cfg_test() -> None:
@@ -109,7 +146,11 @@ def test_test_support_is_not_excluded_without_cfg_test() -> None:
         }
     )
     assert result.returncode == 1
-    assert_output(result, "crates/demo/src/test_support.rs:1:panic")
+    assert_exact_output(
+        result,
+        ["crates/demo/src/test_support.rs:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
 
 
 def test_comments_rustdoc_strings_and_macros_are_ignored() -> None:
@@ -130,7 +171,10 @@ pub fn ok() {
         }
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert_output(result, "Audit passed: 0 unbaselined findings, 0 stale baseline entries")
+    assert_exact_output(
+        result,
+        ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
+    )
 
 
 def test_masking_handles_bytes_nested_comments_and_scope_corruption() -> None:
@@ -145,9 +189,11 @@ pub fn production() {
 '''
     result = run_audit({"crates/demo/src/lib.rs": source})
     assert result.returncode == 1
-    assert_output(result, "crates/demo/src/lib.rs:7:assert")
-    output = result.stdout + result.stderr
-    assert output.count("crates/demo/src/lib.rs:") == 1, output
+    assert_exact_output(
+        result,
+        ["crates/demo/src/lib.rs:7:assert"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
 
 
 def test_multiline_calls_and_known_ufcs_are_reported_without_user_function_false_matches() -> None:
@@ -179,21 +225,294 @@ fn bad(value: Option<bool>, result: Result<bool, ()>) {
 '''
     result = run_audit({"crates/demo/src/lib.rs": source})
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:4:panic",
-        "crates/demo/src/lib.rs:7:unreachable",
-        "crates/demo/src/lib.rs:10:unwrap",
-        "crates/demo/src/lib.rs:14:expect",
-        "crates/demo/src/lib.rs:16:unwrap",
-        "crates/demo/src/lib.rs:19:unwrap",
-        "crates/demo/src/lib.rs:22:expect",
+        [
+            "crates/demo/src/lib.rs:4:panic",
+            "crates/demo/src/lib.rs:7:unreachable",
+            "crates/demo/src/lib.rs:10:unwrap",
+            "crates/demo/src/lib.rs:14:expect",
+            "crates/demo/src/lib.rs:16:unwrap",
+            "crates/demo/src/lib.rs:19:unwrap",
+            "crates/demo/src/lib.rs:22:expect",
+        ],
+        ["Audit failed: 7 unbaselined findings, 0 stale baseline entries."],
     )
-    output = result.stdout + result.stderr
-    assert "user_unwrap" not in output
-    assert "user::std::option" not in output
-    assert "crates/demo/src/lib.rs:25:unwrap" not in output
-    assert "crates/demo/src/lib.rs:26:unwrap" not in output
+
+
+def test_ufcs_reports_both_option_result_methods_and_rejects_collisions() -> None:
+    source = """fn ufcs(option: Option<bool>, result: Result<bool, ()>) {
+    let _ = Option::unwrap(option);
+    let _ = Option::expect(option, "missing");
+    let _ = Result::unwrap(result);
+    let _ = Result::expect(result, "missing");
+    let _ = std::option::Option::<bool>::expect(option, "missing");
+    let _ = std::result::Result::<bool, ()>::unwrap(result);
+    let _ = <Option<bool>>::expect(option, "missing");
+    let _ = <std::result::Result<bool, ()>>::unwrap(result);
+    let _ = ::core::option::Option::<bool>::unwrap(option);
+    let _ = ::std::result::Result::<bool, ()>::expect(result, "missing");
+    let _ = user::Option::expect(option, "not standard");
+    let _ = Optionish::unwrap(option);
+    let _ = Result2::expect(result, "not standard");
+    let _ = user::std::option::Option::<bool>::unwrap(option);
+}
+"""
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    expected = [
+        "crates/demo/src/lib.rs:2:unwrap",
+        "crates/demo/src/lib.rs:3:expect",
+        "crates/demo/src/lib.rs:4:unwrap",
+        "crates/demo/src/lib.rs:5:expect",
+        "crates/demo/src/lib.rs:6:expect",
+        "crates/demo/src/lib.rs:7:unwrap",
+        "crates/demo/src/lib.rs:8:expect",
+        "crates/demo/src/lib.rs:9:unwrap",
+        "crates/demo/src/lib.rs:10:unwrap",
+        "crates/demo/src/lib.rs:11:expect",
+    ]
+    assert_exact_output(
+        result,
+        expected,
+        ["Audit failed: 10 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_public_trait_defaults_and_external_impls_are_public_conservatively() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": "mod api; mod implementations;\n",
+            "crates/demo/src/api.rs": """pub trait ExternalTrait {
+    fn default_method(&self) {
+        assert!(true);
+    }
+}
+trait SameName {
+    fn private_default(&self) {
+        assert!(true);
+    }
+}
+""",
+            "crates/demo/src/implementations.rs": """struct PublicType;
+impl crate::api::ExternalTrait for PublicType {
+    fn impl_method(&self) {
+        debug_assert!(true);
+    }
+}
+impl SameName for PublicType {
+    fn private_trait_impl(&self) {
+        assert!(true);
+    }
+}
+impl PublicType {
+    fn private_inherent(&self) {
+        assert!(true);
+    }
+}
+""",
+            "crates/consumer/src/lib.rs": """struct ConsumerType;
+impl demo::api::ExternalTrait for ConsumerType {
+    fn cross_crate_impl(&self) {
+        assert!(true);
+    }
+}
+""",
+        }
+    )
+    assert result.returncode == 1
+    expected = [
+        "crates/consumer/src/lib.rs:4:assert",
+        "crates/demo/src/api.rs:3:assert",
+        "crates/demo/src/implementations.rs:4:debug_assert",
+        "crates/demo/src/implementations.rs:9:assert",
+    ]
+    assert_exact_output(
+        result,
+        expected,
+        ["Audit failed: 4 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_const_generic_where_body_and_attribute_visibility_are_structural() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": """trait Bound<T> {}
+#[some(pub)]
+fn private_attribute(value: bool) {
+    assert!(value);
+}
+#[some(pub)]
+pub fn public_attribute(value: bool) {
+    assert!(value);
+}
+pub fn const_generic<T: Bound<{ 1 }>>(value: bool)
+where
+    T: Sized,
+{
+    assert!(value);
+}
+"""
+        }
+    )
+    assert result.returncode == 1
+    expected = [
+        "crates/demo/src/lib.rs:8:assert",
+        "crates/demo/src/lib.rs:14:assert",
+    ]
+    assert_exact_output(
+        result,
+        expected,
+        ["Audit failed: 2 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_cfg_test_external_modules_are_order_independent_and_transitive() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": """#[path = "root_tests.rs"]
+#[cfg(test)]
+mod root_tests;
+#[cfg(test)]
+mod inline_tests {
+    #[path = "inline_helper.rs"]
+    mod helper;
+}
+""",
+            "crates/demo/src/root_tests.rs": """mod nested_tests;
+pub fn test_only() { panic!("root"); }
+""",
+            "crates/demo/src/root_tests/nested_tests.rs": 'pub fn test_only() { unreachable!("nested"); }\n',
+            "crates/demo/src/inline_helper.rs": 'pub fn test_only() { panic!("inline helper"); }\n',
+        }
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert_exact_output(
+        result,
+        ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
+    )
+
+
+def test_production_reference_overrides_test_only_alias() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": """#[path = "shared.rs"]
+mod production_shared;
+#[cfg(test)]
+#[path = "shared.rs"]
+mod test_shared;
+""",
+            "crates/demo/src/shared.rs": 'pub fn production() { panic!("shared"); }\n',
+        }
+    )
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/shared.rs:1:panic",
+        ],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
+def test_cfg_test_macro_rules_range_is_excluded() -> None:
+    result = run_audit(
+        {
+            "crates/demo/src/lib.rs": """#[cfg(test)]
+macro_rules! test_helper {
+    () => { panic!("test macro"); };
+}
+"""
+        }
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert_exact_output(
+        result,
+        ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
+    )
+
+
+def test_source_names_and_checkout_ancestors_do_not_exclude_production_files() -> None:
+    outer = Path(tempfile.mkdtemp())
+    try:
+        fixture = outer / "tests" / "checkout"
+        _write_fixture(
+            fixture,
+            {
+                "crates/demo/src/tests.rs": 'pub fn bad() { panic!("tests"); }\n',
+                "crates/demo/src/test_utils.rs": 'pub fn bad() { unreachable!("utils"); }\n',
+                "crates/demo/src/_tests.rs": 'pub fn bad() { panic!("suffix"); }\n',
+                "crates/demo/src/tests/unreferenced.rs": 'pub fn bad() { panic!("directory"); }\n',
+            },
+        )
+        result = run_audit_at_root(fixture)
+    finally:
+        shutil.rmtree(outer)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        [
+            "crates/demo/src/_tests.rs:1:panic",
+            "crates/demo/src/test_utils.rs:1:unreachable",
+            "crates/demo/src/tests.rs:1:panic",
+            "crates/demo/src/tests/unreferenced.rs:1:panic",
+        ],
+        ["Audit failed: 4 unbaselined findings, 0 stale baseline entries."],
+    )
+
+
+def test_outside_root_symlink_is_skipped_safely() -> None:
+    with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+        fixture = Path(directory)
+        outside_source = Path(outside) / "outside.rs"
+        outside_source.write_text('pub fn bad() { panic!("outside"); }\n', encoding="utf-8")
+        link = fixture / "crates/demo/src/link.rs"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(outside_source)
+        except OSError as error:
+            raise AssertionError(f"symlink fixture unavailable: {error}") from error
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert_exact_output(
+        result,
+        ["Audit passed: 0 unbaselined findings, 0 stale baseline entries"],
+    )
+
+
+def test_in_root_symlink_is_canonicalized_and_reported_once() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        real = fixture / "crates/demo/src/real.rs"
+        alias = fixture / "crates/demo/src/alias.rs"
+        real.parent.mkdir(parents=True, exist_ok=True)
+        real.write_text('pub fn bad() { panic!("inside"); }\n', encoding="utf-8")
+        try:
+            alias.symlink_to(real)
+        except OSError as error:
+            raise AssertionError(f"symlink fixture unavailable: {error}") from error
+        result = run_audit_at_root(fixture)
+    assert result.returncode == 1
+    assert_exact_output(
+        result,
+        ["crates/demo/src/real.rs:1:panic"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
+
+
+def test_large_fixture_stays_within_subprocess_timeout() -> None:
+    source = "\n".join(
+        f"pub fn function_{index}() {{ assert!(true); }}" for index in range(2_500)
+    )
+    result = run_audit({"crates/demo/src/lib.rs": source})
+    assert result.returncode == 1
+    lines = result.stdout.splitlines()
+    assert len(lines) == 2_500
+    assert lines[0] == "crates/demo/src/lib.rs:1:assert"
+    assert lines[-1] == "crates/demo/src/lib.rs:2500:assert"
+    assert result.stderr.splitlines() == [
+        "Audit failed: 2500 unbaselined findings, 0 stale baseline entries."
+    ]
 
 
 def test_public_trait_defaults_impls_and_signature_modifiers_are_public_paths() -> None:
@@ -241,19 +560,19 @@ impl PublicType {
 '''
     result = run_audit({"crates/demo/src/lib.rs": source})
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:3:assert",
-        "crates/demo/src/lib.rs:14:debug_assert",
-        "crates/demo/src/lib.rs:28:assert",
-        "crates/demo/src/lib.rs:32:assert",
-        "crates/demo/src/lib.rs:35:assert",
-        "crates/demo/src/lib.rs:39:assert",
+        [
+            "crates/demo/src/lib.rs:3:assert",
+            "crates/demo/src/lib.rs:14:debug_assert",
+            "crates/demo/src/lib.rs:19:assert",
+            "crates/demo/src/lib.rs:28:assert",
+            "crates/demo/src/lib.rs:32:assert",
+            "crates/demo/src/lib.rs:35:assert",
+            "crates/demo/src/lib.rs:39:assert",
+        ],
+        ["Audit failed: 7 unbaselined findings, 0 stale baseline entries."],
     )
-    output = result.stdout + result.stderr
-    assert "crates/demo/src/lib.rs:8:assert" not in output
-    assert "crates/demo/src/lib.rs:19:assert" not in output
-    assert "crates/demo/src/lib.rs:24:assert" not in output
 
 
 def test_generic_public_trait_impl_and_qualified_ufcs_are_detected() -> None:
@@ -286,17 +605,17 @@ fn ufcs(value: Option<bool>, result: Result<bool, ()>) {
 '''
     result = run_audit({"crates/demo/src/lib.rs": source})
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:3:assert",
-        "crates/demo/src/lib.rs:14:debug_assert",
-        "crates/demo/src/lib.rs:23:unwrap",
-        "crates/demo/src/lib.rs:24:expect",
+        [
+            "crates/demo/src/lib.rs:3:assert",
+            "crates/demo/src/lib.rs:14:debug_assert",
+            "crates/demo/src/lib.rs:19:assert",
+            "crates/demo/src/lib.rs:23:unwrap",
+            "crates/demo/src/lib.rs:24:expect",
+        ],
+        ["Audit failed: 5 unbaselined findings, 0 stale baseline entries."],
     )
-    output = result.stdout + result.stderr
-    assert "crates/demo/src/lib.rs:8:assert" not in output
-    assert "crates/demo/src/lib.rs:18:assert" not in output
-    assert "crates/demo/src/lib.rs:25:unwrap" not in output
 
 
 def test_cfg_test_attributes_do_not_leak_to_following_items() -> None:
@@ -309,14 +628,14 @@ def test_cfg_test_attributes_do_not_leak_to_following_items() -> None:
         }
     )
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:1:assert",
-        "crates/demo/src/lib.rs:2:debug_assert",
+        [
+            "crates/demo/src/lib.rs:1:assert",
+            "crates/demo/src/lib.rs:2:debug_assert",
+        ],
+        ["Audit failed: 2 unbaselined findings, 0 stale baseline entries."],
     )
-    output = result.stdout + result.stderr
-    assert "fixtures.rs" not in output
-    assert "panic" not in output
 
 
 def test_cfg_test_function_does_not_hide_following_production_module() -> None:
@@ -330,13 +649,14 @@ pub fn production_path() { assert!(true); }
         }
     )
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:3:assert",
-        "crates/demo/src/production.rs:1:panic",
+        [
+            "crates/demo/src/lib.rs:3:assert",
+            "crates/demo/src/production.rs:1:panic",
+        ],
+        ["Audit failed: 2 unbaselined findings, 0 stale baseline entries."],
     )
-    output = result.stdout + result.stderr
-    assert "crates/demo/src/lib.rs:1:panic" not in output
 
 
 def test_public_assertions_are_reported_but_private_helpers_are_not() -> None:
@@ -360,17 +680,14 @@ pub(crate) fn crate_helper(value: bool) {
         }
     )
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        "crates/demo/src/lib.rs:3:assert",
-        "crates/demo/src/lib.rs:4:debug_assert",
+        [
+            "crates/demo/src/lib.rs:3:assert",
+            "crates/demo/src/lib.rs:4:debug_assert",
+        ],
+        ["Audit failed: 2 unbaselined findings, 0 stale baseline entries."],
     )
-    output = result.stdout + result.stderr
-    assert "crates/demo/src/lib.rs:8:assert" not in output
-    assert "crates/demo/src/lib.rs:9:debug_assert" not in output
-    assert "crates/demo/src/lib.rs:12:assert" not in output
-    assert "crates/demo/src/lib.rs:5:assert" not in output
-    assert "crates/demo/src/lib.rs:6:debug_assert" not in output
 
 
 def test_matching_baseline_passes_with_normalized_entry() -> None:
@@ -380,8 +697,13 @@ def test_matching_baseline_passes_with_normalized_entry() -> None:
         [entry],
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert_output(result, f"Baseline matched: {entry}")
-    assert_output(result, "Audit passed: 0 unbaselined findings, 0 stale baseline entries")
+    assert_exact_output(
+        result,
+        [
+            f"Baseline matched: {entry}",
+            "Audit passed: 0 unbaselined findings, 0 stale baseline entries",
+        ],
+    )
 
 
 def test_new_finding_fails_against_existing_baseline() -> None:
@@ -398,24 +720,35 @@ pub fn public_path() {
         [baseline],
     )
     assert result.returncode == 1
-    assert_output(result, f"Baseline matched: {baseline}", "crates/demo/src/lib.rs:4:debug_assert")
-    assert_output(result, "Audit failed: 1 unbaselined finding, 0 stale baseline entries")
+    assert_exact_output(
+        result,
+        [f"Baseline matched: {baseline}", "crates/demo/src/lib.rs:4:debug_assert"],
+        ["Audit failed: 1 unbaselined finding, 0 stale baseline entries."],
+    )
 
 
 def test_stale_baseline_fails() -> None:
     entry = "crates/demo/src/lib.rs:2:assert"
     result = run_audit({"crates/demo/src/lib.rs": "pub fn public_path() {}\n"}, [entry])
     assert result.returncode == 1
-    assert_output(result, f"Stale baseline: {entry}")
-    assert_output(result, "Audit failed: 0 unbaselined findings, 1 stale baseline entry")
-
+    assert_exact_output(
+        result,
+        [f"Stale baseline: {entry}"],
+        ["Audit failed: 0 unbaselined findings, 1 stale baseline entry."],
+    )
 
 def test_raw_panic_style_entries_cannot_be_baselined() -> None:
     entry = "crates/demo/src/lib.rs:1:panic"
     result = run_audit({"crates/demo/src/lib.rs": 'pub fn bad() { panic!("boom"); }\n'}, [entry])
     assert result.returncode == 1
-    assert_output(result, f"Baseline contains forbidden raw panic-style entry: {entry}")
-
+    assert_exact_output(
+        result,
+        [f"Baseline matched: {entry}"],
+        [
+            f"Baseline contains forbidden raw panic-style entry: {entry}",
+            "Audit failed: 0 unbaselined findings, 0 stale baseline entries.",
+        ],
+    )
 
 def test_duplicate_baseline_entries_fail_configuration() -> None:
     entry = "crates/demo/src/lib.rs:2:assert"
@@ -424,7 +757,13 @@ def test_duplicate_baseline_entries_fail_configuration() -> None:
         [entry, entry],
     )
     assert result.returncode == 2
-    assert_output(result, "baseline contains duplicate entries")
+    assert_exact_output(
+        result,
+        [],
+        [
+            "library panic audit configuration error: panic baseline contains duplicate entries"
+        ],
+    )
 
 
 def test_malformed_and_non_normalized_baselines_fail_configuration() -> None:
@@ -440,7 +779,11 @@ def test_malformed_and_non_normalized_baselines_fail_configuration() -> None:
     ]:
         result = run_audit(source, baseline)
         assert result.returncode == 2, (baseline, result.stdout, result.stderr)
-        assert_output(result, message)
+        assert_exact_output(
+            result,
+            [],
+            [f"library panic audit configuration error: {message}: {baseline[0]!r}"],
+        )
 
 
 def test_report_claims_include_exact_sorted_findings_matches_and_stale_entries() -> None:
@@ -453,12 +796,14 @@ def test_report_claims_include_exact_sorted_findings_matches_and_stale_entries()
         [baseline],
     )
     assert result.returncode == 1
-    assert_output(
+    assert_exact_output(
         result,
-        f"Baseline matched: {baseline}",
-        "crates/demo/src/lib.rs:3:debug_assert",
-        "crates/demo/src/other.rs:1:panic",
-        "Audit failed: 2 unbaselined findings, 0 stale baseline entries",
+        [
+            f"Baseline matched: {baseline}",
+            "crates/demo/src/lib.rs:3:debug_assert",
+            "crates/demo/src/other.rs:1:panic",
+        ],
+        ["Audit failed: 2 unbaselined findings, 0 stale baseline entries."],
     )
 
 
@@ -466,11 +811,21 @@ def main() -> int:
     tests = [
         test_production_hit_fails_with_normalized_kind,
         test_all_raw_panic_kinds_fail,
-        test_test_modules_and_files_are_excluded,
+        test_structurally_test_only_modules_and_inline_items_are_excluded,
         test_test_support_is_not_excluded_without_cfg_test,
         test_comments_rustdoc_strings_and_macros_are_ignored,
         test_masking_handles_bytes_nested_comments_and_scope_corruption,
         test_multiline_calls_and_known_ufcs_are_reported_without_user_function_false_matches,
+        test_ufcs_reports_both_option_result_methods_and_rejects_collisions,
+        test_public_trait_defaults_and_external_impls_are_public_conservatively,
+        test_const_generic_where_body_and_attribute_visibility_are_structural,
+        test_cfg_test_external_modules_are_order_independent_and_transitive,
+        test_production_reference_overrides_test_only_alias,
+        test_cfg_test_macro_rules_range_is_excluded,
+        test_source_names_and_checkout_ancestors_do_not_exclude_production_files,
+        test_outside_root_symlink_is_skipped_safely,
+        test_in_root_symlink_is_canonicalized_and_reported_once,
+        test_large_fixture_stays_within_subprocess_timeout,
         test_public_trait_defaults_impls_and_signature_modifiers_are_public_paths,
         test_generic_public_trait_impl_and_qualified_ufcs_are_detected,
         test_cfg_test_attributes_do_not_leak_to_following_items,
