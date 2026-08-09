@@ -36,9 +36,9 @@ fn hermitian_eigendecomposition_solves_complex_residuals() {
         let expected = vector.scale(AnyScalar::new_real(lambda)).unwrap();
 
         assert!(
-            applied.isapprox(&expected, 1.0e-10, 0.0),
+            applied.isapprox(&expected, 1.0e-10, 0.0).unwrap(),
             "eigenpair {position} residual maxabs={}",
-            applied.sub(&expected).unwrap().maxabs()
+            applied.sub(&expected).unwrap().maxabs().unwrap()
         );
     }
 }

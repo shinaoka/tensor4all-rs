@@ -1254,7 +1254,7 @@ fn test_partial_contract_complex_diagonal_pair_keeps_left_leg() {
         vec![Complex64::new(2.5, 3.5), Complex64::new(2.0, 9.0)],
     )
     .unwrap();
-    assert!(dense.isapprox(&expected, 1e-12, 0.0));
+    assert!(dense.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -1287,7 +1287,7 @@ fn test_partial_contract_diagonal_pair_keeps_left_leg() {
 
     let dense = result.contract_to_tensor().unwrap();
     let expected = TensorDynLen::from_dense(vec![i], vec![10.0_f64, 40.0]).unwrap();
-    assert!(dense.isapprox(&expected, 1e-12, 0.0));
+    assert!(dense.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -1420,7 +1420,7 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
     .unwrap();
 
     assert!(
-        result_dense.isapprox(&expected, 1.0e-10, 0.0),
+        result_dense.isapprox(&expected, 1.0e-10, 0.0).unwrap(),
         "cross-topology partial_contract mismatch:\nresult={:?}\nexpected={:?}",
         result_dense.as_slice_f64().unwrap(),
         expected.as_slice_f64().unwrap()

@@ -98,7 +98,7 @@ fn test_affine_extreme_i64_coefficients_are_exact() {
                 ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
             Complex64::new(f64::from((y == expected_y) as u8), 0.0)
         });
-        let maxabs = actual.sub(&expected).unwrap().maxabs();
+        let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
         assert!(
             maxabs < 1e-12,
             "MPO mismatch for a={coefficient}, b={translation}: {maxabs}"
@@ -810,7 +810,7 @@ fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[Bound
     let op = affine_operator(r, params, bc).unwrap();
     let actual = op.mpo().contract_to_tensor().unwrap();
     let expected = affine_matrix_to_dense_tensor(&matrix, &op, r, m, n, &actual);
-    let maxabs = actual.sub(&expected).unwrap().maxabs();
+    let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
 
     assert!(
         maxabs < 1e-10,
@@ -1300,7 +1300,7 @@ fn test_affine_operator_interleaved_matches_matrix() {
     let actual = op.mpo().contract_to_tensor().unwrap();
     let expected =
         affine_interleaved_matrix_to_dense_tensor(&matrix, &op, r, params.m(), params.n(), &actual);
-    let maxabs = actual.sub(&expected).unwrap().maxabs();
+    let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
     assert!(maxabs < 1e-10, "interleaved affine maxabs={maxabs}");
 }
 
@@ -1501,6 +1501,6 @@ fn test_affine_antiperiodic_mpo_applies_outgoing_carry_parity() {
         };
         Complex64::new(if y == expected_y { expected_sign } else { 0.0 }, 0.0)
     });
-    let maxabs = actual.sub(&expected).unwrap().maxabs();
+    let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
     assert!(maxabs < 1e-12, "anti-periodic MPO mismatch: {maxabs}");
 }

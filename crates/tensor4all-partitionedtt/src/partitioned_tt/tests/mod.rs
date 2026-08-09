@@ -1,6 +1,7 @@
 use super::*;
 use tensor4all_core::index::Index;
 use tensor4all_core::{TensorContractionLike, TensorDynLen};
+use tensor4all_itensorlike::TensorTrainError;
 
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
@@ -297,6 +298,27 @@ fn test_subdomain_tt_norm_with_projector() {
     // Note: Current implementation returns raw TT norm, not projected norm
     // If we want projected norm, we'd need to modify the implementation
     // For now, this test just verifies current behavior is consistent
+}
+
+#[test]
+fn test_partitioned_tt_add_preserves_tensor_train_error_variant() {
+    let left_index = make_index(2);
+    let right_index = make_index(3);
+    let left = SubDomainTT::from_tt(TensorTrain::new(vec![make_tensor(vec![left_index])]).unwrap());
+    let right =
+        SubDomainTT::from_tt(TensorTrain::new(vec![make_tensor(vec![right_index])]).unwrap());
+    let left_partitioned = PartitionedTT::from_subdomain(left);
+    let right_partitioned = PartitionedTT::from_subdomain(right);
+
+    let error = left_partitioned
+        .add(&right_partitioned, &TruncateOptions::svd())
+        .unwrap_err();
+    match error {
+        PartitionedTTError::TensorTrain { source } => {
+            assert!(matches!(source, TensorTrainError::InvalidStructure { .. }));
+        }
+        other => panic!("expected preserved tensor-train error, got {other:?}"),
+    }
 }
 
 #[test]

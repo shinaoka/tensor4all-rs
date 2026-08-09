@@ -281,9 +281,9 @@ impl SubDomainTT {
 
     /// Truncate the tensor train.
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
-        self.data.truncate(options).map_err(|e| {
-            PartitionedTTError::tensor_train_operation(format!("Truncation failed: {}", e))
-        })
+        self.data
+            .truncate(options)
+            .map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
     /// Contract with another SubDomainTT.
@@ -335,9 +335,7 @@ impl SubDomainTT {
 
         let contracted_data = self_projected
             .contract(&other_projected, options)
-            .map_err(|e| {
-                PartitionedTTError::tensor_train_operation(format!("Contraction failed: {}", e))
-            })?;
+            .map_err(|source| PartitionedTTError::TensorTrain { source })?;
 
         // Create result with the new projector
         let result = Self::new(contracted_data, proj_after);
@@ -387,7 +385,7 @@ impl SubDomainTT {
     pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
         self.data
             .inner(other.data())
-            .map_err(|err| PartitionedTTError::tensor_train_operation(err.to_string()))
+            .map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 }
 

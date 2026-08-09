@@ -6,7 +6,7 @@
 //! The main contraction functionality is implemented in `SubDomainTT::contract`
 //! and `PartitionedTT::contract`. This module provides additional utilities.
 
-use crate::error::Result;
+use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
 use crate::subdomain_tt::SubDomainTT;
 use tensor4all_itensorlike::ContractOptions;
@@ -81,6 +81,19 @@ pub fn proj_contract(
     proj: &Projector,
     options: &ContractOptions,
 ) -> Result<Option<SubDomainTT>> {
+    let all_indices = m1
+        .all_indices()
+        .into_iter()
+        .chain(m2.all_indices())
+        .collect::<std::collections::HashSet<_>>();
+    for (index, _) in proj.iter() {
+        if !all_indices.contains(index) {
+            return Err(PartitionedTTError::ProjectorIndexNotFound {
+                index: index.clone(),
+            });
+        }
+    }
+
     // A shared projector may mention an index belonging to only one input;
     // filter it at this two-input seam before each strict single-TT project.
     let m1_proj = match m1.project(&proj.filter_indices(&m1.all_indices()))? {

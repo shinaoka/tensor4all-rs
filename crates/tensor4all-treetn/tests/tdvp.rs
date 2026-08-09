@@ -619,7 +619,7 @@ fn one_site_tdvp_identity_star_matches_global_phase() {
 fn one_site_tdvp_sum_z_chain_preserves_norm_and_matches_exact_phase() {
     let (state, sites) = chain_state();
     let before = state.contract_to_tensor().unwrap();
-    let before_norm = before.norm();
+    let before_norm = before.norm().unwrap();
     let coeffs = [0.4, -0.9];
     let operator =
         diagonal_sum_z_operator(&sites, &["site0", "site1"], &[("site0", "site1")], &coeffs);
@@ -636,7 +636,7 @@ fn one_site_tdvp_sum_z_chain_preserves_norm_and_matches_exact_phase() {
     .unwrap();
 
     let after = result.state.contract_to_tensor().unwrap();
-    assert!((after.norm() - before_norm).abs() < 1.0e-10);
+    assert!((after.norm().unwrap() - before_norm).abs() < 1.0e-10);
     assert_diagonal_sum_z_evolution(&before, &after, exponent, &coeffs, 1.0e-10);
 }
 

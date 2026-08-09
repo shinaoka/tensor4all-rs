@@ -493,7 +493,10 @@ fn tracked_negative_real_analytic_ops_match_principal_complex_values_and_backwar
     assert!(sqrt.tracks_grad());
     sqrt.backward().unwrap();
     let sqrt_grad: Complex64 = x.grad().unwrap().unwrap().into();
-    assert!(sqrt_grad.re.is_finite() && sqrt_grad.im.is_finite());
+    assert!(sqrt_grad.re.abs() < 1.0e-12);
+    // Reverse mode uses tenferro's Hermitian real-inner-product convention,
+    // so this is the conjugated analytic derivative.
+    assert!((sqrt_grad.im - 0.25).abs() < 1.0e-12);
     x.clear_grad().unwrap();
 
     let pow = x.powf(0.5);
@@ -503,7 +506,8 @@ fn tracked_negative_real_analytic_ops_match_principal_complex_values_and_backwar
     assert!(pow.tracks_grad());
     pow.backward().unwrap();
     let pow_grad: Complex64 = x.grad().unwrap().unwrap().into();
-    assert!(pow_grad.re.is_finite() && pow_grad.im.is_finite());
+    assert!(pow_grad.re.abs() < 1.0e-12);
+    assert!((pow_grad.im - 0.25).abs() < 1.0e-12);
 }
 
 #[test]
@@ -532,12 +536,27 @@ fn tracked_real_and_imag_parts_keep_graph_and_values() {
 
 #[test]
 fn tracked_powi_zero_is_graph_connected_with_zero_gradient() {
-    let x = AnyScalar::new_real(3.0).enable_grad().unwrap();
-    let result = x.powi(0);
+    for value in [3.0, 0.0] {
+        let x = AnyScalar::new_real(value).enable_grad().unwrap();
+        let result = x.powi(0);
 
-    assert_eq!(result.real(), 1.0);
-    assert!(result.tracks_grad());
+        assert_eq!(result.real(), 1.0);
+        assert!(result.tracks_grad());
+        result.backward().unwrap();
+        let gradient = x.grad().unwrap().unwrap();
+        assert!(gradient.real().abs() < 1e-12);
+    }
+}
+
+#[test]
+fn tracked_scalar_subtraction_preserves_autodiff() {
+    let x = AnyScalar::new_real(5.0).enable_grad().unwrap();
+    let y = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let result = &x - &y;
+
+    assert_eq!(result.real(), 3.0);
     result.backward().unwrap();
-    let gradient = x.grad().unwrap().unwrap();
-    assert!(gradient.real().abs() < 1e-12);
+
+    assert!((x.grad().unwrap().unwrap().real() - 1.0).abs() < 1.0e-12);
+    assert!((y.grad().unwrap().unwrap().real() + 1.0).abs() < 1.0e-12);
 }

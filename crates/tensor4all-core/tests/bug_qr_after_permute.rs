@@ -133,7 +133,7 @@ fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &Factori
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = t.add(&neg).unwrap();
-    diff.norm()
+    diff.norm().unwrap()
 }
 
 fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
@@ -151,7 +151,7 @@ fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = t.add(&neg).unwrap();
-    diff.norm()
+    diff.norm().unwrap()
 }
 
 /// Regression: QR and SVD should both reconstruct this tensor to machine precision.

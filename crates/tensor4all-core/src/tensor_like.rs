@@ -587,11 +587,6 @@ pub trait TensorVectorSpace: TensorIndex {
     /// ```
     fn maxabs(&self) -> Result<f64>;
 
-    /// Fallible alias for [`Self::maxabs`].
-    fn try_maxabs(&self) -> Result<f64> {
-        self.maxabs()
-    }
-
     /// Element-wise subtraction: `self - other`.
     fn sub(&self, other: &Self) -> Result<Self> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))

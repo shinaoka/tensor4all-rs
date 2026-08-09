@@ -409,7 +409,7 @@ fn gmres_absolute_tolerance_and_total_iteration_limit_paths() {
     let result = gmres_with_absolute_tolerance(apply_a, &b, &x0, &options, 1e-10).unwrap();
     assert!(result.converged);
     let expected = make_vector_with_index(vec![2.0, 3.0], &idx);
-    assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-10);
+    assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-10);
 
     let limited = gmres_with_total_iteration_limit(
         |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 3.0]),
@@ -448,7 +448,7 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
     .unwrap();
     assert!(result.converged);
     let expected = make_vector_with_index(vec![2.0, 28.0 / 11.0], &idx);
-    assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-10);
+    assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-10);
 
     let scaled = gmres_affine(
         |x: &TensorDynLen| scale_vector_f64(x, &[100.0, 100.0]),
@@ -467,6 +467,7 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
             .sub(&make_vector_with_index(vec![5.0, 14.0], &idx))
             .unwrap()
             .maxabs()
+            .unwrap()
             < 1e-12
     );
 
@@ -509,7 +510,7 @@ fn gmres_affine_profile_and_zero_rhs_paths() {
 
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
-    assert!(result.solution.sub(&x0).unwrap().maxabs() < 1e-12);
+    assert!(result.solution.sub(&x0).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -602,7 +603,7 @@ fn gmres_lucky_breakdown_paths_are_reachable_with_zero_tolerance() {
     let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &options).unwrap();
     assert!(!result.converged);
     assert_eq!(result.iterations, 1);
-    assert!(result.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(result.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let affine = gmres_affine(
         |x: &TensorDynLen| Ok(x.clone()),
@@ -615,7 +616,7 @@ fn gmres_lucky_breakdown_paths_are_reachable_with_zero_tolerance() {
     .unwrap();
     assert!(!affine.converged);
     assert_eq!(affine.iterations, 1);
-    assert!(affine.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(affine.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let truncated = gmres_with_truncation(
         |x: &TensorDynLen| Ok(x.clone()),
@@ -627,7 +628,7 @@ fn gmres_lucky_breakdown_paths_are_reachable_with_zero_tolerance() {
     .unwrap();
     assert!(!truncated.converged);
     assert_eq!(truncated.iterations, 1);
-    assert!(truncated.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(truncated.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -645,7 +646,7 @@ fn gmres_convergence_branches_cover_true_residual_and_affine_fast_finish() {
 
     let checked = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &options).unwrap();
     assert!(checked.converged);
-    assert!(checked.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(checked.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let truncated = gmres_with_truncation(
         |x: &TensorDynLen| Ok(x.clone()),
@@ -656,7 +657,7 @@ fn gmres_convergence_branches_cover_true_residual_and_affine_fast_finish() {
     )
     .unwrap();
     assert!(truncated.converged);
-    assert!(truncated.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(truncated.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let no_true_check = GmresOptions {
         check_true_residual: false,
@@ -672,7 +673,7 @@ fn gmres_convergence_branches_cover_true_residual_and_affine_fast_finish() {
     )
     .unwrap();
     assert!(affine.converged);
-    assert!(affine.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(affine.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -711,7 +712,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
         .unwrap()
     });
     assert!(checked.converged);
-    assert!(checked.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(checked.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let lucky_options = GmresOptions {
         check_true_residual: false,
@@ -731,7 +732,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
     });
     assert!(!lucky.converged);
     assert_eq!(lucky.iterations, 1);
-    assert!(lucky.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(lucky.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -777,7 +778,7 @@ fn gmres_zero_cycle_and_restart_nonzero_update_paths() {
     .unwrap();
     assert!(!restarted.converged);
     assert_eq!(restarted.outer_iterations, 2);
-    assert!(restarted.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(restarted.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -971,7 +972,7 @@ fn test_gmres_identity_operator() {
         .solution
         .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    assert!(diff.norm() < 1e-10, "Solution should equal b");
+    assert!(diff.norm().unwrap() < 1e-10, "Solution should equal b");
 }
 
 #[test]
@@ -1014,9 +1015,9 @@ fn test_gmres_diagonal_matrix() {
         )
         .unwrap();
     assert!(
-        diff.norm() < 1e-8,
+        diff.norm().unwrap() < 1e-8,
         "Solution error too large: {}",
-        diff.norm()
+        diff.norm().unwrap()
     );
 }
 
@@ -1054,7 +1055,11 @@ fn test_gmres_complex_nonsymmetric_matrix() {
             AnyScalar::new_real(-1.0),
         )
         .unwrap();
-    assert!(diff.norm() < 1e-10, "solution error={}", diff.norm());
+    assert!(
+        diff.norm().unwrap() < 1e-10,
+        "solution error={}",
+        diff.norm().unwrap()
+    );
 }
 
 #[test]
@@ -1098,7 +1103,7 @@ fn test_gmres_with_total_iteration_limit_allows_zero_iterations() {
 
     assert_eq!(result.iterations, 0);
     assert!(!result.converged);
-    assert!(result.solution.sub(&x0).unwrap().norm() < 1.0e-12);
+    assert!(result.solution.sub(&x0).unwrap().norm().unwrap() < 1.0e-12);
 }
 
 #[test]
@@ -1139,9 +1144,9 @@ fn test_gmres_nonsymmetric_matrix() {
         )
         .unwrap();
     assert!(
-        diff.norm() < 1e-8,
+        diff.norm().unwrap() < 1e-8,
         "Solution error too large: {}",
-        diff.norm()
+        diff.norm().unwrap()
     );
 }
 
@@ -1212,7 +1217,7 @@ fn test_gmres_identity_operator_c64() {
         .solution
         .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    let err = diff.norm();
+    let err = diff.norm().unwrap();
 
     assert!(result.converged, "GMRES should converge for identity (c64)");
     assert!(
@@ -1275,7 +1280,7 @@ fn test_gmres_diagonal_c64() {
             AnyScalar::new_real(-1.0),
         )
         .unwrap();
-    let err = diff.norm();
+    let err = diff.norm().unwrap();
 
     assert!(result.converged, "GMRES should converge for diagonal (c64)");
     assert!(err < 1e-8, "Solution error too large: {}", err);
@@ -1332,7 +1337,7 @@ fn test_restart_gmres_identity_operator() {
         .solution
         .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    assert!(diff.norm() < 1e-10, "Solution should equal b");
+    assert!(diff.norm().unwrap() < 1e-10, "Solution should equal b");
 }
 
 #[test]
@@ -1378,9 +1383,9 @@ fn test_restart_gmres_diagonal_matrix() {
         )
         .unwrap();
     assert!(
-        diff.norm() < 1e-8,
+        diff.norm().unwrap() < 1e-8,
         "Solution error too large: {}",
-        diff.norm()
+        diff.norm().unwrap()
     );
 }
 
@@ -1412,9 +1417,9 @@ fn test_restart_gmres_with_initial_guess() {
         )
         .unwrap();
     assert!(
-        diff.norm() < 1e-8,
+        diff.norm().unwrap() < 1e-8,
         "Solution error too large: {}",
-        diff.norm()
+        diff.norm().unwrap()
     );
 }
 
@@ -1528,7 +1533,7 @@ fn test_gmres_with_truncation_check_true_residual_safe() {
     let r = ax
         .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    let true_rel_res = r.norm() / b.norm();
+    let true_rel_res = r.norm().unwrap() / b.norm().unwrap();
     assert!(
         true_rel_res < 1e-8,
         "True residual should be small: {}",
@@ -1582,7 +1587,7 @@ fn test_gmres_with_truncation_check_true_residual_consistency() {
     let r = ax
         .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    let true_rel_res = r.norm() / b.norm();
+    let true_rel_res = r.norm().unwrap() / b.norm().unwrap();
 
     // The reported residual should match the true residual closely
     assert!(
@@ -1677,7 +1682,7 @@ fn test_gmres_lucky_breakdown() {
             AnyScalar::new_real(-1.0),
         )
         .unwrap();
-    assert!(diff.norm() < 1e-10, "Solution should be [2.0]");
+    assert!(diff.norm().unwrap() < 1e-10, "Solution should be [2.0]");
 }
 
 #[test]

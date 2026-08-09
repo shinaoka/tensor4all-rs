@@ -572,12 +572,12 @@ pub enum StructuredSelectorError {
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
 ///
-/// `TensorDynLen` stores a logical multi-dimensional tensor of `f64` or
-/// `Complex64` values together with a list of [`DynIndex`] labels. The
-/// authoritative payload is compact [`Storage`], which may be dense, diagonal,
-/// or explicitly structured. The indices carry unique identities (UUIDs) so
-/// that contraction, addition, and other binary operations can automatically
-/// match legs by identity rather than position.
+/// `TensorDynLen` stores a logical multi-dimensional tensor of supported scalar
+/// values (`f32`, `f64`, `Complex32`, or `Complex64`) together with a list of
+/// [`DynIndex`] labels. The authoritative payload is compact [`Storage`], which
+/// may be dense, diagonal, or explicitly structured. The indices carry unique
+/// identities (UUIDs) so that contraction, addition, and other binary
+/// operations can automatically match legs by identity rather than position.
 ///
 /// # Key Operations
 ///
@@ -635,6 +635,21 @@ pub struct TensorDynLen {
 impl TensorDynLen {
     fn dense_axis_classes(rank: usize) -> Vec<usize> {
         (0..rank).collect()
+    }
+
+    fn scalar_dtype(&self) -> Result<DType> {
+        if let Some(inner) = self.storage.eager() {
+            return Ok(inner.data().dtype());
+        }
+        if self.storage.is_f64() {
+            Ok(DType::F64)
+        } else if self.storage.is_c64() {
+            Ok(DType::C64)
+        } else {
+            Err(anyhow::anyhow!(
+                "unable to determine TensorDynLen scalar dtype"
+            ))
+        }
     }
 
     fn diag_axis_classes(rank: usize) -> Vec<usize> {
@@ -1105,6 +1120,9 @@ impl TensorDynLen {
                 payload_inner.data().shape(),
                 payload_dims
             ));
+        }
+        if axis_classes == Self::dense_axis_classes(indices.len()) {
+            return Self::from_inner_with_axis_classes(indices, payload_inner, axis_classes);
         }
         let storage = storage_from_payload_native(
             payload_inner.data().clone(),
@@ -2195,7 +2213,7 @@ impl TensorDynLen {
     /// let applied = TensorDynLen::contract(&[&matrix, &eigenvector_as_col]).unwrap();
     /// let expected = eigenvector.scale(AnyScalar::new_real(decomp.eigenvalues[0])).unwrap();
     ///
-    /// assert!(applied.isapprox(&expected, 1.0e-12, 0.0));
+    /// assert!(applied.isapprox(&expected, 1.0e-12, 0.0).unwrap());
     /// ```
     pub fn hermitian_eigendecomposition(
         &self,
@@ -2347,8 +2365,18 @@ impl TensorDynLen {
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     pub fn enable_grad(self) -> Result<Self> {
         let materialized = self.storage.materialize(self.indices.len())?;
-        let payload = storage_payload_native(materialized.as_ref())
-            .context("TensorDynLen::enable_grad failed")?;
+        // Keep the eager payload when available: compact Storage currently
+        // stores only f64/C64 and would promote f32/C32 leaves before AD.
+        let eager_payload = self
+            .storage
+            .eager()
+            .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
+            .filter(|inner| inner.data().shape() == self.storage.payload_dims());
+        let payload = match eager_payload {
+            Some(inner) => inner.data().clone(),
+            None => storage_payload_native(materialized.as_ref())
+                .context("TensorDynLen::enable_grad failed")?,
+        };
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
         Ok(Self {
@@ -2382,6 +2410,13 @@ impl TensorDynLen {
                 .payload
                 .grad()
                 .map(|grad| {
+                    if self.compact_payload_is_logical_dense(&value.payload_dims) {
+                        return Self::from_native_with_axis_classes(
+                            self.indices.clone(),
+                            grad.as_ref().clone(),
+                            value.axis_classes.clone(),
+                        );
+                    }
                     let storage = storage_from_payload_native(
                         grad.as_ref().clone(),
                         &value.payload_dims,
@@ -3434,8 +3469,9 @@ impl TensorDynLen {
 impl TensorDynLen {
     /// Complex conjugate of all tensor elements.
     ///
-    /// For real (f64) tensors, returns a copy (conjugate of real is identity).
-    /// For complex (Complex64) tensors, conjugates each element.
+    /// For real (`f32`/`f64`) tensors, returns a copy (conjugate of real is
+    /// identity). For complex (`Complex32`/`Complex64`) tensors, conjugates
+    /// each element.
     ///
     /// The indices and dimensions remain unchanged. If an eager backend cannot
     /// perform the conjugation, the failure is retained and reported by the
@@ -3540,6 +3576,9 @@ impl TensorDynLen {
     /// For real tensors: sum of squares of all elements.
     /// For complex tensors: sum of |z|² = z * conj(z) for all elements.
     ///
+    /// # Errors
+    /// Returns an error if conjugation, contraction, or scalar extraction fails.
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -3550,17 +3589,9 @@ impl TensorDynLen {
     /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];  // 1² + 2² + ... + 6² = 91
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i, j], data).unwrap();
     ///
-    /// assert!((tensor.norm_squared() - 91.0).abs() < 1e-10);
+    /// assert!((tensor.norm_squared().unwrap() - 91.0).abs() < 1e-10);
     /// ```
-    pub fn norm_squared(&self) -> f64 {
-        self.try_norm_squared().unwrap_or(f64::NAN)
-    }
-
-    /// Try to compute the squared Frobenius norm of the tensor.
-    ///
-    /// # Errors
-    /// Returns an error if conjugation, contraction, or scalar extraction fails.
-    pub fn try_norm_squared(&self) -> Result<f64> {
+    pub fn norm_squared(&self) -> Result<f64> {
         // Special case: scalar tensor (no indices)
         if self.indices.is_empty() {
             // For a scalar, ||T||² = |value|²
@@ -3580,6 +3611,9 @@ impl TensorDynLen {
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
     ///
+    /// # Errors
+    /// Returns an error if norm evaluation fails.
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -3589,13 +3623,16 @@ impl TensorDynLen {
     /// let data = vec![3.0, 4.0];  // sqrt(9 + 16) = 5
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i], data).unwrap();
     ///
-    /// assert!((tensor.norm() - 5.0).abs() < 1e-10);
+    /// assert!((tensor.norm().unwrap() - 5.0).abs() < 1e-10);
     /// ```
-    pub fn norm(&self) -> f64 {
-        self.norm_squared().sqrt()
+    pub fn norm(&self) -> Result<f64> {
+        Ok(self.norm_squared()?.sqrt())
     }
 
     /// Maximum absolute value of all elements (L-infinity norm).
+    ///
+    /// # Errors
+    /// Returns an error if authoritative storage cannot be materialized.
     ///
     /// # Examples
     ///
@@ -3604,14 +3641,9 @@ impl TensorDynLen {
     ///
     /// let i = DynIndex::new_dyn(4);
     /// let t = TensorDynLen::from_dense(vec![i], vec![-5.0, 1.0, 3.0, -2.0]).unwrap();
-    /// assert!((t.maxabs() - 5.0).abs() < 1e-12);
+    /// assert!((t.maxabs().unwrap() - 5.0).abs() < 1e-12);
     /// ```
-    pub fn maxabs(&self) -> f64 {
-        self.try_maxabs().unwrap_or(f64::NAN)
-    }
-
-    /// Try to compute the maximum absolute value of all tensor elements.
-    pub fn try_maxabs(&self) -> Result<f64> {
+    pub fn maxabs(&self) -> Result<f64> {
         self.storage.max_abs()
     }
 
@@ -3636,15 +3668,15 @@ impl TensorDynLen {
 
     /// Approximate equality check using Julia `isapprox`-style semantics.
     ///
-    /// Returns `true` when `||self - other|| <= max(atol, rtol *
+    /// Returns `Ok(true)` when `||self - other|| <= max(atol, rtol *
     /// max(||self||, ||other||))`.
-    pub fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
-        let diff = match self.sub(other) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
-        let diff_norm = diff.norm();
-        diff_norm <= atol.max(rtol * self.norm().max(other.norm()))
+    ///
+    /// # Errors
+    /// Returns an error when subtraction or norm evaluation fails.
+    pub fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> Result<bool> {
+        let diff = self.sub(other)?;
+        let diff_norm = diff.norm()?;
+        Ok(diff_norm <= atol.max(rtol * self.norm()?.max(other.norm()?)))
     }
 
     /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
@@ -3692,10 +3724,10 @@ impl TensorDynLen {
     ///
     /// This is the differentiable masking counterpart to [`Self::select_indices`].
     /// It selects the requested slice, forms a one-hot tensor over the removed
-    /// axis, and takes an explicit tensor product to restore the original index
-    /// order. The implementation stays in the tensor backend, so structured
-    /// storage and reverse-mode metadata are preserved whenever the backend can
-    /// represent the operation.
+    /// axis in the source dtype, and takes an explicit tensor product to restore
+    /// the original index order. The implementation stays in the tensor backend,
+    /// so structured storage and reverse-mode metadata are preserved whenever
+    /// the backend can represent the operation.
     ///
     /// # Arguments
     ///
@@ -3729,12 +3761,66 @@ impl TensorDynLen {
     /// .is_err());
     /// ```
     pub fn mask_index(&self, index: &DynIndex, position: usize) -> Result<Self> {
+        anyhow::ensure!(
+            self.indices.iter().any(|candidate| candidate == index),
+            "mask_index: index is not present in tensor"
+        );
+        anyhow::ensure!(
+            position < index.dim(),
+            "mask_index: position {position} is out of range for dimension {}",
+            index.dim()
+        );
+
         // Retaining the shared index turns contraction into a backend-level
-        // elementwise product instead of materializing a host mask.
-        let onehot = Self::onehot(&[(index.clone(), position)])?;
+        // elementwise product instead of materializing a host mask. Construct
+        // the constant mask in the input dtype so f32/c32 values and AD graphs
+        // are not promoted or detached.
+        let mask = match self.scalar_dtype()? {
+            DType::F32 => Self::from_dense(
+                vec![index.clone()],
+                (0..index.dim())
+                    .map(|value| if value == position { 1.0_f32 } else { 0.0 })
+                    .collect(),
+            ),
+            DType::F64 => Self::from_dense(
+                vec![index.clone()],
+                (0..index.dim())
+                    .map(|value| if value == position { 1.0_f64 } else { 0.0 })
+                    .collect(),
+            ),
+            DType::C32 => Self::from_dense(
+                vec![index.clone()],
+                (0..index.dim())
+                    .map(|value| {
+                        if value == position {
+                            num_complex::Complex32::new(1.0, 0.0)
+                        } else {
+                            num_complex::Complex32::new(0.0, 0.0)
+                        }
+                    })
+                    .collect(),
+            ),
+            DType::C64 => Self::from_dense(
+                vec![index.clone()],
+                (0..index.dim())
+                    .map(|value| {
+                        if value == position {
+                            Complex64::new(1.0, 0.0)
+                        } else {
+                            Complex64::new(0.0, 0.0)
+                        }
+                    })
+                    .collect(),
+            ),
+            dtype => {
+                return Err(anyhow::anyhow!(
+                    "mask_index does not support dtype {dtype:?}"
+                ))
+            }
+        }?;
         super::contract::contract_pair_with_options(
             self,
-            &onehot,
+            &mask,
             super::contract::ContractionOptions::new()
                 .with_retain_indices(std::slice::from_ref(index)),
         )
@@ -3771,12 +3857,12 @@ impl TensorDynLen {
     /// assert!(tensor_a.distance(&tensor_b).unwrap() < 1e-10);  // Zero distance
     /// ```
     pub fn distance(&self, other: &Self) -> Result<f64> {
-        let norm_self = self.norm();
+        let norm_self = self.norm()?;
 
         // Compute A - B = A + (-1) * B
         let neg_other = other.scale(AnyScalar::new_real(-1.0))?;
         let diff = self.add(&neg_other)?;
-        let norm_diff = diff.norm();
+        let norm_diff = diff.norm()?;
 
         if norm_self > 0.0 {
             Ok(norm_diff / norm_self)
@@ -4009,11 +4095,11 @@ use crate::tensor_like::{
 
 impl TensorVectorSpace for TensorDynLen {
     fn norm_squared(&self) -> Result<f64> {
-        TensorDynLen::try_norm_squared(self)
+        TensorDynLen::norm_squared(self)
     }
 
     fn maxabs(&self) -> Result<f64> {
-        TensorDynLen::try_maxabs(self)
+        TensorDynLen::maxabs(self)
     }
 
     fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
@@ -4460,7 +4546,7 @@ impl TensorDynLen {
     /// let roundtrip = fused_tensor
     ///     .unfuse_index(&fused, &[i, j], LinearizationOrder::ColumnMajor)
     ///     .unwrap();
-    /// assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    /// assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0).unwrap());
     /// ```
     pub fn fuse_indices(
         &self,
@@ -4573,7 +4659,7 @@ impl TensorDynLen {
     ///     .unwrap();
     ///
     /// let expected = TensorDynLen::from_dense(vec![i, j], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    /// assert!(unfused.isapprox(&expected, 1e-12, 0.0));
+    /// assert!(unfused.isapprox(&expected, 1e-12, 0.0).unwrap());
     /// ```
     pub fn unfuse_index(
         &self,
@@ -5014,8 +5100,8 @@ mod tests {
         assert!(conjugated.sum().is_err());
         assert!(conjugated.grad().is_err());
         assert!(conjugated.clear_grad().is_err());
-        assert!(conjugated.maxabs().is_nan());
-        assert!(conjugated.norm_squared().is_nan());
+        assert!(conjugated.maxabs().is_err());
+        assert!(conjugated.norm_squared().is_err());
 
         let twice_conjugated = conjugated.conj();
         let error = twice_conjugated.to_storage().unwrap_err();

@@ -30,7 +30,7 @@
 //! let result = gmres(apply_operator, &rhs, &initial_guess, &GmresOptions::default())?;
 //!
 //! assert!(result.converged);
-//! assert!(result.solution.sub(&rhs)?.maxabs() < 1e-12);
+//! assert!(result.solution.sub(&rhs)?.maxabs()? < 1e-12);
 //! # Ok(())
 //! # }
 //! ```
@@ -1712,7 +1712,7 @@ where
 /// assert!(result.converged);
 /// // Solution should be [2.0, 3.0]
 /// let expected = TensorDynLen::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
-/// assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-8);
+/// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn gmres_with_truncation<T, F, Tr>(
     apply_a: F,
@@ -2208,7 +2208,7 @@ pub struct RestartGmresResult<T> {
 ///
 /// assert!(result.converged);
 /// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
-/// assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-8);
+/// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(
     apply_a: F,

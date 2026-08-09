@@ -88,9 +88,9 @@ fn test_qr_reconstruction() {
 
     // Check reconstruction accuracy
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "QR reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -184,9 +184,9 @@ fn test_qr_nontrivial_split_reconstruction() {
     let reconstructed = q.contract_pair(&r).unwrap();
 
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "QR nontrivial split reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -209,9 +209,9 @@ fn test_qr_complex_reconstruction() {
 
     let reconstructed = q.contract_pair(&r).unwrap();
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "Complex QR reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -223,7 +223,7 @@ fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = t.add(&neg).unwrap();
-    diff.norm()
+    diff.norm().unwrap()
 }
 
 fn qr_reconstruction_error_c64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
@@ -233,7 +233,7 @@ fn qr_reconstruction_error_c64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = t.add(&neg).unwrap();
-    diff.norm()
+    diff.norm().unwrap()
 }
 
 #[test]

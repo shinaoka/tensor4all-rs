@@ -51,12 +51,12 @@ fn build_tn(
 /// Frobenius relative error: ||after - before|| / ||before||
 /// Uses sub() to align indices correctly before subtracting.
 fn rel_error(before: &TensorDynLen, after: &TensorDynLen) -> f64 {
-    let norm_before = before.norm();
+    let norm_before = before.norm().unwrap();
     if norm_before == 0.0 {
         return 0.0;
     }
     let diff = before.sub(after).expect("sub failed");
-    diff.norm() / norm_before
+    diff.norm().unwrap() / norm_before
 }
 
 fn run_timing(r: usize, bond_dim: usize, options: &SwapOptions, label: &str) {

@@ -143,7 +143,7 @@ pub fn factorize(
 ///     Canonical::Left,
 /// )?;
 /// let reconstructed = result.left.contract_pair(&result.right).unwrap();
-/// assert!(tensor.sub(&reconstructed)?.maxabs() < 1.0e-18);
+/// assert!(tensor.sub(&reconstructed)?.maxabs()? < 1.0e-18);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn factorize_full_rank(

@@ -1474,7 +1474,7 @@ mod tests {
         assert!(result
             .site_index_network()
             .share_equivalent_site_index_network(&target));
-        assert!(result.to_dense()?.sub(&before)?.maxabs() < 1.0e-12);
+        assert!(result.to_dense()?.sub(&before)?.maxabs()? < 1.0e-12);
 
         Ok(())
     }
@@ -1509,7 +1509,7 @@ mod tests {
         assert!(result
             .site_index_network()
             .share_equivalent_site_index_network(&target));
-        assert!(result.to_dense()?.sub(&before)?.maxabs() < 1.0e-12);
+        assert!(result.to_dense()?.sub(&before)?.maxabs()? < 1.0e-12);
 
         Ok(())
     }

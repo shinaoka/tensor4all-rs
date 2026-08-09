@@ -179,7 +179,7 @@ fn read_payload_c64(tensor: *const t4a_tensor) -> Vec<f64> {
 fn assert_tensors_close(actual: &InternalTensor, expected: &InternalTensor, tol: f64) {
     let neg_expected = expected.scale(AnyScalar::new_real(-1.0)).unwrap();
     let diff = actual.add(&neg_expected).unwrap();
-    let maxabs = diff.maxabs();
+    let maxabs = diff.maxabs().unwrap();
     assert!(
         maxabs < tol,
         "tensor maxabs diff {maxabs} exceeded tolerance {tol}"

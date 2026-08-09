@@ -65,7 +65,7 @@ fn test_diag_tensor_scale_preserves_diagonal_values() {
         StorageKind::Diagonal
     );
     let expected = diag_tensor_dyn_len(vec![i, j], vec![-0.5, 1.0, -2.0]).unwrap();
-    assert!(scaled.isapprox(&expected, 1e-12, 0.0));
+    assert!(scaled.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn test_diag_tensor_permute() {
     let permuted = tensor.permute(&[2, 0, 1]).unwrap();
     assert_eq!(permuted.dims(), vec![3, 3, 3]);
     let expected = diag_tensor_dyn_len(vec![k, i, j], diag_data).unwrap();
-    assert!(permuted.isapprox(&expected, 1e-12, 0.0));
+    assert!(permuted.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn test_diag_tensor_contract_diag_diag_partial() {
 
     // Result diagonal should be element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
     let expected = diag_tensor_dyn_len(vec![i, k], vec![4.0, 10.0, 18.0]).unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn test_diag_tensor_tensordot_diag_diag_partial_preserves_diagonal_storage() {
     );
 
     let expected = diag_tensor_dyn_len(vec![i, l], vec![4.0, 10.0, 18.0]).unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn test_diag_tensor_contract_diag_dense() {
 
     assert_eq!(result.dims(), vec![2, 2]);
     let expected = TensorDynLen::from_dense(vec![i, k], vec![1.0, 2.0, 1.0, 2.0]).unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn test_diag_tensor_convert_to_dense() {
         ],
     )
     .unwrap();
-    assert!(dense_tensor.isapprox(&expected, 1e-12, 0.0));
+    assert!(dense_tensor.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn tensorlike_delta_two_pairs_preserves_independent_copy_structure() {
         &TensorDynLen::from_diag(vec![i2, o2], vec![1.0_f64, 1.0, 1.0]).unwrap(),
     )
     .unwrap();
-    assert!(delta.isapprox(&expected, 1e-12, 0.0));
+    assert!(delta.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -428,7 +428,7 @@ fn test_copy_tensor_rank3() {
     .unwrap();
 
     let expected = TensorDynLen::from_diag(vec![i, j, k], vec![1.0, 1.0, 1.0]).unwrap();
-    assert!(tensor.isapprox(&expected, 1e-12, 0.0));
+    assert!(tensor.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -454,7 +454,7 @@ fn test_from_diag_any_real() {
     .unwrap();
 
     let expected = TensorDynLen::from_diag(vec![i, j], vec![1.0, 2.0]).unwrap();
-    assert!(tensor.isapprox(&expected, 1e-12, 0.0));
+    assert!(tensor.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -473,7 +473,7 @@ fn test_from_diag_any_complex_promotes_payload() {
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, -0.5)],
     )
     .unwrap();
-    assert!(tensor.isapprox(&expected, 1e-12, 0.0));
+    assert!(tensor.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -533,7 +533,7 @@ fn test_diag_tensor_complex_axpby_preserves_diagonal_values() {
         .map(|(&x, &y)| Complex64::new(2.0, 0.0) * x + b_c * y)
         .collect();
     let expected = TensorDynLen::from_diag(vec![i, j], expected_diag).unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -561,5 +561,5 @@ fn test_diag_tensor_contract_rank3() {
 
     // Result diagonal should be element-wise product: [1*3, 2*4] = [3, 8]
     let expected = diag_tensor_dyn_len(vec![i, j, l], vec![3.0, 8.0]).unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }

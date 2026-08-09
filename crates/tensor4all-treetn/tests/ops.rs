@@ -152,7 +152,7 @@ fn test_norm_against_dense() {
 
     // Compute norm from dense tensor
     let dense = tn.to_dense().unwrap();
-    let norm_dense = dense.norm_squared().sqrt();
+    let norm_dense = dense.norm_squared().unwrap().sqrt();
 
     assert!(
         (norm_tn - norm_dense).abs() / norm_dense < 1e-10,
@@ -253,7 +253,7 @@ fn test_to_dense_single_node() {
 
     let dense = tn.to_dense().unwrap();
     assert!(
-        dense.isapprox(&t0, 1e-10, 0.0),
+        dense.isapprox(&t0, 1e-10, 0.0).unwrap(),
         "to_dense mismatch: maxabs diff = {}",
         dense.distance(&t0).unwrap()
     );
@@ -799,7 +799,7 @@ fn test_add_two_nodes() {
     let a_dense = tn_a.to_dense().unwrap();
     let expected = a_dense.scale(AnyScalar::new_real(2.0)).unwrap();
     assert!(
-        sum_dense.isapprox(&expected, 1e-10, 0.0),
+        sum_dense.isapprox(&expected, 1e-10, 0.0).unwrap(),
         "add mismatch: maxabs diff = {}",
         sum_dense.distance(&expected).unwrap()
     );

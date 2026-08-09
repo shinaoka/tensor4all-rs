@@ -227,6 +227,24 @@ impl AnyScalar {
             .unwrap_or_else(|| ScalarValue::F64(value.real()))
     }
 
+    fn zero_like(&self) -> Self {
+        match self.value() {
+            ScalarValue::F32(_) => Self::from_value(0.0_f32),
+            ScalarValue::F64(_) => Self::from_value(0.0_f64),
+            ScalarValue::C32(_) => Self::from_value(Complex32::new(0.0, 0.0)),
+            ScalarValue::C64(_) => Self::from_value(Complex64::new(0.0, 0.0)),
+        }
+    }
+
+    fn one_like(&self) -> Self {
+        match self.value() {
+            ScalarValue::F32(_) => Self::from_value(1.0_f32),
+            ScalarValue::F64(_) => Self::from_value(1.0_f64),
+            ScalarValue::C32(_) => Self::from_value(Complex32::new(1.0, 0.0)),
+            ScalarValue::C64(_) => Self::from_value(Complex64::new(1.0, 0.0)),
+        }
+    }
+
     fn from_eager_binary<E>(
         lhs: &Self,
         rhs: &Self,
@@ -258,25 +276,29 @@ impl AnyScalar {
     }
 
     fn scalar_value_from_tensor(tensor: &TensorDynLen) -> Result<ScalarValue> {
-        let storage = tensor.storage()?;
-        if storage.is_c64() {
-            let values = storage
-                .payload_c64_col_major_vec()
-                .map_err(|e| anyhow!("failed to read c64 scalar storage: {e}"))?;
-            values
-                .first()
-                .copied()
-                .map(ScalarValue::C64)
-                .ok_or_else(|| anyhow!("rank-0 c64 scalar storage is empty"))
-        } else {
-            let values = storage
-                .payload_f64_col_major_vec()
-                .map_err(|e| anyhow!("failed to read f64 scalar storage: {e}"))?;
-            values
-                .first()
-                .copied()
+        let native = tensor.as_native()?;
+        match native.dtype() {
+            DType::F32 => native
+                .as_slice::<f32>()
+                .and_then(|values| values.first().copied())
+                .map(ScalarValue::F32)
+                .ok_or_else(|| anyhow!("rank-0 f32 scalar tensor is empty")),
+            DType::F64 => native
+                .as_slice::<f64>()
+                .and_then(|values| values.first().copied())
                 .map(ScalarValue::F64)
-                .ok_or_else(|| anyhow!("rank-0 f64 scalar storage is empty"))
+                .ok_or_else(|| anyhow!("rank-0 f64 scalar tensor is empty")),
+            DType::C32 => native
+                .as_slice::<Complex32>()
+                .and_then(|values| values.first().copied())
+                .map(ScalarValue::C32)
+                .ok_or_else(|| anyhow!("rank-0 c32 scalar tensor is empty")),
+            DType::C64 => native
+                .as_slice::<Complex64>()
+                .and_then(|values| values.first().copied())
+                .map(ScalarValue::C64)
+                .ok_or_else(|| anyhow!("rank-0 c64 scalar tensor is empty")),
+            dtype => Err(anyhow!("unsupported scalar tensor dtype {dtype:?}")),
         }
     }
 
@@ -1050,15 +1072,12 @@ impl AnyScalar {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().sqrt()));
         }
         if self.is_real() && self.real() < 0.0 {
-            let complex = self
-                .as_tensor()?
-                .as_inner()?
-                .convert(DType::C64)
-                .map_err(|error| operation_error("sqrt", error))?;
-            let result = complex
-                .sqrt()
-                .map_err(|error| operation_error("sqrt", error))?;
-            return Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), "sqrt");
+            let magnitude_input = Self::from_eager_unary(self, "sqrt", |tensor| tensor.neg())?;
+            let magnitude = magnitude_input.try_sqrt()?;
+            let factor = Self::new_complex(0.0, 1.0);
+            return Self::from_eager_binary(&magnitude, &factor, "sqrt", |value, factor| {
+                value.mul(factor)
+            });
         }
         Self::from_eager_unary(self, "sqrt", |tensor| tensor.sqrt())
     }
@@ -1071,17 +1090,13 @@ impl AnyScalar {
             ));
         }
         if self.is_real() && self.real() < 0.0 && exponent.fract() != 0.0 {
-            let base = self
-                .as_tensor()?
-                .as_inner()?
-                .convert(DType::C64)
-                .map_err(|error| operation_error("powf", error))?;
-            let exponent_scalar = Self::new_complex(exponent, 0.0);
-            let exponent = exponent_scalar.as_tensor()?.as_inner()?;
-            let result = base
-                .pow(exponent)
-                .map_err(|error| operation_error("powf", error))?;
-            return Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), "powf");
+            let magnitude_input = Self::from_eager_unary(self, "powf", |tensor| tensor.neg())?;
+            let magnitude = magnitude_input.try_powf(exponent)?;
+            let phase = std::f64::consts::PI * exponent;
+            let factor = Self::new_complex(phase.cos(), phase.sin());
+            return Self::from_eager_binary(&magnitude, &factor, "powf", |value, factor| {
+                value.mul(factor)
+            });
         }
         let exponent = if self.is_complex() {
             Self::new_complex(exponent, 0.0)
@@ -1095,7 +1110,11 @@ impl AnyScalar {
         self.as_tensor()?;
         if exponent == 0 {
             if self.tracks_grad() {
-                return self.try_powf(0.0);
+                // Build 1 as `self * 0 + 1`, rather than evaluating x^0.
+                // This keeps the result in the graph and has an exact zero
+                // derivative even when the input is zero.
+                let zeroed = self.try_mul(&self.zero_like())?;
+                return zeroed.try_add(&self.one_like());
             }
             return Ok(Self::one());
         }

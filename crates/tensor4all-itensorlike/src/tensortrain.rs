@@ -1603,7 +1603,11 @@ impl TensorTrain {
     /// # }
     /// ```
     pub fn dense_maxabs(&self) -> Result<f64> {
-        self.to_dense().map(|t| t.maxabs())
+        self.to_dense()?
+            .maxabs()
+            .map_err(|error| TensorTrainError::OperationError {
+                message: format!("failed to compute dense maximum absolute value: {error}"),
+            })
     }
 
     /// Add two tensor trains using direct-sum construction.
@@ -1873,14 +1877,10 @@ impl TensorVectorSpace for TensorTrain {
         TensorTrain::norm_squared(self).map_err(anyhow::Error::new)
     }
 
-    fn try_maxabs(&self) -> anyhow::Result<f64> {
+    fn maxabs(&self) -> anyhow::Result<f64> {
         anyhow::bail!(
             "TensorTrain does not support TensorVectorSpace::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains"
         )
-    }
-
-    fn maxabs(&self) -> anyhow::Result<f64> {
-        self.try_maxabs()
     }
 }
 

@@ -474,7 +474,7 @@ where
     ///     .unwrap();
     /// let dense = result.contract_to_tensor().unwrap();
     /// let expected = TensorDynLen::from_dense(vec![site], vec![-1.0, 0.0]).unwrap();
-    /// assert!(dense.isapprox(&expected, 1.0e-12, 0.0));
+    /// assert!(dense.isapprox(&expected, 1.0e-12, 0.0).unwrap());
     /// ```
     pub fn axpby<A, B>(&self, a: A, other: &Self, b: B) -> Result<Self>
     where

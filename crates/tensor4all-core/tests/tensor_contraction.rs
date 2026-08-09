@@ -138,7 +138,7 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
         ],
     )
     .unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn structured_tensor_contract_materializes_to_correct_dense_result() {
     let result = diag.contract_pair(&dense).unwrap();
 
     let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
-    assert!(result.sub(&expected).unwrap().maxabs() < 1e-12);
+    assert!(result.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -346,7 +346,7 @@ fn test_contract_pair_with_lhs_conj_matches_materialized_conj() {
     .unwrap();
     let materialized = contract_pair(&lhs.conj(), &rhs).unwrap();
 
-    assert!(flagged.isapprox(&materialized, 1e-12, 0.0));
+    assert!(flagged.isapprox(&materialized, 1e-12, 0.0).unwrap());
     assert_eq!(flagged.indices[0].id, i.id);
     assert_eq!(flagged.indices[1].id, k.id);
 }
@@ -384,7 +384,7 @@ fn test_contract_pair_with_rhs_conj_matches_materialized_conj() {
     .unwrap();
     let materialized = contract_pair(&lhs, &rhs.conj()).unwrap();
 
-    assert!(flagged.isapprox(&materialized, 1e-12, 0.0));
+    assert!(flagged.isapprox(&materialized, 1e-12, 0.0).unwrap());
     assert_eq!(flagged.indices[0].id, i.id);
     assert_eq!(flagged.indices[1].id, k.id);
 }

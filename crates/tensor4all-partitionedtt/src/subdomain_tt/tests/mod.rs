@@ -2,6 +2,7 @@ use super::*;
 use std::sync::Arc;
 use tensor4all_core::index::Index;
 use tensor4all_core::TensorStorageError;
+use tensor4all_itensorlike::TensorTrainError;
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
 }
@@ -201,5 +202,23 @@ fn project_error_mapping_retains_typed_storage_source() {
             assert!(std::error::Error::source(&source).is_some());
         }
         other => panic!("expected typed storage error, got {other:?}"),
+    }
+}
+
+#[test]
+fn subdomain_contract_preserves_tensor_train_error_variant_and_source() {
+    let (nonempty, _, _) = make_simple_tt();
+    let empty = SubDomainTT::from_tt(TensorTrain::new(vec![]).unwrap());
+    let nonempty = SubDomainTT::from_tt(nonempty);
+
+    let error = empty
+        .contract(&nonempty, &ContractOptions::default())
+        .unwrap_err();
+    match error {
+        PartitionedTTError::TensorTrain { source } => {
+            assert!(matches!(source, TensorTrainError::InvalidStructure { .. }));
+            assert!(std::error::Error::source(&source).is_none());
+        }
+        other => panic!("expected preserved tensor-train error, got {other:?}"),
     }
 }

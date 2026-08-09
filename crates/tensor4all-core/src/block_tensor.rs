@@ -425,14 +425,10 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
             .try_fold(0.0, |sum, value| Ok(sum + value?))
     }
 
-    fn try_maxabs(&self) -> Result<f64> {
+    fn maxabs(&self) -> Result<f64> {
         self.blocks
             .iter()
-            .try_fold(0.0_f64, |acc, block| Ok(acc.max(block.try_maxabs()?)))
-    }
-
-    fn maxabs(&self) -> Result<f64> {
-        self.try_maxabs()
+            .try_fold(0.0_f64, |acc, block| Ok(acc.max(block.maxabs()?)))
     }
 
     fn scale(&self, scalar: AnyScalar) -> Result<Self> {

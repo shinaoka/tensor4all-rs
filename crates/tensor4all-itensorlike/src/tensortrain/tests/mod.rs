@@ -99,7 +99,7 @@ fn add_reindexed_like_self_aligns_site_indices_before_addition() {
             AnyScalar::new_real(1.0),
         )
         .unwrap();
-    assert!(dense.sub(&expected).unwrap().maxabs() < 1e-12);
+    assert!(dense.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -421,7 +421,8 @@ fn test_contract_with_fit_method() {
     assert!(result_tt
         .to_dense()
         .unwrap()
-        .isapprox(&naive_result, 1e-10, 0.0));
+        .isapprox(&naive_result, 1e-10, 0.0)
+        .unwrap());
 }
 
 #[test]
@@ -450,7 +451,8 @@ fn test_contract_with_naive_method() {
     assert!(result_tt
         .to_dense()
         .unwrap()
-        .isapprox(&naive_result, 1e-10, 0.0));
+        .isapprox(&naive_result, 1e-10, 0.0)
+        .unwrap());
 }
 
 #[test]
@@ -485,7 +487,8 @@ fn test_contract_nhalfsweeps_conversion() {
     assert!(result_tt
         .to_dense()
         .unwrap()
-        .isapprox(&naive_result, 1e-10, 0.0));
+        .isapprox(&naive_result, 1e-10, 0.0)
+        .unwrap());
 }
 
 #[test]
@@ -1371,7 +1374,7 @@ fn test_dense_maxabs_is_explicit_dense_reference_api() {
 
     let maxabs = tt.dense_maxabs().unwrap();
     let dense = tt.to_dense().unwrap();
-    let dense_maxabs = dense.maxabs();
+    let dense_maxabs = dense.maxabs().unwrap();
     assert!((maxabs - dense_maxabs).abs() < 1e-10);
 }
 
@@ -1386,8 +1389,6 @@ fn test_tensor_like_maxabs_is_not_hidden_dense_for_tensor_train() {
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    let err = TensorVectorSpace::try_maxabs(&tt).unwrap_err();
-    assert!(err.to_string().contains("explicit dense materialization"));
     let err = TensorVectorSpace::maxabs(&tt).unwrap_err();
     assert!(err.to_string().contains("explicit dense materialization"));
 }

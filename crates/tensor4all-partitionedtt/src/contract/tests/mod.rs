@@ -253,6 +253,21 @@ fn test_proj_contract() {
     assert!(contracted.projector().is_projected_at(&s0));
 }
 
+#[test]
+fn test_proj_contract_rejects_projector_index_absent_from_both_operands() {
+    let (s0, l01, s1, l12, s2) = make_contraction_indices();
+    let left = SubDomainTT::from_tt(make_tt_generic::<f64>(&s0, &l01, &s1));
+    let right = SubDomainTT::from_tt(make_tt_generic::<f64>(&s1, &l12, &s2));
+    let absent = make_index(2);
+    let projector = Projector::from_pairs([(absent.clone(), 0)]);
+
+    let error = proj_contract(&left, &right, &projector, &ContractOptions::default()).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::error::PartitionedTTError::ProjectorIndexNotFound { index } if index == absent
+    ));
+}
+
 /// Generic numerical correctness test for contraction
 fn test_contract_numerical_correctness_generic<T: TestScalar>() {
     let (s0, l01, s1, l12, s2) = make_contraction_indices();

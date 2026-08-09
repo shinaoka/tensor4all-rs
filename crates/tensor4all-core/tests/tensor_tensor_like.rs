@@ -70,11 +70,11 @@ fn tensor_vector_space_default_methods_cover_common_paths() {
 
     let neg = TensorVectorSpace::neg(&a).unwrap();
     assert_eq!(neg.to_vec::<f64>().unwrap(), vec![-1.0, 2.0, -3.0]);
-    assert!(a.isapprox(&b, 1.0e-12, 0.0));
+    assert!(a.isapprox(&b, 1.0e-12, 0.0).unwrap());
 
     let j = Index::<DynId>::new_dyn(2);
     let incompatible = TensorDynLen::from_dense(vec![j], vec![1.0, 2.0]).unwrap();
-    assert!(!a.isapprox(&incompatible, 1.0e-12, 0.0));
+    assert!(a.isapprox(&incompatible, 1.0e-12, 0.0).is_err());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn tensor_contraction_and_construction_default_methods_cover_paths() {
     TensorContractionLike::validate(&contracted).unwrap();
 
     let unchanged = TensorConstructionLike::select_indices(&b, &[], &[]).unwrap();
-    assert!(unchanged.isapprox(&b, 0.0, 0.0));
+    assert!(unchanged.isapprox(&b, 0.0, 0.0).unwrap());
 
     let selected =
         TensorConstructionLike::select_indices(&b, std::slice::from_ref(&i), &[1]).unwrap();
@@ -202,7 +202,7 @@ fn test_outer_product_preserves_input_component_order() {
         ],
     )
     .unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
