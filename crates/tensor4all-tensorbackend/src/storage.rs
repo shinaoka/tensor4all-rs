@@ -724,6 +724,10 @@ impl<T: Copy + Default> StructuredStorage<T> {
     /// logical axes. Logical indices that violate those constraints are
     /// structural zeros in the dense materialization.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the logical dimension product overflows `usize`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -731,32 +735,29 @@ impl<T: Copy + Default> StructuredStorage<T> {
     ///
     /// // Diagonal [1, 2] in 2x2 becomes [1, 0, 0, 2] column-major
     /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
-    /// assert_eq!(d.logical_dense_col_major_vec(), vec![1.0, 0.0, 0.0, 2.0]);
+    /// assert_eq!(d.logical_dense_col_major_vec().unwrap(), vec![1.0, 0.0, 0.0, 2.0]);
     /// ```
-    pub fn logical_dense_col_major_vec(&self) -> Vec<T> {
+    pub fn logical_dense_col_major_vec(&self) -> StorageResult<Vec<T>> {
         let logical_dims = self.logical_dims();
-        let logical_len = logical_dims
-            .iter()
-            .try_fold(1usize, |length, &dim| length.checked_mul(dim))
-            .unwrap_or(0);
+        let logical_len = self.checked_logical_len()?;
         if logical_len == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         if let Some(view) = self.dense_col_major_view_if_contiguous() {
-            return view.to_vec();
+            return Ok(view.to_vec());
         }
         if self.is_dense() {
-            return self.payload_col_major_vec();
+            return Ok(self.payload_col_major_vec());
         }
 
         let mut payload_index = vec![0usize; self.payload_dims.len()];
-        (0..logical_len)
+        Ok((0..logical_len)
             .map(|linear| {
                 let logical_index = col_major_multi_index(linear, &logical_dims);
                 self.value_at_with_dims(&logical_index, &logical_dims, &mut payload_index)
                     .unwrap_or_default()
             })
-            .collect()
+            .collect())
     }
 
     fn for_each_payload_value(&self, mut f: impl FnMut(T)) {
@@ -1771,8 +1772,7 @@ impl Storage {
                         logical_dims, structured_dims
                     )));
                 }
-                v.checked_logical_len()?;
-                Ok(v.logical_dense_col_major_vec())
+                v.logical_dense_col_major_vec()
             }
             StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
                 expected: "f64",
@@ -1813,8 +1813,7 @@ impl Storage {
                         logical_dims, structured_dims
                     )));
                 }
-                v.checked_logical_len()?;
-                Ok(v.logical_dense_col_major_vec())
+                v.logical_dense_col_major_vec()
             }
             StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
                 expected: "Complex64",

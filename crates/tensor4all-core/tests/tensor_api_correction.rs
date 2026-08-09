@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use std::error::Error;
 use std::sync::Arc;
 use tensor4all_core::{DynIndex, TensorDynLen, TensorDynLenError, TensorStorageError};
-use tensor4all_tensorbackend::Storage;
+use tensor4all_tensorbackend::{Storage, StorageKind};
 
 #[test]
 fn tensor_dyn_len_norm_and_comparison_operations_are_fallible() {
@@ -223,30 +223,37 @@ fn tracked_scale_from_public_structured_storage_stays_compact() {
 }
 
 #[test]
-fn untracked_scale_from_public_structured_storage_stays_compact() {
-    let bond_dim = 10;
-    let site_dim = 3;
-    let left = DynIndex::new_dyn(bond_dim);
-    let site = DynIndex::new_dyn(site_dim);
-    let right = DynIndex::new_dyn(bond_dim);
+fn untracked_scale_of_gapped_structured_storage_stays_compact() {
+    let left = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(2);
+    // Backing offset 2 is a stride gap no payload coordinate references
+    // (strides [3,1] address offsets 0,1,3,4); scaling must not reproduce
+    // it in the resulting storage.
     let storage = Storage::new_structured(
-        vec![2.0_f64; bond_dim * site_dim],
-        vec![bond_dim, site_dim],
-        vec![1, bond_dim as isize],
-        vec![0, 1, 0],
+        vec![1.0_f64, 2.0, 999.0, 3.0, 4.0],
+        vec![2, 2],
+        vec![3, 1],
+        vec![0, 1],
     )
     .unwrap();
-    let tensor = TensorDynLen::from_storage(vec![left, site, right], Arc::new(storage)).unwrap();
+    let tensor = TensorDynLen::from_storage(vec![left, right], Arc::new(storage)).unwrap();
     assert!(!tensor.tracks_grad());
     let scaled = tensor
-        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .scale(tensor4all_core::AnyScalar::new_real(2.0))
         .unwrap();
     assert!(!scaled.tracks_grad());
     let scaled_storage = scaled.storage().unwrap();
-    assert_eq!(scaled_storage.axis_classes(), &[0, 1, 0]);
-    assert_eq!(scaled_storage.payload_dims(), &[bond_dim, site_dim]);
-    assert_eq!(scaled_storage.payload_len(), bond_dim * site_dim);
-    assert_eq!(scaled_storage.scalar_at(&[0, 1]).unwrap().real(), 6.0);
+    // Only the compact payload survives: the strided-gap layout must collapse
+    // to dense storage (the old whole-backing scale preserved it as
+    // Structured), and the referenced values must scale correctly.
+    assert_eq!(scaled_storage.storage_kind(), StorageKind::Dense);
+    assert_eq!(scaled_storage.payload_len(), 4);
+    // Payload coords (0,0),(1,0),(0,1),(1,1) read offsets 0,3,1,4 from the
+    // original backing [1,2,999,3,4] -> [1,3,2,4], doubled to [2,6,4,8].
+    assert_eq!(scaled_storage.scalar_at(&[0, 0]).unwrap().real(), 2.0);
+    assert_eq!(scaled_storage.scalar_at(&[1, 0]).unwrap().real(), 6.0);
+    assert_eq!(scaled_storage.scalar_at(&[0, 1]).unwrap().real(), 4.0);
+    assert_eq!(scaled_storage.scalar_at(&[1, 1]).unwrap().real(), 8.0);
 }
 
 #[test]
