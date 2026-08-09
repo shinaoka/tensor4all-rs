@@ -196,6 +196,35 @@ fn test_isapprox_structured_support_matches_permuted_and_dense_layouts() {
 
     assert!(structured.isapprox(&permuted, 0.0, 0.0).unwrap());
     assert!(structured.isapprox(&dense, 0.0, 0.0).unwrap());
+    // The same compact-support mapping must hold in non-exact tolerance mode.
+    assert!(structured.isapprox(&permuted, 1.0e-12, 1.0e-12).unwrap());
+    assert!(structured.isapprox(&dense, 1.0e-12, 1.0e-12).unwrap());
+}
+
+#[test]
+fn test_isapprox_diagonal_vs_dense_collapsed_support() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let diag = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, 2.0]).unwrap();
+    // Dense expansion keeps the diagonal support; off-diagonal structural
+    // zeros are still part of the logical tensor and must be compared.
+    let same =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 0.0, 0.0, 2.0]).unwrap();
+    let different = TensorDynLen::from_dense(vec![i.clone(), j], vec![1.0, 0.0, 0.0, 3.0]).unwrap();
+    assert!(diag.isapprox(&same, 1.0e-12, 1.0e-12).unwrap());
+    assert!(!diag.isapprox(&different, 0.0, 0.1).unwrap());
+}
+
+#[test]
+fn test_isapprox_rejects_nan_input() {
+    let lhs = TensorDynLen::scalar(f64::NAN).unwrap();
+    let rhs = TensorDynLen::scalar(1.0).unwrap();
+    assert!(lhs.isapprox(&rhs, 1.0e-12, 1.0e-12).is_err());
+
+    let index = Index::new_dyn(2);
+    let nan_tensor = TensorDynLen::from_dense(vec![index.clone()], vec![1.0, f64::NAN]).unwrap();
+    let finite = TensorDynLen::from_dense(vec![index], vec![1.0, 1.0]).unwrap();
+    assert!(nan_tensor.isapprox(&finite, 1.0e-12, 1.0e-12).is_err());
 }
 
 #[test]

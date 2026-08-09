@@ -4369,8 +4369,9 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns [`TensorDynLenError`] when storage/materialization or scalar
-    /// extraction fails, or when the input produces NaN. Finite tiny
-    /// negative roundoff is clamped to zero; positive infinity is preserved.
+    /// extraction fails, or when the input produces NaN. The result is
+    /// accumulated from squared magnitudes, so it is never negative;
+    /// positive infinity is preserved.
     ///
     /// # Example
     /// ```
