@@ -72,7 +72,7 @@ where
             .context("factorize_or_trivial: left outer_product")?;
         let mut right = T::onehot(&[(bond.clone(), 0)])
             .map_err(|e| anyhow::anyhow!("factorize_or_trivial: right onehot: {}", e))?;
-        let left_norm = left.norm();
+        let left_norm = left.norm()?;
         if left_norm > 0.0 {
             left = left
                 .scale(tensor4all_core::AnyScalar::new_real(1.0 / left_norm))

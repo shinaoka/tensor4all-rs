@@ -519,7 +519,23 @@ impl LinearizationOrder {
 /// state types do not have to provide unrelated tensor-network operations.
 pub trait TensorVectorSpace: TensorIndex {
     /// Compute the squared Frobenius norm of the tensor.
-    fn norm_squared(&self) -> f64;
+    ///
+    /// # Errors
+    /// Returns backend or storage diagnostics when the norm cannot be
+    /// evaluated.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![index], vec![3.0_f64, 4.0])?;
+    /// assert!((TensorVectorSpace::norm_squared(&tensor)? - 25.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn norm_squared(&self) -> Result<f64>;
 
     /// Compute a linear combination: `a * self + b * other`.
     fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
@@ -533,17 +549,48 @@ pub trait TensorVectorSpace: TensorIndex {
     fn inner_product(&self, other: &Self) -> Result<AnyScalar>;
 
     /// Compute the Frobenius norm of the tensor.
-    fn norm(&self) -> f64 {
-        self.norm_squared().sqrt()
+    ///
+    /// # Errors
+    /// Propagates failures from [`Self::norm_squared`].
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![index], vec![3.0_f64, 4.0])?;
+    /// assert!((TensorVectorSpace::norm(&tensor)? - 5.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn norm(&self) -> Result<f64> {
+        Ok(self.norm_squared()?.sqrt())
     }
 
-    /// Try to compute the maximum absolute value of all tensor elements.
+    /// Compute the maximum absolute value of all tensor elements.
+    ///
+    /// # Errors
+    /// Returns backend or storage diagnostics when the maximum cannot be
+    /// evaluated.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![index], vec![-3.0_f64, 2.0])?;
+    /// assert!((TensorVectorSpace::maxabs(&tensor)? - 3.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn maxabs(&self) -> Result<f64>;
+
+    /// Fallible alias for [`Self::maxabs`].
     fn try_maxabs(&self) -> Result<f64> {
-        Ok(self.maxabs())
+        self.maxabs()
     }
-
-    /// Maximum absolute value of all elements (L-infinity norm).
-    fn maxabs(&self) -> f64;
 
     /// Element-wise subtraction: `self - other`.
     fn sub(&self, other: &Self) -> Result<Self> {
@@ -556,13 +603,15 @@ pub trait TensorVectorSpace: TensorIndex {
     }
 
     /// Approximate equality check (Julia `isapprox` semantics).
-    fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
-        let diff = match self.sub(other) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
-        let diff_norm = diff.norm();
-        diff_norm <= atol.max(rtol * self.norm().max(other.norm()))
+    ///
+    /// # Errors
+    /// Propagates failures from subtraction or norm evaluation.
+    fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> Result<bool> {
+        let diff = self.sub(other)?;
+        let diff_norm = diff.norm()?;
+        let self_norm = self.norm()?;
+        let other_norm = other.norm()?;
+        Ok(diff_norm <= atol.max(rtol * self_norm.max(other_norm)))
     }
 
     /// Validate structural consistency of this tensor-like vector.

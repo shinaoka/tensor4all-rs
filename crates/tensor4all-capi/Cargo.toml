@@ -9,7 +9,6 @@ description = "C API for tensor4all (Rust) core types"
 
 [features]
 default = ["tenferro-cpu-faer"]
-test-support = ["tensor4all-core/test-support"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-quanticstransform/tenferro-cpu-faer",

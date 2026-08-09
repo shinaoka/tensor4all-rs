@@ -277,7 +277,7 @@ fn test_fit_wrong_for_elementwise_structured() {
 
     // Reference: zipup without truncation (exact)
     let result_ref = elementwise_mul(&tt_a, &tt_b, &all_sites, &ContractOptions::zipup());
-    let ref_norm = result_ref.norm();
+    let ref_norm = result_ref.norm().unwrap();
     eprintln!("||ref|| = {:.6e}", ref_norm);
 
     // fit(A,B): this converges to wrong local minimum
@@ -286,6 +286,7 @@ fn test_fit_wrong_for_elementwise_structured() {
         .axpby(1.0.into(), &result_ref, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / ref_norm;
 
     // fit(B,A): swapped order should also work
@@ -294,6 +295,7 @@ fn test_fit_wrong_for_elementwise_structured() {
         .axpby(1.0.into(), &result_ref, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / ref_norm;
 
     // fit(A,B) with explicit rtol=1e-30 (effectively zero, like ITensorMPS.jl benchmarks)
@@ -307,6 +309,7 @@ fn test_fit_wrong_for_elementwise_structured() {
         .axpby(1.0.into(), &result_ref, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / ref_norm;
 
     eprintln!("fit(A,B)            rel_err = {:.6e}", fit_err);

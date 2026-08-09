@@ -115,7 +115,7 @@ fn test_truncate_drops_significant_singular_values() {
     eprintln!(
         "before truncate: bonds={:?} norm={:.6e}",
         bond_dims(&f),
-        f.norm()
+        f.norm().unwrap()
     );
 
     // truncate with rtol=1e-15: should keep bonddim=2
@@ -131,7 +131,7 @@ fn test_truncate_drops_significant_singular_values() {
     eprintln!(
         "after truncate(rtol=1e-15): bonds={:?} norm={:.6e}",
         bond_dims(&f_truncated),
-        f_truncated.norm()
+        f_truncated.norm().unwrap()
     );
 
     let diff = f_dense_before

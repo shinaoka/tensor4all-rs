@@ -584,7 +584,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
 
     // Create b = block of all-ones MPOs
     let b = create_block_ones_mpo(&indices)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b (all-ones block MPO) created, norm: {:.6}", b_norm);
 
     // Create identity superoperators for each block
@@ -609,7 +609,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
     // Compute initial residual
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("Initial residual: {:.6e}", initial_residual);
 
     let options = GmresOptions {
@@ -633,7 +633,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
     // Compute true residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     println!("\nResults:");
     println!("Converged: {}", result.converged);
@@ -676,7 +676,7 @@ fn test_block_diagonal_diagonal_operator() -> anyhow::Result<()> {
 
     // Create x_true = all-ones block MPO
     let x_true = create_block_ones_mpo(&indices)?;
-    println!("x_true (all-ones) created, norm: {:.6}", x_true.norm());
+    println!("x_true (all-ones) created, norm: {:.6}", x_true.norm()?);
 
     // Create diagonal superoperators for each block
     let diagonal_ops: Vec<TensorTrain> = (0..indices.num_blocks)
@@ -696,17 +696,17 @@ fn test_block_diagonal_diagonal_operator() -> anyhow::Result<()> {
 
     // Compute b = A * x_true
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A * x_true computed, norm: {:.6}", b_norm);
 
     // Initial guess: x0 = 0.5 * b
     let x0 = b.scale(AnyScalar::new_real(0.5))?;
-    println!("x0 (0.5 * b) created, norm: {:.6}", x0.norm());
+    println!("x0 (0.5 * b) created, norm: {:.6}", x0.norm()?);
 
     // Compute initial residual
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("Initial residual: {:.6e}", initial_residual);
 
     let options = GmresOptions {
@@ -730,14 +730,14 @@ fn test_block_diagonal_diagonal_operator() -> anyhow::Result<()> {
     // Compute true residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     // Compute error ||x_sol - x_true||
     let diff =
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
 
     println!("\nResults:");
     println!("Converged: {}", result.converged);
@@ -834,11 +834,11 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
         }
     }
     let x_true = BlockTensor::try_new(x_true_blocks, indices.block_shape)?;
-    println!("x_true created, norm: {:.6}", x_true.norm());
+    println!("x_true created, norm: {:.6}", x_true.norm()?);
 
     // Compute b = A * x_true
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A * x_true computed, norm: {:.6}", b_norm);
 
     // Initial guess: x0 = 0
@@ -847,7 +847,7 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
     // Compute initial residual
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("Initial residual: {:.6e}", initial_residual);
 
     let options = GmresOptions {
@@ -871,14 +871,14 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
     // Compute true residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     // Compute error
     let diff =
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
 
     println!("\nResults:");
     println!("Converged: {}", result.converged);
@@ -923,7 +923,7 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
 
     // Create x_true = all-ones block MPO
     let x_true = create_block_ones_mpo(&indices)?;
-    println!("x_true (all-ones) created, norm: {:.6}", x_true.norm());
+    println!("x_true (all-ones) created, norm: {:.6}", x_true.norm()?);
 
     // Create diagonal superoperators for each block
     let diagonal_ops: Vec<TensorTrain> = (0..indices.num_blocks)
@@ -943,7 +943,7 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
 
     // Compute b = A * x_true
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A * x_true computed, norm: {:.6}", b_norm);
 
     // Truncation with aggressive settings
@@ -980,14 +980,14 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
     // Compute true residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     // Compute error
     let diff =
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
 
     println!("\nResults:");
     println!("Converged: {}", result.converged);
@@ -1062,7 +1062,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         }
     }
     let x_true = BlockTensor::try_new(x_true_blocks, indices.block_shape)?;
-    println!("x_true created, norm: {:.6}", x_true.norm());
+    println!("x_true created, norm: {:.6}", x_true.norm()?);
 
     // A = [[0, i*σ_x], [i*σ_x, 0]] acting on block rows
     // y_{0,j} = i*σ_x * x_{1,j}, y_{1,j} = i*σ_x * x_{0,j}
@@ -1091,7 +1091,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
 
     // Compute b = A * x_true
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A * x_true computed, norm: {:.6}", b_norm);
 
     // Initial guess: complex zero
@@ -1101,7 +1101,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let x0 = BlockTensor::try_new(x0_blocks, indices.block_shape)?;
-    println!("x0 (complex zero) created, norm: {:.6}", x0.norm());
+    println!("x0 (complex zero) created, norm: {:.6}", x0.norm()?);
 
     let options = GmresOptions {
         max_iter: 20,
@@ -1124,14 +1124,14 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
     // Compute true residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     // Compute error
     let diff =
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
 
     println!("\nResults:");
     println!("Converged: {}", result.converged);
@@ -1212,7 +1212,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         }
     }
     let x_true = BlockTensor::try_new(x_true_blocks, indices.block_shape)?;
-    println!("x_true created, norm: {:.6}", x_true.norm());
+    println!("x_true created, norm: {:.6}", x_true.norm()?);
 
     // A = [[0, 0, i*σ_x], [0, i*σ_x, 0], [i*σ_x, 0, 0]] acting on block rows
     // y_{0,j} = i*σ_x * x_{2,j}, y_{1,j} = i*σ_x * x_{1,j}, y_{2,j} = i*σ_x * x_{0,j}
@@ -1249,7 +1249,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
 
     // Compute b = A * x_true
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A * x_true computed, norm: {:.6}", b_norm);
 
     // Initial guess: complex zero
@@ -1259,7 +1259,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let x0 = BlockTensor::try_new(x0_blocks, indices.block_shape)?;
-    println!("x0 (complex zero) created, norm: {:.6}", x0.norm());
+    println!("x0 (complex zero) created, norm: {:.6}", x0.norm()?);
 
     let options = GmresOptions {
         max_iter: 30,
@@ -1282,14 +1282,14 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
     // Compute true residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     // Compute error
     let diff =
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
 
     println!("\nResults:");
     println!("Converged: {}", result.converged);
@@ -1376,7 +1376,7 @@ fn scaling_2x2_offdiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
     };
 
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
 
     let x0_blocks: Vec<TensorTrain> = (0..indices.num_blocks)
         .map(|block_idx| {
@@ -1406,7 +1406,7 @@ fn scaling_2x2_offdiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
 
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     let block_dim: usize = (0..n_sites).map(|_| phys_dim).product::<usize>().pow(2);
     let total_dim = block_dim * block_rows * block_cols;
@@ -1516,7 +1516,7 @@ fn scaling_3x3_antidiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
     };
 
     let b = apply_a(&x_true)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
 
     let x0_blocks: Vec<TensorTrain> = (0..indices.num_blocks)
         .map(|block_idx| {
@@ -1546,7 +1546,7 @@ fn scaling_3x3_antidiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
 
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     let block_dim: usize = (0..n_sites).map(|_| phys_dim).product::<usize>().pow(2);
     let total_dim = block_dim * block_rows * block_cols;

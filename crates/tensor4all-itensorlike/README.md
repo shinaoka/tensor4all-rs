@@ -54,7 +54,7 @@ tt.truncate(&TruncateOptions::svd()
 
 assert!(tt.isortho());
 assert_eq!(s1.dim(), 2);
-let norm = tt.norm();
+let norm = tt.norm()?;
 assert!(norm.is_finite());
 
 // Inner product: <tt|tt> = norm^2

@@ -419,19 +419,19 @@ fn exported_payload_function_preserves_status_and_last_error_message() {
     t4a_index_release(index);
 }
 
-#[cfg(feature = "test-support")]
 #[test]
 fn exported_dense_function_preserves_real_deferred_backend_diagnostic() {
     let index = new_index(2);
     let core_index = unsafe { (*index).inner().clone() };
-    let internal = InternalTensor::from_dense(vec![core_index], vec![1.0_f64, 2.0])
-        .unwrap()
-        .with_deferred_storage_error_for_testing(TensorStorageError::Materialization {
+    let internal = InternalTensor::from_dense(vec![core_index], vec![1.0_f64, 2.0]).unwrap();
+    let tensor = Box::into_raw(Box::new(t4a_tensor::with_test_storage_error(
+        internal,
+        TensorStorageError::Materialization {
             source: Arc::new(std::io::Error::other(
                 "forced deferred C API backend failure",
             )),
-        });
-    let tensor = Box::into_raw(Box::new(t4a_tensor::new(internal)));
+        },
+    )));
     let mut out_len = 0usize;
 
     assert_eq!(

@@ -481,3 +481,63 @@ fn test_function_api_takes_anyscalar_ref() {
     let grad = x.grad().unwrap().unwrap();
     assert!((grad.real() - 6.0).abs() < 1e-12);
 }
+
+#[test]
+fn tracked_negative_real_analytic_ops_match_principal_complex_values_and_backward() {
+    let x = AnyScalar::new_real(-4.0).enable_grad().unwrap();
+
+    let sqrt = x.sqrt();
+    let sqrt_value: Complex64 = sqrt.clone().into();
+    assert!((sqrt_value.re).abs() < 1e-12);
+    assert!((sqrt_value.im - 2.0).abs() < 1e-12);
+    assert!(sqrt.tracks_grad());
+    sqrt.backward().unwrap();
+    let sqrt_grad: Complex64 = x.grad().unwrap().unwrap().into();
+    assert!(sqrt_grad.re.is_finite() && sqrt_grad.im.is_finite());
+    x.clear_grad().unwrap();
+
+    let pow = x.powf(0.5);
+    let pow_value: Complex64 = pow.clone().into();
+    assert!((pow_value.re).abs() < 1e-12);
+    assert!((pow_value.im - 2.0).abs() < 1e-12);
+    assert!(pow.tracks_grad());
+    pow.backward().unwrap();
+    let pow_grad: Complex64 = x.grad().unwrap().unwrap().into();
+    assert!(pow_grad.re.is_finite() && pow_grad.im.is_finite());
+}
+
+#[test]
+fn tracked_real_and_imag_parts_keep_graph_and_values() {
+    let x = AnyScalar::new_complex(2.0, 3.0).enable_grad().unwrap();
+
+    let real = x.real_part();
+    assert!(real.is_real());
+    assert!(real.tracks_grad());
+    assert!((real.real() - 2.0).abs() < 1e-12);
+    real.backward().unwrap();
+    let real_grad: Complex64 = x.grad().unwrap().unwrap().into();
+    assert!((real_grad.re - 1.0).abs() < 1e-12);
+    assert!(real_grad.im.abs() < 1e-12);
+    x.clear_grad().unwrap();
+
+    let imag = x.imag_part();
+    assert!(imag.is_real());
+    assert!(imag.tracks_grad());
+    assert!((imag.real() - 3.0).abs() < 1e-12);
+    imag.backward().unwrap();
+    let imag_grad: Complex64 = x.grad().unwrap().unwrap().into();
+    assert!(imag_grad.re.abs() < 1e-12);
+    assert!((imag_grad.im - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn tracked_powi_zero_is_graph_connected_with_zero_gradient() {
+    let x = AnyScalar::new_real(3.0).enable_grad().unwrap();
+    let result = x.powi(0);
+
+    assert_eq!(result.real(), 1.0);
+    assert!(result.tracks_grad());
+    result.backward().unwrap();
+    let gradient = x.grad().unwrap().unwrap();
+    assert!(gradient.real().abs() < 1e-12);
+}

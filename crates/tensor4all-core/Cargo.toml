@@ -9,8 +9,6 @@ description = "Core tensor types, indices, and operations (SVD, QR, contraction)
 
 [features]
 default = ["backend-tenferro", "tenferro-cpu-faer"]
-# Enables constructors used only by downstream crate regression tests.
-test-support = []
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
 tenferro-cpu-faer = [
     "tensor4all-tensorbackend/tenferro-cpu-faer",

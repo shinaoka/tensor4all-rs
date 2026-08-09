@@ -7,6 +7,7 @@
 //! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
 use num_complex::Complex64;
+use std::any::TypeId;
 use std::env;
 use std::ops::Range;
 use std::sync::OnceLock;
@@ -719,42 +720,37 @@ impl TensorTrain {
         Ok(())
     }
 
-    fn has_simple_linear_links(&self) -> bool {
+    fn has_simple_linear_links(&self) -> Result<bool> {
         if self.len() <= 1 {
-            return true;
+            return Ok(true);
         }
 
-        (0..self.len() - 1).all(|site| {
-            let (Ok(left), Ok(right)) = (self.tensor_checked(site), self.tensor_checked(site + 1))
-            else {
-                return false;
-            };
-            common_inds(left.indices(), right.indices()).len() <= 1
-        })
+        for site in 0..self.len() - 1 {
+            let left = self.tensor_checked(site)?;
+            let right = self.tensor_checked(site + 1)?;
+            if common_inds(left.indices(), right.indices()).len() > 1 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
-    fn can_normalize_site_tensor_order(&self, site: usize) -> bool {
+    fn can_normalize_site_tensor_order(&self, site: usize) -> Result<bool> {
         let left_ok = if site > 0 {
-            let (Ok(left), Ok(current)) =
-                (self.tensor_checked(site - 1), self.tensor_checked(site))
-            else {
-                return false;
-            };
+            let left = self.tensor_checked(site - 1)?;
+            let current = self.tensor_checked(site)?;
             common_inds(left.indices(), current.indices()).len() <= 1
         } else {
             true
         };
         let right_ok = if site + 1 < self.len() {
-            let (Ok(current), Ok(right)) =
-                (self.tensor_checked(site), self.tensor_checked(site + 1))
-            else {
-                return false;
-            };
+            let current = self.tensor_checked(site)?;
+            let right = self.tensor_checked(site + 1)?;
             common_inds(current.indices(), right.indices()).len() <= 1
         } else {
             true
         };
-        left_ok && right_ok
+        Ok(left_ok && right_ok)
     }
 
     fn with_explicit_unit_links(&self) -> Result<Self> {
@@ -821,7 +817,7 @@ impl TensorTrain {
     }
 
     fn normalize_site_tensor_order(&mut self, site: usize) -> Result<()> {
-        if !self.can_normalize_site_tensor_order(site) {
+        if !self.can_normalize_site_tensor_order(site)? {
             return Ok(());
         }
 
@@ -1343,86 +1339,145 @@ impl TensorTrain {
     ///
     /// Returns `<self | self>` = ||self||^2.
     ///
+    /// # Errors
+    /// Returns a [`TensorTrainError`] when storage or contraction diagnostics
+    /// prevent evaluating the norm.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    /// assert!((tt.norm_squared()? - 25.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Note
     /// For linear tensor trains with one site index per site, this uses a
     /// specialized chain contraction instead of the generic inner-product path.
     /// Due to numerical errors, the final scalar can be very slightly negative,
     /// so the returned value is clamped to be non-negative.
-    pub fn norm_squared(&self) -> f64 {
-        match self.norm_squared_fast_path() {
-            Some(value) => value,
-            None => self
-                .inner(self)
-                .map(|value| value.real().max(0.0))
-                .unwrap_or(f64::NAN),
+    pub fn norm_squared(&self) -> Result<f64> {
+        match self.norm_squared_fast_path()? {
+            Some(value) => Ok(value),
+            None => self.inner(self).map(|value| value.real().max(0.0)),
         }
     }
 
     /// Compute the norm of the tensor train.
     ///
     /// Returns ||self|| = sqrt(<self | self>).
-    pub fn norm(&self) -> f64 {
-        self.norm_squared().sqrt()
+    ///
+    /// # Errors
+    /// Returns a [`TensorTrainError`] when storage or contraction diagnostics
+    /// prevent evaluating the norm.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    /// assert!((tt.norm()? - 5.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn norm(&self) -> Result<f64> {
+        Ok(self.norm_squared()?.sqrt())
     }
 
-    fn norm_squared_fast_path(&self) -> Option<f64> {
+    fn norm_squared_fast_path(&self) -> Result<Option<f64>> {
         if self.is_empty() {
-            return Some(0.0);
+            return Ok(Some(0.0));
         }
-        if !self.has_simple_linear_links() {
-            return None;
+        if !self.has_simple_linear_links()? {
+            return Ok(None);
         }
         if self
             .siteinds()
             .iter()
             .any(|site_indices| site_indices.len() != 1)
         {
-            return None;
+            return Ok(None);
         }
 
         let mut normalized = self.clone();
-        normalized.normalize_site_tensor_orders().ok()?;
+        normalized.normalize_site_tensor_orders()?;
 
-        if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized) {
-            return Some(Self::norm_squared_from_packed_sites(&sites));
+        if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized)? {
+            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)));
         }
-        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized) {
-            return Some(Self::norm_squared_from_packed_sites(&sites));
+        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized)? {
+            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)));
         }
 
-        None
+        Ok(None)
     }
 
-    fn pack_normalized_sites<T: TensorElement>(tt: &Self) -> Option<Vec<PackedSiteTensor<T>>> {
+    fn pack_normalized_sites<T: TensorElement>(
+        tt: &Self,
+    ) -> Result<Option<Vec<PackedSiteTensor<T>>>> {
         let mut sites = Vec::with_capacity(tt.len());
 
         for site in 0..tt.len() {
-            let tensor = tt.tensor_checked(site).ok()?;
+            let tensor = tt.tensor_checked(site)?;
             let left_dim = if site == 0 {
                 1
             } else {
-                tt.linkind(site - 1)?.size()
+                match tt.linkind(site - 1) {
+                    Some(link) => link.size(),
+                    None => return Ok(None),
+                }
             };
             let right_dim = if site + 1 == tt.len() {
                 1
             } else {
-                tt.linkind(site)?.size()
+                match tt.linkind(site) {
+                    Some(link) => link.size(),
+                    None => return Ok(None),
+                }
             };
             let total_size: usize = tensor.dims().iter().product();
-            let boundary_size = left_dim.checked_mul(right_dim)?;
+            let boundary_size = match left_dim.checked_mul(right_dim) {
+                Some(size) => size,
+                None => return Ok(None),
+            };
             if boundary_size == 0 || !total_size.is_multiple_of(boundary_size) {
-                return None;
+                return Ok(None);
+            }
+
+            let dtype_matches = if TypeId::of::<T>() == TypeId::of::<f64>() {
+                tensor.is_f64()
+            } else if TypeId::of::<T>() == TypeId::of::<Complex64>() {
+                tensor.is_c64()
+            } else {
+                false
+            };
+            if !dtype_matches {
+                return Ok(None);
             }
 
             sites.push(PackedSiteTensor {
                 left_dim,
                 physical_dim: total_size / boundary_size,
                 right_dim,
-                data: tensor.to_vec::<T>().ok()?,
+                data: tensor
+                    .to_vec::<T>()
+                    .map_err(|err| TensorTrainError::OperationError {
+                        message: format!("failed to materialize normalized site tensor: {err}"),
+                    })?,
             });
         }
 
-        Some(sites)
+        Ok(Some(sites))
     }
 
     fn norm_squared_from_packed_sites<T: NormAccumScalar>(sites: &[PackedSiteTensor<T>]) -> f64 {
@@ -1814,8 +1869,8 @@ impl TensorVectorSpace for TensorTrain {
         self.inner(other).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
-    fn norm_squared(&self) -> f64 {
-        TensorTrain::norm_squared(self)
+    fn norm_squared(&self) -> anyhow::Result<f64> {
+        TensorTrain::norm_squared(self).map_err(anyhow::Error::new)
     }
 
     fn try_maxabs(&self) -> anyhow::Result<f64> {
@@ -1824,8 +1879,8 @@ impl TensorVectorSpace for TensorTrain {
         )
     }
 
-    fn maxabs(&self) -> f64 {
-        f64::NAN
+    fn maxabs(&self) -> anyhow::Result<f64> {
+        self.try_maxabs()
     }
 }
 

@@ -140,7 +140,7 @@ fn assert_close_relative(actual: f64, expected: f64) {
 #[test]
 fn test_norm_small_tt_works() {
     let tt = make_tt(4);
-    let n = tt.norm();
+    let n = tt.norm().unwrap();
     assert!(n > 0.0, "norm should be positive, got {n}");
     assert!(n.is_finite(), "norm should be finite, got {n}");
     assert_close_relative(n * n, reference_norm_squared(&tt));
@@ -149,7 +149,7 @@ fn test_norm_small_tt_works() {
 #[test]
 fn test_norm_25_site_tt_matches_local_reference() {
     let tt = make_tt(25);
-    let n = tt.norm();
+    let n = tt.norm().unwrap();
     assert!(n > 0.0, "norm should be positive, got {n}");
     assert!(n.is_finite(), "norm should be finite, got {n}");
     assert_close_relative(n * n, reference_norm_squared(&tt));
@@ -161,7 +161,7 @@ fn test_norm_90_site_tt_uses_scalable_structured_path() {
     assert_eq!(tt.len(), 90);
     assert_eq!(tt.maxbonddim(), 2);
 
-    let n = tt.norm();
+    let n = tt.norm().unwrap();
     assert!(n > 0.0, "norm should be positive, got {n}");
     assert!(n.is_finite(), "norm should be finite, got {n}");
     assert_close_relative(n * n, reference_norm_squared(&tt));
@@ -175,5 +175,5 @@ fn test_long_tt_residual_uses_norm_without_dense_maxabs() {
         .unwrap();
 
     assert_eq!(residual.len(), tt.len());
-    assert!(residual.norm() <= 1e-12 * tt.norm().max(1.0));
+    assert!(residual.norm().unwrap() <= 1e-12 * tt.norm().unwrap().max(1.0));
 }

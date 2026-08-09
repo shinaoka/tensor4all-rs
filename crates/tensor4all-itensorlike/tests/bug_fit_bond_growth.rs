@@ -86,7 +86,7 @@ fn test_fit_bond_growth_with_rtol() {
 
     // Reference: zipup without truncation (exact)
     let result_exact = mpo_a.contract(&mpo_b, &ContractOptions::zipup()).unwrap();
-    let exact_norm = result_exact.norm();
+    let exact_norm = result_exact.norm().unwrap();
     let exact_bd = result_exact.maxbonddim();
     eprintln!("exact max bond: {exact_bd}, ||exact|| = {exact_norm:.6e}");
 
@@ -106,6 +106,7 @@ fn test_fit_bond_growth_with_rtol() {
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / exact_norm;
     eprintln!("zipup(rtol={rtol}) max bond: {zipup_bd}, rel_err = {zipup_err:.6e}");
     assert!(
@@ -131,6 +132,7 @@ fn test_fit_bond_growth_with_rtol() {
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / exact_norm;
     eprintln!("fit(rtol={rtol}) max bond: {fit_bd}, rel_err = {fit_err:.6e}");
 
@@ -148,6 +150,7 @@ fn test_fit_bond_growth_with_rtol() {
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / exact_norm;
     eprintln!("fit(rtol={rtol},4sw) max bond: {fit4_bd}, rel_err = {fit4_err:.6e}");
 
@@ -164,6 +167,7 @@ fn test_fit_bond_growth_with_rtol() {
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / exact_norm;
     eprintln!("fit(rtol=1e-12) max bond: {fit_small_rtol_bd}, rel_err = {fit_small_rtol_err:.6e}");
 

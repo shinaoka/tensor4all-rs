@@ -418,8 +418,11 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------
 
-    fn norm_squared(&self) -> f64 {
-        self.blocks.iter().map(|b| b.norm_squared()).sum()
+    fn norm_squared(&self) -> Result<f64> {
+        self.blocks
+            .iter()
+            .map(TensorVectorSpace::norm_squared)
+            .try_fold(0.0, |sum, value| Ok(sum + value?))
     }
 
     fn try_maxabs(&self) -> Result<f64> {
@@ -428,8 +431,8 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
             .try_fold(0.0_f64, |acc, block| Ok(acc.max(block.try_maxabs()?)))
     }
 
-    fn maxabs(&self) -> f64 {
-        self.try_maxabs().unwrap_or(f64::NAN)
+    fn maxabs(&self) -> Result<f64> {
+        self.try_maxabs()
     }
 
     fn scale(&self, scalar: AnyScalar) -> Result<Self> {

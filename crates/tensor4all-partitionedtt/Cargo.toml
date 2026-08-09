@@ -9,7 +9,6 @@ repository.workspace = true
 
 [features]
 default = ["tenferro-cpu-faer"]
-test-support = ["tensor4all-core/test-support"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-itensorlike/tenferro-cpu-faer",

@@ -60,8 +60,8 @@ impl TensorIndex for PlainVector {
 }
 
 impl TensorVectorSpace for PlainVector {
-    fn norm_squared(&self) -> f64 {
-        self.data.iter().map(|x| x * x).sum()
+    fn norm_squared(&self) -> Result<f64> {
+        Ok(self.data.iter().map(|x| x * x).sum())
     }
 
     fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
@@ -106,8 +106,8 @@ impl TensorVectorSpace for PlainVector {
         ))
     }
 
-    fn maxabs(&self) -> f64 {
-        self.data.iter().map(|x| x.abs()).fold(0.0, f64::max)
+    fn maxabs(&self) -> Result<f64> {
+        Ok(self.data.iter().map(|x| x.abs()).fold(0.0, f64::max))
     }
 }
 
@@ -389,7 +389,7 @@ fn gmres_accepts_vector_space_without_tensorlike() {
     .expect("GMRES should accept TensorVectorSpace-only values");
 
     assert!(result.converged);
-    assert!(result.solution.sub(&b).unwrap().maxabs() < 1e-12);
+    assert!(result.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]

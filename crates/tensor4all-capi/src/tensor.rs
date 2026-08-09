@@ -601,6 +601,13 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
     if out_len.is_null() {
         return err_null_pointer("out_len");
     }
+    #[cfg(test)]
+    if let Some(error) = unsafe { (*ptr).test_storage_error() } {
+        return crate::err_status(
+            format!("tensor dense f64 materialization failed: {error}"),
+            T4A_INTERNAL_ERROR,
+        );
+    }
     if unsafe { !(*ptr).inner().is_f64() } {
         return crate::err_status(
             "tensor dense f64 copy requires an f64 tensor",

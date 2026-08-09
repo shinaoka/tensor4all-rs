@@ -193,25 +193,28 @@ fn test_gmres_mpo_identity(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     println!(
         "x_true (identity MPO) created with {} sites, norm: {:.6}",
         x_true.len(),
-        x_true.norm()
+        x_true.norm()?
     );
 
     // For identity superoperator, b = A(x_true) = x_true
     let b = x_true.clone();
-    println!("b = A(x_true) = x_true, norm: {:.6}", b.norm());
+    println!("b = A(x_true) = x_true, norm: {:.6}", b.norm()?);
 
     // Initial guess: 0.5 * b
     let x0 = b.scale(AnyScalar::new_real(0.5))?;
-    println!("x0 (initial guess = 0.5*b) created, norm: {:.6}", x0.norm());
+    println!(
+        "x0 (initial guess = 0.5*b) created, norm: {:.6}",
+        x0.norm()?
+    );
 
     // Define apply_a closure: A(X) = X (identity)
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> { Ok(x.clone()) };
 
     // Compute initial residual
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("\n=== Initial Residual ===");
     println!("|Ax0 - b| / |b| = {:.6e}", initial_residual);
 
@@ -242,7 +245,7 @@ fn test_gmres_mpo_identity(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     // Compute final residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     println!("\n=== Results ===");
     println!("Converged: {}", result.converged);
@@ -255,7 +258,7 @@ fn test_gmres_mpo_identity(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
     println!("Error ||x_sol - x_true||: {:.6e}", error);
     println!("Solution bond dims: {:?}", result.solution.bond_dims());
 
@@ -286,16 +289,19 @@ fn test_gmres_mpo_pauli(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     println!(
         "x_true (identity MPO) created with {} sites, norm: {:.6}",
         x_true.len(),
-        x_true.norm()
+        x_true.norm()?
     );
 
     // b = A(x_true) = σ_x * I = σ_x
     let b = apply_operator_to_mpo(&pauli_x_op, &x_true, &indices)?;
-    println!("b = A(x_true) computed, norm: {:.6}", b.norm());
+    println!("b = A(x_true) computed, norm: {:.6}", b.norm()?);
 
     // Initial guess: 0.5 * b
     let x0 = b.scale(AnyScalar::new_real(0.5))?;
-    println!("x0 (initial guess = 0.5*b) created, norm: {:.6}", x0.norm());
+    println!(
+        "x0 (initial guess = 0.5*b) created, norm: {:.6}",
+        x0.norm()?
+    );
 
     // Define apply_a closure
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> {
@@ -303,10 +309,10 @@ fn test_gmres_mpo_pauli(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     };
 
     // Compute initial residual
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("\n=== Initial Residual ===");
     println!("|Ax0 - b| / |b| = {:.6e}", initial_residual);
 
@@ -337,7 +343,7 @@ fn test_gmres_mpo_pauli(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     // Compute final residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     println!("\n=== Results ===");
     println!("Converged: {}", result.converged);
@@ -350,7 +356,7 @@ fn test_gmres_mpo_pauli(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
     println!("Error ||x_sol - x_true||: {:.6e}", error);
     println!("Solution bond dims: {:?}", result.solution.bond_dims());
 
@@ -373,17 +379,17 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     println!(
         "x_true (i * identity MPO) created with {} sites, norm: {:.6}",
         x_true.len(),
-        x_true.norm()
+        x_true.norm()?
     );
 
     // b = A(x_true) = i * (i * I) = -I
     // Apply i to x_true
     let b = x_true.scale(AnyScalar::from(Complex64::new(0.0, 1.0)))?;
-    println!("b = i * x_true computed, norm: {:.6}", b.norm());
+    println!("b = i * x_true computed, norm: {:.6}", b.norm()?);
 
     // Initial guess: b
     let x0 = b.clone();
-    println!("x0 (initial guess = b) created, norm: {:.6}", x0.norm());
+    println!("x0 (initial guess = b) created, norm: {:.6}", x0.norm()?);
 
     // Define apply_a closure: A(X) = i * X
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> {
@@ -391,10 +397,10 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     };
 
     // Compute initial residual
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("\n=== Initial Residual ===");
     println!("|Ax0 - b| / |b| = {:.6e}", initial_residual);
 
@@ -425,7 +431,7 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
     // Compute final residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     println!("\n=== Results ===");
     println!("Converged: {}", result.converged);
@@ -438,7 +444,7 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
     println!("Error ||x_sol - x_true||: {:.6e}", error);
     println!("Solution bond dims: {:?}", result.solution.bond_dims());
 
@@ -469,16 +475,16 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
     println!(
         "x_true (identity MPO) created with {} sites, norm: {:.6}",
         x_true.len(),
-        x_true.norm()
+        x_true.norm()?
     );
 
     // b = A(x_true) = O * I
     let b = apply_operator_to_mpo(&random_op, &x_true, &indices)?;
-    println!("b = A(x_true) computed, norm: {:.6}", b.norm());
+    println!("b = A(x_true) computed, norm: {:.6}", b.norm()?);
 
     // Initial guess: b
     let x0 = b.clone();
-    println!("x0 (initial guess = b) created, norm: {:.6}", x0.norm());
+    println!("x0 (initial guess = b) created, norm: {:.6}", x0.norm()?);
 
     // Define apply_a closure
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> {
@@ -486,10 +492,10 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
     };
 
     // Compute initial residual
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     let ax0 = apply_a(&x0)?;
     let r0 = ax0.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let initial_residual = r0.norm() / b_norm;
+    let initial_residual = r0.norm()? / b_norm;
     println!("\n=== Initial Residual ===");
     println!("|Ax0 - b| / |b| = {:.6e}", initial_residual);
 
@@ -520,7 +526,7 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
     // Compute final residual
     let ax_sol = apply_a(&result.solution)?;
     let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let final_residual = r_final.norm() / b_norm;
+    let final_residual = r_final.norm()? / b_norm;
 
     println!("\n=== Results ===");
     println!("Converged: {}", result.converged);
@@ -533,7 +539,7 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    let error = diff.norm();
+    let error = diff.norm()?;
     println!("Error ||x_sol - x_true||: {:.6e}", error);
     println!("Solution bond dims: {:?}", result.solution.bond_dims());
 

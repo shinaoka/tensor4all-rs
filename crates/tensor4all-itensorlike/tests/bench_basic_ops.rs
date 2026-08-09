@@ -90,7 +90,7 @@ fn bench_norm() {
     for &n in &[20, 45, 90] {
         let mps = make_random_mps(n, 2, 16, 123);
         time_it(&format!("norm({n} sites, bd=16)"), || {
-            let _ = mps.norm();
+            let _ = mps.norm().unwrap();
         });
     }
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
+use tenferro::DType;
 use tensor4all_tensorbackend::AnyScalar as BackendScalar;
 
 use crate::defaults::tensordynlen::TensorDynLen;
@@ -783,6 +784,7 @@ impl AnyScalar {
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, 4.0)));
     /// ```
     pub fn try_conj(&self) -> Result<Self> {
+        self.as_tensor()?;
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().conj()));
         }
@@ -815,7 +817,12 @@ impl AnyScalar {
     /// assert!(scalar.is_real());
     /// ```
     pub fn real_part(&self) -> Self {
-        Self::from_real(self.real())
+        Self::fallback_result(
+            self.try_real_part(),
+            "real_part",
+            || Self::from_real(self.real()).value(),
+            self.tracks_grad(),
+        )
     }
 
     /// Returns the imaginary part as a real-valued scalar.
@@ -834,7 +841,12 @@ impl AnyScalar {
     /// assert!(scalar.is_real());
     /// ```
     pub fn imag_part(&self) -> Self {
-        Self::from_real(self.imag())
+        Self::fallback_result(
+            self.try_imag_part(),
+            "imag_part",
+            || Self::from_real(self.imag()).value(),
+            self.tracks_grad(),
+        )
     }
 
     /// Combines two real-valued scalars into a complex scalar.
@@ -945,13 +957,12 @@ impl AnyScalar {
     /// assert_eq!(AnyScalar::new_real(2.0).powi(-1).real(), 0.5);
     /// ```
     pub fn powi(&self, exponent: i32) -> Self {
-        if exponent == 0 {
-            return Self::one();
-        }
-        if self.tracks_grad() {
-            return self.powf(exponent as f64);
-        }
-        Self::from_backend_scalar(self.to_backend_scalar().powi(exponent))
+        Self::fallback_result(
+            self.try_powi(exponent),
+            "powi",
+            || Self::scalar_value_from_backend(self.to_backend_scalar().powi(exponent)),
+            self.tracks_grad(),
+        )
     }
 
     pub(crate) fn to_backend_scalar(&self) -> BackendScalar {
@@ -964,6 +975,8 @@ impl AnyScalar {
     }
 
     pub(crate) fn try_add(&self, rhs: &Self) -> Result<Self> {
+        self.as_tensor()?;
+        rhs.as_tensor()?;
         if !self.tracks_grad() && !rhs.tracks_grad() {
             return Ok(Self::from_backend_scalar(
                 self.to_backend_scalar() + rhs.to_backend_scalar(),
@@ -973,6 +986,8 @@ impl AnyScalar {
     }
 
     pub(crate) fn try_mul(&self, rhs: &Self) -> Result<Self> {
+        self.as_tensor()?;
+        rhs.as_tensor()?;
         if !self.tracks_grad() && !rhs.tracks_grad() {
             return Ok(Self::from_backend_scalar(
                 self.to_backend_scalar() * rhs.to_backend_scalar(),
@@ -982,6 +997,8 @@ impl AnyScalar {
     }
 
     pub(crate) fn try_div(&self, rhs: &Self) -> Result<Self> {
+        self.as_tensor()?;
+        rhs.as_tensor()?;
         if !self.tracks_grad() && !rhs.tracks_grad() {
             return Ok(Self::from_backend_scalar(
                 self.to_backend_scalar() / rhs.to_backend_scalar(),
@@ -991,24 +1008,80 @@ impl AnyScalar {
     }
 
     pub(crate) fn try_neg(&self) -> Result<Self> {
+        self.as_tensor()?;
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(-self.to_backend_scalar()));
         }
         Self::from_eager_unary(self, "neg", |tensor| tensor.neg())
     }
 
+    fn try_real_part(&self) -> Result<Self> {
+        self.as_tensor()?;
+        if !self.tracks_grad() {
+            return Ok(Self::from_real(self.real()));
+        }
+        if self.is_complex() {
+            Self::from_eager_unary(self, "real_part", |tensor| tensor.convert(DType::F64))
+        } else {
+            self.try_mul(&Self::new_real(1.0))
+        }
+    }
+
+    fn try_imag_part(&self) -> Result<Self> {
+        self.as_tensor()?;
+        if !self.tracks_grad() {
+            return Ok(Self::from_real(self.imag()));
+        }
+        if self.is_complex() {
+            let factor = Self::new_complex(0.0, -1.0);
+            let imaginary =
+                Self::from_eager_binary(self, &factor, "imag_part", |value, factor| {
+                    value.mul(factor)
+                })?;
+            Self::from_eager_unary(&imaginary, "imag_part", |tensor| tensor.convert(DType::F64))
+        } else {
+            self.try_mul(&Self::new_real(0.0))
+        }
+    }
+
     fn try_sqrt(&self) -> Result<Self> {
+        self.as_tensor()?;
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().sqrt()));
+        }
+        if self.is_real() && self.real() < 0.0 {
+            let complex = self
+                .as_tensor()?
+                .as_inner()?
+                .convert(DType::C64)
+                .map_err(|error| operation_error("sqrt", error))?;
+            let result = complex
+                .sqrt()
+                .map_err(|error| operation_error("sqrt", error))?;
+            return Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), "sqrt");
         }
         Self::from_eager_unary(self, "sqrt", |tensor| tensor.sqrt())
     }
 
     fn try_powf(&self, exponent: f64) -> Result<Self> {
+        self.as_tensor()?;
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(
                 self.to_backend_scalar().powf(exponent),
             ));
+        }
+        if self.is_real() && self.real() < 0.0 && exponent.fract() != 0.0 {
+            let base = self
+                .as_tensor()?
+                .as_inner()?
+                .convert(DType::C64)
+                .map_err(|error| operation_error("powf", error))?;
+            let exponent_scalar = Self::new_complex(exponent, 0.0);
+            let exponent = exponent_scalar.as_tensor()?.as_inner()?;
+            let result = base
+                .pow(exponent)
+                .map_err(|error| operation_error("powf", error))?;
+            return Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), "powf");
         }
         let exponent = if self.is_complex() {
             Self::new_complex(exponent, 0.0)
@@ -1016,6 +1089,22 @@ impl AnyScalar {
             Self::new_real(exponent)
         };
         Self::from_eager_binary(self, &exponent, "powf", |base, exponent| base.pow(exponent))
+    }
+
+    fn try_powi(&self, exponent: i32) -> Result<Self> {
+        self.as_tensor()?;
+        if exponent == 0 {
+            if self.tracks_grad() {
+                return self.try_powf(0.0);
+            }
+            return Ok(Self::one());
+        }
+        if self.tracks_grad() {
+            return self.try_powf(exponent as f64);
+        }
+        Ok(Self::from_backend_scalar(
+            self.to_backend_scalar().powi(exponent),
+        ))
     }
 }
 
@@ -1464,6 +1553,8 @@ mod tests {
             &failed / &one,
             -&failed,
             failed.conj(),
+            failed.real_part(),
+            failed.imag_part(),
             failed.sqrt(),
             failed.powf(2.0),
             failed.powi(2),
@@ -1475,6 +1566,32 @@ mod tests {
             assert!(error
                 .chain()
                 .any(|cause| cause.to_string() == "forced tracked scalar failure"));
+        }
+    }
+
+    #[test]
+    fn every_infallible_scalar_operation_retains_an_initialization_error() {
+        let failed = with_forced_tensor_initialization_failure(|| AnyScalar::new_real(2.0));
+        let one = AnyScalar::new_real(1.0);
+
+        let results = [
+            &failed + &one,
+            &failed * &one,
+            &failed / &one,
+            -&failed,
+            failed.conj(),
+            failed.real_part(),
+            failed.imag_part(),
+            failed.sqrt(),
+            failed.powf(2.0),
+            failed.powi(0),
+        ];
+        for result in results {
+            let error = result.as_tensor().unwrap_err();
+            assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
+            assert!(error
+                .chain()
+                .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
         }
     }
 }

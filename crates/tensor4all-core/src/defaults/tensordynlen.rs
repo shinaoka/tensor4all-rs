@@ -2463,15 +2463,6 @@ impl TensorDynLen {
         self.storage.materialize(self.indices.len())
     }
 
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn with_deferred_storage_error_for_testing(self, error: TensorStorageError) -> Self {
-        Self {
-            storage: self.storage.with_deferred_error(error),
-            ..self
-        }
-    }
-
     /// Returns the authoritative compact storage.
     ///
     /// # Errors
@@ -3616,7 +3607,12 @@ impl TensorDynLen {
     /// assert!((t.maxabs() - 5.0).abs() < 1e-12);
     /// ```
     pub fn maxabs(&self) -> f64 {
-        self.storage.max_abs().unwrap_or(f64::NAN)
+        self.try_maxabs().unwrap_or(f64::NAN)
+    }
+
+    /// Try to compute the maximum absolute value of all tensor elements.
+    pub fn try_maxabs(&self) -> Result<f64> {
+        self.storage.max_abs()
     }
 
     /// Element-wise subtraction with index alignment.
@@ -3690,6 +3686,58 @@ impl TensorDynLen {
     /// Returns an error if any coordinate is outside its index dimension.
     pub fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
         <Self as TensorConstructionLike>::onehot(index_vals)
+    }
+
+    /// Keep one coordinate along an index while retaining that index axis.
+    ///
+    /// This is the differentiable masking counterpart to [`Self::select_indices`].
+    /// It selects the requested slice, forms a one-hot tensor over the removed
+    /// axis, and takes an explicit tensor product to restore the original index
+    /// order. The implementation stays in the tensor backend, so structured
+    /// storage and reverse-mode metadata are preserved whenever the backend can
+    /// represent the operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Existing tensor index to mask.
+    /// * `position` - Zero-based coordinate to keep; all other coordinates become
+    ///   zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` is absent, repeated, or if `position` is out
+    /// of range for the index dimension, or if the backend cannot execute the
+    /// differentiable tensor operations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let masked = tensor.mask_index(&i, 1).unwrap();
+    ///
+    /// assert_eq!(masked.indices(), &[i]);
+    /// assert_eq!(masked.to_vec::<f64>().unwrap(), vec![0.0, 4.0]);
+    /// assert!(TensorDynLen::from_dense(
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![1.0_f64, 2.0],
+    /// )
+    /// .unwrap()
+    /// .mask_index(&DynIndex::new_dyn(2), 0)
+    /// .is_err());
+    /// ```
+    pub fn mask_index(&self, index: &DynIndex, position: usize) -> Result<Self> {
+        // Retaining the shared index turns contraction into a backend-level
+        // elementwise product instead of materializing a host mask.
+        let onehot = Self::onehot(&[(index.clone(), position)])?;
+        super::contract::contract_pair_with_options(
+            self,
+            &onehot,
+            super::contract::ContractionOptions::new()
+                .with_retain_indices(std::slice::from_ref(index)),
+        )
     }
 
     /// Compute the relative distance between two tensors.
@@ -3960,12 +4008,12 @@ use crate::tensor_like::{
 };
 
 impl TensorVectorSpace for TensorDynLen {
-    fn norm_squared(&self) -> f64 {
-        TensorDynLen::norm_squared(self)
+    fn norm_squared(&self) -> Result<f64> {
+        TensorDynLen::try_norm_squared(self)
     }
 
-    fn maxabs(&self) -> f64 {
-        TensorDynLen::maxabs(self)
+    fn maxabs(&self) -> Result<f64> {
+        TensorDynLen::try_maxabs(self)
     }
 
     fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
@@ -4732,6 +4780,25 @@ impl TensorDynLen {
     /// ```
     pub fn is_f64(&self) -> bool {
         self.storage.is_f64()
+    }
+
+    /// Check if the tensor has complex-64 storage.
+    ///
+    /// # Example
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![i],
+    ///     vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+    /// )
+    /// .unwrap();
+    /// assert!(tensor.is_c64());
+    /// ```
+    pub fn is_c64(&self) -> bool {
+        self.storage.is_c64()
     }
 
     /// Check whether the tensor carries diagonal logical axis metadata.

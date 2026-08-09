@@ -69,7 +69,7 @@ fn create_mps_with_bond_dim(n: usize, phys_dim: usize, num_states: usize) -> Res
 /// Run GMRES with identity operator and report results.
 /// Returns (converged, reported_residual, actual_error).
 fn run_identity_gmres(b: &TensorTrain, max_outer_iters: usize) -> Result<(bool, f64, f64)> {
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
 
     let apply_identity = |x: &TensorTrain| -> Result<TensorTrain> { Ok(x.clone()) };
 
@@ -97,7 +97,7 @@ fn run_identity_gmres(b: &TensorTrain, max_outer_iters: usize) -> Result<(bool, 
     let diff = result
         .solution
         .axpby(AnyScalar::new_real(1.0), b, AnyScalar::new_real(-1.0))?;
-    let actual_err = diff.norm() / b_norm;
+    let actual_err = diff.norm()? / b_norm;
 
     Ok((result.converged, result.residual_norm, actual_err))
 }

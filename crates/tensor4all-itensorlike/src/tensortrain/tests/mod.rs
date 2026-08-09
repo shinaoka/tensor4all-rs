@@ -52,7 +52,7 @@ fn profile_helpers_and_basic_accessors_cover_paths() {
         .to_string()
         .contains("out of bounds"));
     assert_eq!(tt.clone().into_treetn().node_count(), 1);
-    assert!(tt.norm_squared() >= 0.0);
+    assert!(tt.norm_squared().unwrap() >= 0.0);
 }
 
 #[test]
@@ -538,11 +538,11 @@ fn test_inner_product() {
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     // Compute norm squared
-    let norm_sq = tt.norm_squared();
+    let norm_sq = tt.norm_squared().unwrap();
     assert!(norm_sq > 0.0);
 
     // Compute norm
-    let norm = tt.norm();
+    let norm = tt.norm().unwrap();
     assert!((norm * norm - norm_sq).abs() < 1e-10);
 }
 
@@ -925,8 +925,8 @@ fn test_scale() {
     let scaled = tt.scale(AnyScalar::new_real(2.0)).unwrap();
 
     // Verify: norm of scaled should be 2 * norm of original
-    let orig_norm = tt.norm();
-    let scaled_norm = scaled.norm();
+    let orig_norm = tt.norm().unwrap();
+    let scaled_norm = scaled.norm().unwrap();
     assert!(
         (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
         "Expected scaled_norm = {}, got {}",
@@ -996,8 +996,8 @@ fn test_tensor_like_scale() {
     // Use TensorVectorSpace::scale
     let scaled = TensorVectorSpace::scale(&tt, AnyScalar::new_real(2.0)).unwrap();
 
-    let orig_norm = tt.norm();
-    let scaled_norm = TensorVectorSpace::norm(&scaled);
+    let orig_norm = tt.norm().unwrap();
+    let scaled_norm = TensorVectorSpace::norm(&scaled).unwrap();
     assert!(
         (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
         "Expected scaled_norm = {}, got {}",
@@ -1388,7 +1388,8 @@ fn test_tensor_like_maxabs_is_not_hidden_dense_for_tensor_train() {
 
     let err = TensorVectorSpace::try_maxabs(&tt).unwrap_err();
     assert!(err.to_string().contains("explicit dense materialization"));
-    assert!(TensorVectorSpace::maxabs(&tt).is_nan());
+    let err = TensorVectorSpace::maxabs(&tt).unwrap_err();
+    assert!(err.to_string().contains("explicit dense materialization"));
 }
 
 #[test]
