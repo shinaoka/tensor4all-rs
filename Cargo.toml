@@ -30,8 +30,33 @@ authors = ["tensor4all collaboration"]
 license = "MIT"
 repository = "https://github.com/tensor4all/tensor4all-rs"
 
+# Keep ordinary local profiles free of debug info (shared rule: build-artifact
+# hygiene). For Rust source-level C API diagnostics or debugger sessions, build
+# with --profile release-debug. One-command dev/test overrides remain available
+# through CARGO_PROFILE_DEV_DEBUG=2 / CARGO_PROFILE_TEST_DEBUG=2.
+[profile.dev]
+debug = 0
+debug-assertions = true
+overflow-checks = true
+
+[profile.test]
+debug = 0
+debug-assertions = true
+overflow-checks = true
+
 [profile.release]
-debug = true  # Include debug info in release builds (enables detailed RUST_BACKTRACE)
+debug = 0
+
+[profile.release-debug]
+inherits = "release"
+debug = true
+
+# Comprehensive CI keeps release-mode semantics while avoiding artifacts that
+# are not reused after the job and symbols that are not needed to run checks.
+[profile.ci]
+inherits = "release"
+incremental = false
+strip = "symbols"
 
 [workspace.dependencies]
 num-complex = "0.4"
