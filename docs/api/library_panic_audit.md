@@ -34,13 +34,15 @@
 
 ### ` fn resolve_call_site(span: & Value, root: & Path) -> Result < Option < (String , usize) > >`
 
+### ` fn all_sources(&self) -> BTreeSet < PathBuf >` (impl ParsedDepInfo)
+
 ### ` fn dep_info_sources(root: & Path, artifacts: & CompilerArtifacts, expected: & HashSet < TargetKey >) -> Result < BTreeSet < PathBuf > >`
 
 ### ` fn artifact_identity(artifact: & CompilerArtifact) -> String`
 
 ### ` fn artifact_source_path(root: & Path, artifact: & CompilerArtifact) -> Result < Option < PathBuf > >`
 
-### ` fn locate_dep_infos(root: & Path, artifact: & CompilerArtifact) -> Result < Vec < (PathBuf , ParsedDepInfo) > >`
+### ` fn locate_dep_infos(root: & Path, artifact: & CompilerArtifact) -> Result < Vec < (PathBuf , BTreeSet < PathBuf >) > >`
 
 ### ` fn normalize_path(root: & Path, path: & Path) -> PathBuf`
 
@@ -71,6 +73,10 @@
 ### ` fn scan_assertion_tokens(path: & str, tokens: TokenStream, findings: & mut BTreeSet < Finding >)`
 
 ### ` fn scan_macro_rules(path: & str, tokens: TokenStream, findings: & mut BTreeSet < Finding >)`
+
+### ` fn scan_macro_transcriber(path: & str, tokens: TokenStream, findings: & mut BTreeSet < Finding >)`
+
+Scan a `macro_rules!` transcriber for actual assertion invocations while recognizing nested `macro_rules!` definitions: a nested name in matcher position is a pattern, not a call, so only the nested rules' transcribers
 
 ### ` fn scan_item_macro(path: & str, item: & syn :: ItemMacro, findings: & mut BTreeSet < Finding >)`
 
@@ -154,6 +160,8 @@
 
 ### ` fn dep_info_lookup_rejects_stale_heuristic_targets()`
 
+### ` fn dep_info_rejects_artifact_output_without_its_own_sources()`
+
 ### ` fn dep_info_lookup_requires_artifact_source_in_selected_sources()`
 
 ### ` fn cargo_json_preserves_each_artifact_record()`
@@ -175,3 +183,4 @@
 ### ` fn print_help()`
 
 ### ` fn main()`
+
