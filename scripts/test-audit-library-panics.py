@@ -30,6 +30,13 @@ name = "demo"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "demo-bin"
+path = "src/shared.rs"
+
 [features]
 default = []
 production = []
@@ -76,6 +83,14 @@ pub fn direct(option: Option<bool>) {
     let _ = option.unwrap();
 }
 
+pub fn raw_unreachable() {
+    unreachable!("production unreachable");
+}
+
+pub fn raw_expect(option: Option<bool>) {
+    let _ = option.expect("production expect");
+}
+
 pub fn aliases(option: Maybe<bool>) {
     let _ = Maybe::unwrap(option);
     fail!("aliased panic");
@@ -109,6 +124,28 @@ pub(crate) fn crate_assertions() {
     assert!(true);
 }
 
+pub fn cfg_statement_assertions() {
+    #[cfg(test)]
+    assert!(true);
+    #[cfg(test)]
+    {
+        assert!(true);
+    }
+    #[cfg(test)]
+    fn nested_test() {
+        assert!(true);
+    }
+    #[cfg(not(test))]
+    {
+        assert!(true);
+    }
+}
+
+#[cfg_attr(all(feature = "production", not(test)), path = "feature_selected.rs")]
+mod selected;
+
+mod shared;
+
 #[cfg(test)]
 pub fn test_only_function() {
     panic!("test function");
@@ -128,7 +165,17 @@ pub fn feature_production() {
 }
 '''
 
-FIXTURE_BIN = 'fn main() { std::panic!("production binary"); }\n'
+FIXTURE_SHARED = r'''mod nested;
+
+fn main() {
+    std::panic!("production binary");
+}
+'''
+
+FIXTURE_SELECTED = 'pub fn default_selected_assertion() { assert!(true); }\n'
+FIXTURE_FEATURE_SELECTED = 'pub fn feature_selected_assertion() { assert!(true); }\n'
+FIXTURE_BIN_NESTED = 'pub fn bin_root_assertion() { assert!(true); }\n'
+FIXTURE_LIB_NESTED = 'pub fn lib_module_assertion() { assert!(true); }\n'
 
 
 def _build_tool_once() -> None:
@@ -145,30 +192,16 @@ def _build_tool_once() -> None:
             TOOL_PACKAGE,
         ],
         cwd=ROOT,
-        text=True,
         capture_output=True,
         check=False,
-        timeout=300,
+        timeout=600,
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    executable = None
-    for line in result.stdout.splitlines():
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        target = message.get("target", {})
-        if (
-            message.get("reason") == "compiler-artifact"
-            and target.get("name") == TOOL_PACKAGE
-            and "bin" in target.get("kind", [])
-            and message.get("executable")
-        ):
-            executable = Path(message["executable"])
-            if not executable.is_absolute():
-                executable = (ROOT / executable).resolve()
-            break
-    assert executable is not None, result.stdout
+    wrapper_spec = importlib.util.spec_from_file_location("panic_wrapper", SCRIPT)
+    assert wrapper_spec and wrapper_spec.loader
+    wrapper = importlib.util.module_from_spec(wrapper_spec)
+    wrapper_spec.loader.exec_module(wrapper)
+    executable = wrapper._artifact_executable(result.stdout, ROOT)
     assert executable.is_file(), executable
     os.environ[TOOL_ENV] = str(executable)
 
@@ -178,7 +211,11 @@ def _write_fixture(root: Path) -> None:
         "Cargo.toml": FIXTURE_MANIFEST,
         "crates/demo/Cargo.toml": FIXTURE_PACKAGE,
         "crates/demo/src/lib.rs": FIXTURE_LIB,
-        "crates/demo/src/bin/demo-bin.rs": FIXTURE_BIN,
+        "crates/demo/src/shared.rs": FIXTURE_SHARED,
+        "crates/demo/src/selected.rs": FIXTURE_SELECTED,
+        "crates/demo/src/feature_selected.rs": FIXTURE_FEATURE_SELECTED,
+        "crates/demo/src/nested.rs": FIXTURE_BIN_NESTED,
+        "crates/demo/src/shared/nested.rs": FIXTURE_LIB_NESTED,
         "crates/demo/tests/ignored.rs": 'pub fn ignored() { panic!("integration test"); }\n',
         "crates/demo/examples/ignored.rs": 'fn main() { panic!("example"); }\n',
         "crates/demo/benches/ignored.rs": 'fn main() { panic!("bench"); }\n',
@@ -225,28 +262,60 @@ def test_compiled_fixture_covers_production_targets_once() -> None:
         baseline = [
             f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    assert!(true);')}:assert",
             f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    debug_assert!(true);')}:debug_assert",
+            f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '        assert!(true);', 3)}:assert",
+            f"crates/demo/src/selected.rs:{_line(FIXTURE_SELECTED, 'assert!(true);')}:assert",
+            f"crates/demo/src/feature_selected.rs:{_line(FIXTURE_FEATURE_SELECTED, 'assert!(true);')}:assert",
+            f"crates/demo/src/nested.rs:{_line(FIXTURE_BIN_NESTED, 'assert!(true);')}:assert",
+            f"crates/demo/src/shared/nested.rs:{_line(FIXTURE_LIB_NESTED, 'assert!(true);')}:assert",
         ]
         result = _run_audit(fixture, baseline)
 
     assert result.returncode == 1, result.stderr
     assert result.stderr.splitlines() == [
-        "Audit failed: 9 unbaselined findings, 0 stale baseline entries."
+        "Audit failed: 11 unbaselined findings, 0 stale baseline entries."
     ]
     findings = result.stdout.splitlines()
-    assert findings[:2] == [f"Baseline matched: {entry}" for entry in sorted(baseline)]
-    assert findings[2:] == [
-        f"crates/demo/src/bin/demo-bin.rs:1:panic",
+    assert findings[: len(baseline)] == [
+        f"Baseline matched: {entry}" for entry in sorted(baseline)
+    ]
+    assert findings[len(baseline) :] == [
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"allow cannot hide this\");')}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 1)}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 2)}:unwrap",
+        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    unreachable!(\"production unreachable\");')}:unreachable",
+        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.expect(\"production expect\");')}:expect",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = Maybe::unwrap(option);')}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    fail!(\"aliased panic\");')}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(option.unwrap());')}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(panic!(\"invoked macro argument\"));')}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"all-features production\");')}:panic",
+        f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, '    std::panic!(\"production binary\");')}:panic",
     ]
+    assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :]} >= {
+        "panic",
+        "unreachable",
+        "unwrap",
+        "expect",
+    }
     assert all("ignored" not in finding for finding in findings)
     assert all("test_only" not in finding for finding in findings)
+
+
+def test_unknown_cfg_attr_path_fails_closed() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        source_path = fixture / "crates/demo/src/lib.rs"
+        source = source_path.read_text(encoding="utf-8")
+        source = source.replace(
+            '#[cfg_attr(all(feature = "production", not(test)), path = "feature_selected.rs")]\n',
+            '#[cfg_attr(any(feature = "production", target_vendor = "unknown"), path = "feature_selected.rs")]\n',
+        )
+        source_path.write_text(source, encoding="utf-8")
+        result = _run_audit(fixture)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "cannot evaluate cfg_attr path predicate" in result.stderr
 
 
 def test_wrapper_discovers_custom_target_artifact() -> None:
@@ -267,11 +336,14 @@ def test_wrapper_discovers_custom_target_artifact() -> None:
                 json.dumps(
                     {
                         "reason": "compiler-artifact",
+                        "package_id": "path+file:///fixture#library-panic-audit@0.1.0",
                         "target": {"name": TOOL_PACKAGE, "kind": ["bin"]},
                         "executable": str(artifact),
                     }
                 )
             )
+            + "; printf '%s\\n' "
+            + repr(json.dumps({"reason": "build-finished", "success": True}))
             + "\n",
             encoding="utf-8",
         )
@@ -289,6 +361,13 @@ def test_wrapper_discovers_custom_target_artifact() -> None:
             if old_override is not None:
                 os.environ[TOOL_ENV] = old_override
         assert discovered == artifact.resolve()
+        for malformed in [b"\xff", b"null\n", b'{"reason":"unknown"}\n']:
+            try:
+                wrapper._artifact_executable(malformed, directory_path)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("malformed Cargo JSON was accepted")
 
 
 def test_missing_manifest_fails_closed() -> None:
@@ -324,6 +403,7 @@ def main() -> int:
     _build_tool_once()
     tests = [
         test_compiled_fixture_covers_production_targets_once,
+        test_unknown_cfg_attr_path_fails_closed,
         test_wrapper_discovers_custom_target_artifact,
         test_missing_manifest_fails_closed,
         test_wrapper_rejects_missing_override,

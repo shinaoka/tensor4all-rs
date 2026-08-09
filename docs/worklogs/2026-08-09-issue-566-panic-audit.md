@@ -2,37 +2,49 @@
 
 ## Decision
 
-The Task 8 raw panic scan now delegates production reachability and name/macro
+The Task 8 raw panic scan delegates production reachability and name/macro
 resolution to Cargo and Clippy. The audit selects workspace packages under
-`crates/`, compiles only `--lib --bins`, runs default features and
-`--all-features` when a production package defines non-default features, and
-forces exactly these diagnostics: `clippy::panic`, `clippy::unreachable`,
-`clippy::unwrap_used`, and `clippy::expect_used`.
+`crates/`, compiles library-like Cargo targets (`lib`, `rlib`, `dylib`,
+`cdylib`, `staticlib`, and `proc-macro`) plus `bin` targets, and therefore
+covers the `tensor4all-capi` `cdylib`/`rlib` target. It runs default features
+and `--all-features` when a selected production package defines non-default
+features, forcing exactly these diagnostics: `clippy::panic`,
+`clippy::unreachable`, `clippy::unwrap_used`, and `clippy::expect_used`.
 
-The JSON boundary is fail-closed. Cargo failure, malformed output, incomplete
-target coverage, unsupported targeted Clippy codes, or a targeted diagnostic
-without a local primary/expansion call-site span exits with configuration error
-2. Local paths are canonicalized, normalized, deduplicated, and sorted. Macro
-expansion definitions and external dependency spans are not findings; the
-local expansion call site is used when present.
+The Cargo JSON boundary is fail-closed. Invalid UTF-8, malformed/non-object
+records, missing or non-string reasons, unknown reasons, unsuccessful or
+missing `build-finished` records, unsupported targeted Clippy codes, or
+incomplete production-target compiler-artifact coverage are configuration
+errors. Clippy runs have a ten-minute timeout; the wrapper allows both feature
+runs without the old combined 120-second limit. Local paths are canonicalized,
+normalized, deduplicated, and sorted. Macro expansion definitions and external
+dependency spans are not findings; the local expansion call site is used when
+present.
 
-`syn` remains only for the reviewed public `assert!`/`debug_assert!` baseline.
-It follows Cargo target roots and a small structural `mod` graph, excludes
-`#[cfg(test)]`, and deliberately does not resolve imports, types, or macros.
-The compiler boundary therefore does not claim to inspect dormant macro token
-text or arbitrary metavariable expansions. The reviewed baseline remains the
-14 existing matrix assertions.
+`syn` remains only for the reviewed public `assert!`/`debug_assert!` baseline;
+it does not resolve names, types, imports, or macros. Assertion traversal follows
+target/root logical module context in its visited identity, evaluates default
+and all-feature `cfg`/`cfg_attr` predicates structurally (`all`, `any`, and
+`not`, including `feature` and `test`), and fails closed when an active path
+attribute cannot be evaluated. `#[cfg(test)]` statements, nested items, and
+expressions inside public bodies are skipped while production `cfg(not(test))`
+code is retained. The reviewed baseline remains exactly the 14 existing matrix
+assertions.
 
 ## Verification
 
 - Rust unit tests cover exact-code filtering, synthetic expansion spans,
-  outside-root/missing-span failures, and baseline normalization.
-- The Python self-test builds the audit binary once and runs one fixture audit;
-  that fixture covers aliases, local macro arguments, custom methods, safe and
-  dormant macros, `#[cfg(test)]`, public/private assertions, a feature-only
-  production function, and a production binary.
+  outside-root/missing-span failures, baseline normalization, strict Cargo JSON,
+  invalid UTF-8, build completion, and `cdylib`/`rlib` target coverage.
+- The Python self-test builds the audit binary once and runs compiled fixtures
+  covering aliases, local macro arguments, custom methods, safe and dormant
+  macros, all four raw diagnostics (panic/unreachable/unwrap/expect),
+  `#[cfg(test)]`, public/private assertions, feature-selected `cfg_attr` module
+  paths, lib-module versus bin-root traversal of one canonical file, and a
+  production `cdylib`/`rlib` plus binary target.
 - The real audit reports 14 matched baseline entries, zero unbaselined findings,
   and zero stale entries for both default and all-feature Clippy runs.
+- `docs/api/library_panic_audit.md` was regenerated from the tool source.
 
 No Rust library or C API surface was changed.
 

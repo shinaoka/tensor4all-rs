@@ -9,11 +9,18 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::process::{Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
-use syn::{Attribute, Expr, ExprLit, ImplItem, Item, Lit, Meta, TraitItem, Visibility};
+use syn::{
+    Attribute, Expr, ExprLit, ImplItem, Item, Lit, Meta, Stmt, Token, TraitItem, Visibility,
+};
 
 const RAW_CODES: [(&str, &str); 4] = [
     ("clippy::panic", "panic"),
@@ -23,6 +30,16 @@ const RAW_CODES: [(&str, &str); 4] = [
 ];
 const RAW_KINDS: [&str; 4] = ["panic", "unreachable", "unwrap", "expect"];
 const ASSERTION_KINDS: [&str; 2] = ["assert", "debug_assert"];
+const PRODUCTION_KINDS: [&str; 7] = [
+    "lib",
+    "rlib",
+    "dylib",
+    "cdylib",
+    "staticlib",
+    "proc-macro",
+    "bin",
+];
+const CLIPPY_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Finding {
@@ -103,6 +120,8 @@ struct ProductionTarget {
     target_name: String,
     kind: String,
     source_path: PathBuf,
+    features: BTreeSet<String>,
+    default_features: BTreeSet<String>,
 }
 
 impl ProductionTarget {
@@ -115,7 +134,7 @@ impl ProductionTarget {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct TargetKey {
     package_id: String,
     target_name: String,
@@ -180,6 +199,12 @@ impl ProductionSelection {
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("cargo metadata package omitted name"))?;
             all_workspace_packages.push(package_name.to_owned());
+            let feature_map = package
+                .get("features")
+                .and_then(Value::as_object)
+                .ok_or_else(|| anyhow!("cargo metadata package omitted features"))?;
+            let features = feature_map.keys().cloned().collect::<BTreeSet<_>>();
+            let default_features = cargo_default_features(feature_map)?;
             let manifest = package
                 .get("manifest_path")
                 .and_then(Value::as_str)
@@ -197,13 +222,7 @@ impl ProductionSelection {
                     .get("kind")
                     .and_then(Value::as_array)
                     .ok_or_else(|| anyhow!("cargo metadata target omitted kind"))?;
-                let kind = if target_kind.iter().any(|value| value == "lib") {
-                    Some("lib")
-                } else if target_kind.iter().any(|value| value == "bin") {
-                    Some("bin")
-                } else {
-                    None
-                };
+                let kind = cargo_target_kind(target_kind)?;
                 let Some(kind) = kind else {
                     continue;
                 };
@@ -222,12 +241,14 @@ impl ProductionSelection {
                     target_name: target_name.to_owned(),
                     kind: kind.to_owned(),
                     source_path,
+                    features: features.clone(),
+                    default_features: default_features.clone(),
                 });
             }
         }
 
         if targets.is_empty() {
-            bail!("cargo metadata selected no production lib/bin targets under crates/");
+            bail!("cargo metadata selected no production Cargo targets under crates/");
         }
         let selected_package_names = targets
             .iter()
@@ -237,27 +258,9 @@ impl ProductionSelection {
             .into_iter()
             .filter(|name| !selected_package_names.contains(name.as_str()))
             .collect::<Vec<_>>();
-        let all_features = packages.iter().any(|package| {
-            let Some(package_id) = package.get("id").and_then(Value::as_str) else {
-                return false;
-            };
-            if !member_ids.contains(package_id) {
-                return false;
-            }
-            let Some(manifest) = package.get("manifest_path").and_then(Value::as_str) else {
-                return false;
-            };
-            let Ok(manifest) = ensure_inside(&root, Path::new(manifest), "package manifest") else {
-                return false;
-            };
-            if !manifest.starts_with(&crates_root) {
-                return false;
-            }
-            package
-                .get("features")
-                .and_then(Value::as_object)
-                .is_some_and(|features| features.keys().any(|name| name != "default"))
-        });
+        let all_features = targets
+            .iter()
+            .any(|target| target.features.iter().any(|name| name != "default"));
 
         Ok(Self {
             root,
@@ -270,6 +273,51 @@ impl ProductionSelection {
     fn expected_keys(&self) -> HashSet<TargetKey> {
         self.targets.iter().map(ProductionTarget::key).collect()
     }
+}
+
+fn cargo_default_features(
+    feature_map: &serde_json::Map<String, Value>,
+) -> Result<BTreeSet<String>> {
+    let mut enabled = BTreeSet::new();
+    let Some(_) = feature_map.get("default") else {
+        return Ok(enabled);
+    };
+    let mut pending = vec!["default".to_owned()];
+    enabled.insert("default".to_owned());
+    while let Some(feature) = pending.pop() {
+        let values = feature_map
+            .get(&feature)
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("cargo metadata feature {feature:?} was not an array"))?;
+        for value in values {
+            let value = value
+                .as_str()
+                .ok_or_else(|| anyhow!("cargo metadata feature value was not a string"))?;
+            let value = value.strip_prefix("dep:").unwrap_or(value);
+            let candidate = value.split('/').next().unwrap_or(value);
+            if feature_map.contains_key(candidate) && enabled.insert(candidate.to_owned()) {
+                pending.push(candidate.to_owned());
+            }
+        }
+    }
+    Ok(enabled)
+}
+
+fn cargo_target_kind(kinds: &[Value]) -> Result<Option<String>> {
+    if kinds.is_empty() {
+        bail!("cargo JSON target omitted kind entries");
+    }
+    let kinds = kinds
+        .iter()
+        .map(|kind| {
+            kind.as_str()
+                .ok_or_else(|| anyhow!("cargo JSON target kind was not a string"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(PRODUCTION_KINDS
+        .iter()
+        .find(|candidate| kinds.contains(candidate))
+        .map(|kind| (*kind).to_owned()))
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf> {
@@ -324,9 +372,8 @@ fn run_clippy(selection: &ProductionSelection, all_features: bool) -> Result<BTr
         command.args(["--force-warn", code]);
     }
 
-    let output = command
-        .current_dir(&selection.root)
-        .output()
+    command.current_dir(&selection.root);
+    let output = command_output_with_timeout(&mut command, CLIPPY_TIMEOUT)
         .context("failed to execute cargo clippy")?;
     if !output.status.success() {
         bail!(
@@ -341,10 +388,70 @@ fn run_clippy(selection: &ProductionSelection, all_features: bool) -> Result<BTr
     }
 
     let expected = selection.expected_keys();
+    let (_, findings) = parse_clippy_output(&output.stdout, &selection.root, &expected)?;
+    Ok(findings)
+}
+
+fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("cargo clippy stdout pipe was unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("cargo clippy stderr pipe was unavailable"))?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stdout = stdout;
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stderr = stderr;
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            bail!("cargo clippy timed out after {} seconds", timeout.as_secs());
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| anyhow!("cargo clippy stdout reader panicked"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| anyhow!("cargo clippy stderr reader panicked"))??;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn parse_clippy_output(
+    stdout: &[u8],
+    root: &Path,
+    expected: &HashSet<TargetKey>,
+) -> Result<(HashSet<TargetKey>, BTreeSet<Finding>)> {
+    let stdout = std::str::from_utf8(stdout).context("cargo clippy emitted invalid UTF-8")?;
     let mut seen_targets = HashSet::new();
     let mut findings = BTreeSet::new();
     let mut build_finished = false;
-    for (line_number, line) in String::from_utf8_lossy(&output.stdout).lines().enumerate() {
+    for (line_number, line) in stdout.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
@@ -354,39 +461,61 @@ fn run_clippy(selection: &ProductionSelection, all_features: bool) -> Result<BTr
                 line_number + 1
             )
         })?;
-        match message.get("reason").and_then(Value::as_str) {
-            Some("compiler-artifact") => {
-                if let Some(key) = selected_target_key(&message, &expected)? {
+        if !message.is_object() {
+            bail!(
+                "cargo clippy emitted a non-object JSON record on line {}",
+                line_number + 1
+            );
+        }
+        let reason = message
+            .get("reason")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("cargo clippy JSON record omitted string reason"))?;
+        match reason {
+            "compiler-artifact" => {
+                if let Some(key) = selected_target_key(&message, expected)? {
                     seen_targets.insert(key);
                 }
             }
-            Some("compiler-message") => {
-                if selected_target_key(&message, &expected)?.is_some() {
-                    if let Some(finding) = parse_compiler_message(&message, &selection.root)? {
+            "compiler-message" => {
+                let diagnostic = message
+                    .get("message")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| anyhow!("cargo compiler-message record omitted message"))?;
+                if diagnostic.is_empty() {
+                    bail!("cargo compiler-message record contained an empty message");
+                }
+                if selected_target_key(&message, expected)?.is_some() {
+                    if let Some(finding) = parse_compiler_message(&message, root)? {
                         findings.insert(finding);
                     }
                 }
             }
-            Some("build-finished") => {
-                build_finished = true;
-                if message.get("success").and_then(Value::as_bool) != Some(true) {
+            "build-finished" => {
+                let success = message
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| anyhow!("cargo build-finished record omitted success"))?;
+                if !success {
                     bail!("cargo clippy reported an incomplete build");
                 }
+                build_finished = true;
             }
-            _ => {}
+            "build-script-executed" => {}
+            other => bail!("cargo clippy emitted unknown JSON reason: {other:?}"),
         }
     }
     if !build_finished {
         bail!("cargo clippy output did not contain a successful build-finished record");
     }
-    if seen_targets != expected {
+    if seen_targets != *expected {
         let missing = expected
             .difference(&seen_targets)
             .map(|key| format!("{}:{}", key.target_name, key.kind))
             .collect::<Vec<_>>();
         bail!("cargo clippy did not compile every production target: {missing:?}");
     }
-    Ok(findings)
+    Ok((seen_targets, findings))
 }
 
 fn selected_target_key(
@@ -409,17 +538,13 @@ fn selected_target_key(
         .get("kind")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("cargo JSON target omitted kind"))?;
-    let kind = if kinds.iter().any(|value| value == "lib") {
-        "lib"
-    } else if kinds.iter().any(|value| value == "bin") {
-        "bin"
-    } else {
+    let Some(kind) = cargo_target_kind(kinds)? else {
         return Ok(None);
     };
     let key = TargetKey {
         package_id: package_id.to_owned(),
         target_name: target_name.to_owned(),
-        kind: kind.to_owned(),
+        kind,
     };
     Ok(expected.get(&key).cloned())
 }
@@ -510,28 +635,60 @@ fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)
     Ok(Some((relative, line)))
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct VisitKey {
+    target: TargetKey,
+    path: PathBuf,
+    module_dir: PathBuf,
+}
+
 struct AssertionScanner {
     root: PathBuf,
-    visited: BTreeSet<PathBuf>,
+    visited: BTreeSet<VisitKey>,
     findings: BTreeSet<Finding>,
 }
 
 impl AssertionScanner {
-    fn scan(root: &Path, targets: &[ProductionTarget]) -> Result<BTreeSet<Finding>> {
+    fn scan(
+        root: &Path,
+        targets: &[ProductionTarget],
+        all_features: bool,
+    ) -> Result<BTreeSet<Finding>> {
         let mut scanner = Self {
             root: root.to_owned(),
             visited: BTreeSet::new(),
             findings: BTreeSet::new(),
         };
+        let mut targets = targets.to_vec();
+        targets.sort_by_key(ProductionTarget::key);
         for target in targets {
-            scanner.scan_file(&target.source_path, true)?;
+            let features = if all_features {
+                target.features.clone()
+            } else {
+                target.default_features.clone()
+            };
+            let target_key = target.key();
+            let module_dir = module_directory(&target.source_path, true);
+            scanner.scan_file(&target.source_path, &module_dir, &target_key, &features)?;
         }
         Ok(scanner.findings)
     }
 
-    fn scan_file(&mut self, path: &Path, crate_root: bool) -> Result<()> {
+    fn scan_file(
+        &mut self,
+        path: &Path,
+        module_dir: &Path,
+        target: &TargetKey,
+        features: &BTreeSet<String>,
+    ) -> Result<()> {
         let path = ensure_inside(&self.root, path, "production source")?;
-        if !self.visited.insert(path.clone()) {
+        let module_dir = lexical_inside(&self.root, module_dir, "module directory")?;
+        let visit_key = VisitKey {
+            target: target.clone(),
+            path: path.clone(),
+            module_dir: module_dir.clone(),
+        };
+        if !self.visited.insert(visit_key) {
             return Ok(());
         }
         let source = fs::read_to_string(&path)
@@ -543,27 +700,33 @@ impl AssertionScanner {
             .map_err(|_| anyhow!("production source escaped audit root"))?
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/");
-        let module_dir = module_directory(&path, crate_root);
-        self.scan_items(&file.items, &module_dir, &relative)
+        self.scan_items(&file.items, &module_dir, &relative, target, features)
     }
 
-    fn scan_items(&mut self, items: &[Item], module_dir: &Path, source_path: &str) -> Result<()> {
+    fn scan_items(
+        &mut self,
+        items: &[Item],
+        module_dir: &Path,
+        source_path: &str,
+        target: &TargetKey,
+        features: &BTreeSet<String>,
+    ) -> Result<()> {
         for item in items {
-            if has_cfg_test(item_attrs(item)) {
+            if !cfg_enabled(item_attrs(item), features)? {
                 continue;
             }
             match item {
                 Item::Fn(function) if is_public(&function.vis) => {
-                    self.scan_block(&function.block, source_path);
+                    self.scan_block(&function.block, source_path, features)?;
                 }
                 Item::Trait(trait_item) if is_public(&trait_item.vis) => {
                     for trait_item in &trait_item.items {
-                        if has_cfg_test(trait_item_attrs(trait_item)) {
+                        if !cfg_enabled(trait_item_attrs(trait_item), features)? {
                             continue;
                         }
                         if let TraitItem::Fn(function) = trait_item {
                             if let Some(block) = &function.default {
-                                self.scan_block(block, source_path);
+                                self.scan_block(block, source_path, features)?;
                             }
                         }
                     }
@@ -571,12 +734,12 @@ impl AssertionScanner {
                 Item::Impl(impl_item) => {
                     let trait_impl = impl_item.trait_.is_some();
                     for impl_item in &impl_item.items {
-                        if has_cfg_test(impl_item_attrs(impl_item)) {
+                        if !cfg_enabled(impl_item_attrs(impl_item), features)? {
                             continue;
                         }
                         if let ImplItem::Fn(function) = impl_item {
                             if trait_impl || is_public(&function.vis) {
-                                self.scan_block(&function.block, source_path);
+                                self.scan_block(&function.block, source_path, features)?;
                             }
                         }
                     }
@@ -584,10 +747,11 @@ impl AssertionScanner {
                 Item::Mod(module) => {
                     let child_dir = module_dir.join(module.ident.to_string());
                     if let Some((_, items)) = &module.content {
-                        self.scan_items(items, &child_dir, source_path)?;
-                    } else if let Some(path) = resolve_module_file(&self.root, module_dir, module)?
+                        self.scan_items(items, &child_dir, source_path, target, features)?;
+                    } else if let Some(path) =
+                        resolve_module_file(&self.root, module_dir, module, features)?
                     {
-                        self.scan_file(&path, false)?;
+                        self.scan_file(&path, &child_dir, target, features)?;
                     }
                 }
                 // Macro definitions and invocations are intentionally opaque:
@@ -599,21 +763,75 @@ impl AssertionScanner {
         Ok(())
     }
 
-    fn scan_block(&mut self, block: &syn::Block, source_path: &str) {
+    fn scan_block(
+        &mut self,
+        block: &syn::Block,
+        source_path: &str,
+        features: &BTreeSet<String>,
+    ) -> Result<()> {
         let mut visitor = AssertionVisitor {
             path: source_path,
             findings: &mut self.findings,
+            features,
+            error: None,
         };
         visitor.visit_block(block);
+        if let Some(error) = visitor.error {
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
 struct AssertionVisitor<'a> {
     path: &'a str,
     findings: &'a mut BTreeSet<Finding>,
+    features: &'a BTreeSet<String>,
+    error: Option<anyhow::Error>,
+}
+
+impl AssertionVisitor<'_> {
+    fn skip_attrs(&mut self, attrs: &[Attribute]) -> bool {
+        match cfg_enabled(attrs, self.features) {
+            Ok(enabled) => !enabled,
+            Err(error) => {
+                if self.error.is_none() {
+                    self.error = Some(error);
+                }
+                true
+            }
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for AssertionVisitor<'_> {
+    fn visit_item(&mut self, node: &'ast Item) {
+        if self.skip_attrs(item_attrs(node)) {
+            return;
+        }
+        syn::visit::visit_item(self, node);
+    }
+
+    fn visit_stmt(&mut self, node: &'ast Stmt) {
+        let attrs = match node {
+            Stmt::Local(local) => &local.attrs,
+            Stmt::Item(item) => item_attrs(item),
+            Stmt::Expr(expr, _) => expr_attrs(expr),
+            Stmt::Macro(mac) => &mac.attrs,
+        };
+        if self.skip_attrs(attrs) {
+            return;
+        }
+        syn::visit::visit_stmt(self, node);
+    }
+
+    fn visit_expr(&mut self, node: &'ast Expr) {
+        if self.skip_attrs(expr_attrs(node)) {
+            return;
+        }
+        syn::visit::visit_expr(self, node);
+    }
+
     fn visit_item_macro(&mut self, _node: &'ast syn::ItemMacro) {
         // Do not inspect dormant macro token text.
     }
@@ -640,6 +858,52 @@ impl<'ast> Visit<'ast> for AssertionVisitor<'_> {
     }
 }
 
+fn expr_attrs(expr: &Expr) -> &[Attribute] {
+    match expr {
+        Expr::Array(expr) => &expr.attrs,
+        Expr::Assign(expr) => &expr.attrs,
+        Expr::Async(expr) => &expr.attrs,
+        Expr::Await(expr) => &expr.attrs,
+        Expr::Binary(expr) => &expr.attrs,
+        Expr::Block(expr) => &expr.attrs,
+        Expr::Break(expr) => &expr.attrs,
+        Expr::Call(expr) => &expr.attrs,
+        Expr::Cast(expr) => &expr.attrs,
+        Expr::Closure(expr) => &expr.attrs,
+        Expr::Const(expr) => &expr.attrs,
+        Expr::Continue(expr) => &expr.attrs,
+        Expr::Field(expr) => &expr.attrs,
+        Expr::ForLoop(expr) => &expr.attrs,
+        Expr::Group(expr) => &expr.attrs,
+        Expr::If(expr) => &expr.attrs,
+        Expr::Index(expr) => &expr.attrs,
+        Expr::Infer(expr) => &expr.attrs,
+        Expr::Let(expr) => &expr.attrs,
+        Expr::Lit(expr) => &expr.attrs,
+        Expr::Loop(expr) => &expr.attrs,
+        Expr::Macro(expr) => &expr.attrs,
+        Expr::Match(expr) => &expr.attrs,
+        Expr::MethodCall(expr) => &expr.attrs,
+        Expr::Paren(expr) => &expr.attrs,
+        Expr::Path(expr) => &expr.attrs,
+        Expr::Range(expr) => &expr.attrs,
+        Expr::RawAddr(expr) => &expr.attrs,
+        Expr::Reference(expr) => &expr.attrs,
+        Expr::Repeat(expr) => &expr.attrs,
+        Expr::Return(expr) => &expr.attrs,
+        Expr::Struct(expr) => &expr.attrs,
+        Expr::Try(expr) => &expr.attrs,
+        Expr::TryBlock(expr) => &expr.attrs,
+        Expr::Tuple(expr) => &expr.attrs,
+        Expr::Unary(expr) => &expr.attrs,
+        Expr::Unsafe(expr) => &expr.attrs,
+        Expr::While(expr) => &expr.attrs,
+        Expr::Yield(expr) => &expr.attrs,
+        Expr::Verbatim(_) => &[],
+        _ => &[],
+    }
+}
+
 fn module_directory(path: &Path, crate_root: bool) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("/")).to_owned();
     if crate_root || path.file_name().and_then(|name| name.to_str()) == Some("mod.rs") {
@@ -653,12 +917,15 @@ fn resolve_module_file(
     root: &Path,
     module_dir: &Path,
     module: &syn::ItemMod,
+    features: &BTreeSet<String>,
 ) -> Result<Option<PathBuf>> {
-    let relative = path_attribute(&module.attrs)?
+    let path = path_attribute(&module.attrs, features)?;
+    let relative = path
+        .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(module.ident.to_string()));
     let candidate = lexical_inside(root, &module_dir.join(relative), "module source")?;
-    if path_attribute(&module.attrs)?.is_some() {
+    if path.is_some() {
         return if candidate.is_file() {
             Ok(Some(ensure_inside(root, &candidate, "module source")?))
         } else {
@@ -697,12 +964,172 @@ fn lexical_inside(root: &Path, path: &Path, description: &str) -> Result<PathBuf
     Ok(normalized)
 }
 
-fn path_attribute(attrs: &[Attribute]) -> Result<Option<String>> {
+fn parse_meta_list(list: &syn::MetaList) -> Result<Vec<Meta>> {
+    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        .map(|metas| metas.into_iter().collect())
+        .context("cfg attribute has invalid predicate syntax")
+}
+
+fn cfg_enabled(attrs: &[Attribute], features: &BTreeSet<String>) -> Result<bool> {
     for attr in attrs {
-        if !attr.path().is_ident("path") {
-            continue;
+        if attr.path().is_ident("cfg") {
+            let Meta::List(list) = &attr.meta else {
+                bail!("cfg attribute must have a predicate");
+            };
+            let metas = parse_meta_list(list)?;
+            if metas.len() != 1 {
+                bail!("cfg attribute must have exactly one predicate");
+            }
+            if !eval_cfg_meta(&metas[0], features)? {
+                return Ok(false);
+            }
+        } else if attr.path().is_ident("cfg_attr") {
+            let Meta::List(list) = &attr.meta else {
+                bail!("cfg_attr attribute must have a predicate");
+            };
+            let metas = parse_meta_list(list)?;
+            let Some(predicate) = metas.first() else {
+                bail!("cfg_attr attribute omitted its predicate");
+            };
+            let active = match eval_cfg_meta(predicate, features) {
+                Ok(active) => active,
+                Err(_) if !metas[1..].iter().any(meta_affects_cfg) => continue,
+                Err(error) => {
+                    return Err(anyhow!("cannot evaluate cfg_attr predicate: {error}"));
+                }
+            };
+            if active {
+                for generated in &metas[1..] {
+                    if generated.path().is_ident("cfg") {
+                        let Meta::List(list) = generated else {
+                            bail!("cfg_attr generated cfg must have a predicate");
+                        };
+                        let predicates = parse_meta_list(list)?;
+                        if predicates.len() != 1 {
+                            bail!("cfg_attr generated cfg must have one predicate");
+                        }
+                        if !eval_cfg_meta(&predicates[0], features)? {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
         }
-        let Meta::NameValue(name_value) = &attr.meta else {
+    }
+    Ok(true)
+}
+
+fn syn_path_name(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn eval_cfg_meta(meta: &Meta, features: &BTreeSet<String>) -> Result<bool> {
+    match meta {
+        Meta::Path(path) if path.is_ident("test") || path.is_ident("doctest") => Ok(false),
+        Meta::Path(path) if path.is_ident("debug_assertions") => Ok(true),
+        Meta::Path(path) if path.is_ident("unix") => Ok(cfg!(unix)),
+        Meta::Path(path) if path.is_ident("windows") => Ok(cfg!(windows)),
+        Meta::Path(path) if path.is_ident("target_os") => {
+            bail!("cfg target_os requires a string value")
+        }
+        Meta::Path(path) => bail!("unsupported cfg predicate: {}", syn_path_name(path)),
+        Meta::NameValue(name_value) => {
+            let value = match &name_value.value {
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(value),
+                    ..
+                }) => value.value(),
+                _ => bail!("cfg predicate value must be a string literal"),
+            };
+            let path = &name_value.path;
+            if path.is_ident("feature") {
+                return Ok(features.contains(&value));
+            }
+            if path.is_ident("target_os") {
+                return Ok(std::env::consts::OS == value);
+            }
+            if path.is_ident("target_arch") {
+                return Ok(std::env::consts::ARCH == value);
+            }
+            if path.is_ident("target_family") {
+                return Ok((cfg!(unix) && value == "unix") || (cfg!(windows) && value == "windows"));
+            }
+            if path.is_ident("target_endian") {
+                return Ok((cfg!(target_endian = "little") && value == "little")
+                    || (cfg!(target_endian = "big") && value == "big"));
+            }
+            if path.is_ident("target_pointer_width") {
+                return Ok(value == usize::BITS.to_string());
+            }
+            bail!(
+                "unsupported cfg predicate: {} = {value:?}",
+                syn_path_name(path)
+            )
+        }
+        Meta::List(list) => {
+            let metas = parse_meta_list(list)?;
+            if list.path.is_ident("all") {
+                return metas
+                    .iter()
+                    .map(|meta| eval_cfg_meta(meta, features))
+                    .collect::<Result<Vec<_>>>()
+                    .map(|values| values.into_iter().all(|value| value));
+            }
+            if list.path.is_ident("any") {
+                return metas
+                    .iter()
+                    .map(|meta| eval_cfg_meta(meta, features))
+                    .collect::<Result<Vec<_>>>()
+                    .map(|values| values.into_iter().any(|value| value));
+            }
+            if list.path.is_ident("not") {
+                if metas.len() != 1 {
+                    bail!("cfg not predicate must have one argument");
+                }
+                return Ok(!eval_cfg_meta(&metas[0], features)?);
+            }
+            bail!("unsupported cfg predicate: {}", syn_path_name(&list.path))
+        }
+    }
+}
+
+fn meta_affects_cfg(meta: &Meta) -> bool {
+    if meta.path().is_ident("cfg") {
+        return true;
+    }
+    if !meta.path().is_ident("cfg_attr") {
+        return false;
+    }
+    let Meta::List(list) = meta else {
+        return false;
+    };
+    parse_meta_list(list)
+        .ok()
+        .is_some_and(|metas| metas.iter().skip(1).any(meta_affects_cfg))
+}
+
+fn meta_affects_path(meta: &Meta) -> bool {
+    if meta.path().is_ident("path") {
+        return true;
+    }
+    if !meta.path().is_ident("cfg_attr") {
+        return false;
+    }
+    let Meta::List(list) = meta else {
+        return false;
+    };
+    parse_meta_list(list)
+        .ok()
+        .is_some_and(|metas| metas.iter().skip(1).any(meta_affects_path))
+}
+
+fn path_meta_value(meta: &Meta, features: &BTreeSet<String>) -> Result<Option<String>> {
+    if meta.path().is_ident("path") {
+        let Meta::NameValue(name_value) = meta else {
             bail!("#[path] must have a string value");
         };
         let Expr::Lit(ExprLit {
@@ -714,20 +1141,52 @@ fn path_attribute(attrs: &[Attribute]) -> Result<Option<String>> {
         };
         return Ok(Some(value.value()));
     }
-    Ok(None)
+    if !meta.path().is_ident("cfg_attr") {
+        return Ok(None);
+    }
+    let Meta::List(list) = meta else {
+        bail!("cfg_attr attribute must have a predicate");
+    };
+    let metas = parse_meta_list(list)?;
+    let Some(predicate) = metas.first() else {
+        bail!("cfg_attr attribute omitted its predicate");
+    };
+    let active = match eval_cfg_meta(predicate, features) {
+        Ok(active) => active,
+        Err(error) if metas[1..].iter().any(meta_affects_path) => {
+            return Err(anyhow!("cannot evaluate cfg_attr path predicate: {error}"));
+        }
+        Err(_) => return Ok(None),
+    };
+    if !active {
+        return Ok(None);
+    }
+    let mut path = None;
+    for generated in &metas[1..] {
+        if let Some(value) = path_meta_value(generated, features)? {
+            if path.replace(value).is_some() {
+                bail!("cfg_attr supplied multiple active path attributes");
+            }
+        }
+    }
+    Ok(path)
 }
 
-fn has_cfg_test(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        let path = attr.path();
-        if path.is_ident("cfg") {
-            return match &attr.meta {
-                Meta::List(list) => list.tokens.to_string().replace(' ', "") == "test",
-                _ => false,
-            };
+fn path_attribute(attrs: &[Attribute], features: &BTreeSet<String>) -> Result<Option<String>> {
+    let mut path = None;
+    for attr in attrs {
+        let candidate = if attr.path().is_ident("path") || attr.path().is_ident("cfg_attr") {
+            path_meta_value(&attr.meta, features)?
+        } else {
+            None
+        };
+        if let Some(candidate) = candidate {
+            if path.replace(candidate).is_some() {
+                bail!("module has multiple active path attributes");
+            }
         }
-        false
-    })
+    }
+    Ok(path)
 }
 
 fn item_attrs(item: &Item) -> &[Attribute] {
@@ -855,7 +1314,18 @@ pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport
     if selection.all_features {
         actual.extend(run_clippy(&selection, true)?);
     }
-    actual.extend(AssertionScanner::scan(&selection.root, &selection.targets)?);
+    actual.extend(AssertionScanner::scan(
+        &selection.root,
+        &selection.targets,
+        false,
+    )?);
+    if selection.all_features {
+        actual.extend(AssertionScanner::scan(
+            &selection.root,
+            &selection.targets,
+            true,
+        )?);
+    }
     Ok(build_report(&actual, &baseline))
 }
 
@@ -906,6 +1376,46 @@ mod tests {
             "line_end": line,
             "is_primary": true
         })
+    }
+
+    #[test]
+    fn cargo_json_boundary_is_strict_and_tracks_lib_like_targets() {
+        let root = TempRoot::new();
+        let expected = HashSet::from([TargetKey {
+            package_id: "pkg".to_owned(),
+            target_name: "demo".to_owned(),
+            kind: "rlib".to_owned(),
+        }]);
+        let artifact = json!({
+            "reason": "compiler-artifact",
+            "package_id": "pkg",
+            "target": {"name": "demo", "kind": ["cdylib", "rlib"]}
+        });
+        let finished = json!({"reason": "build-finished", "success": true});
+        let output = format!("{}\n{}\n", artifact, finished);
+        let (seen, findings) = parse_clippy_output(output.as_bytes(), &root.path, &expected)
+            .expect("valid Cargo JSON");
+        assert_eq!(seen, expected);
+        assert!(findings.is_empty());
+
+        for malformed in [
+            b"\xff".as_slice(),
+            b"null\n".as_slice(),
+            b"{}\n".as_slice(),
+            br#"{"reason":null}\n"#.as_slice(),
+            br#"{"reason":"unknown"}\n"#.as_slice(),
+            br#"{"reason":"build-finished","success":null}\n"#.as_slice(),
+        ] {
+            assert!(parse_clippy_output(malformed, &root.path, &HashSet::new()).is_err());
+        }
+
+        let missing_message =
+            br#"{"reason":"compiler-message","package_id":"pkg","target":{"name":"demo","kind":["rlib"]},"message":null}\n"#;
+        assert!(parse_clippy_output(missing_message, &root.path, &HashSet::new()).is_err());
+        assert!(
+            parse_clippy_output(format!("{}\n", finished).as_bytes(), &root.path, &expected,)
+                .is_err()
+        );
     }
 
     #[test]

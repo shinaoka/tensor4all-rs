@@ -20,26 +20,83 @@ from pathlib import Path
 
 TOOL_ENV = "T4A_PANIC_AUDIT_BIN"
 TOOL_PACKAGE = "library-panic-audit"
-TIMEOUT_SECONDS = 120
+BUILD_TIMEOUT_SECONDS = 600
+AUDIT_TIMEOUT_SECONDS = 1200
+KNOWN_CARGO_REASONS = {
+    "build-finished",
+    "build-script-executed",
+    "compiler-artifact",
+    "compiler-message",
+}
 
 
-def _artifact_executable(output: str, root: Path) -> Path | None:
-    for line in output.splitlines():
+def _decode_cargo_output(output: bytes) -> str:
+    try:
+        return output.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"Cargo emitted invalid UTF-8: {error}") from error
+
+
+def _target_record(message: dict[str, object]) -> tuple[str, list[str]]:
+    package_id = message.get("package_id")
+    if not isinstance(package_id, str):
+        raise RuntimeError("Cargo artifact record omitted string package_id")
+    target = message.get("target")
+    if not isinstance(target, dict):
+        raise RuntimeError("Cargo artifact record omitted target object")
+    name = target.get("name")
+    kinds = target.get("kind")
+    if not isinstance(name, str) or not isinstance(kinds, list) or not kinds:
+        raise RuntimeError("Cargo artifact record contained an invalid target")
+    if not all(isinstance(kind, str) for kind in kinds):
+        raise RuntimeError("Cargo artifact target kind was not a string")
+    return name, kinds
+
+
+def _artifact_executable(output: bytes, root: Path) -> Path:
+    text = _decode_cargo_output(output)
+    executable: Path | None = None
+    build_finished = False
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
         try:
             message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        target = message.get("target", {})
-        executable = message.get("executable")
-        if (
-            message.get("reason") == "compiler-artifact"
-            and target.get("name") == TOOL_PACKAGE
-            and "bin" in target.get("kind", [])
-            and executable
-        ):
-            path = Path(executable)
-            return path if path.is_absolute() else (root / path).resolve()
-    return None
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Cargo emitted malformed JSON on line {line_number}: {error}"
+            ) from error
+        if not isinstance(message, dict):
+            raise RuntimeError(f"Cargo emitted a non-object record on line {line_number}")
+        reason = message.get("reason")
+        if not isinstance(reason, str):
+            raise RuntimeError(f"Cargo record omitted string reason on line {line_number}")
+        if reason not in KNOWN_CARGO_REASONS:
+            raise RuntimeError(f"Cargo emitted unknown JSON reason: {reason!r}")
+        if reason == "compiler-artifact":
+            name, kinds = _target_record(message)
+            if name == TOOL_PACKAGE and "bin" in kinds:
+                value = message.get("executable")
+                if not isinstance(value, str) or not value:
+                    raise RuntimeError("library-panic-audit artifact omitted executable")
+                path = Path(value)
+                executable = path if path.is_absolute() else (root / path).resolve()
+        elif reason == "compiler-message":
+            _target_record(message)
+            if not isinstance(message.get("message"), dict):
+                raise RuntimeError("Cargo compiler-message record omitted message object")
+        elif reason == "build-finished":
+            success = message.get("success")
+            if not isinstance(success, bool):
+                raise RuntimeError("Cargo build-finished record omitted boolean success")
+            if not success:
+                raise RuntimeError("Cargo reported an unsuccessful build")
+            build_finished = True
+    if not build_finished:
+        raise RuntimeError("Cargo output omitted a successful build-finished record")
+    if executable is None or not executable.is_file():
+        raise RuntimeError(f"cargo build produced no executable artifact for {TOOL_PACKAGE}")
+    return executable
 
 
 def _tool_path(root: Path) -> Path:
@@ -65,20 +122,14 @@ def _tool_path(root: Path) -> Path:
     result = subprocess.run(
         command,
         cwd=root,
-        text=True,
         capture_output=True,
         check=False,
-        timeout=TIMEOUT_SECONDS,
+        timeout=BUILD_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
+        detail = _decode_cargo_output(result.stderr or result.stdout).strip()
         raise RuntimeError(f"failed to build {TOOL_PACKAGE}: {detail}")
-    path = _artifact_executable(result.stdout, root)
-    if path is None or not path.is_file():
-        raise RuntimeError(
-            f"cargo build produced no executable artifact for {TOOL_PACKAGE}"
-        )
-    return path
+    return _artifact_executable(result.stdout, root)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             cwd=Path(__file__).resolve().parents[1],
             text=True,
             check=False,
-            timeout=TIMEOUT_SECONDS,
+            timeout=AUDIT_TIMEOUT_SECONDS,
         )
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f"library panic audit configuration error: {error}", file=sys.stderr)
