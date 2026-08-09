@@ -296,6 +296,86 @@ fn untracked_structured_32_bit_tensors_can_be_consumed_as_dense_parts() {
 }
 
 #[test]
+fn compact_scale_preserves_large_selector_layout_for_all_supported_dtypes() {
+    let bond_dim = 100_000;
+    let site = DynIndex::new_dyn(3);
+
+    let f64_tensor = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(bond_dim),
+        site.clone(),
+        DynIndex::new_dyn(bond_dim),
+        1,
+        2.0_f64,
+    )
+    .unwrap();
+    let f64_scaled = f64_tensor
+        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    let f64_storage = f64_scaled.storage().unwrap();
+    assert_eq!(f64_storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(f64_storage.payload_dims(), &[bond_dim, 3]);
+    assert_eq!(f64_storage.payload_len(), bond_dim * 3);
+    assert_eq!(f64_storage.scalar_at(&[0, 1, 0]).unwrap().real(), 6.0);
+
+    let tracked = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(32),
+        site.clone(),
+        DynIndex::new_dyn(32),
+        1,
+        2.0_f64,
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+    let tracked_alias = tracked.clone();
+    let tracked_scaled = tracked
+        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    assert!(tracked_scaled.tracks_grad());
+    assert_eq!(tracked_scaled.storage().unwrap().payload_len(), 32 * 3);
+    tracked_scaled.sum().unwrap().backward().unwrap();
+    assert_eq!(
+        tracked_alias
+            .grad()
+            .unwrap()
+            .unwrap()
+            .storage()
+            .unwrap()
+            .payload_len(),
+        32 * 3
+    );
+
+    let f32_tensor = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(2),
+        site.clone(),
+        DynIndex::new_dyn(2),
+        1,
+        2.0_f32,
+    )
+    .unwrap();
+    let f32_scaled = f32_tensor
+        .scale(tensor4all_core::AnyScalar::new_real(3.0))
+        .unwrap();
+    assert_eq!(f32_scaled.to_vec::<f32>().unwrap()[2], 6.0);
+    assert!(f32_scaled.to_vec::<f64>().is_err());
+
+    let diag = TensorDynLen::from_diag(
+        vec![DynIndex::new_dyn(3), DynIndex::new_dyn(3)],
+        vec![1.0_f64, 2.0, 3.0],
+    )
+    .unwrap();
+    let scaled_diag = diag
+        .scale(tensor4all_core::AnyScalar::new_real(-2.0))
+        .unwrap();
+    assert!(scaled_diag.is_diag());
+    assert_eq!(scaled_diag.storage().unwrap().payload_len(), 3);
+    assert_eq!(
+        scaled_diag.to_vec::<f64>().unwrap(),
+        vec![-2.0, 0.0, 0.0, 0.0, -4.0, 0.0, 0.0, 0.0, -6.0]
+    );
+}
+
+#[test]
 fn structured_mask_retains_compact_payload_for_large_copy_selector() {
     let bond_dim = 100_000;
     let left = DynIndex::new_dyn(bond_dim);

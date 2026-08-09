@@ -17,7 +17,7 @@ fn extract_c64(storage: &Storage) -> Vec<Complex64> {
 }
 
 #[test]
-fn payload_nonfinite_flags_ignore_unreferenced_stride_gaps() {
+fn referenced_strided_entries_ignore_unreferenced_stride_gaps() {
     let storage = Storage::new_structured(
         vec![1.0_f64, 2.0, f64::NAN, 3.0, 4.0],
         vec![2, 2],
@@ -27,12 +27,48 @@ fn payload_nonfinite_flags_ignore_unreferenced_stride_gaps() {
     .unwrap();
 
     assert_eq!(storage.payload_nonfinite_flags(), (false, false));
-    let mut scratch = [0usize; 2];
+    assert_eq!(storage.sum::<f64>(), 10.0);
+    assert_eq!(storage.max_abs(), 4.0);
+    assert_eq!(storage.scalar_at(&[1, 0]).unwrap().real(), 3.0);
     assert_eq!(
-        storage
-            .value_f64_at_with_scratch(&[1, 0], &mut scratch)
-            .unwrap(),
-        3.0
+        storage.scalar_at_offset(2).unwrap_err().to_string(),
+        "invalid structured storage: payload offset 2 is not referenced by the structured layout"
+    );
+
+    let complex_storage = Storage::new_structured(
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+        vec![2, 2],
+        vec![3, 1],
+        vec![0, 1],
+    )
+    .unwrap();
+    assert_eq!(complex_storage.payload_nonfinite_flags(), (false, false));
+    assert_eq!(
+        complex_storage.sum::<Complex64>(),
+        Complex64::new(10.0, 0.0)
+    );
+    assert_eq!(complex_storage.max_abs(), 4.0);
+}
+
+#[test]
+fn scalar_at_returns_the_stored_dynamic_scalar_kind() {
+    let real = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
+    let complex = Storage::from_dense_col_major(
+        vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)],
+        &[2],
+    )
+    .unwrap();
+
+    assert_eq!(real.scalar_at(&[1]).unwrap().real(), 2.0);
+    assert_eq!(
+        complex.scalar_at(&[0]).unwrap().as_c64(),
+        Some(Complex64::new(1.0, -2.0))
     );
 }
 

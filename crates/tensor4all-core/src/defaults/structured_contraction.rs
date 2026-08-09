@@ -335,14 +335,14 @@ pub(crate) fn storage_payload_native(storage: &Storage) -> Result<NativeTensor> 
             storage.payload_dims().to_vec(),
             storage
                 .payload_f64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
+                .map_err(anyhow::Error::new)?,
         ))
     } else if storage.is_c64() {
         Ok(NativeTensor::from_vec_col_major(
             storage.payload_dims().to_vec(),
             storage
                 .payload_c64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
+                .map_err(anyhow::Error::new)?,
         ))
     } else {
         Err(anyhow!("unsupported storage scalar type"))

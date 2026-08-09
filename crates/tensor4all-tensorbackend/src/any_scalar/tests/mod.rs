@@ -59,6 +59,22 @@ fn any_scalar_sum_from_complex_storage_stays_complex() {
 }
 
 #[test]
+fn complex_abs_rejects_nonfinite_components_before_norm() {
+    for value in [
+        Complex64::new(f64::INFINITY, f64::NAN),
+        Complex64::new(f64::NAN, f64::INFINITY),
+    ] {
+        assert!(Scalar::from_value(value).abs().is_nan());
+    }
+    for value in [
+        Complex32::new(f32::INFINITY, f32::NAN),
+        Complex32::new(f32::NAN, f32::INFINITY),
+    ] {
+        assert!(Scalar::from_value(value).abs().is_nan());
+    }
+}
+
+#[test]
 fn scalar_arithmetic_uses_runtime_bridge() {
     let sum = AnyScalar::from_real(1.5) + AnyScalar::from_real(2.0);
     let diff = AnyScalar::from_complex(3.0, -1.0) - AnyScalar::from_real(1.0);

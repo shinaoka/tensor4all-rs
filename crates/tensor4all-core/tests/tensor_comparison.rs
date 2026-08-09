@@ -141,6 +141,43 @@ fn test_isapprox_index_mismatch_returns_error() {
 }
 
 #[test]
+fn test_isapprox_aligns_permuted_axes_without_reordering_payloads() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let lhs =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let rhs = TensorDynLen::from_dense(vec![j, i], vec![1.0, 3.0, 2.0, 4.0]).unwrap();
+
+    assert!(lhs.isapprox(&rhs, 0.0, 0.0).unwrap());
+}
+
+#[test]
+fn test_isapprox_exact_comparison_does_not_underflow() {
+    let lhs = TensorDynLen::scalar(1.0e-300).unwrap();
+    let rhs = TensorDynLen::scalar(2.0e-300).unwrap();
+
+    assert!(!lhs.isapprox(&rhs, 0.0, 0.0).unwrap());
+}
+
+#[test]
+fn test_isapprox_relative_tolerance_does_not_underflow() {
+    let lhs = TensorDynLen::scalar(1.0e-300).unwrap();
+    let rhs = TensorDynLen::scalar(2.0e-300).unwrap();
+
+    assert!(!lhs.isapprox(&rhs, 0.0, 0.1).unwrap());
+    assert!(lhs.isapprox(&rhs, 0.0, 0.6).unwrap());
+}
+
+#[test]
+fn test_isapprox_relative_tolerance_does_not_overflow() {
+    let lhs = TensorDynLen::scalar(f64::MAX).unwrap();
+    let rhs = TensorDynLen::scalar(-f64::MAX).unwrap();
+
+    assert!(!lhs.isapprox(&rhs, 0.0, 1.0).unwrap());
+    assert!(lhs.isapprox(&rhs, 0.0, 2.0).unwrap());
+}
+
+#[test]
 fn test_sub_operator_owned() {
     let i = Index::new_dyn(2);
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0]).unwrap();

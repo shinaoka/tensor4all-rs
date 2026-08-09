@@ -200,6 +200,99 @@ fn retained_multi_contraction_preserves_grad_path() {
 }
 
 #[test]
+fn mixed_nary_copy_selector_contraction_stays_compact() {
+    let bond = 128;
+    let site = Index::new_dyn(3);
+    let a = TensorDynLen::from_copy_selector(
+        Index::new_dyn(bond),
+        site.clone(),
+        Index::new_dyn(bond),
+        1,
+        2.0_f32,
+    )
+    .unwrap();
+    let b = TensorDynLen::from_copy_selector(
+        a.indices()[2].clone(),
+        site.clone(),
+        Index::new_dyn(bond),
+        1,
+        3.0_f64,
+    )
+    .unwrap();
+    let c = TensorDynLen::from_copy_selector(
+        b.indices()[2].clone(),
+        site,
+        Index::new_dyn(bond),
+        1,
+        Complex64::new(5.0, 0.0),
+    )
+    .unwrap();
+
+    let result = contract_with_options(
+        &[&a, &b, &c],
+        ContractionOptions::new().with_retain_indices(&[a.indices()[1].clone()]),
+    )
+    .unwrap();
+    let storage = result.storage().unwrap();
+    assert_eq!(result.storage_kind(), StorageKind::Structured);
+    assert_eq!(storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(storage.payload_dims(), &[bond, 3]);
+    assert_eq!(storage.payload_len(), bond * 3);
+    assert_eq!(
+        storage.scalar_at(&[0, 1, 0]).unwrap().as_c64(),
+        Some(Complex64::new(30.0, 0.0))
+    );
+}
+
+#[test]
+fn tracked_nary_copy_selector_contraction_preserves_compact_gradient() {
+    let bond = 4;
+    let site = Index::new_dyn(3);
+    let a = TensorDynLen::from_copy_selector(
+        Index::new_dyn(bond),
+        site.clone(),
+        Index::new_dyn(bond),
+        1,
+        2.0_f64,
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+    let b = TensorDynLen::from_copy_selector(
+        a.indices()[2].clone(),
+        site.clone(),
+        Index::new_dyn(bond),
+        1,
+        3.0_f64,
+    )
+    .unwrap();
+    let c = TensorDynLen::from_copy_selector(
+        b.indices()[2].clone(),
+        site.clone(),
+        Index::new_dyn(bond),
+        1,
+        5.0_f64,
+    )
+    .unwrap();
+
+    let result = contract_with_options(
+        &[&a, &b, &c],
+        ContractionOptions::new().with_retain_indices(&[a.indices()[1].clone()]),
+    )
+    .unwrap();
+    let ones = TensorDynLen::from_dense(result.indices().to_vec(), vec![1.0_f64; bond * 3 * bond])
+        .unwrap();
+    contract(&[&result, &ones]).unwrap().backward().unwrap();
+
+    let grad = a.grad().unwrap().unwrap();
+    let grad_storage = grad.storage().unwrap();
+    assert_eq!(grad_storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(grad_storage.payload_dims(), &[bond, 3]);
+    assert_eq!(grad_storage.payload_len(), bond * 3);
+    assert_eq!(grad_storage.scalar_at(&[0, 1, 0]).unwrap().real(), 15.0);
+}
+
+#[test]
 fn structured_retained_multi_contraction_preserves_grad_path() {
     let batch = Index::new_dyn(2);
     let i = Index::new_dyn(3);

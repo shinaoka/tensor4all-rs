@@ -1465,6 +1465,47 @@ mod tests {
     }
 
     #[test]
+    fn compact_sum_preserves_f32_and_c32_dtype_with_and_without_ad() {
+        let indices = || vec![crate::DynIndex::new_dyn(2), crate::DynIndex::new_dyn(2)];
+        for tensor in [
+            TensorDynLen::from_diag(indices(), vec![1.0_f32, 2.0_f32])
+                .unwrap()
+                .sum()
+                .unwrap(),
+            TensorDynLen::from_diag(indices(), vec![1.0_f32, 2.0_f32])
+                .unwrap()
+                .enable_grad()
+                .unwrap()
+                .sum()
+                .unwrap(),
+        ] {
+            assert!(matches!(tensor.value(), ScalarValue::F32(3.0)));
+        }
+        for tensor in [
+            TensorDynLen::from_diag(
+                indices(),
+                vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
+            )
+            .unwrap()
+            .sum()
+            .unwrap(),
+            TensorDynLen::from_diag(
+                indices(),
+                vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
+            )
+            .unwrap()
+            .enable_grad()
+            .unwrap()
+            .sum()
+            .unwrap(),
+        ] {
+            assert!(
+                matches!(tensor.value(), ScalarValue::C32(value) if value == Complex32::new(4.0, 6.0))
+            );
+        }
+    }
+
+    #[test]
     fn non_grad_scalar_arithmetic_uses_plain_values() {
         let a = AnyScalar::new_real(3.0);
         let b = AnyScalar::new_real(4.0);

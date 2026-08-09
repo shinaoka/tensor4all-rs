@@ -1590,11 +1590,9 @@ impl TensorTrain {
             });
         }
 
-        self.treetn
-            .contract_to_tensor()
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Failed to contract to dense: {}", e),
-            })
+        self.treetn.contract_to_tensor().map_err(|source| {
+            TensorTrainError::operation_source("Failed to contract to dense", source)
+        })
     }
 
     /// Compute an explicit dense maximum absolute value.
