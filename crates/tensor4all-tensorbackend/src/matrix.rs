@@ -923,8 +923,10 @@ pub fn try_from_vec2d<T: Clone + Zero>(
 ///
 /// # Panics
 ///
-/// Panics if the row lengths are not all equal. Use [`try_from_vec2d`] when
-/// row-shaped input comes from users, files, or other fallible boundaries.
+/// Panics if the row lengths are not all equal or if the rectangular shape's
+/// element count overflows `usize`. Use [`try_from_vec2d`] when row-shaped
+/// input comes from users, files, or other fallible boundaries to receive a
+/// typed error for ragged rows.
 ///
 /// # Examples
 ///

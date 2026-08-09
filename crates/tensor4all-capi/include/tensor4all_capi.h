@@ -606,6 +606,11 @@ void t4a_qtt_layout_release(struct t4a_qtt_layout *obj);
 
 /**
  * Copy logical-axis to payload-axis class mapping.
+ *
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+ * retrieve the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_axis_classes(const struct t4a_tensor *ptr,
                                              size_t *buf,
@@ -645,8 +650,10 @@ enum t4a_status_code t4a_tensor_contract_retain(const struct t4a_tensor *a,
 /**
  * Copy dense `Complex64` data as interleaved doubles in column-major order.
  *
- * Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
- * diagnostic is available through `t4a_last_error_message`.
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
+ * the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,
                                                double *buf_interleaved,
@@ -656,8 +663,10 @@ enum t4a_status_code t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,
 /**
  * Copy dense `f64` data in column-major order.
  *
- * Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
- * diagnostic is available through `t4a_last_error_message`.
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
+ * the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
                                                double *buf,
@@ -666,6 +675,8 @@ enum t4a_status_code t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
 
 /**
  * Copy compact payload `Complex64` data as interleaved doubles.
+ *
+ * # Returns
  *
  * Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
  * diagnostic preserved in `t4a_last_error_message`.
@@ -677,6 +688,8 @@ enum t4a_status_code t4a_tensor_copy_payload_c64(const struct t4a_tensor *ptr,
 
 /**
  * Copy compact payload `f64` data in payload column-major order.
+ *
+ * # Returns
  *
  * Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
  * diagnostic preserved in `t4a_last_error_message`.
@@ -775,6 +788,11 @@ enum t4a_status_code t4a_tensor_new_structured_f64(size_t rank,
 
 /**
  * Copy compact payload dimensions.
+ *
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+ * retrieve the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_payload_dims(const struct t4a_tensor *ptr,
                                              size_t *buf,
@@ -783,16 +801,31 @@ enum t4a_status_code t4a_tensor_payload_dims(const struct t4a_tensor *ptr,
 
 /**
  * Get the compact payload length in scalar elements.
+ *
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+ * retrieve the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_payload_len(const struct t4a_tensor *ptr, size_t *out_len);
 
 /**
  * Get the rank of the compact payload tensor.
+ *
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+ * retrieve the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_payload_rank(const struct t4a_tensor *ptr, size_t *out_rank);
 
 /**
  * Copy compact payload strides in scalar elements.
+ *
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+ * retrieve the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
                                                 ptrdiff_t *buf,
@@ -868,6 +901,11 @@ enum t4a_status_code t4a_tensor_select_indices(const struct t4a_tensor *tensor,
 
 /**
  * Get the storage layout kind of a tensor.
+ *
+ * # Returns
+ *
+ * Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+ * retrieve the diagnostic with `t4a_last_error_message`.
  */
 enum t4a_status_code t4a_tensor_storage_kind(const struct t4a_tensor *ptr,
                                              enum t4a_storage_kind *out_kind);

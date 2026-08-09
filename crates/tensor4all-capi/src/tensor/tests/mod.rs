@@ -403,6 +403,23 @@ fn tensor_storage_materialization_failure_maps_to_internal_error_with_diagnostic
 }
 
 #[test]
+fn exported_payload_function_preserves_status_and_last_error_message() {
+    let index = new_index(2);
+    let tensor = new_tensor_c64(&[index], &[1.0, 2.0, 3.0, 4.0]);
+    let mut out_len = 0usize;
+
+    assert_eq!(
+        t4a_tensor_copy_payload_f64(tensor, std::ptr::null_mut(), 0, &mut out_len,),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("tensor storage payload operation failed"));
+    assert!(last_error().contains("expected f64 storage"));
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(index);
+}
+
+#[test]
 fn raw_slice_null_pointer_precedes_byte_length_validation() {
     let error = read_plain_slice::<f64>("data", std::ptr::null(), 1).unwrap_err();
     assert_eq!(error.0, T4A_NULL_POINTER);

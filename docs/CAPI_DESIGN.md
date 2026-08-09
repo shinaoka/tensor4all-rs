@@ -73,9 +73,11 @@ function-specific status integer types. Keep new status variants in the shared
 `t4a_status_code` enum unless there is a binding-level reason to introduce a
 new typed result channel.
 
-Error details are stored in thread-local storage and must be preserved across
-the FFI boundary. Do not discard `Err(e)` or panic payloads. New entry points
-should use the helpers in `lib.rs`:
+Error details are stored in thread-local storage. The failing FFI call and
+`t4a_last_error_message` retrieval must run on the same OS thread; diagnostics
+are not process-global and do not cross thread boundaries. Preserve the
+original diagnostic across the FFI boundary and do not discard `Err(e)` or
+panic payloads. New entry points should use the helpers in `lib.rs`:
 
 - `run_catching` for constructor-style `out` functions
 - `unwrap_catch` / `unwrap_catch_ptr` for `catch_unwind` wrappers

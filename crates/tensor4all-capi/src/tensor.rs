@@ -433,6 +433,11 @@ pub extern "C" fn t4a_tensor_scalar_kind(
 }
 
 /// Get the storage layout kind of a tensor.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_storage_kind(
     ptr: *const t4a_tensor,
@@ -452,6 +457,11 @@ pub extern "C" fn t4a_tensor_storage_kind(
 }
 
 /// Get the rank of the compact payload tensor.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_rank(
     ptr: *const t4a_tensor,
@@ -471,6 +481,11 @@ pub extern "C" fn t4a_tensor_payload_rank(
 }
 
 /// Get the compact payload length in scalar elements.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_len(
     ptr: *const t4a_tensor,
@@ -490,6 +505,11 @@ pub extern "C" fn t4a_tensor_payload_len(
 }
 
 /// Copy compact payload dimensions.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_dims(
     ptr: *const t4a_tensor,
@@ -511,6 +531,11 @@ pub extern "C" fn t4a_tensor_payload_dims(
 }
 
 /// Copy compact payload strides in scalar elements.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_strides(
     ptr: *const t4a_tensor,
@@ -532,6 +557,11 @@ pub extern "C" fn t4a_tensor_payload_strides(
 }
 
 /// Copy logical-axis to payload-axis class mapping.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_axis_classes(
     ptr: *const t4a_tensor,
@@ -554,8 +584,10 @@ pub extern "C" fn t4a_tensor_axis_classes(
 
 /// Copy dense `f64` data in column-major order.
 ///
-/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
-/// diagnostic is available through `t4a_last_error_message`.
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
+/// the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_f64(
     ptr: *const t4a_tensor,
@@ -604,8 +636,10 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
 
 /// Copy dense `Complex64` data as interleaved doubles in column-major order.
 ///
-/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; the
-/// diagnostic is available through `t4a_last_error_message`.
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
+/// the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_c64(
     ptr: *const t4a_tensor,
@@ -657,6 +691,8 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
 
 /// Copy compact payload `f64` data in payload column-major order.
 ///
+/// # Returns
+///
 /// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
 /// diagnostic preserved in `t4a_last_error_message`.
 #[unsafe(no_mangle)]
@@ -679,6 +715,8 @@ pub extern "C" fn t4a_tensor_copy_payload_f64(
 }
 
 /// Copy compact payload `Complex64` data as interleaved doubles.
+///
+/// # Returns
 ///
 /// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
 /// diagnostic preserved in `t4a_last_error_message`.

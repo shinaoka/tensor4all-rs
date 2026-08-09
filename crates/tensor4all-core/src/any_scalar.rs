@@ -1,6 +1,9 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
@@ -97,14 +100,46 @@ impl ScalarTensorElement for Complex64 {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+enum AnyScalarTensorError {
+    #[error("AnyScalar tensor initialization failed: {source}")]
+    Initialization {
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+fn initialize_tensor<T: ScalarTensorElement>(
+    value: T,
+) -> std::result::Result<TensorDynLen, AnyScalarTensorError> {
+    #[cfg(test)]
+    if FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(Cell::get) {
+        return Err(AnyScalarTensorError::Initialization {
+            source: Arc::new(std::io::Error::other(
+                "forced AnyScalar eager initialization failure",
+            )),
+        });
+    }
+
+    TensorDynLen::scalar(value).map_err(|source| AnyScalarTensorError::Initialization {
+        source: Arc::from(source.into_boxed_dyn_error()),
+    })
+}
+
 /// Dynamic scalar compatibility wrapper for tensor4all-core.
 ///
 /// This owns a rank-0 [`TensorDynLen`] so that scalar values can participate in
 /// the same eager autodiff graph as tensors while preserving the existing
-/// dynamic scalar API shape.
+/// dynamic scalar API shape. The infallible scalar constructors retain a
+/// tensor-initialization failure for later fallible tensor or AD operations.
 #[derive(Clone)]
 pub struct AnyScalar {
-    tensor: Option<TensorDynLen>,
+    tensor: std::result::Result<TensorDynLen, AnyScalarTensorError>,
     value: ScalarValue,
 }
 
@@ -118,7 +153,7 @@ impl AnyScalar {
         );
         let value = Self::scalar_value_from_tensor(&tensor)?;
         Ok(Self {
-            tensor: Some(tensor),
+            tensor: Ok(tensor),
             value,
         })
     }
@@ -202,7 +237,7 @@ impl AnyScalar {
     pub(crate) fn as_tensor(&self) -> Result<&TensorDynLen> {
         self.tensor
             .as_ref()
-            .ok_or_else(|| anyhow!("AnyScalar has no backend tensor representation"))
+            .map_err(|error| anyhow::Error::new(error.clone()))
     }
 
     /// Creates an `AnyScalar` from a tensor element.
@@ -218,6 +253,11 @@ impl AnyScalar {
     ///
     /// A rank-0 `AnyScalar` containing `value`.
     ///
+    /// Tensor initialization is attempted eagerly. Because this constructor is
+    /// infallible, an initialization failure is retained and returned by later
+    /// tensor- or AD-dependent operations such as [`AnyScalar::enable_grad`].
+    /// Value-only accessors and non-AD arithmetic remain available.
+    ///
     /// # Examples
     ///
     /// ```
@@ -230,7 +270,7 @@ impl AnyScalar {
     #[allow(private_bounds)]
     pub fn from_value<T: ScalarTensorElement>(value: T) -> Self {
         Self {
-            tensor: TensorDynLen::scalar(value).ok(),
+            tensor: initialize_tensor(value),
             value: T::scalar_value(value),
         }
     }
@@ -364,6 +404,12 @@ impl AnyScalar {
     ///
     /// A new scalar that shares the same value but participates in autodiff.
     ///
+    /// # Errors
+    ///
+    /// Returns the original tensor-initialization diagnostic if this scalar's
+    /// eager backend tensor could not be created, or propagates an AD runtime
+    /// failure while enabling gradients.
+    ///
     /// # Examples
     ///
     /// ```
@@ -373,9 +419,7 @@ impl AnyScalar {
     /// assert!(scalar.tracks_grad());
     /// ```
     pub fn enable_grad(self) -> Result<Self> {
-        let tensor = self
-            .tensor
-            .ok_or_else(|| anyhow!("AnyScalar has no backend tensor representation"))?;
+        let tensor = self.tensor.map_err(anyhow::Error::new)?;
         Self::from_tensor(tensor.enable_grad()?)
     }
 
@@ -395,7 +439,10 @@ impl AnyScalar {
     /// assert!(!scalar.tracks_grad());
     /// ```
     pub fn tracks_grad(&self) -> bool {
-        self.tensor.as_ref().is_some_and(TensorDynLen::tracks_grad)
+        match self.tensor.as_ref() {
+            Ok(tensor) => tensor.tracks_grad(),
+            Err(_) => false,
+        }
     }
 
     /// Returns the stored gradient, if any.
@@ -1200,6 +1247,14 @@ impl fmt::Debug for AnyScalar {
 mod tests {
     use super::*;
 
+    fn with_forced_tensor_initialization_failure<T>(f: impl FnOnce() -> T) -> T {
+        let previous =
+            FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(|failure| failure.replace(true));
+        let result = f();
+        FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(|failure| failure.set(previous));
+        result
+    }
+
     #[test]
     fn non_grad_scalar_arithmetic_uses_plain_values() {
         let a = AnyScalar::new_real(3.0);
@@ -1223,5 +1278,27 @@ mod tests {
 
         let grad = x.grad().unwrap().unwrap();
         assert_eq!(grad.as_f64(), Some(4.0));
+    }
+
+    #[test]
+    fn scalar_tensor_initialization_failure_is_retained_for_tensor_operations() {
+        let scalar = with_forced_tensor_initialization_failure(|| AnyScalar::new_real(2.0));
+        assert_eq!(scalar.real(), 2.0);
+        assert!(!scalar.tracks_grad());
+
+        let error = scalar.as_tensor().unwrap_err();
+        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
+        assert!(error
+            .to_string()
+            .contains("AnyScalar tensor initialization failed"));
+        assert!(error
+            .chain()
+            .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
+
+        let error = scalar.clone().enable_grad().unwrap_err();
+        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
+        assert!(error
+            .chain()
+            .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
     }
 }

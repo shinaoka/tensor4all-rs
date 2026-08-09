@@ -36,23 +36,50 @@ use super::structured_contraction::{
     OperandLayout, StructuredContractionPlan, StructuredContractionSpec,
 };
 
-#[cfg(test)]
-thread_local! {
-    static FORCE_EAGER_CONJUGATION_FAILURE: Cell<bool> = const { Cell::new(false) };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConjugationFailureStage {
+    #[cfg(test)]
+    AuthoritativeStorage,
+    StructuredAd,
+    EagerCache,
 }
 
-fn conjugate_eager(inner: &EagerTensor) -> std::result::Result<EagerTensor, TensorStorageError> {
+#[cfg(test)]
+thread_local! {
+    static FORCED_CONJUGATION_FAILURE: Cell<Option<ConjugationFailureStage>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn forced_conjugation_error(
+    stage: ConjugationFailureStage,
+) -> Option<Arc<dyn std::error::Error + Send + Sync + 'static>> {
+    let message = match stage {
+        ConjugationFailureStage::AuthoritativeStorage => {
+            "forced authoritative storage conjugation failure"
+        }
+        ConjugationFailureStage::StructuredAd => "forced structured AD conjugation failure",
+        ConjugationFailureStage::EagerCache => "forced eager cache conjugation failure",
+    };
+    FORCED_CONJUGATION_FAILURE.with(|failure| {
+        (failure.get() == Some(stage)).then(|| Arc::new(std::io::Error::other(message)) as _)
+    })
+}
+
+fn conjugate_eager(
+    inner: &EagerTensor,
+) -> std::result::Result<EagerTensor, Arc<dyn std::error::Error + Send + Sync + 'static>> {
+    inner.conj().map_err(|source| Arc::new(source) as _)
+}
+
+fn conjugate_eager_at(
+    inner: &EagerTensor,
+    #[allow(unused_variables)] stage: ConjugationFailureStage,
+) -> std::result::Result<EagerTensor, Arc<dyn std::error::Error + Send + Sync + 'static>> {
     #[cfg(test)]
-    if FORCE_EAGER_CONJUGATION_FAILURE.with(Cell::get) {
-        return Err(TensorStorageError::Conjugation {
-            source: Arc::new(std::io::Error::other("forced eager conjugation failure")),
-        });
+    if let Some(source) = forced_conjugation_error(stage) {
+        return Err(source);
     }
-    inner
-        .conj()
-        .map_err(|source| TensorStorageError::Conjugation {
-            source: Arc::new(source),
-        })
+    conjugate_eager(inner)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -485,15 +512,24 @@ impl TensorDynLenStorage {
     }
 
     fn conjugate(&self) -> std::result::Result<Self, TensorStorageError> {
+        #[cfg(test)]
+        if let Some(source) =
+            forced_conjugation_error(ConjugationFailureStage::AuthoritativeStorage)
+        {
+            return Err(TensorStorageError::Conjugation { source });
+        }
+
         match self {
             Self::Materialized(storage) => Ok(Self::Materialized(Arc::new(storage.conj()))),
             Self::Eager {
                 inner,
                 axis_classes,
-            } => conjugate_eager(inner).map(|conjugated| Self::Eager {
-                inner: Arc::new(conjugated),
-                axis_classes: axis_classes.clone(),
-            }),
+            } => conjugate_eager(inner)
+                .map(|conjugated| Self::Eager {
+                    inner: Arc::new(conjugated),
+                    axis_classes: axis_classes.clone(),
+                })
+                .map_err(|source| TensorStorageError::Conjugation { source }),
             Self::Deferred { error, .. } => Err((**error).clone()),
         }
     }
@@ -3481,7 +3517,10 @@ impl TensorDynLen {
 
         if storage.deferred_error().is_none() {
             if let Some(value) = self.structured_ad.as_deref() {
-                match conjugate_eager(value.payload.as_ref()) {
+                match conjugate_eager_at(
+                    value.payload.as_ref(),
+                    ConjugationFailureStage::StructuredAd,
+                ) {
                     Ok(payload) => {
                         structured_ad = Some(Arc::new(StructuredAdValue {
                             payload: Arc::new(payload),
@@ -3490,9 +3529,8 @@ impl TensorDynLen {
                         }));
                     }
                     Err(source) => {
-                        storage = storage.with_deferred_error(TensorStorageError::Conjugation {
-                            source: Arc::new(source),
-                        });
+                        storage =
+                            storage.with_deferred_error(TensorStorageError::Conjugation { source });
                         eager_cache = Arc::clone(&self.eager_cache);
                     }
                 }
@@ -3501,12 +3539,11 @@ impl TensorDynLen {
 
         if storage.deferred_error().is_none() {
             if let Some(inner) = self.eager_cache.get() {
-                match conjugate_eager(inner.as_ref()) {
+                match conjugate_eager_at(inner.as_ref(), ConjugationFailureStage::EagerCache) {
                     Ok(conjugated) => eager_cache = Self::eager_cache_with(conjugated),
                     Err(source) => {
-                        storage = storage.with_deferred_error(TensorStorageError::Conjugation {
-                            source: Arc::new(source),
-                        });
+                        storage =
+                            storage.with_deferred_error(TensorStorageError::Conjugation { source });
                         // Keep the original cache alive so tracks_grad() does
                         // not report a detached tensor after a deferred error.
                         eager_cache = Arc::clone(&self.eager_cache);
@@ -4624,7 +4661,10 @@ impl TensorDynLen {
     /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
-    /// Returns an error if the tensor's scalar type does not match `T`.
+    /// Returns an error if the tensor's scalar type does not match `T`, if a
+    /// deferred eager operation failed, if authoritative storage cannot be
+    /// materialized, or if the eager backend context cannot be initialized for
+    /// materialization.
     ///
     /// # Example
     /// ```
@@ -4836,28 +4876,73 @@ mod tests {
         assert!(std::error::Error::source(&error).is_some());
     }
 
+    fn with_forced_conjugation_failure<T>(
+        stage: ConjugationFailureStage,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let previous = FORCED_CONJUGATION_FAILURE.with(|failure| failure.replace(Some(stage)));
+        let result = f();
+        FORCED_CONJUGATION_FAILURE.with(|failure| failure.set(previous));
+        result
+    }
+
+    fn forced_conjugation_message(stage: ConjugationFailureStage) -> &'static str {
+        match stage {
+            ConjugationFailureStage::AuthoritativeStorage => {
+                "forced authoritative storage conjugation failure"
+            }
+            ConjugationFailureStage::StructuredAd => "forced structured AD conjugation failure",
+            ConjugationFailureStage::EagerCache => "forced eager cache conjugation failure",
+        }
+    }
+
+    fn assert_unwrapped_conjugation_error(
+        tensor: TensorDynLen,
+        stage: ConjugationFailureStage,
+    ) -> TensorDynLen {
+        let conjugated = with_forced_conjugation_failure(stage, || tensor.conj());
+        let error = conjugated.to_storage().unwrap_err();
+        assert!(matches!(error, TensorStorageError::Conjugation { .. }));
+        let source = std::error::Error::source(&error).unwrap();
+        assert_eq!(source.to_string(), forced_conjugation_message(stage));
+        assert!(
+            source.source().is_none(),
+            "source was wrapped more than once"
+        );
+        conjugated
+    }
+
     #[test]
-    fn forced_eager_conjugation_failure_is_retained_for_materialization_and_ad() {
-        let index = DynIndex::new_dyn(2);
-        let tensor = TensorDynLen::from_dense(
-            vec![index],
+    fn authoritative_storage_conjugation_failure_is_deferred_without_detaching() {
+        let i = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(2);
+        let tensor = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap();
+
+        let conjugated = assert_unwrapped_conjugation_error(
+            tensor,
+            ConjugationFailureStage::AuthoritativeStorage,
+        );
+        assert!(!conjugated.tracks_grad());
+        assert!(conjugated.detach().is_err());
+    }
+
+    #[test]
+    fn structured_ad_conjugation_failure_retains_graph_and_blocks_detached_primal() {
+        let i = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(2);
+        let tensor = TensorDynLen::from_diag(
+            vec![i, j],
             vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
         )
         .unwrap()
         .enable_grad()
         .unwrap();
 
-        FORCE_EAGER_CONJUGATION_FAILURE.with(|flag| flag.set(true));
-        let conjugated = tensor.conj();
-        FORCE_EAGER_CONJUGATION_FAILURE.with(|flag| flag.set(false));
-
+        let conjugated =
+            assert_unwrapped_conjugation_error(tensor, ConjugationFailureStage::StructuredAd);
         assert!(conjugated.tracks_grad());
-        let error = conjugated.to_storage().unwrap_err();
-        assert!(matches!(error, TensorStorageError::Conjugation { .. }));
-        assert_eq!(
-            std::error::Error::source(&error).unwrap().to_string(),
-            "forced eager conjugation failure"
-        );
+        assert!(conjugated.detach().is_err());
+        assert!(conjugated.clone().enable_grad().is_err());
         assert!(conjugated.sum().is_err());
         assert!(conjugated.grad().is_err());
         assert!(conjugated.clear_grad().is_err());
@@ -4868,7 +4953,19 @@ mod tests {
         let error = twice_conjugated.to_storage().unwrap_err();
         assert_eq!(
             std::error::Error::source(&error).unwrap().to_string(),
-            "forced eager conjugation failure"
+            forced_conjugation_message(ConjugationFailureStage::StructuredAd)
         );
+    }
+
+    #[test]
+    fn eager_cache_conjugation_failure_is_deferred_with_original_diagnostic() {
+        let i = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(2);
+        let tensor = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap();
+
+        let conjugated =
+            assert_unwrapped_conjugation_error(tensor, ConjugationFailureStage::EagerCache);
+        assert!(!conjugated.tracks_grad());
+        assert!(conjugated.detach().is_err());
     }
 }

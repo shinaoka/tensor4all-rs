@@ -8,6 +8,8 @@
 //! created from the same global CPU context, so thread-pool configuration is
 //! shared.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{GraphCompiler, GraphExecutor};
@@ -49,6 +51,11 @@ pub enum EagerContextError {
 
 static DEFAULT_EAGER_RUNTIME: OnceLock<std::result::Result<Arc<EagerRuntime>, EagerContextError>> =
     OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_EAGER_CONTEXT_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
 
 fn default_cpu_context() -> Arc<CpuContext> {
     DEFAULT_CPU_CONTEXT
@@ -155,6 +162,15 @@ pub(crate) fn reset_default_engine() {
 /// assert!(Arc::ptr_eq(&first, &second));
 /// ```
 pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContextError> {
+    #[cfg(test)]
+    if FORCE_EAGER_CONTEXT_FAILURE.with(Cell::get) {
+        return Err(EagerContextError::Registration {
+            source: Arc::new(std::io::Error::other(
+                "forced default eager context registration failure",
+            )),
+        });
+    }
+
     match DEFAULT_EAGER_RUNTIME.get_or_init(|| {
         tenferro_linalg::register_extension_rule()
             .map(|_| {
@@ -167,6 +183,14 @@ pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContex
         Ok(context) => Ok(Arc::clone(context)),
         Err(error) => Err(error.clone()),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn with_forced_eager_context_failure<T>(f: impl FnOnce() -> T) -> T {
+    let previous = FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.replace(true));
+    let result = f();
+    FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.set(previous));
+    result
 }
 
 #[cfg(test)]
@@ -191,6 +215,23 @@ mod tests {
     fn eager_context_has_typed_error_contract() {
         let result: std::result::Result<Arc<EagerRuntime>, EagerContextError> = default_eager_ctx();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn eager_context_failure_uses_production_path_and_preserves_source() {
+        with_forced_eager_context_failure(|| {
+            let error = match default_eager_ctx() {
+                Ok(_) => panic!("forced eager context failure unexpectedly succeeded"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, EagerContextError::Registration { .. }));
+            let source = std::error::Error::source(&error).unwrap();
+            assert_eq!(
+                source.to_string(),
+                "forced default eager context registration failure"
+            );
+            assert!(source.source().is_none());
+        });
     }
 
     #[test]

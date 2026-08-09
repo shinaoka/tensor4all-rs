@@ -3,6 +3,27 @@ use num_complex::Complex64;
 use tenferro::TypedTensor;
 
 #[test]
+fn hermitian_eigendecomposition_maps_eager_context_error_with_source_chain() {
+    let matrix = Matrix::from_col_major_vec(1, 1, vec![2.0_f64]);
+    let error = crate::context::with_forced_eager_context_failure(|| {
+        hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap_err()
+    });
+
+    let HermitianEigenError::Backend { source } = error else {
+        panic!("expected backend error from forced eager context failure");
+    };
+    let context_error = source
+        .downcast_ref::<crate::context::EagerContextError>()
+        .expect("backend source should retain EagerContextError");
+    let registration_source = std::error::Error::source(context_error).unwrap();
+    assert_eq!(
+        registration_source.to_string(),
+        "forced default eager context registration failure"
+    );
+    assert!(registration_source.source().is_none());
+}
+
+#[test]
 fn hermitian_backend_error_preserves_source_chain() {
     let source = std::io::Error::other("forced eigensolver failure");
     let error = HermitianEigenError::Backend {
