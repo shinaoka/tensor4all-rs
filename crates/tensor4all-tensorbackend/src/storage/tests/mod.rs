@@ -30,10 +30,7 @@ fn referenced_strided_entries_ignore_unreferenced_stride_gaps() {
     assert_eq!(storage.sum::<f64>(), 10.0);
     assert_eq!(storage.max_abs(), 4.0);
     assert_eq!(storage.scalar_at(&[1, 0]).unwrap().real(), 3.0);
-    assert_eq!(
-        storage.scalar_at_offset(2).unwrap_err().to_string(),
-        "invalid structured storage: payload offset 2 is not referenced by the structured layout"
-    );
+    assert_eq!(storage.scalar_at(&[1, 1]).unwrap().real(), 4.0);
 
     let complex_storage = Storage::new_structured(
         vec![
@@ -70,6 +67,34 @@ fn scalar_at_returns_the_stored_dynamic_scalar_kind() {
         complex.scalar_at(&[0]).unwrap().as_c64(),
         Some(Complex64::new(1.0, -2.0))
     );
+}
+
+#[test]
+fn structured_storage_rejects_payload_length_product_overflow() {
+    let error =
+        StructuredStorage::<u8>::new(Vec::new(), vec![usize::MAX, 2], vec![0, 0], vec![0, 1])
+            .unwrap_err();
+    assert!(error.to_string().contains("payload length overflow"));
+
+    let dense_error =
+        Storage::from_dense_col_major(Vec::<f64>::new(), &[usize::MAX, 2]).unwrap_err();
+    assert!(dense_error.to_string().contains("overflow"));
+}
+
+#[test]
+fn scalar_at_reads_compact_payload_coordinates_directly() {
+    let storage = Storage::new_structured(
+        vec![10.0_f64, 20.0, -1.0, 30.0, 40.0],
+        vec![2, 2],
+        vec![1, 3],
+        vec![0, 1],
+    )
+    .unwrap();
+    assert_eq!(storage.scalar_at(&[0, 0]).unwrap().real(), 10.0);
+    assert_eq!(storage.scalar_at(&[0, 1]).unwrap().real(), 30.0);
+    assert_eq!(storage.scalar_at(&[1, 0]).unwrap().real(), 20.0);
+    assert_eq!(storage.scalar_at(&[1, 1]).unwrap().real(), 40.0);
+    assert!(storage.scalar_at(&[2, 0]).is_err());
 }
 
 // ===== Type inspection tests =====

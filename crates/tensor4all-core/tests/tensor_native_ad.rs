@@ -239,7 +239,7 @@ fn mixed_nary_copy_selector_contraction_stays_compact() {
     assert_eq!(storage.payload_dims(), &[bond, 3]);
     assert_eq!(storage.payload_len(), bond * 3);
     assert_eq!(
-        storage.scalar_at(&[0, 1, 0]).unwrap().as_c64(),
+        storage.scalar_at(&[0, 1]).unwrap().as_c64(),
         Some(Complex64::new(30.0, 0.0))
     );
 }
@@ -289,7 +289,7 @@ fn tracked_nary_copy_selector_contraction_preserves_compact_gradient() {
     assert_eq!(grad_storage.axis_classes(), &[0, 1, 0]);
     assert_eq!(grad_storage.payload_dims(), &[bond, 3]);
     assert_eq!(grad_storage.payload_len(), bond * 3);
-    assert_eq!(grad_storage.scalar_at(&[0, 1, 0]).unwrap().real(), 15.0);
+    assert_eq!(grad_storage.scalar_at(&[0, 1]).unwrap().real(), 15.0);
 }
 
 #[test]

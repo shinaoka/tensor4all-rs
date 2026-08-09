@@ -2,6 +2,7 @@ use num_complex::{Complex32, Complex64};
 use std::error::Error;
 use std::sync::Arc;
 use tensor4all_core::{DynIndex, TensorDynLen, TensorDynLenError, TensorStorageError};
+use tensor4all_tensorbackend::Storage;
 
 #[test]
 fn tensor_dyn_len_norm_and_comparison_operations_are_fallible() {
@@ -171,6 +172,54 @@ fn tensor_dyn_len_norm_rejects_nan_and_preserves_infinity() {
             Err(TensorDynLenError::NaNInput { .. })
         ));
     }
+}
+
+#[test]
+fn compact_norms_promote_f32_extremes_to_stable_f64_metrics() {
+    let tensor = TensorDynLen::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![f32::MAX, f32::MIN_POSITIVE],
+    )
+    .unwrap();
+    let expected = f64::from(f32::MAX);
+    assert_eq!(tensor.maxabs().unwrap(), expected);
+    assert!(tensor.norm_squared().unwrap().is_finite());
+    assert!((tensor.norm().unwrap() - expected).abs() / expected < 1.0e-12);
+}
+
+#[test]
+fn tracked_scale_from_public_structured_storage_stays_compact() {
+    let bond_dim = 100_000;
+    let site_dim = 3;
+    let left = DynIndex::new_dyn(bond_dim);
+    let site = DynIndex::new_dyn(site_dim);
+    let right = DynIndex::new_dyn(bond_dim);
+    let storage = Storage::new_structured(
+        vec![2.0_f64; bond_dim * site_dim],
+        vec![bond_dim, site_dim],
+        vec![1, bond_dim as isize],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    let tensor = TensorDynLen::from_storage(vec![left, site, right], Arc::new(storage)).unwrap();
+    let scalar = tensor4all_core::AnyScalar::new_real(3.0)
+        .enable_grad()
+        .unwrap();
+    let scalar_alias = scalar.clone();
+    let scaled = tensor.scale(scalar).unwrap();
+
+    assert!(scaled.tracks_grad());
+    let scaled_storage = scaled.storage().unwrap();
+    assert_eq!(scaled_storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(scaled_storage.payload_dims(), &[bond_dim, site_dim]);
+    assert_eq!(scaled_storage.payload_len(), bond_dim * site_dim);
+    assert_eq!(scaled_storage.scalar_at(&[0, 1]).unwrap().real(), 6.0);
+
+    scaled.sum().unwrap().backward().unwrap();
+    assert_eq!(
+        scalar_alias.grad().unwrap().unwrap().real(),
+        2.0 * (bond_dim * site_dim) as f64
+    );
 }
 
 #[test]

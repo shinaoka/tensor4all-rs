@@ -664,31 +664,44 @@ impl TensorDynLenStorage {
 
     fn scale_eager_payload(&self, scalar: &AnyScalar) -> Result<Self> {
         let (payload, payload_dims, axis_classes) = match self {
+            Self::Materialized(storage) => {
+                let native = if storage.is_f64() {
+                    let values = storage
+                        .payload_f64_col_major_vec()
+                        .map_err(anyhow::Error::new)?;
+                    dense_native_tensor_from_col_major(&values, storage.payload_dims())?
+                } else {
+                    let values = storage
+                        .payload_c64_col_major_vec()
+                        .map_err(anyhow::Error::new)?;
+                    dense_native_tensor_from_col_major(&values, storage.payload_dims())?
+                };
+                (
+                    EagerTensor::from_tensor_in(native, default_eager_ctx()?),
+                    storage.payload_dims().to_vec(),
+                    storage.axis_classes().to_vec(),
+                )
+            }
             Self::Eager {
                 inner,
                 axis_classes,
             } => (
-                inner.as_ref(),
+                (**inner).clone(),
                 inner.data().shape().to_vec(),
                 axis_classes.clone(),
             ),
             Self::Compact(compact) => (
-                compact.payload.as_ref(),
+                (*compact.payload).clone(),
                 compact.payload_dims.clone(),
                 compact.axis_classes.clone(),
             ),
             Self::Deferred { error, .. } => return Err(anyhow::Error::new((**error).clone())),
-            Self::Materialized(_) => {
-                return Err(anyhow::anyhow!(
-                    "eager payload scaling requires eager or compact storage"
-                ));
-            }
         };
         let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
         let target_dtype =
             TensorDynLen::scale_target_dtype(payload.data().dtype(), scalar_inner.data().dtype())?;
         let payload = if payload.data().dtype() == target_dtype {
-            payload.clone()
+            payload
         } else {
             payload.convert(target_dtype)?
         };
@@ -708,15 +721,14 @@ impl TensorDynLenStorage {
                 inner: Arc::new(scaled),
                 axis_classes,
             }),
-            Self::Compact(_) => Ok(Self::Compact(Arc::new(StructuredPayload {
-                payload: Arc::new(scaled),
-                payload_dims,
-                axis_classes,
-            }))),
+            Self::Compact(_) | Self::Materialized(_) => {
+                Ok(Self::Compact(Arc::new(StructuredPayload {
+                    payload: Arc::new(scaled),
+                    payload_dims,
+                    axis_classes,
+                })))
+            }
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
-            Self::Materialized(_) => Err(anyhow::anyhow!(
-                "eager payload scaling requires eager or compact storage"
-            )),
         }
     }
 
@@ -769,15 +781,6 @@ impl TensorDynLenStorage {
         }
     }
 
-    fn max_abs(&self) -> Result<f64> {
-        match self {
-            Self::Materialized(storage) => Ok(storage.max_abs()),
-            Self::Eager { inner, .. } => TensorDynLen::native_max_abs(inner.data()),
-            Self::Compact(payload) => TensorDynLen::native_max_abs(payload.payload.data()),
-            Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
-        }
-    }
-
     fn nonfinite_flags(&self) -> Result<(bool, bool)> {
         match self {
             Self::Materialized(storage) => Ok(storage.payload_nonfinite_flags()),
@@ -787,36 +790,43 @@ impl TensorDynLenStorage {
         }
     }
 
-    fn semantic_value_at(
-        &self,
-        logical_index: &[usize],
-        logical_dims: &[usize],
-        payload_index: &mut [usize],
-    ) -> Result<Complex64> {
+    fn payload_value_at(&self, payload_coords: &[usize]) -> Result<Complex64> {
         match self {
             Self::Materialized(storage) => storage
-                .scalar_at_with_scratch(logical_index, payload_index)
+                .scalar_at(payload_coords)
                 .map(Complex64::from)
                 .map_err(anyhow::Error::new),
-            Self::Eager {
-                inner,
-                axis_classes,
-            } => TensorDynLen::native_complex_value_at(
-                inner.data(),
-                axis_classes,
-                logical_dims,
-                logical_index,
-                payload_index,
-            ),
-            Self::Compact(payload) => TensorDynLen::native_complex_value_at(
+            Self::Eager { inner, .. } => {
+                TensorDynLen::native_complex_payload_value_at(inner.data(), payload_coords)
+            }
+            Self::Compact(payload) => TensorDynLen::native_complex_payload_value_at(
                 payload.payload.data(),
-                &payload.axis_classes,
-                logical_dims,
-                logical_index,
-                payload_index,
+                payload_coords,
             ),
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
+    }
+
+    fn for_each_payload_value(&self, mut f: impl FnMut(Complex64)) -> Result<()> {
+        let payload_dims = self.payload_dims();
+        let payload_len = checked_product(payload_dims)?;
+        let mut payload_coords = vec![0usize; payload_dims.len()];
+        for _ in 0..payload_len {
+            f(self.payload_value_at(&payload_coords)?);
+            let mut carry = true;
+            for (coordinate, &dim) in payload_coords.iter_mut().zip(payload_dims.iter()) {
+                if !carry {
+                    break;
+                }
+                *coordinate += 1;
+                if *coordinate == dim {
+                    *coordinate = 0;
+                } else {
+                    carry = false;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn compact_payload(&self) -> Option<&StructuredPayload> {
@@ -978,56 +988,6 @@ impl TensorDynLen {
             DType::I32 => "i32",
             DType::I64 => "i64",
             DType::Bool => "bool",
-        }
-    }
-
-    fn native_max_abs(native: &NativeTensor) -> Result<f64> {
-        fn fold(values: impl IntoIterator<Item = f64>) -> f64 {
-            values.into_iter().fold(0.0, |current, value| {
-                if current.is_nan() || value.is_nan() {
-                    f64::NAN
-                } else {
-                    current.max(value)
-                }
-            })
-        }
-
-        match native.dtype() {
-            DType::F32 => native
-                .as_slice::<f32>()
-                .map(|values| fold(values.iter().map(|value| f64::from(value.abs()))))
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 tensor for maxabs")),
-            DType::F64 => native
-                .as_slice::<f64>()
-                .map(|values| fold(values.iter().map(|value| value.abs())))
-                .ok_or_else(|| anyhow::anyhow!("failed to read f64 tensor for maxabs")),
-            DType::C32 => native
-                .as_slice::<Complex32>()
-                .map(|values| {
-                    fold(values.iter().map(|value| {
-                        if value.re.is_nan() || value.im.is_nan() {
-                            f64::NAN
-                        } else {
-                            f64::from(value.re).hypot(f64::from(value.im))
-                        }
-                    }))
-                })
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 tensor for maxabs")),
-            DType::C64 => native
-                .as_slice::<Complex64>()
-                .map(|values| {
-                    fold(values.iter().map(|value| {
-                        if value.re.is_nan() || value.im.is_nan() {
-                            f64::NAN
-                        } else {
-                            value.re.hypot(value.im)
-                        }
-                    }))
-                })
-                .ok_or_else(|| anyhow::anyhow!("failed to read c64 tensor for maxabs")),
-            dtype => Err(anyhow::anyhow!(
-                "TensorDynLen maxabs does not support dtype {dtype:?}"
-            )),
         }
     }
 
@@ -3948,7 +3908,9 @@ impl TensorDynLen {
 
         if matches!(
             &self.storage,
-            TensorDynLenStorage::Eager { .. } | TensorDynLenStorage::Compact(_)
+            TensorDynLenStorage::Eager { .. }
+                | TensorDynLenStorage::Compact(_)
+                | TensorDynLenStorage::Materialized(_)
         ) {
             let storage = self.storage.scale_eager_payload(&scalar)?;
             return Ok(Self {
@@ -4363,12 +4325,23 @@ impl Lassq {
         self.add_component_difference(lhs.im, rhs.im);
     }
 
-    fn add_infinite(&mut self) {
-        self.infinite = true;
-    }
-
     fn is_zero(&self) -> bool {
         !self.infinite && self.scale == 0.0
+    }
+
+    fn norm(&self) -> f64 {
+        if self.infinite {
+            f64::INFINITY
+        } else if self.scale == 0.0 {
+            0.0
+        } else {
+            self.scale * self.sumsq.sqrt()
+        }
+    }
+
+    fn norm_squared(&self) -> f64 {
+        let norm = self.norm();
+        norm * norm
     }
 
     fn log_norm(&self) -> f64 {
@@ -4390,11 +4363,13 @@ impl TensorDynLen {
     /// Compute the squared Frobenius norm of the tensor: ||T||² = Σ|T_ijk...|²
     ///
     /// For real tensors: sum of squares of all elements.
-    /// For complex tensors: sum of |z|² = z * conj(z) for all elements.
+    /// For complex tensors: sum of `|z|²` over the compact payload.
+    /// The reduction promotes source values to `f64` and uses a stable LASSQ
+    /// accumulator, so it does not form a source-dtype `self * conj(self)`.
     ///
     /// # Errors
-    /// Returns [`TensorDynLenError`] when storage/materialization, contraction,
-    /// or scalar extraction fails, or when the input produces NaN. Finite tiny
+    /// Returns [`TensorDynLenError`] when storage/materialization or scalar
+    /// extraction fails, or when the input produces NaN. Finite tiny
     /// negative roundoff is clamped to zero; positive infinity is preserved.
     ///
     /// # Example
@@ -4427,29 +4402,18 @@ impl TensorDynLen {
                 operation: "norm_squared",
             });
         }
-        let value = if self.indices.is_empty() {
-            let scalar = self.sum().map_err(TensorDynLenError::scalar_extraction)?;
-            let value = scalar.abs();
-            value * value
-        } else {
-            let conj = self.conj();
-            let scalar = super::contract::contract_pair(self, &conj)
-                .map_err(TensorDynLenError::materialization)?
-                .sum()
-                .map_err(TensorDynLenError::scalar_extraction)?;
-            if scalar.real().is_nan() || scalar.imag().is_nan() {
-                return Err(TensorDynLenError::NaNInput {
-                    operation: "norm_squared",
-                });
-            }
-            scalar.real()
-        };
+
+        let mut norm = Lassq::default();
+        self.storage
+            .for_each_payload_value(|value| norm.add_complex(value))
+            .map_err(TensorDynLenError::materialization)?;
+        let value = norm.norm_squared();
         if value.is_nan() {
             return Err(TensorDynLenError::NaNInput {
                 operation: "norm_squared",
             });
         }
-        Ok(value.max(0.0))
+        Ok(value)
     }
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
@@ -4507,91 +4471,73 @@ impl TensorDynLen {
                 actual: Self::dtype_name(dtype).to_string(),
             });
         }
-        let value = self
-            .storage
-            .max_abs()
+        let (has_nan, _) = self
+            .compact_nonfinite_flags()
             .map_err(TensorDynLenError::materialization)?;
-        if value.is_nan() {
+        if has_nan {
             return Err(TensorDynLenError::NaNInput {
                 operation: "maxabs",
             });
         }
+        let mut value = 0.0_f64;
+        self.storage
+            .for_each_payload_value(|scalar| {
+                let magnitude = scalar.re.hypot(scalar.im);
+                value = value.max(magnitude);
+            })
+            .map_err(TensorDynLenError::materialization)?;
         Ok(value)
     }
 
-    fn native_complex_value_at(
+    fn native_complex_payload_value_at(
         native: &NativeTensor,
-        axis_classes: &[usize],
-        logical_dims: &[usize],
-        logical_index: &[usize],
-        payload_index: &mut [usize],
+        payload_coords: &[usize],
     ) -> Result<Complex64> {
         anyhow::ensure!(
-            logical_dims.len() == logical_index.len() && axis_classes.len() == logical_index.len(),
-            "semantic value rank does not match tensor layout"
+            payload_coords.len() == native.shape().len(),
+            "payload coordinate rank {} does not match payload rank {}",
+            payload_coords.len(),
+            native.shape().len()
         );
-        let payload_rank = axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|class_id| class_id + 1)
-            .unwrap_or(0);
-        anyhow::ensure!(
-            payload_index.len() >= payload_rank,
-            "semantic value scratch is too small for payload rank {payload_rank}"
-        );
-        payload_index[..payload_rank].fill(usize::MAX);
-        for ((&value, &dim), &class_id) in logical_index
-            .iter()
-            .zip(logical_dims.iter())
-            .zip(axis_classes.iter())
-        {
-            anyhow::ensure!(value < dim, "semantic coordinate {value} is out of bounds");
-            if payload_index[class_id] == usize::MAX {
-                payload_index[class_id] = value;
-            } else if payload_index[class_id] != value {
-                return Ok(Complex64::new(0.0, 0.0));
-            }
-        }
         let mut offset = 0usize;
         let mut stride = 1usize;
-        for (&value, &dim) in payload_index[..payload_rank]
-            .iter()
-            .zip(native.shape().iter())
-        {
-            anyhow::ensure!(value < dim, "payload coordinate {value} is out of bounds");
+        for (&coordinate, &dim) in payload_coords.iter().zip(native.shape().iter()) {
+            anyhow::ensure!(
+                coordinate < dim,
+                "payload coordinate {coordinate} is out of bounds for dim {dim}"
+            );
             offset = offset
                 .checked_add(
-                    value
+                    coordinate
                         .checked_mul(stride)
-                        .ok_or_else(|| anyhow::anyhow!("semantic payload offset overflow"))?,
+                        .ok_or_else(|| anyhow::anyhow!("payload offset overflow"))?,
                 )
-                .ok_or_else(|| anyhow::anyhow!("semantic payload offset overflow"))?;
+                .ok_or_else(|| anyhow::anyhow!("payload offset overflow"))?;
             stride = stride
                 .checked_mul(dim)
-                .ok_or_else(|| anyhow::anyhow!("semantic payload stride overflow"))?;
+                .ok_or_else(|| anyhow::anyhow!("payload stride overflow"))?;
         }
         match native.dtype() {
             DType::F32 => native
                 .as_slice::<f32>()
                 .and_then(|values| values.get(offset).copied())
                 .map(|value| Complex64::new(f64::from(value), 0.0))
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 semantic value")),
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 payload value")),
             DType::F64 => native
                 .as_slice::<f64>()
                 .and_then(|values| values.get(offset).copied())
                 .map(|value| Complex64::new(value, 0.0))
-                .ok_or_else(|| anyhow::anyhow!("failed to read f64 semantic value")),
+                .ok_or_else(|| anyhow::anyhow!("failed to read f64 payload value")),
             DType::C32 => native
                 .as_slice::<Complex32>()
                 .and_then(|values| values.get(offset).copied())
                 .map(|value| Complex64::new(f64::from(value.re), f64::from(value.im)))
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 semantic value")),
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 payload value")),
             DType::C64 => native
                 .as_slice::<Complex64>()
                 .and_then(|values| values.get(offset).copied())
-                .ok_or_else(|| anyhow::anyhow!("failed to read c64 semantic value")),
-            dtype => Err(anyhow::anyhow!("unsupported semantic dtype {dtype:?}")),
+                .ok_or_else(|| anyhow::anyhow!("failed to read c64 payload value")),
+            dtype => Err(anyhow::anyhow!("unsupported payload dtype {dtype:?}")),
         }
     }
 
@@ -4687,11 +4633,10 @@ impl TensorDynLen {
 
     /// Approximate equality check using Julia `isapprox`-style semantics.
     ///
-    /// Values are aligned by index identity and streamed from the authoritative
-    /// dense or compact payload. Exact zero-tolerance comparisons use exact
-    /// scalar equality; nonzero tolerances use scaled sum-of-squares
-    /// accumulation, avoiding logical-dense scratch allocation and avoidable
-    /// underflow/overflow.
+    /// Values are aligned by index identity and streamed from each tensor's
+    /// compact support. Exact zero-tolerance comparisons use exact scalar
+    /// equality; nonzero tolerances use scaled sum-of-squares accumulation,
+    /// avoiding logical-dense traversal and avoidable underflow/overflow.
     ///
     /// # Errors
     /// Returns [`TensorDynLenError`] when tolerances are invalid, the index
@@ -4760,67 +4705,99 @@ impl TensorDynLen {
         }
 
         let exact = atol == 0.0 && rtol == 0.0;
-        let total = checked_product(&self_dims).map_err(TensorDynLenError::materialization)?;
-        let payload_rank = self
-            .storage
-            .payload_dims()
-            .len()
-            .max(other.storage.payload_dims().len());
-        let mut lhs_index = vec![0usize; self_dims.len()];
-        let mut rhs_index = vec![0usize; other_dims.len()];
-        let mut lhs_payload_index = vec![0usize; payload_rank];
-        let mut rhs_payload_index = vec![0usize; payload_rank];
+        let lhs_payload_dims = self.storage.payload_dims().to_vec();
+        let rhs_payload_dims = other.storage.payload_dims().to_vec();
+        let lhs_payload_len =
+            checked_product(&lhs_payload_dims).map_err(TensorDynLenError::materialization)?;
+        let rhs_payload_len =
+            checked_product(&rhs_payload_dims).map_err(TensorDynLenError::materialization)?;
+        let lhs_axis_classes = self.storage.axis_classes();
+        let rhs_axis_classes = other.storage.axis_classes();
+        let self_to_other = other_positions.clone();
+        let mut other_to_self = vec![0usize; self_to_other.len()];
+        for (self_axis, &other_axis) in self_to_other.iter().enumerate() {
+            other_to_self[other_axis] = self_axis;
+        }
+
         let mut diff = Lassq::default();
         let mut lhs_norm = Lassq::default();
         let mut rhs_norm = Lassq::default();
-
-        for _ in 0..total {
-            for (axis, &other_axis) in other_positions.iter().enumerate() {
-                rhs_index[other_axis] = lhs_index[axis];
+        let mut compare = |lhs: Complex64, rhs: Complex64| -> bool {
+            if exact {
+                return lhs == rhs;
             }
+            let lhs_infinite = lhs.re.is_infinite() || lhs.im.is_infinite();
+            let rhs_infinite = rhs.re.is_infinite() || rhs.im.is_infinite();
+            if lhs_infinite || rhs_infinite {
+                return lhs == rhs;
+            }
+            lhs_norm.add_complex(lhs);
+            rhs_norm.add_complex(rhs);
+            diff.add_complex_difference(lhs, rhs);
+            true
+        };
+
+        // Each compact payload coordinate identifies exactly one logical
+        // support point. Map it through the aligned logical axes instead of
+        // traversing structural zeros in the logical tensor.
+        let mut lhs_coords = vec![0usize; lhs_payload_dims.len()];
+        let mut rhs_from_lhs = vec![0usize; rhs_payload_dims.len()];
+        let mut rhs_seen = vec![false; rhs_payload_dims.len()];
+        for _ in 0..lhs_payload_len {
             let lhs = self
                 .storage
-                .semantic_value_at(&lhs_index, &self_dims, &mut lhs_payload_index)
+                .payload_value_at(&lhs_coords)
                 .map_err(TensorDynLenError::materialization)?;
-            let rhs = other
-                .storage
-                .semantic_value_at(&rhs_index, &other_dims, &mut rhs_payload_index)
-                .map_err(TensorDynLenError::materialization)?;
-
-            if exact {
-                if lhs != rhs {
+            if map_payload_support_coordinate(
+                lhs_axis_classes,
+                rhs_axis_classes,
+                &self_to_other,
+                &lhs_coords,
+                &mut rhs_from_lhs,
+                &mut rhs_seen,
+            ) {
+                let rhs = other
+                    .storage
+                    .payload_value_at(&rhs_from_lhs)
+                    .map_err(TensorDynLenError::materialization)?;
+                if !compare(lhs, rhs) {
                     return Ok(false);
                 }
-            } else {
-                let lhs_infinite = lhs.re.is_infinite() || lhs.im.is_infinite();
-                let rhs_infinite = rhs.re.is_infinite() || rhs.im.is_infinite();
-                if lhs_infinite || rhs_infinite {
-                    if lhs != rhs {
-                        return Ok(false);
-                    }
-                    lhs_norm.add_infinite();
-                    rhs_norm.add_infinite();
-                } else {
-                    lhs_norm.add_complex(lhs);
-                    rhs_norm.add_complex(rhs);
-                    diff.add_complex_difference(lhs, rhs);
-                }
+            } else if !compare(lhs, Complex64::new(0.0, 0.0)) {
+                return Ok(false);
             }
 
-            let mut carry = true;
-            for (coordinate, &dim) in lhs_index.iter_mut().zip(self_dims.iter()) {
-                if !carry {
-                    break;
-                }
-                *coordinate += 1;
-                if *coordinate == dim {
-                    *coordinate = 0;
-                } else {
-                    carry = false;
-                }
-            }
+            increment_col_major_coordinate(&mut lhs_coords, &lhs_payload_dims);
         }
 
+        // The reverse pass accounts for support points that exist only in the
+        // right tensor. Overlap points were compared in the first pass and are
+        // therefore skipped here without a payload-sized visited set.
+        let mut rhs_coords = vec![0usize; rhs_payload_dims.len()];
+        let mut lhs_from_rhs = vec![0usize; lhs_payload_dims.len()];
+        let mut lhs_seen = vec![false; lhs_payload_dims.len()];
+        for _ in 0..rhs_payload_len {
+            let rhs = other
+                .storage
+                .payload_value_at(&rhs_coords)
+                .map_err(TensorDynLenError::materialization)?;
+            if !map_payload_support_coordinate(
+                rhs_axis_classes,
+                lhs_axis_classes,
+                &other_to_self,
+                &rhs_coords,
+                &mut lhs_from_rhs,
+                &mut lhs_seen,
+            ) && !compare(Complex64::new(0.0, 0.0), rhs)
+            {
+                return Ok(false);
+            }
+            increment_col_major_coordinate(&mut rhs_coords, &rhs_payload_dims);
+        }
+
+        if exact {
+            return Ok(true);
+        }
         let absolute_ok = if diff.is_zero() {
             true
         } else if atol == 0.0 || diff.infinite {
@@ -6172,6 +6149,60 @@ fn checked_product(dims: &[usize]) -> Result<usize> {
     })
 }
 
+fn increment_col_major_coordinate(coords: &mut [usize], dims: &[usize]) {
+    let mut carry = true;
+    for (coordinate, &dim) in coords.iter_mut().zip(dims.iter()) {
+        if !carry {
+            break;
+        }
+        *coordinate += 1;
+        if *coordinate == dim {
+            *coordinate = 0;
+        } else {
+            carry = false;
+        }
+    }
+}
+
+fn map_payload_support_coordinate(
+    source_axis_classes: &[usize],
+    target_axis_classes: &[usize],
+    source_to_target_axes: &[usize],
+    source_coords: &[usize],
+    target_coords: &mut [usize],
+    target_seen: &mut [bool],
+) -> bool {
+    if source_axis_classes.len() != source_to_target_axes.len()
+        || target_coords.len() != target_seen.len()
+    {
+        return false;
+    }
+    target_seen.fill(false);
+    for (source_axis, &target_axis) in source_to_target_axes.iter().enumerate() {
+        let Some(&source_class) = source_axis_classes.get(source_axis) else {
+            return false;
+        };
+        let Some(&target_class) = target_axis_classes.get(target_axis) else {
+            return false;
+        };
+        let Some(&source_value) = source_coords.get(source_class) else {
+            return false;
+        };
+        let Some(target_value) = target_coords.get_mut(target_class) else {
+            return false;
+        };
+        if target_seen[target_class] {
+            if *target_value != source_value {
+                return false;
+            }
+        } else {
+            *target_value = source_value;
+            target_seen[target_class] = true;
+        }
+    }
+    target_seen.iter().all(|&seen| seen)
+}
+
 fn decode_col_major_linear(linear: usize, dims: &[usize]) -> Result<Vec<usize>> {
     let total = checked_product(dims)?;
     anyhow::ensure!(
@@ -6289,11 +6320,10 @@ mod tests {
     }
 
     #[test]
-    fn semantic_storage_error_retains_typed_source() {
+    fn payload_storage_error_retains_typed_source() {
         let storage = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
-        let storage = TensorDynLenStorage::Materialized(Arc::new(storage));
-        let error = storage.semantic_value_at(&[2], &[2], &mut []).unwrap_err();
-        assert!(error.downcast_ref::<StorageError>().is_some());
+        let error = storage.scalar_at(&[2]).unwrap_err();
+        assert!(matches!(error, StorageError::InvalidStructuredStorage(_)));
     }
 
     #[test]

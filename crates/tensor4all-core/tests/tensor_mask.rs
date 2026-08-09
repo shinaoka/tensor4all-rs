@@ -315,7 +315,7 @@ fn compact_scale_preserves_large_selector_layout_for_all_supported_dtypes() {
     assert_eq!(f64_storage.axis_classes(), &[0, 1, 0]);
     assert_eq!(f64_storage.payload_dims(), &[bond_dim, 3]);
     assert_eq!(f64_storage.payload_len(), bond_dim * 3);
-    assert_eq!(f64_storage.scalar_at(&[0, 1, 0]).unwrap().real(), 6.0);
+    assert_eq!(f64_storage.scalar_at(&[0, 1]).unwrap().real(), 6.0);
 
     let tracked = TensorDynLen::from_copy_selector(
         DynIndex::new_dyn(32),

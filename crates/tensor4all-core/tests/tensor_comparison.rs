@@ -178,6 +178,55 @@ fn test_isapprox_relative_tolerance_does_not_overflow() {
 }
 
 #[test]
+fn test_isapprox_structured_support_matches_permuted_and_dense_layouts() {
+    let left = Index::new_dyn(2);
+    let site = Index::new_dyn(3);
+    let right = Index::new_dyn(2);
+    let structured =
+        TensorDynLen::from_copy_selector(left.clone(), site.clone(), right.clone(), 1, 2.0_f64)
+            .unwrap();
+    let permuted = structured
+        .permute_indices(&[site.clone(), right.clone(), left.clone()])
+        .unwrap();
+    let dense = TensorDynLen::from_dense(
+        structured.indices().to_vec(),
+        structured.to_vec::<f64>().unwrap(),
+    )
+    .unwrap();
+
+    assert!(structured.isapprox(&permuted, 0.0, 0.0).unwrap());
+    assert!(structured.isapprox(&dense, 0.0, 0.0).unwrap());
+}
+
+#[test]
+fn test_isapprox_large_structured_support_does_not_visit_logical_domain() {
+    let bond_dim = 100_000;
+    let site = Index::new_dyn(3);
+    let tensor = TensorDynLen::from_copy_selector(
+        Index::new_dyn(bond_dim),
+        site,
+        Index::new_dyn(bond_dim),
+        1,
+        2.0_f64,
+    )
+    .unwrap();
+
+    assert!(tensor.isapprox(&tensor, 0.0, 0.0).unwrap());
+    assert_eq!(tensor.maxabs().unwrap(), 2.0);
+    assert!((tensor.norm_squared().unwrap() - 4.0 * bond_dim as f64).abs() < 1.0e-8);
+}
+
+#[test]
+fn test_isapprox_matching_infinities_are_not_reference_norms() {
+    let index = Index::new_dyn(2);
+    let lhs = TensorDynLen::from_dense(vec![index.clone()], vec![f64::INFINITY, 0.0]).unwrap();
+    let rhs = TensorDynLen::from_dense(vec![index], vec![f64::INFINITY, 1.0]).unwrap();
+
+    assert!(!lhs.isapprox(&rhs, 0.0, 0.5).unwrap());
+    assert!(lhs.isapprox(&rhs, 0.0, 1.0).unwrap());
+}
+
+#[test]
 fn test_sub_operator_owned() {
     let i = Index::new_dyn(2);
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0]).unwrap();
