@@ -661,7 +661,10 @@ pub trait TensorVectorSpace: TensorIndex {
     /// Approximate equality check (Julia `isapprox` semantics).
     ///
     /// # Errors
-    /// Propagates failures from subtraction or norm evaluation.
+    /// Returns `Self::Error` when the operands have incompatible index spaces
+    /// (an index-space mismatch), when a NaN or invalid tolerance is
+    /// encountered, or when norm evaluation fails; propagates failures from
+    /// subtraction and norm evaluation.
     fn isapprox(
         &self,
         other: &Self,
