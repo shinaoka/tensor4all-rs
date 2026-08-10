@@ -153,12 +153,14 @@ jobs:
       - name: Check crate boundaries and dev cycles
         run: python3 scripts/check-crate-boundaries.py
 
+      - name: Test coverage threshold checker
+        run: python3 scripts/test-check-coverage.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-22.04
     env:
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
 
@@ -171,8 +173,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Generate coverage JSON
-        run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+      - name: Generate release coverage JSON
+        # Release-mode measurement: the repository's normal verification mode.
+        run: cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json

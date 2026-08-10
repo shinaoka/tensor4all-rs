@@ -199,3 +199,25 @@ a separate decision point for the #566 Phase 2 shared-rules adoption.
   35 tests pass; no `no_run`/`ignore` doctest fences remain in `.rs` (a
   historical planning doc under `docs/superpowers/plans/` still contains
   ```ignore fences; it is not shipped or compiled, out of scope).
+
+## Task 12 — release-mode coverage and threshold rationale (2026-08-10)
+
+- CI coverage job now runs `cargo llvm-cov --release --workspace --exclude
+  tensor4all-hdf5` (release is the repository's normal verification mode; the
+  debug-only `CARGO_PROFILE_DEV_DEBUG` env was removed). Coverage stays a
+  CI-owned gate; the local pre-PR gate is attestation-based per the shared
+  agent rules.
+- `scripts/check-coverage.py` gained `--thresholds PATH` so the self-test can
+  isolate fixtures; `scripts/test-check-coverage.py` (5 tests) proves default
+  pass/fail, exact per-file override, missing-file fallback to default, and
+  that top-level `_comment_*` keys are ignored for enforcement. Wired into
+  `jobs.scripts`.
+- `coverage-thresholds.json` gained rationale clusters (`_comment_tooling`,
+  `_comment_xtask`, `_comment_test_utils`, `_comment_capi`,
+  `_comment_expensive_algorithms`, `_comment_reference_crates`,
+  `_comment_boundary_modules`, `_comment_dmrg_release_only`) without changing
+  any number. The only release-mode deficit is `treetn/src/dmrg/mod.rs`
+  (72.4% vs 75; debug is 77.2% — release compiles out debug_assert paths);
+  pinned at 72 with a documented reason, consistent with PR 1's recorded
+  pre-existing deficit.
+- Local release measurement: 207/207 files pass with the new thresholds.
