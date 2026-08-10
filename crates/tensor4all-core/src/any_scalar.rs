@@ -150,6 +150,23 @@ fn initialize_tensor<T: ScalarTensorElement>(
     })
 }
 
+/// Error returned by eager-tensor `AnyScalar` operations (autodiff, conjugation,
+/// and complex composition).
+#[derive(Debug, thiserror::Error)]
+#[error("AnyScalar eager-tensor operation failed: {source}")]
+pub struct AnyScalarError {
+    /// Original tensor, AD-runtime, or configuration diagnostic, including any
+    /// operation-specific context added by the failing call.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for AnyScalarError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
 fn operation_error<E>(op: &'static str, source: E) -> anyhow::Error
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -498,7 +515,7 @@ impl AnyScalar {
     /// assert_eq!(primal.real(), 5.0);
     /// assert!(!primal.tracks_grad());
     /// ```
-    pub fn primal(&self) -> Result<Self> {
+    pub fn primal(&self) -> std::result::Result<Self, AnyScalarError> {
         self.detach()
     }
 
@@ -522,9 +539,9 @@ impl AnyScalar {
     /// let scalar = AnyScalar::new_real(2.0).enable_grad().unwrap();
     /// assert!(scalar.tracks_grad());
     /// ```
-    pub fn enable_grad(self) -> Result<Self> {
+    pub fn enable_grad(self) -> std::result::Result<Self, AnyScalarError> {
         let tensor = self.tensor.map_err(anyhow::Error::new)?;
-        Self::from_tensor(tensor.enable_grad()?)
+        Self::from_tensor(tensor.enable_grad()?).map_err(AnyScalarError::from)
     }
 
     /// Returns whether this scalar tracks gradients.
@@ -570,10 +587,11 @@ impl AnyScalar {
     /// let grad = x.grad().unwrap().unwrap();
     /// assert_eq!(grad.real(), 4.0);
     /// ```
-    pub fn grad(&self) -> Result<Option<Self>> {
+    pub fn grad(&self) -> std::result::Result<Option<Self>, AnyScalarError> {
         self.as_tensor()?
             .grad()
             .and_then(|maybe_grad| maybe_grad.map(Self::from_tensor).transpose())
+            .map_err(AnyScalarError::from)
     }
 
     /// Clears the stored gradient for this scalar.
@@ -600,8 +618,8 @@ impl AnyScalar {
     /// x.clear_grad().unwrap();
     /// assert!(x.grad().unwrap().is_none());
     /// ```
-    pub fn clear_grad(&self) -> Result<()> {
-        self.as_tensor()?.clear_grad()
+    pub fn clear_grad(&self) -> std::result::Result<(), AnyScalarError> {
+        self.as_tensor()?.clear_grad().map_err(AnyScalarError::from)
     }
 
     /// Runs reverse-mode autodiff starting from this scalar.
@@ -627,8 +645,8 @@ impl AnyScalar {
     /// let grad = x.grad().unwrap().unwrap();
     /// assert_eq!(grad.real(), 4.0);
     /// ```
-    pub fn backward(&self) -> Result<()> {
-        self.as_tensor()?.backward()
+    pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
+        self.as_tensor()?.backward().map_err(AnyScalarError::from)
     }
 
     /// Returns a detached copy of this scalar.
@@ -655,8 +673,8 @@ impl AnyScalar {
     /// assert_eq!(detached.real(), 7.0);
     /// assert!(!detached.tracks_grad());
     /// ```
-    pub fn detach(&self) -> Result<Self> {
-        Self::from_tensor(self.as_tensor()?.detach()?)
+    pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
+        Self::from_tensor(self.as_tensor()?.detach()?).map_err(AnyScalarError::from)
     }
 
     /// Returns the real part of this scalar.
@@ -835,18 +853,18 @@ impl AnyScalar {
     /// let scalar = AnyScalar::new_complex(3.0, -4.0).conj();
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, 4.0)));
     /// ```
-    pub fn try_conj(&self) -> Result<Self> {
+    pub fn try_conj(&self) -> std::result::Result<Self, AnyScalarError> {
         self.as_tensor()?;
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().conj()));
         }
-        Self::from_eager_unary(self, "conj", |tensor| tensor.conj())
+        Self::from_eager_unary(self, "conj", |tensor| tensor.conj()).map_err(AnyScalarError::from)
     }
 
     /// Returns the complex conjugate of this scalar.
     pub fn conj(&self) -> Self {
         Self::fallback_result(
-            self.try_conj(),
+            self.try_conj().map_err(|error| error.source),
             "conj",
             || Self::scalar_value_from_backend(self.to_backend_scalar().conj()),
             self.tracks_grad(),
@@ -930,12 +948,12 @@ impl AnyScalar {
     /// .unwrap();
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, -4.0)));
     /// ```
-    pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
+    pub fn compose_complex(real: Self, imag: Self) -> std::result::Result<Self, AnyScalarError> {
         if !real.is_real() || !imag.is_real() {
-            return Err(anyhow!("compose_complex requires real-valued inputs"));
+            return Err(anyhow!("compose_complex requires real-valued inputs").into());
         }
         let imag_term = imag.try_mul(&Self::new_complex(0.0, 1.0))?;
-        real.try_add(&imag_term)
+        real.try_add(&imag_term).map_err(AnyScalarError::from)
     }
 
     /// Returns the square root of this scalar.
@@ -1564,8 +1582,12 @@ mod tests {
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
 
         let error = scalar.clone().enable_grad().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
         assert!(error
+            .source
+            .downcast_ref::<AnyScalarTensorError>()
+            .is_some());
+        assert!(error
+            .source
             .chain()
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
     }
@@ -1588,8 +1610,12 @@ mod tests {
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
 
         let error = result.clone().enable_grad().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
         assert!(error
+            .source
+            .downcast_ref::<AnyScalarTensorError>()
+            .is_some());
+        assert!(error
+            .source
             .chain()
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
     }
