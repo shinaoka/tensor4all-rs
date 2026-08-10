@@ -1,7 +1,8 @@
+use crate::error::Result as TreeTciResult;
 use crate::{
     update::update_edge, AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use tensor4all_core::CommonScalar;
 use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 
@@ -134,7 +135,7 @@ pub fn optimize_default<T, F>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
-) -> Result<(Vec<usize>, Vec<f64>)>
+) -> TreeTciResult<(Vec<usize>, Vec<f64>)>
 where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
@@ -195,20 +196,18 @@ pub fn optimize_with_proposer<T, F, P>(
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
-) -> Result<(Vec<usize>, Vec<f64>)>
+) -> TreeTciResult<(Vec<usize>, Vec<f64>)>
 where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    ensure!(
-        options.max_iter > 0,
-        "TreeTCI optimization requires max_iter > 0"
-    );
-    ensure!(
-        options.max_bond_dim > 0,
-        "TreeTCI optimization requires max_bond_dim > 0"
-    );
+    if !(options.max_iter > 0) {
+        return Err(anyhow::anyhow!("TreeTCI optimization requires max_iter > 0").into());
+    };
+    if !(options.max_bond_dim > 0) {
+        return Err(anyhow::anyhow!("TreeTCI optimization requires max_bond_dim > 0").into());
+    };
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();

@@ -1,4 +1,4 @@
-use anyhow::{ensure, Result};
+use crate::error::Result as TreeTciResult;
 
 /// Borrowed view of a global site-order batch.
 ///
@@ -56,13 +56,15 @@ impl<'a> GlobalIndexBatch<'a> {
     /// // Wrong length produces an error
     /// assert!(GlobalIndexBatch::new(&data, 3, 2).is_err());
     /// ```
-    pub fn new(data: &'a [usize], n_sites: usize, n_points: usize) -> Result<Self> {
-        ensure!(
-            data.len() == n_sites * n_points,
-            "global index batch has length {}, expected {}",
-            data.len(),
-            n_sites * n_points
-        );
+    pub fn new(data: &'a [usize], n_sites: usize, n_points: usize) -> TreeTciResult<Self> {
+        if !(data.len() == n_sites * n_points) {
+            return Err(anyhow::anyhow!(
+                "global index batch has length {}, expected {}",
+                data.len(),
+                n_sites * n_points
+            )
+            .into());
+        };
         Ok(Self {
             data,
             n_sites,
@@ -141,7 +143,7 @@ impl OwnedGlobalIndexBatch {
     /// // Wrong length is an error
     /// assert!(OwnedGlobalIndexBatch::new(vec![1, 2, 3], 2, 2).is_err());
     /// ```
-    pub fn new(data: Vec<usize>, n_sites: usize, n_points: usize) -> Result<Self> {
+    pub fn new(data: Vec<usize>, n_sites: usize, n_points: usize) -> TreeTciResult<Self> {
         GlobalIndexBatch::new(&data, n_sites, n_points)?;
         Ok(Self {
             data,

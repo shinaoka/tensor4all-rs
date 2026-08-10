@@ -32,3 +32,11 @@ impl From<anyhow::Error> for QuanticsTCIError {
         Self::Operation { source }
     }
 }
+
+impl From<tensor4all_treetci::TreeTciError> for QuanticsTCIError {
+    fn from(source: tensor4all_treetci::TreeTciError) -> Self {
+        Self::Operation {
+            source: anyhow::Error::new(source),
+        }
+    }
+}

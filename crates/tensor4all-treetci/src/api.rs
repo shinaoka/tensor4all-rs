@@ -1,9 +1,10 @@
+use crate::error::Result as TreeTciResult;
 use crate::{
     materialize::{to_treetn, FullPivLuScalar},
     optimize_with_proposer, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
     TreeTciGraph, TreeTciOptions,
 };
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use tensor4all_core::CommonScalar;
 use tensor4all_treetn::TreeTN;
 
@@ -87,18 +88,20 @@ pub fn crossinterpolate2<T, F, P>(
     options: TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
-) -> Result<TreeTciRunResult>
+) -> TreeTciResult<TreeTciRunResult>
 where
     T: FullPivLuScalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    ensure!(
-        local_dims.len() == graph.n_sites(),
-        "local_dims length {} must match graph site count {}",
-        local_dims.len(),
-        graph.n_sites()
-    );
+    if !(local_dims.len() == graph.n_sites()) {
+        return Err(anyhow::anyhow!(
+            "local_dims length {} must match graph site count {}",
+            local_dims.len(),
+            graph.n_sites()
+        )
+        .into());
+    };
 
     let pivots = if initial_pivots.is_empty() {
         vec![vec![0; local_dims.len()]]
@@ -118,10 +121,9 @@ where
         .iter()
         .map(|v| CommonScalar::abs_val(*v))
         .fold(0.0f64, f64::max);
-    ensure!(
-        tci.max_sample_value > 0.0,
-        "initial pivots must not all evaluate to zero"
-    );
+    if tci.max_sample_value <= 0.0 {
+        return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
+    }
 
     let (ranks, errors) = optimize_with_proposer(&mut tci, &evaluate, &options, proposer)?;
     let treetn = to_treetn(&tci, &evaluate, center_site)?;

@@ -1,9 +1,11 @@
+use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::{
     assemble::{assemble_points_column_major, MultiIndex},
     assemble_global_point, column_2d, ncols_2d, GlobalIndexBatch, SubtreeKey, TreeTCI2,
     TreeTciEdge,
 };
-use anyhow::{ensure, Result};
+use anyhow::Result;
+
 use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
 use tenferro_linalg::LinalgBackend;
@@ -46,20 +48,24 @@ macro_rules! impl_full_piv_lu_scalar {
                 pivot_rows: usize,
                 pivot_cols: usize,
             ) -> Result<Vec<Self>> {
-                ensure!(
-                    pivot_rows == pivot_cols,
-                    "full-pivot solve requires a square pivot matrix, got {}x{}",
-                    pivot_rows,
-                    pivot_cols
-                );
-                ensure!(
-                    lhs_cols == pivot_rows,
-                    "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
-                    lhs_rows,
-                    lhs_cols,
-                    pivot_rows,
-                    pivot_cols
-                );
+                if !(pivot_rows == pivot_cols) {
+                    return Err(anyhow::anyhow!(
+                        "full-pivot solve requires a square pivot matrix, got {}x{}",
+                        pivot_rows,
+                        pivot_cols
+                    )
+                    .into());
+                };
+                if !(lhs_cols == pivot_rows) {
+                    return Err(anyhow::anyhow!(
+                        "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
+                        lhs_rows,
+                        lhs_cols,
+                        pivot_rows,
+                        pivot_cols
+                    )
+                    .into());
+                };
 
                 let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
                 let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
@@ -103,7 +109,7 @@ pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,
     evaluate: F,
     center_site: Option<usize>,
-) -> Result<TreeTN<TensorDynLen, usize>>
+) -> TreeTciResult<TreeTN<TensorDynLen, usize>>
 where
     T: FullPivLuScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
@@ -126,13 +132,15 @@ where
             .map(ncols_2d)
             .transpose()?
             .unwrap_or(0);
-        ensure!(
-            left_rank == right_rank,
-            "bond ranks disagree across edge {:?}: left {}, right {}",
-            edge,
-            left_rank,
-            right_rank
-        );
+        if !(left_rank == right_rank) {
+            return Err(anyhow::anyhow!(
+                "bond ranks disagree across edge {:?}: left {}, right {}",
+                edge,
+                left_rank,
+                right_rank
+            )
+            .into());
+        };
         bond_indices.insert(edge, DynIndex::new_dyn(left_rank.max(1)));
     }
 
@@ -182,7 +190,7 @@ where
         node_names.push(site);
     }
 
-    TreeTN::from_tensors(tensors, node_names)
+    TreeTN::from_tensors(tensors, node_names).map_err(TreeTciError::from)
 }
 
 fn site_tensor_with_parent<T, F>(
@@ -197,10 +205,11 @@ where
     T: FullPivLuScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    ensure!(
-        out_keys.len() == 1,
-        "MVP TreeTCI materialization expects exactly one outgoing key per non-root site"
-    );
+    if !(out_keys.len() == 1) {
+        return Err(anyhow::anyhow!(
+            "MVP TreeTCI materialization expects exactly one outgoing key per non-root site"
+        ));
+    };
 
     let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate)?;
     let rows = state.local_dims[site] * product_pivot_dims(state, in_keys)?;
@@ -219,13 +228,14 @@ where
         .get(&site_side_key)
         .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", site_side_key))
         .and_then(ncols_2d)?;
-    ensure!(
-        p_rows == cols,
-        "pivot matrix for site {} is not square: {} x {}",
-        site,
-        p_rows,
-        cols
-    );
+    if !(p_rows == cols) {
+        return Err(anyhow::anyhow!(
+            "pivot matrix for site {} is not square: {} x {}",
+            site,
+            p_rows,
+            cols
+        ));
+    };
 
     T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
 }
@@ -292,12 +302,13 @@ where
 
     let batch = assemble_points_column_major(&points)?;
     let values = evaluate(batch.as_view())?;
-    ensure!(
-        values.len() == points.len(),
-        "batch evaluator returned {} values for {} fill-tensor points",
-        values.len(),
-        points.len()
-    );
+    if !(values.len() == points.len()) {
+        return Err(anyhow::anyhow!(
+            "batch evaluator returned {} values for {} fill-tensor points",
+            values.len(),
+            points.len()
+        ));
+    };
     Ok(values)
 }
 
