@@ -122,3 +122,25 @@
   quanticstci → treetn → quanticstransform/HDF5 → 残り全公開面。
 - レイヤリング（c..i）7 項目。
 - 最終: 各スライス reviewer-gpt → 全検証 → PR（#566）→ CI → merge。
+
+## Session 2026-08-12 (PR 3 typed-error step 2 継続)
+
+### tensorbackend 完了（レビュー済み・コミット済み）
+- `3281a4d` backend linalg dispatch → BackendLinalgError
+- `082530a` tenferro_bridge 18 fn → BridgeError（source 保存、From<anyhow::Error>）
+- `7763073` reviewer-gpt finding 4 件修正: (1) lib.rs で BackendLinalgError/BridgeError 再エクスポート, (2) triangular_solve_matrix(_owned) を BackendLinalgError 化, (3) axpby_native_tensor を BridgeError 化, (4) native_tensor_primal_to_storage の "native tensor snapshot materialization failed" コンテキスト復元
+- 教訓: blanket `From<E: std::error::Error>` は E0119 自己衝突 → 使わない。trait メソッド（anyhow 返し）と tenferro エラーは map_err が異なる（前者 From 直、後者 anyhow::Error::new wrap）
+
+### core contraction API 完了（レビュー済み・コミット済み）
+- `f62c4af` defaults/contract.rs 9 fn + direct_sum.rs 1 fn → Result<_, TensorDynLenError>
+- defaults/mod.rs で TensorDynLenError 再エクスポート追加
+- trait impl（TensorContractionLike for TensorDynLen）の identity map_err 削除
+- 呼び出し側: factorize.rs（anyhow::Error::new wrap）、treetn gse.rs 6 サイト（GseError::Algorithm source を anyhow::Error::new）、itensorlike tensortrain.rs 3 サイト（operation_source に anyhow::Error::new）
+- 教訓: `TensorDynLenError::Operation.source` は `Arc<dyn Error + Send + Sync>`（anyhow ではない）→ std::io::Error::other で構築
+- reviewer-gpt: finding 0（clean）
+
+### 次のスライス候補
+- defaults/index.rs + index_ops.rs（index 生成/置換系）
+- any_scalar.rs（13 fn、内部に AnyScalarTensorError 下地あり）
+- krylov.rs（9 fn、エラー enum 新設が必要）
+- 残り ~100 fn の tensordynlen inherent メソッド
