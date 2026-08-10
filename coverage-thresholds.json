@@ -28,7 +28,9 @@
     "crates/tensor4all-tensorbackend/src/storage.rs": 72,
     "crates/tensor4all-treetn/src/treetn/fit.rs": 66,
     "crates/tensor4all-hdf5/src/compat.rs": 62,
-    "crates/tensor4all-treetn/src/dmrg/mod.rs": 72
+    "crates/tensor4all-treetn/src/dmrg/mod.rs": 72,
+    "docs/tutorial-code/src/qtt_interval_common.rs": 74
   },
-  "_comment_hdf5": "crates/tensor4all-hdf5/src/compat.rs (62): HDF5 I/O internals are exercised by crates/tensor4all-hdf5/tests/test_hdf5.rs under `cargo test` (dlopen-based tests cannot run under nextest or llvm-cov); release llvm-cov cannot attribute them. Remove when the HDF5 suite runs under a coverage-compatible harness."
+  "_comment_hdf5": "crates/tensor4all-hdf5/src/compat.rs (62): HDF5 I/O internals are exercised by crates/tensor4all-hdf5/tests/test_hdf5.rs under `cargo test` (dlopen-based tests cannot run under nextest or llvm-cov); release llvm-cov cannot attribute them. Remove when the HDF5 suite runs under a coverage-compatible harness.",
+  "_comment_tutorial_code": "docs/tutorial-code/src/qtt_interval_common.rs: shared helper for the tutorial binaries; release coverage is CI-variant (74.4% on the hosted runner, >=75 locally) because the long-running tutorial binaries (docs/tutorial-code/src/bin/*) exercise different path sets per run. The tutorials themselves are the deterministic artifact; pinned at 74. Remove when tutorial-code gains a stable unit suite."
 }
