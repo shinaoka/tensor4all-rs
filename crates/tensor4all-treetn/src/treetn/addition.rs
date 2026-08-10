@@ -66,8 +66,9 @@ where
     /// rewritten to match `template`.
     ///
     /// # Errors
-    /// Returns an error if the two networks have different topologies or
-    /// incompatible site-space dimensions on any node.
+    ///
+    /// Returns an error when the site spaces are incompatible (a shape mismatch)
+    /// /// or the reindexing fails.
     ///
     /// # Examples
     /// ```
@@ -152,8 +153,9 @@ where
     /// The direct-sum addition result with site IDs matching `self`.
     ///
     /// # Errors
-    /// Returns an error if the two TreeTNs cannot be reindexed to the same site
-    /// space, or if the strict addition fails after reindexing.
+    ///
+    /// Returns an error when the site spaces are incompatible (a shape mismatch)
+    /// /// or the addition fails.
     ///
     /// # Examples
     /// ```
@@ -200,6 +202,10 @@ where
     /// - Networks have incompatible topologies
     /// - Bond indices cannot be found
     #[allow(clippy::type_complexity)]
+    /// # Errors
+    ///
+    /// Returns an error when the bond spaces are incompatible (a shape mismatch).
+    ///
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
@@ -307,7 +313,9 @@ where
     /// A new TreeTN representing the sum.
     ///
     /// # Errors
-    /// Returns an error if the networks have incompatible structures.
+    ///
+    /// Returns an error when the networks are incompatible (a shape or index
+    /// /// mismatch) or the addition fails (a backend failure).
     ///
     /// # Examples
     ///
@@ -456,8 +464,9 @@ where
     /// A direct-sum TreeTN representing `a * self + b * other`.
     ///
     /// # Errors
-    /// Returns an error if scaling fails, or if strict direct-sum addition fails
-    /// because topology or site indices do not match.
+    ///
+    /// Returns an error when the networks are incompatible (a shape or index
+    /// /// mismatch) or the axpby fails (a backend failure).
     ///
     /// # Examples
     /// ```

@@ -491,9 +491,6 @@ impl TensorTrain {
 
     /// Get a reference to the tensor at the given site.
     ///
-    /// # Errors
-    ///
-    /// Returns `Err` if `site >= len()`.
     #[inline]
     /// # Errors
     ///
@@ -533,9 +530,6 @@ impl TensorTrain {
 
     /// Get a mutable reference to the tensor at the given site.
     ///
-    /// # Errors
-    ///
-    /// Returns `Err` if `site >= len()`.
     #[inline]
     /// # Errors
     ///

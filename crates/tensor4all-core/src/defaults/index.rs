@@ -72,6 +72,11 @@ impl TagSet {
 
     /// Create a tag set from a comma-separated string.
     #[allow(clippy::should_implement_trait)]
+    /// # Errors
+    ///
+    /// Returns an error when the string cannot be parsed as an index (an
+    /// /// invalid-input failure).
+    ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         Ok(Self(Arc::new(InlineTagSet::from_str(s)?)))
     }
@@ -79,6 +84,11 @@ impl TagSet {
     /// Create a tag set from a slice of tag strings.
     ///
     /// Returns an error if any tag contains a comma (reserved as separator in `from_str`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tag string is invalid (an invalid-input
+    /// /// failure).
     ///
     /// # Example
     /// ```
@@ -333,6 +343,10 @@ impl Index<DynId, TagSet> {
     /// For sharing the same tag across many indices, create the `TagSet`
     /// once and use `new_dyn_with_tags` instead.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the tag is invalid (an invalid-input failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -355,6 +369,10 @@ impl Index<DynId, TagSet> {
     ///
     /// This is a convenience method for creating bond indices commonly used in tensor
     /// decompositions like SVD and QR factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the link dimension is invalid (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -528,6 +546,10 @@ impl DynIndex {
     ///
     /// # Returns
     /// A new index with a unique identity and the specified dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bond dimension is invalid (a shape mismatch).
     ///
     /// # Examples
     ///
