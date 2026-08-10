@@ -438,11 +438,14 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
-    fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        let scaled: Result<Vec<T>> = self
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        let scaled: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|b| b.scale(scalar.clone()))
+            .map(|b| {
+                b.scale(scalar.clone())
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: scaled?,
@@ -450,18 +453,27 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
-        anyhow::ensure!(
-            self.shape == other.shape,
-            "Block shapes must match: {:?} vs {:?}",
-            self.shape,
-            other.shape
-        );
-        let result: Result<Vec<T>> = self
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        if self.shape != other.shape {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block shapes must match: {:?} vs {:?}",
+                self.shape,
+                other.shape
+            )));
+        }
+        let result: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
             .zip(other.blocks.iter())
-            .map(|(s, o)| s.axpby(a.clone(), o, b.clone()))
+            .map(|(s, o)| {
+                s.axpby(a.clone(), o, b.clone())
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: result?,
@@ -469,22 +481,27 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
-        anyhow::ensure!(
-            self.shape == other.shape,
-            "Block shapes must match for inner product: {:?} vs {:?}",
-            self.shape,
-            other.shape
-        );
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        if self.shape != other.shape {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block shapes must match for inner product: {:?} vs {:?}",
+                self.shape,
+                other.shape
+            )));
+        }
         let mut sum = AnyScalar::new_real(0.0);
         for (s, o) in self.blocks.iter().zip(other.blocks.iter()) {
-            sum = sum + s.inner_product(o)?;
+            let value = s
+                .inner_product(o)
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            sum = sum + value;
         }
         Ok(sum)
     }
 
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
         self.validate_indices()
+            .map_err(TensorVectorSpaceError::from)
     }
 }
 

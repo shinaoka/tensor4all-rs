@@ -449,13 +449,13 @@ where
             .inner_product(&h_local)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to compute Rayleigh numerator",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let denominator = local
             .inner_product(&local)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to compute Rayleigh denominator",
-                source,
+                source: anyhow::Error::new(source),
             })?;
 
         let numerator = checked_real_scalar(

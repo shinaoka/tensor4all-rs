@@ -568,15 +568,35 @@ pub trait TensorVectorSpace: TensorIndex {
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error>;
 
     /// Compute a linear combination: `a * self + b * other`.
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the operands have incompatible index spaces
+    /// or the underlying arithmetic/backend computation fails.
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Scalar multiplication.
-    fn scale(&self, scalar: AnyScalar) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the underlying arithmetic/backend
+    /// computation fails.
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error>;
 
     /// Inner product (dot product) of two tensors.
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the operands have incompatible index spaces
+    /// or the underlying contraction/backend computation fails.
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error>;
 
     /// Compute the Frobenius norm of the tensor.
     ///
@@ -618,12 +638,20 @@ pub trait TensorVectorSpace: TensorIndex {
     fn maxabs(&self) -> std::result::Result<f64, Self::Error>;
 
     /// Element-wise subtraction: `self - other`.
-    fn sub(&self, other: &Self) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Propagates failures from [`Self::axpby`].
+    fn sub(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
 
     /// Negate all elements: `-self`.
-    fn neg(&self) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Propagates failures from [`Self::scale`].
+    fn neg(&self) -> std::result::Result<Self, Self::Error> {
         self.scale(AnyScalar::new_real(-1.0))
     }
 
@@ -637,7 +665,7 @@ pub trait TensorVectorSpace: TensorIndex {
         atol: f64,
         rtol: f64,
     ) -> std::result::Result<bool, Self::Error> {
-        let diff = self.sub(other).map_err(Self::Error::from)?;
+        let diff = self.sub(other)?;
         let diff_norm = diff.norm()?;
         let self_norm = self.norm()?;
         let other_norm = other.norm()?;
@@ -645,7 +673,12 @@ pub trait TensorVectorSpace: TensorIndex {
     }
 
     /// Validate structural consistency of this tensor-like vector.
-    fn validate(&self) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when structural consistency validation fails.
+    /// The default implementation always returns `Ok(())`.
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
         Ok(())
     }
 }

@@ -851,7 +851,9 @@ where
         hermitian_tol,
         "hermitian_krylov_expm_multiply",
     )?;
-    unit_output.scale(AnyScalar::new_real(initial_norm))
+    unit_output
+        .scale(AnyScalar::new_real(initial_norm))
+        .map_err(anyhow::Error::new)
 }
 
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).

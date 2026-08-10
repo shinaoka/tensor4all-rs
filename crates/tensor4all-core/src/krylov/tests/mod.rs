@@ -66,15 +66,22 @@ impl TensorVectorSpace for PlainVector {
         Ok(self.data.iter().map(|x| x * x).sum())
     }
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
-        anyhow::ensure!(
-            self.data.len() == other.data.len(),
-            "vector lengths must match"
-        );
-        anyhow::ensure!(
-            a.is_real() && b.is_real(),
-            "PlainVector test helper only supports real coefficients"
-        );
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        if self.data.len() != other.data.len() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "vector lengths must match"
+            )));
+        }
+        if !(a.is_real() && b.is_real()) {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "PlainVector test helper only supports real coefficients"
+            )));
+        }
         let data = self
             .data
             .iter()
@@ -84,21 +91,23 @@ impl TensorVectorSpace for PlainVector {
         Ok(Self { data })
     }
 
-    fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        anyhow::ensure!(
-            scalar.is_real(),
-            "PlainVector test helper only supports real coefficients"
-        );
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        if !scalar.is_real() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "PlainVector test helper only supports real coefficients"
+            )));
+        }
         Ok(Self {
             data: self.data.iter().map(|&x| scalar.real() * x).collect(),
         })
     }
 
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
-        anyhow::ensure!(
-            self.data.len() == other.data.len(),
-            "vector lengths must match"
-        );
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        if self.data.len() != other.data.len() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "vector lengths must match"
+            )));
+        }
         Ok(AnyScalar::new_real(
             self.data
                 .iter()

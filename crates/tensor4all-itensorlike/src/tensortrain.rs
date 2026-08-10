@@ -1881,16 +1881,21 @@ impl TensorVectorSpace for TensorTrain {
     // GMRES-required methods (fully supported)
     // ========================================================================
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::axpby(self, a, other, b).map_err(anyhow::Error::new)
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        TensorTrain::axpby(self, a, other, b).map_err(Self::Error::from)
     }
 
-    fn scale(&self, scalar: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::scale(self, scalar).map_err(anyhow::Error::new)
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        TensorTrain::scale(self, scalar).map_err(Self::Error::from)
     }
 
-    fn inner_product(&self, other: &Self) -> anyhow::Result<AnyScalar> {
-        self.inner(other).map_err(anyhow::Error::new)
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        self.inner(other).map_err(Self::Error::from)
     }
 
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {

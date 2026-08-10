@@ -5253,16 +5253,21 @@ impl TensorVectorSpace for TensorDynLen {
         TensorDynLen::isapprox(self, other, atol, rtol)
     }
 
-    fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
-        TensorDynLen::axpby(self, a, other, b)
+    fn axpby(
+        &self,
+        a: crate::AnyScalar,
+        other: &Self,
+        b: crate::AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        TensorDynLen::axpby(self, a, other, b).map_err(Self::Error::from)
     }
 
-    fn scale(&self, scalar: crate::AnyScalar) -> Result<Self> {
-        TensorDynLen::scale(self, scalar)
+    fn scale(&self, scalar: crate::AnyScalar) -> std::result::Result<Self, Self::Error> {
+        TensorDynLen::scale(self, scalar).map_err(Self::Error::from)
     }
 
-    fn inner_product(&self, other: &Self) -> Result<crate::AnyScalar> {
-        TensorDynLen::inner_product(self, other)
+    fn inner_product(&self, other: &Self) -> std::result::Result<crate::AnyScalar, Self::Error> {
+        TensorDynLen::inner_product(self, other).map_err(Self::Error::from)
     }
 }
 
