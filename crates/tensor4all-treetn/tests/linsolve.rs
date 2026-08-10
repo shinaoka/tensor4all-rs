@@ -2461,7 +2461,7 @@ fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
     );
 }
 
-/// The mapped solver must preserve the identity-term-only linear system.
+/// One-node linear systems must be rejected rather than silently returning init.
 #[test]
 fn test_square_linsolve_rejects_one_site_systems() {
     use tensor4all_treetn::square_linsolve;
