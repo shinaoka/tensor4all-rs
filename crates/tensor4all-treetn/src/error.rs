@@ -397,3 +397,21 @@ mod tests {
         assert_eq!(format_anyhow_error(error), "outer context: root");
     }
 }
+
+/// Error returned by general TreeTN and operator index operations.
+///
+/// Wraps the source diagnostic from the underlying tensor operation, so
+/// callers propagating into `anyhow::Result` keep the full source chain.
+#[derive(Debug, thiserror::Error)]
+#[error("TreeTN operation failed: {source}")]
+pub struct TreeTNOperationError {
+    /// Original tensor/network diagnostic.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for TreeTNOperationError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}

@@ -1347,6 +1347,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     type Index = T::Index;
+    type Error = crate::TreeTNOperationError;
 
     /// Return all external indices (true input and output indices).
     fn external_indices(&self) -> Vec<Self::Index> {
@@ -1371,14 +1372,19 @@ where
     /// Replace an external index (true index) in this operator.
     ///
     /// This updates the mapping but does NOT modify the internal MPO tensors.
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
             return Err(anyhow::anyhow!(
                 "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
                 old_index.dim(),
                 new_index.dim()
-            ));
+            )
+            .into());
         }
 
         let mut result = self.clone();
@@ -1411,7 +1417,8 @@ where
         Err(anyhow::anyhow!(
             "Index {:?} not found in LinearOperator mappings",
             old_index.id()
-        ))
+        )
+        .into())
     }
 
     /// Replace multiple external indices.
@@ -1419,13 +1426,14 @@ where
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         if old_indices.len() != new_indices.len() {
             return Err(anyhow::anyhow!(
                 "Length mismatch: {} old indices, {} new indices",
                 old_indices.len(),
                 new_indices.len()
-            ));
+            )
+            .into());
         }
         let mut seen = HashSet::new();
         for old in old_indices {
@@ -1433,7 +1441,8 @@ where
                 return Err(anyhow::anyhow!(
                     "Duplicate old index {:?} in LinearOperator::replaceinds",
                     old.id()
-                ));
+                )
+                .into());
             }
         }
 

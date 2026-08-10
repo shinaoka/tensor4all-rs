@@ -23,6 +23,13 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// The index type used by this object.
     type Index: IndexLike;
 
+    /// Error type for fallible index operations.
+    ///
+    /// Implementations map their internal diagnostics into a typed,
+    /// source-preserving error; callers propagating into `anyhow::Result`
+    /// keep working through `From`.
+    type Error: std::error::Error + Send + Sync + 'static + From<anyhow::Error>;
+
     /// Return flattened external indices for this object.
     ///
     /// # Ordering
@@ -56,7 +63,16 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the index replaced.
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `old_index` is not present or the
+    /// replacement violates an index identity invariant.
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Replace multiple indices in this object.
     ///
@@ -71,8 +87,16 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the indices replaced.
-    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index])
-        -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when an `old_indices` entry is not present or
+    /// `old_indices` and `new_indices` differ in length.
+    fn replaceinds(
+        &self,
+        old_indices: &[Self::Index],
+        new_indices: &[Self::Index],
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Replace indices using pairs of (old, new).
     ///
@@ -85,7 +109,10 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the indices replaced.
-    fn replaceinds_pairs(&self, pairs: &[(Self::Index, Self::Index)]) -> Result<Self> {
+    fn replaceinds_pairs(
+        &self,
+        pairs: &[(Self::Index, Self::Index)],
+    ) -> std::result::Result<Self, Self::Error> {
         let (old, new): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
         self.replaceinds(&old, &new)
     }

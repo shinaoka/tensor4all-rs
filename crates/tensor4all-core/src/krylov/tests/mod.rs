@@ -41,12 +41,17 @@ struct PlainVector {
 
 impl TensorIndex for PlainVector {
     type Index = DynIndex;
+    type Error = TensorVectorSpaceError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         Vec::new()
     }
 
-    fn replaceind(&self, _old_index: &Self::Index, _new_index: &Self::Index) -> Result<Self> {
+    fn replaceind(
+        &self,
+        _old_index: &Self::Index,
+        _new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         Ok(self.clone())
     }
 
@@ -54,14 +59,12 @@ impl TensorIndex for PlainVector {
         &self,
         _old_indices: &[Self::Index],
         _new_indices: &[Self::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         Ok(self.clone())
     }
 }
 
 impl TensorVectorSpace for PlainVector {
-    type Error = TensorVectorSpaceError;
-
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|x| x * x).sum())
     }

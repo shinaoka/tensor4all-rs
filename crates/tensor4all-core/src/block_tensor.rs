@@ -365,6 +365,7 @@ impl<T: TensorLike> BlockTensor<T> {
 
 impl<T: TensorLike> TensorIndex for BlockTensor<T> {
     type Index = T::Index;
+    type Error = TensorVectorSpaceError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         // Collect unique external indices across all blocks (deduplicated by full index).
@@ -380,11 +381,18 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
         result
     }
 
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
-        let replaced: Result<Vec<T>> = self
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
+        let replaced: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|b| b.replaceind(old_index, new_index))
+            .map(|b| {
+                b.replaceind(old_index, new_index)
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: replaced?,
@@ -396,11 +404,14 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
-    ) -> Result<Self> {
-        let replaced: Result<Vec<T>> = self
+    ) -> std::result::Result<Self, Self::Error> {
+        let replaced: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|b| b.replaceinds(old_indices, new_indices))
+            .map(|b| {
+                b.replaceinds(old_indices, new_indices)
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: replaced?,
@@ -414,8 +425,6 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
 // ============================================================================
 
 impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
-    type Error = TensorVectorSpaceError;
-
     // ------------------------------------------------------------------------
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------

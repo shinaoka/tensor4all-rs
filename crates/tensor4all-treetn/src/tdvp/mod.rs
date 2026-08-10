@@ -766,7 +766,7 @@ where
             .replaceind(&ket_center_bond, &ref_center_bond)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to relabel one-site Q reference bond",
-                source,
+                source: anyhow::Error::new(source),
             })?;
 
         for neighbor in self.topology.neighbors(current) {
@@ -790,7 +790,7 @@ where
                     .replaceind(ket_bond, ref_bond)
                     .map_err(|source| TdvpError::Algorithm {
                         context: "TDVP failed to relabel one-site Q boundary bond",
-                        source,
+                        source: anyhow::Error::new(source),
                     })?;
         }
 

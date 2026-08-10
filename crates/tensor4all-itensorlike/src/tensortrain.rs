@@ -1847,6 +1847,7 @@ impl Default for TensorTrain {
 
 impl TensorIndex for TensorTrain {
     type Index = DynIndex;
+    type Error = TensorTrainError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         // Delegate to the internal TreeTN's TensorIndex implementation
@@ -1857,16 +1858,30 @@ impl TensorIndex for TensorTrain {
         self.treetn.num_external_indices()
     }
 
-    fn replaceind(&self, old: &Self::Index, new: &Self::Index) -> anyhow::Result<Self> {
+    fn replaceind(
+        &self,
+        old: &Self::Index,
+        new: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the internal TreeTN's replaceind
         // After replacement, canonical form may be invalid, so set to None
-        let treetn = self.treetn.replaceind(old, new)?;
-        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
+        let treetn = self
+            .treetn
+            .replaceind(old, new)
+            .map_err(anyhow::Error::new)?;
+        Self::from_inner(treetn, None).map_err(Self::Error::from)
     }
 
-    fn replaceinds(&self, old: &[Self::Index], new: &[Self::Index]) -> anyhow::Result<Self> {
-        let treetn = self.treetn.replaceinds(old, new)?;
-        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
+    fn replaceinds(
+        &self,
+        old: &[Self::Index],
+        new: &[Self::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        let treetn = self
+            .treetn
+            .replaceinds(old, new)
+            .map_err(anyhow::Error::new)?;
+        Self::from_inner(treetn, None).map_err(Self::Error::from)
     }
 }
 
@@ -1875,8 +1890,6 @@ impl TensorIndex for TensorTrain {
 // ============================================================================
 
 impl TensorVectorSpace for TensorTrain {
-    type Error = TensorTrainError;
-
     // ========================================================================
     // GMRES-required methods (fully supported)
     // ========================================================================

@@ -44,6 +44,7 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
     type Index = T::Index;
+    type Error = crate::TreeTNOperationError;
 
     /// Return all external (site/physical) indices from all nodes.
     ///
@@ -75,14 +76,19 @@ where
     ///
     /// Note: `replace_tensor` automatically updates the `site_index_network` based on
     /// the new tensor's indices, so we don't need to manually call `replace_site_index`.
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
             return Err(anyhow::anyhow!(
                 "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
                 old_index.dim(),
                 new_index.dim()
-            ));
+            )
+            .into());
         }
 
         let mut result = self.clone();
@@ -105,7 +111,9 @@ where
                     anyhow::anyhow!("Index not found in tensor at node {:?}", node_name)
                 })?
                 .clone();
-            let new_tensor = tensor.replaceind(&old_in_tensor, new_index)?;
+            let new_tensor = tensor
+                .replaceind(&old_in_tensor, new_index)
+                .map_err(anyhow::Error::new)?;
             result.replace_tensor(node_idx, new_tensor)?;
 
             // Keep ortho_towards consistent (if present)
@@ -140,7 +148,9 @@ where
                     .find(|idx| *idx == old_index)
                     .ok_or_else(|| anyhow::anyhow!("Bond index not found in endpoint tensor"))?
                     .clone();
-                let new_tensor = tensor.replaceind(&old_in_tensor, new_index)?;
+                let new_tensor = tensor
+                    .replaceind(&old_in_tensor, new_index)
+                    .map_err(anyhow::Error::new)?;
                 result.replace_tensor(node, new_tensor)?;
             }
 
@@ -158,10 +168,7 @@ where
             return Ok(result);
         }
 
-        Err(anyhow::anyhow!(
-            "Index {:?} not found in TreeTN",
-            old_index.id()
-        ))
+        Err(anyhow::anyhow!("Index {:?} not found in TreeTN", old_index.id()).into())
     }
 
     /// Replace multiple indices in this TreeTN.
@@ -169,18 +176,19 @@ where
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         if old_indices.len() != new_indices.len() {
             return Err(anyhow::anyhow!(
                 "Length mismatch: {} old indices, {} new indices",
                 old_indices.len(),
                 new_indices.len()
-            ));
+            )
+            .into());
         }
 
         let mut result = self.clone();
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
-            result = result.replaceind(old, new)?;
+            result = result.replaceind(old, new).map_err(anyhow::Error::new)?;
         }
         Ok(result)
     }

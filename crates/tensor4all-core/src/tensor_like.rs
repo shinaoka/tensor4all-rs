@@ -545,9 +545,6 @@ impl From<anyhow::Error> for TensorVectorSpaceError {
 /// on this trait instead of [`TensorLike`] so block vectors and other abstract
 /// state types do not have to provide unrelated tensor-network operations.
 pub trait TensorVectorSpace: TensorIndex {
-    /// Error returned by norm and approximate-comparison operations.
-    type Error: std::error::Error + Send + Sync + 'static + From<anyhow::Error>;
-
     /// Compute the squared Frobenius norm of the tensor.
     ///
     /// # Errors

@@ -5203,6 +5203,7 @@ use crate::tensor_index::TensorIndex;
 
 impl TensorIndex for TensorDynLen {
     type Index = DynIndex;
+    type Error = TensorDynLenError;
 
     fn external_indices(&self) -> Vec<DynIndex> {
         // For TensorDynLen, all indices are external.
@@ -5213,14 +5214,22 @@ impl TensorIndex for TensorDynLen {
         self.indices.len()
     }
 
-    fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::replaceind(self, old_index, new_index)
+    fn replaceind(
+        &self,
+        old_index: &DynIndex,
+        new_index: &DynIndex,
+    ) -> std::result::Result<Self, Self::Error> {
+        // Delegate to the inherent method.
+        TensorDynLen::replaceind(self, old_index, new_index).map_err(Self::Error::from)
     }
 
-    fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::replaceinds(self, old_indices, new_indices)
+    fn replaceinds(
+        &self,
+        old_indices: &[DynIndex],
+        new_indices: &[DynIndex],
+    ) -> std::result::Result<Self, Self::Error> {
+        // Delegate to the inherent method.
+        TensorDynLen::replaceinds(self, old_indices, new_indices).map_err(Self::Error::from)
     }
 }
 
@@ -5234,8 +5243,6 @@ use crate::tensor_like::{
 };
 
 impl TensorVectorSpace for TensorDynLen {
-    type Error = TensorDynLenError;
-
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         TensorDynLen::norm_squared(self)
     }

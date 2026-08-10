@@ -135,6 +135,7 @@ where
         }
 
         self.replaceinds(&old_indices, &new_indices)
+            .map_err(anyhow::Error::new)
     }
 
     /// Add two TreeTNs after reindexing the second operand's site space to match `self`.

@@ -42,7 +42,7 @@ pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};
 pub use error::{
     LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,
-    NumberedTagSelectionError, SelectedIndexContractionError,
+    NumberedTagSelectionError, SelectedIndexContractionError, TreeTNOperationError,
 };
 pub use gse::{
     global_subspace_expand, global_subspace_expand_with_references, gse_tdvp, GseError, GseOptions,
