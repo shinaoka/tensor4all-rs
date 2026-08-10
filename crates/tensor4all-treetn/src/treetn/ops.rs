@@ -100,10 +100,8 @@ where
     /// The natural logarithm of the Frobenius norm.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - The network is empty
-    /// - Canonicalization fails
-    ///
+    /// Returns an error when the tensor train contains a non-finite value or its
+    /// scaling is invalid (an invalid-state or dtype mismatch failure).
     /// # Examples
     ///
     /// ```
@@ -193,8 +191,8 @@ where
     /// This method is mutable because it may need to canonicalize the network.
     ///
     /// # Errors
-    /// Returns an error if the network is empty or canonicalization fails.
-    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -233,8 +231,8 @@ where
     /// This method is mutable because it may need to canonicalize the network.
     ///
     /// # Errors
-    /// Returns an error if the network is empty or canonicalization fails.
-    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -273,9 +271,8 @@ where
     /// `Ok(())` after the selected node tensor has been updated in place
     ///
     /// # Errors
-    /// Returns an error if the TreeTN is empty or the selected node/tensor
-    /// cannot be found
-    ///
+    /// Returns an error when the scaling fails (a dtype mismatch or backend
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -340,8 +337,8 @@ where
     /// `conj(self) * other` into a scalar.
     ///
     /// # Errors
-    /// Returns an error if the networks have incompatible topologies.
-    ///
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// (a shape mismatch) or the contraction fails (a backend failure).
     /// # Examples
     ///
     /// ```
@@ -480,8 +477,8 @@ where
     /// as the result size grows exponentially with the number of sites.
     ///
     /// # Errors
-    /// Returns an error if the network is empty or contraction fails.
-    ///
+    /// Returns an error when the dense materialization fails (a materialization or
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -534,10 +531,8 @@ where
     /// A reusable evaluator bound to this TreeTN.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the TreeTN is empty or `indices` is not a complete,
-    /// duplicate-free list of this TreeTN's site indices.
-    ///
+    /// Returns an error when the evaluator cannot be constructed (an
+    /// invalid-configuration failure).
     /// # Examples
     ///
     /// ```
@@ -711,7 +706,8 @@ where
     /// between the two vectors.
     ///
     /// # Errors
-    /// Returns an error if a node's site space cannot be found.
+    /// Returns an error if a node's site space cannot be found (a missing-index
+    /// failure).
     ///
     /// # Examples
     /// ```
@@ -738,6 +734,10 @@ where
     /// assert!(indices.contains(&s1));
     /// ```
     #[allow(clippy::type_complexity)]
+    /// # Errors
+    /// Returns an error when a node's site space cannot be found (a
+    /// missing-index failure).
+    ///
     pub fn all_site_indices(&self) -> Result<(Vec<T::Index>, Vec<V>)>
     where
         V: Clone,
@@ -773,9 +773,8 @@ where
     /// A `Vec<AnyScalar>` of length `n_points`.
     ///
     /// # Errors
-    /// Returns an error if the underlying [`evaluate()`](Self::evaluate)
-    /// call fails.
-    ///
+    /// Returns an error when the coordinate is out of range (an out-of-bounds
+    /// failure) or evaluation fails (a backend failure).
     /// # Examples
     /// ```
     /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};

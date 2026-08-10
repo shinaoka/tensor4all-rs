@@ -63,6 +63,11 @@ where
     /// Add a node with the given name and data.
     ///
     /// Returns an error if the node already exists.
+    /// # Errors
+    ///
+    /// Returns an error when the graph is invalid (an invalid-topology
+    /// /// failure).
+    ///
     pub fn add_node(&mut self, node_name: NodeName, data: NodeData) -> Result<NodeIndex> {
         if self.node_name_to_index.contains_key(&node_name) {
             return Err(anyhow::anyhow!("Node already exists: {:?}", node_name));
@@ -91,6 +96,11 @@ where
     /// Rename an existing node without changing its data or incident edges.
     ///
     /// Returns an error if the old node doesn't exist or the new name is already in use.
+    /// # Errors
+    ///
+    /// Returns an error when the node is not found (a missing-index failure)
+    /// /// or the new name is already in use (a duplicate operation failure).
+    ///
     pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
         if old_name == &new_name {
             return Ok(());
@@ -136,6 +146,11 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
+    /// # Errors
+    ///
+    /// Returns an error when the graph is invalid (an invalid-topology
+    /// /// failure).
+    ///
     pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName, weight: EdgeData) -> Result<EdgeIndex>
     where
         EdgeData: Clone,

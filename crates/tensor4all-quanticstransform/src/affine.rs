@@ -67,21 +67,16 @@ impl<const N: usize> BoolTensor<N> {
 }
 
 /// A primitive integer row for a linear equality or inequality constraint.
-///
 /// Use this type when a row is scale-invariant, such as `a*x == rhs` or
 /// `a*x <= rhs`, and the row will be used to derive affine or halfspace
 /// transform operators. It is intentionally separate from [`AffineParams`]
 /// because an affine map `y = A*x + b` is not invariant under row scaling.
-///
 /// Related types: [`AffineParams`] stores affine-map parameters for
 /// [`affine_operator`]; this type stores normalized constraint rows that can be
 /// used before constructing a constraint-derived operator.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::LinearConstraintRow;
-///
 /// let row = LinearConstraintRow::from_integers(vec![16], 64);
 /// assert_eq!(row.coefficients, vec![1]);
 /// assert_eq!(row.rhs, 4);
@@ -124,6 +119,9 @@ impl LinearConstraintRow {
     /// positive scaling. If all coefficients and `rhs` are zero, the zero row
     /// is returned unchanged.
     ///
+    /// # Errors
+    /// Returns an error when the integer coefficient cannot be represented (an
+    /// overflow failure) or the operator construction fails.
     /// # Examples
     ///
     /// ```
@@ -175,10 +173,9 @@ impl LinearConstraintRow {
     /// general affine map `y = A*x + b`.
     ///
     /// # Errors
-    /// Returns an error if any coefficient or the right-hand side has a zero
-    /// denominator, if the primitive integer representation cannot fit in
-    /// `i64`, or if a backing allocation fails.
-    ///
+    /// Returns an error when the rational coefficient cannot be represented (an
+    /// invalid-coefficient failure, i.e. a zero denominator or an overflow
+    /// failure) or the operator construction fails.
     /// # Examples
     ///
     /// ```
@@ -262,24 +259,19 @@ fn normalize_bigint_row(coefficients: Vec<BigInt>, rhs: BigInt) -> Result<Linear
 }
 
 /// Affine transformation parameters.
-///
 /// Represents the transformation y = A*x + b where:
 /// - A is an M x N matrix stored in column-major order
 /// - b is an M-dimensional vector
 /// - x is an N-dimensional input
 /// - y is an M-dimensional output
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::AffineParams;
 /// use num_rational::Rational64;
-///
 /// // 1D shift: y = x + 3
 /// let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
 /// assert_eq!(params.m(), 1);
 /// assert_eq!(params.n(), 1);
-///
 /// // 2D rotation: y = [[1,1],[1,-1]] * x
 /// // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]]
 /// let params = AffineParams::from_integers(
@@ -287,7 +279,6 @@ fn normalize_bigint_row(coefficients: Vec<BigInt>, rhs: BigInt) -> Result<Linear
 /// ).unwrap();
 /// assert_eq!(params.m(), 2);
 /// assert_eq!(params.n(), 2);
-///
 /// // With rational coefficients: y = (1/2)*x
 /// let params = AffineParams::new(
 ///     vec![Rational64::new(1, 2)],
@@ -313,11 +304,8 @@ impl AffineParams {
     /// * `n` - Number of input dimensions
     ///
     /// # Errors
-    /// Returns an error when any matrix or translation entry has a zero
-    /// denominator, when the matrix/vector lengths do not match the
-    /// dimensions, a dimension product overflows, or a power-of-two site
-    /// dimension cannot be represented safely.
-    ///
+    /// Returns an error when the operator dimensions overflow (an overflow failure)
+    /// or the construction is invalid (an invalid-configuration failure).
     /// # Examples
     ///
     /// ```
@@ -455,10 +443,8 @@ impl AffineParams {
     /// Convenience method that converts integer values to rationals.
     ///
     /// # Errors
-    /// Returns an error when a backing allocation fails, when the matrix/vector
-    /// lengths do not match the dimensions, a dimension product overflows, or
-    /// a power-of-two site dimension cannot be represented safely.
-    ///
+    /// Returns an error when the integer coefficient cannot be represented (an
+    /// overflow failure) or the operator construction fails (a backend failure).
     /// # Examples
     ///
     /// ```
@@ -558,7 +544,6 @@ fn affine_needs_extension(bc: &[BoundaryCondition], b_work: &[BigInt]) -> bool {
 
 /// Remap site indices of the affine MPO from internal encoding to the convention
 /// expected by `tensortrain_to_linear_operator_asymmetric`.
-///
 /// Internal encoding: `site_idx = y_bits | (x_bits << m)` (y-minor, x-major)
 /// Expected encoding: `s = s_out * in_dim + s_in = y_bits * 2^n + x_bits` (x-minor, y-major)
 fn checked_affine_site_dims(m: usize, n: usize) -> Result<(usize, usize, usize)> {
@@ -626,36 +611,26 @@ fn remap_affine_site_indices(
 }
 
 /// Create the operator that realizes the coordinate map `y = A * x + b`.
-///
 /// This is the **forward** affine operator. It maps a quantics tensor train
 /// representing an `N`-variable state `x` to the quantics tensor train of
 /// the `M`-variable state `y = A * x + b`.
-///
 /// To build the **pullback** (`f(y) = g(A * y + b)`), call `.transpose()`
 /// on the returned operator; the pullback is exactly the transpose of the
 /// forward operator.
-///
 /// # Arguments
-///
 /// * `r` — bits per variable (number of sites in the output MPO).
 /// * `params` — rational `M × N` matrix `A` and `M`-vector `b` describing
 ///   the affine map.
 /// * `bc` — length `M` array of boundary conditions for each output variable.
 ///   `Periodic` wraps output coordinates modulo `2^r`; `Open` zeroes the
 ///   out-of-range contributions.
-///
 /// # Errors
-///
-/// Returns an error if `params` is invalid, `r == 0`, if `bc.len() != params.m()`,
-/// or if a required dimension/allocation exceeds the supported `usize` and
-/// `isize::MAX` bounds.
-///
+/// Returns an error when the operator dimensions overflow (an overflow failure)
+/// or a variable count is invalid (an invalid-configuration failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
 /// use num_rational::Rational64;
-///
 /// // Transform g(x, y) -> g(x + y, x - y) (rotation by 45 degrees, scaled)
 /// let a = vec![
 ///     Rational64::from_integer(1), Rational64::from_integer(1),  // row 0: x + y
@@ -667,12 +642,9 @@ fn remap_affine_site_indices(
 /// let op = affine_operator(4, &params, &bc).unwrap();
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
-///
 /// Using integer convenience constructor:
-///
 /// ```
 /// use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
-///
 /// // Identity transform: y = x (1D)
 /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic];
@@ -719,44 +691,31 @@ pub fn affine_operator(
 }
 
 /// Create an affine operator with interleaved binary variable indices.
-///
 /// This is the same forward coordinate map as [`affine_operator`], but each bit
 /// node carries one binary output index per output variable and one binary input
 /// index per input variable instead of fusing variables into local dimensions
 /// `2^M` and `2^N`. The mapping order at each node is
 /// `(y0, y1, ..., yM-1)` for outputs and `(x0, x1, ..., xN-1)` for inputs.
-///
 /// Use this form when the state stores variables as separate interleaved QTT
 /// site indices and should bind them through [`LinearOperator::new_multi`].
-///
 /// # Arguments
-///
 /// * `r` - Bits per variable. Node `0` is the most significant bit.
 /// * `params` - Rational affine map `y = A*x + b`.
 /// * `bc` - Boundary condition for each output variable.
-///
 /// # Returns
-///
 /// A [`LinearOperator`] whose node `i` has `params.n()` input mappings and
 /// `params.m()` output mappings, all with binary dimension.
-///
 /// # Errors
-///
-/// Returns an error when `params` is invalid, `r == 0`, when
-/// `bc.len() != params.m()`, when a required allocation exceeds its checked
-/// byte bound, or when the affine tensor network cannot be constructed.
-///
+/// Returns an error when the operator dimensions overflow (an overflow failure)
+/// or a variable count is invalid (an invalid-configuration failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{
 ///     affine_operator_interleaved, AffineParams, BoundaryCondition,
 /// };
-///
 /// let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
 /// let op = affine_operator_interleaved(3, &params, &bc).unwrap();
-///
 /// assert_eq!(op.mpo().node_count(), 3);
 /// assert_eq!(op.get_output_mappings(&0).unwrap().len(), 2);
 /// assert_eq!(op.get_input_mappings(&0).unwrap().len(), 2);
@@ -809,35 +768,26 @@ pub fn affine_operator_interleaved(
 }
 
 /// Compute the full affine transformation matrix directly (for verification).
-///
 /// This computes the transformation matrix by directly evaluating y = A*x + b
 /// for all possible input values. The result is a sparse boolean matrix.
-///
 /// # Arguments
 /// * `r` - Number of bits per variable
 /// * `params` - Affine transformation parameters
 /// * `bc` - Boundary conditions for each output variable
-///
 /// # Returns
 /// Sparse matrix of size 2^(R*M) × 2^(R*N) where entry (y_flat, x_flat) = 1
 /// if the transformation maps x to y.
-///
 /// # Note
 /// This is only practical for small R due to exponential size.
 /// Use for testing/verification only.
-///
 /// # Errors
-/// Returns an error when `params` is invalid, `r == 0`, when
-/// `bc.len() != params.m()`, or when dense dimensions/allocation sizes cannot
-/// be represented safely.
-///
+/// Returns an error when the operator dimensions overflow (an overflow failure)
+/// or the matrix construction fails.
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{
 ///     affine_transform_matrix, AffineParams, BoundaryCondition,
 /// };
-///
 /// let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
 /// let matrix = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
 /// assert_eq!(matrix.rows(), 4);
@@ -980,42 +930,31 @@ fn affine_transform_mpo(
 }
 
 /// Create unfused affine transformation tensors.
-///
 /// Returns a vector of R tensors, where each tensor has shape:
 /// `[left_bond, 2, 2, ..., 2, right_bond]` with M+N physical indices of dimension 2.
-///
 /// The physical index order matches Quantics.jl:
 /// `(y[1], y[2], ..., y[M], x[1], x[2], ..., x[N])`
 /// where y are output variables and x are input variables.
-///
 /// # Arguments
 /// * `r` - Number of bits per variable (number of sites)
 /// * `params` - Affine transformation parameters
 /// * `bc` - Boundary conditions for each output variable
-///
 /// # Returns
 /// Vector of R tensors with unfused physical indices.
-///
 /// # Errors
-/// Returns an error when `params` is invalid, `r == 0`, when
-/// `bc.len() != params.m()`, when a tensor allocation exceeds the checked
-/// byte bound, or when affine tensor construction fails.
-///
+/// Returns an error when the operator dimensions overflow (an overflow failure)
+/// or the tensor construction fails.
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{
 ///     affine_transform_tensors_unfused, AffineParams, BoundaryCondition,
 /// };
 /// use tensor4all_simplett::Tensor3Ops;
-///
 /// let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
 /// let tensors = affine_transform_tensors_unfused(4, &params, &bc).unwrap();
-///
 /// // One tensor per site
 /// assert_eq!(tensors.len(), 4);
-///
 /// // Each tensor has fused site_dim = 2^(M+N) = 16 for M=2, N=2
 /// assert_eq!(tensors[0].site_dim(), 16);
 /// ```
@@ -1138,26 +1077,19 @@ pub fn affine_transform_tensors_unfused(
 }
 
 /// Information about the unfused tensor structure.
-///
 /// This helper provides metadata for reshaping the unfused tensors
 /// produced by [`affine_transform_tensors_unfused`].
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
-///
 /// let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
 /// let info = UnfusedTensorInfo::new(&params).unwrap();
-///
 /// assert_eq!(info.m(), 2);
 /// assert_eq!(info.n(), 2);
 /// assert_eq!(info.num_physical_dims(), 4);
-///
 /// // Get shape for a tensor with bond dims 3 and 5
 /// let shape = info.unfused_shape(3, 5).unwrap();
 /// assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
-///
 /// // Round-trip encode/decode
 /// let fused = info.encode_fused_index(&[1, 0], &[0, 1]).unwrap();
 /// let (y_bits, x_bits) = info.decode_fused_index(fused).unwrap();
@@ -1177,10 +1109,8 @@ impl UnfusedTensorInfo {
     /// Create checked metadata for the given affine parameters.
     ///
     /// # Errors
-    /// Returns an error if the affine parameters are malformed, a variable
-    /// width cannot be represented by `usize`, the fused site dimension
-    /// overflows, or `M + N` cannot be represented safely.
-    ///
+    /// Returns an error when the variable count is invalid (an
+    /// invalid-configuration failure) or the operator construction fails.
     /// # Examples
     ///
     /// ```
@@ -1287,8 +1217,8 @@ impl UnfusedTensorInfo {
     /// ```
     ///
     /// # Errors
-    /// Returns an error if the shape rank or backing allocation cannot be
-    /// represented safely.
+    /// Returns an error when the shape cannot be represented (an overflow failure).
+    ///
     pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Result<Vec<usize>> {
         let rank = self
             .num_physical_dims
@@ -1304,9 +1234,8 @@ impl UnfusedTensorInfo {
     /// Decode a fused site index to individual variable bits.
     ///
     /// # Errors
-    /// Returns an error when `fused_idx` is outside the checked fused site
-    /// dimension or when a decoded-bit backing allocation fails.
-    ///
+    /// Returns an error when the index is out of range for the fused shape (an
+    /// out-of-bounds failure).
     /// # Examples
     ///
     /// ```
@@ -1345,9 +1274,8 @@ impl UnfusedTensorInfo {
     /// * `x_bits` - Bits for input variables (length N), each either 0 or 1.
     ///
     /// # Errors
-    /// Returns an error when either slice has the wrong length, contains a
-    /// value other than 0 or 1, or the encoded index cannot be represented.
-    ///
+    /// Returns an error when the coordinate is out of range for the fused shape (an
+    /// out-of-bounds failure).
     /// # Examples
     ///
     /// ```
@@ -1407,13 +1335,10 @@ impl UnfusedTensorInfo {
 }
 
 /// Compute the core tensors for the affine transformation.
-///
 /// This implements the algorithm from Quantics.jl that handles:
 /// - Carry propagation for multi-bit arithmetic
 /// - Scaling factor s from rational to integer conversion
-///
 /// Uses big-endian convention: site 0 = MSB, site R-1 = LSB.
-///
 /// Carry propagation direction (matching shift.rs):
 /// - Arithmetic carry flows LSB → MSB (physical fact)
 /// - In big-endian: site R-1 → site 0 (right → left)
@@ -1667,7 +1592,6 @@ fn affine_transform_tensors(
 }
 
 /// Core tensor data for affine transformation.
-///
 /// Shape: (num_carry_out, num_carry_in, site_dim)
 /// where site_dim = 2^(M+N)
 struct AffineCoreData {
@@ -1705,9 +1629,7 @@ fn record_affine_core_transition(
 }
 
 /// Compute a single core tensor for the affine transformation.
-///
 /// The core tensor encodes: 2 * carry_out = A * x + b_curr - scale * y + carry_in
-///
 /// Returns AffineCoreData containing:
 /// - carries_out: list of possible outgoing carry vectors
 /// - tensor: shape (num_carry_out, num_carry_in, site_dim)

@@ -7,22 +7,16 @@ use tensor4all_simplett::{Tensor3, Tensor3Ops};
 use crate::error::{invalid_argument, Result};
 
 /// Barycentric Lagrange basis on a one-dimensional interpolation grid.
-///
 /// The basis stores interpolation nodes in `[0, 1]` and scaled barycentric
 /// weights. It is used by the interpolative QTT constructors to transfer
 /// local polynomial information across binary refinement levels.
-///
 /// # Related Types
-///
 /// `LagrangePolynomials` provides the local basis. The generated core tensors
 /// are stored as `tensor4all-simplett` rank-3 tensors and assembled into a
 /// `TensorTrain`.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::get_chebyshev_grid;
-///
 /// let basis = get_chebyshev_grid(4).unwrap();
 /// assert_eq!(basis.len(), 5);
 /// assert!((basis.evaluate(0, basis.grid()[0]).unwrap() - 1.0).abs() < 1e-12);
@@ -41,10 +35,8 @@ impl LagrangePolynomials {
     /// basis can be evaluated with [`LagrangePolynomials::evaluate`].
     ///
     /// # Errors
-    ///
-    /// Returns an error if the grid is too short, contains non-finite values,
-    /// or has duplicate nodes.
-    ///
+    /// Returns an error when the basis data is invalid (an invalid-configuration
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -236,19 +228,13 @@ impl LagrangePolynomials {
 }
 
 /// Build a Chebyshev-Lobatto Lagrange basis on `[0, 1]`.
-///
 /// `degree` is the local polynomial degree and must be at least one. The
 /// returned basis has `degree + 1` nodes.
-///
 /// # Errors
-///
-/// Returns an error if `degree == 0`.
-///
+/// Returns an error when `degree` is zero (an invalid-configuration failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::get_chebyshev_grid;
-///
 /// let basis = get_chebyshev_grid(4).unwrap();
 /// assert_eq!(basis.len(), 5);
 /// assert!((basis.grid()[0] - 0.0).abs() < 1e-12);
@@ -324,21 +310,16 @@ fn chebyshev_lobatto_barycentric_weights(degree: usize) -> Vec<f64> {
 }
 
 /// Build the dense local interpolation core for a Lagrange basis.
-///
 /// The returned tensor has shape `(degree + 1, 2, degree + 1)`. The middle
 /// index is the binary refinement digit `sigma`, and the value is
 /// `P_alpha((sigma + grid_beta) / 2)`.
-///
 /// # Errors
-///
-/// Returns an error if a basis evaluation fails.
-///
+/// Returns an error when a basis evaluation fails (a non-convergence or
+/// backend failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{get_chebyshev_grid, interpolation_tensor};
 /// use tensor4all_simplett::Tensor3Ops;
-///
 /// let basis = get_chebyshev_grid(3).unwrap();
 /// let core = interpolation_tensor(&basis).unwrap();
 /// assert_eq!(core.left_dim(), 4);
@@ -363,28 +344,21 @@ pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>>
 }
 
 /// Build the fused direct product of rank-3 core tensors.
-///
 /// Given cores with shapes `(a_i, s_i, b_i)`, the result has shape
 /// `(prod_i a_i, prod_i s_i, prod_i b_i)`. Index `0` is the fastest-moving
 /// component in each fused axis, matching the fused quantics layout used by
 /// `quanticsgrids`.
-///
 /// This is a dense local-core construction. For `D` fused dimensions and a
 /// polynomial degree `p`, single-scale interpolation can produce bonds of
 /// size `(p + 1)^D` and a site dimension of `2^D`, so callers should keep
 /// `D` and `p` modest or use the sparse constructor.
-///
 /// # Errors
-///
 /// Returns an error when `cores` is empty or fused dimensions overflow
 /// `usize`.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::direct_product_core_tensors;
 /// use tensor4all_simplett::{Tensor3, Tensor3Ops};
-///
 /// let a = Tensor3::from_fn([2, 2, 1], |[l, s, _]| (l + s) as f64);
 /// let b = Tensor3::from_fn([3, 2, 1], |[l, s, _]| (10 + l + s) as f64);
 /// let fused = direct_product_core_tensors(&[a, b]).unwrap();
