@@ -126,6 +126,11 @@ pub fn interleaved_site_values(
         .collect()
 }
 
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_input_grid(
     config: &PartialFourier2dConfig,
 ) -> Result<DiscretizedGrid, Box<dyn Error>> {
@@ -138,6 +143,11 @@ pub fn build_input_grid(
         .build()?)
 }
 
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_frequency_grid(
     config: &PartialFourier2dConfig,
 ) -> Result<DiscretizedGrid, Box<dyn Error>> {
@@ -159,6 +169,11 @@ fn k_t_names() -> Vec<&'static str> {
     vec!["k", "t"]
 }
 
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_source_qtt(
     grid: &DiscretizedGrid,
     config: &PartialFourier2dConfig,
@@ -198,6 +213,11 @@ pub fn build_source_qtt(
         options,
     )?)
 }
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
@@ -231,6 +251,11 @@ fn single_site_index_from_state(
         .ok_or_else(|| format!("state node {node} has an empty site space").into())
 }
 
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn transform_x_dimension(
     qtci: &QuanticsTensorCI2<f64>,
     operator: &LinearOperator<TensorDynLen, usize>,
@@ -247,6 +272,11 @@ pub fn transform_x_dimension(
     Ok((transformed, output_site_indices))
 }
 
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn evaluate_tree_point(
     tn: &TreeTN<TensorDynLen, usize>,
     site_indices: &[SiteIndex],
@@ -255,6 +285,11 @@ pub fn evaluate_tree_point(
     let value = tn.evaluate_point(site_indices, site_values)?;
     Ok(Complex64::new(value.real(), value.imag()))
 }
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples(
     transformed: &TreeTN<TensorDynLen, usize>,
     site_indices: &[SiteIndex],
@@ -329,6 +364,11 @@ fn write_optional_usize(value: Option<usize>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
 
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(
     path: &Path,
     samples: &[PartialFourier2dSamplePoint],
@@ -360,6 +400,11 @@ pub fn write_samples_csv(
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(
     path: &Path,
     bond_dims: &[PartialFourier2dBondDimRow],
@@ -381,6 +426,11 @@ pub fn write_bond_dims_csv(
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_operator_bond_dims_csv(
     path: &Path,
     bond_dims: &[usize],

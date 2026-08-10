@@ -119,6 +119,11 @@ pub fn transformed_reference(x: usize, y: usize, bits: usize, mode: AffineBounda
 }
 
 /// Build the source QTT for the periodic analytic function.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput, Box<dyn Error>> {
     let n = point_count(config.bits);
     let sizes = vec![n, n];
@@ -170,6 +175,11 @@ fn boundary_conditions(mode: AffineBoundaryMode) -> Vec<BoundaryCondition> {
 }
 
 /// Build the affine operator and transpose it to obtain the passive pullback.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_affine_operator(
     config: &AffineTutorialConfig,
     mode: AffineBoundaryMode,
@@ -179,6 +189,11 @@ pub fn build_affine_operator(
 }
 
 /// Evaluate a TreeTN at one set of site values and return the complex scalar.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn evaluate_tree_point(
     tn: &TreeTN<TensorDynLen, usize>,
     site_indices: &[SiteIndex],
@@ -189,6 +204,11 @@ pub fn evaluate_tree_point(
 }
 
 /// Apply the affine operator to the source QTT.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn apply_affine_operator(
     source: &QuanticsTensorCI2<f64>,
     operator: &LinearOperator<TensorDynLen, usize>,
@@ -207,6 +227,11 @@ pub fn apply_affine_operator(
 
 /// Collect dense transformed samples against the analytic reference.
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples(
     periodic: &TreeTN<TensorDynLen, usize>,
     periodic_site_indices: &[SiteIndex],
@@ -311,6 +336,11 @@ fn write_optional_usize(value: Option<usize>) -> String {
 }
 
 /// Write dense samples to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
@@ -346,6 +376,11 @@ pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(
 }
 
 /// Write bond-dimension rows to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
@@ -370,6 +405,11 @@ pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(),
 }
 
 /// Write affine operator bond dimensions to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_operator_bond_dims_csv(
     path: &Path,
     rows: &[AffineOperatorBondDimRow],

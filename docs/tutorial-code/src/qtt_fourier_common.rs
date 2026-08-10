@@ -102,6 +102,11 @@ pub fn physical_frequency_bounds(config: &FourierTutorialConfig) -> (f64, f64) {
 }
 
 /// Build the QTT approximation of the input Gaussian.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_gaussian_qtt(
     grid: &DiscretizedGrid,
     config: &FourierTutorialConfig,
@@ -126,6 +131,11 @@ pub fn build_gaussian_qtt(
 }
 
 /// Build the quantics Fourier operator.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_fourier_operator(
     config: &FourierTutorialConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
@@ -149,6 +159,11 @@ pub fn global_index_to_quantics_sites(index_1based: usize, bits: usize) -> Vec<u
 }
 
 /// Apply the Fourier operator to the Gaussian QTT.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn transform_gaussian(
     qtci: &QuanticsTensorCI2<f64>,
     operator: &LinearOperator<TensorDynLen, usize>,
@@ -164,6 +179,11 @@ pub fn transform_gaussian(
 }
 
 /// Evaluate a TreeTN at one set of site values and return the complex scalar.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn evaluate_tree_point(
     tn: &TreeTN<TensorDynLen, usize>,
     site_indices: &[SiteIndex],
@@ -174,6 +194,11 @@ pub fn evaluate_tree_point(
 }
 
 /// Evaluate the transformed Gaussian on the frequency grid and collect a sample table.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples(
     transformed: &TreeTN<TensorDynLen, usize>,
     site_indices: &[SiteIndex],
@@ -258,6 +283,11 @@ pub fn print_summary(
 }
 
 /// Write the Fourier sample table used by Julia plotting.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
@@ -285,6 +315,11 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 }
 
 /// Write the Fourier bond-dimension table used by Julia plotting.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(
     path: &Path,
     bond_dims: &[(usize, usize, usize)],
@@ -301,6 +336,11 @@ pub fn write_bond_dims_csv(
 }
 
 /// Write the Fourier MPO bond-dimension table used by Julia plotting.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_fourier_operator_bond_dims_csv(
     path: &Path,
     bond_dims: &[usize],

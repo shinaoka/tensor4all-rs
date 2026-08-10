@@ -46,6 +46,11 @@ pub fn point_count(config: &MultivariateTutorialConfig) -> usize {
 }
 
 /// Build the two-dimensional discretized grid used by the tutorial.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_multivariate_grid(
     config: &MultivariateTutorialConfig,
     scheme: UnfoldingScheme,
@@ -59,6 +64,11 @@ pub fn build_multivariate_grid(
 }
 
 /// Build a QTT approximation for the provided 2D `target_fn`.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_multivariate_qtt<F>(
     grid: &DiscretizedGrid,
     target_fn: F,
@@ -180,6 +190,11 @@ fn evaluate_dense_qtt(qtt: &QuanticsTensorCI2<f64>) -> Result<Vec<f64>, Box<dyn 
 }
 
 /// Collect dense samples for both layouts on the full cartesian grid.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples<F>(
     interleaved: &QuanticsTensorCI2<f64>,
     grouped: &QuanticsTensorCI2<f64>,
@@ -240,6 +255,11 @@ pub fn collect_bond_dims(interleaved: &[usize], grouped: &[usize]) -> Vec<BondDi
 }
 
 /// Write dense samples to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(
     path: &Path,
     samples: &[MultivariateSamplePoint],
@@ -271,6 +291,11 @@ pub fn write_samples_csv(
 }
 
 /// Write bond-dimension rows to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(path: &Path, rows: &[BondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);

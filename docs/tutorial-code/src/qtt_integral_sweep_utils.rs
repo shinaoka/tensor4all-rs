@@ -24,6 +24,11 @@ pub fn print_sweep_row(row: &IntegralSweepRow) {
 }
 
 /// Write the integral convergence table used by Julia for plotting.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_sweep_csv(path: &Path, rows: &[IntegralSweepRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
