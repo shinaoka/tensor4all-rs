@@ -103,6 +103,24 @@ pub trait MatrixSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
     }
 }
 
+/// Error returned by the CPU backend linear-algebra dispatch helpers.
+///
+/// Wraps the underlying tenferro or shape diagnostic, preserving its source
+/// chain.
+#[derive(Debug, thiserror::Error)]
+#[error("backend linear algebra failed: {source}")]
+pub struct BackendLinalgError {
+    /// Original backend or shape diagnostic.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for BackendLinalgError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
 /// Scalar types supported by [`triangular_solve_matrix`].
 /// `f64` and `Complex64` are solved directly. `f32` and `Complex32` are
 /// promoted to the corresponding 64-bit dtype for the backend solve and then
@@ -482,7 +500,7 @@ where
 /// Returns an error when the SVD fails (a backend or non-convergence
 /// /// failure).
 ///
-pub fn svd_backend<T>(a: &TypedTensor<T>) -> Result<SvdResult<T>>
+pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -505,7 +523,9 @@ where
 /// Returns an error when the QR fails (a backend or non-convergence
 /// /// failure).
 ///
-pub fn qr_backend<T>(a: &TypedTensor<T>) -> Result<(TypedTensor<T>, TypedTensor<T>)>
+pub fn qr_backend<T>(
+    a: &TypedTensor<T>,
+) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -526,7 +546,10 @@ where
 /// Returns an error when the input shapes or scalar dtype are invalid (a
 /// shape or dtype mismatch) or the coefficient matrix is singular (a singular
 /// failure).
-pub fn solve_backend<T>(a: &TypedTensor<T>, b: &TypedTensor<T>) -> Result<TypedTensor<T>>
+pub fn solve_backend<T>(
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+) -> std::result::Result<TypedTensor<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -534,7 +557,7 @@ where
     let b_tensor = T::into_tensor(b.shape().to_vec(), b.host_data().to_vec());
     let result = with_default_backend(|backend| backend.solve(&a_tensor, &b_tensor))
         .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
-    try_into_typed_result::<T>("solve", result)
+    try_into_typed_result::<T>("solve", result).map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system with the configured tenferro backend.
@@ -591,11 +614,14 @@ where
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
 /// ```
-pub fn solve_matrix<T>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>>
+pub fn solve_matrix<T>(
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixSolveScalar,
 {
-    T::solve_matrix_impl(a, b)
+    T::solve_matrix_impl(a, b).map_err(BackendLinalgError::from)
 }
 
 /// Solve `A X = B` while consuming column-major [`Matrix`] values.
@@ -617,11 +643,14 @@ where
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
 /// ```
-pub fn solve_matrix_owned<T>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>>
+pub fn solve_matrix_owned<T>(
+    a: Matrix<T>,
+    b: Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixSolveScalar,
 {
-    T::solve_matrix_owned_impl(a, b)
+    T::solve_matrix_owned_impl(a, b).map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system for column-major [`Matrix`] values.
@@ -698,7 +727,9 @@ where
 /// Returns an error when the LU factorization fails (a backend or
 /// /// non-convergence failure).
 ///
-pub fn full_piv_lu_backend<T>(a: &TypedTensor<T>) -> Result<FullPivLuResult<T>>
+pub fn full_piv_lu_backend<T>(
+    a: &TypedTensor<T>,
+) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -734,7 +765,9 @@ where
 /// assert_eq!(factors.p.nrows(), 2);
 /// assert_eq!(factors.q.ncols(), 2);
 /// ```
-pub fn full_piv_lu_matrix<T>(a: &Matrix<T>) -> Result<FullPivLuMatrixResult<T>>
+pub fn full_piv_lu_matrix<T>(
+    a: &Matrix<T>,
+) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar + Copy,
 {
