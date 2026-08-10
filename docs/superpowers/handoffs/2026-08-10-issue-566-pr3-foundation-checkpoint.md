@@ -168,3 +168,28 @@
 - tensordynlen inherent メソッド群（sum/scale/add/axpby/inner_product/sub/neg/permute/select_indices/from_dense/from_diag/to_vec/scalar/zeros/fuse_indices/unfuse_index/stack_along_new_index/index_select/mask_index/from_native/as_native 等 ~80 fn）— 最大ブロック
 - block_tensor.rs / col_major_array.rs / krylov.rs
 - レイヤリング項目 c..i
+
+## Session 2026-08-12 後半2（TensorDynLen 一括型付け）
+
+### 完了: TensorDynLen inherent 43 fn 型付け（レビュー済み・コミット済み）
+- `cd61911`: select_indices/stack_along_new_index/index_select/from_dense(_any)/from_diag(_any)/from_indices/from_storage/from_structured_storage/enable_grad/grad/clear_grad/backward/detach/sum/only/inner_product/add/axpby/scale/sub/neg/permute_indices/permute/fuse_indices/unfuse_index/mask_index/diagonal/delta/scalar_one/ones/onehot/to_vec/scalar/zeros/copy_tensor/into_dense_col_major_parts/as_slice_f64/c64/compute_permutation_from_indices/hermitian_eigendecomposition/diag_tensor_dyn_len/unfold_split/norm/norm_squared/maxabs/isapprox/distance → Result<_, TensorDynLenError>
+- 新設 From impl: TensorStorageError→Storage / tenferro_ad::Error・EagerContextError・BridgeError→Materialization
+- trait impl の identity map_err(Self::Error::from) 除去
+- 呼び出し側: itensorlike（From<TensorDynLenError> 追加）、treetn gse/cached_evaluator、partitionedtt、benchmarks 3 本、krylov doc examples
+- `862dcaa`: reviewer major 3 件修正 — (1) partitionedtt tensor_operation_error を TensorDynLenError::Storage 直接マッチ化、テスト実パス化、(2) From<BridgeError> は Arc::new(source) でフレーム保存、(3) tensortrain の二重ラップ削除（TensorTrainError::from 直）
+
+### 教訓（ハンドオフ追記）
+- 一括変換は行範囲認識なしのブロック regex で破損が起きた（ファイルを bfc4236 に戻して再適用）。安全手順: (a) シグネチャ subn → (b) Err(anyhow) の .into() 付与 → (c) ensure! の paren-aware 変換 → (d) コンパイラ駆動で tail 修正 → (e) clippy の useless_conversion を報告行ベースで除去（ブロック regex は typed fn の .into() も消すため禁止）
+- `Err(anyhow!(...).into()).context(...)` パターンは E0283（.into() が曖昧）→ anyhow 文脈では .into() を付けない
+- clippy neg_cmp_op_on_partial_ord: `!(a <= b)` → `!matches!(a.partial_cmp(&b), Some(Less) | Some(Equal))` が NaN セマンティクス保存
+- 全ゲート green: nextest 2693 / doctests 841 / hdf5 41 / clippy 両 deny / public-error-docs / crate-boundaries / fmt
+
+### core 残り anyhow 公開面: 12 fn
+- block_tensor.rs: try_new/new/validate_indices（3）
+- krylov.rs: 9（新エラー enum 必要）
+- それ以外（factorize/qr/svd/index_ops/tagset/smallstring/global_default/col_major_array）は既に typed 済み（`Result<X, TypedError>` は検出の偽陽性）
+
+### 次のスライス候補
+- block_tensor + krylov（core 完）
+- step 3: treetci/quanticstci → step 4: treetn → step 5: quanticstransform/HDF5
+- レイヤリング項目 c..i
