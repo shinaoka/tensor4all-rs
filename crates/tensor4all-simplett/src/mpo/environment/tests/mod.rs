@@ -34,7 +34,7 @@ fn test_contract_site_tensors_rejects_shared_dimension_mismatch() {
     let b: Tensor4<f64> = tensor4_zeros(1, 4, 2, 1);
 
     let err = contract_site_tensors(&a, &b).unwrap_err();
-    assert!(err.to_string().contains("Shared dimension mismatch"));
+    assert!(err.to_string().contains("Shared shape mismatch"));
     assert!(err.to_string().contains("3"));
     assert!(err.to_string().contains("4"));
 }
@@ -139,12 +139,12 @@ fn test_environment_reports_length_and_dimension_errors() {
     let mpo_mismatch = MPO::<f64>::constant(&[(2, 3), (2, 2)], 1.0);
     let mut cache = Vec::new();
     let err = left_environment(&mpo_a, &mpo_mismatch, 1, &mut cache).unwrap_err();
-    assert!(err.to_string().contains("Shared dimension mismatch"));
+    assert!(err.to_string().contains("Shared shape mismatch"));
 
     let mpo_mismatch_right = MPO::<f64>::constant(&[(2, 2), (2, 3)], 1.0);
     let mut cache = Vec::new();
     let err = right_environment(&mpo_a, &mpo_mismatch_right, 0, &mut cache).unwrap_err();
-    assert!(err.to_string().contains("Shared dimension mismatch"));
+    assert!(err.to_string().contains("Shared shape mismatch"));
 }
 
 #[test]

@@ -749,7 +749,7 @@ fn contract_impl(
                 std::collections::hash_map::Entry::Occupied(entry) => {
                     if *entry.get() != dim {
                         return Err(anyhow::anyhow!(
-                            "Internal label dimension mismatch: label {} has dimensions {} and {}",
+                            "Internal label shape mismatch: label {} has dimensions {} and {}",
                             internal_id,
                             entry.get(),
                             dim

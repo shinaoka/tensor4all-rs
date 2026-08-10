@@ -2224,7 +2224,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when a selected coordinate is out of range for its index
-    /// (an out-of-bounds failure) or when `selected_indices` and `positions`
+    /// (an out of bounds failure) or when `selected_indices` and `positions`
     /// differ in length (a length mismatch).
     /// # Examples
     ///
@@ -2412,8 +2412,8 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when a selected position is out of range for the source
-    /// index (an out-of-bounds failure) or when the source and target index
-    /// dimensions are incompatible (a dimension mismatch).
+    /// index (an out of bounds failure) or when the source and target index
+    /// dimensions are incompatible (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -2471,7 +2471,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the storage logical dimension does not match the
-    /// index dimension product (a dimension mismatch) or when duplicate
+    /// index dimension product (a shape mismatch) or when duplicate
     /// indices are provided.
     /// # Examples
     ///
@@ -2495,7 +2495,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the storage logical dimension does not match the
-    /// index dimension product (a dimension mismatch) or when duplicate
+    /// index dimension product (a shape mismatch) or when duplicate
     /// indices are provided.
     /// # Examples
     ///
@@ -2518,7 +2518,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error when the storage scalar kind is incompatible with the
     /// requested operations (a scalar-kind mismatch) or the storage cannot
-    /// represent the given index space (a dimension mismatch).
+    /// represent the given index space (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -2549,7 +2549,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the structured storage is invalid (an invalid-storage
-    /// failure) or the index space is incompatible (a dimension mismatch).
+    /// failure) or the index space is incompatible (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -2742,7 +2742,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the tensor is not rank-2, when the two indices have
-    /// unequal dimensions (a shape or dimension mismatch), or when the
+    /// unequal dimensions (a shape or shape mismatch), or when the
     /// eigensolver fails to converge (a non-convergence failure).
     /// # Examples
     ///
@@ -4038,7 +4038,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when `old_index` is not present (a missing-index failure)
-    /// or the new index has an incompatible dimension (a dimension mismatch).
+    /// or the new index has an incompatible dimension (a shape mismatch).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -4817,7 +4817,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the two indices have different dimensions (an
-    /// index dimension mismatch).
+    /// index shape mismatch).
     ///
     pub fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
         <Self as TensorConstructionLike>::diagonal(input_index, output_index)
@@ -4858,7 +4858,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when any coordinate is outside its index dimension (an
-    /// out-of-bounds failure).
+    /// out of bounds failure).
     ///
     pub fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
         <Self as TensorConstructionLike>::onehot(index_vals).map_err(anyhow::Error::new)
@@ -4881,7 +4881,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the coordinate is outside the index dimension (an
-    /// out-of-bounds failure) or the mask construction fails.
+    /// out of bounds failure) or the mask construction fails.
     /// # Examples
     ///
     /// ```
@@ -5523,7 +5523,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the data length does not match the index dimension
-    /// product (a dimension mismatch).
+    /// product (a shape mismatch).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5550,7 +5550,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the payload length does not match the index dimension
-    /// product (a dimension mismatch) or a scalar conversion fails.
+    /// product (a shape mismatch) or a scalar conversion fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5592,7 +5592,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the index dimensions are unequal or the payload
-    /// length does not match the diagonal dimension (a dimension mismatch).
+    /// length does not match the diagonal dimension (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -5626,7 +5626,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the index dimensions are unequal or the payload
-    /// length does not match (a dimension mismatch), or a scalar conversion
+    /// length does not match (a shape mismatch), or a scalar conversion
     /// fails.
     /// # Examples
     /// ```
@@ -5835,7 +5835,7 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error when the fused dimension does not equal the product of
-    /// the new index dimensions (a dimension mismatch).
+    /// the new index dimensions (a shape mismatch).
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};

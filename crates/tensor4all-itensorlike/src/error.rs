@@ -23,8 +23,8 @@ pub enum TensorTrainError {
         length: usize,
     },
 
-    /// Bond dimension mismatch between adjacent tensors.
-    #[error("Bond dimension mismatch at site {site}: left tensor has right dim {left_dim}, right tensor has left dim {right_dim}")]
+    /// Bond shape mismatch between adjacent tensors.
+    #[error("Bond shape mismatch at site {site}: left tensor has right dim {left_dim}, right tensor has left dim {right_dim}")]
     BondDimensionMismatch {
         /// The site index where the mismatch occurred.
         site: usize,

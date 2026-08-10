@@ -805,7 +805,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// # Errors
     ///
     /// Returns `Self::Error` when the input and output indices have unequal
-    /// dimensions (a dimension mismatch) or the underlying construction
+    /// dimensions (a shape mismatch) or the underlying construction
     /// reports a failure.
     fn diagonal(
         input_index: &<Self as TensorIndex>::Index,
@@ -869,7 +869,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// Returns `Self::Error` when `selected_indices` and `positions` differ in
     /// length (a length mismatch), when an index is selected more than once
     /// (a duplicate-index failure), when a coordinate is out of range (an
-    /// out-of-bounds failure), or when the underlying one-hot construction or
+    /// out of bounds failure), or when the underlying one-hot construction or
     /// contraction reports a failure; propagates failures from
     /// [`Self::onehot`] and [`Self::contract`].
     fn select_indices(
@@ -919,7 +919,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// # Errors
     ///
     /// Returns `Self::Error` when a position is out of range for its index
-    /// (an out-of-bounds failure) or the underlying construction reports a
+    /// (an out of bounds failure) or the underlying construction reports a
     /// failure.
     fn onehot(
         index_vals: &[(<Self as TensorIndex>::Index, usize)],

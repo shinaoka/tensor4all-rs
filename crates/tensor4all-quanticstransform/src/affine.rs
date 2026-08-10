@@ -1235,7 +1235,7 @@ impl UnfusedTensorInfo {
     ///
     /// # Errors
     /// Returns an error when the index is out of range for the fused shape (an
-    /// out-of-bounds failure).
+    /// out of bounds failure).
     /// # Examples
     ///
     /// ```
@@ -1275,7 +1275,7 @@ impl UnfusedTensorInfo {
     ///
     /// # Errors
     /// Returns an error when the coordinate is out of range for the fused shape (an
-    /// out-of-bounds failure).
+    /// out of bounds failure).
     /// # Examples
     ///
     /// ```

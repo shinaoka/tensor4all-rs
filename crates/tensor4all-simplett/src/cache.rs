@@ -512,7 +512,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         if left.len() != right.len() {
             return Err(TensorTrainError::InvalidOperation {
                 message: format!(
-                    "Left/right dimension mismatch: {} vs {}",
+                    "Left/right shape mismatch: {} vs {}",
                     left.len(),
                     right.len()
                 ),

@@ -629,7 +629,7 @@ fn test_align_to_state_dimension_mismatch() {
         TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
-    // Should fail due to dimension mismatch
+    // Should fail due to shape mismatch
     let result = op.align_to_state(&state);
     assert!(result.is_err());
 }

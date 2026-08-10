@@ -182,7 +182,7 @@ where
     /// A new TreeTN with tensors connected by common indices, or an error if:
     /// - The lengths of `tensors` and `node_names` don't match
     /// - An index ID appears in more than 2 tensors (TreeTN is a tree, so each bond connects exactly 2 nodes)
-    /// - Connection fails (e.g., dimension mismatch)
+    /// - Connection fails (e.g., shape mismatch)
     ///
     /// # Errors
     /// Returns an error when `tensors` and `node_names` differ in length (a
@@ -757,7 +757,7 @@ where
     ///
     /// Returns the old tensor if the node exists and validation passes.
     /// # Errors
-    /// Returns an error when `node` is out of range (an out-of-bounds failure) or
+    /// Returns an error when `node` is out of range (an out of bounds failure) or
     /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     pub fn replace_tensor(&mut self, node: NodeIndex, new_tensor: T) -> Result<Option<T>> {
@@ -1934,7 +1934,7 @@ where
                     tensor_self.num_external_indices(),
                     tensor_reconstructed.num_external_indices()
                 ))
-                .context("verify_internal_consistency: tensor dimension mismatch");
+                .context("verify_internal_consistency: tensor shape mismatch");
             }
         }
 

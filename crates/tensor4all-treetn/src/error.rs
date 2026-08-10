@@ -61,12 +61,12 @@ pub enum NumberedTagSelectionError {
 ///     old_dim: 2,
 ///     new_dim: 3,
 /// };
-/// assert!(err.to_string().contains("input index dimension mismatch"));
+/// assert!(err.to_string().contains("input index shape mismatch"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LinearOperatorIndexBindingError {
     /// A replacement would change an index dimension.
-    #[error("{role} index dimension mismatch: old dimension {old_dim} vs new dimension {new_dim}")]
+    #[error("{role} index shape mismatch: old dimension {old_dim} vs new dimension {new_dim}")]
     DimensionMismatch {
         /// Binding role, currently `"input"` or `"output"`.
         role: &'static str,
@@ -272,7 +272,7 @@ mod tests {
                 new_dim: 3,
             }
             .to_string(),
-            "input index dimension mismatch: old dimension 2 vs new dimension 3"
+            "input index shape mismatch: old dimension 2 vs new dimension 3"
         );
         assert_eq!(
             LinearOperatorIndexBindingError::DuplicateSourceIndex {

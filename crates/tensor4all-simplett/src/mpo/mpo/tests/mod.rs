@@ -23,7 +23,7 @@ fn test_mpo_new_rejects_invalid_structure() {
     let left: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2);
     let right: Tensor4<f64> = tensor4_zeros(3, 2, 2, 1);
     let err = MPO::new(vec![left, right]).unwrap_err();
-    assert!(err.to_string().contains("Bond dimension mismatch"));
+    assert!(err.to_string().contains("Bond shape mismatch"));
 
     let bad_left: Tensor4<f64> = tensor4_zeros(2, 2, 2, 1);
     let err = MPO::new(vec![bad_left]).unwrap_err();

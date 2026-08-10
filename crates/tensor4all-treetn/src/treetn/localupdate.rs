@@ -214,6 +214,11 @@ where
 ///
 /// # Returns
 /// Vector of boundary edges, each containing the node in region, neighbor outside, and bond index.
+/// # Errors
+///
+/// Returns an error when the region or graph is invalid (an invalid-topology
+/// /// failure).
+///
 pub fn get_boundary_edges<T, V>(
     treetn: &TreeTN<T, V>,
     region: &[V],
@@ -352,6 +357,11 @@ where
 /// - Subtree extraction fails
 /// - The updater returns an error
 /// - Subtree replacement fails
+/// # Errors
+///
+/// Returns an error when a local update in the sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 pub fn apply_local_update_sweep<T, V, U>(
     treetn: &mut TreeTN<T, V>,
     plan: &LocalUpdateSweepPlan<V>,

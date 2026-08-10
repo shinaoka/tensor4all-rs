@@ -11,7 +11,7 @@ pub enum TCIError {
     /// Dimension mismatch
     #[error("Dimension mismatch: {message}")]
     DimensionMismatch {
-        /// Description of the dimension mismatch
+        /// Description of the shape mismatch
         message: String,
     },
 

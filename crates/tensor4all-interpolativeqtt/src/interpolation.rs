@@ -639,7 +639,7 @@ fn validate_common(
     }
     if lower.len() != upper.len() {
         return Err(invalid_argument(format!(
-            "domain dimension mismatch: lower has {}, upper has {}",
+            "domain shape mismatch: lower has {}, upper has {}",
             lower.len(),
             upper.len()
         )));
@@ -672,7 +672,7 @@ fn validate_points(points: &[Vec<f64>], ndims: usize, name: &str) -> Result<()> 
     for point in points {
         if point.len() != ndims {
             return Err(invalid_argument(format!(
-                "{name} dimension mismatch: expected {ndims}, got {}",
+                "{name} shape mismatch: expected {ndims}, got {}",
                 point.len()
             )));
         }
@@ -1085,7 +1085,7 @@ fn invert_stage1(tt: &TensorTrain<f64>, basis: &LagrangePolynomials) -> Result<M
 
     if current.ncols() != decode.nrows() {
         return Err(invalid_argument(format!(
-            "matrix dimension mismatch: {}x{} times {}x{}",
+            "matrix shape mismatch: {}x{} times {}x{}",
             current.nrows(),
             current.ncols(),
             decode.nrows(),

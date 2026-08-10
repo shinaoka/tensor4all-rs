@@ -1445,12 +1445,12 @@ mod tests {
 
         let err = TdvpError::from(SquareSiteMappingError::InvalidMapping {
             node: "site3".to_string(),
-            reason: "dimension mismatch".to_string(),
+            reason: "shape mismatch".to_string(),
         });
         assert!(matches!(
             err,
             TdvpError::InvalidMapping { node, reason }
-                if node == "site3" && reason == "dimension mismatch"
+                if node == "site3" && reason == "shape mismatch"
         ));
     }
 }

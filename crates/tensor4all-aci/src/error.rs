@@ -50,7 +50,7 @@ pub enum AciError {
     },
 
     /// A tensor-train site dimension did not match the expected value.
-    #[error("ACI site dimension mismatch at site {site}: expected {expected}, got {got}")]
+    #[error("ACI site shape mismatch at site {site}: expected {expected}, got {got}")]
     SiteDimMismatch {
         /// Zero-based site where the mismatch occurred.
         site: usize,

@@ -773,7 +773,7 @@ where
     /// A `Vec<AnyScalar>` of length `n_points`.
     ///
     /// # Errors
-    /// Returns an error when the coordinate is out of range (an out-of-bounds
+    /// Returns an error when the coordinate is out of range (an out of bounds
     /// failure) or evaluation fails (a backend failure).
     /// # Examples
     /// ```

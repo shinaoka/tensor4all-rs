@@ -123,7 +123,7 @@ where
             for (old_index, new_index) in self_sorted.iter().zip(template_sorted.iter()) {
                 if old_index.dim() != new_index.dim() {
                     bail!(
-                        "reindex_site_space_like: node {:?} site dimension mismatch {} != {}",
+                        "reindex_site_space_like: node {:?} site shape mismatch {} != {}",
                         node_name,
                         old_index.dim(),
                         new_index.dim()

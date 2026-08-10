@@ -104,7 +104,7 @@ pub fn check_unique_indices<I: IndexLike>(indices: &[I]) -> Result<(), ReplaceIn
 /// * `replacements` - Pairs of `(old_index, new_index)` where indices equal to `old_index` are replaced with `new_index`
 ///
 /// # Returns
-/// A new vector with replacements applied, or an error if any replacement has a dimension mismatch.
+/// A new vector with replacements applied, or an error if any replacement has a shape mismatch.
 ///
 /// # Errors
 /// Returns `ReplaceIndsError::SpaceMismatch` if any replacement index has a different dimension than the original.
@@ -171,7 +171,7 @@ pub fn replaceinds<I: IndexLike>(
 /// * `replacements` - Pairs of `(old_index, new_index)` where indices equal to `old_index` are replaced with `new_index`
 ///
 /// # Returns
-/// `Ok(())` on success, or an error if any replacement has a dimension mismatch.
+/// `Ok(())` on success, or an error if any replacement has a shape mismatch.
 ///
 /// # Errors
 /// Returns `ReplaceIndsError::SpaceMismatch` if any replacement index has a different dimension than the original.

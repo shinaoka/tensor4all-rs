@@ -326,7 +326,7 @@ fn test_reindex_site_space_like_rejects_incompatible_inputs() {
     let err = self_two_node
         .reindex_site_space_like(&template_dim_mismatch)
         .unwrap_err();
-    assert!(err.to_string().contains("site dimension mismatch"));
+    assert!(err.to_string().contains("site shape mismatch"));
 }
 
 #[test]

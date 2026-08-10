@@ -755,7 +755,7 @@ pub fn dense_native_tensor_from_col_major<T: TensorElement>(
 /// Build a dense native tensor whose logical values are diagonal.
 /// # Errors
 ///
-/// Returns an error when the diagonal payload is incompatible with the logical rank (a dimension mismatch) or the backend conversion fails.
+/// Returns an error when the diagonal payload is incompatible with the logical rank (a shape mismatch) or the backend conversion fails.
 pub fn diag_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_rank: usize,

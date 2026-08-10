@@ -100,7 +100,7 @@ where
         for (idx_a, idx_b) in pairs {
             if idx_a.dim() != idx_b.dim() {
                 bail!(
-                    "partial_contract: {} index dimension mismatch: {} != {}",
+                    "partial_contract: {} index shape mismatch: {} != {}",
                     kind,
                     idx_a.dim(),
                     idx_b.dim()

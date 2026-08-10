@@ -182,7 +182,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when a tensor's site dimensions are incompatible with
-    /// /// its neighbors (a dimension mismatch) or the chain is structurally
+    /// /// its neighbors (a shape mismatch) or the chain is structurally
     /// /// inconsistent (an invalid-state failure).
     ///
     pub fn new(tensors: Vec<TensorDynLen>) -> Result<Self> {
@@ -253,7 +253,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the orthogonality center is out of range (an
-    /// /// out-of-bounds failure) or orthogonalization fails.
+    /// /// out of bounds failure) or orthogonalization fails.
     ///
     pub fn with_ortho(
         tensors: Vec<TensorDynLen>,
@@ -497,7 +497,7 @@ impl TensorTrain {
     #[inline]
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
     pub fn tensor(&self, site: usize) -> Result<&TensorDynLen> {
         self.tensor_checked(site)
@@ -507,7 +507,7 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
     pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
         if site >= self.len() {
@@ -539,7 +539,7 @@ impl TensorTrain {
     #[inline]
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
     pub fn tensor_mut(&mut self, site: usize) -> Result<&mut TensorDynLen> {
         self.tensor_mut_checked(site)
@@ -549,7 +549,7 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
     /// # Examples
     ///
@@ -994,8 +994,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure) or
-    /// /// the new tensor has incompatible dimensions (a dimension mismatch).
+    /// Returns an error when `site` is out of range (an out of bounds failure) or
+    /// /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1024,8 +1024,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure) or
-    /// /// the new tensor has incompatible dimensions (a dimension mismatch).
+    /// Returns an error when `site` is out of range (an out of bounds failure) or
+    /// /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1110,7 +1110,7 @@ impl TensorTrain {
     ///   - `CI`: Uses Cross Interpolation
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out-of-bounds failure) or
+    /// Returns an error when `site` is out of range (an out of bounds failure) or
     /// /// orthogonalization fails (a backend or non-convergence failure).
     ///
     pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
