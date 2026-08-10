@@ -1481,3 +1481,130 @@ fn test_truncate_with_rtol() {
     tt.truncate(&options).unwrap();
     assert!(tt.isortho() || tt.len() == 3);
 }
+
+#[test]
+fn tt_inner_profile_enabled_path_runs() {
+    // The profile-gated branch of profile_tt_inner_section and
+    // print_tt_inner_profile are normally dead under tests. Force the env
+    // flag on and exercise a contraction so both branches execute.
+    unsafe {
+        std::env::set_var("T4A_PROFILE_TT_INNER", "1");
+    }
+    let i = DynIndex::new_dyn(2);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    let _ = super::contract_pair(&a, &b).unwrap();
+    unsafe {
+        std::env::remove_var("T4A_PROFILE_TT_INNER");
+    }
+}
+
+#[test]
+fn tt_inner_profile_print_formats_zero_profile() {
+    let profile = TensorTrainInnerProfile::default();
+    print_tt_inner_profile(&profile, 3);
+}
+
+fn make_two_site_tt() -> TensorTrain {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+    TensorTrain::new(vec![t0, t1]).unwrap()
+}
+
+#[test]
+fn tensor_checked_rejects_out_of_bounds_site() {
+    let tt = make_two_site_tt();
+    let err = tt.tensor_checked(5).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 5, .. }
+    ));
+}
+
+#[test]
+fn tensor_mut_checked_rejects_out_of_bounds_site() {
+    let mut tt = make_two_site_tt();
+    let err = tt.tensor_mut_checked(7).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 7, .. }
+    ));
+}
+
+#[test]
+fn tensor_mut_rejects_out_of_bounds_site() {
+    let mut tt = make_two_site_tt();
+    assert!(tt.tensor_mut(9).is_err());
+}
+
+#[test]
+fn empty_tt_len_and_tensor_checked() {
+    let tt = TensorTrain::new(vec![]).unwrap();
+    assert_eq!(tt.len(), 0);
+    assert!(tt.tensor_checked(0).is_err());
+    assert!(tt.ortho_lims().is_empty());
+}
+
+#[test]
+fn haslink_bounds_and_missing_node() {
+    let tt = make_two_site_tt();
+    assert!(tt.haslink(0));
+    // Out-of-range site: no link
+    assert!(!tt.haslink(5));
+}
+
+#[test]
+fn set_tensor_raw_out_of_bounds_reports_site() {
+    let mut tt = make_two_site_tt();
+    let t = make_tensor(vec![idx(0, 2)]);
+    let err = tt.set_tensor_raw(9, t).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 9, .. }
+    ));
+}
+
+#[test]
+fn new_rejects_no_common_index_between_adjacent() {
+    let t0 = make_tensor(vec![idx(0, 2)]);
+    let t1 = make_tensor(vec![idx(3, 2)]);
+    let err = TensorTrain::new(vec![t0, t1]).unwrap_err();
+    assert!(err.to_string().contains("No common index"));
+}
+
+#[test]
+fn new_rejects_multiple_common_indices() {
+    let a = idx(0, 2);
+    let b = idx(1, 2);
+    let t0 = make_tensor(vec![a.clone(), b.clone()]);
+    let t1 = make_tensor(vec![a.clone(), b.clone()]);
+    let err = TensorTrain::new(vec![t0, t1]).unwrap_err();
+    assert!(err.to_string().contains("Multiple common indices"));
+}
+
+#[test]
+fn new_empty_tt_has_no_ortho_lims() {
+    let tt = TensorTrain::new(vec![]).unwrap();
+    assert_eq!(tt.len(), 0);
+    assert!(tt.ortho_lims().is_empty());
+}
+
+#[test]
+fn tensor_index_replaceinds_updates_site_indices() {
+    let tt = make_two_site_tt();
+    let old = tt.siteinds()[0][0].clone();
+    let new = idx(50, old.size());
+    let replaced = TensorIndex::replaceinds(&tt, &[old], &[new]).unwrap();
+    let got = replaced.siteinds()[0][0].clone();
+    assert_eq!(got.id().value(), 50);
+    assert_eq!(got.size(), 2);
+}
+
+#[test]
+fn siteinds_empty_tt_returns_empty() {
+    let tt = TensorTrain::new(vec![]).unwrap();
+    assert!(tt.siteinds().is_empty());
+}

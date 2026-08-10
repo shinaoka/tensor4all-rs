@@ -77,5 +77,19 @@ mod tests {
             <dyn std::error::Error>::source(&e).unwrap().to_string(),
             "root cause"
         );
+
+        let dyn_err = QuanticsTransformError::from(tensor4all_core::TensorDynLenError::NaNInput {
+            operation: "test",
+        });
+        assert!(dyn_err
+            .to_string()
+            .contains("quantics transform operation failed"));
+
+        let tree_err = QuanticsTransformError::from(tensor4all_treetn::TreeTNOperationError::from(
+            anyhow::anyhow!("tree root"),
+        ));
+        assert!(tree_err
+            .to_string()
+            .contains("quantics transform operation failed"));
     }
 }
