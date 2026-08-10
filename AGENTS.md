@@ -149,7 +149,7 @@ cargo nextest run --release -p crate_name        # Single crate
 - Before pushing a deletion PR, attest in the PR body that the removed code paths were reviewed for coverage impact (shared agent rules `common/docs-and-tests.md`: coverage is CI-owned, the local pre-PR gate is attestation-based). The CI coverage job is the authoritative measurement; a local llvm-cov run is optional:
 
 ```bash
-cargo llvm-cov --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 ```
 
