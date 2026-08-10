@@ -47,26 +47,20 @@ struct PairwiseContractProfileEntry {
 }
 
 /// Hermitian eigendecomposition of a rank-2 [`TensorDynLen`].
-///
 /// Eigenvectors are returned as a rank-2 tensor whose first index is the input
 /// matrix row index and whose second index labels eigenvector columns. The
 /// eigenvalues are detached primal values intended for nonsmooth selection
 /// logic such as truncation cutoffs.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};
-///
 /// let row = DynIndex::new_dyn(2);
 /// let col = DynIndex::new_dyn(2);
 /// let matrix = TensorDynLen::from_dense(
 ///     vec![row.clone(), col],
 ///     vec![1.0_f64, 0.0, 0.0, 2.0],
 /// ).unwrap();
-///
 /// let decomp = matrix.hermitian_eigendecomposition(1.0e-12).unwrap();
-///
 /// assert_eq!(decomp.eigenvalues, vec![1.0, 2.0]);
 /// assert_eq!(
 ///     decomp.eigenvectors.indices(),
@@ -178,7 +172,6 @@ fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
 
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
-///
 /// This enables the generic [`TensorDynLen::random`] constructor.
 pub trait RandomScalar: TensorElement {
     /// Generate a random value from the standard normal distribution.
@@ -198,34 +191,27 @@ impl RandomScalar for Complex64 {
 }
 
 /// Compute the permutation array from original indices to new indices.
-///
 /// This function finds the mapping from new indices to original indices by
 /// matching index IDs. The result is a permutation array `perm` such that
 /// `new_indices[i]` corresponds to `original_indices[perm[i]]`.
-///
 /// # Arguments
 /// * `original_indices` - The original indices in their current order
 /// * `new_indices` - The desired new indices order (must be a permutation of original_indices)
-///
 /// # Returns
 /// A `Vec<usize>` representing the permutation: `perm[i]` is the position in
 /// `original_indices` of the index that should be at position `i` in `new_indices`.
-///
 /// # Errors
-/// Returns an error if the slices have different lengths, if `new_indices`
-/// is not a permutation of `original_indices`, or if `new_indices` contains
-/// duplicate indices.
-///
+/// Returns an error when `new_order` contains indices not present in
+/// `original` (a missing-index failure) or the two lists differ in length
+/// (a length mismatch).
 /// # Example
 /// ```
 /// use tensor4all_core::tensor::compute_permutation_from_indices;
 /// use tensor4all_core::DynIndex;
-///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let original = vec![i.clone(), j.clone()];
 /// let new_order = vec![j.clone(), i.clone()];
-///
 /// let perm = compute_permutation_from_indices(&original, &new_order).unwrap();
 /// assert_eq!(perm, vec![1, 0]);  // j is at position 1, i is at position 0
 /// ```
@@ -259,7 +245,6 @@ pub fn compute_permutation_from_indices(
 }
 
 /// Compact structured payload kept in the authoritative eager representation.
-///
 /// The payload may use any supported eager dtype (`f32`, `f64`, `c32`, or
 /// `c64`) and may be either tracked or untracked. Tracking is a property of
 /// `payload`, never of the presence of this metadata container.
@@ -273,19 +258,15 @@ pub(crate) struct StructuredPayload {
 /// Error returned when [`TensorDynLen::storage`] or
 /// [`TensorDynLen::to_storage`] cannot produce a compact `f64`/`Complex64`
 /// storage snapshot from the authoritative payload.
-///
 /// Backend diagnostics remain available through [`std::error::Error::source`]
 /// instead of being erased into a display string. The error is cloneable so a
 /// deferred failure can be retained by cloned tensors without rebuilding a
 /// detached primal value.
-///
 /// # Examples
-///
 /// ```
 /// use std::error::Error;
 /// use std::sync::Arc;
 /// use tensor4all_core::TensorStorageError;
-///
 /// let error = TensorStorageError::Materialization {
 ///     source: Arc::new(std::io::Error::other("backend unavailable")),
 /// };
@@ -321,17 +302,13 @@ pub enum TensorStorageError {
 
 /// Errors returned by the fallible numerical and comparison methods on
 /// [`TensorDynLen`].
-///
 /// The enum is intentionally owned by `tensor4all-core`: callers can match
 /// storage, shape, scalar, subtraction, and invalid-value failures without
 /// depending on the internal `anyhow` plumbing. Wrapped backend diagnostics
 /// retain their complete [`std::error::Error::source`] chain.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::TensorDynLenError;
-///
 /// let error = TensorDynLenError::NaNInput {
 ///     operation: "norm_squared",
 /// };
@@ -835,16 +812,12 @@ impl TensorDynLenStorage {
 }
 
 /// Errors returned when constructing a compact copy-selector tensor.
-///
 /// A copy-selector has logical values
 /// `scale * delta(left, right) * delta(site, selected_value)` and is used to
 /// carry a bond through a fixed physical site without dense bond-squared storage.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, StructuredSelectorError, TensorDynLen};
-///
 /// let left = DynIndex::new_dyn(2);
 /// let site = DynIndex::new_dyn(3);
 /// let right = DynIndex::new_dyn(4);
@@ -906,7 +879,6 @@ pub enum StructuredSelectorError {
 
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
-///
 /// `TensorDynLen` stores a logical multi-dimensional tensor of supported scalar
 /// values (`f32`, `f64`, `Complex32`, or `Complex64`) together with a list of
 /// [`DynIndex`] labels. `f64`/`Complex64` tensors may use compact [`Storage`]
@@ -916,9 +888,7 @@ pub enum StructuredSelectorError {
 /// structured. The indices carry unique
 /// identities (UUIDs) so that contraction, addition, and other binary
 /// operations can automatically match legs by identity rather than position.
-///
 /// # Key Operations
-///
 /// | Operation | Method |
 /// |-----------|--------|
 /// | Create from data | [`from_dense`](Self::from_dense), [`from_diag`](Self::from_diag), [`zeros`](Self::zeros) |
@@ -928,32 +898,24 @@ pub enum StructuredSelectorError {
 /// | Factorization | via [`TensorFactorizationLike::factorize`](crate::TensorFactorizationLike::factorize) |
 /// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
 /// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
-///
 /// # Data Layout
-///
 /// Logical dense extraction uses **column-major** order (first index varies
 /// fastest), matching Fortran, Julia, and ITensors.jl conventions. Compact
 /// structured payloads additionally carry explicit payload dimensions, strides,
 /// and logical-axis classes.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{TensorDynLen, DynIndex};
-///
 /// // Create a 2x3 real tensor
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 /// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
-///
 /// assert_eq!(t.dims(), vec![2, 3]);
 /// assert!(t.is_f64());
-///
 /// // Sum all elements: 1+2+3+4+5+6 = 21
 /// let s = t.sum().unwrap();
 /// assert!((s.real() - 21.0).abs() < 1e-12);
-///
 /// // Extract data back out
 /// let data_out = t.to_vec::<f64>().unwrap();
 /// assert_eq!(data_out, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -2261,10 +2223,9 @@ impl TensorDynLen {
     /// still be represented by axis classes.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the argument lengths differ, a selected index is not
-    /// present, a selected index is duplicated, or a coordinate is out of range.
-    ///
+    /// Returns an error when a selected coordinate is out of range for its index
+    /// (an out-of-bounds failure) or when `selected_indices` and `positions`
+    /// differ in length (a length mismatch).
     /// # Examples
     ///
     /// ```
@@ -2450,12 +2411,9 @@ impl TensorDynLen {
     /// cotangents through tenferro's scatter-add gather transpose.
     ///
     /// # Errors
-    ///
-    /// Returns an error if `source_index` is not present, `target_index.dim()`
-    /// differs from `positions.len()`, or any position is out of range for the
-    /// source index. A tracked structured-AD tensor with compact storage is
-    /// also rejected because dense materialization would detach gradients.
-    ///
+    /// Returns an error when a selected position is out of range for the source
+    /// index (an out-of-bounds failure) or when the source and target index
+    /// dimensions are incompatible (a dimension mismatch).
     /// # Examples
     ///
     /// ```
@@ -2512,10 +2470,9 @@ impl TensorDynLen {
     /// Create a new tensor with dynamic rank.
     ///
     /// # Errors
-    /// Returns an error if the storage logical dimensions do not match the
-    /// supplied indices, if diagonal storage has unequal logical dimensions,
-    /// or if duplicate indices are provided.
-    ///
+    /// Returns an error when the storage logical dimension does not match the
+    /// index dimension product (a dimension mismatch) or when duplicate
+    /// indices are provided.
     /// # Examples
     ///
     /// ```
@@ -2537,10 +2494,9 @@ impl TensorDynLen {
     /// This is a convenience constructor that extracts dimensions from indices using `IndexLike::dim()`.
     ///
     /// # Errors
-    /// Returns an error if the storage logical dimensions do not match the
-    /// supplied indices, if diagonal storage has unequal logical dimensions,
-    /// or if duplicate indices are provided.
-    ///
+    /// Returns an error when the storage logical dimension does not match the
+    /// index dimension product (a dimension mismatch) or when duplicate
+    /// indices are provided.
     /// # Examples
     ///
     /// ```
@@ -2559,6 +2515,10 @@ impl TensorDynLen {
 
     /// Create a tensor from explicit compact storage.
     ///
+    /// # Errors
+    /// Returns an error when the storage scalar kind is incompatible with the
+    /// requested operations (a scalar-kind mismatch) or the storage cannot
+    /// represent the given index space (a dimension mismatch).
     /// # Examples
     ///
     /// ```
@@ -2588,10 +2548,8 @@ impl TensorDynLen {
     /// emphasizes that compact structured metadata is preserved.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the storage logical dimensions do not match the
-    /// supplied indices, or if duplicate indices are provided.
-    ///
+    /// Returns an error when the structured storage is invalid (an invalid-storage
+    /// failure) or the index space is incompatible (a dimension mismatch).
     /// # Examples
     ///
     /// ```
@@ -2783,11 +2741,9 @@ impl TensorDynLen {
     /// as `1e-12` for numerically Hermitian inputs.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the tensor is not a non-empty square matrix, if the
-    /// backend eigensolver fails, or if complex eigenvalues have imaginary
-    /// parts larger than `hermitian_tol * max(|lambda|, 1)`.
-    ///
+    /// Returns an error when the tensor is not rank-2, when the two indices have
+    /// unequal dimensions (a shape or dimension mismatch), or when the
+    /// eigensolver fails to converge (a non-convergence failure).
     /// # Examples
     ///
     /// ```
@@ -2962,6 +2918,10 @@ impl TensorDynLen {
     }
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
+    /// # Errors
+    /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
+    /// AD backend cannot track the tensor's dtype.
+    ///
     pub fn enable_grad(self) -> Result<Self> {
         self.ensure_storage_ready()?;
         // Keep the eager payload when available: compact Storage currently
@@ -3011,6 +2971,10 @@ impl TensorDynLen {
     }
 
     /// Return the accumulated gradient, if one has been stored.
+    /// # Errors
+    /// Returns an error when the tensor is not a tracked leaf or the gradient is
+    /// unavailable for the tensor's dtype (an unavailable-gradient failure).
+    ///
     pub fn grad(&self) -> Result<Option<Self>> {
         if let Some(value) = self.tracked_compact_payload_value() {
             return value
@@ -3054,6 +3018,10 @@ impl TensorDynLen {
     }
 
     /// Clear the accumulated gradient stored for this tensor.
+    /// # Errors
+    /// Returns an error when the tensor is not a tracked leaf (a missing-graph
+    /// failure).
+    ///
     pub fn clear_grad(&self) -> Result<()> {
         self.ensure_storage_ready()?;
         if let Some(value) = self.tracked_compact_payload_value() {
@@ -3069,6 +3037,10 @@ impl TensorDynLen {
     }
 
     /// Run reverse-mode autodiff from this scalar tensor.
+    /// # Errors
+    /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
+    /// reverse pass fails (a graph failure).
+    ///
     pub fn backward(&self) -> Result<()> {
         if let Some(value) = self.tracked_compact_payload_value() {
             return value
@@ -3084,6 +3056,10 @@ impl TensorDynLen {
     }
 
     /// Detach this tensor from the reverse graph.
+    /// # Errors
+    /// Returns an error when the tensor is not a tracked leaf (a missing-graph
+    /// failure).
+    ///
     pub fn detach(&self) -> Result<Self> {
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
@@ -3114,14 +3090,8 @@ impl TensorDynLen {
     /// Materializes and returns a compact storage snapshot.
     ///
     /// # Errors
-    ///
-    /// The authoritative payload remains eager for `f32`/`c32` and for tracked
-    /// tensors; this method is a fallible snapshot bridge to the compact
-    /// `Storage` representation. It returns an error when an eager backend
-    /// payload cannot be converted to compact storage, when its dtype is
-    /// `f32`/`c32` (compact storage supports only `f64`/`c64`), or when a
-    /// deferred eager operation failed.
-    ///
+    /// Returns an error when the compact storage cannot be materialized (a
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -3163,6 +3133,9 @@ impl TensorDynLen {
 
     /// Sum all elements, returning `AnyScalar`.
     ///
+    /// # Errors
+    /// Returns an error when the reduction fails (a backend or scalar-extraction
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -3190,6 +3163,9 @@ impl TensorDynLen {
     ///
     /// This is similar to Julia's `only()` function.
     ///
+    /// # Errors
+    /// Returns an error when the tensor is not rank-0 and does not contain exactly
+    /// one element (a rank mismatch).
     /// # Panics
     ///
     /// Panics if the tensor has more than one element.
@@ -3229,6 +3205,9 @@ impl TensorDynLen {
     /// * `new_indices` - The desired new indices order. Must be a permutation
     ///   of `self.indices` (matched by ID).
     ///
+    /// # Errors
+    /// Returns an error when `new_order` does not contain exactly the tensor's
+    /// indices (an index-set mismatch or a missing-index failure).
     /// # Panics
     /// Panics if `new_indices.len() != self.indices.len()`, if any index ID
     /// doesn't match, or if there are duplicate indices.
@@ -3273,6 +3252,9 @@ impl TensorDynLen {
     /// # Arguments
     /// * `perm` - The permutation: `perm[i]` is the old axis index for new axis `i`
     ///
+    /// # Errors
+    /// Returns an error when `new_order` does not contain exactly the tensor's
+    /// indices (an index-set mismatch or a missing-index failure).
     /// # Panics
     /// Panics if `perm.len() != self.indices.len()` or if the permutation is invalid.
     ///
@@ -3637,6 +3619,9 @@ impl TensorDynLen {
     /// * `rng` - Random number generator
     /// * `indices` - The indices for the tensor
     ///
+    /// # Errors
+    /// Returns an error when the dimension product overflows (an overflow failure)
+    /// or the backend cannot generate the requested scalar type.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -3673,6 +3658,9 @@ impl TensorDynLen {
     /// - The dimensions don't match
     /// - Storage types are incompatible
     ///
+    /// # Errors
+    /// Returns an error when the two tensors have different index sets (an
+    /// index-set mismatch) or the arithmetic reports a failure.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -3753,6 +3741,9 @@ impl TensorDynLen {
     /// If indices are in a different order, `other` is automatically permuted
     /// to match `self`.
     ///
+    /// # Errors
+    /// Returns an error when the tensors have different index sets (an index-set
+    /// mismatch) or the arithmetic reports a failure.
     /// # Examples
     ///
     /// ```
@@ -3883,6 +3874,10 @@ impl TensorDynLen {
     ///
     /// Multiplies every element by `scalar`.
     ///
+    /// # Errors
+    /// Returns an error when the scalar coefficient is invalid for the tensor's
+    /// scalar type (an invalid scalar dtype) or the backend reports a
+    /// failure.
     /// # Examples
     ///
     /// ```
@@ -3981,6 +3976,9 @@ impl TensorDynLen {
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
     ///
+    /// # Errors
+    /// Returns an error when the tensors have different index sets (an index-set
+    /// mismatch) or the contraction reports a failure.
     /// # Examples
     ///
     /// ```
@@ -4039,8 +4037,8 @@ impl TensorDynLen {
     /// returns a clone of the original tensor.
     ///
     /// # Errors
-    /// Returns an error if the replacement index has a different dimension.
-    ///
+    /// Returns an error when `old_index` is not present (a missing-index failure)
+    /// or the new index has an incompatible dimension (a dimension mismatch).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -4101,9 +4099,9 @@ impl TensorDynLen {
     /// are kept unchanged.
     ///
     /// # Errors
-    /// Returns an error if `old_indices` and `new_indices` have different
-    /// lengths or if any replacement index has a different dimension.
-    ///
+    /// Returns an error when an `old_indices` entry is not present (a
+    /// missing-index failure) or `old_indices`/`new_indices` differ in length
+    /// (a length mismatch).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -4611,7 +4609,9 @@ impl TensorDynLen {
     /// [`TensorVectorSpace`](crate::TensorVectorSpace).
     ///
     /// # Errors
-    /// Returns an error if the tensors cannot be aligned or subtracted.
+    /// Returns an error when the tensors have different index sets (an index-set
+    /// mismatch) or the arithmetic reports a failure.
+    ///
     pub fn sub(&self, other: &Self) -> Result<Self> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
@@ -4619,7 +4619,9 @@ impl TensorDynLen {
     /// Negate all elements.
     ///
     /// # Errors
-    /// Returns an error if scalar multiplication fails for the tensor storage.
+    /// Returns an error when scalar multiplication fails for the tensor storage
+    /// (a dtype mismatch) or the backend reports a failure.
+    ///
     pub fn neg(&self) -> Result<Self> {
         self.scale(AnyScalar::new_real(-1.0))
     }
@@ -4814,7 +4816,9 @@ impl TensorDynLen {
     /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
     ///
     /// # Errors
-    /// Returns an error if the two indices have different dimensions.
+    /// Returns an error when the two indices have different dimensions (an
+    /// index dimension mismatch).
+    ///
     pub fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
         <Self as TensorConstructionLike>::diagonal(input_index, output_index)
             .map_err(anyhow::Error::new)
@@ -4833,7 +4837,9 @@ impl TensorDynLen {
     /// Create a scalar tensor equal to one.
     ///
     /// # Errors
-    /// Returns an error if dense scalar construction fails.
+    /// Returns an error when dense scalar construction fails for the element type
+    /// (an invalid scalar dtype or a construction failure).
+    ///
     pub fn scalar_one() -> Result<Self> {
         <Self as TensorConstructionLike>::scalar_one().map_err(anyhow::Error::new)
     }
@@ -4841,7 +4847,9 @@ impl TensorDynLen {
     /// Create a tensor filled with ones over the given indices.
     ///
     /// # Errors
-    /// Returns an error if the tensor size overflows or dense construction fails.
+    /// Returns an error when the tensor size overflows (an overflow failure) or
+    /// dense construction fails.
+    ///
     pub fn ones(indices: &[DynIndex]) -> Result<Self> {
         <Self as TensorConstructionLike>::ones(indices).map_err(anyhow::Error::new)
     }
@@ -4849,7 +4857,9 @@ impl TensorDynLen {
     /// Create a one-hot tensor with value one at the specified index positions.
     ///
     /// # Errors
-    /// Returns an error if any coordinate is outside its index dimension.
+    /// Returns an error when any coordinate is outside its index dimension (an
+    /// out-of-bounds failure).
+    ///
     pub fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
         <Self as TensorConstructionLike>::onehot(index_vals).map_err(anyhow::Error::new)
     }
@@ -4870,11 +4880,8 @@ impl TensorDynLen {
     ///   zero.
     ///
     /// # Errors
-    ///
-    /// Returns an error if `index` is absent, repeated, or if `position` is out
-    /// of range for the index dimension, or if the backend cannot execute the
-    /// differentiable tensor operations.
-    ///
+    /// Returns an error when the coordinate is outside the index dimension (an
+    /// out-of-bounds failure) or the mask construction fails.
     /// # Examples
     ///
     /// ```
@@ -5025,23 +5032,20 @@ impl std::fmt::Debug for TensorDynLen {
 }
 
 /// Create a diagonal tensor with dynamic rank from diagonal data.
-///
 /// # Arguments
 /// * `indices` - The indices for the tensor (all must have the same dimension)
 /// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
-///
 /// The returned tensor preserves compact diagonal payload metadata; use
 /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
 /// representation.
-///
+/// # Errors
+/// Returns an error when the index dimensions are unequal (a dimension
+/// mismatch) or the diagonal construction fails.
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, diag_tensor_dyn_len};
-///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
@@ -5063,14 +5067,11 @@ pub(crate) type UnfoldSplitInnerResult = (
 );
 
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
-///
 /// This function validates the split, permutes the tensor so that left indices
 /// come first, and returns a rank-2 native tenferro tensor along with metadata.
-///
 /// # Arguments
 /// * `t` - Input tensor
 /// * `left_inds` - Indices to place on the left (row) side of the matrix
-///
 /// # Returns
 /// A tuple `(matrix_tensor, left_len, m, n, left_indices, right_indices)` where:
 /// - `matrix_tensor` is a rank-2 `tenferro::Tensor` with shape `[m, n]`
@@ -5079,19 +5080,15 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// - `n` is the product of right index dimensions
 /// - `left_indices` is the vector of left indices (cloned)
 /// - `right_indices` is the vector of right indices (cloned)
-///
 /// # Errors
 /// Returns an error if:
 /// - The tensor rank is < 2
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - Native reshape fails
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, unfold_split};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// // 2x3 dense tensor with data [1..6]
@@ -5099,7 +5096,6 @@ pub(crate) type UnfoldSplitInnerResult = (
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
-///
 /// let (matrix, left_len, m, n, left_indices, right_indices) =
 ///     unfold_split(&t, &[i]).unwrap();
 /// assert_eq!(left_len, 1);
@@ -5109,6 +5105,10 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// assert_eq!(right_indices.len(), 1);
 /// ```
 #[allow(clippy::type_complexity)]
+/// # Errors
+/// Returns an error when the index dimensions do not support the requested
+/// split (an invalid index split, a shape mismatch).
+///
 pub fn unfold_split(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
@@ -5525,9 +5525,8 @@ impl TensorDynLen {
     /// * `data` - Tensor data in column-major order
     ///
     /// # Errors
-    /// Returns an error if indices are duplicated, or if data length does not
-    /// match the checked product of index dimensions.
-    ///
+    /// Returns an error when the data length does not match the index dimension
+    /// product (a dimension mismatch).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5552,6 +5551,9 @@ impl TensorDynLen {
     /// This is the preferred public API when the caller only knows the scalar
     /// type at runtime.
     ///
+    /// # Errors
+    /// Returns an error when the payload length does not match the index dimension
+    /// product (a dimension mismatch) or a scalar conversion fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5592,9 +5594,8 @@ impl TensorDynLen {
     /// never promoted into compact `f64`/`Complex64` storage.
     ///
     /// # Errors
-    /// Returns an error if indices are duplicated, if no indices are supplied,
-    /// if dimensions differ, or if the diagonal payload length is incorrect.
-    ///
+    /// Returns an error when the index dimensions are unequal or the payload
+    /// length does not match the diagonal dimension (a dimension mismatch).
     /// # Examples
     ///
     /// ```
@@ -5626,6 +5627,10 @@ impl TensorDynLen {
     /// This is the preferred public API when the caller only knows the scalar
     /// type at runtime.
     ///
+    /// # Errors
+    /// Returns an error when the index dimensions are unequal or the payload
+    /// length does not match (a dimension mismatch), or a scalar conversion
+    /// fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5654,6 +5659,9 @@ impl TensorDynLen {
     /// For indices `[i, j, k]`, the returned tensor satisfies
     /// `T[i, j, k] = value` when `i = j = k`, and zero otherwise.
     ///
+    /// # Errors
+    /// Returns an error when the index dimensions are unequal (a dimension
+    /// mismatch) or the construction fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5828,6 +5836,9 @@ impl TensorDynLen {
     /// The caller must specify how the old fused index should be decoded into
     /// the new indices via `order`.
     ///
+    /// # Errors
+    /// Returns an error when the fused dimension does not equal the product of
+    /// the new index dimensions (a dimension mismatch).
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
@@ -5911,6 +5922,9 @@ impl TensorDynLen {
 
     /// Create a scalar (0-dimensional) tensor from a supported element value.
     ///
+    /// # Errors
+    /// Returns an error when the element type is not supported (an
+    /// unsupported-dtype failure).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5925,6 +5939,9 @@ impl TensorDynLen {
 
     /// Create a tensor filled with zeros of a supported element type.
     ///
+    /// # Errors
+    /// Returns an error when the dimension product overflows (an overflow failure)
+    /// or the element type is unsupported.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5957,11 +5974,8 @@ impl TensorDynLen {
     /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
-    /// Returns an error if the tensor's scalar type does not match `T`, if a
-    /// deferred eager operation failed, if authoritative storage cannot be
-    /// materialized, or if the eager backend context cannot be initialized for
-    /// materialization. Extraction preserves all four supported dtypes.
-    ///
+    /// Returns an error when the tensor dtype does not match the requested element
+    /// type (a scalar-kind mismatch) or materialization fails.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5991,10 +6005,8 @@ impl TensorDynLen {
     /// The tensor's original indices and dense column-major flat data.
     ///
     /// # Errors
-    /// Returns an error if the tensor has tracked autodiff state, if the
-    /// requested scalar type does not match the tensor payload, or if dense
-    /// materialization fails.
-    ///
+    /// Returns an error when the tensor dtype does not match the requested element
+    /// type (a scalar-kind mismatch) or materialization fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, TensorDynLen};
@@ -6024,6 +6036,10 @@ impl TensorDynLen {
     ///
     /// Prefer the generic [`to_vec::<f64>()`](Self::to_vec) method.
     /// This wrapper is kept for C API compatibility.
+    /// # Errors
+    /// Returns an error when the tensor is not f64-compatible (a dtype mismatch)
+    /// or materialization fails.
+    ///
     pub fn as_slice_f64(&self) -> Result<Vec<f64>> {
         self.to_vec::<f64>()
     }
@@ -6032,6 +6048,10 @@ impl TensorDynLen {
     ///
     /// Prefer the generic [`to_vec::<Complex64>()`](Self::to_vec) method.
     /// This wrapper is kept for C API compatibility.
+    /// # Errors
+    /// Returns an error when the tensor is not c64-compatible (a dtype mismatch)
+    /// or materialization fails.
+    ///
     pub fn as_slice_c64(&self) -> Result<Vec<Complex64>> {
         self.to_vec::<Complex64>()
     }
