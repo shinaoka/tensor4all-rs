@@ -10,6 +10,7 @@
 //!
 //! This ensures all bonds are optimally truncated in both directions.
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashSet;
 use std::hash::Hash;
 
@@ -82,7 +83,7 @@ where
         mut self,
         canonical_region: impl IntoIterator<Item = V>,
         options: TruncationOptions,
-    ) -> Result<Self>
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
@@ -108,7 +109,7 @@ where
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
         options: TruncationOptions,
-    ) -> Result<()>
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
@@ -119,6 +120,7 @@ where
             options.truncation.max_rank,
             "truncate_mut",
         )
+        .map_err(TreeTNOperationError::from)
     }
 
     /// Internal implementation for truncation.
@@ -147,8 +149,8 @@ where
             return Err(anyhow::anyhow!(
                 "truncate currently requires a single-node center, got {} nodes",
                 center_nodes.len()
-            ))
-            .context(format!("{}: multi-node center not supported", context_name));
+            )
+            .context(format!("{context_name}: multi-node center not supported")));
         }
 
         let center_node = center_nodes

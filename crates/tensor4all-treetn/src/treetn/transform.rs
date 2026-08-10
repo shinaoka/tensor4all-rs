@@ -4,6 +4,7 @@
 //! - [`fuse_to`](TreeTN::fuse_to): Merge adjacent nodes to match a target structure
 //! - [`split_to`](TreeTN::split_to): Split nodes to match a target structure
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -147,7 +148,7 @@ where
     pub fn fuse_to<TargetV>(
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
-    ) -> Result<TreeTN<T, TargetV>>
+    ) -> std::result::Result<TreeTN<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
@@ -178,11 +179,13 @@ where
             }
 
             if current_nodes_for_target.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Target node {:?} has site indices not found in current TreeTN",
-                    target_node_name
-                ))
-                .context("fuse_to: incompatible target structure");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Target node {:?} has site indices not found in current TreeTN",
+                        target_node_name
+                    )
+                    .context("fuse_to: incompatible target structure"),
+                ));
             }
 
             target_to_current.insert(target_node_name.clone(), current_nodes_for_target);
@@ -193,13 +196,15 @@ where
         for (target_name, current_nodes) in &target_to_current {
             for current_node in current_nodes {
                 if let Some(existing_target) = current_to_target.get(current_node) {
-                    return Err(anyhow::anyhow!(
-                        "Current node {:?} maps to multiple target nodes: {:?} and {:?}",
-                        current_node,
-                        existing_target,
-                        target_name
-                    ))
-                    .context("fuse_to: ambiguous mapping");
+                    return Err(TreeTNOperationError::from(
+                        anyhow::anyhow!(
+                            "Current node {:?} maps to multiple target nodes: {:?} and {:?}",
+                            current_node,
+                            existing_target,
+                            target_name
+                        )
+                        .context("fuse_to: ambiguous mapping"),
+                    ));
                 }
                 current_to_target.insert(current_node.clone(), target_name.clone());
             }
@@ -214,11 +219,13 @@ where
                     .site_space(&current_name)
                     .is_some_and(|s| !s.is_empty())
             {
-                return Err(anyhow::anyhow!(
-                    "Current node {:?} has site indices but no corresponding target node",
-                    current_name
-                ))
-                .context("fuse_to: missing target for current node");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Current node {:?} has site indices but no corresponding target node",
+                        current_name
+                    )
+                    .context("fuse_to: missing target for current node"),
+                ));
             }
         }
 
@@ -476,7 +483,7 @@ where
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
         options: &SplitOptions,
-    ) -> Result<TreeTN<T, TargetV>>
+    ) -> std::result::Result<TreeTN<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
@@ -526,7 +533,7 @@ where
                 return Err(anyhow::anyhow!(
                     "split_to: target node {:?} spans multiple current nodes; use restructure_to for mixed regrouping",
                     target_node_name
-                ));
+                ).into());
             }
             let current_name = current_names.into_iter().next().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -554,12 +561,14 @@ where
                     if let Some(target_name) = site_to_target.get(site_idx) {
                         targets_for_node.insert(target_name.clone());
                     } else {
-                        return Err(anyhow::anyhow!(
-                            "Site index {:?} in current node {:?} has no corresponding target node",
-                            site_idx,
-                            current_node_name
-                        ))
-                        .context("split_to: incompatible target structure");
+                        return Err(TreeTNOperationError::from(
+                            anyhow::anyhow!(
+                                "Site index {:?} in current node {:?} has no corresponding target node",
+                                site_idx,
+                                current_node_name
+                            )
+                            .context("split_to: incompatible target structure"),
+                        ));
                     }
                 }
                 current_to_targets.insert(current_node_name.clone(), targets_for_node);
@@ -637,7 +646,8 @@ where
                     .edges()
                     .map(|(a, b)| (a.clone(), b.clone()))
                     .collect::<Vec<_>>(),
-            ));
+            )
+            .into());
         }
 
         // Step 6: Phase 2 - Optional truncation sweep
@@ -654,7 +664,8 @@ where
 
             return result
                 .truncate([center], truncation_options)
-                .context("split_to: truncation sweep failed");
+                .context("split_to: truncation sweep failed")
+                .map_err(TreeTNOperationError::from);
         }
 
         Ok(result)

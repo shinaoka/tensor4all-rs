@@ -325,7 +325,7 @@ where
         .canonicalize([center.clone()], CanonicalizationOptions::forced())
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to canonicalize target state",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
     let mut reference_buffers = Vec::with_capacity(references.len());
@@ -335,7 +335,7 @@ where
             .canonicalize([center.clone()], CanonicalizationOptions::forced())
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to canonicalize reference state",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         reference
             .sim_linkinds_mut()
@@ -497,7 +497,7 @@ where
             .canonicalize([center.clone()], CanonicalizationOptions::forced())
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to canonicalize generated reference",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         current = next.clone();
         references.push(next);

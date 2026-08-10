@@ -654,7 +654,7 @@ where
         .canonicalize([center.clone()], CanonicalizationOptions::default())
         .map_err(|source| DmrgError::Algorithm {
             context: "DMRG failed to canonicalize initial state",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
     let plan =

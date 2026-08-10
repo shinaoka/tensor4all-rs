@@ -23,6 +23,7 @@ use petgraph::stable_graph::NodeIndex;
 use tensor4all_core::{IndexLike, TensorLike};
 
 use super::TreeTN;
+use crate::error::TreeTNOperationError;
 use crate::{RestructureOptions, SiteIndexNetwork};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1199,7 +1200,10 @@ where
             let split = tree
                 .split_to(split_target.as_ref(), &options.split)
                 .context("restructure_to: split phase")?;
-            split.fuse_to(target).context("restructure_to: fuse phase")
+            split
+                .fuse_to(target)
+                .context("restructure_to: fuse phase")
+                .map_err(TreeTNOperationError::from)
         }
     }?;
 

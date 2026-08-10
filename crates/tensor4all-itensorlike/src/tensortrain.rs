@@ -1622,7 +1622,10 @@ impl TensorTrain {
         }
 
         self.treetn.contract_to_tensor().map_err(|source| {
-            TensorTrainError::operation_source("Failed to contract to dense", source)
+            TensorTrainError::operation_source(
+                "Failed to contract to dense",
+                anyhow::Error::new(source),
+            )
         })
     }
 

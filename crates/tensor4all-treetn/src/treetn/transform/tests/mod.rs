@@ -370,7 +370,7 @@ fn test_split_to_rejects_missing_explicit_target_boundary_edge() {
     let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
 
     assert!(error_chain_contains(
-        &error,
+        &anyhow::Error::new(error),
         "expected exactly one target edge crossing current edge"
     ));
 }
@@ -390,7 +390,7 @@ fn test_split_to_rejects_ambiguous_explicit_target_boundary_edges() {
     let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
 
     assert!(error_chain_contains(
-        &error,
+        &anyhow::Error::new(error),
         "expected exactly one target edge crossing current edge"
     ));
 }
@@ -418,7 +418,10 @@ fn test_fuse_to_rejects_ambiguous_current_node_mapping() {
 
     let error = fused.fuse_to(&incompatible_target).unwrap_err();
 
-    assert!(error_chain_contains(&error, "ambiguous mapping"));
+    assert!(error_chain_contains(
+        &anyhow::Error::new(error),
+        "ambiguous mapping"
+    ));
 }
 
 #[test]
@@ -438,8 +441,9 @@ fn test_fuse_to_rejects_disconnected_current_group() {
 
     let error = tn.fuse_to(&target).unwrap_err();
 
-    assert!(error_chain_contains(&error, "failed to contract nodes"));
-    assert!(error_chain_contains(&error, "connected subtree"));
+    let err = anyhow::Error::new(error);
+    assert!(error_chain_contains(&err, "failed to contract nodes"));
+    assert!(error_chain_contains(&err, "connected subtree"));
 }
 
 #[test]
@@ -487,7 +491,8 @@ fn test_split_to_rejects_target_node_spanning_current_nodes() {
 
     let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
 
-    assert!(error_chain_contains(&error, "spans multiple current nodes"));
+    let err = anyhow::Error::new(error);
+    assert!(error_chain_contains(&err, "spans multiple current nodes"));
 }
 
 #[test]
@@ -501,14 +506,12 @@ fn test_split_to_rejects_current_site_missing_from_target() {
 
     let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
 
+    let err = anyhow::Error::new(error);
     assert!(error_chain_contains(
-        &error,
+        &err,
         "has no corresponding target node"
     ));
-    assert!(error_chain_contains(
-        &error,
-        "incompatible target structure"
-    ));
+    assert!(error_chain_contains(&err, "incompatible target structure"));
 }
 
 #[test]

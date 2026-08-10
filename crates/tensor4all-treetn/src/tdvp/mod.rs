@@ -977,7 +977,7 @@ where
         )
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to split evolved two-site tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         record_tdvp_profile(factorize_started, |profile, elapsed| {
             profile.factorize += elapsed;
@@ -1144,7 +1144,7 @@ where
         .canonicalize([center.clone()], CanonicalizationOptions::default())
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to canonicalize initial state",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     record_tdvp_profile(canonicalize_started, |profile, elapsed| {
         profile.initial_canonicalize += elapsed;
