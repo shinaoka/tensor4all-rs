@@ -13,6 +13,7 @@ use tensor4all_core::krylov::{hermitian_lanczos_lowest_eigenpair, HermitianLancz
 use tensor4all_core::{AnyScalar, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike};
 use thiserror::Error;
 
+use crate::error::TreeTNOperationError;
 use crate::linsolve::common::ProjectedOperator;
 use crate::linsolve::square::local_linop::LocalLinOp;
 use crate::local_update_support::{
@@ -487,12 +488,14 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_before: &TreeTN<T, V>,
-    ) -> anyhow::Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         if step.nodes.len() != 2 {
-            return Err(anyhow::Error::new(DmrgError::UnsupportedNsite {
-                requested: step.nodes.len(),
-                supported: 2,
-            }));
+            return Err(TreeTNOperationError::from(anyhow::Error::new(
+                DmrgError::UnsupportedNsite {
+                    requested: step.nodes.len(),
+                    supported: 2,
+                },
+            )));
         }
         initialize_reference_state_if_empty(&mut self.reference_state, full_treetn_before)?;
         Ok(())
@@ -503,7 +506,7 @@ where
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> anyhow::Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         let init_local = contract_region(&subtree, &step.nodes)?;
         let solved_local = self
             .solve_local(&step.nodes, &init_local, full_treetn)
@@ -543,7 +546,7 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<T, V>,
-    ) -> anyhow::Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         sync_reference_state_region(&mut self.reference_state, None, step, full_treetn_after)?;
         let topology = full_treetn_after.site_index_network();
         let mut projected_operator = self

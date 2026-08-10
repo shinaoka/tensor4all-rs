@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 
 use tensor4all_core::{IndexLike, TensorLike};
 
@@ -291,7 +291,7 @@ where
         &mut self,
         _step: &LocalUpdateStep<V>,
         _full_treetn_before: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         Ok(())
     }
 
@@ -319,7 +319,7 @@ where
         subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>>;
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>;
 
     /// Optional hook called after an update step has been applied to the full TreeTN.
     ///
@@ -337,7 +337,7 @@ where
         &mut self,
         _step: &LocalUpdateStep<V>,
         _full_treetn_after: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         Ok(())
     }
 }
@@ -525,13 +525,14 @@ where
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         _full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         // TruncateUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
                 "TruncateUpdater requires exactly 2 nodes, got {}",
                 step.nodes.len()
-            ));
+            )
+            .into());
         }
 
         let node_a = &step.nodes[0];

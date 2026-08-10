@@ -486,8 +486,7 @@ where
                     return Err(anyhow::anyhow!(
                         "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
                         from, to, child, from
-                    )
-                    .into());
+                    ).into());
                 }
             }
         }
@@ -687,13 +686,14 @@ where
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         // FitUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
                 "FitUpdater requires exactly 2 nodes, got {}",
                 step.nodes.len()
-            ));
+            )
+            .into());
         }
 
         let node_u = &step.nodes[0];
@@ -709,23 +709,18 @@ where
         let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
 
         if full_treetn.node_index(node_u).is_none() {
-            return Err(anyhow::anyhow!(
-                "Node {:?} not found in full TreeTN",
-                node_u
-            ));
+            return Err(anyhow::anyhow!("Node {:?} not found in full TreeTN", node_u).into());
         }
         if full_treetn.node_index(node_v).is_none() {
-            return Err(anyhow::anyhow!(
-                "Node {:?} not found in full TreeTN",
-                node_v
-            ));
+            return Err(anyhow::anyhow!("Node {:?} not found in full TreeTN", node_v).into());
         }
         if full_treetn.edge_between(node_u, node_v).is_none() {
             return Err(anyhow::anyhow!(
                 "FitUpdater update step nodes {:?} and {:?} are not adjacent in full TreeTN",
                 node_u,
                 node_v
-            ));
+            )
+            .into());
         }
 
         // Collect environments from neighbors (excluding the edge between u and v)
@@ -947,7 +942,7 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         // Invalidate all caches affected by the updated region
         let started = fit_profile_enabled().then(Instant::now);
         self.envs.try_invalidate(&step.nodes, full_treetn_after)?;

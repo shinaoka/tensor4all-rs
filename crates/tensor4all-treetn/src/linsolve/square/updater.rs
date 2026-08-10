@@ -527,7 +527,7 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_before: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         // Initialize reference_state lazily on first call
         self.ensure_reference_state_initialized(full_treetn_before)?;
 
@@ -551,7 +551,7 @@ where
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         // Contract tensors in the region into a single local tensor
         let init_local = self.contract_region(&subtree, &step.nodes)?;
         // Solve local linear problem using GMRES
@@ -599,7 +599,7 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = full_treetn_after.site_index_network();
 
