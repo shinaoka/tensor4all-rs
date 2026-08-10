@@ -30,6 +30,11 @@ impl<T: TTScalar> MPO<T> {
     ///
     /// Each tensor should have shape (left_bond, site_dim_1, site_dim_2, right_bond)
     /// where the right_bond of tensor i equals the left_bond of tensor i+1.
+    /// # Errors
+    ///
+    /// Returns an error when the MPO dimensions are invalid (a shape mismatch) or
+    /// /// the construction fails.
+    ///
     pub fn new(tensors: Vec<Tensor4<T>>) -> Result<Self> {
         // Validate dimensions
         for i in 0..tensors.len().saturating_sub(1) {
@@ -135,6 +140,11 @@ impl<T: TTScalar> MPO<T> {
     /// Create an identity MPO (only when site_dim_1 == site_dim_2 at each site)
     ///
     /// The identity operator: O[i1, j1, ...] = delta(i1, j1) * delta(i2, j2) * ...
+    /// # Errors
+    ///
+    /// Returns an error when the identity MPO construction fails (a shape
+    /// /// mismatch or backend failure).
+    ///
     pub fn identity(site_dims: &[usize]) -> Result<Self> {
         if site_dims.is_empty() {
             return Ok(Self {
@@ -230,6 +240,11 @@ impl<T: TTScalar> MPO<T> {
     /// indices should have length 2*L where L is the number of sites
     /// alternating between site_dim_1 and site_dim_2 indices:
     /// [i1, j1, i2, j2, ..., iL, jL]
+    /// # Errors
+    ///
+    /// Returns an error when the MPO evaluation fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
     where
         T: EinsumScalar,
@@ -319,6 +334,11 @@ impl<T: TTScalar> MPO<T> {
     /// assert!((sum - 12.0).abs() < 1e-10);
     /// ```
     #[allow(clippy::needless_range_loop)]
+    /// # Errors
+    ///
+    /// Returns an error when the MPO addition fails (a shape or index mismatch,
+    /// /// or a backend failure).
+    ///
     pub fn sum(&self) -> Result<T>
     where
         T: EinsumScalar,

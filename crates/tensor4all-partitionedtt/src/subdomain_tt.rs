@@ -262,7 +262,10 @@ impl SubDomainTT {
     /// Compute the Frobenius norm.
     ///
     /// # Errors
-    /// Propagates tensor-train storage or contraction failures.
+    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// /// backend failure).
+    ///
     pub fn norm(&self) -> Result<f64> {
         self.data
             .norm()
@@ -272,7 +275,10 @@ impl SubDomainTT {
     /// Compute the squared Frobenius norm.
     ///
     /// # Errors
-    /// Propagates tensor-train storage or contraction failures.
+    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// /// backend failure).
+    ///
     pub fn norm_squared(&self) -> Result<f64> {
         self.data
             .norm_squared()
@@ -280,6 +286,10 @@ impl SubDomainTT {
     }
 
     /// Truncate the tensor train.
+    /// # Errors
+    ///
+    /// Returns an error when the truncation fails (a backend or SVD failure).
+    ///
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         self.data
             .truncate(options)
@@ -382,6 +392,11 @@ impl SubDomainTT {
     }
 
     /// Inner product with another SubDomainTT.
+    /// # Errors
+    ///
+    /// Returns an error when the subdomains are incompatible (a shape mismatch)
+    /// /// or the inner product fails (a backend failure).
+    ///
     pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
         self.data
             .inner(other.data())

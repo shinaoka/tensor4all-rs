@@ -411,6 +411,11 @@ where
 {
     /// Create a new cached function with automatic key selection (up to 1024 bits).
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the cache dimensions are invalid (a shape mismatch)
+    /// /// or the construction fails.
+    ///
     /// # Examples
     ///
     /// ```
@@ -438,6 +443,11 @@ where
     /// The batch function is used for cache misses during [`eval_batch`](Self::eval_batch)
     /// calls, enabling amortized cost when evaluating many indices at once
     /// (e.g., batch FFI calls or vectorized computations).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the batch configuration is invalid (an
+    /// /// invalid-configuration failure).
     ///
     /// # Examples
     ///
@@ -474,6 +484,11 @@ where
     }
 
     /// Create with an explicit key type for index spaces larger than 1024 bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the key type configuration is invalid (an
+    /// /// invalid-configuration failure).
     ///
     /// # Example
     ///
@@ -532,6 +547,11 @@ where
     /// Combines [`with_key_type`](Self::with_key_type) and
     /// [`with_batch`](Self::with_batch) for index spaces larger than 1024
     /// bits that also benefit from batch evaluation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configuration is invalid (an
+    /// /// invalid-configuration failure).
     ///
     /// # Examples
     ///

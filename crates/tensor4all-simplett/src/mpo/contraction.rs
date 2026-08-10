@@ -40,7 +40,6 @@ impl Default for ContractionOptions {
 }
 
 /// Contraction of two MPOs with caching
-///
 /// This struct efficiently computes the product of two MPOs by
 /// caching left and right environments for reuse.
 pub struct Contraction<T: SVDScalar>
@@ -66,6 +65,11 @@ where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
 {
     /// Create a new Contraction from two MPOs
+    /// # Errors
+    ///
+    /// Returns an error when the two MPOs differ in length (a shape mismatch)
+    /// /// or the contraction setup fails.
+    ///
     pub fn new(mpo_a: MPO<T>, mpo_b: MPO<T>) -> Result<Self> {
         if mpo_a.len() != mpo_b.len() {
             return Err(MPOError::LengthMismatch {
@@ -106,6 +110,11 @@ where
     }
 
     /// Create a new Contraction with a transformation function
+    /// # Errors
+    ///
+    /// Returns an error when the two MPOs differ in length (a shape mismatch)
+    /// /// or the contraction setup fails.
+    ///
     pub fn with_transform<F>(mpo_a: MPO<T>, mpo_b: MPO<T>, f: F) -> Result<Self>
     where
         F: Fn(T) -> T + Send + Sync + 'static,
@@ -148,6 +157,11 @@ where
     /// indices should be [(i1, j1), (i2, j2), ...] where:
     /// - i_k is the index for s1 of MPO A at site k
     /// - j_k is the index for s2 of MPO B at site k
+    /// # Errors
+    ///
+    /// Returns an error when the contraction evaluation fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn evaluate(&mut self, indices: &[(usize, usize)]) -> Result<T> {
         if indices.len() != self.len() {
             return Err(MPOError::InvalidOperation {
@@ -216,6 +230,11 @@ where
     /// Evaluate the left environment up to site n (exclusive)
     ///
     /// Returns L\[n\] = product of sites 0..n
+    /// # Errors
+    ///
+    /// Returns an error when the left evaluation fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn evaluate_left(&mut self, n: usize, indices: &[(usize, usize)]) -> Result<Matrix2<T>> {
         if n > self.len() {
             return Err(MPOError::InvalidOperation {
@@ -266,6 +285,11 @@ where
     /// Evaluate the right environment from site n (exclusive) to the end
     ///
     /// Returns R\[n\] = product of sites n..L
+    /// # Errors
+    ///
+    /// Returns an error when the right evaluation fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn evaluate_right(&mut self, n: usize, indices: &[(usize, usize)]) -> Result<Matrix2<T>> {
         let len = self.len();
         if n > len {

@@ -59,24 +59,18 @@ fn zero_tensor3(
 }
 
 /// Options for Fourier transform construction.
-///
 /// Controls the sign convention, compression parameters, and normalization
 /// of the quantics Fourier transform MPO.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::FourierOptions;
-///
 /// // Forward transform (default): sign = -1
 /// let fwd = FourierOptions::forward();
 /// assert_eq!(fwd.sign, -1.0);
 /// assert!(fwd.normalize);
-///
 /// // Inverse transform: sign = +1
 /// let inv = FourierOptions::inverse();
 /// assert_eq!(inv.sign, 1.0);
-///
 /// // Custom options
 /// let opts = FourierOptions {
 ///     maxbonddim: 20,
@@ -113,6 +107,11 @@ impl Default for FourierOptions {
 
 impl FourierOptions {
     /// Create options for forward Fourier transform.
+    /// # Errors
+    ///
+    /// Returns an error when the forward transform fails (a shape mismatch or
+    /// /// backend failure).
+    ///
     pub fn forward() -> Self {
         Self::default()
     }
@@ -127,21 +126,15 @@ impl FourierOptions {
 }
 
 /// Convenience wrapper for forward/backward Fourier transform.
-///
 /// Caches the forward MPO so that repeated calls to [`FTCore::forward()`]
 /// and [`FTCore::backward()`] avoid redundant MPO construction.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{FTCore, FourierOptions};
-///
 /// let ft = FTCore::new(4, FourierOptions::default()).unwrap();
 /// assert_eq!(ft.r(), 4);
-///
 /// let fwd_op = ft.forward().unwrap();
 /// assert_eq!(fwd_op.mpo().node_count(), 4);
-///
 /// let bwd_op = ft.backward().unwrap();
 /// assert_eq!(bwd_op.mpo().node_count(), 4);
 /// ```
@@ -156,9 +149,10 @@ impl FTCore {
     /// Create a new FTCore for r bits.
     ///
     /// # Errors
-    /// Returns an error when `r < 2`, `options.k == 0`, a Fourier tensor
-    /// dimension/product or backing allocation exceeds checked bounds, or
-    /// Fourier MPO construction fails.
+    ///
+    /// Returns an error when the variable count or dimension overflows (an
+    /// /// overflow or invalid-configuration failure).
+    ///
     pub fn new(r: usize, options: FourierOptions) -> Result<Self> {
         if r < 2 {
             anyhow::bail!("Number of sites must be at least 2, got {r}");
@@ -179,7 +173,8 @@ impl FTCore {
     ///
     /// # Errors
     /// Returns an error when converting the cached Fourier MPO to a linear
-    /// operator fails or a required site-dimension allocation fails.
+    /// operator fails (a shape mismatch or backend failure) or a required
+    /// site-dimension allocation fails (an overflow failure).
     pub fn forward(&self) -> Result<QuanticsOperator> {
         let mut site_dims =
             try_vec_with_capacity::<usize>("Fourier forward site dimensions", self.r)?;
@@ -190,8 +185,10 @@ impl FTCore {
     /// Get the backward (inverse) Fourier transform operator.
     ///
     /// # Errors
-    /// Returns an error when inverse Fourier MPO construction, site-dimension
-    /// allocation, or conversion to a linear operator fails.
+    ///
+    /// Returns an error when the inverse transform fails (a shape mismatch or
+    /// /// backend failure).
+    ///
     pub fn backward(&self) -> Result<QuanticsOperator> {
         let inverse_options = FourierOptions {
             sign: 1.0,
@@ -212,38 +209,29 @@ impl FTCore {
 }
 
 /// Create a Quantics Fourier Transform operator.
-///
 /// This implements the Chen & Lindsey construction of the DFT as a matrix product operator.
 /// The resulting operator transforms a quantics tensor train representing a function
 /// to its Fourier transform in quantics tensor train form.
-///
 /// # Index ordering
-///
 /// Before the Fourier transform, the leftmost index corresponds to the most significant
 /// bit (largest length scale). After transformation, the leftmost index corresponds to
 /// the least significant bit (smallest length scale) - this allows for a small bond
 /// dimension construction.
-///
 /// # Arguments
 /// * `r` - Number of bits
 /// * `options` - Fourier transform options
-///
 /// # Returns
 /// LinearOperator representing the QFT
-///
 /// # Errors
-/// Returns an error when `r < 2`, `options.k == 0`, a Fourier tensor
-/// dimension/product or backing allocation exceeds checked bounds, or when
-/// Fourier MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-///
 /// // Create a forward QFT operator for 4-bit quantics representation
 /// let op = quantics_fourier_operator(4, FourierOptions::forward()).unwrap();
-///
 /// // The operator has one MPO tensor per bit
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
@@ -367,7 +355,6 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
 }
 
 /// Get Chebyshev grid points and barycentric weights.
-///
 /// Returns (grid, bary_weights) where:
 /// - grid[j] = 0.5 * (1 - cos(π*j/K)) for j = 0, ..., K
 /// - bary_weights are the barycentric interpolation weights
@@ -413,10 +400,8 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 }
 
 /// Build the DFT core tensor A[alpha, tau, sigma, beta].
-///
 /// A[alpha, tau, sigma, beta] = P_alpha(x) * exp(2πi * sign * x * tau)
 /// where x = (sigma + grid[beta]) / 2
-///
 /// Returns tensor of shape (k+1, 2, 2, k+1)
 fn build_dft_core_tensor(
     grid: &[f64],
