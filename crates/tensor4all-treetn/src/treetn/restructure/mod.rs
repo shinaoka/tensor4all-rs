@@ -1320,7 +1320,7 @@ where
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
         options: &RestructureOptions,
-    ) -> Result<TreeTN<T, TargetV>>
+    ) -> std::result::Result<TreeTN<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
         <T::Index as IndexLike>::Id:
@@ -1328,7 +1328,9 @@ where
     {
         let plan = build_plan::<T, V, TargetV>(self.site_index_network(), target, &self.graph)
             .context("restructure_to: build plan")?;
-        execute_plan(self, plan, target, options).context("restructure_to: execute plan")
+        execute_plan(self, plan, target, options)
+            .context("restructure_to: execute plan")
+            .map_err(TreeTNOperationError::from)
     }
 }
 

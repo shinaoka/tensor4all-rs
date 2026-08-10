@@ -77,6 +77,7 @@ use tensor4all_core::{
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
 use super::Operator;
+use crate::error::TreeTNOperationError;
 use crate::error::{
     format_anyhow_error, LinearOperatorIndexApplyError, LinearOperatorIndexBindingError,
     LinearOperatorTaggedApplyError,
@@ -306,7 +307,7 @@ pub fn apply_linear_operator<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
     options: ApplyOptions,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
@@ -332,7 +333,8 @@ where
             "Operator nodes {:?} are not a subset of state nodes {:?}",
             op_nodes,
             state_nodes
-        ));
+        )
+        .into());
     };
 
     // 2. Transform state's site indices to operator's input indices
@@ -519,7 +521,7 @@ where
     let rebound = bind_linear_operator_indices(operator, input_pairs, output_pairs)?;
     apply_linear_operator(&rebound, state, options).map_err(|error| {
         LinearOperatorIndexApplyError::ApplyFailed {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })
 }

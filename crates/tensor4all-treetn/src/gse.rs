@@ -473,7 +473,7 @@ where
             apply_linear_operator(operator, &current, apply_options).map_err(|source| {
                 GseError::Algorithm {
                     context: "GSE failed to apply operator while building references",
-                    source,
+                    source: anyhow::Error::new(source),
                 }
             })?;
         if !next.same_topology(init) {

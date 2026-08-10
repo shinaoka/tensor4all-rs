@@ -3,6 +3,7 @@
 //! This module provides functions to compose multiple operators that act on
 //! non-overlapping regions into a single operator on the full target space.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -162,7 +163,7 @@ pub fn compose_exclusive_linear_operators<T, V>(
     target: &SiteIndexNetwork<V, T::Index>,
     operators: &[&LinearOperator<T, V>],
     gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
-) -> Result<LinearOperator<T, V>>
+) -> std::result::Result<LinearOperator<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq + Debug,
@@ -170,6 +171,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     compose_exclusive_linear_operators_inner(target, operators, gap_site_indices, true)
+        .map_err(TreeTNOperationError::from)
 }
 
 #[allow(clippy::type_complexity)]

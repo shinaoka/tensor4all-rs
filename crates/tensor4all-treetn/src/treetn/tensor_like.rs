@@ -24,12 +24,11 @@
 
 use std::hash::Hash;
 
-use anyhow::Result;
 use tensor4all_core::{
     DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorIndex, TensorLike,
 };
 
-use crate::error::NumberedTagSelectionError;
+use crate::error::{NumberedTagSelectionError, TreeTNOperationError};
 
 use super::TreeTN;
 
@@ -352,7 +351,7 @@ where
         old_index: &DynIndex,
         new_indices: &[DynIndex],
         order: LinearizationOrder,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         let node_name = self
             .site_index_network
             .find_node_by_index(old_index)

@@ -5,7 +5,7 @@
 //!
 //! This module provides convenience wrappers around `TensorConstructionLike::delta()`.
 
-use anyhow::Result;
+use crate::error::TreeTNOperationError;
 
 use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 
@@ -41,9 +41,9 @@ use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 pub fn build_identity_operator_tensor(
     site_indices: &[DynIndex],
     output_site_indices: &[DynIndex],
-) -> Result<TensorDynLen> {
+) -> std::result::Result<TensorDynLen, TreeTNOperationError> {
     <TensorDynLen as TensorConstructionLike>::delta(site_indices, output_site_indices)
-        .map_err(anyhow::Error::new)
+        .map_err(TreeTNOperationError::from)
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
 //! contracted and which should be linked through explicit diagonal/copy
 //! structure before calling the existing TreeTN contraction pipeline.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -871,7 +872,7 @@ pub fn partial_contract<V>(
     spec: &PartialContractionSpec<DynIndex>,
     center: &V,
     options: ContractionOptions,
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -907,7 +908,7 @@ where
     }
 
     if let Some(output_order) = &spec.output_order {
-        apply_output_order(result, output_order)
+        apply_output_order(result, output_order).map_err(TreeTNOperationError::from)
     } else {
         Ok(result)
     }
@@ -1018,22 +1019,25 @@ pub fn partial_contract_to_site_network<V, TargetV>(
     target: &SiteIndexNetwork<TargetV, DynIndex>,
     options: ContractionOptions,
     restructure_options: &RestructureOptions,
-) -> Result<TreeTN<TensorDynLen, TargetV>>
+) -> std::result::Result<TreeTN<TensorDynLen, TargetV>, TreeTNOperationError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     TargetV: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
     if spec.output_order.is_some() {
-        bail!(
+        return Err(TreeTNOperationError::from(anyhow::anyhow!(
             "partial_contract_to_site_network: spec.output_order must be None because the target site network defines the output layout"
-        );
+        )));
     }
 
     let result = partial_contract(a, b, spec, center, options)?;
-    result.restructure_to(target, restructure_options).context(
-        "partial_contract_to_site_network: failed to restructure result to target site network",
-    )
+    result
+        .restructure_to(target, restructure_options)
+        .context(
+            "partial_contract_to_site_network: failed to restructure result to target site network",
+        )
+        .map_err(TreeTNOperationError::from)
 }
 
 /// Multiply two TreeTNs elementwise along selected external index pairs.
@@ -1096,7 +1100,7 @@ where
     };
     partial_contract(left, right, &spec, center, options).map_err(|error| {
         SelectedIndexContractionError::PartialContractFailed {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })
 }
@@ -1171,7 +1175,7 @@ where
     };
     partial_contract(state, weights, &spec, center, options).map_err(|error| {
         SelectedIndexContractionError::PartialContractFailed {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })
 }

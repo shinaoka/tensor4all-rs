@@ -3,6 +3,7 @@
 //! Implements swapping site indices between adjacent nodes along the tree
 //! so that the network reaches a target assignment (index -> node name).
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
@@ -249,12 +250,11 @@ where
         current_assignment: &HashMap<K, V>,
         target_assignment: &HashMap<K, V>,
         root: &V,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         if !topology.has_node(root) {
-            return Err(anyhow::anyhow!(
-                "SwapSchedule::build: root {:?} not in topology",
-                root
-            ));
+            return Err(
+                anyhow::anyhow!("SwapSchedule::build: root {:?} not in topology", root).into(),
+            );
         }
 
         for (index, current_node) in current_assignment {
@@ -263,7 +263,8 @@ where
                     "SwapSchedule::build: current node {:?} for index {:?} is not in the topology",
                     current_node,
                     index
-                ));
+                )
+                .into());
             }
         }
 
@@ -272,14 +273,15 @@ where
                 return Err(anyhow::anyhow!(
                     "SwapSchedule::build: target_assignment contains index {:?} which is not in the network",
                     index
-                ));
+                ).into());
             }
             if !topology.has_node(target_node) {
                 return Err(anyhow::anyhow!(
                     "SwapSchedule::build: target node {:?} for index {:?} is not in the topology",
                     target_node,
                     index
-                ));
+                )
+                .into());
             }
         }
 
@@ -376,7 +378,8 @@ where
             return Err(anyhow::anyhow!(
                 "SwapSchedule::build: did not converge within {} passes",
                 max_passes
-            ));
+            )
+            .into());
         }
 
         Ok(Self {
