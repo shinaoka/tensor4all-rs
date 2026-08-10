@@ -4060,14 +4060,18 @@ impl TensorDynLen {
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, j.id);
     /// ```
-    pub fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
+    pub fn replaceind(
+        &self,
+        old_index: &DynIndex,
+        new_index: &DynIndex,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
-            return Err(anyhow::anyhow!(
-                "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
-                old_index.dim(),
-                new_index.dim()
-            ));
+            return Err(TensorDynLenError::ShapeMismatch {
+                operation: "replaceind",
+                expected: format!("dimension {}", old_index.dim()),
+                actual: format!("dimension {}", new_index.dim()),
+            });
         }
 
         let new_indices: Vec<_> = self
@@ -4126,20 +4130,27 @@ impl TensorDynLen {
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
-        anyhow::ensure!(
-            old_indices.len() == new_indices.len(),
-            "old_indices and new_indices must have the same length"
-        );
+    pub fn replaceinds(
+        &self,
+        old_indices: &[DynIndex],
+        new_indices: &[DynIndex],
+    ) -> std::result::Result<Self, TensorDynLenError> {
+        if old_indices.len() != new_indices.len() {
+            return Err(TensorDynLenError::ShapeMismatch {
+                operation: "replaceinds",
+                expected: format!("{} indices", old_indices.len()),
+                actual: format!("{} indices", new_indices.len()),
+            });
+        }
 
         // Validate dimension matches for all replacements
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             if old.dim() != new.dim() {
-                return Err(anyhow::anyhow!(
-                    "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
-                    old.dim(),
-                    new.dim()
-                ));
+                return Err(TensorDynLenError::ShapeMismatch {
+                    operation: "replaceinds",
+                    expected: format!("dimension {}", old.dim()),
+                    actual: format!("dimension {}", new.dim()),
+                });
             }
         }
 
@@ -5227,7 +5238,7 @@ impl TensorIndex for TensorDynLen {
         new_index: &DynIndex,
     ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method.
-        TensorDynLen::replaceind(self, old_index, new_index).map_err(Self::Error::from)
+        TensorDynLen::replaceind(self, old_index, new_index)
     }
 
     fn replaceinds(
@@ -5236,7 +5247,7 @@ impl TensorIndex for TensorDynLen {
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method.
-        TensorDynLen::replaceinds(self, old_indices, new_indices).map_err(Self::Error::from)
+        TensorDynLen::replaceinds(self, old_indices, new_indices)
     }
 }
 

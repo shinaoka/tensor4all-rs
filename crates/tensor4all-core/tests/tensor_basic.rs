@@ -594,7 +594,8 @@ fn test_replaceinds_length_mismatch() {
     let err = tensor
         .replaceinds(std::slice::from_ref(&i), &[new_i, new_j])
         .unwrap_err();
-    assert!(err.to_string().contains("same length"));
+    assert!(err.to_string().contains("replaceinds"));
+    assert!(err.to_string().contains("shape mismatch"));
 }
 
 #[test]
@@ -608,7 +609,8 @@ fn test_replaceind_dimension_mismatch() {
     let tensor = make_tensor_f64(indices, data);
 
     let err = tensor.replaceind(&i, &wrong_size).unwrap_err();
-    assert!(err.to_string().contains("Index space mismatch"));
+    assert!(err.to_string().contains("replaceind"));
+    assert!(err.to_string().contains("shape mismatch"));
 }
 
 #[test]
@@ -625,7 +627,8 @@ fn test_replaceinds_dimension_mismatch() {
     let err = tensor
         .replaceinds(&[i.clone(), j.clone()], &[new_i, wrong_size])
         .unwrap_err();
-    assert!(err.to_string().contains("Index space mismatch"));
+    assert!(err.to_string().contains("replaceinds"));
+    assert!(err.to_string().contains("shape mismatch"));
 }
 
 #[test]

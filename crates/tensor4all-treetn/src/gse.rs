@@ -882,7 +882,7 @@ where
         .and_then(|tensor| tensor.replaceinds(target_q_indices, &ref_q_indices))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to relabel expanded basis for reference child",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     let coeff_tensor =
         coefficient_tensor(&child_tensor, &child_replacement).map_err(|error| match error {
@@ -987,13 +987,13 @@ where
             .replaceinds(&ref_q_indices, q_left)
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to relabel reference density bra indices",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let ket = ref_child_tensor
             .replaceinds(&ref_q_indices, q_right)
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to relabel reference density ket indices",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let contribution = contract_pair_with_operand_options(
             &bra,
@@ -1056,7 +1056,12 @@ fn eigenvector_basis_row(
         })?;
     let row = vector
         .unfuse_index(flat_left, q_left, LinearizationOrder::ColumnMajor)
-        .and_then(|tensor| tensor.conj().replaceinds(q_left, q_indices))
+        .and_then(|tensor| {
+            tensor
+                .conj()
+                .replaceinds(q_left, q_indices)
+                .map_err(anyhow::Error::from)
+        })
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to reshape projected-density eigenvector into a basis row",
             source,
@@ -1101,14 +1106,14 @@ fn projected_missing_density_tensor(
             .replaceinds(q_indices, q_left)
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to relabel represented-basis bra indices",
-                source,
+                source: anyhow::Error::new(source),
             })?;
     let basis_right =
         basis
             .replaceinds(q_indices, q_right)
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to relabel represented-basis ket indices",
-                source,
+                source: anyhow::Error::new(source),
             })?;
     let represented = contract_pair_with_operand_options(
         &basis_left,
@@ -1137,20 +1142,20 @@ fn projected_missing_density_tensor(
         .replaceinds(q_right, &q_mid_left)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to relabel left projected-density projector",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     let density_mid = density
         .replaceinds(q_left, &q_mid_left)
         .and_then(|tensor| tensor.replaceinds(q_right, &q_mid_right))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to relabel middle projected-density tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     let p_mid_right = projector
         .replaceinds(q_left, &q_mid_right)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to relabel right projected-density projector",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     TensorDynLen::contract(&[&p_left_mid, &density_mid, &p_mid_right]).map_err(|source| {
         GseError::Algorithm {
@@ -1242,7 +1247,7 @@ fn adjoint_by_index_groups(
         .and_then(|tensor| tensor.replaceinds(&temporary, right))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to swap grouped tensor indices for adjoint",
-            source,
+            source: anyhow::Error::new(source),
         })
 }
 

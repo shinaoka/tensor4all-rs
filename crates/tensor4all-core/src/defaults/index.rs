@@ -531,7 +531,7 @@ impl IndexLike for DynIndex {
             acc.checked_mul(idx.dim())
                 .ok_or_else(|| anyhow::anyhow!("product link dimension overflow"))
         })?;
-        DynIndex::new_bond(dim)
+        DynIndex::new_bond(dim).map_err(|e| anyhow::anyhow!("failed to create bond index: {e}"))
     }
 }
 
@@ -559,8 +559,8 @@ impl DynIndex {
     /// let bond = DynIndex::new_bond(8).unwrap();
     /// assert_eq!(bond.dim(), 8);
     /// ```
-    pub fn new_bond(dim: usize) -> Result<Self> {
-        Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
+    pub fn new_bond(dim: usize) -> std::result::Result<Self, TagSetError> {
+        Index::new_link(dim)
     }
 
     /// Return a copy of this index with its prime level incremented by one.

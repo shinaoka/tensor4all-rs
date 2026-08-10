@@ -709,7 +709,7 @@ impl TensorTrain {
                 new_tensor = new_tensor.replaceind(old_idx, new_idx).map_err(|err| {
                     TensorTrainError::operation_source(
                         "failed to replace simulated link index",
-                        err,
+                        anyhow::Error::new(err),
                     )
                 })?;
             }

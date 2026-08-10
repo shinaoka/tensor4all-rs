@@ -733,7 +733,7 @@ where
         .link_dims()
         .into_iter()
         .map(DynIndex::new_bond)
-        .collect::<Result<_>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let nsites = tt.len();
 
     let mut tensors = Vec::with_capacity(nsites);
