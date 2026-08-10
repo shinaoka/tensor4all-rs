@@ -3,7 +3,8 @@ use crate::validation::{validate_inputs, validate_options};
 use crate::{
     elementwise,
     elementwise::{
-        convergence_criterion_like_julia, error_metric, max_error_metric, ranks_are_stable,
+        convergence_criterion_like_julia, error_metric, max_error_metric, rank_is_saturated,
+        ranks_are_stable,
     },
     elementwise_batched, initial_guess,
     random_tt::{
@@ -30,6 +31,40 @@ fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> Tens
             let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
             let right_dim = link_dims.get(site).copied().unwrap_or(1);
             tensor3_zeros(left_dim, site_dim, right_dim)
+        })
+        .collect();
+    TensorTrain::new(cores).unwrap()
+}
+
+/// Builds a tensor train with the requested link dimensions and deterministic,
+/// value-dependent cores drawn from a small linear congruential generator.
+///
+/// Used where a genuinely high-rank pointwise product is needed;
+/// `tensor_train_with_link_dims` fills with zeros, whose product is degenerate.
+fn tensor_train_with_values(
+    site_dims: &[usize],
+    link_dims: &[usize],
+    seed: u64,
+) -> TensorTrain<f64> {
+    assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
+    let mut state = seed | 1;
+    let mut next = move || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        // Top bits carry the best-mixed randomness of an LCG.
+        (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5
+    };
+    let cores = site_dims
+        .iter()
+        .enumerate()
+        .map(|(site, &site_dim)| {
+            let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
+            let right_dim = link_dims.get(site).copied().unwrap_or(1);
+            let data = (0..left_dim * site_dim * right_dim)
+                .map(|_| next())
+                .collect();
+            tensor3_from_data(data, left_dim, site_dim, right_dim).unwrap()
         })
         .collect();
     TensorTrain::new(cores).unwrap()
@@ -361,6 +396,69 @@ fn convergence_criterion_matches_julia_algorithm() {
         2,
         1.0e-10
     ));
+}
+
+#[test]
+fn rank_saturation_needs_a_full_dwell_at_the_cap() {
+    // Below the cap, or at the cap for fewer than min_iters sweeps, the exit
+    // must not fire.
+    assert!(!rank_is_saturated(&[4], 2, 4));
+    assert!(!rank_is_saturated(&[3, 4], 2, 4));
+    assert!(rank_is_saturated(&[3, 4, 4], 2, 4));
+    assert!(!rank_is_saturated(&[4, 4], 3, 4));
+    // The default cap is unreachable, so unconstrained runs never exit here.
+    assert!(!rank_is_saturated(&[4, 4], 2, usize::MAX));
+    // min_iters == 0 disables the exit, as it disables the tolerance criterion.
+    assert!(!rank_is_saturated(&[4, 4], 0, 4));
+}
+
+#[test]
+fn capped_elementwise_run_stops_once_rank_saturates() {
+    // Two value-dependent rank-4 trains whose pointwise product genuinely needs
+    // rank 16 in the interior, run against a cap of 4. The requested tolerance
+    // is therefore unreachable and the sweep must exit on rank saturation
+    // rather than burn all max_iters sweeps at the cap.
+    let site_dims = [2usize; 10];
+    let link_dims = [2usize, 4, 4, 4, 4, 4, 4, 4, 2];
+    let input_a = tensor_train_with_values(&site_dims, &link_dims, 12345);
+    let input_b = tensor_train_with_values(&site_dims, &link_dims, 98765);
+
+    let options = AciOptions::<f64> {
+        max_iters: 20,
+        min_iters: 2,
+        max_bond_dim: 4,
+        tolerance: 1e-10,
+        ..Default::default()
+    };
+
+    let result = elementwise_batched(multiply_batch, &[input_a, input_b], &options).unwrap();
+
+    // The cap is binding: the tolerance was never met, so without the
+    // rank-saturation exit this run would consume all 20 sweeps.
+    let last_error = *result.errors.last().unwrap();
+    assert!(
+        last_error > options.tolerance,
+        "cap is not binding, last error {last_error:e} already met the tolerance"
+    );
+    assert!(
+        result.ranks.len() <= options.min_iters + 2,
+        "expected an early exit, got {} sweeps with ranks {:?}",
+        result.ranks.len(),
+        result.ranks
+    );
+    assert!(result.ranks.len() < options.max_iters);
+    assert_eq!(
+        &result.ranks[(result.ranks.len() - options.min_iters)..],
+        &[options.max_bond_dim; 2],
+        "the exit must fire only after a full dwell at the cap, ranks {:?}",
+        result.ranks
+    );
+    assert_eq!(result.tensor_train.site_dims(), site_dims.to_vec());
+    assert!(result
+        .tensor_train
+        .link_dims()
+        .iter()
+        .all(|&dim| dim <= options.max_bond_dim));
 }
 
 #[test]

@@ -45,5 +45,13 @@ pub struct AciResult<T: TTScalar> {
     ///
     /// Entries are stored in completed-sweep order and use the same scaling
     /// convention as [`AciOptions::tolerance`](crate::AciOptions::tolerance).
+    ///
+    /// The last entry is not guaranteed to be at or below the requested
+    /// tolerance. A run under a binding
+    /// [`AciOptions::max_bond_dim`](crate::AciOptions::max_bond_dim) stops once
+    /// the rank has sat at the cap, because the sweep can no longer add pivots
+    /// and the tolerance can never be met; such a run finishes above tolerance
+    /// by design. Compare the last [`ranks`](Self::ranks) entry against
+    /// `max_bond_dim` to tell a rank-limited run from a converged one.
     pub errors: Vec<f64>,
 }
