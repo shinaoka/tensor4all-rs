@@ -270,11 +270,23 @@ impl PairwiseContractionOptions {
 ///
 /// Use explicit [`outer_product`] calls when an outer product of disconnected
 /// components is intentional.
+/// # Errors
+///
+/// Returns an error when the network is disconnected (a disconnected-network
+/// /// failure), when indices are incompatible (a shape or index mismatch), or
+/// /// when the contraction reports a failure (a backend failure).
+///
 pub fn contract(tensors: &[&TensorDynLen]) -> Result<TensorDynLen> {
     contract_with_options(tensors, ContractionOptions::new())
 }
 
 /// Contract a connected tensor network with advanced options.
+/// # Errors
+///
+/// Returns an error when the network is disconnected (a disconnected-network
+/// /// failure), when indices are incompatible (a shape or index mismatch), or
+/// /// when the contraction reports a failure (a backend failure).
+///
 pub fn contract_with_options(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
@@ -283,11 +295,23 @@ pub fn contract_with_options(
 }
 
 /// Contract owned tensors with the default connected-network semantics.
+/// # Errors
+///
+/// Returns an error when the network is disconnected (a disconnected-network
+/// /// failure), when indices are incompatible (a shape or index mismatch), or
+/// /// when the contraction reports a failure (a backend failure).
+///
 pub fn contract_owned(tensors: Vec<TensorDynLen>) -> Result<TensorDynLen> {
     contract_owned_with_options(tensors, ContractionOptions::new())
 }
 
 /// Contract owned tensors with advanced connected-network options.
+/// # Errors
+///
+/// Returns an error when the network is disconnected (a disconnected-network
+/// /// failure), when indices are incompatible (a shape or index mismatch), or
+/// /// when the contraction reports a failure (a backend failure).
+///
 pub fn contract_owned_with_options(
     tensors: Vec<TensorDynLen>,
     options: ContractionOptions<'_>,
@@ -309,6 +333,12 @@ pub fn contract_owned_with_options(
 /// This is the concrete `TensorDynLen` entry point for binary contraction. It
 /// contracts all common indices and preserves the pairwise structured fast
 /// paths used by [`TensorContractionLike::contract_pair`].
+/// # Errors
+///
+/// Returns an error when the pair is disconnected or has incompatible indices
+/// /// (a shape or index mismatch), or when the contraction reports a failure (a
+/// /// backend failure).
+///
 pub fn contract_pair(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDynLen> {
     lhs.try_contract_pairwise_default_with_options(rhs, PairwiseContractionOptions::new())
 }
@@ -319,6 +349,12 @@ pub fn contract_pair(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDyn
 /// conjugation applied to either operand before matching and contracting common
 /// indices. Implementations may pass conjugation to the backend to avoid
 /// materializing conjugated payloads.
+///
+/// # Errors
+///
+/// Returns an error when the pair is disconnected or has incompatible indices
+/// /// (a shape or index mismatch), or when the contraction reports a failure (a
+/// /// backend failure).
 ///
 /// # Examples
 ///
@@ -357,6 +393,12 @@ pub fn contract_pair_with_operand_options(
 }
 
 /// Contract two tensors with explicit contraction options.
+/// # Errors
+///
+/// Returns an error when the pair is disconnected or has incompatible indices
+/// /// (a shape or index mismatch), or when the contraction reports a failure (a
+/// /// backend failure).
+///
 pub fn contract_pair_with_options(
     lhs: &TensorDynLen,
     rhs: &TensorDynLen,
@@ -366,6 +408,11 @@ pub fn contract_pair_with_options(
 }
 
 /// Contract two tensors along explicitly specified index pairs.
+/// # Errors
+///
+/// Returns an error when the contracted indices are incompatible (a shape or
+/// /// index mismatch) or the contraction reports a failure (a backend failure).
+///
 pub fn tensordot(
     lhs: &TensorDynLen,
     rhs: &TensorDynLen,
@@ -378,6 +425,12 @@ pub fn tensordot(
 ///
 /// This is an explicit tensor product, not a dense-only operation. Compact
 /// structured storage is preserved when the operand layouts allow it.
+/// # Errors
+///
+/// Returns an error when the two tensors share contractable indices (a
+/// /// shared-index mismatch) or the construction reports a failure (a backend
+/// /// failure).
+///
 pub fn outer_product(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDynLen> {
     lhs.try_outer_product_pairwise(rhs)
 }

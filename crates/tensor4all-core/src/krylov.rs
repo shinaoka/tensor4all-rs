@@ -129,12 +129,9 @@ impl GmresOpProfile {
 }
 
 /// Options for GMRES solver.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::GmresOptions;
-///
 /// let opts = GmresOptions {
 ///     max_iter: 50,
 ///     rtol: 1e-8,
@@ -208,20 +205,15 @@ impl GmresTolerance {
 }
 
 /// Result of GMRES solver.
-///
 /// Contains the solution, iteration count, final residual norm, and
 /// convergence status.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
 /// use tensor4all_core::krylov::{gmres, GmresOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 7.0]).unwrap();
 /// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
-///
 /// let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &GmresOptions::default()).unwrap();
 /// assert!(result.converged);
 /// assert!(result.residual_norm < 1e-10);
@@ -242,16 +234,12 @@ pub struct GmresResult<T> {
 }
 
 /// Options for [`hermitian_lanczos_lowest_eigenpair`].
-///
 /// These options control the maximum Krylov subspace dimension, convergence
 /// tolerance, and validation tolerance for the small projected Hermitian matrix.
 /// When in doubt, use [`Default::default`].
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianLanczosOptions;
-///
 /// let opts = HermitianLanczosOptions {
 ///     max_iter: 32,
 ///     rtol: 1.0e-9,
@@ -312,15 +300,11 @@ impl Default for HermitianLanczosOptions {
 }
 
 /// Result of [`hermitian_lanczos_lowest_eigenpair`].
-///
 /// Contains the lowest Ritz eigenpair, the final true residual norm, iteration
 /// count, and convergence status.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianLanczosResult;
-///
 /// let result = HermitianLanczosResult {
 ///     eigenvalue: 1.0,
 ///     eigenvector: vec![1.0_f64],
@@ -350,19 +334,15 @@ pub struct HermitianLanczosResult<T> {
 }
 
 /// Options for [`hermitian_krylov_expm_multiply`].
-///
 /// The routine builds a Hermitian Lanczos basis for a matrix-free operator,
 /// exponentiates the small projected Hermitian matrix, and combines the basis
 /// vectors without materializing the full operator. Scalar convergence checks
 /// and projected eigendecompositions are explicit non-differentiable
 /// boundaries; vector-space tensor operations preserve backend metadata when
 /// the underlying tensor implementation supports it.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianKrylovExpmOptions;
-///
 /// let options = HermitianKrylovExpmOptions {
 ///     max_iter: 32,
 ///     tol: 1.0e-10,
@@ -401,12 +381,9 @@ impl Default for HermitianKrylovExpmOptions {
 }
 
 /// Result of [`hermitian_krylov_expm_multiply`].
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianKrylovExpmResult;
-///
 /// let result = HermitianKrylovExpmResult {
 ///     output: vec![1.0_f64, 0.0],
 ///     iterations: 1,
@@ -443,33 +420,26 @@ struct HermitianRitzState {
 }
 
 /// Compute the lowest eigenpair of a Hermitian matrix-free operator.
-///
 /// The operator is supplied as `apply_a`, which maps a vector to `A * vector`.
 /// The algorithm builds an orthonormal Krylov basis using modified
 /// Gram-Schmidt with a second reorthogonalization pass, forms the small
 /// projected matrix `V^dagger A V`, and solves that small Hermitian problem via
 /// tensorbackend. The full operator matrix is never materialized.
-///
 /// # Arguments
 /// * `apply_a` - Matrix-free Hermitian operator application.
 /// * `initial` - Nonzero initial vector that defines the starting Krylov vector.
 /// * `options` - Krylov dimension, convergence tolerances, and Hermitian
 ///   validation settings.
-///
 /// # Returns
 /// The lowest Ritz eigenpair and the true residual norm.
-///
 /// # Errors
-/// Returns an error if the initial vector is zero, a vector-space operation
-/// fails, `apply_a` fails, the projected operator is not Hermitian, or the small
-/// projected eigensolver fails.
-///
+/// Returns an error when the operator is not Hermitian-compatible (a shape
+/// mismatch), when the iteration fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
 /// use tensor4all_core::krylov::{hermitian_lanczos_lowest_eigenpair, HermitianLanczosOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let initial = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 1.0]).unwrap();
 /// let result = hermitian_lanczos_lowest_eigenpair(
@@ -477,7 +447,6 @@ struct HermitianRitzState {
 ///     &initial,
 ///     &HermitianLanczosOptions::default(),
 /// ).unwrap();
-///
 /// assert!(result.converged);
 /// assert!((result.eigenvalue - 1.0).abs() < 1.0e-12);
 /// ```
@@ -579,34 +548,27 @@ where
 }
 
 /// Apply `exp(exponent * A)` to a vector using a matrix-free Hermitian Krylov method.
-///
 /// This routine only materializes small projected Krylov matrices. It never
 /// forms the full matrix for `A`, so it can be used by tensor-network local
 /// solvers whose operator application is available as a closure.
-///
 /// # Arguments
 /// * `apply_a` - Matrix-free Hermitian operator application.
 /// * `exponent` - Scalar exponent, for example `-im * dt` for real-time TDVP.
 /// * `initial` - Initial vector.
 /// * `options` - Krylov dimension, tolerance, and Hermitian validation options.
-///
 /// # Returns
 /// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
-///
 /// # Errors
-/// Returns an error if an option is invalid, a vector-space operation fails,
-/// the projected matrix is not Hermitian, or the requested tolerance is not met
-/// after the configured time splits.
-///
+/// Returns an error when the operator is not Hermitian-compatible (a shape
+/// mismatch), when the iteration fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
 /// # Examples
-///
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_core::krylov::{
 ///     hermitian_krylov_expm_multiply, HermitianKrylovExpmOptions,
 /// };
 /// use tensor4all_core::{DynIndex, TensorDynLen};
-///
 /// # fn main() -> anyhow::Result<()> {
 /// let index = DynIndex::new_dyn(2);
 /// let initial = TensorDynLen::from_dense(
@@ -857,37 +819,27 @@ where
 }
 
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).
-///
 /// This implements the restarted GMRES algorithm that works with abstract tensor types
 /// through the [`TensorVectorSpace`] trait's vector space operations.
-///
 /// # Algorithm
-///
 /// GMRES builds an orthonormal basis for the Krylov subspace
 /// `K_m = span{r_0, A r_0, A^2 r_0, ..., A^{m-1} r_0}` and finds the
 /// solution that minimizes `||b - A x||` over this subspace.
-///
 /// # Type Parameters
-///
 /// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
-///
 /// # Arguments
-///
 /// * `apply_a` - Function that applies the linear operator A to a tensor
 /// * `b` - Right-hand side tensor
 /// * `x0` - Initial guess
 /// * `options` - Solver options
-///
 /// # Returns
-///
 /// A `GmresResult` containing the solution and convergence information.
-///
 /// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
 ///
-/// Returns an error if:
-/// - Vector space operations (add, sub, scale, inner_product) fail
-/// - The linear operator application fails
 pub fn gmres<T, F>(apply_a: F, b: &T, x0: &T, options: &GmresOptions) -> Result<GmresResult<T>>
 where
     T: TensorVectorSpace,
@@ -904,9 +856,13 @@ where
 }
 
 /// Solve `A x = b` using GMRES with an absolute residual tolerance.
-///
 /// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
 /// relative residual tolerance and is preferred for scale-independent solves.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
+///
 pub fn gmres_with_absolute_tolerance<T, F>(
     apply_a: F,
     b: &T,
@@ -929,10 +885,14 @@ where
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
-///
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
+///
 pub fn gmres_affine<T, F>(
     apply_a: F,
     b: &T,
@@ -957,11 +917,15 @@ where
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with an absolute residual tolerance.
-///
 /// The Arnoldi basis is built from the unshifted `A` callback, while the affine
 /// coefficients are applied to the small Hessenberg problem. This mirrors
 /// KrylovKit's `linsolve(operator, b, a0, a1)` algorithm and avoids changing the
 /// Krylov basis when affine coefficients are present.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
+///
 pub fn gmres_affine_with_absolute_tolerance<T, F>(
     apply_a: F,
     b: &T,
@@ -1395,11 +1359,15 @@ where
 }
 
 /// Solve `A x = b` using GMRES while enforcing a total iteration limit.
-///
 /// [`GmresOptions::max_iter`] remains the restart cycle length and
 /// [`GmresOptions::max_restarts`] remains the maximum number of restart cycles.
 /// `max_total_iter` caps the total number of Arnoldi steps across all restart
 /// cycles; the final cycle is shortened when necessary.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
+///
 pub fn gmres_with_total_iteration_limit<T, F>(
     apply_a: F,
     b: &T,
@@ -1669,47 +1637,38 @@ where
 }
 
 /// Solve `A x = b` using GMRES with optional truncation after each iteration.
-///
 /// This is an extension of [`gmres`] that allows truncating Krylov basis vectors
 /// to control bond dimension growth in tensor network representations.
-///
 /// # Type Parameters
-///
 /// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 /// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
-///
 /// # Arguments
-///
 /// * `apply_a` - Function that applies the linear operator A to a tensor
 /// * `b` - Right-hand side tensor
 /// * `x0` - Initial guess
 /// * `options` - Solver options
 /// * `truncate` - Function that truncates a tensor to control bond dimension
-///
 /// # Note
-///
 /// Truncation is applied after each Gram-Schmidt orthogonalization step
 /// and after the final solution update. This helps control the bond dimension
 /// growth that would otherwise occur in MPS/MPO representations.
-///
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
 /// # Examples
-///
 /// Solve `2x = b` with a no-op truncation function:
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{gmres_with_truncation, GmresOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 6.0]).unwrap();
 /// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
-///
 /// // Operator A = 2*I (scales input by 2)
 /// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(2.0));
 /// // No-op truncation
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
-///
 /// let result = gmres_with_truncation(apply_a, &b, &x0, &GmresOptions::default(), truncate).unwrap();
 /// assert!(result.converged);
 /// // Solution should be [2.0, 3.0]
@@ -1990,15 +1949,11 @@ where
 }
 
 /// Options for restarted GMRES with truncation.
-///
 /// This is used by [`restart_gmres_with_truncation`] which wraps the standard GMRES
 /// with an outer loop that recomputes the true residual at each restart.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::RestartGmresOptions;
-///
 /// let opts = RestartGmresOptions::new()
 ///     .with_max_outer_iters(10)
 ///     .with_rtol(1e-6)
@@ -2007,7 +1962,6 @@ where
 ///     .with_min_reduction(0.99)
 ///     .with_inner_rtol(0.01)
 ///     .with_verbose(false);
-///
 /// assert_eq!(opts.max_outer_iters, 10);
 /// assert_eq!(opts.rtol, 1e-6);
 /// assert_eq!(opts.inner_max_iter, 20);
@@ -2115,23 +2069,17 @@ impl RestartGmresOptions {
 }
 
 /// Result of restarted GMRES solver.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
-///
 /// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(3.0));
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
-///
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
 /// ).unwrap();
-///
 /// assert!(result.converged);
 /// assert!(result.residual_norm < 1e-10);
 /// assert!(result.outer_iterations <= 20);
@@ -2155,13 +2103,10 @@ pub struct RestartGmresResult<T> {
 }
 
 /// Solve `A x = b` using restarted GMRES with truncation.
-///
 /// This wraps [`gmres_with_truncation`] with an outer loop that recomputes the true residual
 /// at each restart. This is particularly useful for MPS/MPO computations where truncation
 /// can cause the inner GMRES residual to be inaccurate.
-///
 /// # Algorithm
-///
 /// ```text
 /// for outer_iter in 0..max_outer_iters:
 ///     r = b - A*x0          // Compute true residual
@@ -2171,43 +2116,34 @@ pub struct RestartGmresResult<T> {
 ///     x' = gmres_with_truncation(A, r, 0, inner_options, truncate)
 ///     x0 = truncate(x0 + x')
 /// ```
-///
 /// # Type Parameters
-///
 /// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 /// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
-///
 /// # Arguments
-///
 /// * `apply_a` - Function that applies the linear operator A to a tensor
 /// * `b` - Right-hand side tensor
 /// * `x0` - Initial guess (if None, starts from zero)
 /// * `options` - Solver options
 /// * `truncate` - Function that truncates a tensor to control bond dimension
-///
 /// # Returns
-///
 /// A `RestartGmresResult` containing the solution and convergence information.
-///
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when GMRES fails to converge (a non-convergence
+/// failure), or when the backend reports a failure.
 /// # Examples
-///
 /// Solve `5x = b` with no truncation:
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
-///
 /// let i = DynIndex::new_dyn(3);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0, 15.0]).unwrap();
-///
 /// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(5.0));
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
-///
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
 /// ).unwrap();
-///
 /// assert!(result.converged);
 /// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
@@ -2551,7 +2487,6 @@ where
 }
 
 /// Compute Givens rotation coefficients to eliminate b in (a, b).
-///
 /// This function keeps computation in `AnyScalar` space to preserve AD metadata
 /// as much as possible.
 fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScalar) {
@@ -2576,7 +2511,6 @@ fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScala
 
 /// Apply Givens rotation: (c, s) @ (x, y) -> (c*x + s*y, -conj(s)*x + c*y) for complex
 /// or (c*x + s*y, -s*x + c*y) for real.
-///
 /// This function keeps computation in `AnyScalar` space to preserve AD metadata
 /// as much as possible.
 fn apply_givens_rotation(
