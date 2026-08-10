@@ -346,7 +346,9 @@ pub enum TensorDynLenError {
         /// Scalar dtype returned by the reduction.
         actual: String,
     },
-    /// Tensor shapes or index spaces cannot be aligned for comparison.
+    /// Tensor shapes, index spaces, or dimension metadata cannot be aligned
+    /// for an operation (comparison, index replacement, or other shape-sensitive
+    /// transformations).
     #[error("TensorDynLen shape mismatch during {operation}: expected {expected}, got {actual}")]
     ShapeMismatch {
         /// Operation that attempted the alignment.
@@ -4029,11 +4031,12 @@ impl TensorDynLen {
 impl TensorDynLen {
     /// Replace an index in the tensor with a new index.
     ///
-    /// This replaces the index matching `old_index` by ID with `new_index`.
+    /// This replaces every index equal to `old_index` (full index equality,
+    /// including id, prime level, and tags) with `new_index`.
     /// The storage data is not modified, only the index metadata is changed.
     ///
     /// # Arguments
-    /// * `old_index` - The index to replace (matched by ID)
+    /// * `old_index` - The index to replace (matched by full index equality)
     /// * `new_index` - The new index to use
     ///
     /// # Returns
@@ -4041,8 +4044,8 @@ impl TensorDynLen {
     /// returns a clone of the original tensor.
     ///
     /// # Errors
-    /// Returns an error when `old_index` is not present (a missing-index failure)
-    /// or the new index has an incompatible dimension (a shape mismatch).
+    /// Returns an error when the new index has an incompatible dimension
+    /// (a shape mismatch: the replacement dimension must equal the original).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -4095,11 +4098,12 @@ impl TensorDynLen {
 
     /// Replace multiple indices in the tensor.
     ///
-    /// This replaces each index in `old_indices` (matched by ID) with the corresponding
-    /// index in `new_indices`. The storage data is not modified.
+    /// This replaces each index in `old_indices` (matched by full index equality,
+    /// including id, prime level, and tags) with the corresponding index in
+    /// `new_indices`. The storage data is not modified.
     ///
     /// # Arguments
-    /// * `old_indices` - The indices to replace (matched by ID)
+    /// * `old_indices` - The indices to replace (matched by full index equality)
     /// * `new_indices` - The new indices to use
     ///
     /// # Returns
@@ -4107,9 +4111,10 @@ impl TensorDynLen {
     /// are kept unchanged.
     ///
     /// # Errors
-    /// Returns an error when an `old_indices` entry is not present (a
-    /// missing-index failure) or `old_indices`/`new_indices` differ in length
-    /// (a length mismatch).
+    /// Returns an error when `old_indices` and `new_indices` differ in length
+    /// (a shape mismatch), or when any replacement index has an incompatible
+    /// dimension (a shape mismatch: the replacement dimension must equal the
+    /// original).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;

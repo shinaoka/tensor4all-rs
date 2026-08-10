@@ -372,7 +372,8 @@ impl Index<DynId, TagSet> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the link dimension is invalid (a shape mismatch).
+    /// Returns an error when the tag construction fails (an invalid-input
+    /// failure). No dimension validation is performed.
     ///
     /// # Examples
     ///
