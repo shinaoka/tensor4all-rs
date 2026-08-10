@@ -17,6 +17,15 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 /// operator-output magnitude from the completed sweep, and the largest
 /// normalized value is used.
 ///
+/// Sweeping also stops once the solution rank has sat at
+/// [`AciOptions::max_bond_dim`] for [`AciOptions::min_iters`] consecutive
+/// sweeps. At the cap the sweep can no longer add pivots, so the tolerance can
+/// never be met and further sweeps only repeat full-rank work. A run that stops
+/// this way returns normally with a final entry of [`AciResult::errors`] above
+/// [`AciOptions::tolerance`]: under a binding `max_bond_dim` that outcome is by
+/// design, not a failure. Compare the last [`AciResult::ranks`] entry against
+/// `max_bond_dim` to tell a rank-limited run from a converged one.
+///
 /// For single-site tensor trains there are no bonds to sweep. In that case the
 /// operator is evaluated once over all site points, and the returned
 /// [`AciResult`] contains empty `ranks` and `errors` histories.
@@ -121,6 +130,10 @@ where
             options.min_iters,
             options.tolerance,
         ) {
+            break;
+        }
+
+        if rank_is_saturated(&ranks, options.min_iters, options.max_bond_dim) {
             break;
         }
     }
@@ -273,6 +286,34 @@ pub(crate) fn convergence_criterion_like_julia(
     !ranks[(iteration - min_iters)..iteration]
         .iter()
         .any(|&rank| rank > baseline)
+}
+
+/// Reports whether the solution rank has been pinned at `max_bond_dim` long
+/// enough that further sweeps cannot reduce the pivot error below tolerance.
+///
+/// Once the rank reaches the cap the tolerance branch of
+/// [`convergence_criterion_like_julia`] can never fire, because the sweep has no
+/// remaining freedom to add pivots. Without this exit a capped run burns every
+/// remaining sweep at full rank. The dwell of `min_iters` consecutive sweeps at
+/// the cap guards against stopping on the sweep where the cap is first reached,
+/// when pivot re-selection inside the fixed rank can still improve the error.
+///
+/// `min_iters == 0` disables the exit, matching
+/// [`convergence_criterion_like_julia`], and the default `max_bond_dim` of
+/// [`usize::MAX`] is unreachable, so unconstrained runs are unaffected.
+///
+/// This is the `all(lastranks .>= maxbonddim)` disjunct of the Julia
+/// `convergencecriterion` that [`convergence_criterion_like_julia`] otherwise
+/// ports, over the same trailing window. `tensor4all-treetci` gained the
+/// equivalent exit in its own sweep loop in #575.
+pub(crate) fn rank_is_saturated(ranks: &[usize], min_iters: usize, max_bond_dim: usize) -> bool {
+    if min_iters == 0 || ranks.len() < min_iters {
+        return false;
+    }
+
+    ranks[(ranks.len() - min_iters)..]
+        .iter()
+        .all(|&rank| rank >= max_bond_dim)
 }
 
 pub(crate) fn error_metric(
