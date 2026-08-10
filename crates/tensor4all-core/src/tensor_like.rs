@@ -16,7 +16,6 @@ use crate::any_scalar::AnyScalar;
 use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
 use crate::truncation::SvdTruncationPolicy;
-use anyhow::Result;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -850,8 +849,9 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when the underlying construction reports a
-    /// failure.
+    /// Returns `Self::Error` when the scalar type does not support the
+    /// required construction (an invalid scalar dtype or a backend
+    /// construction failure).
     fn scalar_one() -> std::result::Result<Self, Self::Error>;
 
     /// Create a tensor filled with 1.0 for the given indices.
