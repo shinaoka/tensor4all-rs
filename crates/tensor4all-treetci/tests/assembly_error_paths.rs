@@ -1,8 +1,6 @@
 //! Integration tests for treetci point assembly error paths and success cases.
 
-use tensor4all_treetci::{
-    assemble_global_point, assemble_points_column_major, MultiIndex, SubtreeKey, TreeTciGraph,
-};
+use tensor4all_treetci::{assemble_global_point, assemble_points_column_major, SubtreeKey};
 
 #[test]
 fn assemble_global_point_builds_valid_point() {
