@@ -64,37 +64,27 @@ pub use partial_contraction::{
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
-///
 /// Maintains a graph of tensors connected by bonds (edges).
 /// Each node stores a tensor, and edges store `Connection` objects
 /// that hold the bond index.
-///
 /// The structure uses SiteIndexNetwork to manage:
 /// - **Topology**: Graph structure (which nodes connect to which)
 /// - **Site Space**: Physical indices organized by node
-///
 /// # Type Parameters
 /// - `T`: Tensor type implementing `TensorLike` (default: `TensorDynLen`)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
-///
 /// # Construction
-///
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
 /// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
-///
 /// # Examples
-///
 /// Build a 2-node chain manually and verify node count:
-///
 /// ```
 /// use tensor4all_treetn::TreeTN;
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-///
 /// // Create site and bond indices
 /// let s0 = DynIndex::new_dyn(2);
 /// let bond = DynIndex::new_dyn(3);
 /// let s1 = DynIndex::new_dyn(2);
-///
 /// // Build tensors
 /// let t0 = TensorDynLen::from_dense(
 ///     vec![s0.clone(), bond.clone()],
@@ -104,13 +94,11 @@ pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 ///     vec![bond.clone(), s1.clone()],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
-///
 /// // Use from_tensors (auto-connects nodes sharing the same index ID)
 /// let tn = TreeTN::<_, String>::from_tensors(
 ///     vec![t0, t1],
 ///     vec!["A".to_string(), "B".to_string()],
 /// ).unwrap();
-///
 /// assert_eq!(tn.node_count(), 2);
 /// assert_eq!(tn.edge_count(), 1);
 /// ```
@@ -147,7 +135,6 @@ where
 }
 
 /// Internal context for sweep-to-center operations.
-///
 /// Contains precomputed information needed for both canonicalization and truncation.
 #[derive(Debug)]
 pub(crate) struct SweepContext {
@@ -198,8 +185,9 @@ where
     /// - Connection fails (e.g., dimension mismatch)
     ///
     /// # Errors
-    /// Returns an error if validation fails or connection fails.
-    ///
+    /// Returns an error when `tensors` and `node_names` differ in length (a
+    /// shape mismatch) or a tensor structure is invalid (an invalid-state
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -330,6 +318,11 @@ where
     ///
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
+    /// # Errors
+    /// Returns an error when the tensor's site dimensions are incompatible with
+    /// its neighbors (a shape mismatch) or the node name is already in use
+    /// (a duplicate operation failure).
+    ///
     pub fn add_tensor(&mut self, node_name: V, tensor: T) -> Result<NodeIndex> {
         self.add_tensor_internal(node_name, tensor)
     }
@@ -343,10 +336,8 @@ where
     /// Returns the NodeIndex for the newly added tensor.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the generated node name already exists or the
-    /// underlying graph rejects the tensor insertion.
-    ///
+    /// Returns an error when the tensor's site dimensions are incompatible with
+    /// its neighbors (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -390,6 +381,11 @@ where
     ///
     /// # Returns
     /// The EdgeIndex of the new connection, or an error if validation fails.
+    /// # Errors
+    /// Returns an error when the indices do not belong to the two nodes (a
+    /// missing-index failure) or their dimensions differ (a dimension
+    /// mismatch).
+    ///
     pub fn connect(
         &mut self,
         node_a: NodeIndex,
@@ -760,6 +756,10 @@ where
     /// to this node. Returns an error if any connection index is missing.
     ///
     /// Returns the old tensor if the node exists and validation passes.
+    /// # Errors
+    /// Returns an error when `node` is out of range (an out-of-bounds failure) or
+    /// the new tensor has incompatible dimensions (a shape mismatch).
+    ///
     pub fn replace_tensor(&mut self, node: NodeIndex, new_tensor: T) -> Result<Option<T>> {
         // Check if node exists
         if !self.graph.contains_node(node) {
@@ -843,6 +843,10 @@ where
     ///
     /// Also updates site_index_network: the old bond index becomes physical again,
     /// and the new bond index is removed from physical indices.
+    /// # Errors
+    /// Returns an error when the edge is not found (a missing-edge failure) or
+    /// the new bond has an incompatible dimension (a shape mismatch).
+    ///
     pub fn replace_edge_bond(&mut self, edge: EdgeIndex, new_bond_index: T::Index) -> Result<()> {
         // Validate edge exists and get endpoints
         let (source, target) = self
@@ -912,6 +916,10 @@ where
     /// Notes:
     /// - This keeps dimensions and conjugate states, but changes identities.
     /// - This updates both endpoint tensors and internal bookkeeping.
+    /// # Errors
+    /// Returns an error when the link-index relabeling fails (an invalid-index
+    /// failure).
+    ///
     pub fn sim_linkinds(&self) -> Result<Self>
     where
         T::Index: IndexLike,
@@ -924,6 +932,10 @@ where
     /// Replace all link/bond indices with fresh IDs in-place.
     ///
     /// See [`Self::sim_linkinds`] for details.
+    /// # Errors
+    /// Returns an error when the link-index relabeling fails (an invalid-index
+    /// failure).
+    ///
     pub fn sim_linkinds_mut(&mut self) -> Result<()>
     where
         T::Index: IndexLike,
@@ -1013,6 +1025,9 @@ where
     ///
     /// The direction is specified as a node name (or None to clear).
     /// The node must be one of the edge's endpoints.
+    /// # Errors
+    /// Returns an error when the edge is not found (a missing-index failure).
+    ///
     pub fn set_edge_ortho_towards(
         &mut self,
         edge: petgraph::stable_graph::EdgeIndex,
@@ -1072,6 +1087,10 @@ where
     /// Checks:
     /// - The graph is connected (all nodes reachable from the first node)
     /// - For each connected component: edges = nodes - 1 (tree condition)
+    /// # Errors
+    /// Returns an error when the graph is not a tree (an invalid-topology
+    /// failure) or an internal invariant is violated (an invalid-state failure).
+    ///
     pub fn validate_tree(&self) -> Result<()> {
         let g = self.graph.graph();
         if g.node_count() == 0 {
@@ -1133,6 +1152,10 @@ where
 
     /// Rename an existing node while preserving topology, site space, and
     /// orthogonality metadata.
+    /// # Errors
+    /// Returns an error when `old_name` is not found (a missing-index failure) or
+    /// `new_name` is already in use (a duplicate operation failure).
+    ///
     pub fn rename_node(&mut self, old_name: &V, new_name: V) -> Result<()> {
         if old_name == &new_name {
             return Ok(());
@@ -1220,6 +1243,9 @@ where
     /// Set the orthogonalization region (using node names).
     ///
     /// Validates that all specified nodes exist in the graph.
+    /// # Errors
+    /// Returns an error when a region node is not found (a missing-index failure).
+    ///
     pub fn set_canonical_region(&mut self, region: impl IntoIterator<Item = V>) -> Result<()> {
         let region: HashSet<V> = region.into_iter().collect();
 
@@ -1256,6 +1282,9 @@ where
     /// Add a node to the orthogonalization region.
     ///
     /// Validates that the node exists in the graph.
+    /// # Errors
+    /// Returns an error when the node is not found (a missing-index failure).
+    ///
     pub fn add_to_canonical_region(&mut self, node_name: V) -> Result<()> {
         if !self.graph.has_node(&node_name) {
             return Err(anyhow::anyhow!(
@@ -1568,7 +1597,9 @@ where
     /// * `options` - Truncation options for each SVD (default: no truncation, exact).
     ///
     /// # Errors
-    /// Returns an error if target nodes are missing, an index is unknown, or sweep fails.
+    /// Returns an error when the index permutation is invalid (an invalid-index
+    /// or shape mismatch failure).
+    ///
     pub fn swap_site_indices(
         &mut self,
         target_assignment: &HashMap<T::Index, V>,
@@ -1668,6 +1699,9 @@ where
     ///
     /// Alias for [`swap_site_indices`](Self::swap_site_indices).
     ///
+    /// # Errors
+    /// Returns an error when a target index is not found (a missing-index
+    /// failure) or the permutation is invalid.
     /// # Examples
     ///
     /// ```
@@ -1740,6 +1774,10 @@ where
     ///
     /// # Returns
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
+    /// # Errors
+    /// Returns an error when an internal invariant is violated (a graph
+    /// consistency failure).
+    ///
     pub fn verify_internal_consistency(&self) -> Result<()>
     where
         <T::Index as IndexLike>::Id:

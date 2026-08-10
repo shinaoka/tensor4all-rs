@@ -26,10 +26,25 @@ use std::sync::Arc;
 /// ```
 pub trait StorageScalar: Clone + Send + Sync + 'static {
     /// Build a dense [`Storage`] from column-major data.
+    /// # Errors
+    ///
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
+    ///
     fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage>;
     /// Build a diagonal [`Storage`] from diagonal payload data.
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
+    ///
     fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage>;
     /// Build a structured [`Storage`] from explicit payload metadata.
+    /// # Errors
+    ///
+    /// Returns an error when the structured metadata is inconsistent (an
+    /// /// invalid-storage failure).
+    ///
     fn build_structured_storage(
         data: Vec<Self>,
         payload_dims: Vec<usize>,
@@ -285,8 +300,8 @@ impl<T> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not equal the product of
-    /// `logical_dims`, or if column-major stride computation overflows.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -311,8 +326,8 @@ impl<T> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `logical_rank` is zero and the data does not contain
-    /// exactly one scalar value, or if column-major stride computation overflows.
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -585,7 +600,8 @@ impl<T: Clone> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `perm` is not a valid permutation of the logical axes.
+    /// Returns an error when the permutation is not a valid reordering of the axes
+    /// /// (an invalid-index failure).
     ///
     /// # Examples
     ///
@@ -1040,7 +1056,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the requested dense metadata overflows.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1067,7 +1084,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Currently infallible for valid data, but returns `Result` for consistency.
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1126,8 +1144,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the structured metadata is inconsistent (see
-    /// [`StructuredStorage::new`] for details).
+    /// Returns an error when the structured metadata is inconsistent (an
+    /// /// invalid-storage failure).
     ///
     /// # Examples
     ///
@@ -1211,7 +1229,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not match the product of `logical_dims`.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1233,7 +1252,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not match the product of `logical_dims`.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1255,6 +1275,11 @@ impl Storage {
 
     /// Create diagonal f64 storage from column-major diagonal payload values.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
+    ///
     /// # Examples
     ///
     /// ```
@@ -1271,6 +1296,11 @@ impl Storage {
     }
 
     /// Create diagonal Complex64 storage from column-major diagonal payload values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
