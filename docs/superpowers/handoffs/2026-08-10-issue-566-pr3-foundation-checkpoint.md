@@ -251,3 +251,19 @@
 - apply / compose / identity / linear_operator
 - linsolve / projected_operator / local_linop / projected_state / updater / simplett_bridge
 - top-level mod.rs（dmrg/tdvp/gse エントリ）
+
+## Session 2026-08-13 深夜（treetn 完了）
+
+### treetn の公開 anyhow 面ゼロ達成（step 4 完了）
+- `14f0b37`: addition/evaluator/cached_evaluator/fit/localupdate 16 fn
+- `9c7b395`: partial_contraction/restructure/swap/tensor_like/identity/compose/apply 8 fn
+- `4395320`: linear_operator/linsolve square 11 fn
+- `4d5e75b`: simplett_bridge/projected_*/updater/random + top-level dmrg/tdvp/gse 19 fn
+- 全ゲート green（nextest 2693 / doctests 841 / hdf5 41 / clippy 両 deny / public-error-docs / crate-boundaries / fmt）
+- 教訓: mangled シグネチャ（`Result<X<A,B,Err>>`・tuple 内挿入・`Err(x).into()` vs `Err(x.into())`）が頻発 — 各スライスで awk/brace-scan による fn 境界確認と構造修復を繰り返した。`Ok(...?)` の needless_question_mark にも注意
+
+### 残作業
+- step 5: quanticstransform（29）+ HDF5（6）
+- step 6: simplett（57）+ 残り全公開面
+- レイヤリング項目 c..i
+- PR 作成 → CI → merge → 完了監査
