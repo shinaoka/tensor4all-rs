@@ -66,8 +66,9 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when `old_index` is not present or the
-    /// replacement violates an index identity invariant.
+    /// Returns `Self::Error` when `old_index` is not present (a
+    /// missing-index failure) or the replacement violates an index identity
+    /// invariant (an invalid replacement).
     fn replaceind(
         &self,
         old_index: &Self::Index,
@@ -90,8 +91,10 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when an `old_indices` entry is not present or
-    /// `old_indices` and `new_indices` differ in length.
+    /// Returns `Self::Error` when an `old_indices` entry is not present
+    /// (a missing-index failure), when `old_indices` and `new_indices` differ
+    /// in length (a length mismatch), or when the replacement violates an
+    /// index identity invariant (an invalid replacement).
     fn replaceinds(
         &self,
         old_indices: &[Self::Index],
