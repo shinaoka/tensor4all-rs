@@ -109,6 +109,12 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the indices replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when an `old` entry is not present or
+    /// `old`/`new` differ in length; propagates failures from
+    /// [`Self::replaceinds`].
     fn replaceinds_pairs(
         &self,
         pairs: &[(Self::Index, Self::Index)],
