@@ -115,8 +115,10 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when an `old` entry is not present or
-    /// `old`/`new` differ in length; propagates failures from
+    /// Returns `Self::Error` when an `old` entry is not present (a
+    /// missing-index failure), when `old`/`new` differ in length (a length
+    /// mismatch), or when the replacement violates an index identity
+    /// invariant (an invalid replacement); propagates failures from
     /// [`Self::replaceinds`].
     fn replaceinds_pairs(
         &self,
