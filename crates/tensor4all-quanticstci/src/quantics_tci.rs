@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::error::{QuanticsTCIError, Result as QtciResult};
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
@@ -189,13 +190,14 @@ where
     /// let val = qtci.evaluate(&[2, 3]).unwrap();
     /// assert!((val - 5.0).abs() < 1e-8);
     /// ```
-    pub fn evaluate(&self, indices: &[i64]) -> Result<V> {
+    pub fn evaluate(&self, indices: &[i64]) -> QtciResult<V> {
         let quantics = self.grididx_to_quantics(indices)?;
         // Convert 1-indexed i64 quantics to 0-indexed usize for tensor train evaluation
         let quantics_usize: Vec<usize> = quantics.iter().map(|&x| (x - 1) as usize).collect();
         self.tt
             .evaluate(&quantics_usize)
-            .map_err(|e| anyhow!("Evaluation error: {}", e))
+            .map_err(|e| anyhow!("Evaluation error: {e}"))
+            .map_err(QuanticsTCIError::from)
     }
 
     /// Factorized sum over all grid points.
@@ -222,7 +224,7 @@ where
     /// let sum = qtci.sum().unwrap();
     /// assert!((sum - 8.0).abs() < 1e-8);
     /// ```
-    pub fn sum(&self) -> Result<V> {
+    pub fn sum(&self) -> QtciResult<V> {
         Ok(self.tt.sum())
     }
 
@@ -262,7 +264,7 @@ where
     /// let integral = qtci.integral().unwrap();
     /// assert!((integral - 1.0).abs() < 1e-8);
     /// ```
-    pub fn integral(&self) -> Result<V>
+    pub fn integral(&self) -> QtciResult<V>
     where
         V: std::ops::Mul<f64, Output = V>,
     {
@@ -322,7 +324,7 @@ where
     /// Returns an error when the grid coordinate conversion fails (an
     /// /// grid shape mismatch failure).
     ///
-    pub fn cachedata_origcoord(&self) -> Result<Vec<(Vec<f64>, V)>>
+    pub fn cachedata_origcoord(&self) -> std::result::Result<Vec<(Vec<f64>, V)>, QuanticsTCIError>
     where
         V: Clone,
     {
@@ -337,9 +339,7 @@ where
             }
             Ok(result)
         } else {
-            Err(anyhow!(
-                "Original coordinates only available for discretized grids"
-            ))
+            Err(QuanticsTCIError::DiscreteGridRequired)
         }
     }
 }
@@ -497,7 +497,7 @@ pub fn quanticscrossinterpolate<V, F>(
     f: F,
     initial_pivots: Option<Vec<Vec<i64>>>,
     options: QtciOptions,
-) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     F: Fn(&[f64]) -> V + 'static,
@@ -592,10 +592,11 @@ where
         .iter()
         .map(|v| <V as tensor4all_tcicore::MatrixLuciScalar>::abs_val(*v))
         .fold(0.0f64, f64::max);
-    anyhow::ensure!(
-        tci.max_sample_value > 0.0,
-        "initial pivots must not all evaluate to zero"
-    );
+    if tci.max_sample_value <= 0.0 {
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "initial pivots must not all evaluate to zero".to_string(),
+        });
+    }
 
     let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
@@ -661,16 +662,20 @@ pub fn quanticscrossinterpolate_from_arrays<V, F>(
     f: F,
     initial_pivots: Option<Vec<Vec<i64>>>,
     options: QtciOptions,
-) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     F: Fn(&[f64]) -> V + 'static,
 {
     if xvals.is_empty() {
-        return Err(anyhow!("xvals must not be empty"));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "xvals must not be empty".to_string(),
+        });
     }
     if xvals.iter().any(|x| x.is_empty()) {
-        return Err(anyhow!("xvals must not contain empty dimensions"));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "xvals must not contain empty dimensions".to_string(),
+        });
     }
 
     // Validate inputs
@@ -678,16 +683,18 @@ where
 
     // Check all dimensions are equal (current limitation)
     if !dimensions.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10) {
-        return Err(anyhow!(
-            "This method only supports grids with equal number of points in each direction"
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message:
+                "this method only supports grids with equal number of points in each direction"
+                    .to_string(),
+        });
     }
 
     // Check dimensions are powers of 2
     if !dimensions.iter().all(|&d| (d - d.round()).abs() < 1e-10) {
-        return Err(anyhow!(
-            "This method only supports grid sizes that are powers of 2"
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "this method only supports grid sizes that are powers of 2".to_string(),
+        });
     }
 
     let rs: Vec<usize> = dimensions.iter().map(|&d| d as usize).collect();
@@ -773,29 +780,32 @@ pub fn quanticscrossinterpolate_discrete<V, F>(
     f: F,
     initial_pivots: Option<Vec<Vec<i64>>>,
     options: QtciOptions,
-) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     F: Fn(&[i64]) -> V + 'static,
 {
     if size.is_empty() {
-        return Err(anyhow!(
-            "This method requires at least one grid dimension, got an empty size"
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "this method requires at least one grid dimension, got an empty size"
+                .to_string(),
+        });
     }
     // Validate sizes are powers of 2
     let dimensions: Vec<f64> = size.iter().map(|&s| (s as f64).log2()).collect();
 
     if !dimensions.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10) {
-        return Err(anyhow!(
-            "This method only supports grids with equal number of points in each direction"
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message:
+                "this method only supports grids with equal number of points in each direction"
+                    .to_string(),
+        });
     }
 
     if !dimensions.iter().all(|&d| (d - d.round()).abs() < 1e-10) {
-        return Err(anyhow!(
-            "This method only supports grid sizes that are powers of 2"
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "this method only supports grid sizes that are powers of 2".to_string(),
+        });
     }
 
     let r = dimensions[0] as usize;
@@ -893,10 +903,11 @@ where
         .iter()
         .map(|v| <V as tensor4all_tcicore::MatrixLuciScalar>::abs_val(*v))
         .fold(0.0f64, f64::max);
-    anyhow::ensure!(
-        tci.max_sample_value > 0.0,
-        "initial pivots must not all evaluate to zero"
-    );
+    if tci.max_sample_value <= 0.0 {
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "initial pivots must not all evaluate to zero".to_string(),
+        });
+    }
 
     let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;

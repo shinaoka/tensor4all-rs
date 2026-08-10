@@ -209,7 +209,7 @@ fn test_discrete_cachedata_origcoord_error() {
     let result = qtci.cachedata_origcoord();
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("Original coordinates only available for discretized grids"));
+    assert!(err_msg.contains("original coordinates are only available for discretized grids"));
 }
 
 #[test]

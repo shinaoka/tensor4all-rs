@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::error::{QuanticsTCIError, Result as QtciResult};
 use anyhow::{anyhow, Result};
 use quanticsgrids::DiscretizedGrid;
 use tensor4all_core::TensorElement;
@@ -215,21 +216,22 @@ pub fn quanticscrossinterpolate_batched<V, F>(
     output_dims: &[usize],
     initial_pivots: Option<Vec<Vec<i64>>>,
     options: QtciOptions,
-) -> Result<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
+) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
     F: Fn(&[f64]) -> Vec<V> + 'static,
     V: TTScalar + Default + Clone + 'static + TensorElement + FullPivLuScalar,
 {
     // Validate output_dims
     if output_dims.is_empty() {
-        return Err(anyhow!("output_dims must not be empty"));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "output_dims must not be empty".to_string(),
+        });
     }
     let n_components: usize = output_dims.iter().product();
     if n_components == 0 {
-        return Err(anyhow!(
-            "product of output_dims must be positive, got 0 from {:?}",
-            output_dims
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: format!("product of output_dims must be positive, got 0 from {output_dims:?}"),
+        });
     }
 
     // Shared cache: maps coordinate bits to function output vector.
