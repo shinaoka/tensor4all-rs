@@ -267,3 +267,19 @@
 - step 6: simplett（57）+ 残り全公開面
 - レイヤリング項目 c..i
 - PR 作成 → CI → merge → 完了監査
+
+## Session 2026-08-13 深夜2（step 5 完了）
+
+### quanticstransform（`0c94b68`）
+- 新規 QuanticsTransformError（InvalidConfiguration/Operation + From<anyhow>/TensorDynLenError/TreeTNOperationError）
+- 29 公開 fn 型付け（affine/cumsum/difference_kernel/flip/fourier/phase_rotation/shift/common MPO・LinearOperator 変換）
+- bail!/ensure!/Err 変換、TensorTrain::new・trait-op の wrap
+
+### HDF5（`04db132`）
+- 新規 Hdf5Error（From<anyhow> + cfg ゲート From<hdf5_metno::Error>/<hdf5_rt::Error>）
+- 6 公開 fn（save/append/load × itensor/mps）型付け
+
+### 残作業
+- step 6: simplett（57 fn）
+- レイヤリング項目 c..i
+- PR 作成 → CI → merge → 完了監査
