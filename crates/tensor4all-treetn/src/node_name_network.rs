@@ -502,7 +502,9 @@ where
         let g = self.graph.graph();
         let mut edges = Vec::with_capacity(nodes.len().saturating_sub(1));
 
-        // Build parent map using BFS from root
+        // Build parent map using BFS from root: a single O(V + E) pass where
+        // each vertex's first discoverer becomes its parent, yielding a rooted
+        // tree orientation over the connected component.
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut bfs = Bfs::new(g, root);
         while let Some(node) = bfs.next(g) {

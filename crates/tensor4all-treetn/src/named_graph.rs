@@ -305,6 +305,10 @@ where
     ///
     /// See [`Self::euler_tour_edges`] for details.
     pub fn euler_tour_edges_by_index(&self, root: NodeIndex) -> Vec<(NodeIndex, NodeIndex)> {
+        // Iterative DFS-based Euler tour: each undirected edge is emitted once
+        // in each direction (forward on descent, backward on backtrack). This is
+        // a single O(V + E) pass with a visited-edge set; there is no
+        // per-vertex rescan, so the total cost stays linear in the graph size.
         let mut visited_edges: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
         let mut tour = Vec::new();
         let mut stack = vec![root];

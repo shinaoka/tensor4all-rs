@@ -380,12 +380,16 @@ where
             .node_index(root_name)
             .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in graph", root_name))?;
 
-        // Get edges within the group, ordered from leaves to root.
-        let mut dfs = petgraph::visit::DfsPostOrder::new(g, root_idx);
-        let mut post_order = Vec::new();
-        while let Some(n) = dfs.next(g) {
-            post_order.push(n);
-        }
+        // Get edges within the group, ordered from leaves to root. Reuse the
+        // network's post-order DFS (single O(V+E) pass over the named graph)
+        // instead of duplicating a local traversal.
+        let post_order = self.site_index_network().post_order_dfs_by_index(root_idx);
+
+        // BFS from the root builds the parent map needed to orient internal
+        // edges toward the contraction root (single O(V+E) pass). This is not
+        // equivalent to the post-order list alone: the post-order gives the
+        // contraction sequence, while parents orient each edge for the
+        // einsum pairing.
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut bfs = petgraph::visit::Bfs::new(g, root_idx);
         while let Some(node) = bfs.next(g) {

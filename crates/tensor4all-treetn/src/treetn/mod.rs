@@ -1133,6 +1133,8 @@ where
             .ok_or_else(|| anyhow::anyhow!("Graph has no nodes"))?;
 
         // DFS to count reachable nodes
+        // Single DFS pass (O(V + E)) to verify tree connectivity from the
+        // start node; visits each reachable node exactly once.
         let mut dfs = Dfs::new(g, start_node);
         while let Some(node) = dfs.next(g) {
             visited.insert(node);
@@ -1830,6 +1832,8 @@ where
         if num_nodes > 1 {
             // Start DFS from any node
             if let Some(start_node) = self.graph.graph().node_indices().next() {
+                // Single DFS pass (O(V + E)) counting reachable nodes to
+                // verify the tree is connected.
                 let mut dfs = Dfs::new(self.graph.graph(), start_node);
                 let mut visited_count = 0;
                 while dfs.next(self.graph.graph()).is_some() {
