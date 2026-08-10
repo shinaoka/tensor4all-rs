@@ -77,6 +77,15 @@ where
     let op_network = operator.site_index_network();
     let rhs_network = rhs.site_index_network();
 
+    // The sweep planner builds two-site updates only; a one-node network yields
+    // an empty plan and the solver would silently return the initial guess.
+    if rhs_network.node_count() < 2 {
+        return Err(anyhow::anyhow!(
+            "square_linsolve requires at least two sites; the one-site local \
+             solve is not implemented"
+        ));
+    }
+
     // Check 1: Operator can act on init
     let result_network = init_network
         .apply_operator_topology(op_network)
@@ -125,7 +134,7 @@ where
 /// let s1 = DynIndex::new_dyn(phys_dim);
 /// let b01 = DynIndex::new_dyn(phys_dim);
 ///
-/// // Right-hand side |b>: a two-site product state with a trivial bond.
+/// // Right-hand side |b>: a two-site state with bond dimension two.
 /// let mut rhs = TreeTN::<TensorDynLen, usize>::new();
 /// let a = TensorDynLen::from_dense(
 ///     vec![s0.clone(), b01.clone()],
@@ -167,12 +176,26 @@ where
 /// input_mapping.insert(0usize, IndexMapping { true_index: s0.clone(), internal_index: s0_in });
 /// input_mapping.insert(1usize, IndexMapping { true_index: s1.clone(), internal_index: s1_in });
 /// let mut output_mapping = HashMap::new();
+///
+/// // Zero initial guess: not the solution, so the assertions below prove the
+/// // solver actually solves the system.
+/// let mut init = TreeTN::<TensorDynLen, usize>::new();
+/// let iz0 = TensorDynLen::from_dense(
+///     vec![s0.clone(), b01.clone()],
+///     vec![0.0_f64, 0.0, 0.0, 0.0],
+/// )?;
+/// let iz1 = TensorDynLen::from_dense(
+///     vec![b01.clone(), s1.clone()],
+///     vec![0.0_f64, 0.0, 0.0, 0.0],
+/// )?;
+/// let in0 = init.add_tensor(0, iz0)?;
+/// let in1 = init.add_tensor(1, iz1)?;
+/// init.connect(in0, &b01, in1, &b01)?;
+///
 /// output_mapping.insert(0usize, IndexMapping { true_index: s0, internal_index: s0_out });
 /// output_mapping.insert(1usize, IndexMapping { true_index: s1, internal_index: s1_out });
-///
-/// let init = rhs.clone();
 /// let options = LinsolveOptions::default()
-///     .with_nfullsweeps(3)
+///     .with_nfullsweeps(5)
 ///     .with_gmres_tol(1.0e-10)
 ///     .with_gmres_restart_dim(10)
 ///     .with_gmres_max_restarts(30)

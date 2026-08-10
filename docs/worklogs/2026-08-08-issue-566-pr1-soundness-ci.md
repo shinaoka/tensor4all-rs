@@ -176,19 +176,26 @@ a separate decision point for the #566 Phase 2 shared-rules adoption.
   examples carrying numerical assertions:
   - `partial_contract`: contracts [1,2] and [3,4] over the pair and asserts the
     scalar result is 11.0 via `contract_to_tensor().only().real()`.
-  - `square_linsolve`: two-site identity MPO with explicit index mappings;
-    asserts relative residual < 1e-8 and that the solution reproduces the RHS
-    (Frobenius diff < 1e-6). The plan's one-site identity example does NOT
-    converge in the current implementation (solution stays at init, residual
-    1.0), so the example uses the two-site form that mirrors the passing
-    `test_square_linsolve_with_mappings_identity`; a one-site mapped
-    `square_linsolve` returning init unchanged is a suspected related bug
-    (candidate follow-up: crates/tensor4all-treetn/src/linsolve/square).
+  - `square_linsolve`: two-site identity MPO with explicit index mappings and a
+    zero initial guess; asserts relative residual < 1e-8 and that the solution
+    reproduces the RHS (Frobenius diff < 1e-6). A zero init (not the solution)
+    is used so the assertions actually exercise the solver.
+- One-site mapped systems silently returned the initial guess (residual 1.0)
+  because the two-site sweep planner produces an empty plan for a one-node
+  network. `square_linsolve` now rejects single-site inputs with an explicit
+  error ("requires at least two sites"), with a regression test
+  `test_square_linsolve_rejects_one_site_systems`. A real one-site local solve
+  remains a follow-up. The plan's one-site example therefore could not be used
+  verbatim; the two-site example mirrors the passing
+  `test_square_linsolve_with_mappings_identity`.
 - `kryst` removed from workspace and treetn manifests; stale "via kryst" and
   the kryst link in `linsolve/square/mod.rs` now name
   `tensor4all_core::krylov::gmres`. Cargo.lock is gitignored (regenerated
-  locally by Cargo). `cargo tree -i kryst` is empty.
+  locally by Cargo). No live dependency on `kryst` remains; the only remaining
+  textual `kryst` mentions are intentional records in the worklog and the
+  historical plan under `docs/superpowers/plans/**` (not shipped, excluded by
+  the plan's own `:!docs/superpowers/specs/**`/`plans/**` grep convention).
 - `cargo test --doc --release --workspace` — 840 passed; treetn linsolve
-  tests pass; no `no_run`/`ignore` fences remain in `.rs` (a historical
-  planning doc under docs/superpowers/plans/ still contains ```ignore fences;
-  it is not shipped or compiled, out of scope).
+  35 tests pass; no `no_run`/`ignore` doctest fences remain in `.rs` (a
+  historical planning doc under `docs/superpowers/plans/` still contains
+  ```ignore fences; it is not shipped or compiled, out of scope).
