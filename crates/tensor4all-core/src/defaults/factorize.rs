@@ -515,6 +515,16 @@ where
     factorize_ci_with_options::<T>(t, left_inds, canonical, usize::MAX, 0.0)
 }
 
+// CI-factorization default seam.
+//
+// The default LU/CI factorization implementations in this module consume
+// tensor4all-tcicore's foundational matrix-CI seam (rrlu, MatrixLUCI,
+// MatrixLuciScalar) below the algorithm layer. tensor4all-tcicore has no
+// dependency on tensor4all-core, so the direction core -> tcicore is
+// high-to-low and acyclic: the crate-boundary script rejects any reverse or
+// dev-dependency cycle. TensorDynLen data is unfolded into a column-major
+// eager matrix at this boundary, and fixed-pivot CI factors are rebuilt from
+// that primal value.
 fn factorize_ci_with_options<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
