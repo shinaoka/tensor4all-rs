@@ -576,7 +576,7 @@ pub fn triangular_solve_backend<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> Result<TypedTensor<T>>
+) -> std::result::Result<TypedTensor<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -593,7 +593,7 @@ where
         )
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
-    try_into_typed_result::<T>("triangular_solve", result)
+    try_into_typed_result::<T>("triangular_solve", result).map_err(BackendLinalgError::from)
 }
 
 /// Solve `A X = B` for column-major [`Matrix`] values.
