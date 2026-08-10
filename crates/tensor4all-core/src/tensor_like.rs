@@ -673,8 +673,10 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when structural consistency validation fails.
-    /// The default implementation always returns `Ok(())`.
+    /// Returns `Self::Error` when the tensor's index space or shape is
+    /// structurally inconsistent (for example index-space or dimension
+    /// mismatches, or an invalid internal state). The default implementation
+    /// always returns `Ok(())`.
     fn validate(&self) -> std::result::Result<(), Self::Error> {
         Ok(())
     }
