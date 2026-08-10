@@ -8,7 +8,7 @@
 //!
 //! The algorithm uses alternating updates (sweeping) similar to DMRG:
 //! 1. Position environments to expose a local region
-//! 2. Solve the local linear problem using GMRES (via kryst)
+//! 2. Solve the local linear problem using GMRES (through `tensor4all_core::krylov::gmres`)
 //! 3. Factorize the result and move the orthogonality center
 //! 4. Update environment caches
 //!
@@ -17,7 +17,6 @@
 //! This implementation is inspired by:
 //! - [ITensorMPS.jl](https://github.com/ITensor/ITensorMPS.jl) - Core algorithm structure
 //! - [KrylovKit.jl](https://github.com/Jutho/KrylovKit.jl) - Krylov solver integration pattern
-//! - [kryst](https://github.com/tmathis720/kryst) - Rust GMRES implementation
 //!
 //! # References
 //!
@@ -115,22 +114,88 @@ where
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
+/// use std::collections::HashMap;
 /// use tensor4all_core::{DynIndex, TensorDynLen};
-/// use tensor4all_treetn::{square_linsolve, LinsolveOptions, TreeTN};
+/// use tensor4all_treetn::{square_linsolve, IndexMapping, LinsolveOptions, TreeTN};
 ///
 /// # fn main() -> anyhow::Result<()> {
-/// let s = DynIndex::new_dyn(2);
-/// let operator_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 1.0])?;
-/// let rhs_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
-/// let init_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![0.0, 0.0])?;
+/// let phys_dim = 2usize;
+/// let s0 = DynIndex::new_dyn(phys_dim);
+/// let s1 = DynIndex::new_dyn(phys_dim);
+/// let b01 = DynIndex::new_dyn(phys_dim);
 ///
-/// let operator = TreeTN::<TensorDynLen, usize>::from_tensors(vec![operator_tensor], vec![0])?;
-/// let rhs = TreeTN::<TensorDynLen, usize>::from_tensors(vec![rhs_tensor], vec![0])?;
-/// let init = TreeTN::<TensorDynLen, usize>::from_tensors(vec![init_tensor], vec![0])?;
+/// // Right-hand side |b>: a two-site product state with a trivial bond.
+/// let mut rhs = TreeTN::<TensorDynLen, usize>::new();
+/// let a = TensorDynLen::from_dense(
+///     vec![s0.clone(), b01.clone()],
+///     vec![1.0_f64, 0.0, 0.0, 2.0],
+/// )?;
+/// let b = TensorDynLen::from_dense(
+///     vec![b01.clone(), s1.clone()],
+///     vec![3.0_f64, 0.0, 0.0, 4.0],
+/// )?;
+/// let n0 = rhs.add_tensor(0, a)?;
+/// let n1 = rhs.add_tensor(1, b)?;
+/// rhs.connect(n0, &b01, n1, &b01)?;
 ///
-/// let result = square_linsolve(&operator, &rhs, init, &0usize, LinsolveOptions::default(), None, None)?;
-/// assert_eq!(result.solution.node_count(), 1);
+/// // Identity MPO with internal input/output indices and a dim-1 bond.
+/// let s0_in = DynIndex::new_dyn(phys_dim);
+/// let s1_in = DynIndex::new_dyn(phys_dim);
+/// let s0_out = DynIndex::new_dyn(phys_dim);
+/// let s1_out = DynIndex::new_dyn(phys_dim);
+/// let m_bond = DynIndex::new_dyn(1);
+/// let mut id = vec![0.0_f64; phys_dim * phys_dim];
+/// for i in 0..phys_dim {
+///     id[i * phys_dim + i] = 1.0;
+/// }
+/// let mut operator = TreeTN::<TensorDynLen, usize>::new();
+/// let t0 = TensorDynLen::from_dense(
+///     vec![s0_out.clone(), s0_in.clone(), m_bond.clone()],
+///     id.clone(),
+/// )?;
+/// let t1 = TensorDynLen::from_dense(
+///     vec![m_bond.clone(), s1_out.clone(), s1_in.clone()],
+///     id.clone(),
+/// )?;
+/// let m0 = operator.add_tensor(0, t0)?;
+/// let m1 = operator.add_tensor(1, t1)?;
+/// operator.connect(m0, &m_bond, m1, &m_bond)?;
+///
+/// // Map each state site to the operator's internal in/out indices.
+/// let mut input_mapping = HashMap::new();
+/// input_mapping.insert(0usize, IndexMapping { true_index: s0.clone(), internal_index: s0_in });
+/// input_mapping.insert(1usize, IndexMapping { true_index: s1.clone(), internal_index: s1_in });
+/// let mut output_mapping = HashMap::new();
+/// output_mapping.insert(0usize, IndexMapping { true_index: s0, internal_index: s0_out });
+/// output_mapping.insert(1usize, IndexMapping { true_index: s1, internal_index: s1_out });
+///
+/// let init = rhs.clone();
+/// let options = LinsolveOptions::default()
+///     .with_nfullsweeps(3)
+///     .with_gmres_tol(1.0e-10)
+///     .with_gmres_restart_dim(10)
+///     .with_gmres_max_restarts(30)
+///     .with_max_rank(4)
+///     .with_convergence_tol(1.0e-8);
+/// let result = square_linsolve(
+///     &operator,
+///     &rhs,
+///     init,
+///     &0usize,
+///     options,
+///     Some(input_mapping),
+///     Some(output_mapping),
+/// )?;
+/// assert!(result.residual.is_some_and(|residual| residual < 1.0e-8));
+/// let expected = rhs.contract_to_tensor()?.to_vec::<f64>()?;
+/// let actual = result.solution.contract_to_tensor()?.to_vec::<f64>()?;
+/// let diff: f64 = expected
+///     .iter()
+///     .zip(actual.iter())
+///     .map(|(e, a)| (e - a).powi(2))
+///     .sum();
+/// assert!(diff.sqrt() < 1.0e-6);
 /// # Ok(())
 /// # }
 /// ```

@@ -169,3 +169,26 @@ rationale clusters required for exceptional files. The local
 always-`--release` test policy remains a documented repository-local stricter
 override (justification: heavy numerical test runtime in debug builds); it is
 a separate decision point for the #566 Phase 2 shared-rules adoption.
+
+## Task 10 — runnable doctests and kryst removal (2026-08-10)
+
+- Both prohibited `no_run` doctests in treetn were replaced with runnable
+  examples carrying numerical assertions:
+  - `partial_contract`: contracts [1,2] and [3,4] over the pair and asserts the
+    scalar result is 11.0 via `contract_to_tensor().only().real()`.
+  - `square_linsolve`: two-site identity MPO with explicit index mappings;
+    asserts relative residual < 1e-8 and that the solution reproduces the RHS
+    (Frobenius diff < 1e-6). The plan's one-site identity example does NOT
+    converge in the current implementation (solution stays at init, residual
+    1.0), so the example uses the two-site form that mirrors the passing
+    `test_square_linsolve_with_mappings_identity`; a one-site mapped
+    `square_linsolve` returning init unchanged is a suspected related bug
+    (candidate follow-up: crates/tensor4all-treetn/src/linsolve/square).
+- `kryst` removed from workspace and treetn manifests; stale "via kryst" and
+  the kryst link in `linsolve/square/mod.rs` now name
+  `tensor4all_core::krylov::gmres`. Cargo.lock is gitignored (regenerated
+  locally by Cargo). `cargo tree -i kryst` is empty.
+- `cargo test --doc --release --workspace` — 840 passed; treetn linsolve
+  tests pass; no `no_run`/`ignore` fences remain in `.rs` (a historical
+  planning doc under docs/superpowers/plans/ still contains ```ignore fences;
+  it is not shipped or compiled, out of scope).
