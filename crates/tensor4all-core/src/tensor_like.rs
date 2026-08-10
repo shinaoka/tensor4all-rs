@@ -569,7 +569,8 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the operands have incompatible index spaces
-    /// or the underlying arithmetic/backend computation fails.
+    /// (an index-space mismatch) or the underlying arithmetic or backend
+    /// computation fails.
     fn axpby(
         &self,
         a: AnyScalar,
@@ -581,8 +582,8 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when the underlying arithmetic/backend
-    /// computation fails.
+    /// Returns `Self::Error` when the scalar coefficient is invalid for the
+    /// tensor's scalar type or the underlying backend computation fails.
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error>;
 
     /// Inner product (dot product) of two tensors.
@@ -592,7 +593,8 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the operands have incompatible index spaces
-    /// or the underlying contraction/backend computation fails.
+    /// (an index-space mismatch) or the underlying contraction or backend
+    /// computation fails.
     fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error>;
 
     /// Compute the Frobenius norm of the tensor.
@@ -638,7 +640,9 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Propagates failures from [`Self::axpby`].
+    /// Returns `Self::Error` when the operand index spaces are incompatible
+    /// (an index-space mismatch) or the underlying arithmetic or backend
+    /// computation fails; propagates failures from [`Self::axpby`].
     fn sub(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
@@ -647,7 +651,9 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Propagates failures from [`Self::scale`].
+    /// Returns `Self::Error` when scaling fails (an invalid scalar coefficient
+    /// or a backend computation failure); propagates failures from
+    /// [`Self::scale`].
     fn neg(&self) -> std::result::Result<Self, Self::Error> {
         self.scale(AnyScalar::new_real(-1.0))
     }
