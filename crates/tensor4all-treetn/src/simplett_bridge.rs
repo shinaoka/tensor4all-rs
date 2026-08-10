@@ -11,6 +11,11 @@ use crate::TreeTN;
 /// The returned site indices are ordered by tensor-train site position, which is
 /// convenient for downstream state/layout bookkeeping.
 ///
+/// # Errors
+///
+/// Returns an error when the tensor train cannot be converted to a TreeTN
+/// /// (a shape or index mismatch, or a backend failure).
+///
 /// # Examples
 ///
 /// ```
@@ -43,6 +48,11 @@ where
 ///
 /// The returned site indices are ordered by tensor-train site position, not by
 /// sorted node-name order.
+///
+/// # Errors
+///
+/// Returns an error when the tensor train cannot be converted to a TreeTN
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -77,6 +87,11 @@ where
 /// This is useful when downstream code must preserve external site-index identities
 /// across a conversion boundary while still allowing internal bond indices to be
 /// created fresh.
+///
+/// # Errors
+///
+/// Returns an error when the tensor train cannot be converted to a TreeTN
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

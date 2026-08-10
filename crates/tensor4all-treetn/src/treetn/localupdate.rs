@@ -350,13 +350,10 @@ where
 /// `Ok(())` if the sweep completes successfully.
 ///
 /// # Errors
-/// Returns an error if:
-/// - TreeTN is not canonicalized (canonical_region is empty)
-/// - canonical_region is not a single node
-/// - canonical_region is not within the extracted subtree
-/// - Subtree extraction fails
-/// - The updater returns an error
-/// - Subtree replacement fails
+///
+/// Returns an error when a local update in the sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 /// # Errors
 ///
 /// Returns an error when a local update in the sweep fails (a shape or index
@@ -613,6 +610,11 @@ where
     /// - Bond indices to excluded nodes become external (site) indices in the sub-tree
     /// - ortho_towards directions are copied for edges within the sub-tree
     /// - canonical_region is intersected with the extracted nodes
+    /// # Errors
+    ///
+    /// Returns an error when the subtree structure is invalid (an
+    /// /// invalid-topology failure).
+    ///
     pub fn extract_subtree(&self, node_names: &[V]) -> Result<Self>
     where
         <T::Index as IndexLike>::Id:
@@ -774,6 +776,11 @@ where
     /// - Bond dimensions may differ (this is the typical use case for truncation)
     /// - ortho_towards may differ (will be copied from replacement)
     /// - The original TreeTN is modified in-place
+    /// # Errors
+    ///
+    /// Returns an error when the subtree structure is invalid (an
+    /// /// invalid-topology failure).
+    ///
     pub fn replace_subtree(&mut self, node_names: &[V], replacement: &Self) -> Result<()>
     where
         <T::Index as IndexLike>::Id:

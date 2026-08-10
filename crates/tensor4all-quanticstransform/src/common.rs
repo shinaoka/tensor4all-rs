@@ -110,9 +110,9 @@ pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 /// LinearOperator wrapping the MPO as a TreeTN.
 ///
 /// # Errors
-/// Returns an error when the tensor train is empty, `site_dims` has the wrong
-/// length, a site dimension product overflows, or a required allocation exceeds
-/// the checked `usize`/`isize::MAX` bounds.
+///
+/// Returns an error when the tensor train cannot be converted to an operator
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -327,9 +327,9 @@ pub fn tensortrain_to_linear_operator(
 /// LinearOperator wrapping the MPO as a TreeTN.
 ///
 /// # Errors
-/// Returns an error when the tensor train is empty, either dimension slice has
-/// the wrong length, a site input/output product overflows, or a required
-/// allocation exceeds the checked `usize`/`isize::MAX` bounds.
+///
+/// Returns an error when the tensor train cannot be converted to an operator
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

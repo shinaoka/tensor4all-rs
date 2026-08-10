@@ -165,6 +165,11 @@ where
 /// - Operator nodes don't exist in target
 /// - Gap node site indices not provided
 #[allow(clippy::type_complexity)]
+/// # Errors
+///
+/// Returns an error when the operator spaces are incompatible (a shape or index
+/// /// mismatch) or the composition fails (a backend failure).
+///
 pub fn compose_exclusive_linear_operators<T, V>(
     target: &SiteIndexNetwork<V, T::Index>,
     operators: &[&LinearOperator<T, V>],

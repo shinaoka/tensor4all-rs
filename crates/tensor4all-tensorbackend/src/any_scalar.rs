@@ -690,7 +690,8 @@ impl Scalar {
     ///
     /// # Errors
     ///
-    /// Returns an error if either input is not a real scalar.
+    /// Returns an error when either input is not a real scalar (a dtype
+    /// mismatch failure).
     ///
     /// # Examples
     ///

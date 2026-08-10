@@ -238,6 +238,11 @@ impl ApplyOptions {
 ///
 /// The result `A|x⟩` as a TreeTN, or an error if application fails.
 ///
+/// # Errors
+///
+/// Returns an error when the operator and state are incompatible (a shape or
+/// /// index mismatch) or the application fails (a backend failure).
+///
 /// # Example
 ///
 /// ```
@@ -385,9 +390,9 @@ where
 /// A new operator with the requested true-index bindings.
 ///
 /// # Errors
-/// Returns an error if a replacement changes dimension, names an index not
-/// present in the corresponding mapping, or names the same source index more
-/// than once.
+///
+/// Returns an error when the index binding fails (a shape or index mismatch,
+/// /// or a missing-index failure).
 ///
 /// # Examples
 /// ```
@@ -457,7 +462,9 @@ where
 /// The result of applying the explicitly rebound operator to `state`.
 ///
 /// # Errors
-/// Returns an error if binding fails or if [`apply_linear_operator`] fails.
+///
+/// Returns an error when the operator and state are incompatible (a shape or
+/// /// index mismatch) or a mapped index is missing (a missing-index failure).
 ///
 /// # Examples
 /// ```
@@ -542,9 +549,9 @@ where
 /// The result of applying `operator` to the selected state indices.
 ///
 /// # Errors
-/// Returns an error if numbered-tag selection fails, if the operator has
-/// unequal input/output mapping counts, if binding selected indices fails, or
-/// if the underlying apply algorithm fails.
+///
+/// Returns an error when a numbered tag is ambiguous or missing (a
+/// /// missing-index failure) or the application fails (a backend failure).
 ///
 /// # Examples
 /// ```

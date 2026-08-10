@@ -98,8 +98,9 @@ impl<'a, T> ColMajorArrayRef<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not match the product of `shape`,
-    /// or if the shape product overflows `usize`.
+    /// Returns an error when the array length does not match the dimensions (a
+    /// /// shape mismatch) or the dimensions are invalid.
+    ///
     pub fn new(data: &'a [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
             checked_shape_numel(shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
@@ -364,6 +365,11 @@ impl<T> ColMajorArray<T> {
     ///
     /// Returns an error if the array is not 2D or if the column length does
     /// not match `nrows()`.
+    /// # Errors
+    ///
+    /// Returns an error when the column length does not match the row count (a
+    /// /// shape mismatch).
+    ///
     pub fn push_column(&mut self, col: &[T]) -> Result<(), ColMajorArrayError>
     where
         T: Clone,
@@ -392,6 +398,11 @@ impl<T: Clone> ColMajorArray<T> {
     /// Create an array filled with a given value.
     ///
     /// Returns an error if the product of shape dimensions overflows `usize`.
+    /// # Errors
+    ///
+    /// Returns an error when the dimensions are invalid (a shape mismatch) or the
+    /// /// fill fails.
+    ///
     pub fn filled(shape: Vec<usize>, value: T) -> Result<Self, ColMajorArrayError> {
         let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
             shape: shape.clone(),
@@ -408,6 +419,10 @@ impl<T: Default + Clone> ColMajorArray<T> {
     /// numeric types).
     ///
     /// Returns an error if the product of shape dimensions overflows `usize`.
+    /// # Errors
+    ///
+    /// Returns an error when the dimensions are invalid (a shape mismatch).
+    ///
     pub fn zeros(shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
         let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
             shape: shape.clone(),

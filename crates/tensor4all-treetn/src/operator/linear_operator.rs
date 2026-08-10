@@ -212,6 +212,11 @@ where
     /// # Returns
     ///
     /// A LinearOperator with proper index mappings, or an error if structure is incompatible.
+    /// # Errors
+    ///
+    /// Returns an error when the MPO and state are incompatible (a shape or index
+    /// /// mismatch) or the binding fails.
+    ///
     pub fn from_mpo_and_state(mpo: TreeTN<T, V>, state: &TreeTN<T, V>) -> Result<Self> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
@@ -306,6 +311,11 @@ where
     /// # Returns
     ///
     /// The result of applying the operator to the local tensor.
+    /// # Errors
+    ///
+    /// Returns an error when the local application fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn apply_local(&self, local_tensor: &T, region: &[V]) -> Result<T> {
         // Step 1: Replace input indices in local_tensor with internal indices
         let mut transformed = local_tensor.clone();
@@ -425,9 +435,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if an old node is unknown, if the mapping contains a
-    /// duplicate old node, if the resulting node names would contain
-    /// duplicates, or if rebuilding the MPO fails.
+    /// Returns an error when a node is not found (a missing-index failure) or the
+    /// /// new name is a duplicate (a duplicate operation failure).
     ///
     /// # Examples
     ///
@@ -593,6 +602,11 @@ where
     /// Reset true input indices to match the given state's site space.
     ///
     /// This only rewrites the external mapping. The internal MPO indices are unchanged.
+    /// # Errors
+    ///
+    /// Returns an error when the state site space is incompatible (a shape
+    /// /// mismatch) or the binding fails.
+    ///
     pub fn set_input_space_from_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
         let nodes: Vec<V> = self.input_mapping.keys().cloned().collect();
         for node in nodes {
@@ -626,6 +640,11 @@ where
     /// Reset true output indices to match the given state's site space.
     ///
     /// This only rewrites the external mapping. The internal MPO indices are unchanged.
+    /// # Errors
+    ///
+    /// Returns an error when the state site space is incompatible (a shape
+    /// /// mismatch) or the binding fails.
+    ///
     pub fn set_output_space_from_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
         let nodes: Vec<V> = self.output_mapping.keys().cloned().collect();
         for node in nodes {
@@ -809,8 +828,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the target is incompatible with the internal MPO, or
-    /// if a mapping's internal index is absent from the target network.
+    /// Returns an error when the restructure is incompatible (a shape or index
+    /// /// mismatch) or the rebuild fails (a backend failure).
     ///
     /// # Examples
     ///
