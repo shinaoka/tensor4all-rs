@@ -1126,7 +1126,7 @@ pub extern "C" fn t4a_treetn_orthogonalize(
             .map_err(|err| {
                 capi_error(
                     T4A_INVALID_ARGUMENT,
-                    orthogonalize_error_message(force, err),
+                    orthogonalize_error_message(force, err.source),
                 )
             })?;
         *tn.inner_mut() = canonicalized;

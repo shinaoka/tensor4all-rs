@@ -970,7 +970,7 @@ fn test_treetn_orthogonalize_force_zero_form_mismatch_reports_c_api_hint() {
     );
     let err = last_error();
     assert!(
-        err.contains("force=1") || err.contains("form mismatch"),
+        err.contains("force=1"),
         "unexpected error message for force=0 form mismatch: {err}"
     );
     assert_eq!(read_dense_f64_treetn(tt), before);
