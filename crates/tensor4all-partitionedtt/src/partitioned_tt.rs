@@ -71,6 +71,11 @@ impl PartitionedTT {
     ///
     /// Returns an error if the projectors are not mutually disjoint.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the subdomains have incompatible shapes (a shape
+    /// /// mismatch) or the construction fails.
+    ///
     /// # Examples
     ///
     /// ```
@@ -190,6 +195,11 @@ impl PartitionedTT {
     }
 
     /// Append another PartitionedTT (must have non-overlapping projectors).
+    /// # Errors
+    ///
+    /// Returns an error when the partition shapes are incompatible (a shape
+    /// /// mismatch) or the append fails.
+    ///
     pub fn append(&mut self, other: Self) -> Result<()> {
         // Check for overlap
         for proj in other.data.keys() {
@@ -209,6 +219,11 @@ impl PartitionedTT {
     }
 
     /// Append subdomains.
+    /// # Errors
+    ///
+    /// Returns an error when the partition shapes are incompatible (a shape
+    /// /// mismatch) or the append fails.
+    ///
     pub fn append_subdomains(&mut self, subdomains: Vec<SubDomainTT>) -> Result<()> {
         let other = Self::from_subdomains(subdomains)?;
         self.append(other)
@@ -217,8 +232,9 @@ impl PartitionedTT {
     /// Compute the total Frobenius norm (sqrt of sum of squared norms).
     ///
     /// # Errors
-    /// Propagates tensor-train storage or contraction failures from a
-    /// subdomain norm evaluation.
+    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// /// backend failure).
     ///
     /// # Examples
     ///
@@ -255,6 +271,11 @@ impl PartitionedTT {
     /// Contract with another PartitionedTT.
     ///
     /// Performs pairwise contraction of compatible SubDomainTTs and combines results.
+    /// # Errors
+    ///
+    /// Returns an error when the contraction fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         let mut result = Self::new();
 
@@ -303,9 +324,9 @@ impl PartitionedTT {
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - The projectors are not pairwise disjoint (overlapping patches)
-    /// - TT addition or truncation fails
+    /// Returns an error when the partitions are incompatible (a shape mismatch)
+    /// /// or the addition fails.
+    ///
     pub fn add(&self, other: &Self, options: &TruncateOptions) -> Result<Self> {
         // Collect unique projectors from both (union)
         let mut unique_projectors: std::collections::HashSet<Projector> =
@@ -407,9 +428,9 @@ impl PartitionedTT {
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - The PartitionedTT is empty
-    /// - The subdomains have incompatible structures (different lengths)
+    /// Returns an error when the conversion fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn to_tensor_train(&self) -> Result<TensorTrain> {
         if self.is_empty() {
             return Err(PartitionedTTError::Empty);

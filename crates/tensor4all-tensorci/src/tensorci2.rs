@@ -357,6 +357,11 @@ where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
 {
     /// Create a new empty TensorCI2
+    /// # Errors
+    ///
+    /// Returns an error when the options or input dimensions are invalid (an
+    /// /// invalid-configuration failure).
+    ///
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
             return Err(TCIError::DimensionMismatch {
@@ -613,12 +618,22 @@ where
     }
 
     /// Convert to TensorTrain
+    /// # Errors
+    ///
+    /// Returns an error when the conversion fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn to_tensor_train(&self) -> Result<TensorTrain<T>> {
         let tensors = self.site_tensors.clone();
         TensorTrain::new(tensors).map_err(TCIError::TensorTrainError)
     }
 
     /// Add global pivots to the TCI
+    /// # Errors
+    ///
+    /// Returns an error when a pivot is invalid (an invalid-index or
+    /// /// out-of-bounds failure).
+    ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
         for pivot in pivots {
             if pivot.len() != self.len() {
@@ -677,6 +692,11 @@ where
     ///
     /// This is a public wrapper around the internal `update_pivots` logic,
     /// suitable for calling from C-API.
+    /// # Errors
+    ///
+    /// Returns an error when the two-site sweep fails (a shape or index mismatch,
+    /// /// a non-convergence failure, or a backend failure).
+    ///
     pub fn sweep2site<F, B>(
         &mut self,
         f: &F,
@@ -785,6 +805,11 @@ where
     /// canonical site tensors.
     ///
     /// Port of Julia's `sweep1site!` from `tensorci2.jl`.
+    /// # Errors
+    ///
+    /// Returns an error when the one-site sweep fails (a shape or index mismatch,
+    /// /// a non-convergence failure, or a backend failure).
+    ///
     pub fn sweep1site<F>(
         &mut self,
         f: &F,
@@ -959,6 +984,11 @@ where
     /// The last site tensor is set by direct evaluation.
     ///
     /// Port of Julia's `fillsitetensors!` / `setsitetensor!`.
+    /// # Errors
+    ///
+    /// Returns an error when the site tensors cannot be built (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn fill_site_tensors<F>(&mut self, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -1047,6 +1077,11 @@ where
     /// 3. Forward sweep (with truncation + update tensors)
     ///
     /// Port of Julia's `makecanonical!`.
+    /// # Errors
+    ///
+    /// Returns an error when the canonicalization fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn make_canonical<F>(
         &mut self,
         f: &F,

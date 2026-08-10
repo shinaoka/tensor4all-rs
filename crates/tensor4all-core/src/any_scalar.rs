@@ -171,7 +171,6 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 }
 
 /// Dynamic scalar compatibility wrapper for tensor4all-core.
-///
 /// This owns a rank-0 [`TensorDynLen`] so that scalar values can participate in
 /// the same eager autodiff graph as tensors while preserving the existing
 /// dynamic scalar API shape. The infallible scalar constructors retain a
@@ -485,6 +484,11 @@ impl AnyScalar {
     ///
     /// A scalar with the same value and no gradient tracking.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
+    /// /// failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -551,8 +555,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Propagates autodiff or tensor access failures from the underlying
-    /// tensor runtime.
+    /// Returns an error when the scalar is not a tracked leaf or the gradient is
+    /// /// unavailable (a missing-graph or dtype mismatch failure).
     ///
     /// # Examples
     ///
@@ -580,7 +584,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Propagates tensor runtime failures from the underlying autodiff state.
+    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
+    /// /// failure).
     ///
     /// # Examples
     ///
@@ -607,7 +612,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Propagates failures from the underlying tensor autodiff engine.
+    /// Returns an error when the scalar is not a scalar-valued leaf or the reverse
+    /// /// pass fails (a graph failure).
     ///
     /// # Examples
     ///
@@ -630,6 +636,11 @@ impl AnyScalar {
     /// # Returns
     ///
     /// A scalar with the same value but without gradient tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
+    /// /// failure).
     ///
     /// # Examples
     ///
@@ -811,6 +822,11 @@ impl AnyScalar {
     ///
     /// The conjugated scalar. Real-valued inputs are returned unchanged.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the conjugation fails (a dtype mismatch or backend
+    /// /// failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -899,7 +915,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error if either input is not real-valued.
+    /// Returns an error when the components cannot be composed (a dtype mismatch
+    /// or a backend failure).
     ///
     /// # Examples
     ///

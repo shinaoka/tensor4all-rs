@@ -105,10 +105,9 @@ where
     /// A single tensor representing the full contraction of the network.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - The network is empty
-    /// - The graph is not a valid tree
-    /// - Tensor contraction fails
+    ///
+    /// Returns an error when the dense contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -267,6 +266,11 @@ where
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
+    /// # Errors
+    ///
+    /// Returns an error when the zip-up contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn contract_zipup(
         &self,
         other: &Self,
@@ -299,6 +303,11 @@ where
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
+    /// # Errors
+    ///
+    /// Returns an error when the zip-up contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn contract_zipup_with(
         &self,
         other: &Self,
@@ -674,6 +683,11 @@ where
     /// # Note
     /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
     /// Use `contract_zipup` for efficient contraction of large networks.
+    /// # Errors
+    ///
+    /// Returns an error when the naive contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn contract_naive(&self, other: &Self) -> Result<T>
     where
         V: Ord,
@@ -714,6 +728,11 @@ where
     ///   - It must form a connected subtree
     ///   - All edges from outside the center region must have `ortho_towards` pointing towards the center
     ///   - Edges entirely inside the center region may have `ortho_towards == None`
+    /// # Errors
+    ///
+    /// Returns an error when the orthogonality structure is inconsistent (an
+    /// /// graph consistency failure).
+    ///
     pub fn validate_ortho_consistency(&self) -> Result<()> {
         // If not canonicalized, require no ortho_towards at all
         if self.canonical_region.is_empty() {
@@ -1099,6 +1118,11 @@ where
 ///
 /// This is the main entry point for TreeTN contraction. It dispatches to the
 /// appropriate algorithm based on the options.
+/// # Errors
+///
+/// Returns an error when the contraction fails (a shape or index mismatch,
+/// /// or a backend failure).
+///
 pub fn contract<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
@@ -1162,6 +1186,11 @@ where
 ///
 /// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Returns an error when the contraction fails (a shape or index mismatch,
+/// /// or a backend failure).
+///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,

@@ -169,6 +169,11 @@ where
     /// # Returns
     /// The interpolated value at the specified grid point.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the grid coordinate conversion fails (an
+    /// /// grid shape mismatch failure) or the evaluation fails.
+    ///
     /// # Examples
     ///
     /// ```
@@ -197,6 +202,11 @@ where
     /// Computes the sum efficiently using the tensor train structure,
     /// without visiting every grid point individually.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the grid coordinate conversion fails (an
+    /// /// grid shape mismatch failure) or the summation fails.
+    ///
     /// # Examples
     ///
     /// ```
@@ -224,6 +234,11 @@ where
     /// For inherent discrete grids (created via
     /// [`quanticscrossinterpolate_discrete`]), there is no continuous
     /// domain, so this returns the plain [`sum`](Self::sum).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the grid coordinate conversion fails (an
+    /// /// grid shape mismatch failure) or the integration fails.
     ///
     /// # Examples
     ///
@@ -301,6 +316,11 @@ where
     ///
     /// Only available for discretized grids.
     /// Returns a vector of (coordinates, value) pairs since f64 is not hashable.
+    /// # Errors
+    ///
+    /// Returns an error when the grid coordinate conversion fails (an
+    /// /// grid shape mismatch failure).
+    ///
     pub fn cachedata_origcoord(&self) -> Result<Vec<(Vec<f64>, V)>>
     where
         V: Clone,
@@ -439,6 +459,12 @@ where
 ///
 /// # Returns
 /// Tuple of (QuanticsTensorCI2, ranks, errors)
+///
+/// # Errors
+///
+/// Returns an error when the grid or options are invalid (an
+/// /// invalid-configuration failure), an initial pivot conversion fails, or the
+/// /// interpolation fails to converge (a non-convergence failure).
 ///
 /// # Examples
 ///
@@ -607,7 +633,10 @@ where
 /// Tuple of ([`QuanticsTensorCI2`], ranks per sweep, errors per sweep)
 ///
 /// # Errors
-/// Returns an error if dimensions are not equal or not powers of 2.
+///
+/// Returns an error when the grid or options are invalid (an
+/// /// invalid-configuration failure), an initial pivot conversion fails, or the
+/// /// interpolation fails to converge (a non-convergence failure).
 ///
 /// # Examples
 ///
@@ -710,7 +739,10 @@ where
 /// Tuple of ([`QuanticsTensorCI2`], ranks per sweep, errors per sweep)
 ///
 /// # Errors
-/// Returns an error if dimensions are not equal or not powers of 2.
+///
+/// Returns an error when the grid or options are invalid (an
+/// /// invalid-configuration failure), an initial pivot conversion fails, or the
+/// /// interpolation fails to converge (a non-convergence failure).
 ///
 /// # Examples
 ///
