@@ -239,3 +239,15 @@
 
 ### treetn 残り ~60 fn
 - addition (5) / cached_evaluator (2) / evaluator (2) / fit (3) / localupdate (4) / partial_contraction (2) / restructure (1) / swap (1) / tensor_like (1) / apply/compose/identity (3) / linear_operator (7) / linsolve (5) / projected_operator/local_linop/projected_state/updater (4) / simplett_bridge (7) / top-level mod.rs dmrg/tdvp/gse (7)
+
+## Session 2026-08-13 夜（treetn step 4 継続）
+
+- `1f3e362`: contraction/decompose/canonicalize/truncate/transform 16 fn 型付け
+- `dcdeaf8`: reviewer must-fix — capi orthogonalize_error_message が err.source（anyhow チェーン）を整形するよう修正し、force=1 ヒント復元。テストを force=1 必須に戻す
+- treetn 型付け済み 58 fn / 残り ~54 fn
+
+### 次のスライス
+- addition / cached_evaluator / evaluator / fit / localupdate / partial_contraction / restructure / swap / tensor_like
+- apply / compose / identity / linear_operator
+- linsolve / projected_operator / local_linop / projected_state / updater / simplett_bridge
+- top-level mod.rs（dmrg/tdvp/gse エントリ）
