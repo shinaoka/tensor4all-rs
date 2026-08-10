@@ -155,14 +155,14 @@ cargo test --doc --release --workspace
 cargo doc --workspace --no-deps
 ```
 
-Also run every changed audit script's self-tests and the relevant C API, HDF5, tutorial, benchmark, or generated-artifact checks. Run coverage before any deletion pull request and at final closure:
+Also run every changed audit script's self-tests and the relevant C API, HDF5, tutorial, benchmark, or generated-artifact checks. Coverage is a CI-owned gate (shared agent rules `common/docs-and-tests.md`: hosted CI owns the measurement for coverage, the canonical case; the local pre-PR gate is attestation-based). The coverage job on the pushed pull request is authoritative; a local llvm-cov run is optional, applied only when a deletion or a coverage-sensitive change needs a faster pre-push signal:
 
 ```bash
 cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 ```
 
-Coverage execution must use the repository's resolved release-mode policy after PR 1 updates it.
+Coverage execution must use the repository's resolved release-mode policy after the coverage PR updates it.
 
 ### Final closure validation
 

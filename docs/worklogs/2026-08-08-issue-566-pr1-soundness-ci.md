@@ -155,3 +155,17 @@ fixed and verified in commit `cbfe040`:
   covered by `_comment_tooling` thresholds: they are exercised deterministically
   by the subprocess self-tests, which llvm-cov cannot attribute.
 - `.pi-subagents/` is untracked session infrastructure and now gitignored.
+
+## Shared-rules alignment: coverage ownership (2026-08-10)
+
+Maintainer decision: align local coverage requirements with the shared agent
+rules (`tensor4all-agent-rules`, `common/docs-and-tests.md`). Coverage is the
+canonical CI-owned gate; the local pre-PR gate is attestation-based, so local
+llvm-cov runs are no longer required for PR validation, deletion PRs, or the
+closure audit. The CI coverage job is authoritative. Revised: plan Task 12
+Step 5 and Task 13 step 4, the design Validation Contract, and AGENTS.md.
+Unchanged: CI release-mode coverage (Task 12), thresholds never lowered,
+rationale clusters required for exceptional files. The local
+always-`--release` test policy remains a documented repository-local stricter
+override (justification: heavy numerical test runtime in debug builds); it is
+a separate decision point for the #566 Phase 2 shared-rules adoption.
