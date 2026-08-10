@@ -146,7 +146,7 @@ fn initialize_tensor<T: ScalarTensorElement>(
     }
 
     TensorDynLen::scalar(value).map_err(|source| AnyScalarTensorError::Initialization {
-        source: Arc::from(source.into_boxed_dyn_error()),
+        source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
     })
 }
 
@@ -556,7 +556,8 @@ impl AnyScalar {
     /// ```
     pub fn enable_grad(self) -> std::result::Result<Self, AnyScalarError> {
         let tensor = self.tensor.map_err(anyhow::Error::new)?;
-        Self::from_tensor(tensor.enable_grad()?).map_err(AnyScalarError::from)
+        Self::from_tensor(tensor.enable_grad().map_err(anyhow::Error::from)?)
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns whether this scalar tracks gradients.
@@ -605,6 +606,7 @@ impl AnyScalar {
     pub fn grad(&self) -> std::result::Result<Option<Self>, AnyScalarError> {
         self.as_tensor()?
             .grad()
+            .map_err(anyhow::Error::from)
             .and_then(|maybe_grad| maybe_grad.map(Self::from_tensor).transpose())
             .map_err(AnyScalarError::from)
     }
@@ -634,7 +636,10 @@ impl AnyScalar {
     /// assert!(x.grad().unwrap().is_none());
     /// ```
     pub fn clear_grad(&self) -> std::result::Result<(), AnyScalarError> {
-        self.as_tensor()?.clear_grad().map_err(AnyScalarError::from)
+        self.as_tensor()?
+            .clear_grad()
+            .map_err(anyhow::Error::from)
+            .map_err(AnyScalarError::from)
     }
 
     /// Runs reverse-mode autodiff starting from this scalar.
@@ -661,7 +666,10 @@ impl AnyScalar {
     /// assert_eq!(grad.real(), 4.0);
     /// ```
     pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
-        self.as_tensor()?.backward().map_err(AnyScalarError::from)
+        self.as_tensor()?
+            .backward()
+            .map_err(anyhow::Error::from)
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns a detached copy of this scalar.
@@ -689,7 +697,8 @@ impl AnyScalar {
     /// assert!(!detached.tracks_grad());
     /// ```
     pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
-        Self::from_tensor(self.as_tensor()?.detach()?).map_err(AnyScalarError::from)
+        Self::from_tensor(self.as_tensor()?.detach().map_err(anyhow::Error::from)?)
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns the real part of this scalar.

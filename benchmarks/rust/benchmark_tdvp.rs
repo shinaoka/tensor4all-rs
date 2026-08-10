@@ -174,6 +174,7 @@ fn local_heisenberg_tensor(
     }
 
     TensorDynLen::from_dense(vec![out_left, in_left, out_right, in_right], data)
+        .map_err(anyhow::Error::from)
 }
 
 fn make_edge_heisenberg_operator(
@@ -375,7 +376,7 @@ fn state_vector(
 ) -> anyhow::Result<Vec<Complex64>> {
     let tensor = state.contract_to_tensor()?;
     let aligned = tensor.permuteinds(sites)?;
-    aligned.to_vec::<Complex64>()
+    aligned.to_vec::<Complex64>().map_err(anyhow::Error::from)
 }
 
 fn vector_norm(vector: &[Complex64]) -> f64 {

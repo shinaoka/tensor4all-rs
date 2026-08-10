@@ -156,7 +156,7 @@ fn deterministic_tensor(indices: Vec<DynIndex>, seed: usize) -> Result<TensorDyn
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    TensorDynLen::from_dense(indices, data)
+    TensorDynLen::from_dense(indices, data).map_err(anyhow::Error::from)
 }
 
 fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -415,7 +415,7 @@ fn inner_sitewise_pair_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<An
             .with_context(|| format!("failed to contract ket tensor at site {site}"))?;
     }
 
-    env.sum()
+    env.sum().map_err(anyhow::Error::from)
 }
 
 fn preconjugate_sites(bra: &TensorTrain) -> Result<Vec<TensorDynLen>> {
@@ -449,7 +449,7 @@ fn inner_sitewise_pair_preconj_no_sim(
             .with_context(|| format!("failed to contract ket tensor at site {site}"))?;
     }
 
-    env.sum()
+    env.sum().map_err(anyhow::Error::from)
 }
 
 fn inner_sitewise_nary_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<AnyScalar> {
@@ -474,7 +474,7 @@ fn inner_sitewise_nary_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<An
             .with_context(|| format!("failed to contract three-tensor environment at site {site}"))?;
     }
 
-    env.sum()
+    env.sum().map_err(anyhow::Error::from)
 }
 
 fn inner_sitewise_binary_contract_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<AnyScalar> {
@@ -501,7 +501,7 @@ fn inner_sitewise_binary_contract_no_sim(bra: &TensorTrain, ket: &TensorTrain) -
             .with_context(|| format!("failed to contract ket tensor at site {site}"))?;
     }
 
-    env.sum()
+    env.sum().map_err(anyhow::Error::from)
 }
 
 #[derive(Debug, Default)]

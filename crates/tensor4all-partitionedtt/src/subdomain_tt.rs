@@ -229,8 +229,8 @@ impl SubDomainTT {
         TensorTrain::new(new_tensors).map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
-    fn tensor_operation_error(error: anyhow::Error) -> PartitionedTTError {
-        match error.downcast::<TensorStorageError>() {
+    fn tensor_operation_error(error: impl Into<anyhow::Error>) -> PartitionedTTError {
+        match error.into().downcast::<TensorStorageError>() {
             Ok(source) => PartitionedTTError::TensorStorage { source },
             Err(source) => PartitionedTTError::TensorConstruction { source },
         }

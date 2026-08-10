@@ -588,6 +588,7 @@ where
 ///             vec![index.clone()],
 ///             vec![data[0], Complex64::new(2.0, 0.0) * data[1]],
 ///         )
+///         .map_err(anyhow::Error::from)
 ///     },
 ///     Complex64::new(0.0, -0.25),
 ///     &initial,
@@ -1667,7 +1668,9 @@ where
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 6.0]).unwrap();
 /// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
 /// // Operator A = 2*I (scales input by 2)
-/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(2.0));
+/// let apply_a = |x: &TensorDynLen| {
+///     x.scale(AnyScalar::new_real(2.0)).map_err(anyhow::Error::from)
+/// };
 /// // No-op truncation
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
 /// let result = gmres_with_truncation(apply_a, &b, &x0, &GmresOptions::default(), truncate).unwrap();
@@ -2076,7 +2079,9 @@ impl RestartGmresOptions {
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
-/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(3.0));
+/// let apply_a = |x: &TensorDynLen| {
+///     x.scale(AnyScalar::new_real(3.0)).map_err(anyhow::Error::from)
+/// };
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
@@ -2140,7 +2145,9 @@ pub struct RestartGmresResult<T> {
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
 /// let i = DynIndex::new_dyn(3);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0, 15.0]).unwrap();
-/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(5.0));
+/// let apply_a = |x: &TensorDynLen| {
+///     x.scale(AnyScalar::new_real(5.0)).map_err(anyhow::Error::from)
+/// };
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,

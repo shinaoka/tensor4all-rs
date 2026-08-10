@@ -713,6 +713,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
                 calls.set(call + 1);
                 if call == 2 {
                     x.scale(AnyScalar::new_real(2.0))
+                        .map_err(anyhow::Error::from)
                 } else {
                     Ok(x.clone())
                 }
@@ -1174,6 +1175,7 @@ fn test_gmres_with_good_initial_guess() {
     let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> {
         // A = 2*I
         x.scale(AnyScalar::new_real(2.0))
+            .map_err(anyhow::Error::from)
     };
 
     let options = GmresOptions {

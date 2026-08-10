@@ -689,7 +689,7 @@ where
     })?;
     let trace = trace_tensor.sum().map_err(|source| GseError::Algorithm {
         context: "GSE failed to read local reference-density trace",
-        source,
+        source: anyhow::Error::new(source),
     })?;
 
     let mut basis_rows = old_basis_rows(&basis_tensor, &basis_bond, basis_rank)?;
@@ -699,7 +699,7 @@ where
                 .scale(AnyScalar::new_real(1.0) / trace)
                 .map_err(|source| GseError::Algorithm {
                     context: "GSE failed to normalize local reference density",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         let missing = projected_missing_density_tensor(
             &normalized_density,
@@ -721,20 +721,16 @@ where
                     LinearizationOrder::ColumnMajor,
                 )
             })
-            .and_then(|tensor| {
-                tensor
-                    .permuteinds(&[flat_left.clone(), flat_right])
-                    .map_err(anyhow::Error::new)
-            })
+            .and_then(|tensor| tensor.permuteinds(&[flat_left.clone(), flat_right]))
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to reshape projected reference density for eigensolve",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let decomp = missing_matrix
             .hermitian_eigendecomposition(options.hermitian_tol)
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to diagonalize projected reference density",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         for (col, &lambda) in decomp.eigenvalues.iter().enumerate() {
             if lambda > options.density_weight_cutoff {
@@ -1011,7 +1007,7 @@ where
                     .add(&contribution)
                     .map_err(|source| GseError::Algorithm {
                         context: "GSE failed to accumulate reference density",
-                        source,
+                        source: anyhow::Error::new(source),
                     })?
             }
             None => contribution,
@@ -1034,7 +1030,7 @@ fn old_basis_rows(
                 .select_indices(std::slice::from_ref(basis_bond), &[row])
                 .map_err(|source| GseError::Algorithm {
                     context: "GSE failed to slice old target basis row",
-                    source,
+                    source: anyhow::Error::new(source),
                 })
         })
         .collect()
@@ -1052,19 +1048,14 @@ fn eigenvector_basis_row(
         .select_indices(std::slice::from_ref(eigenvector_index), &[col])
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to select projected-density eigenvector",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     let row = vector
         .unfuse_index(flat_left, q_left, LinearizationOrder::ColumnMajor)
-        .and_then(|tensor| {
-            tensor
-                .conj()
-                .replaceinds(q_left, q_indices)
-                .map_err(anyhow::Error::from)
-        })
+        .and_then(|tensor| tensor.conj().replaceinds(q_left, q_indices))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to reshape projected-density eigenvector into a basis row",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     Ok(row)
 }
@@ -1073,7 +1064,7 @@ fn stack_basis_rows(rows: &[TensorDynLen], new_bond: DynIndex) -> Result<TensorD
     let refs = rows.iter().collect::<Vec<_>>();
     TensorDynLen::stack_along_new_index(&refs, new_bond, 0).map_err(|source| GseError::Algorithm {
         context: "GSE failed to stack expanded basis rows",
-        source,
+        source: anyhow::Error::new(source),
     })
 }
 
@@ -1133,7 +1124,7 @@ fn projected_missing_density_tensor(
         )
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to subtract represented basis projector",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
     let q_mid_left = fresh_indices_like(q_left);
@@ -1187,7 +1178,7 @@ fn identity_on_index_pairs(
         )
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to build one-index-pair identity",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         identity = Some(match identity {
             Some(accumulated) => {
@@ -1205,7 +1196,7 @@ fn identity_on_index_pairs(
         Some(tensor) => Ok(tensor),
         None => TensorDynLen::scalar(1.0_f64).map_err(|source| GseError::Algorithm {
             context: "GSE failed to build scalar q-space identity",
-            source,
+            source: anyhow::Error::new(source),
         }),
     }
 }
@@ -1220,7 +1211,7 @@ fn hermitianize_by_index_groups(
         .axpby(AnyScalar::new_real(0.5), &adjoint, AnyScalar::new_real(0.5))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to Hermitianize projected reference density",
-            source,
+            source: anyhow::Error::new(source),
         })
 }
 

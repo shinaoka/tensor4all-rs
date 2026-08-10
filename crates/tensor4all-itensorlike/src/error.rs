@@ -7,6 +7,8 @@ use thiserror::Error;
 /// Result type for TensorTrain operations.
 pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
+use tensor4all_core::TensorDynLenError;
+
 /// Errors that can occur in TensorTrain operations.
 #[derive(Debug, Error)]
 pub enum TensorTrainError {
@@ -83,6 +85,12 @@ pub enum TensorTrainError {
 impl From<anyhow::Error> for TensorTrainError {
     fn from(source: anyhow::Error) -> Self {
         Self::operation_source("TensorTrain operation failed", source)
+    }
+}
+
+impl From<TensorDynLenError> for TensorTrainError {
+    fn from(source: TensorDynLenError) -> Self {
+        Self::TensorDynLen { source }
     }
 }
 

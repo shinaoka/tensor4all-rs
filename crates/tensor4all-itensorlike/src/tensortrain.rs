@@ -781,12 +781,18 @@ impl TensorTrain {
                 tensors[site] = tensors[site]
                     .fuse_indices(&common, fused_link.clone(), LinearizationOrder::ColumnMajor)
                     .map_err(|e| {
-                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
+                        TensorTrainError::operation_source(
+                            "failed to fuse parallel TT links",
+                            anyhow::Error::new(e),
+                        )
                     })?;
                 tensors[site + 1] = tensors[site + 1]
                     .fuse_indices(&common, fused_link, LinearizationOrder::ColumnMajor)
                     .map_err(|e| {
-                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
+                        TensorTrainError::operation_source(
+                            "failed to fuse parallel TT links",
+                            anyhow::Error::new(e),
+                        )
                     })?;
                 continue;
             }
@@ -1356,7 +1362,10 @@ impl TensorTrain {
         }
         let result = profile_tt_inner_section(profile_enabled, &mut profile.sum, || {
             env.sum().map_err(|err| {
-                TensorTrainError::operation_source("failed to sum scalar inner-product tensor", err)
+                TensorTrainError::operation_source(
+                    "failed to sum scalar inner-product tensor",
+                    anyhow::Error::new(err),
+                )
             })
         });
         if profile_enabled {
@@ -1519,7 +1528,7 @@ impl TensorTrain {
                     .to_vec::<T>()
                     .map_err(|err| TensorTrainError::TensorDynLen {
                         source: TensorDynLenError::Materialization {
-                            source: Arc::from(err.into_boxed_dyn_error()),
+                            source: Arc::new(err),
                         },
                     })?,
             });
@@ -1835,7 +1844,10 @@ impl TensorTrain {
             if site == 0 {
                 // Scale only the first tensor
                 let scaled = tensor.scale(scalar.clone()).map_err(|e| {
-                    TensorTrainError::operation_source("failed to scale tensor at site 0", e)
+                    TensorTrainError::operation_source(
+                        "failed to scale tensor at site 0",
+                        anyhow::Error::new(e),
+                    )
                 })?;
                 tensors.push(scaled);
             } else {

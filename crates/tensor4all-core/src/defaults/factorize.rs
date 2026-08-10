@@ -453,15 +453,15 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let left =
-        TensorDynLen::from_dense(l_indices, l_vec).map_err(FactorizeError::ComputationError)?;
+    let left = TensorDynLen::from_dense(l_indices, l_vec)
+        .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     // Convert U matrix back to tensor
     let u_vec = matrix_to_vec(&u_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let right =
-        TensorDynLen::from_dense(r_indices, u_vec).map_err(FactorizeError::ComputationError)?;
+    let right = TensorDynLen::from_dense(r_indices, u_vec)
+        .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok(FactorizeResult {
         left,

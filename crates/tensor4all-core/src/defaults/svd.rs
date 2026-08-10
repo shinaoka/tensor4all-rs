@@ -385,7 +385,7 @@ pub fn svd_with<T>(
     let v = vh
         .conj()
         .permute(&perm)
-        .map_err(SvdError::ComputationError)?;
+        .map_err(|e| SvdError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok((u, s, v))
 }

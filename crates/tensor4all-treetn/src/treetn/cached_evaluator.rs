@@ -1294,21 +1294,27 @@ fn slice_tensor(tensor: &TensorDynLen, index_vals: &[(DynIndex, usize)]) -> Resu
         .iter()
         .map(|(_, position)| *position)
         .collect::<Vec<_>>();
-    tensor.select_indices(&selected_indices, &positions)
+    tensor
+        .select_indices(&selected_indices, &positions)
+        .map_err(anyhow::Error::from)
 }
 
 fn tensor_values_any(tensor: &TensorDynLen) -> Result<Vec<AnyScalar>> {
     if tensor.is_complex() {
-        tensor.to_vec::<Complex64>().map(|values| {
-            values
-                .into_iter()
-                .map(|value| AnyScalar::new_complex(value.re, value.im))
-                .collect()
-        })
+        tensor
+            .to_vec::<Complex64>()
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| AnyScalar::new_complex(value.re, value.im))
+                    .collect()
+            })
+            .map_err(anyhow::Error::from)
     } else {
         tensor
             .to_vec::<f64>()
             .map(|values| values.into_iter().map(AnyScalar::new_real).collect())
+            .map_err(anyhow::Error::from)
     }
 }
 
@@ -1329,6 +1335,7 @@ fn stack_tensors_with_assignment_index(
 
     let tensor_refs = tensors.iter().collect::<Vec<_>>();
     TensorDynLen::stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
+        .map_err(anyhow::Error::from)
 }
 
 fn gather_stacked_tensor(
@@ -1348,11 +1355,13 @@ fn gather_stacked_tensor(
         target_assignment_index.dim()
     );
 
-    stacked.index_select(
-        source_assignment_index,
-        target_assignment_index.clone(),
-        selected_assignments,
-    )
+    stacked
+        .index_select(
+            source_assignment_index,
+            target_assignment_index.clone(),
+            selected_assignments,
+        )
+        .map_err(anyhow::Error::from)
 }
 
 fn ensure_assignment_axis_last(
