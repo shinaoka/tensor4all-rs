@@ -547,8 +547,9 @@ pub trait TensorVectorSpace: TensorIndex {
     /// Compute the squared Frobenius norm of the tensor.
     ///
     /// # Errors
-    /// Returns backend or storage diagnostics when the norm cannot be
-    /// evaluated.
+    ///
+    /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
+    /// /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -600,7 +601,9 @@ pub trait TensorVectorSpace: TensorIndex {
     /// Compute the Frobenius norm of the tensor.
     ///
     /// # Errors
-    /// Propagates failures from [`Self::norm_squared`].
+    ///
+    /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
+    /// /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -620,8 +623,9 @@ pub trait TensorVectorSpace: TensorIndex {
     /// Compute the maximum absolute value of all tensor elements.
     ///
     /// # Errors
-    /// Returns backend or storage diagnostics when the maximum cannot be
-    /// evaluated.
+    ///
+    /// Returns `Self::Error` when the maximum cannot be evaluated (a
+    /// /// materialization or backend failure).
     ///
     /// # Examples
     /// ```
@@ -783,6 +787,11 @@ pub trait TensorContractionLike: TensorIndex {
 /// Factorization operations for tensor-like values.
 pub trait TensorFactorizationLike: TensorIndex {
     /// Factorize this tensor into left and right factors.
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when the factorization fails (a non-convergence,
+    /// /// singular, or unsupported-storage failure).
+    ///
     fn factorize(
         &self,
         left_inds: &[<Self as TensorIndex>::Index],
@@ -790,6 +799,11 @@ pub trait TensorFactorizationLike: TensorIndex {
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
     /// Factorize this tensor without applying truncation controls.
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when the factorization fails (a non-convergence,
+    /// /// singular, or unsupported-storage failure).
+    ///
     fn factorize_full_rank(
         &self,
         left_inds: &[<Self as TensorIndex>::Index],

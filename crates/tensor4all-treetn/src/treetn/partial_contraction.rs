@@ -823,6 +823,12 @@ where
 ///   index remains in the result.
 /// - **Unmentioned indices**: Pass through unchanged as external legs.
 ///
+/// # Errors
+///
+/// Returns an error when the contraction specification is invalid (an
+/// /// invalid-spec failure) or the contraction fails (a shape or index
+/// /// mismatch, or a backend failure).
+///
 /// # Examples
 ///
 /// ```
@@ -927,8 +933,10 @@ where
 /// A TreeTN with node names and site-index assignment matching `target`.
 ///
 /// # Errors
-/// Returns an error if `spec.output_order` is set, if the partial contraction
-/// fails, or if the contracted result cannot be restructured to `target`.
+///
+/// Returns an error when the contraction specification is invalid (an
+/// /// invalid-spec failure) or the contraction fails (a shape or index
+/// /// mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -1038,8 +1046,9 @@ where
 /// A TreeTN representing the selected-index Hadamard product.
 ///
 /// # Errors
-/// Returns an error if a pair has mismatched dimensions, references a
-/// non-external index, or the underlying contraction fails.
+///
+/// Returns an error when the index spaces are incompatible (a shape or index
+/// /// mismatch) or the contraction fails (a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1101,8 +1110,9 @@ where
 /// A TreeTN after summing over all selected pairs.
 ///
 /// # Errors
-/// Returns an error if a pair has mismatched dimensions, references a
-/// non-external index, or the underlying contraction fails.
+///
+/// Returns an error when the index spaces are incompatible (a shape or index
+/// /// mismatch) or the weighted sum fails (a backend failure).
 ///
 /// # Examples
 /// ```

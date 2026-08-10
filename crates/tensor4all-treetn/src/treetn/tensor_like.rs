@@ -251,9 +251,9 @@ where
     /// `tag_prefix=start_index+1`, and so on.
     ///
     /// # Errors
-    /// Returns an error if `tag_prefix` contains `=`, if any requested numbered
-    /// tag is absent, if a requested numbered tag matches more than one
-    /// external index, or if `start_index + count` overflows `usize`.
+    ///
+    /// Returns an error when a numbered tag is ambiguous or missing (a
+    /// /// missing-index failure).
     ///
     /// # Examples
     /// ```
@@ -315,6 +315,11 @@ where
     /// This is a TreeTN-level wrapper around [`TensorDynLen::unfuse_index`].
     /// It updates the owning node tensor and the site-index metadata, without
     /// introducing any approximation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the old site index is not present (a missing-index
+    /// /// failure) or the new indices are incompatible (a shape mismatch).
     ///
     /// # Examples
     /// ```
