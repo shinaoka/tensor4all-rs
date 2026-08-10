@@ -155,7 +155,25 @@ pub extern "C" fn t4a_index_new(
     })
 }
 
-/// Create a new index with explicit identity, tags, and prime level.
+/// Create a new index with an explicit identity, tags, and prime level.
+///
+/// **Serialization semantics:** index IDs are internal identities used to
+/// distinguish indices with identical tags and prime levels. Constructing an
+/// index with an explicit ID is intended for round-tripping indices through a
+/// serialized representation (file, stream, or foreign buffer) where the
+/// original ID must be preserved. Callers must not fabricate IDs for
+/// application logic; two indices with the same ID, tags, and prime level are
+/// treated as the same index by contraction and index-matching operations.
+///
+/// # Safety
+///
+/// `tags_csv` must be a valid NUL-terminated UTF-8 string. `out` must be a
+/// valid, non-null pointer to a `t4a_index*` location.
+///
+/// # Errors
+///
+/// Returns [`T4A_INVALID_ARGUMENT`] when `dim` is zero, `plev` is negative, or
+/// the tag string is malformed.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_new_with_id(
     dim: usize,
@@ -190,6 +208,20 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> t
 }
 
 /// Get the explicit identity of an index.
+///
+/// **Serialization semantics:** the returned ID identifies the index for
+/// round-tripping through a serialized representation. It is not a stable
+/// user-facing label; callers should rely on tags and prime levels for
+/// application-level identity.
+///
+/// # Safety
+///
+/// `ptr` must point to a valid `t4a_index` created by this library.
+/// `out_id` must be a valid, non-null pointer to a `u64`.
+///
+/// # Errors
+///
+/// Returns a null-pointer error when `ptr` or `out_id` is null.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> t4a_status_code {
     run_value(out_id, || {

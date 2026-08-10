@@ -31,8 +31,10 @@ use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
 use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{einsum_native_tensors, einsum_native_tensors_owned};
 
+#[cfg(test)]
+use crate::defaults::DynId;
 use crate::defaults::TensorDynLenError;
-use crate::defaults::{DynId, DynIndex, TensorDynLen};
+use crate::defaults::{DynIndex, TensorDynLen};
 
 use crate::index_like::IndexLike;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -496,8 +498,7 @@ fn contract_owned_with_options_impl(
                 ));
             }
 
-            let mut diag_uf = AxisUnionFind::new();
-            let plan = build_contraction_plan(&tensor_refs, options, &mut diag_uf)?;
+            let plan = build_contraction_plan(&tensor_refs, options)?;
             drop(tensor_refs);
             let native_operands = tensors
                 .into_iter()
@@ -557,8 +558,7 @@ fn contract_with_options_impl(
                 .any(|structured| structured);
             let has_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
             if has_structured_storage || has_grad {
-                let mut diag_uf = AxisUnionFind::new();
-                let plan = build_contraction_plan(tensors, options, &mut diag_uf)?;
+                let plan = build_contraction_plan(tensors, options)?;
                 return TensorDynLen::contract_structured_payloads_nary(
                     tensors,
                     plan.result_indices,
@@ -582,13 +582,15 @@ fn contract_with_options_impl(
 /// Used to merge diagonal axes from Diag tensors so that they share
 /// the same representative ID when passed to einsum.
 #[derive(Debug, Clone)]
-pub struct AxisUnionFind {
+#[cfg(test)]
+pub(crate) struct AxisUnionFind {
     /// Maps each ID to its parent. If parent[id] == id, it's a root.
     parent: HashMap<DynId, DynId>,
     /// Rank for union by rank optimization.
     rank: HashMap<DynId, usize>,
 }
 
+#[cfg(test)]
 impl AxisUnionFind {
     /// Create a new empty union-find structure.
     pub fn new() -> Self {
@@ -654,6 +656,7 @@ impl AxisUnionFind {
     }
 }
 
+#[cfg(test)]
 impl Default for AxisUnionFind {
     fn default() -> Self {
         Self::new()
@@ -664,35 +667,15 @@ impl Default for AxisUnionFind {
 // Axis helper builders
 // ============================================================================
 
-/// Build a union-find structure from a collection of tensors.
-///
-/// This helper is kept for callers that need to group diagonal axes by index ID.
-/// Numeric contraction currently keeps dense logical axes distinct and propagates
-/// diagonal result metadata separately.
-pub fn build_diag_union(tensors: &[&TensorDynLen]) -> AxisUnionFind {
-    let mut uf = AxisUnionFind::new();
-
-    for tensor in tensors {
-        for idx in tensor.indices() {
-            uf.make_set(*idx.id());
-        }
-
-        if tensor.is_diag() && tensor.indices().len() >= 2 {
-            let first_id = *tensor.indices()[0].id();
-            for idx in tensor.indices().iter().skip(1) {
-                uf.union(first_id, *idx.id());
-            }
-        }
-    }
-
-    uf
-}
-
 /// Remap tensor indices using the union-find structure.
 ///
 /// Returns a vector of remapped IDs for each tensor, suitable for passing
 /// to einsum. The original tensors are not modified.
-pub fn remap_tensor_ids(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> Vec<Vec<DynId>> {
+#[cfg(test)]
+pub(crate) fn remap_tensor_ids(
+    tensors: &[&TensorDynLen],
+    uf: &mut AxisUnionFind,
+) -> Vec<Vec<DynId>> {
     tensors
         .iter()
         .map(|t| t.indices.iter().map(|idx| uf.find(*idx.id())).collect())
@@ -700,7 +683,8 @@ pub fn remap_tensor_ids(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> Ve
 }
 
 /// Remap output IDs using the union-find structure.
-pub fn remap_output_ids(output: &[DynIndex], uf: &mut AxisUnionFind) -> Vec<DynId> {
+#[cfg(test)]
+pub(crate) fn remap_output_ids(output: &[DynIndex], uf: &mut AxisUnionFind) -> Vec<DynId> {
     output.iter().map(|idx| uf.find(*idx.id())).collect()
 }
 
@@ -708,7 +692,11 @@ pub fn remap_output_ids(output: &[DynIndex], uf: &mut AxisUnionFind) -> Vec<DynI
 ///
 /// For unified IDs (from Diag tensors), all axes must have the same dimension,
 /// so we just take the first occurrence.
-pub fn collect_sizes(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> HashMap<DynId, usize> {
+#[cfg(test)]
+pub(crate) fn collect_sizes(
+    tensors: &[&TensorDynLen],
+    uf: &mut AxisUnionFind,
+) -> HashMap<DynId, usize> {
     let mut sizes = HashMap::new();
 
     for tensor in tensors {
@@ -738,13 +726,8 @@ fn contract_impl(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
 ) -> Result<TensorDynLen> {
-    // 1. Build union-find over exact matching index IDs. Diagonal equality is
-    // encoded in the dense native values and should not collapse uncontracted
-    // logical axes in the numeric einsum.
-    let mut diag_uf = AxisUnionFind::new();
-
-    // 2. Build the contraction plan from internal labels.
-    let plan = build_contraction_plan(tensors, options, &mut diag_uf)?;
+    // 1. Build the contraction plan from internal labels.
+    let plan = build_contraction_plan(tensors, options)?;
 
     // Note: Connectivity check is done by caller.
     // via find_tensor_connected_components before calling this function
@@ -906,11 +889,9 @@ struct ContractionPlan {
 fn build_contraction_plan(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
-    diag_uf: &mut AxisUnionFind,
 ) -> Result<ContractionPlan> {
     let retained_indices: HashSet<DynIndex> = options.retain_indices.iter().cloned().collect();
-    let (input_ids, internal_id_to_original) =
-        build_internal_ids(tensors, diag_uf, &retained_indices)?;
+    let (input_ids, internal_id_to_original) = build_internal_ids(tensors, &retained_indices)?;
 
     let mut counts: HashMap<usize, usize> = HashMap::new();
     for ids in &input_ids {
@@ -1077,7 +1058,6 @@ fn output_axis_classes(
 #[allow(clippy::type_complexity)]
 fn build_internal_ids(
     tensors: &[&TensorDynLen],
-    _diag_uf: &mut AxisUnionFind,
     retained_indices: &HashSet<DynIndex>,
 ) -> Result<(Vec<Vec<usize>>, HashMap<usize, (usize, usize)>)> {
     let mut next_id = 0usize;
