@@ -181,8 +181,10 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensors have inconsistent bond dimensions
-    /// (i.e., the link indices between adjacent tensors don't match).
+    /// Returns an error when a tensor's site dimensions are incompatible with
+    /// /// its neighbors (a dimension mismatch) or the chain is structurally
+    /// /// inconsistent (an invalid-state failure).
+    ///
     pub fn new(tensors: Vec<TensorDynLen>) -> Result<Self> {
         if tensors.is_empty() {
             // Create an empty TreeTN
@@ -248,6 +250,11 @@ impl TensorTrain {
     /// * `llim` - Left orthogonality limit (for compatibility; only used to compute center)
     /// * `rlim` - Right orthogonality limit (for compatibility; only used to compute center)
     /// * `canonical_form` - The method used for canonicalization (if any)
+    /// # Errors
+    ///
+    /// Returns an error when the orthogonality center is out of range (an
+    /// /// out-of-bounds failure) or orthogonalization fails.
+    ///
     pub fn with_ortho(
         tensors: Vec<TensorDynLen>,
         llim: i32,
@@ -304,9 +311,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tree cannot be interpreted as a valid tensor
-    /// train, for example because adjacent site tensors have incompatible
-    /// shared indices.
+    /// Returns an error when the input TreeTN is not a linear chain (an
+    /// /// invalid-topology failure) or a site conversion fails.
     ///
     /// # Examples
     ///
@@ -489,6 +495,10 @@ impl TensorTrain {
     ///
     /// Returns `Err` if `site >= len()`.
     #[inline]
+    /// # Errors
+    ///
+    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    ///
     pub fn tensor(&self, site: usize) -> Result<&TensorDynLen> {
         self.tensor_checked(site)
     }
@@ -497,7 +507,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `site >= len()`.
+    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    ///
     pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
@@ -526,6 +537,10 @@ impl TensorTrain {
     ///
     /// Returns `Err` if `site >= len()`.
     #[inline]
+    /// # Errors
+    ///
+    /// Returns an error when `site` is out of range (an out-of-bounds failure).
+    ///
     pub fn tensor_mut(&mut self, site: usize) -> Result<&mut TensorDynLen> {
         self.tensor_mut_checked(site)
     }
@@ -534,7 +549,7 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `site >= len()`.
+    /// Returns an error when `site` is out of range (an out-of-bounds failure).
     ///
     /// # Examples
     ///
@@ -588,6 +603,11 @@ impl TensorTrain {
     ///
     /// Returns an error if the internal site-to-node mapping is inconsistent.
     #[inline]
+    /// # Errors
+    ///
+    /// Returns an error when the tensor train is in an inconsistent state (an
+    /// /// invalid-state failure).
+    ///
     pub fn tensors_mut(&mut self) -> Result<Vec<&mut TensorDynLen>> {
         self.tensors_mut_checked()
     }
@@ -596,7 +616,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal site-to-node mapping is inconsistent.
+    /// Returns an error when the tensor train is in an inconsistent state (an
+    /// /// invalid-state failure).
     ///
     /// # Examples
     ///
@@ -679,8 +700,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor train's internal site mapping is
-    /// inconsistent or rebuilding the tensor train fails.
+    /// Returns an error when the link-index relabeling fails (an invalid-index
+    /// /// failure).
+    ///
     pub fn sim_linkinds(&self) -> Result<Self> {
         if self.len() <= 1 {
             return Ok(self.clone());
@@ -972,8 +994,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if `site >= len()` or if replacing the tensor makes the
-    /// tensor train structure invalid.
+    /// Returns an error when `site` is out of range (an out-of-bounds failure) or
+    /// /// the new tensor has incompatible dimensions (a dimension mismatch).
     ///
     /// # Examples
     ///
@@ -1002,8 +1024,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if `site >= len()` or if replacing the tensor makes the
-    /// tensor train structure invalid.
+    /// Returns an error when `site` is out of range (an out-of-bounds failure) or
+    /// /// the new tensor has incompatible dimensions (a dimension mismatch).
     ///
     /// # Examples
     ///
@@ -1086,6 +1108,11 @@ impl TensorTrain {
     ///   - `Unitary`: Uses QR decomposition, each tensor is isometric
     ///   - `LU`: Uses LU decomposition, one factor has unit diagonal
     ///   - `CI`: Uses Cross Interpolation
+    /// # Errors
+    ///
+    /// Returns an error when `site` is out of range (an out-of-bounds failure) or
+    /// /// orthogonalization fails (a backend or non-convergence failure).
+    ///
     pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
         if self.is_empty() {
             return Err(TensorTrainError::Empty);
@@ -1117,6 +1144,10 @@ impl TensorTrain {
     ///
     /// Note: The `site_range` option in `TruncateOptions` is currently ignored
     /// as the underlying TreeTN truncation operates on the full network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when truncation fails (a backend or SVD failure).
     ///
     /// # Examples
     ///
@@ -1192,9 +1223,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor trains have different lengths, if the
-    /// internal site mapping is inconsistent, or if the final contraction does
-    /// not produce a scalar.
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the contraction fails (a backend failure).
     ///
     /// # Examples
     ///
@@ -1569,6 +1599,11 @@ impl TensorTrain {
     /// A single tensor containing all site indices, or an error if the
     /// tensor train is empty.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the dense materialization fails (a materialization
+    /// /// or backend failure).
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::{DynIndex, TensorDynLen};
@@ -1614,8 +1649,9 @@ impl TensorTrain {
     /// tensor train.
     ///
     /// # Errors
-    /// Returns an error when the tensor train is empty or dense materialization
-    /// fails.
+    ///
+    /// Returns an error when the dense materialization fails (a materialization
+    /// /// or backend failure).
     ///
     /// # Examples
     ///
@@ -1650,7 +1686,10 @@ impl TensorTrain {
     /// A new tensor train representing the sum.
     ///
     /// # Errors
-    /// Returns an error if the tensor trains have incompatible structures.
+    ///
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the direct-sum construction fails.
+    ///
     pub fn add(&self, other: &Self) -> Result<Self> {
         if self.is_empty() && other.is_empty() {
             return Ok(Self::default());
@@ -1704,9 +1743,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the two tensor trains have incompatible chain
-    /// topology, site counts, or site dimensions, or if the strict addition
-    /// fails after reindexing.
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the reindexed addition fails.
     ///
     /// # Examples
     ///
@@ -1776,6 +1814,11 @@ impl TensorTrain {
     /// # Returns
     /// A new tensor train scaled by the given scalar.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the scaling fails (a dtype mismatch or backend
+    /// /// failure).
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
@@ -1830,6 +1873,11 @@ impl TensorTrain {
     /// # Note
     /// The bond dimension of the result is the sum of the bond dimensions
     /// of the two input tensor trains (before any truncation).
+    /// # Errors
+    ///
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the axpby computation fails (a backend failure).
+    ///
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         let scaled_self = self.scale(a)?;
         let scaled_other = other.scale(b)?;
