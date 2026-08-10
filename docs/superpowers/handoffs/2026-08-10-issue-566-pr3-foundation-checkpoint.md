@@ -203,3 +203,23 @@
 
 ### 次のスライス
 - step 3: treetci/quanticstci の公開 anyhow 面
+
+## Session 2026-08-13（step 3 完了: treetci + quanticstci）
+
+### quanticstci（`400e414` + `3ca33d9`）
+- 新規 QuanticsTCIError（InvalidConfiguration/DiscreteGridRequired/Operation + From<anyhow>/From<TreeTciError>）+ QtciResult alias
+- 8 公開 fn 型付け。検証エラー→InvalidConfiguration、非 discretized grid→DiscreteGridRequired
+- reviewer minor: sum() を infallible と文書化、# Errors を variant 基準に、stray '///' 除去
+
+### treetci（`5b7f133` + `44b9caf`）
+- 新規 TreeTciError（InvalidGraph/IndexOutOfBounds/Operation + From<anyhow>/From<TensorDynLenError>）+ TreeTciResult alias
+- 21 公開 fn 型付け（api/assemble/batch/graph/materialize/optimize/state）
+- reviewer must-fix 3 件修正: (1) NaN セマンティクス復元（partial_cmp matches!）、(2) 専用 variant 到達可能化（graph 検証→InvalidGraph、site/edge bounds→IndexOutOfBounds、ConvergenceFailure 削除）、(3) 公開 trait メソッド（FullPivLuScalar::solve_right_full_piv_lu、PivotCandidateProposer::candidates）も TreeTciResult 化
+- 教訓: ensure! 変換の `anyhow!` は macro 未 import ファイルで E0433 → `anyhow::anyhow!` に正規化
+
+### 残作業
+- step 4: treetn（TreeTNOperationError は既設、残り公開 anyhow 面を確認要）
+- step 5: quanticstransform（29）+ HDF5（6）
+- step 6: simplett（57）+ 残り全公開面
+- レイヤリング項目 c..i
+- PR 作成 → CI → merge → 完了監査
