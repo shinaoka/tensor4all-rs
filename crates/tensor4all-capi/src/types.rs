@@ -300,10 +300,13 @@ impl From<t4a_canonical_form> for TreeCanonicalForm {
 ///
 /// Related types:
 /// - [`t4a_singular_value_measure`] selects whether the threshold is applied to
+///
 ///   singular values or squared singular values.
 /// - [`t4a_truncation_rule`] selects whether the threshold is checked per value
+///
 ///   or against the discarded suffix sum.
 /// - [`t4a_svd_truncation_policy`] combines all three knobs with the numeric
+///
 ///   threshold.
 ///
 /// # Examples
@@ -353,8 +356,10 @@ impl From<t4a_threshold_scale> for ThresholdScale {
 ///
 /// Related types:
 /// - [`t4a_threshold_scale`] selects whether the threshold is relative or
+///
 ///   absolute.
 /// - [`t4a_truncation_rule`] selects whether truncation is per value or based
+///
 ///   on the discarded tail sum.
 /// - [`t4a_svd_truncation_policy`] stores the full C-facing SVD policy.
 ///
@@ -405,10 +410,13 @@ impl From<t4a_singular_value_measure> for SingularValueMeasure {
 ///
 /// Related types:
 /// - [`t4a_threshold_scale`] sets whether the threshold is relative or
+///
 ///   absolute.
 /// - [`t4a_singular_value_measure`] sets whether values or squared values are
+///
 ///   measured.
 /// - [`t4a_svd_truncation_policy`] combines the rule with the other SVD
+///
 ///   truncation knobs.
 ///
 /// # Examples
@@ -464,8 +472,10 @@ impl From<t4a_truncation_rule> for TruncationRule {
 /// Related types:
 /// - [`t4a_threshold_scale`] controls relative vs absolute thresholding.
 /// - [`t4a_singular_value_measure`] controls value vs squared-value
+///
 ///   measurement.
 /// - [`t4a_truncation_rule`] controls per-value vs discarded-tail-sum
+///
 ///   truncation.
 ///
 /// # Examples

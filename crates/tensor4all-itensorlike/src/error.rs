@@ -7,6 +7,8 @@ use thiserror::Error;
 /// Result type for TensorTrain operations.
 pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
+use tensor4all_core::TensorDynLenError;
+
 /// Errors that can occur in TensorTrain operations.
 #[derive(Debug, Error)]
 pub enum TensorTrainError {
@@ -23,8 +25,8 @@ pub enum TensorTrainError {
         length: usize,
     },
 
-    /// Bond dimension mismatch between adjacent tensors.
-    #[error("Bond dimension mismatch at site {site}: left tensor has right dim {left_dim}, right tensor has left dim {right_dim}")]
+    /// Bond shape mismatch between adjacent tensors.
+    #[error("Bond shape mismatch at site {site}: left tensor has right dim {left_dim}, right tensor has left dim {right_dim}")]
     BondDimensionMismatch {
         /// The site index where the mismatch occurred.
         site: usize,
@@ -83,6 +85,12 @@ pub enum TensorTrainError {
 impl From<anyhow::Error> for TensorTrainError {
     fn from(source: anyhow::Error) -> Self {
         Self::operation_source("TensorTrain operation failed", source)
+    }
+}
+
+impl From<TensorDynLenError> for TensorTrainError {
+    fn from(source: TensorDynLenError) -> Self {
+        Self::TensorDynLen { source }
     }
 }
 

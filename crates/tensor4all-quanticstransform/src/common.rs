@@ -1,5 +1,6 @@
 //! Common types and helper functions for quantics transformations.
 
+use crate::error::QuanticsTransformError;
 use std::collections::HashMap;
 use std::mem::size_of;
 
@@ -17,28 +18,24 @@ use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
 pub type DynIndex = Index<DynId, TagSet>;
 
 /// Boundary condition for quantics transformations.
-///
 /// Controls how operators handle values that exceed the representable range
 /// `[0, 2^R)`.
-///
 /// # Variants
-///
 /// - **`Periodic`** (default): Results wrap around modulo 2^R.
+///
 ///   Use when functions are periodic or when wraparound is acceptable.
 /// - **`AntiPeriodic`**: Results wrap around modulo 2^R and receive a sign
+///
 ///   `(-1)^q`, where `q` is the integer wrap quotient.
 /// - **`Open`**: Out-of-range results produce zeros.
+///
 ///   Use when the function has compact support or when boundary effects matter.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::BoundaryCondition;
-///
 /// // Default is Periodic
 /// let bc = BoundaryCondition::default();
 /// assert_eq!(bc, BoundaryCondition::Periodic);
-///
 /// // Periodic: shift(7, 2) in 3-bit (mod 8) wraps to 1
 /// // AntiPeriodic: the same wrap receives a -1 sign
 /// // Open: shift(7, 2) in 3-bit goes to 9 >= 8, produces zero
@@ -62,13 +59,10 @@ pub enum BoundaryCondition {
 }
 
 /// Direction for carry propagation in binary arithmetic operations.
-///
 /// This is an internal detail of how binary arithmetic (addition, subtraction)
 /// is implemented in the MPO construction. Most users do not need to set this
 /// directly.
-///
 /// # Variants
-///
 /// - **`LeftToRight`** (default): Carry propagates from MSB to LSB.
 /// - **`RightToLeft`**: Carry propagates from LSB to MSB.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -82,14 +76,11 @@ pub enum CarryDirection {
 
 /// Type alias for the standard LinearOperator used in this crate.
 /// Uses TensorDynLen as the tensor type and usize as the node name type.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{
 ///     identity_mpo, tensortrain_to_linear_operator, QuanticsOperator,
 /// };
-///
 /// let mpo = identity_mpo(1).unwrap();
 /// let operator: QuanticsOperator = tensortrain_to_linear_operator(&mpo, &[2]).unwrap();
 /// assert_eq!(operator.mpo().node_count(), 1);
@@ -97,30 +88,22 @@ pub enum CarryDirection {
 pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 
 /// Convert a TensorTrain (MPO form) to a LinearOperator.
-///
 /// The TensorTrain is assumed to be an MPO with site dimension 4 (2x2 for input/output).
 /// Each site tensor has shape (left_bond, site_dim=4, right_bond) where site_dim
 /// encodes (s_out, s_in) = (2, 2).
-///
 /// # Arguments
 /// * `tt` - TensorTrain representing an MPO
 /// * `site_dims` - Site dimensions for input/output (typically all 2s)
-///
 /// # Returns
 /// LinearOperator wrapping the MPO as a TreeTN.
-///
 /// # Errors
-/// Returns an error when the tensor train is empty, `site_dims` has the wrong
-/// length, a site dimension product overflows, or a required allocation exceeds
-/// the checked `usize`/`isize::MAX` bounds.
-///
+/// Returns an error when the tensor train cannot be converted to an operator
+/// (a shape or index mismatch, or a backend failure).
 /// # Examples
-///
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator;
 /// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-///
 /// let mut tensor = tensor3_zeros(1, 4, 1);
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 3, 0, Complex64::new(1.0, 0.0));
@@ -132,13 +115,13 @@ pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 pub fn tensortrain_to_linear_operator(
     tt: &TensorTrain<Complex64>,
     site_dims: &[usize],
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let n = tt.len();
     if n == 0 {
-        return Err(anyhow::anyhow!("Empty tensor train"));
+        return Err(anyhow::anyhow!("Empty tensor train").into());
     }
     if site_dims.len() != n {
-        return Err(anyhow::anyhow!("Dimension array must have length {n}"));
+        return Err(anyhow::anyhow!("Dimension array must have length {n}").into());
     }
     let bond_capacity = n
         .checked_add(1)
@@ -204,7 +187,8 @@ pub fn tensortrain_to_linear_operator(
                 expected_site_dim,
                 site_dims[i],
                 site_dims[i]
-            ));
+            )
+            .into());
         }
 
         // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
@@ -314,30 +298,22 @@ pub fn tensortrain_to_linear_operator(
 }
 
 /// Convert a TensorTrain (MPO form) to a LinearOperator with asymmetric dimensions.
-///
 /// This variant supports different input and output dimensions, useful for
 /// multi-variable transformations like affine transforms.
-///
 /// # Arguments
 /// * `tt` - TensorTrain representing an MPO
 /// * `input_dims` - Input dimensions per site
 /// * `output_dims` - Output dimensions per site
-///
 /// # Returns
 /// LinearOperator wrapping the MPO as a TreeTN.
-///
 /// # Errors
-/// Returns an error when the tensor train is empty, either dimension slice has
-/// the wrong length, a site input/output product overflows, or a required
-/// allocation exceeds the checked `usize`/`isize::MAX` bounds.
-///
+/// Returns an error when the tensor train cannot be converted to an operator
+/// (a shape or index mismatch, or a backend failure).
 /// # Examples
-///
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator_asymmetric;
 /// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-///
 /// let mut tensor = tensor3_zeros(1, 6, 1);
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 5, 0, Complex64::new(1.0, 0.0));
@@ -350,13 +326,13 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     tt: &TensorTrain<Complex64>,
     input_dims: &[usize],
     output_dims: &[usize],
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let n = tt.len();
     if n == 0 {
-        return Err(anyhow::anyhow!("Empty tensor train"));
+        return Err(anyhow::anyhow!("Empty tensor train").into());
     }
     if input_dims.len() != n || output_dims.len() != n {
-        return Err(anyhow::anyhow!("Dimension arrays must have length {}", n));
+        return Err(anyhow::anyhow!("Dimension arrays must have length {}", n).into());
     }
     let bond_capacity = n
         .checked_add(1)
@@ -428,7 +404,8 @@ pub fn tensortrain_to_linear_operator_asymmetric(
                 expected_site_dim,
                 out_dim,
                 in_dim
-            ));
+            )
+            .into());
         }
 
         // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
@@ -583,15 +560,12 @@ pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)>
 }
 
 /// Embed a single-variable MPO into a multi-variable context.
-///
 /// The original MPO acts on one variable (site_dim = d*d for d=2, i.e., in/out dim 2).
 /// The embedded MPO acts on `nvariables` variables, applying the original
 /// operator to `target_var` and identity on all others.
-///
 /// Site index encoding in the embedded MPO:
 /// `s = s_out * (2^nvariables) + s_in` where
 /// `s_out = var0_out + 2*var1_out + ...` and similarly for `s_in`.
-///
 /// # Arguments
 /// * `mpo` - Single-variable MPO (R sites, site_dim = 4)
 /// * `nvariables` - Total number of variables (must be >= 2)
@@ -680,26 +654,29 @@ pub(crate) fn embed_single_var_mpo(
 }
 
 /// Create an identity MPO for `r` binary sites.
-///
 /// # Errors
-/// Returns an error when `r == 0` or when the site-list allocation exceeds
-/// the checked `usize`/`isize::MAX` bounds.
 ///
+/// Returns an error when `r` is zero (an invalid-configuration failure) or
+/// the site-list allocation overflows (an overflow failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::identity_mpo;
 /// use tensor4all_simplett::AbstractTensorTrain;
-///
 /// let mpo = identity_mpo(2).unwrap();
 /// assert_eq!(mpo.len(), 2);
 /// assert_eq!(mpo.site_dims(), vec![4, 4]);
 /// assert!(identity_mpo(0).is_err());
 /// ```
 #[allow(dead_code)]
-pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
+/// # Errors
+/// Returns an error when the operator construction fails (an overflow or
+/// invalid-configuration failure, or a shape mismatch).
+///
+pub fn identity_mpo(
+    r: usize,
+) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "identity MPO site list",
@@ -717,12 +694,21 @@ pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
         tensors.push(t);
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {}", e))
+    TensorTrain::new(tensors)
+        .map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {e}"))
+        .map_err(QuanticsTransformError::from)
 }
 
 /// Create a scalar MPO (constant times identity).
 #[allow(dead_code)]
-pub fn scalar_mpo(r: usize, value: Complex64) -> Result<TensorTrain<Complex64>> {
+/// # Errors
+/// Returns an error when the operator construction fails (an overflow or
+/// invalid-configuration failure, or a shape mismatch).
+///
+pub fn scalar_mpo(
+    r: usize,
+    value: Complex64,
+) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
     let mut mpo = identity_mpo(r)?;
     mpo.scale(value);
     Ok(mpo)

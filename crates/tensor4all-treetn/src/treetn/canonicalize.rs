@@ -2,10 +2,11 @@
 //!
 //! This module provides methods for canonicalizing tree tensor networks.
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashSet;
 use std::hash::Hash;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{Canonical, FactorizeAlg, TensorLike};
@@ -26,10 +27,17 @@ where
     ///
     /// # Behavior
     /// - If `options.force` is false (default):
+    ///
     ///   - Already at target with same form: returns unchanged (no-op)
     ///   - Different form: returns an error (use `options.force()` to override)
     /// - If `options.force` is true:
+    ///
     ///   - Always performs full canonicalization
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///
@@ -63,7 +71,7 @@ where
         mut self,
         canonical_region: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         let center_v: HashSet<V> = canonical_region.into_iter().collect();
 
         // Smart behavior when not forced
@@ -71,13 +79,15 @@ where
             // Check if already canonicalized with a different form
             if let Some(current_form) = self.canonical_form {
                 if current_form != options.form {
-                    return Err(anyhow::anyhow!(
-                        "Cannot move ortho center: current form is {:?} but {:?} was requested. \
-                         Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
-                        current_form,
-                        options.form
-                    ))
-                    .context("canonicalize: form mismatch");
+                    return Err(TreeTNOperationError::from(
+                        anyhow::anyhow!(
+                            "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                             Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
+                            current_form,
+                            options.form
+                        )
+                        .context("canonicalize: form mismatch"),
+                    ));
                 }
             }
 
@@ -95,11 +105,16 @@ where
     /// Canonicalize the network in-place towards the specified center using options.
     ///
     /// This is the `&mut self` version of [`Self::canonicalize`].
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     pub fn canonicalize_mut(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
-    ) -> Result<()>
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         Self: Default,
     {

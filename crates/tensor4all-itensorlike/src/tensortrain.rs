@@ -10,7 +10,7 @@ use num_complex::Complex64;
 use std::any::TypeId;
 use std::env;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tensor4all_core::{
     common_inds, contract_pair, contract_pair_with_operand_options, hascommoninds, DynIndex,
@@ -75,39 +75,28 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 }
 
 /// Tensor Train with orthogonality tracking.
-///
 /// This type represents a tensor train as a sequence of tensors with tracked
 /// orthogonality limits. It is inspired by ITensorMPS.jl but uses
 /// 0-indexed sites (Rust convention).
-///
 /// Unlike traditional MPS which assumes one physical index per site, this
 /// implementation allows each site to have multiple site indices.
-///
 /// # Orthogonality Tracking
-///
 /// The tensor train tracks orthogonality using `ortho_region` from the underlying TreeTN:
 /// - When `ortho_region` is empty, no orthogonality is assumed
 /// - When `ortho_region` contains a single site, that site is the orthogonality center
-///
 /// # Implementation
-///
 /// Internally wraps `TreeTN<TensorDynLen, usize>` where node names are site indices.
 /// This allows reuse of TreeTN's canonicalization and contraction algorithms.
-///
 /// # Examples
-///
 /// Build a 2-site tensor train and query its properties:
-///
 /// ```
 /// use tensor4all_itensorlike::TensorTrain;
 /// use tensor4all_core::{DynIndex, TensorDynLen, Index};
 /// use tensor4all_core::DynId;
-///
 /// // Site indices and link index
 /// let s0 = Index::new_with_size(DynId(0), 2);
 /// let link = Index::new_with_size(DynId(1), 3);
 /// let s1 = Index::new_with_size(DynId(2), 2);
-///
 /// let t0 = TensorDynLen::from_dense(
 ///     vec![s0.clone(), link.clone()],
 ///     (0..6).map(|i| i as f64).collect(),
@@ -116,7 +105,6 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 ///     vec![link.clone(), s1.clone()],
 ///     (0..6).map(|i| i as f64).collect(),
 /// ).unwrap();
-///
 /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 /// assert_eq!(tt.len(), 2);
 /// assert_eq!(tt.maxbonddim(), 3);
@@ -181,8 +169,10 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensors have inconsistent bond dimensions
-    /// (i.e., the link indices between adjacent tensors don't match).
+    /// Returns an error when a tensor's site dimensions are incompatible with
+    /// /// its neighbors (a shape mismatch) or the chain is structurally
+    /// /// inconsistent (an invalid-state failure).
+    ///
     pub fn new(tensors: Vec<TensorDynLen>) -> Result<Self> {
         if tensors.is_empty() {
             // Create an empty TreeTN
@@ -248,6 +238,11 @@ impl TensorTrain {
     /// * `llim` - Left orthogonality limit (for compatibility; only used to compute center)
     /// * `rlim` - Right orthogonality limit (for compatibility; only used to compute center)
     /// * `canonical_form` - The method used for canonicalization (if any)
+    /// # Errors
+    ///
+    /// Returns an error when the orthogonality center is out of range (an
+    /// /// out of bounds failure) or orthogonalization fails.
+    ///
     pub fn with_ortho(
         tensors: Vec<TensorDynLen>,
         llim: i32,
@@ -304,9 +299,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tree cannot be interpreted as a valid tensor
-    /// train, for example because adjacent site tensors have incompatible
-    /// shared indices.
+    /// Returns an error when the input TreeTN is not a linear chain (an
+    /// /// invalid-topology failure) or a site conversion fails.
     ///
     /// # Examples
     ///
@@ -485,10 +479,11 @@ impl TensorTrain {
 
     /// Get a reference to the tensor at the given site.
     ///
+    #[inline]
     /// # Errors
     ///
-    /// Returns `Err` if `site >= len()`.
-    #[inline]
+    /// Returns an error when `site` is out of range (an out of bounds failure).
+    ///
     pub fn tensor(&self, site: usize) -> Result<&TensorDynLen> {
         self.tensor_checked(site)
     }
@@ -497,7 +492,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `site >= len()`.
+    /// Returns an error when `site` is out of range (an out of bounds failure).
+    ///
     pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
@@ -522,10 +518,11 @@ impl TensorTrain {
 
     /// Get a mutable reference to the tensor at the given site.
     ///
+    #[inline]
     /// # Errors
     ///
-    /// Returns `Err` if `site >= len()`.
-    #[inline]
+    /// Returns an error when `site` is out of range (an out of bounds failure).
+    ///
     pub fn tensor_mut(&mut self, site: usize) -> Result<&mut TensorDynLen> {
         self.tensor_mut_checked(site)
     }
@@ -534,7 +531,7 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `site >= len()`.
+    /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
     /// # Examples
     ///
@@ -586,8 +583,14 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal site-to-node mapping is inconsistent.
+    /// Returns an error when the internal site-to-node mapping is inconsistent (a
+    /// graph consistency failure).
     #[inline]
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn tensors_mut(&mut self) -> Result<Vec<&mut TensorDynLen>> {
         self.tensors_mut_checked()
     }
@@ -596,7 +599,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal site-to-node mapping is inconsistent.
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///
@@ -679,8 +683,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor train's internal site mapping is
-    /// inconsistent or rebuilding the tensor train fails.
+    /// Returns an error when the link-index relabeling fails (an invalid-index
+    /// /// failure).
+    ///
     pub fn sim_linkinds(&self) -> Result<Self> {
         if self.len() <= 1 {
             return Ok(self.clone());
@@ -704,7 +709,7 @@ impl TensorTrain {
                 new_tensor = new_tensor.replaceind(old_idx, new_idx).map_err(|err| {
                     TensorTrainError::operation_source(
                         "failed to replace simulated link index",
-                        err,
+                        anyhow::Error::new(err),
                     )
                 })?;
             }
@@ -776,12 +781,18 @@ impl TensorTrain {
                 tensors[site] = tensors[site]
                     .fuse_indices(&common, fused_link.clone(), LinearizationOrder::ColumnMajor)
                     .map_err(|e| {
-                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
+                        TensorTrainError::operation_source(
+                            "failed to fuse parallel TT links",
+                            anyhow::Error::new(e),
+                        )
                     })?;
                 tensors[site + 1] = tensors[site + 1]
                     .fuse_indices(&common, fused_link, LinearizationOrder::ColumnMajor)
                     .map_err(|e| {
-                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
+                        TensorTrainError::operation_source(
+                            "failed to fuse parallel TT links",
+                            anyhow::Error::new(e),
+                        )
                     })?;
                 continue;
             }
@@ -795,22 +806,28 @@ impl TensorTrain {
                     .map_err(|e| {
                         TensorTrainError::operation_source(
                             "failed to build implicit unit link tensor",
-                            e,
+                            anyhow::Error::new(e),
                         )
                     })?;
             tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
-                TensorTrainError::operation_source("failed to attach implicit unit link", e)
+                TensorTrainError::operation_source(
+                    "failed to attach implicit unit link",
+                    anyhow::Error::new(e),
+                )
             })?;
 
             let right_link =
                 <TensorDynLen as TensorConstructionLike>::ones(&[link]).map_err(|e| {
                     TensorTrainError::operation_source(
                         "failed to build implicit unit link tensor",
-                        e,
+                        anyhow::Error::new(e),
                     )
                 })?;
             tensors[site + 1] = tensors[site + 1].outer_product(&right_link).map_err(|e| {
-                TensorTrainError::operation_source("failed to attach implicit unit link", e)
+                TensorTrainError::operation_source(
+                    "failed to attach implicit unit link",
+                    anyhow::Error::new(e),
+                )
             })?;
         }
 
@@ -966,8 +983,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if `site >= len()` or if replacing the tensor makes the
-    /// tensor train structure invalid.
+    /// Returns an error when `site` is out of range (an out of bounds failure) or
+    /// /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -996,8 +1013,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if `site >= len()` or if replacing the tensor makes the
-    /// tensor train structure invalid.
+    /// Returns an error when `site` is out of range (an out of bounds failure) or
+    /// /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1077,9 +1094,15 @@ impl TensorTrain {
     ///
     /// * `site` - The target site for the orthogonality center (0-indexed)
     /// * `form` - The canonical form to use:
+    ///
     ///   - `Unitary`: Uses QR decomposition, each tensor is isometric
     ///   - `LU`: Uses LU decomposition, one factor has unit diagonal
     ///   - `CI`: Uses Cross Interpolation
+    /// # Errors
+    ///
+    /// Returns an error when `site` is out of range (an out of bounds failure) or
+    /// /// orthogonalization fails (a backend or non-convergence failure).
+    ///
     pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
         if self.is_empty() {
             return Err(TensorTrainError::Empty);
@@ -1111,6 +1134,10 @@ impl TensorTrain {
     ///
     /// Note: The `site_range` option in `TruncateOptions` is currently ignored
     /// as the underlying TreeTN truncation operates on the full network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when truncation fails (a backend or SVD failure).
     ///
     /// # Examples
     ///
@@ -1186,9 +1213,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor trains have different lengths, if the
-    /// internal site mapping is inconsistent, or if the final contraction does
-    /// not produce a scalar.
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the contraction fails (a backend failure).
     ///
     /// # Examples
     ///
@@ -1268,7 +1294,10 @@ impl TensorTrain {
                     PairwiseContractionOptions::new().with_lhs_conj(true),
                 )
                 .map_err(|err| {
-                    TensorTrainError::operation_source("failed to contract leftmost tensors", err)
+                    TensorTrainError::operation_source(
+                        "failed to contract leftmost tensors",
+                        anyhow::Error::new(err),
+                    )
                 })
             })?
         };
@@ -1300,7 +1329,7 @@ impl TensorTrain {
                 .map_err(|err| {
                     TensorTrainError::operation_source(
                         format!("failed to contract environment with site {i}"),
-                        err,
+                        anyhow::Error::new(err),
                     )
                 })
             })?;
@@ -1309,7 +1338,7 @@ impl TensorTrain {
                 contract_pair(&env, bi).map_err(|err| {
                     TensorTrainError::operation_source(
                         format!("failed to contract right operand at site {i}"),
-                        err,
+                        anyhow::Error::new(err),
                     )
                 })
             })?;
@@ -1333,7 +1362,10 @@ impl TensorTrain {
         }
         let result = profile_tt_inner_section(profile_enabled, &mut profile.sum, || {
             env.sum().map_err(|err| {
-                TensorTrainError::operation_source("failed to sum scalar inner-product tensor", err)
+                TensorTrainError::operation_source(
+                    "failed to sum scalar inner-product tensor",
+                    anyhow::Error::new(err),
+                )
             })
         });
         if profile_enabled {
@@ -1492,13 +1524,7 @@ impl TensorTrain {
                 left_dim,
                 physical_dim: total_size / boundary_size,
                 right_dim,
-                data: tensor
-                    .to_vec::<T>()
-                    .map_err(|err| TensorTrainError::TensorDynLen {
-                        source: TensorDynLenError::Materialization {
-                            source: Arc::from(err.into_boxed_dyn_error()),
-                        },
-                    })?,
+                data: tensor.to_vec::<T>().map_err(TensorTrainError::from)?,
             });
         }
 
@@ -1563,6 +1589,11 @@ impl TensorTrain {
     /// A single tensor containing all site indices, or an error if the
     /// tensor train is empty.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the dense materialization fails (a materialization
+    /// /// or backend failure).
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::{DynIndex, TensorDynLen};
@@ -1591,7 +1622,10 @@ impl TensorTrain {
         }
 
         self.treetn.contract_to_tensor().map_err(|source| {
-            TensorTrainError::operation_source("Failed to contract to dense", source)
+            TensorTrainError::operation_source(
+                "Failed to contract to dense",
+                anyhow::Error::new(source),
+            )
         })
     }
 
@@ -1608,8 +1642,9 @@ impl TensorTrain {
     /// tensor train.
     ///
     /// # Errors
-    /// Returns an error when the tensor train is empty or dense materialization
-    /// fails.
+    ///
+    /// Returns an error when the dense materialization fails (a materialization
+    /// /// or backend failure).
     ///
     /// # Examples
     ///
@@ -1644,7 +1679,10 @@ impl TensorTrain {
     /// A new tensor train representing the sum.
     ///
     /// # Errors
-    /// Returns an error if the tensor trains have incompatible structures.
+    ///
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the direct-sum construction fails.
+    ///
     pub fn add(&self, other: &Self) -> Result<Self> {
         if self.is_empty() && other.is_empty() {
             return Ok(Self::default());
@@ -1689,6 +1727,7 @@ impl TensorTrain {
     /// # Arguments
     ///
     /// * `other` - The tensor train to reindex and add. It must have the same
+    ///
     ///   chain length and compatible site dimensions as `self`.
     ///
     /// # Returns
@@ -1698,9 +1737,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the two tensor trains have incompatible chain
-    /// topology, site counts, or site dimensions, or if the strict addition
-    /// fails after reindexing.
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the reindexed addition fails.
     ///
     /// # Examples
     ///
@@ -1770,6 +1808,11 @@ impl TensorTrain {
     /// # Returns
     /// A new tensor train scaled by the given scalar.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the scaling fails (a dtype mismatch or backend
+    /// /// failure).
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
@@ -1798,7 +1841,10 @@ impl TensorTrain {
             if site == 0 {
                 // Scale only the first tensor
                 let scaled = tensor.scale(scalar.clone()).map_err(|e| {
-                    TensorTrainError::operation_source("failed to scale tensor at site 0", e)
+                    TensorTrainError::operation_source(
+                        "failed to scale tensor at site 0",
+                        anyhow::Error::new(e),
+                    )
                 })?;
                 tensors.push(scaled);
             } else {
@@ -1824,6 +1870,11 @@ impl TensorTrain {
     /// # Note
     /// The bond dimension of the result is the sum of the bond dimensions
     /// of the two input tensor trains (before any truncation).
+    /// # Errors
+    ///
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// /// (a shape mismatch) or the axpby computation fails (a backend failure).
+    ///
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         let scaled_self = self.scale(a)?;
         let scaled_other = other.scale(b)?;
@@ -1847,6 +1898,7 @@ impl Default for TensorTrain {
 
 impl TensorIndex for TensorTrain {
     type Index = DynIndex;
+    type Error = TensorTrainError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         // Delegate to the internal TreeTN's TensorIndex implementation
@@ -1857,16 +1909,30 @@ impl TensorIndex for TensorTrain {
         self.treetn.num_external_indices()
     }
 
-    fn replaceind(&self, old: &Self::Index, new: &Self::Index) -> anyhow::Result<Self> {
+    fn replaceind(
+        &self,
+        old: &Self::Index,
+        new: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the internal TreeTN's replaceind
         // After replacement, canonical form may be invalid, so set to None
-        let treetn = self.treetn.replaceind(old, new)?;
-        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
+        let treetn = self
+            .treetn
+            .replaceind(old, new)
+            .map_err(anyhow::Error::new)?;
+        Self::from_inner(treetn, None)
     }
 
-    fn replaceinds(&self, old: &[Self::Index], new: &[Self::Index]) -> anyhow::Result<Self> {
-        let treetn = self.treetn.replaceinds(old, new)?;
-        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
+    fn replaceinds(
+        &self,
+        old: &[Self::Index],
+        new: &[Self::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        let treetn = self
+            .treetn
+            .replaceinds(old, new)
+            .map_err(anyhow::Error::new)?;
+        Self::from_inner(treetn, None)
     }
 }
 
@@ -1875,22 +1941,25 @@ impl TensorIndex for TensorTrain {
 // ============================================================================
 
 impl TensorVectorSpace for TensorTrain {
-    type Error = TensorTrainError;
-
     // ========================================================================
     // GMRES-required methods (fully supported)
     // ========================================================================
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::axpby(self, a, other, b).map_err(anyhow::Error::new)
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        TensorTrain::axpby(self, a, other, b)
     }
 
-    fn scale(&self, scalar: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::scale(self, scalar).map_err(anyhow::Error::new)
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        TensorTrain::scale(self, scalar)
     }
 
-    fn inner_product(&self, other: &Self) -> anyhow::Result<AnyScalar> {
-        self.inner(other).map_err(anyhow::Error::new)
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        self.inner(other)
     }
 
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
@@ -1920,24 +1989,32 @@ impl TensorContractionLike for TensorTrain {
         result
     }
 
-    fn contract(_tensors: &[&Self]) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorContractionLike::contract; use TensorTrain::contract() method instead")
+    fn contract(_tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support TensorContractionLike::contract; use TensorTrain::contract() method instead".to_string(),
+        })
     }
 
     fn direct_sum(
         &self,
         _other: &Self,
         _pairs: &[(Self::Index, Self::Index)],
-    ) -> anyhow::Result<DirectSumResult<Self>> {
-        anyhow::bail!("TensorTrain does not support direct_sum; use add() instead")
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support direct_sum; use add() instead".to_string(),
+        })
     }
 
-    fn outer_product(&self, _other: &Self) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support outer_product")
+    fn outer_product(&self, _other: &Self) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support outer_product".to_string(),
+        })
     }
 
-    fn permuteinds(&self, _new_order: &[Self::Index]) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support permuteinds")
+    fn permuteinds(&self, _new_order: &[Self::Index]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support permuteinds".to_string(),
+        })
     }
 
     fn fuse_indices(
@@ -1945,8 +2022,10 @@ impl TensorContractionLike for TensorTrain {
         _old_indices: &[Self::Index],
         _new_index: Self::Index,
         _order: LinearizationOrder,
-    ) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorContractionLike::fuse_indices")
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support TensorContractionLike::fuse_indices".to_string(),
+        })
     }
 }
 
@@ -1974,25 +2053,28 @@ impl TensorFactorizationLike for TensorTrain {
 }
 
 impl TensorConstructionLike for TensorTrain {
-    fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
+    fn diagonal(
+        input: &Self::Index,
+        output: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Create a single-site TensorTrain with an identity tensor
         let delta = TensorDynLen::diagonal(input, output)?;
-        Self::new(vec![delta]).map_err(anyhow::Error::new)
+        Self::new(vec![delta])
     }
 
-    fn scalar_one() -> anyhow::Result<Self> {
+    fn scalar_one() -> std::result::Result<Self, Self::Error> {
         // Empty tensor train represents scalar 1
-        Self::new(vec![]).map_err(anyhow::Error::new)
+        Self::new(vec![])
     }
 
-    fn ones(indices: &[Self::Index]) -> anyhow::Result<Self> {
+    fn ones(indices: &[Self::Index]) -> std::result::Result<Self, Self::Error> {
         let t = TensorDynLen::ones(indices)?;
-        Self::new(vec![t]).map_err(anyhow::Error::new)
+        Self::new(vec![t])
     }
 
-    fn onehot(index_vals: &[(Self::Index, usize)]) -> anyhow::Result<Self> {
+    fn onehot(index_vals: &[(Self::Index, usize)]) -> std::result::Result<Self, Self::Error> {
         let t = TensorDynLen::onehot(index_vals)?;
-        Self::new(vec![t]).map_err(anyhow::Error::new)
+        Self::new(vec![t])
     }
 }
 

@@ -19,21 +19,46 @@ use tenferro::{DType, Tensor as NativeTensor, TensorScalar};
 /// ```
 pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a dense native tensor from column-major data.
+    /// # Errors
+    ///
+    /// Returns an error when the data length does not match the dimensions (a
+    /// /// shape mismatch) or the backend conversion fails.
+    ///
     fn dense_native_tensor_from_col_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
     /// Build a diagonal native tensor from column-major diagonal payload data.
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible (a shape
+    /// /// mismatch) or the backend conversion fails.
+    ///
     fn diag_native_tensor_from_col_major(
         data: &[Self],
         logical_rank: usize,
     ) -> Result<NativeTensor>;
 
     /// Build a rank-0 native tensor.
+    /// # Errors
+    ///
+    /// Returns an error when the scalar cannot be converted (a dtype mismatch or
+    /// /// backend failure).
+    ///
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
     /// Materialize dense column-major values from a native tensor.
+    /// # Errors
+    ///
+    /// Returns an error when the native tensor cannot be materialized (a dtype
+    /// /// mismatch or backend failure).
+    ///
     fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal values from a dense native tensor.
+    /// # Errors
+    ///
+    /// Returns an error when the native tensor cannot be materialized (a dtype
+    /// /// mismatch or backend failure).
+    ///
     fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }
 

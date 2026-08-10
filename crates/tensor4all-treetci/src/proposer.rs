@@ -1,3 +1,4 @@
+use crate::error::Result as TreeTciResult;
 use crate::{assemble::MultiIndex, column_2d, ncols_2d, SubtreeKey, TreeTCI2, TreeTciEdge};
 use anyhow::{ensure, Result};
 use rand::rngs::SmallRng;
@@ -23,11 +24,16 @@ pub trait PivotCandidateProposer {
     ///
     /// `I_candidates` are multi-indices for the left (u-side) subtree,
     /// `J_candidates` for the right (v-side) subtree.
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
-    ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)>;
+    ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)>;
 }
 
 /// Default neighbor-product proposer that mirrors `TreeTCI.jl`.
@@ -48,11 +54,16 @@ pub trait PivotCandidateProposer {
 pub struct DefaultProposer;
 
 impl PivotCandidateProposer for DefaultProposer {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
-    ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)> {
+    ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
 
@@ -120,11 +131,16 @@ impl Default for SimpleProposer {
 }
 
 impl PivotCandidateProposer for SimpleProposer {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
-    ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)> {
+    ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
         let mut rng = rng_for_edge(state, edge, self.seed, "simple")?;
@@ -192,11 +208,16 @@ impl Default for TruncatedDefaultProposer {
 }
 
 impl PivotCandidateProposer for TruncatedDefaultProposer {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
-    ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)> {
+    ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
         let (default_i, default_j) = DefaultProposer.candidates(state, edge)?;

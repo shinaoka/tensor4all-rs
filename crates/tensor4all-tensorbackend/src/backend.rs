@@ -13,19 +13,14 @@ use crate::context::with_default_backend;
 use crate::matrix::Matrix;
 
 /// Result of SVD decomposition `A = U * diag(S) * Vt`.
-///
 /// The singular values are stored in a real-valued typed tensor, even when the
 /// input matrix is complex.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::svd_backend;
 /// use tenferro::TypedTensor;
-///
 /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
 /// let result = svd_backend(&a).unwrap();
-///
 /// assert_eq!(result.u.shape(), &[2, 2]);
 /// assert_eq!(result.s.shape(), &[2]);
 /// assert_eq!(result.vt.shape(), &[2, 2]);
@@ -41,7 +36,6 @@ pub struct SvdResult<T: TensorScalar> {
 }
 
 /// Result of complete-pivoting LU decomposition `P A Q^T = L U`.
-///
 /// The parity output from tenferro is intentionally omitted because current
 /// tensor4all callers only need the permutation matrices and the upper
 /// triangular factor for pivot selection.
@@ -58,16 +52,12 @@ pub struct FullPivLuResult<T: TensorScalar> {
 }
 
 /// Result of complete-pivoting LU decomposition on [`Matrix`] values.
-///
 /// This is the matrix-shaped counterpart of [`FullPivLuResult`]. It exists so
 /// downstream crates can use backend linalg without hand-writing
 /// `TypedTensor` conversion code.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, full_piv_lu_matrix};
-///
 /// let matrix = from_vec2d(vec![vec![0.0_f64, 1.0], vec![2.0, 3.0]]);
 /// let factors = full_piv_lu_matrix(&matrix).unwrap();
 /// assert_eq!(factors.u.nrows(), 2);
@@ -88,20 +78,123 @@ pub struct FullPivLuMatrixResult<T> {
 /// Scalar bound accepted by tensor4all's typed linalg wrappers.
 pub trait BackendLinalgScalar: TensorScalar {}
 
+/// Scalar types that can solve `T * P = Pi1` via a right full-pivoting LU
+/// solve on the tenferro backend.
+///
+/// This is the foundational seam for matrix cross-interpolation (CI)
+/// materialization: it lets an algorithm layer ask for the backend's
+/// full-pivot LU solve without depending on any higher crate. The four
+/// supported scalar types (f32, f64, Complex32, Complex64) are implemented
+/// here; `f32`/`Complex32` inputs are solved in double precision by the
+/// backend and converted back.
+///
+/// # Errors
+///
+/// Returns an error when the pivot matrix is not square, the shapes are
+/// incompatible, or the backend solve fails.
+pub trait FullPivLuScalar: BackendLinalgScalar {
+    /// Solve `T * P = Pi1` for `T`, where `P` is the pivot matrix (column-major).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BackendLinalgError`] when the pivot matrix is not square
+    /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
+    /// pivot_rows`, a shape mismatch), or when the backend full-pivot LU solve
+    /// fails (a backend failure).
+    fn solve_right_full_piv_lu(
+        lhs_values: &[Self],
+        lhs_rows: usize,
+        lhs_cols: usize,
+        pivot_values: &[Self],
+        pivot_rows: usize,
+        pivot_cols: usize,
+    ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
+}
+
+macro_rules! impl_full_piv_lu_scalar {
+    ($t:ty) => {
+        impl FullPivLuScalar for $t {
+            fn solve_right_full_piv_lu(
+                lhs_values: &[Self],
+                lhs_rows: usize,
+                lhs_cols: usize,
+                pivot_values: &[Self],
+                pivot_rows: usize,
+                pivot_cols: usize,
+            ) -> std::result::Result<Vec<Self>, BackendLinalgError> {
+                if pivot_rows != pivot_cols {
+                    return Err(BackendLinalgError::from(anyhow::anyhow!(
+                        "full-pivot solve requires a square pivot matrix, got {}x{}",
+                        pivot_rows,
+                        pivot_cols
+                    )));
+                }
+                if lhs_cols != pivot_rows {
+                    return Err(BackendLinalgError::from(anyhow::anyhow!(
+                        "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
+                        lhs_rows,
+                        lhs_cols,
+                        pivot_rows,
+                        pivot_cols
+                    )));
+                }
+
+                let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
+                let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
+                let pivot_tensor = tenferro_tensor::Tensor::from_vec_col_major(
+                    vec![pivot_cols, pivot_rows],
+                    pivot_t,
+                );
+                let lhs_tensor =
+                    tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
+                let solved_t = with_default_backend(|backend| {
+                    backend.full_piv_lu_solve(&pivot_tensor, &lhs_tensor, false)
+                })
+                .map_err(|e| {
+                    BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {e}"))
+                })?;
+
+                let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
+                    BackendLinalgError::from(anyhow::anyhow!(
+                        "full_piv_lu_solve returned unexpected dtype"
+                    ))
+                })?;
+                Ok(transpose_column_major(solved_t_values, lhs_cols, lhs_rows))
+            }
+        }
+    };
+}
+
+impl_full_piv_lu_scalar!(f32);
+impl_full_piv_lu_scalar!(f64);
+impl_full_piv_lu_scalar!(num_complex::Complex32);
+impl_full_piv_lu_scalar!(num_complex::Complex64);
+
+/// Transpose a column-major flat buffer.
+fn transpose_column_major<T: Copy + num_traits::Zero>(
+    values: &[T],
+    nrows: usize,
+    ncols: usize,
+) -> Vec<T> {
+    let mut out = vec![T::zero(); nrows * ncols];
+    for col in 0..ncols {
+        for row in 0..nrows {
+            out[col + ncols * row] = values[row + nrows * col];
+        }
+    }
+    out
+}
+
 impl<T: TensorScalar> BackendLinalgScalar for T {}
 
 /// Scalar types supported by [`solve_matrix`].
-///
 /// `f64` and `Complex64` are solved directly. `f32` and `Complex32` are
 /// promoted to the corresponding 64-bit dtype for the backend solve and then
 /// converted back, because the current tenferro CPU LU solve is double
 /// precision only.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, solve_matrix};
-///
 /// let a = from_vec2d(vec![vec![2.0_f32, 1.0], vec![1.0, 2.0]]);
 /// let b = from_vec2d(vec![vec![1.0_f32], vec![0.0]]);
 /// let x = solve_matrix(&a, &b).unwrap();
@@ -117,18 +210,32 @@ pub trait MatrixSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
     }
 }
 
-/// Scalar types supported by [`triangular_solve_matrix`].
+/// Error returned by the CPU backend linear-algebra dispatch helpers.
 ///
+/// Wraps the underlying tenferro or shape diagnostic, preserving its source
+/// chain.
+#[derive(Debug, thiserror::Error)]
+#[error("backend linear algebra failed: {source}")]
+pub struct BackendLinalgError {
+    /// Original backend or shape diagnostic.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for BackendLinalgError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
+/// Scalar types supported by [`triangular_solve_matrix`].
 /// `f64` and `Complex64` are solved directly. `f32` and `Complex32` are
 /// promoted to the corresponding 64-bit dtype for the backend solve and then
 /// converted back, because the current tenferro CPU triangular solve is double
 /// precision only.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, triangular_solve_matrix};
-///
 /// let a = from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
 /// let b = from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
 /// let x = triangular_solve_matrix(&a, &b, true, true, false, false).unwrap();
@@ -495,12 +602,12 @@ where
 }
 
 /// Compute a thin/economy SVD on a typed tensor.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input or the decomposition
-/// fails to converge.
-pub fn svd_backend<T>(a: &TypedTensor<T>) -> Result<SvdResult<T>>
+/// Returns an error when the SVD fails (a backend or non-convergence
+/// /// failure).
+///
+pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -518,12 +625,14 @@ where
 }
 
 /// Compute a thin/economy QR decomposition on a typed tensor.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input or the decomposition
-/// fails.
-pub fn qr_backend<T>(a: &TypedTensor<T>) -> Result<(TypedTensor<T>, TypedTensor<T>)>
+/// Returns an error when the QR fails (a backend or non-convergence
+/// /// failure).
+///
+pub fn qr_backend<T>(
+    a: &TypedTensor<T>,
+) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -540,12 +649,14 @@ where
 }
 
 /// Solve `A X = B` with the configured tenferro backend.
-///
 /// # Errors
-///
-/// Returns an error if the backend rejects the input shapes, the scalar dtype,
-/// or the coefficient matrix is singular.
-pub fn solve_backend<T>(a: &TypedTensor<T>, b: &TypedTensor<T>) -> Result<TypedTensor<T>>
+/// Returns an error when the input shapes or scalar dtype are invalid (a
+/// shape or dtype mismatch) or the coefficient matrix is singular (a singular
+/// failure).
+pub fn solve_backend<T>(
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+) -> std::result::Result<TypedTensor<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -553,19 +664,18 @@ where
     let b_tensor = T::into_tensor(b.shape().to_vec(), b.host_data().to_vec());
     let result = with_default_backend(|backend| backend.solve(&a_tensor, &b_tensor))
         .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
-    try_into_typed_result::<T>("solve", result)
+    try_into_typed_result::<T>("solve", result).map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system with the configured tenferro backend.
-///
 /// If `left_side` is true, this solves `op(A) X = B`; otherwise it solves
 /// `X op(A) = B`. `lower` selects the triangular half, `transpose_a` applies
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input shapes, scalar dtype, or
-/// triangular solve flags.
+/// Returns an error when the solve fails (a backend, singular, or shape
+/// /// mismatch failure).
+///
 pub fn triangular_solve_backend<T>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -573,7 +683,7 @@ pub fn triangular_solve_backend<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> Result<TypedTensor<T>>
+) -> std::result::Result<TypedTensor<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -590,82 +700,80 @@ where
         )
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
-    try_into_typed_result::<T>("triangular_solve", result)
+    try_into_typed_result::<T>("triangular_solve", result).map_err(BackendLinalgError::from)
 }
 
 /// Solve `A X = B` for column-major [`Matrix`] values.
-///
 /// This routes the operation through the configured tenferro backend and keeps
 /// matrix-to-tensor conversion centralized in `tensor4all-tensorbackend`.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input shapes, scalar dtype, or
-/// coefficient matrix.
+/// Returns an error when the input shapes or scalar dtype are invalid (a
+/// /// shape or dtype mismatch) or the solve fails (a backend or singular
+/// /// failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, solve_matrix};
-///
 /// let a = from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 2.0]]);
 /// let b = from_vec2d(vec![vec![1.0_f64], vec![0.0]]);
 /// let x = solve_matrix(&a, &b).unwrap();
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
 /// ```
-pub fn solve_matrix<T>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>>
+pub fn solve_matrix<T>(
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixSolveScalar,
 {
-    T::solve_matrix_impl(a, b)
+    T::solve_matrix_impl(a, b).map_err(BackendLinalgError::from)
 }
 
 /// Solve `A X = B` while consuming column-major [`Matrix`] values.
-///
 /// This routes the operation through the configured tenferro backend and reuses
 /// the input buffers when constructing backend tensors for directly supported
 /// scalar types.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input shapes, scalar dtype, or
-/// coefficient matrix.
+/// Returns an error when the input shapes or scalar dtype are invalid (a
+/// /// shape or dtype mismatch) or the solve fails (a backend or singular
+/// /// failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, solve_matrix_owned};
-///
 /// let a = from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 2.0]]);
 /// let b = from_vec2d(vec![vec![1.0_f64], vec![0.0]]);
 /// let x = solve_matrix_owned(a, b).unwrap();
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
 /// ```
-pub fn solve_matrix_owned<T>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>>
+pub fn solve_matrix_owned<T>(
+    a: Matrix<T>,
+    b: Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixSolveScalar,
 {
-    T::solve_matrix_owned_impl(a, b)
+    T::solve_matrix_owned_impl(a, b).map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system for column-major [`Matrix`] values.
-///
 /// If `left_side` is true, this solves `op(A) X = B`; otherwise it solves
 /// `X op(A) = B`. `lower` selects the triangular half, `transpose_a` applies
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input shapes, scalar dtype,
-/// triangular solve flags, or coefficient matrix.
+/// Returns an error when the input shapes or scalar dtype are invalid (a
+/// /// shape or dtype mismatch), the triangular flags are invalid (an
+/// /// invalid-configuration failure), or the solve fails (a backend or singular
+/// /// failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, triangular_solve_matrix};
-///
 /// let a = from_vec2d(vec![vec![2.0_f64, 1.0], vec![0.0, 3.0]]);
 /// let b = from_vec2d(vec![vec![2.0_f64, 7.0]]);
 /// let x = triangular_solve_matrix(&a, &b, false, false, false, false).unwrap();
@@ -679,29 +787,28 @@ pub fn triangular_solve_matrix<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> Result<Matrix<T>>
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixTriangularSolveScalar,
 {
     T::triangular_solve_matrix_impl(a, b, left_side, lower, transpose_a, unit_diagonal)
+        .map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system while consuming column-major [`Matrix`] values.
-///
 /// If `left_side` is true, this solves `op(A) X = B`; otherwise it solves
 /// `X op(A) = B`. `lower` selects the triangular half, `transpose_a` applies
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
-///
 /// # Errors
 ///
-/// Returns an error if the backend rejects the input shapes, scalar dtype,
-/// triangular solve flags, or coefficient matrix.
+/// Returns an error when the input shapes or scalar dtype are invalid (a
+/// /// shape or dtype mismatch), the triangular flags are invalid (an
+/// /// invalid-configuration failure), or the solve fails (a backend or singular
+/// /// failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, triangular_solve_matrix_owned};
-///
 /// let a = from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
 /// let b = from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
 /// let x = triangular_solve_matrix_owned(a, b, true, true, false, false).unwrap();
@@ -715,20 +822,23 @@ pub fn triangular_solve_matrix_owned<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> Result<Matrix<T>>
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixTriangularSolveScalar,
 {
     T::triangular_solve_matrix_owned_impl(a, b, left_side, lower, transpose_a, unit_diagonal)
+        .map_err(BackendLinalgError::from)
 }
 
 /// Compute complete-pivoting LU with the configured tenferro backend.
-///
 /// # Errors
 ///
-/// Returns an error if the backend does not support the input dtype or if the
-/// factorization fails.
-pub fn full_piv_lu_backend<T>(a: &TypedTensor<T>) -> Result<FullPivLuResult<T>>
+/// Returns an error when the LU factorization fails (a backend or
+/// /// non-convergence failure).
+///
+pub fn full_piv_lu_backend<T>(
+    a: &TypedTensor<T>,
+) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
@@ -748,26 +858,25 @@ where
 }
 
 /// Compute complete-pivoting LU for a column-major [`Matrix`].
-///
 /// This is a convenience wrapper over [`full_piv_lu_backend`] for callers that
 /// use [`Matrix`] as their dense boundary type.
-///
 /// # Errors
 ///
-/// Returns an error if the backend does not support the input dtype or if the
-/// factorization fails.
+/// Returns an error when the backend does not support the input dtype (a
+/// /// dtype mismatch) or the factorization fails (a backend or
+/// /// non-convergence failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, full_piv_lu_matrix};
-///
 /// let matrix = from_vec2d(vec![vec![0.0_f64, 1.0], vec![2.0, 3.0]]);
 /// let factors = full_piv_lu_matrix(&matrix).unwrap();
 /// assert_eq!(factors.p.nrows(), 2);
 /// assert_eq!(factors.q.ncols(), 2);
 /// ```
-pub fn full_piv_lu_matrix<T>(a: &Matrix<T>) -> Result<FullPivLuMatrixResult<T>>
+pub fn full_piv_lu_matrix<T>(
+    a: &Matrix<T>,
+) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar + Copy,
 {

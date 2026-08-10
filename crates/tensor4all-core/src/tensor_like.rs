@@ -16,7 +16,6 @@ use crate::any_scalar::AnyScalar;
 use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
 use crate::truncation::SvdTruncationPolicy;
-use anyhow::Result;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -545,14 +544,12 @@ impl From<anyhow::Error> for TensorVectorSpaceError {
 /// on this trait instead of [`TensorLike`] so block vectors and other abstract
 /// state types do not have to provide unrelated tensor-network operations.
 pub trait TensorVectorSpace: TensorIndex {
-    /// Error returned by norm and approximate-comparison operations.
-    type Error: std::error::Error + Send + Sync + 'static + From<anyhow::Error>;
-
     /// Compute the squared Frobenius norm of the tensor.
     ///
     /// # Errors
-    /// Returns backend or storage diagnostics when the norm cannot be
-    /// evaluated.
+    ///
+    /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
+    /// /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -568,20 +565,45 @@ pub trait TensorVectorSpace: TensorIndex {
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error>;
 
     /// Compute a linear combination: `a * self + b * other`.
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the operands have incompatible index spaces
+    /// (an index-space mismatch) or the underlying arithmetic or backend
+    /// computation reports a failure.
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Scalar multiplication.
-    fn scale(&self, scalar: AnyScalar) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the scalar coefficient is invalid for the
+    /// tensor's scalar type or the underlying backend computation reports a
+    /// failure.
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error>;
 
     /// Inner product (dot product) of two tensors.
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the operands have incompatible index spaces
+    /// (an index-space mismatch) or the underlying contraction or backend
+    /// computation reports a failure.
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error>;
 
     /// Compute the Frobenius norm of the tensor.
     ///
     /// # Errors
-    /// Propagates failures from [`Self::norm_squared`].
+    ///
+    /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
+    /// /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -601,8 +623,9 @@ pub trait TensorVectorSpace: TensorIndex {
     /// Compute the maximum absolute value of all tensor elements.
     ///
     /// # Errors
-    /// Returns backend or storage diagnostics when the maximum cannot be
-    /// evaluated.
+    ///
+    /// Returns `Self::Error` when the maximum cannot be evaluated (a
+    /// /// materialization or backend failure).
     ///
     /// # Examples
     /// ```
@@ -618,26 +641,40 @@ pub trait TensorVectorSpace: TensorIndex {
     fn maxabs(&self) -> std::result::Result<f64, Self::Error>;
 
     /// Element-wise subtraction: `self - other`.
-    fn sub(&self, other: &Self) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the operand index spaces are incompatible
+    /// (an index-space mismatch) or the underlying arithmetic or backend
+    /// computation reports a failure; propagates failures from [`Self::axpby`].
+    fn sub(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
 
     /// Negate all elements: `-self`.
-    fn neg(&self) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when scaling reports a failure (an invalid
+    /// scalar coefficient or a backend computation failure); propagates
+    /// failures from [`Self::scale`].
+    fn neg(&self) -> std::result::Result<Self, Self::Error> {
         self.scale(AnyScalar::new_real(-1.0))
     }
 
     /// Approximate equality check (Julia `isapprox` semantics).
     ///
     /// # Errors
-    /// Propagates failures from subtraction or norm evaluation.
+    /// Returns `Self::Error` when the operands have incompatible index spaces
+    /// (an index-space mismatch) or when norm evaluation reports a failure;
+    /// propagates failures from subtraction and norm evaluation.
     fn isapprox(
         &self,
         other: &Self,
         atol: f64,
         rtol: f64,
     ) -> std::result::Result<bool, Self::Error> {
-        let diff = self.sub(other).map_err(Self::Error::from)?;
+        let diff = self.sub(other)?;
         let diff_norm = diff.norm()?;
         let self_norm = self.norm()?;
         let other_norm = other.norm()?;
@@ -645,7 +682,14 @@ pub trait TensorVectorSpace: TensorIndex {
     }
 
     /// Validate structural consistency of this tensor-like vector.
-    fn validate(&self) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the tensor's index space or shape is
+    /// structurally inconsistent (for example index-space or dimension
+    /// mismatches, or an invalid internal state). The default implementation
+    /// always returns `Ok(())`.
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -660,36 +704,82 @@ pub trait TensorContractionLike: TensorIndex {
     fn conj(&self) -> Self;
 
     /// Direct sum of two tensors along specified index pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the summed index spaces are incompatible
+    /// (an index-space mismatch) or the underlying construction reports a
+    /// failure.
     fn direct_sum(
         &self,
         other: &Self,
         pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
-    ) -> Result<DirectSumResult<Self>>;
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error>;
 
     /// Outer product (tensor product) of two tensors.
-    fn outer_product(&self, other: &Self) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the two tensors share contractable indices
+    /// (a shared-index mismatch) or the underlying construction reports a
+    /// failure.
+    fn outer_product(&self, other: &Self) -> std::result::Result<Self, Self::Error>;
 
     /// Permute tensor indices to match the specified order.
-    fn permuteinds(&self, new_order: &[<Self as TensorIndex>::Index]) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `new_order` does not contain exactly the
+    /// tensor's external indices (an index-set mismatch or a missing-index
+    /// failure).
+    fn permuteinds(
+        &self,
+        new_order: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Fuse local tensor indices into one replacement index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `old_indices` is not a subset of the
+    /// tensor's external indices (a missing-index failure) or the fused
+    /// dimension product overflows (an overflow failure).
     fn fuse_indices(
         &self,
         old_indices: &[<Self as TensorIndex>::Index],
         new_index: <Self as TensorIndex>::Index,
         order: LinearizationOrder,
-    ) -> Result<Self>;
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Contract a connected tensor network over its contractable indices.
-    fn contract(tensors: &[&Self]) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the network is disconnected (a
+    /// disconnected-network failure), when indices are incompatible (an
+    /// index-space mismatch), or when the underlying contraction reports a
+    /// failure.
+    fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error>;
 
     /// Contract this tensor with one other tensor using default pairwise semantics.
-    fn contract_pair(&self, other: &Self) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the pair is disconnected or has
+    /// incompatible indices (an index-space mismatch); propagates failures
+    /// from [`Self::contract`].
+    fn contract_pair(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         Self::contract(&[self, other])
     }
 
     /// Validate structural consistency of this tensor.
-    fn validate(&self) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the tensor's index space or shape is
+    /// structurally inconsistent (an index-space mismatch or an invalid
+    /// internal state). The default implementation always returns `Ok(())`.
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -697,6 +787,11 @@ pub trait TensorContractionLike: TensorIndex {
 /// Factorization operations for tensor-like values.
 pub trait TensorFactorizationLike: TensorIndex {
     /// Factorize this tensor into left and right factors.
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when the factorization fails (a non-convergence,
+    /// /// singular, or unsupported-storage failure).
+    ///
     fn factorize(
         &self,
         left_inds: &[<Self as TensorIndex>::Index],
@@ -704,6 +799,11 @@ pub trait TensorFactorizationLike: TensorIndex {
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
     /// Factorize this tensor without applying truncation controls.
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when the factorization fails (a non-convergence,
+    /// /// singular, or unsupported-storage failure).
+    ///
     fn factorize_full_rank(
         &self,
         left_inds: &[<Self as TensorIndex>::Index],
@@ -715,22 +815,36 @@ pub trait TensorFactorizationLike: TensorIndex {
 /// Constructors and selection helpers for index-labelled tensors.
 pub trait TensorConstructionLike: TensorContractionLike {
     /// Create a diagonal (Kronecker delta) tensor for a single index pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the input and output indices have unequal
+    /// dimensions (a shape mismatch) or the underlying construction
+    /// reports a failure.
     fn diagonal(
         input_index: &<Self as TensorIndex>::Index,
         output_index: &<Self as TensorIndex>::Index,
-    ) -> Result<Self>;
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Create a delta (identity) tensor as outer product of diagonals.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the input and output index lists differ in
+    /// length (a length mismatch) or when a constituent diagonal or outer
+    /// product reports a failure; propagates failures from [`Self::diagonal`],
+    /// [`Self::scalar_one`], and [`Self::outer_product`].
     fn delta(
         input_indices: &[<Self as TensorIndex>::Index],
         output_indices: &[<Self as TensorIndex>::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         if input_indices.len() != output_indices.len() {
             return Err(anyhow::anyhow!(
                 "Number of input indices ({}) must match output indices ({})",
                 input_indices.len(),
                 output_indices.len()
-            ));
+            )
+            .into());
         }
 
         if input_indices.is_empty() {
@@ -746,40 +860,63 @@ pub trait TensorConstructionLike: TensorContractionLike {
     }
 
     /// Create a scalar tensor with value 1.0.
-    fn scalar_one() -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the scalar type does not support the
+    /// required construction (an invalid scalar dtype or a backend
+    /// construction failure).
+    fn scalar_one() -> std::result::Result<Self, Self::Error>;
 
     /// Create a tensor filled with 1.0 for the given indices.
-    fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when an index dimension product overflows (an
+    /// overflow failure) or the underlying construction reports a failure.
+    fn ones(indices: &[<Self as TensorIndex>::Index]) -> std::result::Result<Self, Self::Error>;
 
     /// Select fixed coordinates for a subset of this tensor's external indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `selected_indices` and `positions` differ in
+    /// length (a length mismatch), when an index is selected more than once
+    /// (a duplicate-index failure), when a coordinate is out of range (an
+    /// out of bounds failure), or when the underlying one-hot construction or
+    /// contraction reports a failure; propagates failures from
+    /// [`Self::onehot`] and [`Self::contract`].
     fn select_indices(
         &self,
         selected_indices: &[<Self as TensorIndex>::Index],
         positions: &[usize],
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            selected_indices.len() == positions.len(),
-            "selected_indices length {} does not match positions length {}",
-            selected_indices.len(),
-            positions.len()
-        );
+    ) -> std::result::Result<Self, Self::Error> {
+        if selected_indices.len() != positions.len() {
+            return Err(anyhow::anyhow!(
+                "selected_indices length {} does not match positions length {}",
+                selected_indices.len(),
+                positions.len()
+            )
+            .into());
+        }
         if selected_indices.is_empty() {
             return Ok(self.clone());
         }
 
         let mut seen = HashSet::with_capacity(selected_indices.len());
         for (index, &position) in selected_indices.iter().zip(positions.iter()) {
-            anyhow::ensure!(
-                seen.insert(index.clone()),
-                "selected index appears more than once"
-            );
-            anyhow::ensure!(
-                position < index.dim(),
-                "selected coordinate {} is out of range for index {:?} with dim {}",
-                position,
-                index,
-                index.dim()
-            );
+            if !seen.insert(index.clone()) {
+                return Err(anyhow::anyhow!("selected index appears more than once").into());
+            }
+            if position >= index.dim() {
+                return Err(anyhow::anyhow!(
+                    "selected coordinate {} is out of range for index {:?} with dim {}",
+                    position,
+                    index,
+                    index.dim()
+                )
+                .into());
+            }
         }
 
         let index_vals = selected_indices
@@ -792,7 +929,15 @@ pub trait TensorConstructionLike: TensorContractionLike {
     }
 
     /// Create a one-hot tensor with value 1.0 at the specified index positions.
-    fn onehot(index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when a position is out of range for its index
+    /// (an out of bounds failure) or the underlying construction reports a
+    /// failure.
+    fn onehot(
+        index_vals: &[(<Self as TensorIndex>::Index, usize)],
+    ) -> std::result::Result<Self, Self::Error>;
 }
 
 // ============================================================================

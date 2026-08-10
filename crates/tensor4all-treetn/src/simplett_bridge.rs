@@ -1,4 +1,6 @@
-use anyhow::{ensure, Result};
+use crate::error::TreeTNOperationError;
+use anyhow::Result;
+
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorElement};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain,
@@ -10,6 +12,11 @@ use crate::TreeTN;
 ///
 /// The returned site indices are ordered by tensor-train site position, which is
 /// convenient for downstream state/layout bookkeeping.
+///
+/// # Errors
+///
+/// Returns an error when the tensor train cannot be converted to a TreeTN
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -32,7 +39,7 @@ use crate::TreeTN;
 /// ```
 pub fn tensor_train_to_treetn<T>(
     tt: &TensorTrain<T>,
-) -> Result<(TreeTN<TensorDynLen, usize>, Vec<DynIndex>)>
+) -> std::result::Result<(TreeTN<TensorDynLen, usize>, Vec<DynIndex>), TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
 {
@@ -43,6 +50,11 @@ where
 ///
 /// The returned site indices are ordered by tensor-train site position, not by
 /// sorted node-name order.
+///
+/// # Errors
+///
+/// Returns an error when the tensor train cannot be converted to a TreeTN
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -63,12 +75,12 @@ where
 pub fn tensor_train_to_treetn_with_names<T, V>(
     tt: &TensorTrain<T>,
     node_names: Vec<V>,
-) -> Result<(TreeTN<TensorDynLen, V>, Vec<DynIndex>)>
+) -> std::result::Result<(TreeTN<TensorDynLen, V>, Vec<DynIndex>), TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
     V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    tensor_train_to_treetn_impl(tt, node_names, None)
+    tensor_train_to_treetn_impl(tt, node_names, None).map_err(TreeTNOperationError::from)
 }
 
 /// Convert a linear-chain simple tensor train into a `TreeTN` with explicit node names
@@ -77,6 +89,11 @@ where
 /// This is useful when downstream code must preserve external site-index identities
 /// across a conversion boundary while still allowing internal bond indices to be
 /// created fresh.
+///
+/// # Errors
+///
+/// Returns an error when the tensor train cannot be converted to a TreeTN
+/// /// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -102,7 +119,7 @@ pub fn tensor_train_to_treetn_with_names_and_site_indices<T, V>(
     tt: &TensorTrain<T>,
     node_names: Vec<V>,
     site_indices: Vec<DynIndex>,
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
     V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -119,6 +136,7 @@ where
 ///
 /// # Arguments
 /// * `treetn` - A consumed linear-chain tree tensor network whose node names
+///
 ///   identify tensor-train site positions. Each node must contain one site
 ///   index and zero, one, or two adjacent bond indices.
 ///
@@ -151,41 +169,50 @@ where
 /// assert_eq!(roundtrip.link_dims(), tt.link_dims());
 /// assert_eq!(roundtrip.fulltensor(), tt.fulltensor());
 /// ```
-pub fn treetn_to_tensor_train<T>(mut treetn: TreeTN<TensorDynLen, usize>) -> Result<TensorTrain<T>>
+pub fn treetn_to_tensor_train<T>(
+    mut treetn: TreeTN<TensorDynLen, usize>,
+) -> std::result::Result<TensorTrain<T>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
 {
     let nsites = treetn.node_count();
     if nsites == 0 {
-        return Ok(TensorTrain::new(Vec::new())?);
+        return TensorTrain::new(Vec::new())
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)));
     }
 
     let mut node_names = treetn.node_names();
     node_names.sort_unstable();
     let expected_names: Vec<_> = (0..nsites).collect();
-    ensure!(
-        node_names == expected_names,
-        "treetn_to_tensor_train: expected node names 0..{}, got {:?}",
-        nsites,
-        node_names
-    );
-    ensure!(
-        treetn.edge_count() == nsites - 1,
-        "treetn_to_tensor_train: expected a chain with {} edges, got {}",
-        nsites - 1,
-        treetn.edge_count()
-    );
+    if !(node_names == expected_names) {
+        return Err(anyhow::anyhow!(
+            "treetn_to_tensor_train: expected node names 0..{}, got {:?}",
+            nsites,
+            node_names
+        )
+        .into());
+    };
+    if !(treetn.edge_count() == nsites - 1) {
+        return Err(anyhow::anyhow!(
+            "treetn_to_tensor_train: expected a chain with {} edges, got {}",
+            nsites - 1,
+            treetn.edge_count()
+        )
+        .into());
+    };
 
     let mut site_metadata = Vec::with_capacity(nsites);
     for site in 0..nsites {
         let site_space = treetn.site_space(&site).ok_or_else(|| {
             anyhow::anyhow!("treetn_to_tensor_train: missing site space at node {site}")
         })?;
-        ensure!(
-            site_space.len() == 1,
-            "treetn_to_tensor_train: node {site} must have exactly one site index, got {}",
-            site_space.len()
-        );
+        if !(site_space.len() == 1) {
+            return Err(anyhow::anyhow!(
+                "treetn_to_tensor_train: node {site} must have exactly one site index, got {}",
+                site_space.len()
+            )
+            .into());
+        };
         let site_index = site_space.iter().next().ok_or_else(|| {
             anyhow::anyhow!("treetn_to_tensor_train: node {site} has no site index")
         })?;
@@ -246,7 +273,7 @@ where
         tensors.push(treetn_site_to_tensor3::<T>(tensor, metadata, site)?);
     }
 
-    Ok(TensorTrain::new(tensors)?)
+    TensorTrain::new(tensors).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
 }
 
 /// Insert a one-hot site into a linear-chain `TreeTN<TensorDynLen, usize>`.
@@ -256,6 +283,7 @@ where
 /// - `0` inserts before the first site;
 /// - `len` inserts after the last site;
 /// - any `1..len` inserts on the chain edge between `position - 1` and
+///
 ///   `position`.
 ///
 /// The inserted site is fixed to `value`, so the new tensor evaluates to the
@@ -265,6 +293,7 @@ where
 /// # Arguments
 ///
 /// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///
 ///   Each node must carry exactly one site index.
 /// - `position`: insertion point in `0..=n`; `0` prepends and `n` appends.
 /// - `site_index`: site index to attach to the inserted node.
@@ -278,9 +307,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if `position` is out of range, `value` is outside
-/// `site_index`, the input is not a numbered single-site chain, or the
-/// conversion between the chain `TreeTN` and `TensorTrain` fails.
+/// Returns an error when the insertion fails (a shape or index mismatch, or
+/// /// a missing-index failure).
 ///
 /// # Examples
 ///
@@ -310,23 +338,27 @@ pub fn insert_onehot_site_in_treetn_chain<T>(
     position: usize,
     site_index: DynIndex,
     value: usize,
-) -> Result<TreeTN<TensorDynLen, usize>>
+) -> std::result::Result<TreeTN<TensorDynLen, usize>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
     let old_site_indices = chain_site_indices(&treetn, "insert_onehot_site_in_treetn_chain")?;
-    ensure!(
-        position <= old_site_indices.len(),
-        "insert_onehot_site_in_treetn_chain: position {} is out of range 0..={}",
-        position,
-        old_site_indices.len()
-    );
-    ensure!(
-        value < site_index.dim(),
-        "insert_onehot_site_in_treetn_chain: fixed value {} exceeds site dimension {}",
-        value,
-        site_index.dim()
-    );
+    if !(position <= old_site_indices.len()) {
+        return Err(anyhow::anyhow!(
+            "insert_onehot_site_in_treetn_chain: position {} is out of range 0..={}",
+            position,
+            old_site_indices.len()
+        )
+        .into());
+    };
+    if !(value < site_index.dim()) {
+        return Err(anyhow::anyhow!(
+            "insert_onehot_site_in_treetn_chain: fixed value {} exceeds site dimension {}",
+            value,
+            site_index.dim()
+        )
+        .into());
+    };
 
     let tt = treetn_to_tensor_train::<T>(treetn)?;
     let mut tensors = Vec::with_capacity(tt.len() + 1);
@@ -351,7 +383,8 @@ where
 
     let mut site_indices = old_site_indices;
     site_indices.insert(position, site_index);
-    let tt = TensorTrain::new(tensors)?;
+    let tt =
+        TensorTrain::new(tensors).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
 }
 
@@ -365,6 +398,7 @@ where
 /// # Arguments
 ///
 /// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///
 ///   Each node must carry exactly one site index.
 /// - `position`: chain site to fix and remove, in `0..n`.
 /// - `value`: local coordinate retained at the removed site.
@@ -377,10 +411,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if `position` is out of range, `value` is outside the site
-/// dimension, removing the only site would require an unsupported scalar
-/// zero-site `TreeTN`, the input is not a numbered single-site chain, or the
-/// conversion between the chain `TreeTN` and `TensorTrain` fails.
+/// Returns an error when the removal fails (a shape or index mismatch, or a
+/// /// missing-index failure).
 ///
 /// # Examples
 ///
@@ -410,32 +442,36 @@ pub fn fix_and_remove_site_from_treetn_chain<T>(
     treetn: TreeTN<TensorDynLen, usize>,
     position: usize,
     value: usize,
-) -> Result<TreeTN<TensorDynLen, usize>>
+) -> std::result::Result<TreeTN<TensorDynLen, usize>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
     let site_indices = chain_site_indices(&treetn, "fix_and_remove_site_from_treetn_chain")?;
-    ensure!(
-        position < site_indices.len(),
-        "fix_and_remove_site_from_treetn_chain: position {} is out of range 0..{}",
-        position,
-        site_indices.len()
-    );
-    ensure!(
-        site_indices.len() > 1,
-        "fix_and_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported"
-    );
+    if !(position < site_indices.len()) {
+        return Err(anyhow::anyhow!(
+            "fix_and_remove_site_from_treetn_chain: position {} is out of range 0..{}",
+            position,
+            site_indices.len()
+        )
+        .into());
+    };
+    if !(site_indices.len() > 1) {
+        return Err(anyhow::anyhow!("fix_and_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported").into());
+    };
 
     let tt = treetn_to_tensor_train::<T>(treetn)?;
-    ensure!(
-        value < tt.site_dim(position),
-        "fix_and_remove_site_from_treetn_chain: fixed value {} exceeds site dimension {}",
-        value,
-        tt.site_dim(position)
-    );
+    if !(value < tt.site_dim(position)) {
+        return Err(anyhow::anyhow!(
+            "fix_and_remove_site_from_treetn_chain: fixed value {} exceeds site dimension {}",
+            value,
+            tt.site_dim(position)
+        )
+        .into());
+    };
 
     let reduced_site = fixed_site_matrix(tt.site_tensor(position), value);
     remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
+        .map_err(TreeTNOperationError::from)
 }
 
 /// Contract a site of a linear-chain `TreeTN<TensorDynLen, usize>` with weights and remove it.
@@ -449,6 +485,7 @@ where
 /// # Arguments
 ///
 /// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///
 ///   Each node must carry exactly one site index.
 /// - `position`: chain site to contract and remove, in `0..n`.
 /// - `weights`: one weight per local coordinate of the removed site.
@@ -460,11 +497,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if `position` is out of range, `weights.len()` does not
-/// match the removed site dimension, removing the only site would require an
-/// unsupported scalar zero-site `TreeTN`, the input is not a numbered
-/// single-site chain, or the conversion between the chain `TreeTN` and
-/// `TensorTrain` fails.
+/// Returns an error when the removal fails (a shape or index mismatch, or a
+/// /// missing-index failure).
 ///
 /// # Examples
 ///
@@ -494,32 +528,33 @@ pub fn weighted_remove_site_from_treetn_chain<T>(
     treetn: TreeTN<TensorDynLen, usize>,
     position: usize,
     weights: &[T],
-) -> Result<TreeTN<TensorDynLen, usize>>
+) -> std::result::Result<TreeTN<TensorDynLen, usize>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
     let site_indices = chain_site_indices(&treetn, "weighted_remove_site_from_treetn_chain")?;
-    ensure!(
-        position < site_indices.len(),
-        "weighted_remove_site_from_treetn_chain: position {} is out of range 0..{}",
-        position,
-        site_indices.len()
-    );
-    ensure!(
-        site_indices.len() > 1,
-        "weighted_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported"
-    );
+    if !(position < site_indices.len()) {
+        return Err(anyhow::anyhow!(
+            "weighted_remove_site_from_treetn_chain: position {} is out of range 0..{}",
+            position,
+            site_indices.len()
+        )
+        .into());
+    };
+    if !(site_indices.len() > 1) {
+        return Err(anyhow::anyhow!("weighted_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported").into());
+    };
 
     let tt = treetn_to_tensor_train::<T>(treetn)?;
-    ensure!(
-        weights.len() == tt.site_dim(position),
-        "weighted_remove_site_from_treetn_chain: weights length {} must match site dimension {}",
+    if !(weights.len() == tt.site_dim(position)) {
+        return Err(anyhow::anyhow!("weighted_remove_site_from_treetn_chain: weights length {} must match site dimension {}",
         weights.len(),
-        tt.site_dim(position)
-    );
+        tt.site_dim(position)).into());
+    };
 
     let reduced_site = weighted_site_matrix(tt.site_tensor(position), weights);
     remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
+        .map_err(TreeTNOperationError::from)
 }
 
 fn chain_site_indices(
@@ -529,23 +564,25 @@ fn chain_site_indices(
     let nsites = treetn.node_count();
     let mut node_names = treetn.node_names();
     node_names.sort_unstable();
-    ensure!(
-        node_names == (0..nsites).collect::<Vec<_>>(),
-        "{context}: expected node names 0..{}, got {:?}",
-        nsites,
-        node_names
-    );
+    if !(node_names == (0..nsites).collect::<Vec<_>>()) {
+        return Err(anyhow::anyhow!(
+            "{context}: expected node names 0..{}, got {:?}",
+            nsites,
+            node_names
+        ));
+    };
 
     let mut site_indices = Vec::with_capacity(nsites);
     for site in 0..nsites {
         let site_space = treetn
             .site_space(&site)
             .ok_or_else(|| anyhow::anyhow!("{context}: missing site space at node {site}"))?;
-        ensure!(
-            site_space.len() == 1,
-            "{context}: node {site} must have exactly one site index, got {}",
-            site_space.len()
-        );
+        if !(site_space.len() == 1) {
+            return Err(anyhow::anyhow!(
+                "{context}: node {site} must have exactly one site index, got {}",
+                site_space.len()
+            ));
+        };
         let site_index = site_space
             .iter()
             .next()
@@ -613,6 +650,7 @@ where
     site_indices.remove(position);
     let tt = TensorTrain::new(tensors)?;
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
+        .map_err(anyhow::Error::from)
 }
 
 fn absorb_reduced_site_into_right<T>(
@@ -677,39 +715,39 @@ where
     T: TTScalar + TensorElement + Clone,
     V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    ensure!(
-        tt.len() == node_names.len(),
-        "tensor_train_to_treetn: node_names length {} must match tensor-train length {}",
-        node_names.len(),
-        tt.len()
-    );
+    if !(tt.len() == node_names.len()) {
+        return Err(anyhow::anyhow!(
+            "tensor_train_to_treetn: node_names length {} must match tensor-train length {}",
+            node_names.len(),
+            tt.len()
+        ));
+    };
 
     if tt.is_empty() {
         let site_indices = site_indices.unwrap_or_default();
-        ensure!(
-            site_indices.is_empty(),
-            "tensor_train_to_treetn: empty tensor train requires zero site indices"
-        );
+        if !(site_indices.is_empty()) {
+            return Err(anyhow::anyhow!(
+                "tensor_train_to_treetn: empty tensor train requires zero site indices"
+            ));
+        };
         return Ok((TreeTN::new(), Vec::new()));
     }
 
     let site_indices = match site_indices {
         Some(indices) => {
-            ensure!(
-                indices.len() == tt.len(),
-                "tensor_train_to_treetn: site_indices length {} must match tensor-train length {}",
+            if !(indices.len() == tt.len()) {
+                return Err(anyhow::anyhow!("tensor_train_to_treetn: site_indices length {} must match tensor-train length {}",
                 indices.len(),
-                tt.len()
-            );
+                tt.len()));
+            };
             for (site, index) in indices.iter().enumerate() {
-                ensure!(
-                    index.dim() == tt.site_dim(site),
-                    "tensor_train_to_treetn: site index {} has dim {} but tensor-train site {} has dim {}",
+                if !(index.dim() == tt.site_dim(site)) {
+                    return Err(anyhow::anyhow!("tensor_train_to_treetn: site index {} has dim {} but tensor-train site {} has dim {}",
                     site,
                     index.dim(),
                     site,
-                    tt.site_dim(site)
-                );
+                    tt.site_dim(site)));
+                };
             }
             indices
         }
@@ -719,7 +757,7 @@ where
         .link_dims()
         .into_iter()
         .map(DynIndex::new_bond)
-        .collect::<Result<_>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let nsites = tt.len();
 
     let mut tensors = Vec::with_capacity(nsites);
@@ -780,11 +818,12 @@ where
     let (tensor_indices, source) = tensor.into_dense_col_major_parts::<T>()?;
     let expected_rank =
         1 + usize::from(metadata.left_bond.is_some()) + usize::from(metadata.right_bond.is_some());
-    ensure!(
-        tensor_indices.len() == expected_rank,
-        "treetn_to_tensor_train: node {site} has rank {}, expected {expected_rank}",
-        tensor_indices.len()
-    );
+    if !(tensor_indices.len() == expected_rank) {
+        return Err(anyhow::anyhow!(
+            "treetn_to_tensor_train: node {site} has rank {}, expected {expected_rank}",
+            tensor_indices.len()
+        ));
+    };
 
     let dims: Vec<_> = tensor_indices.iter().map(IndexLike::dim).collect();
     let site_axis = index_axis(&tensor_indices, &metadata.site_index).ok_or_else(|| {

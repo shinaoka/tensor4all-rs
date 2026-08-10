@@ -26,6 +26,7 @@
 //! - T4AMPOContractions.jl: `contract_fit`, `leftenvironment!`, `rightenvironment!`
 //! - ITensorNetworks.jl: `contract` with fitting algorithm
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
@@ -329,6 +330,11 @@ where
     /// * `tn_a` - First input TreeTN
     /// * `tn_b` - Second input TreeTN
     /// * `tn_c` - Current approximation TreeTN
+    /// # Errors
+    ///
+    /// Returns an error when the cached fit value cannot be computed (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn get_or_compute(
         &mut self,
         from: &V,
@@ -336,7 +342,7 @@ where
         tn_a: &TreeTN<T, V>,
         tn_b: &TreeTN<T, V>,
         tn_c: &TreeTN<T, V>,
-    ) -> Result<T>
+    ) -> std::result::Result<T, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -370,7 +376,7 @@ where
         let child_envs: Vec<T> = child_neighbors
             .iter()
             .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
 
         // Compute the environment for (from, to) using child environments
         let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs)?;
@@ -453,7 +459,15 @@ where
     ///
     /// # Returns
     /// `Ok(())` if consistent, or an error describing the inconsistency.
-    pub fn verify_structural_consistency(&self, tn_c: &TreeTN<T, V>) -> Result<()>
+    /// # Errors
+    ///
+    /// Returns an error when the fitted structure is inconsistent (a graph
+    /// /// consistency failure).
+    ///
+    pub fn verify_structural_consistency(
+        &self,
+        tn_c: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         V: Clone + Hash + Eq + std::fmt::Debug,
     {
@@ -472,7 +486,7 @@ where
                     return Err(anyhow::anyhow!(
                         "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
                         from, to, child, from
-                    ));
+                    ).into());
                 }
             }
         }
@@ -672,13 +686,14 @@ where
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         // FitUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
                 "FitUpdater requires exactly 2 nodes, got {}",
                 step.nodes.len()
-            ));
+            )
+            .into());
         }
 
         let node_u = &step.nodes[0];
@@ -694,23 +709,18 @@ where
         let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
 
         if full_treetn.node_index(node_u).is_none() {
-            return Err(anyhow::anyhow!(
-                "Node {:?} not found in full TreeTN",
-                node_u
-            ));
+            return Err(anyhow::anyhow!("Node {:?} not found in full TreeTN", node_u).into());
         }
         if full_treetn.node_index(node_v).is_none() {
-            return Err(anyhow::anyhow!(
-                "Node {:?} not found in full TreeTN",
-                node_v
-            ));
+            return Err(anyhow::anyhow!("Node {:?} not found in full TreeTN", node_v).into());
         }
         if full_treetn.edge_between(node_u, node_v).is_none() {
             return Err(anyhow::anyhow!(
                 "FitUpdater update step nodes {:?} and {:?} are not adjacent in full TreeTN",
                 node_u,
                 node_v
-            ));
+            )
+            .into());
         }
 
         // Collect environments from neighbors (excluding the edge between u and v)
@@ -932,7 +942,7 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         // Invalidate all caches affected by the updated region
         let started = fit_profile_enabled().then(Instant::now);
         self.envs.try_invalidate(&step.nodes, full_treetn_after)?;
@@ -1050,12 +1060,17 @@ impl FitContractionOptions {
 ///
 /// # Returns
 /// A new TreeTN representing the contracted result.
+/// # Errors
+///
+/// Returns an error when the fit contraction fails (a shape or index
+/// /// mismatch, or a backend failure).
+///
 pub fn contract_fit<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1072,9 +1087,9 @@ where
 
     // Validate topologies match
     if !tn_a.same_topology(tn_b) {
-        return Err(anyhow::anyhow!(
-            "TreeTNs must have the same topology for fit contraction"
-        ));
+        return Err(
+            anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
+        );
     }
 
     // Initialize C using the SVD-based zipup contraction while preserving

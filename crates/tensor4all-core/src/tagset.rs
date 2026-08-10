@@ -54,6 +54,10 @@ pub trait TagSetLike: Default + Clone + PartialEq + Eq {
     /// Add a tag (maintains sorted order).
     ///
     /// Returns an error if the tag cannot be added (e.g., capacity exceeded, invalid tag).
+    /// # Errors
+    ///
+    /// Returns an error when the tag is invalid (an invalid-input failure).
+    ///
     fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError>;
 
     /// Remove a tag.
@@ -80,6 +84,11 @@ pub trait TagSetLike: Default + Clone + PartialEq + Eq {
     ///
     /// ASCII spaces are ignored (matching ITensors.jl).
     /// Tags are automatically sorted.
+    /// # Errors
+    ///
+    /// Returns an error when the string cannot be parsed as a tag or tag set (an
+    /// /// invalid-input failure).
+    ///
     fn from_str(s: &str) -> Result<Self, TagSetError> {
         let mut tagset = Self::default();
 
@@ -175,6 +184,11 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
     /// ASCII spaces are ignored (matching ITensors.jl).
     /// Tags are automatically sorted.
     #[allow(clippy::should_implement_trait)]
+    /// # Errors
+    ///
+    /// Returns an error when the string cannot be parsed as a tag or tag set (an
+    /// /// invalid-input failure).
+    ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         <Self as TagSetLike>::from_str(s)
     }
@@ -219,6 +233,10 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
     }
 
     /// Add a tag (maintains sorted order).
+    /// # Errors
+    ///
+    /// Returns an error when the tag is invalid (an invalid-input failure).
+    ///
     pub fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
         <Self as TagSetLike>::add_tag(self, tag)
     }
@@ -265,6 +283,10 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSetLike
         self._has_tag(&tag_str)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error when the tag is invalid (an invalid-input failure).
+    ///
     fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
         let tag_str =
             SmallString::<MAX_TAG_LEN, C>::from_str(tag).map_err(TagSetError::InvalidTag)?;
@@ -409,7 +431,8 @@ impl DynamicTagSet {
     /// ASCII spaces are ignored, matching [`TagSetLike::from_str`].
     ///
     /// # Errors
-    /// Returns an error if a parsed tag violates dynamic tag-set rules.
+    /// Returns an error when a parsed tag violates dynamic tag-set rules (an
+    /// invalid-input failure).
     ///
     /// # Examples
     ///
@@ -422,6 +445,11 @@ impl DynamicTagSet {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[allow(clippy::should_implement_trait)]
+    /// # Errors
+    ///
+    /// Returns an error when the string cannot be parsed as a tag or tag set (an
+    /// /// invalid-input failure).
+    ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         <Self as TagSetLike>::from_str(s)
     }
@@ -450,6 +478,10 @@ impl TagSetLike for DynamicTagSet {
             .is_ok()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error when the tag is invalid (an invalid-input failure).
+    ///
     fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
         if tag.contains(',') {
             return Err(TagSetError::TagContainsComma {

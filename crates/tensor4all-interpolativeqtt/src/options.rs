@@ -9,8 +9,10 @@
 /// # Fields
 ///
 /// - `tolerance`: relative SVD truncation threshold. Smaller values preserve
+///
 ///   more accuracy and usually produce larger bonds.
 /// - `max_bond_dim`: hard upper bound on every TT bond. Use `usize::MAX` for
+///
 ///   no explicit cap.
 ///
 /// # Examples

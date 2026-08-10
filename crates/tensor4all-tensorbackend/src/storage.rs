@@ -26,10 +26,25 @@ use std::sync::Arc;
 /// ```
 pub trait StorageScalar: Clone + Send + Sync + 'static {
     /// Build a dense [`Storage`] from column-major data.
+    /// # Errors
+    ///
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
+    ///
     fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage>;
     /// Build a diagonal [`Storage`] from diagonal payload data.
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
+    ///
     fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage>;
     /// Build a structured [`Storage`] from explicit payload metadata.
+    /// # Errors
+    ///
+    /// Returns an error when the structured metadata is inconsistent (an
+    /// /// invalid-storage failure).
+    ///
     fn build_structured_storage(
         data: Vec<Self>,
         payload_dims: Vec<usize>,
@@ -285,8 +300,8 @@ impl<T> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not equal the product of
-    /// `logical_dims`, or if column-major stride computation overflows.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -297,11 +312,11 @@ impl<T> StructuredStorage<T> {
     /// assert!(s.is_dense());
     /// assert_eq!(s.data(), &[10.0, 20.0, 30.0, 40.0]);
     /// ```
-    pub fn from_dense_col_major(data: Vec<T>, logical_dims: &[usize]) -> Result<Self> {
+    pub fn from_dense_col_major(data: Vec<T>, logical_dims: &[usize]) -> StorageResult<Self> {
         let payload_dims = logical_dims.to_vec();
         let strides = col_major_strides(&payload_dims)?;
         let axis_classes = (0..logical_dims.len()).collect();
-        Self::new(data, payload_dims, strides, axis_classes)
+        Self::new(data, payload_dims, strides, axis_classes).map_err(StorageError::from)
     }
 
     /// Creates a diagonal structured snapshot from column-major diagonal data.
@@ -311,8 +326,8 @@ impl<T> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `logical_rank` is zero and the data does not contain
-    /// exactly one scalar value, or if column-major stride computation overflows.
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -324,7 +339,7 @@ impl<T> StructuredStorage<T> {
     /// assert_eq!(d.logical_dims(), vec![3, 3]);
     /// assert_eq!(d.data(), &[1.0, 2.0, 3.0]);
     /// ```
-    pub fn from_diag_col_major(diag_data: Vec<T>, logical_rank: usize) -> Result<Self> {
+    pub fn from_diag_col_major(diag_data: Vec<T>, logical_rank: usize) -> StorageResult<Self> {
         let payload_dims = if logical_rank == 0 {
             vec![]
         } else {
@@ -332,7 +347,7 @@ impl<T> StructuredStorage<T> {
         };
         let strides = col_major_strides(&payload_dims)?;
         let axis_classes = vec![0; logical_rank];
-        Self::new(diag_data, payload_dims, strides, axis_classes)
+        Self::new(diag_data, payload_dims, strides, axis_classes).map_err(StorageError::from)
     }
 
     /// Returns the payload data buffer as a slice.
@@ -585,7 +600,8 @@ impl<T: Clone> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `perm` is not a valid permutation of the logical axes.
+    /// Returns an error when the permutation is not a valid reordering of the axes
+    /// /// (an invalid-index failure).
     ///
     /// # Examples
     ///
@@ -599,33 +615,39 @@ impl<T: Clone> StructuredStorage<T> {
     /// assert_eq!(p.logical_dims(), vec![3, 3, 3]);
     /// assert!(p.is_diag());
     /// ```
-    pub fn permute_logical_axes(&self, perm: &[usize]) -> Result<Self> {
-        ensure!(
-            perm.len() == self.axis_classes.len(),
-            "logical permutation length {} must match logical rank {}",
-            perm.len(),
-            self.axis_classes.len()
-        );
+    pub fn permute_logical_axes(&self, perm: &[usize]) -> StorageResult<Self> {
+        if perm.len() != self.axis_classes.len() {
+            return Err(StorageError::from(anyhow::anyhow!(
+                "logical permutation length {} must match logical rank {}",
+                perm.len(),
+                self.axis_classes.len()
+            )));
+        }
         let mut seen = vec![false; self.axis_classes.len()];
         let axis_classes = perm
             .iter()
             .map(|&index| {
-                ensure!(
-                    index < self.axis_classes.len(),
-                    "logical permutation axis {index} is out of range for rank {}",
-                    self.axis_classes.len()
-                );
-                ensure!(!seen[index], "logical permutation repeats axis {index}");
+                if index >= self.axis_classes.len() {
+                    return Err(anyhow::anyhow!(
+                        "logical permutation axis {index} is out of range for rank {}",
+                        self.axis_classes.len()
+                    ));
+                }
+                if seen[index] {
+                    return Err(anyhow::anyhow!("logical permutation repeats axis {index}"));
+                }
                 seen[index] = true;
                 Ok(self.axis_classes[index])
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()
+            .map_err(StorageError::from)?;
         Self::new(
             self.data.clone(),
             self.payload_dims.clone(),
             self.strides.clone(),
             axis_classes,
         )
+        .map_err(StorageError::from)
     }
 }
 
@@ -938,6 +960,19 @@ pub enum StorageError {
         /// Right scalar display string.
         b: String,
     },
+    /// A storage operation failed with an internal diagnostic.
+    #[error("storage operation failed: {source}")]
+    Operation {
+        /// Original internal diagnostic, preserving its source chain.
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl From<anyhow::Error> for StorageError {
+    fn from(source: anyhow::Error) -> Self {
+        Self::Operation { source }
+    }
 }
 
 /// Result type returned by storage methods that can fail with [`StorageError`].
@@ -1010,7 +1045,7 @@ impl Storage {
     }
 
     fn invalid_storage_error(err: anyhow::Error) -> StorageError {
-        StorageError::InvalidStructuredStorage(err.to_string())
+        StorageError::from(err)
     }
 
     #[cfg(test)]
@@ -1040,7 +1075,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the requested dense metadata overflows.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1067,7 +1103,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Currently infallible for valid data, but returns `Result` for consistency.
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1098,6 +1135,11 @@ impl Storage {
     /// assert_eq!(s.len(), 5);
     /// assert!((s.max_abs()).abs() < 1e-10);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` when the dimension is invalid (a shape
+    /// mismatch).
     pub fn new_dense<T: StorageScalar + Default>(size: usize) -> StorageResult<Self> {
         Self::from_dense_col_major(vec![T::default(); size], &[size])
             .map_err(Self::invalid_storage_error)
@@ -1126,8 +1168,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the structured metadata is inconsistent (see
-    /// [`StructuredStorage::new`] for details).
+    /// Returns an error when the structured metadata is inconsistent (an
+    /// /// invalid-storage failure).
     ///
     /// # Examples
     ///
@@ -1211,7 +1253,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not match the product of `logical_dims`.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1222,7 +1265,7 @@ impl Storage {
     /// assert!(s.is_f64());
     /// assert!(s.is_dense());
     /// ```
-    pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> Result<Self> {
+    pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> StorageResult<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
         Ok(Self::from_repr(StorageRepr::F64(
             StructuredStorage::from_dense_col_major(data, logical_dims)?,
@@ -1233,7 +1276,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not match the product of `logical_dims`.
+    /// Returns an error when the data length does not match the logical dimension
+    /// /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1246,7 +1290,10 @@ impl Storage {
     /// assert!(s.is_c64());
     /// assert!(s.is_dense());
     /// ```
-    pub fn from_dense_c64_col_major(data: Vec<Complex64>, logical_dims: &[usize]) -> Result<Self> {
+    pub fn from_dense_c64_col_major(
+        data: Vec<Complex64>,
+        logical_dims: &[usize],
+    ) -> StorageResult<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
         Ok(Self::from_repr(StorageRepr::C64(
             StructuredStorage::from_dense_col_major(data, logical_dims)?,
@@ -1254,6 +1301,11 @@ impl Storage {
     }
 
     /// Create diagonal f64 storage from column-major diagonal payload values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1264,13 +1316,21 @@ impl Storage {
     /// assert!(s.is_diag());
     /// assert!(s.is_f64());
     /// ```
-    pub fn from_diag_f64_col_major(diag_data: Vec<f64>, logical_rank: usize) -> Result<Self> {
+    pub fn from_diag_f64_col_major(
+        diag_data: Vec<f64>,
+        logical_rank: usize,
+    ) -> StorageResult<Self> {
         Ok(Self::from_repr(StorageRepr::F64(
             StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
         )))
     }
 
     /// Create diagonal Complex64 storage from column-major diagonal payload values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the diagonal payload is incompatible with the logical
+    /// /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1283,7 +1343,10 @@ impl Storage {
     /// assert!(s.is_diag());
     /// assert!(s.is_c64());
     /// ```
-    pub fn from_diag_c64_col_major(diag_data: Vec<Complex64>, logical_rank: usize) -> Result<Self> {
+    pub fn from_diag_c64_col_major(
+        diag_data: Vec<Complex64>,
+        logical_rank: usize,
+    ) -> StorageResult<Self> {
         Ok(Self::from_repr(StorageRepr::C64(
             StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
         )))
@@ -1502,6 +1565,11 @@ impl Storage {
 
     /// Borrows the compact `f64` payload when it is already contiguous in
     /// column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::ScalarKindMismatch` when the storage is not
+    /// f64-backed (a dtype mismatch).
     pub fn payload_f64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[f64]>> {
         match &self.0 {
             StorageRepr::F64(value) => Ok(value.payload_col_major_view_if_contiguous()),
@@ -1545,6 +1613,11 @@ impl Storage {
 
     /// Borrows the compact `Complex64` payload when it is already contiguous in
     /// column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::ScalarKindMismatch` when the storage is not
+    /// c64-backed (a dtype mismatch).
     pub fn payload_c64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[Complex64]>> {
         match &self.0 {
             StorageRepr::C64(value) => Ok(value.payload_col_major_view_if_contiguous()),
@@ -1905,15 +1978,18 @@ impl Storage {
     /// let t = d.permute_storage(&[2, 2], &[1, 0]).unwrap();
     /// assert!(t.is_diag());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` when the permutation is invalid (an
+    /// invalid-index failure).
     pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> StorageResult<Storage> {
         match &self.0 {
             StorageRepr::F64(v) => Ok(Storage::from_repr(StorageRepr::F64(
-                v.permute_logical_axes(perm)
-                    .map_err(Self::invalid_storage_error)?,
+                v.permute_logical_axes(perm)?,
             ))),
             StorageRepr::C64(v) => Ok(Storage::from_repr(StorageRepr::C64(
-                v.permute_logical_axes(perm)
-                    .map_err(Self::invalid_storage_error)?,
+                v.permute_logical_axes(perm)?,
             ))),
         }
     }

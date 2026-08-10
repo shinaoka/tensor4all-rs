@@ -15,8 +15,8 @@ pub enum MPOError {
         site: usize,
     },
 
-    /// Bond dimension mismatch between adjacent tensors
-    #[error("Bond dimension mismatch at site {site}: left tensor has right_dim={left_right}, right tensor has left_dim={right_left}")]
+    /// Bond shape mismatch between adjacent tensors
+    #[error("Bond shape mismatch at site {site}: left tensor has right_dim={left_right}, right tensor has left_dim={right_left}")]
     BondDimensionMismatch {
         /// The site index where the mismatch occurred
         site: usize,
@@ -26,8 +26,8 @@ pub enum MPOError {
         right_left: usize,
     },
 
-    /// Shared dimension mismatch between two MPOs
-    #[error("Shared dimension mismatch at site {site}: MPO A has site_dim_2={dim_a}, MPO B has site_dim_1={dim_b}")]
+    /// Shared shape mismatch between two MPOs
+    #[error("Shared shape mismatch at site {site}: MPO A has site_dim_2={dim_a}, MPO B has site_dim_1={dim_b}")]
     SharedDimensionMismatch {
         /// The site index where the mismatch occurred
         site: usize,

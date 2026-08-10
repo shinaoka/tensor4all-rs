@@ -122,6 +122,23 @@ pub enum MatrixShapeError {
     },
 }
 
+/// Error returned by matrix multiplication entry points.
+///
+/// Wraps the backend/einsum diagnostic, preserving its source chain.
+#[derive(Debug, thiserror::Error)]
+#[error("matrix multiplication failed: {source}")]
+pub struct MatrixMulError {
+    /// Original backend or einsum diagnostic.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for MatrixMulError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
 /// Error returned by [`lowest_hermitian_eigenpair`].
 ///
 /// The eigensolver is intended for small Rayleigh-Ritz projected matrices; it validates shape and Hermitian structure before calling the backend Hermitian
@@ -534,6 +551,7 @@ impl<T> Matrix<T> {
 /// # Arguments
 /// * `matrix` - Small dense Hermitian matrix in column-major [`Matrix`] layout.
 /// * `hermitian_tol` - Relative tolerance for `A[i, j] = conj(A[j, i])`,
+///
 ///   applied as `hermitian_tol * max(1, |A[i,j]|, |A[j,i]|)`.
 ///   Typical values are `1e-12` for `f64`/`Complex64` projected matrices.
 ///
@@ -595,6 +613,7 @@ where
 ///
 /// * `matrix` - Square Hermitian matrix in column-major [`Matrix`] layout.
 /// * `hermitian_tol` - Relative tolerance for checking `A = A†`, applied per
+///
 ///   entry pair with scale `max(1, |A[i,j]|, |A[j,i]|)`.
 ///
 /// # Returns
@@ -660,6 +679,7 @@ where
 /// * `matrix` - Square Hermitian matrix in column-major [`Matrix`] layout.
 /// * `exponent` - Scalar multiplier in `exp(exponent * A)`.
 /// * `hermitian_tol` - Relative tolerance for checking `A = A†`; accepted
+///
 ///   roundoff is symmetrized before eigensolving.
 ///
 /// # Returns
@@ -1334,7 +1354,8 @@ impl MatrixScalar for Complex32 {
 ///
 /// # Errors
 ///
-/// Returns an error if `a.ncols() != b.nrows()` or the backend einsum fails.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -1349,8 +1370,8 @@ impl MatrixScalar for Complex32 {
 /// assert!((c[[1, 0]] - 43.0).abs() < 1e-10);
 /// assert!((c[[1, 1]] - 50.0).abs() < 1e-10);
 /// ```
-pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>> {
-    T::blas_mat_mul(a, b)
+pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
+    T::blas_mat_mul(a, b).map_err(MatrixMulError::from)
 }
 
 /// Matrix multiplication: consume `A` and `B`, returning `A * B`.
@@ -1360,7 +1381,8 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>> {
 ///
 /// # Errors
 ///
-/// Returns an error if `a.ncols() != b.nrows()` or the backend einsum fails.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -1372,8 +1394,8 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>> {
 /// let c = mat_mul_owned(a, b).unwrap();
 /// assert_eq!(c.as_col_major_slice(), &[19.0, 43.0, 22.0, 50.0]);
 /// ```
-pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>> {
-    T::blas_mat_mul_owned(a, b)
+pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
+    T::blas_mat_mul_owned(a, b).map_err(MatrixMulError::from)
 }
 
 /// Batched matrix multiplication for column-major matrices with one shared shape.
@@ -1405,7 +1427,7 @@ pub fn batched_mat_mul_same_shape<T>(
     n: usize,
     a: &[T],
     b: &[T],
-) -> Result<Vec<T>>
+) -> Result<Vec<T>, MatrixMulError>
 where
     T: tenferro::TensorScalar + Copy,
 {
@@ -1429,7 +1451,7 @@ pub fn batched_mat_mul_same_shape_owned<T>(
     n: usize,
     a: Vec<T>,
     b: Vec<T>,
-) -> Result<Vec<T>>
+) -> Result<Vec<T>, MatrixMulError>
 where
     T: tenferro::TensorScalar + Copy,
 {
@@ -1452,19 +1474,26 @@ where
     .context("batched matrix multiplication failed")?;
     let c = T::try_into_typed(c)
         .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication returned wrong dtype"))?;
-    let (_shape, data) = c.try_into_vec_col_major()?;
+    let (_shape, data) = c
+        .try_into_vec_col_major()
+        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
     let expected_len = batch
         .checked_mul(m)
         .and_then(|value| value.checked_mul(n))
-        .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication output shape overflows"))?;
-    ensure!(
-        data.len() == expected_len,
-        "batched matrix multiplication returned {} values for expected shape {}x{}x{}",
-        data.len(),
-        m,
-        n,
-        batch
-    );
+        .ok_or_else(|| {
+            MatrixMulError::from(anyhow::anyhow!(
+                "batched matrix multiplication output shape overflows"
+            ))
+        })?;
+    if data.len() != expected_len {
+        return Err(MatrixMulError::from(anyhow::anyhow!(
+            "batched matrix multiplication returned {} values for expected shape {}x{}x{}",
+            data.len(),
+            m,
+            n,
+            batch
+        )));
+    }
     Ok(data)
 }
 

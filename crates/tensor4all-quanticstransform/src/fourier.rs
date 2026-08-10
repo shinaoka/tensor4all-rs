@@ -4,6 +4,7 @@
 //! Reference: J. Chen and M. Lindsey, "Direct Interpolative Construction of the
 //! Discrete Fourier Transform as a Matrix Product Operator", arXiv:2404.03182.
 
+use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
@@ -20,7 +21,9 @@ use crate::common::{
 
 fn checked_fourier_order(k: usize) -> Result<usize> {
     if k == 0 {
-        anyhow::bail!("Fourier Chebyshev order k must be positive");
+        return Err(anyhow::anyhow!(
+            "Fourier Chebyshev order k must be positive"
+        ));
     }
     k.checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("Fourier Chebyshev grid size overflows usize for k={k}"))
@@ -59,24 +62,18 @@ fn zero_tensor3(
 }
 
 /// Options for Fourier transform construction.
-///
 /// Controls the sign convention, compression parameters, and normalization
 /// of the quantics Fourier transform MPO.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::FourierOptions;
-///
 /// // Forward transform (default): sign = -1
 /// let fwd = FourierOptions::forward();
 /// assert_eq!(fwd.sign, -1.0);
 /// assert!(fwd.normalize);
-///
 /// // Inverse transform: sign = +1
 /// let inv = FourierOptions::inverse();
 /// assert_eq!(inv.sign, 1.0);
-///
 /// // Custom options
 /// let opts = FourierOptions {
 ///     maxbonddim: 20,
@@ -113,6 +110,11 @@ impl Default for FourierOptions {
 
 impl FourierOptions {
     /// Create options for forward Fourier transform.
+    /// # Errors
+    ///
+    /// Returns an error when the forward transform fails (a shape mismatch or
+    /// /// backend failure).
+    ///
     pub fn forward() -> Self {
         Self::default()
     }
@@ -127,21 +129,15 @@ impl FourierOptions {
 }
 
 /// Convenience wrapper for forward/backward Fourier transform.
-///
 /// Caches the forward MPO so that repeated calls to [`FTCore::forward()`]
 /// and [`FTCore::backward()`] avoid redundant MPO construction.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{FTCore, FourierOptions};
-///
 /// let ft = FTCore::new(4, FourierOptions::default()).unwrap();
 /// assert_eq!(ft.r(), 4);
-///
 /// let fwd_op = ft.forward().unwrap();
 /// assert_eq!(fwd_op.mpo().node_count(), 4);
-///
 /// let bwd_op = ft.backward().unwrap();
 /// assert_eq!(bwd_op.mpo().node_count(), 4);
 /// ```
@@ -156,12 +152,18 @@ impl FTCore {
     /// Create a new FTCore for r bits.
     ///
     /// # Errors
-    /// Returns an error when `r < 2`, `options.k == 0`, a Fourier tensor
-    /// dimension/product or backing allocation exceeds checked bounds, or
-    /// Fourier MPO construction fails.
-    pub fn new(r: usize, options: FourierOptions) -> Result<Self> {
+    ///
+    /// Returns an error when the variable count or dimension overflows (an
+    /// /// overflow or invalid-configuration failure).
+    ///
+    pub fn new(
+        r: usize,
+        options: FourierOptions,
+    ) -> std::result::Result<Self, QuanticsTransformError> {
         if r < 2 {
-            anyhow::bail!("Number of sites must be at least 2, got {r}");
+            return Err(QuanticsTransformError::InvalidConfiguration {
+                message: format!("Number of sites must be at least 2, got {r}"),
+            });
         }
         let forward_options = FourierOptions {
             sign: -1.0,
@@ -179,8 +181,9 @@ impl FTCore {
     ///
     /// # Errors
     /// Returns an error when converting the cached Fourier MPO to a linear
-    /// operator fails or a required site-dimension allocation fails.
-    pub fn forward(&self) -> Result<QuanticsOperator> {
+    /// operator fails (a shape mismatch or backend failure) or a required
+    /// site-dimension allocation fails (an overflow failure).
+    pub fn forward(&self) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
         let mut site_dims =
             try_vec_with_capacity::<usize>("Fourier forward site dimensions", self.r)?;
         site_dims.resize(self.r, 2);
@@ -190,9 +193,11 @@ impl FTCore {
     /// Get the backward (inverse) Fourier transform operator.
     ///
     /// # Errors
-    /// Returns an error when inverse Fourier MPO construction, site-dimension
-    /// allocation, or conversion to a linear operator fails.
-    pub fn backward(&self) -> Result<QuanticsOperator> {
+    ///
+    /// Returns an error when the inverse transform fails (a shape mismatch or
+    /// /// backend failure).
+    ///
+    pub fn backward(&self) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
         let inverse_options = FourierOptions {
             sign: 1.0,
             normalize: self.options.normalize,
@@ -212,44 +217,38 @@ impl FTCore {
 }
 
 /// Create a Quantics Fourier Transform operator.
-///
 /// This implements the Chen & Lindsey construction of the DFT as a matrix product operator.
 /// The resulting operator transforms a quantics tensor train representing a function
 /// to its Fourier transform in quantics tensor train form.
-///
 /// # Index ordering
-///
 /// Before the Fourier transform, the leftmost index corresponds to the most significant
 /// bit (largest length scale). After transformation, the leftmost index corresponds to
 /// the least significant bit (smallest length scale) - this allows for a small bond
 /// dimension construction.
-///
 /// # Arguments
 /// * `r` - Number of bits
 /// * `options` - Fourier transform options
-///
 /// # Returns
 /// LinearOperator representing the QFT
-///
 /// # Errors
-/// Returns an error when `r < 2`, `options.k == 0`, a Fourier tensor
-/// dimension/product or backing allocation exceeds checked bounds, or when
-/// Fourier MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure).
 ///
 /// # Examples
-///
 /// ```
 /// use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-///
 /// // Create a forward QFT operator for 4-bit quantics representation
 /// let op = quantics_fourier_operator(4, FourierOptions::forward()).unwrap();
-///
 /// // The operator has one MPO tensor per bit
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
-pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<QuanticsOperator> {
+pub fn quantics_fourier_operator(
+    r: usize,
+    options: FourierOptions,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
     }
 
     let mpo = quantics_fourier_mpo(r, &options)?;
@@ -261,7 +260,9 @@ pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<Qu
 /// Create the QFT MPO as a TensorTrain using Chen & Lindsey construction.
 fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrain<Complex64>> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!(
+            "Number of sites must be at least 2, got {r}"
+        ));
     }
 
     let k = options.k;
@@ -333,8 +334,9 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         tensors.push(t);
     }
 
-    let mut tt = TensorTrain::new(tensors)
-        .map_err(|e| anyhow::anyhow!("Failed to create Fourier MPO: {}", e))?;
+    let mut tt = TensorTrain::new(tensors).map_err(|e| {
+        QuanticsTransformError::from(anyhow::Error::new(e).context("Failed to create Fourier MPO"))
+    })?;
 
     // Compress the tensor train
     let compress_options = CompressionOptions {
@@ -343,8 +345,11 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         max_bond_dim: options.maxbonddim,
         normalize_error: true,
     };
-    tt.compress(&compress_options)
-        .map_err(|err| anyhow::anyhow!("Fourier MPO compression failed: {err}"))?;
+    tt.compress(&compress_options).map_err(|err| {
+        QuanticsTransformError::from(
+            anyhow::Error::new(err).context("Fourier MPO compression failed"),
+        )
+    })?;
 
     // Normalize if requested
     if options.normalize {
@@ -367,7 +372,6 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
 }
 
 /// Get Chebyshev grid points and barycentric weights.
-///
 /// Returns (grid, bary_weights) where:
 /// - grid[j] = 0.5 * (1 - cos(π*j/K)) for j = 0, ..., K
 /// - bary_weights are the barycentric interpolation weights
@@ -413,10 +417,8 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 }
 
 /// Build the DFT core tensor A[alpha, tau, sigma, beta].
-///
 /// A[alpha, tau, sigma, beta] = P_alpha(x) * exp(2πi * sign * x * tau)
 /// where x = (sigma + grid[beta]) / 2
-///
 /// Returns tensor of shape (k+1, 2, 2, k+1)
 fn build_dft_core_tensor(
     grid: &[f64],
@@ -424,7 +426,9 @@ fn build_dft_core_tensor(
     sign: f64,
 ) -> Result<Tensor4<Complex64>> {
     if grid.is_empty() || grid.len() != bary_weights.len() {
-        anyhow::bail!("Fourier grid and barycentric weights have incompatible lengths");
+        return Err(anyhow::anyhow!(
+            "Fourier grid and barycentric weights have incompatible lengths"
+        ));
     }
     let count = grid.len();
     let k = count - 1;

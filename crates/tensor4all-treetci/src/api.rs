@@ -1,10 +1,11 @@
+use crate::error::Result as TreeTciResult;
 use crate::{
-    materialize::{to_treetn, FullPivLuScalar},
-    optimize_with_proposer, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
-    TreeTciGraph, TreeTciOptions,
+    materialize::to_treetn, optimize_with_proposer, GlobalIndexBatch, MultiIndex,
+    PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
 };
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use tensor4all_core::CommonScalar;
+use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
 
 /// High-level TreeTCI return type:
@@ -74,6 +75,11 @@ pub type TreeTciRunResult = (
 /// assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
 /// ```
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 pub fn crossinterpolate2<T, F, P>(
     evaluate: F,
     local_dims: Vec<usize>,
@@ -82,18 +88,23 @@ pub fn crossinterpolate2<T, F, P>(
     options: TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
-) -> Result<TreeTciRunResult>
+) -> TreeTciResult<TreeTciRunResult>
 where
-    T: FullPivLuScalar + CommonScalar,
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    ensure!(
-        local_dims.len() == graph.n_sites(),
-        "local_dims length {} must match graph site count {}",
-        local_dims.len(),
-        graph.n_sites()
-    );
+    if !(local_dims.len() == graph.n_sites()) {
+        return Err(anyhow::anyhow!(
+            "local_dims length {} must match graph site count {}",
+            local_dims.len(),
+            graph.n_sites()
+        )
+        .into());
+    };
 
     let pivots = if initial_pivots.is_empty() {
         vec![vec![0; local_dims.len()]]
@@ -113,10 +124,12 @@ where
         .iter()
         .map(|v| CommonScalar::abs_val(*v))
         .fold(0.0f64, f64::max);
-    ensure!(
-        tci.max_sample_value > 0.0,
-        "initial pivots must not all evaluate to zero"
-    );
+    if !matches!(
+        tci.max_sample_value.partial_cmp(&0.0),
+        Some(std::cmp::Ordering::Greater)
+    ) {
+        return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
+    }
 
     let (ranks, errors) = optimize_with_proposer(&mut tci, &evaluate, &options, proposer)?;
     let treetn = to_treetn(&tci, &evaluate, center_site)?;

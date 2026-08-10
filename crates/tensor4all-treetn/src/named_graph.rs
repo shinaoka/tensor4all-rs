@@ -4,7 +4,7 @@
 //! Provides a mapping between arbitrary node name types (NodeName) and internal NodeIndex.
 //! This allows using meaningful identifiers (coordinates, strings, etc.) instead of raw indices.
 
-use anyhow::Result;
+use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::EdgeType;
 use petgraph::Undirected;
@@ -63,9 +63,21 @@ where
     /// Add a node with the given name and data.
     ///
     /// Returns an error if the node already exists.
-    pub fn add_node(&mut self, node_name: NodeName, data: NodeData) -> Result<NodeIndex> {
+    /// # Errors
+    ///
+    /// Returns an error when the graph is invalid (an invalid-topology
+    ///  failure).
+    ///
+    pub fn add_node(
+        &mut self,
+        node_name: NodeName,
+        data: NodeData,
+    ) -> std::result::Result<NodeIndex, TreeTNOperationError> {
         if self.node_name_to_index.contains_key(&node_name) {
-            return Err(anyhow::anyhow!("Node already exists: {:?}", node_name));
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                "Node already exists: {:?}",
+                node_name
+            )));
         }
         let node = self.graph.add_node(data);
         self.node_name_to_index.insert(node_name.clone(), node);
@@ -91,12 +103,24 @@ where
     /// Rename an existing node without changing its data or incident edges.
     ///
     /// Returns an error if the old node doesn't exist or the new name is already in use.
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
+    /// # Errors
+    ///
+    /// Returns an error when the node is not found (a missing-index failure)
+    ///  or the new name is already in use (a duplicate operation failure).
+    ///
+    pub fn rename_node(
+        &mut self,
+        old_name: &NodeName,
+        new_name: NodeName,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         if old_name == &new_name {
             return Ok(());
         }
         if self.node_name_to_index.contains_key(&new_name) {
-            return Err(anyhow::anyhow!("Node already exists: {:?}", new_name));
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                "Node already exists: {:?}",
+                new_name
+            )));
         }
 
         let node_idx = self
@@ -136,7 +160,17 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
-    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName, weight: EdgeData) -> Result<EdgeIndex>
+    /// # Errors
+    ///
+    /// Returns an error when the graph is invalid (an invalid-topology
+    ///  failure).
+    ///
+    pub fn add_edge(
+        &mut self,
+        n1: &NodeName,
+        n2: &NodeName,
+        weight: EdgeData,
+    ) -> std::result::Result<EdgeIndex, TreeTNOperationError>
     where
         EdgeData: Clone,
     {
@@ -271,6 +305,10 @@ where
     ///
     /// See [`Self::euler_tour_edges`] for details.
     pub fn euler_tour_edges_by_index(&self, root: NodeIndex) -> Vec<(NodeIndex, NodeIndex)> {
+        // Iterative DFS-based Euler tour: each undirected edge is emitted once
+        // in each direction (forward on descent, backward on backtrack). This is
+        // a single O(V + E) pass with a visited-edge set; there is no
+        // per-vertex rescan, so the total cost stays linear in the graph size.
         let mut visited_edges: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
         let mut tour = Vec::new();
         let mut stack = vec![root];

@@ -4,6 +4,7 @@
 //! - [`fuse_to`](TreeTN::fuse_to): Merge adjacent nodes to match a target structure
 //! - [`split_to`](TreeTN::split_to): Split nodes to match a target structure
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -134,6 +135,11 @@ where
     /// - **Bond dimension**: Unchanged (pure contraction, no truncation)
     /// - **Commutative**: Non-overlapping groups can be merged in any order
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     /// # Example
     /// ```text
     /// Before: x1_1---x2_1---x1_2---x2_2---x1_3---x2_3  (6 nodes)
@@ -142,7 +148,7 @@ where
     pub fn fuse_to<TargetV>(
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
-    ) -> Result<TreeTN<T, TargetV>>
+    ) -> std::result::Result<TreeTN<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
@@ -173,11 +179,13 @@ where
             }
 
             if current_nodes_for_target.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Target node {:?} has site indices not found in current TreeTN",
-                    target_node_name
-                ))
-                .context("fuse_to: incompatible target structure");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Target node {:?} has site indices not found in current TreeTN",
+                        target_node_name
+                    )
+                    .context("fuse_to: incompatible target structure"),
+                ));
             }
 
             target_to_current.insert(target_node_name.clone(), current_nodes_for_target);
@@ -188,13 +196,15 @@ where
         for (target_name, current_nodes) in &target_to_current {
             for current_node in current_nodes {
                 if let Some(existing_target) = current_to_target.get(current_node) {
-                    return Err(anyhow::anyhow!(
-                        "Current node {:?} maps to multiple target nodes: {:?} and {:?}",
-                        current_node,
-                        existing_target,
-                        target_name
-                    ))
-                    .context("fuse_to: ambiguous mapping");
+                    return Err(TreeTNOperationError::from(
+                        anyhow::anyhow!(
+                            "Current node {:?} maps to multiple target nodes: {:?} and {:?}",
+                            current_node,
+                            existing_target,
+                            target_name
+                        )
+                        .context("fuse_to: ambiguous mapping"),
+                    ));
                 }
                 current_to_target.insert(current_node.clone(), target_name.clone());
             }
@@ -209,11 +219,13 @@ where
                     .site_space(&current_name)
                     .is_some_and(|s| !s.is_empty())
             {
-                return Err(anyhow::anyhow!(
-                    "Current node {:?} has site indices but no corresponding target node",
-                    current_name
-                ))
-                .context("fuse_to: missing target for current node");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Current node {:?} has site indices but no corresponding target node",
+                        current_name
+                    )
+                    .context("fuse_to: missing target for current node"),
+                ));
             }
         }
 
@@ -368,12 +380,16 @@ where
             .node_index(root_name)
             .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in graph", root_name))?;
 
-        // Get edges within the group, ordered from leaves to root.
-        let mut dfs = petgraph::visit::DfsPostOrder::new(g, root_idx);
-        let mut post_order = Vec::new();
-        while let Some(n) = dfs.next(g) {
-            post_order.push(n);
-        }
+        // Get edges within the group, ordered from leaves to root. Reuse the
+        // network's post-order DFS (single O(V+E) pass over the named graph)
+        // instead of duplicating a local traversal.
+        let post_order = self.site_index_network().post_order_dfs_by_index(root_idx);
+
+        // BFS from the root builds the parent map needed to orient internal
+        // edges toward the contraction root (single O(V+E) pass). This is not
+        // equivalent to the post-order list alone: the post-order gives the
+        // contraction sequence, while parents orient each edge for the
+        // einsum pairing.
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut bfs = petgraph::visit::Bfs::new(g, root_idx);
         while let Some(node) = bfs.next(g) {
@@ -457,6 +473,11 @@ where
     /// - **Bond dimension**: May increase during split, controlled by truncation
     /// - **Exact (Phase 1)**: Without truncation, represents the same tensor
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     /// # Example
     /// ```text
     /// Before: {x1_1,x2_1}---{x1_2,x2_2}---{x1_3,x2_3}  (3 nodes, fused)
@@ -466,7 +487,7 @@ where
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
         options: &SplitOptions,
-    ) -> Result<TreeTN<T, TargetV>>
+    ) -> std::result::Result<TreeTN<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
@@ -516,7 +537,7 @@ where
                 return Err(anyhow::anyhow!(
                     "split_to: target node {:?} spans multiple current nodes; use restructure_to for mixed regrouping",
                     target_node_name
-                ));
+                ).into());
             }
             let current_name = current_names.into_iter().next().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -544,12 +565,14 @@ where
                     if let Some(target_name) = site_to_target.get(site_idx) {
                         targets_for_node.insert(target_name.clone());
                     } else {
-                        return Err(anyhow::anyhow!(
-                            "Site index {:?} in current node {:?} has no corresponding target node",
-                            site_idx,
-                            current_node_name
-                        ))
-                        .context("split_to: incompatible target structure");
+                        return Err(TreeTNOperationError::from(
+                            anyhow::anyhow!(
+                                "Site index {:?} in current node {:?} has no corresponding target node",
+                                site_idx,
+                                current_node_name
+                            )
+                            .context("split_to: incompatible target structure"),
+                        ));
                     }
                 }
                 current_to_targets.insert(current_node_name.clone(), targets_for_node);
@@ -627,7 +650,8 @@ where
                     .edges()
                     .map(|(a, b)| (a.clone(), b.clone()))
                     .collect::<Vec<_>>(),
-            ));
+            )
+            .into());
         }
 
         // Step 6: Phase 2 - Optional truncation sweep
@@ -644,7 +668,8 @@ where
 
             return result
                 .truncate([center], truncation_options)
-                .context("split_to: truncation sweep failed");
+                .context("split_to: truncation sweep failed")
+                .map_err(TreeTNOperationError::from);
         }
 
         Ok(result)

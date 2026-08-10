@@ -2,7 +2,8 @@
 //!
 //! This transformation computes cumulative sums: y_i = Σ_{j < i} x_j
 
-use anyhow::Result;
+use crate::error::QuanticsTransformError;
+use anyhow::{Context, Result};
 use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
@@ -14,8 +15,10 @@ use crate::common::{tensortrain_to_linear_operator, try_vec_with_capacity, Quant
 /// # Variants
 ///
 /// - **`Lower`**: Strict lower triangle, M\[i,j\] = 1 when i > j.
+///
 ///   Computes the prefix sum: y\_i = sum of x\_j for j < i.
 /// - **`Upper`**: Strict upper triangle, M\[i,j\] = 1 when i < j.
+///
 ///   Computes the suffix sum: y\_i = sum of x\_j for j > i.
 ///
 /// # Examples
@@ -54,8 +57,9 @@ pub enum TriangleType {
 /// LinearOperator representing the cumulative sum
 ///
 /// # Errors
-/// Returns an error when `r < 2`, when the MPO site-list allocation exceeds
-/// checked bounds, or when internal MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -69,9 +73,11 @@ pub enum TriangleType {
 /// assert!(cumsum_operator(1).is_err());
 /// assert!(cumsum_operator(0).is_err());
 /// ```
-pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
+pub fn cumsum_operator(r: usize) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("Number of sites must be at least 2, got {r}"),
+        });
     }
 
     let mpo = cumsum_mpo(r)?;
@@ -90,8 +96,9 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// * `triangle` - Which triangle to use
 ///
 /// # Errors
-/// Returns an error when `r < 2`, when the MPO site-list allocation exceeds
-/// checked bounds, or when internal MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -104,9 +111,14 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// // Requires at least 2 sites
 /// assert!(triangle_operator(1, TriangleType::Lower).is_err());
 /// ```
-pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOperator> {
+pub fn triangle_operator(
+    r: usize,
+    triangle: TriangleType,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("Number of sites must be at least 2, got {r}"),
+        });
     }
 
     let mpo = triangle_mpo(r, triangle)?;
@@ -129,7 +141,9 @@ pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOpe
 #[allow(clippy::needless_range_loop)]
 fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!(
+            "Number of sites must be at least 2, got {r}"
+        ));
     }
 
     let single_tensor = upper_triangle_tensor();
@@ -194,7 +208,9 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
         }
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create cumsum MPO: {}", e))
+    TensorTrain::new(tensors)
+        .map_err(anyhow::Error::new)
+        .context("Failed to create cumsum MPO")
 }
 
 /// Create a triangular matrix MPO as a TensorTrain.
@@ -203,7 +219,9 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
 #[allow(clippy::needless_range_loop)]
 fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex64>> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!(
+            "Number of sites must be at least 2, got {r}"
+        ));
     }
 
     // upper_triangle_tensor() has y>x transition → M[i,j]=1 when i>j = Lower triangle

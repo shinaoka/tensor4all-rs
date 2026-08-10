@@ -674,7 +674,7 @@ fn build_chain_linear_operator(
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!(
-                    "input index dimension mismatch at node {position}: state has {}, operator internal input has {}",
+                    "input index shape mismatch at node {position}: state has {}, operator internal input has {}",
                     true_input.dim(),
                     internal_input.dim()
                 ),
@@ -684,7 +684,7 @@ fn build_chain_linear_operator(
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!(
-                    "output index dimension mismatch at node {position}: requested true output has {}, operator internal output has {}",
+                    "output index shape mismatch at node {position}: requested true output has {}, operator internal output has {}",
                     true_output.dim(),
                     internal_output.dim()
                 ),
@@ -818,7 +818,7 @@ fn build_linsolve_index_mappings(
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!(
-                    "input index dimension mismatch at vertex {vertex}: init has {}, operator internal input has {}",
+                    "input index shape mismatch at vertex {vertex}: init has {}, operator internal input has {}",
                     true_input.dim(),
                     internal_input.dim()
                 ),
@@ -828,7 +828,7 @@ fn build_linsolve_index_mappings(
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!(
-                    "output index dimension mismatch at vertex {vertex}: rhs has {}, operator internal output has {}",
+                    "output index shape mismatch at vertex {vertex}: rhs has {}, operator internal output has {}",
                     true_output.dim(),
                     internal_output.dim()
                 ),
@@ -1104,6 +1104,7 @@ pub extern "C" fn t4a_treetn_linkind(
 /// When `force == 0`, this uses smart canonicalization:
 /// - If the network is already canonical at `vertex` with `form`, the call is a no-op.
 /// - If the network is already canonicalized with a different form, the call returns
+///
 ///   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_orthogonalize(
@@ -1125,7 +1126,7 @@ pub extern "C" fn t4a_treetn_orthogonalize(
             .map_err(|err| {
                 capi_error(
                     T4A_INVALID_ARGUMENT,
-                    orthogonalize_error_message(force, err),
+                    orthogonalize_error_message(force, err.source),
                 )
             })?;
         *tn.inner_mut() = canonicalized;

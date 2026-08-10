@@ -365,10 +365,7 @@ fn test_partial_contract_rejects_dimension_mismatch() {
         ContractionOptions::default(),
     );
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("dimension mismatch"));
+    assert!(result.unwrap_err().to_string().contains("shape mismatch"));
 }
 
 #[test]

@@ -38,7 +38,6 @@ use crate::tensor_like::{
     TensorConstructionLike, TensorContractionLike, TensorFactorizationLike, TensorLike,
     TensorVectorSpace, TensorVectorSpaceError,
 };
-use anyhow::Result;
 
 /// A collection of tensors organized in a block structure.
 ///
@@ -67,7 +66,8 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `rows * cols != blocks.len()`.
+    /// Returns an error when the block count does not match the shape (a shape
+    /// /// mismatch).
     ///
     /// # Examples
     ///
@@ -86,16 +86,20 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let t3 = TensorDynLen::from_dense(vec![i], vec![5.0, 6.0]).unwrap();
     /// assert!(BlockTensor::try_new(vec![t3], (2, 1)).is_err());
     /// ```
-    pub fn try_new(blocks: Vec<T>, shape: (usize, usize)) -> Result<Self> {
+    pub fn try_new(
+        blocks: Vec<T>,
+        shape: (usize, usize),
+    ) -> std::result::Result<Self, TensorVectorSpaceError> {
         let (rows, cols) = shape;
-        anyhow::ensure!(
-            rows * cols == blocks.len(),
-            "Block count mismatch: shape ({}, {}) requires {} blocks, but got {}",
-            rows,
-            cols,
-            rows * cols,
-            blocks.len()
-        );
+        if rows * cols != blocks.len() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block count mismatch: shape ({}, {}) requires {} blocks, but got {}",
+                rows,
+                cols,
+                rows * cols,
+                blocks.len()
+            )));
+        }
         Ok(Self { blocks, shape })
     }
 
@@ -108,7 +112,8 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `rows * cols != blocks.len()`.
+    /// Returns an error when the block count does not match the shape (a shape
+    /// /// mismatch).
     ///
     /// # Examples
     ///
@@ -121,7 +126,10 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// assert_eq!(bt.shape(), (1, 1));
     /// ```
-    pub fn new(blocks: Vec<T>, shape: (usize, usize)) -> Result<Self> {
+    pub fn new(
+        blocks: Vec<T>,
+        shape: (usize, usize),
+    ) -> std::result::Result<Self, TensorVectorSpaceError> {
         Self::try_new(blocks, shape)
     }
 
@@ -259,6 +267,11 @@ impl<T: TensorLike> BlockTensor<T> {
     /// - Blocks in the same row share some common index IDs (output indices).
     /// - Blocks in the same column share some common index IDs (input indices).
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the blocks have inconsistent indices (a shape or
+    /// /// index mismatch).
+    ///
     /// # Examples
     ///
     /// ```
@@ -273,7 +286,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let bt = BlockTensor::new(vec![t1, t2], (2, 1)).unwrap();
     /// assert!(bt.validate_indices().is_ok());
     /// ```
-    pub fn validate_indices(&self) -> Result<()> {
+    pub fn validate_indices(&self) -> std::result::Result<(), TensorVectorSpaceError> {
         let (rows, cols) = self.shape;
 
         if cols <= 1 {
@@ -286,13 +299,14 @@ impl<T: TensorLike> BlockTensor<T> {
         let first_count = self.blocks[0].num_external_indices();
         for (i, block) in self.blocks.iter().enumerate().skip(1) {
             let n = block.num_external_indices();
-            anyhow::ensure!(
-                n == first_count,
-                "Block {} has {} external indices, but block 0 has {}",
-                i,
-                n,
-                first_count
-            );
+            if n != first_count {
+                return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                    "Block {} has {} external indices, but block 0 has {}",
+                    i,
+                    n,
+                    first_count
+                )));
+            }
         }
 
         // Same row: blocks should share at least one full output index.
@@ -313,15 +327,16 @@ impl<T: TensorLike> BlockTensor<T> {
                     .cloned()
                     .collect();
                 let common_count = ref_indices.intersection(&indices).count();
-                anyhow::ensure!(
-                    common_count > 0,
-                    "Matrix row {}: blocks ({},{}) and ({},{}) share no common indices",
-                    row,
-                    row,
-                    0,
-                    row,
-                    col
-                );
+                if common_count == 0 {
+                    return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                        "Matrix row {}: blocks ({},{}) and ({},{}) share no common indices",
+                        row,
+                        row,
+                        0,
+                        row,
+                        col
+                    )));
+                }
             }
         }
 
@@ -343,15 +358,16 @@ impl<T: TensorLike> BlockTensor<T> {
                     .cloned()
                     .collect();
                 let common_count = ref_indices.intersection(&indices).count();
-                anyhow::ensure!(
-                    common_count > 0,
-                    "Matrix col {}: blocks ({},{}) and ({},{}) share no common indices",
-                    col,
-                    0,
-                    col,
-                    row,
-                    col
-                );
+                if common_count == 0 {
+                    return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                        "Matrix col {}: blocks ({},{}) and ({},{}) share no common indices",
+                        col,
+                        0,
+                        col,
+                        row,
+                        col
+                    )));
+                }
             }
         }
 
@@ -365,6 +381,7 @@ impl<T: TensorLike> BlockTensor<T> {
 
 impl<T: TensorLike> TensorIndex for BlockTensor<T> {
     type Index = T::Index;
+    type Error = TensorVectorSpaceError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         // Collect unique external indices across all blocks (deduplicated by full index).
@@ -380,11 +397,18 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
         result
     }
 
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
-        let replaced: Result<Vec<T>> = self
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
+        let replaced: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|b| b.replaceind(old_index, new_index))
+            .map(|b| {
+                b.replaceind(old_index, new_index)
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: replaced?,
@@ -396,11 +420,14 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
-    ) -> Result<Self> {
-        let replaced: Result<Vec<T>> = self
+    ) -> std::result::Result<Self, Self::Error> {
+        let replaced: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|b| b.replaceinds(old_indices, new_indices))
+            .map(|b| {
+                b.replaceinds(old_indices, new_indices)
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: replaced?,
@@ -414,8 +441,6 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
 // ============================================================================
 
 impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
-    type Error = TensorVectorSpaceError;
-
     // ------------------------------------------------------------------------
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------
@@ -438,11 +463,14 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
-    fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        let scaled: Result<Vec<T>> = self
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        let scaled: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|b| b.scale(scalar.clone()))
+            .map(|b| {
+                b.scale(scalar.clone())
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: scaled?,
@@ -450,18 +478,27 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
-        anyhow::ensure!(
-            self.shape == other.shape,
-            "Block shapes must match: {:?} vs {:?}",
-            self.shape,
-            other.shape
-        );
-        let result: Result<Vec<T>> = self
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        if self.shape != other.shape {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block shapes must match: {:?} vs {:?}",
+                self.shape,
+                other.shape
+            )));
+        }
+        let result: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
             .zip(other.blocks.iter())
-            .map(|(s, o)| s.axpby(a.clone(), o, b.clone()))
+            .map(|(s, o)| {
+                s.axpby(a.clone(), o, b.clone())
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: result?,
@@ -469,21 +506,25 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
-        anyhow::ensure!(
-            self.shape == other.shape,
-            "Block shapes must match for inner product: {:?} vs {:?}",
-            self.shape,
-            other.shape
-        );
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        if self.shape != other.shape {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block shapes must match for inner product: {:?} vs {:?}",
+                self.shape,
+                other.shape
+            )));
+        }
         let mut sum = AnyScalar::new_real(0.0);
         for (s, o) in self.blocks.iter().zip(other.blocks.iter()) {
-            sum = sum + s.inner_product(o)?;
+            let value = s
+                .inner_product(o)
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            sum = sum + value;
         }
         Ok(sum)
     }
 
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
         self.validate_indices()
     }
 }
@@ -505,16 +546,25 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         &self,
         _other: &Self,
         _pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
-    ) -> Result<DirectSumResult<Self>> {
-        anyhow::bail!("BlockTensor does not support direct_sum")
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support direct_sum"
+        )))
     }
 
-    fn outer_product(&self, _other: &Self) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support outer_product")
+    fn outer_product(&self, _other: &Self) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support outer_product"
+        )))
     }
 
-    fn permuteinds(&self, _new_order: &[<Self as TensorIndex>::Index]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support permuteinds")
+    fn permuteinds(
+        &self,
+        _new_order: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support permuteinds"
+        )))
     }
 
     fn fuse_indices(
@@ -522,11 +572,15 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         old_indices: &[Self::Index],
         new_index: Self::Index,
         order: LinearizationOrder,
-    ) -> Result<Self> {
-        let blocks: Result<Vec<T>> = self
+    ) -> std::result::Result<Self, Self::Error> {
+        let blocks: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|block| block.fuse_indices(old_indices, new_index.clone(), order))
+            .map(|block| {
+                block
+                    .fuse_indices(old_indices, new_index.clone(), order)
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: blocks?,
@@ -534,8 +588,10 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         })
     }
 
-    fn contract(_tensors: &[&Self]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support contract")
+    fn contract(_tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support contract"
+        )))
     }
 }
 
@@ -566,20 +622,30 @@ impl<T: TensorLike> TensorConstructionLike for BlockTensor<T> {
     fn diagonal(
         _input_index: &<Self as TensorIndex>::Index,
         _output_index: &<Self as TensorIndex>::Index,
-    ) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support diagonal")
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support diagonal"
+        )))
     }
 
-    fn scalar_one() -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support scalar_one")
+    fn scalar_one() -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support scalar_one"
+        )))
     }
 
-    fn ones(_indices: &[<Self as TensorIndex>::Index]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support ones")
+    fn ones(_indices: &[<Self as TensorIndex>::Index]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support ones"
+        )))
     }
 
-    fn onehot(_index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support onehot")
+    fn onehot(
+        _index_vals: &[(<Self as TensorIndex>::Index, usize)],
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support onehot"
+        )))
     }
 }
 

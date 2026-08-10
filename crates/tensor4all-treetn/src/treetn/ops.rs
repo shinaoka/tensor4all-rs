@@ -75,9 +75,10 @@ where
 // Norm Computation
 // ============================================================================
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 
 use crate::algorithm::CanonicalForm;
+use crate::error::TreeTNOperationError;
 use crate::CanonicalizationOptions;
 
 impl<T, V> TreeTN<T, V>
@@ -100,10 +101,8 @@ where
     /// The natural logarithm of the Frobenius norm.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - The network is empty
-    /// - Canonicalization fails
-    ///
+    /// Returns an error when the tensor train contains a non-finite value or its
+    /// scaling is invalid (an invalid-state or dtype mismatch failure).
     /// # Examples
     ///
     /// ```
@@ -118,11 +117,13 @@ where
     /// let ln = tn.log_norm().unwrap();
     /// assert!((ln - 5.0_f64.ln()).abs() < 1e-10);
     /// ```
-    pub fn log_norm(&mut self) -> Result<f64> {
+    pub fn log_norm(&mut self) -> std::result::Result<f64, TreeTNOperationError> {
         let n = self.node_count();
         if n == 0 {
-            return Err(anyhow::anyhow!("Cannot compute log_norm of empty TreeTN"))
-                .context("log_norm: network must have at least one node");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("Cannot compute log_norm of empty TreeTN")
+                    .context("log_norm: network must have at least one node"),
+            ));
         }
 
         // Determine the single center site (by name)
@@ -179,7 +180,9 @@ where
             .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
             .context("log_norm: center tensor must exist")?;
 
-        let norm_sq = center_tensor.norm_squared()?;
+        let norm_sq = center_tensor
+            .norm_squared()
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
         let norm = norm_sq.sqrt();
 
         Ok(norm.ln())
@@ -193,8 +196,8 @@ where
     /// This method is mutable because it may need to canonicalize the network.
     ///
     /// # Errors
-    /// Returns an error if the network is empty or canonicalization fails.
-    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -218,7 +221,7 @@ where
     /// let n = tn.norm().unwrap();
     /// assert!((n - 2.0_f64.sqrt()).abs() < 1e-10);
     /// ```
-    pub fn norm(&mut self) -> Result<f64> {
+    pub fn norm(&mut self) -> std::result::Result<f64, TreeTNOperationError> {
         let log_n = self
             .log_norm()
             .context("norm: failed to compute log_norm")?;
@@ -233,8 +236,8 @@ where
     /// This method is mutable because it may need to canonicalize the network.
     ///
     /// # Errors
-    /// Returns an error if the network is empty or canonicalization fails.
-    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -249,7 +252,7 @@ where
     /// let nsq = tn.norm_squared().unwrap();
     /// assert!((nsq - 25.0).abs() < 1e-10);
     /// ```
-    pub fn norm_squared(&mut self) -> Result<f64> {
+    pub fn norm_squared(&mut self) -> std::result::Result<f64, TreeTNOperationError> {
         let n = self
             .norm()
             .context("norm_squared: failed to compute norm")?;
@@ -273,9 +276,8 @@ where
     /// `Ok(())` after the selected node tensor has been updated in place
     ///
     /// # Errors
-    /// Returns an error if the TreeTN is empty or the selected node/tensor
-    /// cannot be found
-    ///
+    /// Returns an error when the scaling fails (a dtype mismatch or backend
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -295,7 +297,7 @@ where
     /// ).unwrap();
     /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// ```
-    pub fn scale(&mut self, scalar: AnyScalar) -> Result<()> {
+    pub fn scale(&mut self, scalar: AnyScalar) -> std::result::Result<(), TreeTNOperationError> {
         let min_node = self
             .node_names()
             .into_iter()
@@ -340,8 +342,8 @@ where
     /// `conj(self) * other` into a scalar.
     ///
     /// # Errors
-    /// Returns an error if the networks have incompatible topologies.
-    ///
+    /// Returns an error when the two tensor trains have incompatible site spaces
+    /// (a shape mismatch) or the contraction fails (a backend failure).
     /// # Examples
     ///
     /// ```
@@ -356,7 +358,7 @@ where
     /// let ip = tn.inner(&tn).unwrap();
     /// assert!((ip.real() - 25.0).abs() < 1e-10);
     /// ```
-    pub fn inner(&self, other: &Self) -> Result<AnyScalar>
+    pub fn inner(&self, other: &Self) -> std::result::Result<AnyScalar, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -365,9 +367,9 @@ where
             return Ok(AnyScalar::new_real(0.0));
         }
         if !self.share_equivalent_site_index_network(other) {
-            return Err(anyhow::anyhow!(
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
                 "inner: TreeTNs must have the same topology and site indices"
-            ));
+            )));
         }
 
         let root_name = self
@@ -456,16 +458,17 @@ where
             .ok_or_else(|| anyhow::anyhow!("Root environment was not produced"))
             .context("inner: root contraction failed")?;
         if !envs.is_empty() {
-            return Err(anyhow::anyhow!(
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
                 "inner: contraction left {} dangling environments",
                 envs.len()
-            ));
+            )));
         }
 
         let scalar_one = T::scalar_one().context("inner: failed to create scalar_one")?;
         scalar_one
             .inner_product(&result_tensor)
             .context("inner: failed to extract scalar value")
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Convert the TreeTN to a single dense tensor.
@@ -480,8 +483,8 @@ where
     /// as the result size grows exponentially with the number of sites.
     ///
     /// # Errors
-    /// Returns an error if the network is empty or contraction fails.
-    ///
+    /// Returns an error when the dense materialization fails (a materialization or
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -513,9 +516,10 @@ where
     /// // Result is rank-2 (two site indices s0 and s1)
     /// assert_eq!(dense.num_external_indices(), 2);
     /// ```
-    pub fn to_dense(&self) -> Result<T> {
+    pub fn to_dense(&self) -> std::result::Result<T, TreeTNOperationError> {
         self.contract_to_tensor()
             .context("to_dense: failed to contract network to tensor")
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Create a reusable evaluator for repeated batched point evaluation.
@@ -527,6 +531,7 @@ where
     /// # Arguments
     ///
     /// * `indices` - Complete site-index order used as the row order of future
+    ///
     ///   batch value arrays.
     ///
     /// # Returns
@@ -534,10 +539,8 @@ where
     /// A reusable evaluator bound to this TreeTN.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the TreeTN is empty or `indices` is not a complete,
-    /// duplicate-free list of this TreeTN's site indices.
-    ///
+    /// Returns an error when the evaluator cannot be constructed (an
+    /// invalid-configuration failure).
     /// # Examples
     ///
     /// ```
@@ -552,7 +555,10 @@ where
     /// assert_eq!(evaluator.input_count(), 1);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn evaluator(&self, indices: &[T::Index]) -> Result<TreeTNEvaluator<T, V>>
+    pub fn evaluator(
+        &self,
+        indices: &[T::Index],
+    ) -> std::result::Result<TreeTNEvaluator<T, V>, TreeTNOperationError>
     where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
@@ -569,9 +575,11 @@ where
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by full `Index` value (from
+    ///
     ///   [`all_site_indices()`](Self::all_site_indices)).
     ///   Must enumerate every site index exactly once.
     /// * `values` - Column-major array of shape `[n_indices, n_points]`.
+    ///
     ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
     ///
     /// # Returns
@@ -588,7 +596,7 @@ where
         &self,
         indices: &[T::Index],
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Vec<AnyScalar>>
+    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError>
     where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
@@ -604,6 +612,7 @@ where
     /// # Arguments
     ///
     /// * `indices` - Identifies each site index by full `Index` value. It must
+    ///
     ///   enumerate every site index exactly once.
     /// * `values` - One site value for each entry in `indices`.
     ///
@@ -631,17 +640,22 @@ where
     /// assert!(value.imag().abs() < 1e-12);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn evaluate_point(&self, indices: &[T::Index], values: &[usize]) -> Result<AnyScalar>
+    pub fn evaluate_point(
+        &self,
+        indices: &[T::Index],
+        values: &[usize],
+    ) -> std::result::Result<AnyScalar, TreeTNOperationError>
     where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
     {
-        anyhow::ensure!(
-            values.len() == indices.len(),
-            "TreeTN::evaluate_point: values.len() ({}) != indices.len() ({})",
-            values.len(),
-            indices.len()
-        );
+        if values.len() != indices.len() {
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                "TreeTN::evaluate_point: values.len() ({}) != indices.len() ({})",
+                values.len(),
+                indices.len()
+            )));
+        }
 
         let shape = [indices.len(), 1usize];
         let values = ColMajorArrayRef::new(values, &shape)
@@ -652,6 +666,7 @@ where
             .into_iter()
             .next()
             .ok_or_else(|| anyhow::anyhow!("TreeTN::evaluate_point: evaluation returned no values"))
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Return the dimensions of all internal bond links.
@@ -711,7 +726,8 @@ where
     /// between the two vectors.
     ///
     /// # Errors
-    /// Returns an error if a node's site space cannot be found.
+    /// Returns an error if a node's site space cannot be found (a missing-index
+    /// failure).
     ///
     /// # Examples
     /// ```
@@ -738,7 +754,13 @@ where
     /// assert!(indices.contains(&s1));
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn all_site_indices(&self) -> Result<(Vec<T::Index>, Vec<V>)>
+    /// # Errors
+    /// Returns an error when a node's site space cannot be found (a
+    /// missing-index failure).
+    ///
+    pub fn all_site_indices(
+        &self,
+    ) -> std::result::Result<(Vec<T::Index>, Vec<V>), TreeTNOperationError>
     where
         V: Clone,
         T::Index: Clone,
@@ -764,18 +786,19 @@ where
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by its `Index` object
+    ///
     ///   (e.g. from [`all_site_indices()`](Self::all_site_indices)).
     ///   Must enumerate every site index exactly once.
     /// * `values` - Column-major array of shape `[n_indices, n_points]`.
+    ///
     ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
     ///
     /// # Returns
     /// A `Vec<AnyScalar>` of length `n_points`.
     ///
     /// # Errors
-    /// Returns an error if the underlying [`evaluate()`](Self::evaluate)
-    /// call fails.
-    ///
+    /// Returns an error when the coordinate is out of range (an out of bounds
+    /// failure) or evaluation fails (a backend failure).
     /// # Examples
     /// ```
     /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};
@@ -798,7 +821,7 @@ where
         &self,
         indices: &[T::Index],
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Vec<AnyScalar>>
+    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError>
     where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,

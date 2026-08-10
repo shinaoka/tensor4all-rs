@@ -31,8 +31,8 @@ pub use any_scalar::AnyScalar;
 pub use backend::{
     full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,
     solve_matrix_owned, svd_backend, triangular_solve_backend, triangular_solve_matrix,
-    triangular_solve_matrix_owned, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
-    MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
+    triangular_solve_matrix_owned, BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult,
+    FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
 };
 pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 pub use matrix::{
@@ -59,6 +59,6 @@ pub use tenferro_bridge::{
     print_and_reset_native_einsum_profile, qr_native_tensor, reset_native_einsum_profile,
     reshape_col_major_native_tensor, scale_native_tensor, scale_storage_native,
     storage_payload_native_read_input, storage_to_native_tensor, sum_native_tensor,
-    svd_native_tensor, tangent_native_tensor, NativeTensorReadInput,
+    svd_native_tensor, tangent_native_tensor, BridgeError, NativeTensorReadInput,
 };
 pub use tensor_element::TensorElement;

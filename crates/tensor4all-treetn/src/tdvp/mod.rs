@@ -530,7 +530,10 @@ where
             init,
             &self.options.krylov,
         )
-        .map_err(|source| TdvpError::Algorithm { context, source })?;
+        .map_err(|source| TdvpError::Algorithm {
+            context,
+            source: anyhow::Error::new(source),
+        })?;
         record_tdvp_profile(evolve_started, |profile, elapsed| {
             profile.evolve_local += elapsed;
         });
@@ -646,7 +649,7 @@ where
                 .extract_subtree(&step.nodes)
                 .map_err(|source| TdvpError::Algorithm {
                     context: "TDVP failed to extract one-site region",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         record_tdvp_profile(extract_started, |profile, elapsed| {
             profile.extract_region += elapsed;
@@ -678,7 +681,7 @@ where
             .replace_tensor(node_idx, evolved)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to replace one-site tensor",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(replace_started, |profile, elapsed| {
             profile.replace_subtree += elapsed;
@@ -688,7 +691,7 @@ where
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set one-site canonical center",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(center_started, |profile, elapsed| {
             profile.state_center += elapsed;
@@ -766,7 +769,7 @@ where
             .replaceind(&ket_center_bond, &ref_center_bond)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to relabel one-site Q reference bond",
-                source,
+                source: anyhow::Error::new(source),
             })?;
 
         for neighbor in self.topology.neighbors(current) {
@@ -790,7 +793,7 @@ where
                     .replaceind(ket_bond, ref_bond)
                     .map_err(|source| TdvpError::Algorithm {
                         context: "TDVP failed to relabel one-site Q boundary bond",
-                        source,
+                        source: anyhow::Error::new(source),
                     })?;
         }
 
@@ -833,7 +836,7 @@ where
         )?;
         let mut local = T::contract(&[&q, &r_evolved]).map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to contract corrected one-site tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         let target_inds = evolved.external_indices();
         let local_inds = local.external_indices();
@@ -850,7 +853,7 @@ where
                 .permuteinds(&target_inds)
                 .map_err(|source| TdvpError::Algorithm {
                     context: "TDVP failed to align corrected one-site tensor indices",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         }
         Ok(local)
@@ -899,7 +902,7 @@ where
         )
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP one-site bond-center Krylov exponential failed",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         record_tdvp_profile(evolve_started, |profile, elapsed| {
             profile.evolve_local += elapsed;
@@ -926,7 +929,7 @@ where
                 .extract_subtree(&step.nodes)
                 .map_err(|source| TdvpError::Algorithm {
                     context: "TDVP failed to extract two-site region",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         record_tdvp_profile(extract_started, |profile, elapsed| {
             profile.extract_region += elapsed;
@@ -974,7 +977,7 @@ where
         )
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to split evolved two-site tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         record_tdvp_profile(factorize_started, |profile, elapsed| {
             profile.factorize += elapsed;
@@ -994,7 +997,7 @@ where
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set two-site subtree center",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(subtree_center_started, |profile, elapsed| {
             profile.subtree_center += elapsed;
@@ -1007,7 +1010,7 @@ where
                         .set_edge_ortho_towards(edge, Some(to))
                         .map_err(|source| TdvpError::Algorithm {
                             context: "TDVP failed to set subtree orthogonality direction",
-                            source,
+                            source: anyhow::Error::new(source),
                         })?;
                 }
             }
@@ -1020,7 +1023,7 @@ where
             .replace_subtree(&step.nodes, &subtree)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to replace two-site subtree",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(replace_started, |profile, elapsed| {
             profile.replace_subtree += elapsed;
@@ -1030,7 +1033,7 @@ where
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set two-site canonical center",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(state_center_started, |profile, elapsed| {
             profile.state_center += elapsed;
@@ -1044,10 +1047,13 @@ where
 /// # Arguments
 ///
 /// * `operator` - Hamiltonian as a [`LinearOperator`]. The v1 implementation
+///
 ///   supports exactly one input and one output site mapping per node.
 /// * `init` - Initial TreeTN state. It is canonicalized at `center` before
+///
 ///   sweeping.
 /// * `center` - Initial sweep root used for ITensorNetworks-compatible
+///
 ///   post-order region plans.
 /// * `options` - Sweep, truncation, and Krylov exponential options.
 ///
@@ -1103,7 +1109,7 @@ pub fn tdvp<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: TdvpOptions,
-) -> Result<TdvpResult<T, V>, TdvpError>
+) -> std::result::Result<TdvpResult<T, V>, TdvpError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -1138,7 +1144,7 @@ where
         .canonicalize([center.clone()], CanonicalizationOptions::default())
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to canonicalize initial state",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     record_tdvp_profile(canonicalize_started, |profile, elapsed| {
         profile.initial_canonicalize += elapsed;
@@ -1215,6 +1221,11 @@ where
 /// This is a convenience wrapper over [`LinearOperator::from_mpo_and_state`] and
 /// [`tdvp`].
 ///
+/// # Errors
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};
@@ -1239,7 +1250,7 @@ pub fn tdvp_with_treetn_operator<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: TdvpOptions,
-) -> Result<TdvpResult<T, V>, TdvpError>
+) -> std::result::Result<TdvpResult<T, V>, TdvpError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -1250,7 +1261,7 @@ where
         LinearOperator::from_mpo_and_state(operator.clone(), &init).map_err(|source| {
             TdvpError::Algorithm {
                 context: "TDVP failed to build LinearOperator from TreeTN operator",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
     tdvp(&linear_operator, init, center, options)
@@ -1445,12 +1456,12 @@ mod tests {
 
         let err = TdvpError::from(SquareSiteMappingError::InvalidMapping {
             node: "site3".to_string(),
-            reason: "dimension mismatch".to_string(),
+            reason: "shape mismatch".to_string(),
         });
         assert!(matches!(
             err,
             TdvpError::InvalidMapping { node, reason }
-                if node == "site3" && reason == "dimension mismatch"
+                if node == "site3" && reason == "shape mismatch"
         ));
     }
 }

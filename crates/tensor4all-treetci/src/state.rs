@@ -1,5 +1,7 @@
+use crate::error::Result as TreeTciResult;
 use crate::{assemble::MultiIndex, column_2d, ncols_2d, SubtreeKey, TreeTciEdge, TreeTciGraph};
-use anyhow::{ensure, Result};
+use anyhow::Result;
+
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
@@ -60,17 +62,23 @@ pub type SimpleTreeTci<T> = TreeTCI2<T>;
 
 impl<T> TreeTCI2<T> {
     /// Create a new TreeTCI state from local dimensions and a tree graph.
-    pub fn new(local_dims: Vec<usize>, graph: TreeTciGraph) -> Result<Self> {
-        ensure!(
-            local_dims.len() > 1,
-            "local_dims should have at least 2 elements"
-        );
-        ensure!(
-            local_dims.len() == graph.n_sites(),
-            "local_dims length {} must match graph site count {}",
-            local_dims.len(),
-            graph.n_sites()
-        );
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
+    pub fn new(local_dims: Vec<usize>, graph: TreeTciGraph) -> TreeTciResult<Self> {
+        if !(local_dims.len() > 1) {
+            return Err(anyhow::anyhow!("local_dims should have at least 2 elements").into());
+        };
+        if !(local_dims.len() == graph.n_sites()) {
+            return Err(anyhow::anyhow!(
+                "local_dims length {} must match graph site count {}",
+                local_dims.len(),
+                graph.n_sites()
+            )
+            .into());
+        };
 
         let bond_errors = graph
             .edges()
@@ -91,12 +99,18 @@ impl<T> TreeTCI2<T> {
     }
 
     /// Add global pivots and project them to every edge bipartition.
-    pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
+    pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> TreeTciResult<()> {
         let n_sites = self.local_dims.len();
-        ensure!(
-            pivots.iter().all(|pivot| pivot.len() == n_sites),
-            "each global pivot must contain one index per site"
-        );
+        if !(pivots.iter().all(|pivot| pivot.len() == n_sites)) {
+            return Err(
+                anyhow::anyhow!("each global pivot must contain one index per site").into(),
+            );
+        };
 
         for pivot in pivots {
             for edge in self.graph.edges() {

@@ -1,19 +1,16 @@
+use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::SubtreeKey;
-use anyhow::{anyhow, ensure, Result};
+use anyhow::anyhow;
 use petgraph::algo::connected_components;
 use petgraph::graph::{NodeIndex, UnGraph};
 use petgraph::visit::EdgeRef;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Canonical undirected edge used by TreeTCI.
-///
 /// Endpoints are stored in canonical order (`u <= v`).
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_treetci::TreeTciEdge;
-///
 /// let e = TreeTciEdge::new(3, 1);
 /// // canonical ordering: lower endpoint first
 /// assert_eq!(e.u(), 1);
@@ -49,24 +46,18 @@ impl TreeTciEdge {
 }
 
 /// Tree graph metadata for TreeTCI.
-///
 /// A tree graph is a connected, acyclic undirected graph. Each site corresponds
 /// to a node and each bond is an undirected edge.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_treetci::{TreeTciEdge, TreeTciGraph};
-///
 /// // Linear chain: 0 -- 1 -- 2
 /// let graph = TreeTciGraph::new(3, &[
 ///     TreeTciEdge::new(0, 1),
 ///     TreeTciEdge::new(1, 2),
 /// ]).unwrap();
-///
 /// assert_eq!(graph.n_sites(), 3);
 /// assert_eq!(graph.edges().len(), 2);
-///
 /// // Neighbors of site 1 are sites 0 and 2
 /// let mut neighbors = graph.neighbors(1).unwrap();
 /// neighbors.sort();
@@ -80,8 +71,15 @@ pub struct TreeTciGraph {
 
 impl TreeTciGraph {
     /// Construct a tree graph from the site count and edge list.
-    pub fn new(n_sites: usize, edges: &[TreeTciEdge]) -> Result<Self> {
-        ensure!(n_sites > 0, "TreeTCI graph must contain at least one site");
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn new(n_sites: usize, edges: &[TreeTciEdge]) -> TreeTciResult<Self> {
+        if n_sites == 0 {
+            return Err(TreeTciError::InvalidGraph {
+                message: "TreeTCI graph must contain at least one site".to_string(),
+            });
+        }
 
         let mut graph = UnGraph::<(), ()>::default();
         for _ in 0..n_sites {
@@ -90,66 +88,82 @@ impl TreeTciGraph {
 
         let mut seen = BTreeSet::new();
         for &edge in edges {
-            ensure!(
-                edge.u != edge.v,
-                "self-loops are not allowed in TreeTCI graphs"
-            );
-            ensure!(
-                edge.v < n_sites,
-                "edge endpoint {} is out of bounds for {} sites",
-                edge.v,
-                n_sites
-            );
-            ensure!(seen.insert(edge), "duplicate edge ({}, {})", edge.u, edge.v);
+            if edge.u == edge.v {
+                return Err(TreeTciError::InvalidGraph {
+                    message: "self-loops are not allowed in TreeTCI graphs".to_string(),
+                });
+            }
+            if edge.v >= n_sites {
+                return Err(TreeTciError::InvalidGraph {
+                    message: format!(
+                        "edge endpoint {} is out of bounds for {} sites",
+                        edge.v, n_sites
+                    ),
+                });
+            }
+            if !seen.insert(edge) {
+                return Err(TreeTciError::InvalidGraph {
+                    message: format!("duplicate edge ({}, {})", edge.u, edge.v),
+                });
+            }
             graph.add_edge(NodeIndex::new(edge.u), NodeIndex::new(edge.v), ());
         }
 
-        ensure!(
-            graph.edge_count() + 1 == n_sites,
-            "TreeTCI graph must be a tree: expected {} edges for {} sites, got {}",
-            n_sites.saturating_sub(1),
-            n_sites,
-            graph.edge_count()
-        );
-        ensure!(
-            connected_components(&graph) == 1,
-            "TreeTCI graph must be connected"
-        );
+        if graph.edge_count() + 1 != n_sites {
+            return Err(TreeTciError::InvalidGraph {
+                message: format!(
+                    "TreeTCI graph must be a tree: expected {} edges for {} sites, got {}",
+                    n_sites.saturating_sub(1),
+                    n_sites,
+                    graph.edge_count()
+                ),
+            });
+        }
+        if connected_components(&graph) != 1 {
+            return Err(TreeTciError::InvalidGraph {
+                message: "TreeTCI graph must be connected".to_string(),
+            });
+        }
 
         Ok(Self { n_sites, graph })
     }
 
     /// Return the canonicalized edge if present in the graph.
-    pub fn separate_vertices(&self, edge: TreeTciEdge) -> Result<(usize, usize)> {
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn separate_vertices(&self, edge: TreeTciEdge) -> TreeTciResult<(usize, usize)> {
         if self.has_edge(edge) {
             Ok((edge.u, edge.v))
         } else {
-            Err(anyhow!("edge ({}, {}) is not in the graph", edge.u, edge.v))
+            Err(anyhow!("edge ({}, {}) is not in the graph", edge.u, edge.v).into())
         }
     }
 
     /// Return the sorted subtree sites when traversing away from `parent`.
-    pub fn subtree_vertices(&self, parent: usize, children: &[usize]) -> Result<SubtreeKey> {
-        ensure!(
-            parent < self.n_sites,
-            "parent site {} is out of bounds",
-            parent
-        );
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn subtree_vertices(&self, parent: usize, children: &[usize]) -> TreeTciResult<SubtreeKey> {
+        if parent >= self.n_sites {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("parent site {parent} is out of bounds"),
+            });
+        }
 
         let mut sites = Vec::new();
         let mut seen = vec![false; self.n_sites];
         for &child in children {
-            ensure!(
-                child < self.n_sites,
-                "child site {} is out of bounds",
-                child
-            );
-            ensure!(
-                self.has_edge(TreeTciEdge::new(parent, child)),
-                "sites {} and {} are not adjacent",
-                parent,
-                child
-            );
+            if child >= self.n_sites {
+                return Err(TreeTciError::IndexOutOfBounds {
+                    message: format!("child site {child} is out of bounds"),
+                });
+            }
+            if !(self.has_edge(TreeTciEdge::new(parent, child))) {
+                return Err(
+                    anyhow::anyhow!("sites {} and {} are not adjacent", parent, child).into(),
+                );
+            };
             self.collect_subtree_sites(parent, child, &mut seen, &mut sites);
         }
         sites.sort_unstable();
@@ -162,6 +176,8 @@ impl TreeTciGraph {
     /// Returns `(left_key, right_key)` where left contains the subtree on the
     /// `u` side and right contains the subtree on the `v` side.
     ///
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
     /// # Examples
     ///
     /// ```
@@ -176,7 +192,7 @@ impl TreeTciGraph {
     /// assert_eq!(left.as_slice(), &[0]);
     /// assert_eq!(right.as_slice(), &[1, 2]);
     /// ```
-    pub fn subregion_vertices(&self, edge: TreeTciEdge) -> Result<(SubtreeKey, SubtreeKey)> {
+    pub fn subregion_vertices(&self, edge: TreeTciEdge) -> TreeTciResult<(SubtreeKey, SubtreeKey)> {
         let (u, v) = self.separate_vertices(edge)?;
         Ok((
             self.subtree_vertices(v, &[u])?,
@@ -224,7 +240,10 @@ impl TreeTciGraph {
     }
 
     /// Return the candidate edges adjacent to either endpoint of `edge`, excluding `edge`.
-    pub fn candidate_edges(&self, edge: TreeTciEdge) -> Result<Vec<TreeTciEdge>> {
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn candidate_edges(&self, edge: TreeTciEdge) -> TreeTciResult<Vec<TreeTciEdge>> {
         let (u, v) = self.separate_vertices(edge)?;
         let candidates = self
             .adjacent_edges(u, &[edge])
@@ -235,7 +254,10 @@ impl TreeTciGraph {
     }
 
     /// Return graph distances from `edge` to every edge in the tree.
-    pub fn distance_edges(&self, edge: TreeTciEdge) -> Result<BTreeMap<TreeTciEdge, usize>> {
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn distance_edges(&self, edge: TreeTciEdge) -> TreeTciResult<BTreeMap<TreeTciEdge, usize>> {
         let (u, v) = self.separate_vertices(edge)?;
         let mut distances = BTreeMap::new();
         self.collect_edge_distances_from_root(u, v, &mut distances);
@@ -261,8 +283,15 @@ impl TreeTciGraph {
     }
 
     /// Return the neighbors of a site in ascending order.
-    pub fn neighbors(&self, site: usize) -> Result<Vec<usize>> {
-        ensure!(site < self.n_sites, "site {} is out of bounds", site);
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn neighbors(&self, site: usize) -> TreeTciResult<Vec<usize>> {
+        if site >= self.n_sites {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("site {site} is out of bounds"),
+            });
+        }
         let mut neighbors = self
             .graph
             .neighbors(NodeIndex::new(site))
@@ -274,6 +303,8 @@ impl TreeTciGraph {
 
     /// Return the canonical edge between two adjacent sites.
     ///
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
     /// # Examples
     ///
     /// ```
@@ -286,7 +317,7 @@ impl TreeTciGraph {
     /// // Non-adjacent sites produce an error
     /// assert!(graph.edge_between(0, 2).is_err());
     /// ```
-    pub fn edge_between(&self, a: usize, b: usize) -> Result<TreeTciEdge> {
+    pub fn edge_between(&self, a: usize, b: usize) -> TreeTciResult<TreeTciEdge> {
         let edge = TreeTciEdge::new(a, b);
         self.separate_vertices(edge)?;
         Ok(edge)
@@ -297,6 +328,8 @@ impl TreeTciGraph {
     /// `parents[i]` is `Some(parent)` for all nodes except the root.
     /// `distances[i]` is the graph distance from `root` to node `i`.
     ///
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
     /// # Examples
     ///
     /// ```
@@ -312,8 +345,12 @@ impl TreeTciGraph {
     /// assert_eq!(parents[3], Some(2));
     /// assert_eq!(distances, vec![0, 1, 2, 3]);
     /// ```
-    pub fn bfs_tree(&self, root: usize) -> Result<(Vec<Option<usize>>, Vec<usize>)> {
-        ensure!(root < self.n_sites, "root site {} is out of bounds", root);
+    pub fn bfs_tree(&self, root: usize) -> TreeTciResult<(Vec<Option<usize>>, Vec<usize>)> {
+        if root >= self.n_sites {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("root site {root} is out of bounds"),
+            });
+        }
         let mut parents = vec![None; self.n_sites];
         let mut distances = vec![usize::MAX; self.n_sites];
         let mut queue = VecDeque::from([root]);
@@ -333,8 +370,19 @@ impl TreeTciGraph {
     }
 
     /// Return subtree keys for the incoming direction at `site` from the given edges.
-    pub fn edge_in_ij_keys(&self, site: usize, edges: &[TreeTciEdge]) -> Result<Vec<SubtreeKey>> {
-        ensure!(site < self.n_sites, "site {} is out of bounds", site);
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    ///
+    pub fn edge_in_ij_keys(
+        &self,
+        site: usize,
+        edges: &[TreeTciEdge],
+    ) -> TreeTciResult<Vec<SubtreeKey>> {
+        if site >= self.n_sites {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("site {site} is out of bounds"),
+            });
+        }
 
         edges
             .iter()
@@ -345,12 +393,7 @@ impl TreeTciGraph {
                 } else if v == site {
                     self.subtree_vertices(v, &[u])
                 } else {
-                    Err(anyhow!(
-                        "edge ({}, {}) is not adjacent to site {}",
-                        u,
-                        v,
-                        site
-                    ))
+                    Err(anyhow!("edge ({}, {}) is not adjacent to site {}", u, v, site).into())
                 }
             })
             .collect()
@@ -389,6 +432,8 @@ impl TreeTciGraph {
     ///
     /// This is a convenience constructor for the most common topology.
     ///
+    /// # Errors
+    /// Returns an error when the graph is invalid (an invalid-topology failure).
     /// # Examples
     ///
     /// ```
@@ -407,9 +452,11 @@ impl TreeTciGraph {
     /// // Zero sites is an error
     /// assert!(TreeTciGraph::linear_chain(0).is_err());
     /// ```
-    pub fn linear_chain(n_sites: usize) -> Result<Self> {
+    pub fn linear_chain(n_sites: usize) -> TreeTciResult<Self> {
         if n_sites == 0 {
-            return Err(anyhow!("linear_chain requires at least 1 site"));
+            return Err(TreeTciError::InvalidGraph {
+                message: "linear_chain requires at least 1 site".to_string(),
+            });
         }
         let edges: Vec<TreeTciEdge> = (0..n_sites.saturating_sub(1))
             .map(|i| TreeTciEdge::new(i, i + 1))

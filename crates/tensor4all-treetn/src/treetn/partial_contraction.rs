@@ -4,6 +4,7 @@
 //! contracted and which should be linked through explicit diagonal/copy
 //! structure before calling the existing TreeTN contraction pipeline.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -33,6 +34,7 @@ type DiagonalPairApplication<V> = (
 ///
 /// - `contract_pairs`: Site index pairs to sum over and remove from the result.
 /// - `diagonal_pairs`: Site index pairs to identify through diagonal/copy
+///
 ///   structure while keeping the left-hand site leg in the result.
 /// - Remaining (unmentioned) site indices pass through as external legs.
 ///
@@ -100,7 +102,7 @@ where
         for (idx_a, idx_b) in pairs {
             if idx_a.dim() != idx_b.dim() {
                 bail!(
-                    "partial_contract: {} index dimension mismatch: {} != {}",
+                    "partial_contract: {} index shape mismatch: {} != {}",
                     kind,
                     idx_a.dim(),
                     idx_b.dim()
@@ -810,6 +812,7 @@ where
 /// * `a` - First tensor network
 /// * `b` - Second tensor network
 /// * `spec` - Which site indices to contract versus link through diagonal
+///
 ///   structure
 /// * `center` - Canonical center node for the result
 /// * `options` - Contraction algorithm options
@@ -817,11 +820,19 @@ where
 /// # Index handling
 ///
 /// - **contract_pairs**: Both indices are traced over (inner product).
+///
 ///   Neither appears in the result.
 /// - **diagonal_pairs**: The two indices are linked through explicit diagonal
+///
 ///   structure so that only matching values contribute, while the left-hand site
 ///   index remains in the result.
 /// - **Unmentioned indices**: Pass through unchanged as external legs.
+///
+/// # Errors
+///
+/// Returns an error when the contraction specification is invalid (an
+/// /// invalid-spec failure) or the contraction fails (a shape or index
+/// /// mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -861,7 +872,7 @@ pub fn partial_contract<V>(
     spec: &PartialContractionSpec<DynIndex>,
     center: &V,
     options: ContractionOptions,
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -897,7 +908,7 @@ where
     }
 
     if let Some(output_order) = &spec.output_order {
-        apply_output_order(result, output_order)
+        apply_output_order(result, output_order).map_err(TreeTNOperationError::from)
     } else {
         Ok(result)
     }
@@ -915,20 +926,25 @@ where
 /// * `a` - First tensor network. Left indices in `spec` must be site indices of this network.
 /// * `b` - Second tensor network. Right indices in `spec` must be site indices of this network.
 /// * `spec` - Site-index contraction and diagonal-pair specification. `output_order`
+///
 ///   must be `None` because `target` supplies the output layout.
 /// * `center` - Canonical center node used for the intermediate contraction.
 /// * `target` - Target site-index network containing exactly the surviving result
+///
 ///   indices, assigned to the desired output nodes and topology.
 /// * `options` - Contraction algorithm options.
 /// * `restructure_options` - Split, swap, and optional final truncation settings
+///
 ///   used when transforming the intermediate result to `target`.
 ///
 /// # Returns
 /// A TreeTN with node names and site-index assignment matching `target`.
 ///
 /// # Errors
-/// Returns an error if `spec.output_order` is set, if the partial contraction
-/// fails, or if the contracted result cannot be restructured to `target`.
+///
+/// Returns an error when the contraction specification is invalid (an
+/// /// invalid-spec failure) or the contraction fails (a shape or index
+/// /// mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -1003,22 +1019,25 @@ pub fn partial_contract_to_site_network<V, TargetV>(
     target: &SiteIndexNetwork<TargetV, DynIndex>,
     options: ContractionOptions,
     restructure_options: &RestructureOptions,
-) -> Result<TreeTN<TensorDynLen, TargetV>>
+) -> std::result::Result<TreeTN<TensorDynLen, TargetV>, TreeTNOperationError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     TargetV: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
     if spec.output_order.is_some() {
-        bail!(
+        return Err(TreeTNOperationError::from(anyhow::anyhow!(
             "partial_contract_to_site_network: spec.output_order must be None because the target site network defines the output layout"
-        );
+        )));
     }
 
     let result = partial_contract(a, b, spec, center, options)?;
-    result.restructure_to(target, restructure_options).context(
-        "partial_contract_to_site_network: failed to restructure result to target site network",
-    )
+    result
+        .restructure_to(target, restructure_options)
+        .context(
+            "partial_contract_to_site_network: failed to restructure result to target site network",
+        )
+        .map_err(TreeTNOperationError::from)
 }
 
 /// Multiply two TreeTNs elementwise along selected external index pairs.
@@ -1038,8 +1057,9 @@ where
 /// A TreeTN representing the selected-index Hadamard product.
 ///
 /// # Errors
-/// Returns an error if a pair has mismatched dimensions, references a
-/// non-external index, or the underlying contraction fails.
+///
+/// Returns an error when the index spaces are incompatible (a shape or index
+/// /// mismatch) or the contraction fails (a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1080,7 +1100,7 @@ where
     };
     partial_contract(left, right, &spec, center, options).map_err(|error| {
         SelectedIndexContractionError::PartialContractFailed {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })
 }
@@ -1101,8 +1121,9 @@ where
 /// A TreeTN after summing over all selected pairs.
 ///
 /// # Errors
-/// Returns an error if a pair has mismatched dimensions, references a
-/// non-external index, or the underlying contraction fails.
+///
+/// Returns an error when the index spaces are incompatible (a shape or index
+/// /// mismatch) or the weighted sum fails (a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1154,7 +1175,7 @@ where
     };
     partial_contract(state, weights, &spec, center, options).map_err(|error| {
         SelectedIndexContractionError::PartialContractFailed {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })
 }
@@ -1167,6 +1188,7 @@ where
 /// # Arguments
 /// * `state` - Input TreeTN.
 /// * `sum_indices` - External indices of `state` to sum over. Each index must
+///
 ///   be present exactly once in the list.
 /// * `center` - Canonical center node for the result.
 /// * `options` - Contraction algorithm options.
@@ -1176,8 +1198,9 @@ where
 /// returns `state.clone()`.
 ///
 /// # Errors
-/// Returns an error if an index is duplicated, is not external to `state`, or
-/// the underlying contraction fails.
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1278,7 +1301,7 @@ where
             <TensorDynLen as TensorConstructionLike>::ones(&indices).map_err(|error| {
                 SelectedIndexContractionError::BuildOnesTensor {
                     node: format!("{node:?}"),
-                    message: format_anyhow_error(error),
+                    message: format_anyhow_error(anyhow::Error::new(error)),
                 }
             })?,
         );
@@ -1286,7 +1309,7 @@ where
 
     let weights = TreeTN::from_tensors(tensors, node_names).map_err(|error| {
         SelectedIndexContractionError::BuildWeightsTree {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })?;
     weighted_sum_over_index_pairs(state, &weights, &index_pairs, center, options)

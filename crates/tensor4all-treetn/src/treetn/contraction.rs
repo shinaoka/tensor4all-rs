@@ -7,6 +7,7 @@
 //! - Naive contraction (`contract_naive`)
 //! - Validation (`validate_ortho_consistency`)
 
+use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -105,10 +106,9 @@ where
     /// A single tensor representing the full contraction of the network.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - The network is empty
-    /// - The graph is not a valid tree
-    /// - Tensor contraction fails
+    ///
+    /// Returns an error when the dense contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -135,12 +135,12 @@ where
     /// // Result has only site indices
     /// assert_eq!(dense.num_external_indices(), 2);
     /// ```
-    pub fn contract_to_tensor(&self) -> Result<T>
+    pub fn contract_to_tensor(&self) -> std::result::Result<T, TreeTNOperationError>
     where
         V: Ord,
     {
         if self.node_count() == 0 {
-            return Err(anyhow::anyhow!("Cannot contract empty TreeTN"));
+            return Err(anyhow::anyhow!("Cannot contract empty TreeTN").into());
         }
 
         if self.node_count() == 1 {
@@ -154,7 +154,8 @@ where
             return self
                 .tensor(node)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found"));
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found"))
+                .map_err(TreeTNOperationError::from);
         }
 
         // Validate tree structure
@@ -239,7 +240,9 @@ where
 
         // Build permutation: for each expected index, find its position in current indices
         // Then use replaceind to reorder (permuting indices)
-        result.permuteinds(&expected_indices)
+        result
+            .permuteinds(&expected_indices)
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
     }
 
     /// Contract two TreeTNs with the same topology using the zip-up algorithm.
@@ -265,13 +268,18 @@ where
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
+    /// # Errors
+    ///
+    /// Returns an error when the zip-up contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn contract_zipup(
         &self,
         other: &Self,
         center: &V,
         svd_policy: Option<SvdTruncationPolicy>,
         max_rank: Option<usize>,
-    ) -> Result<Self>
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id:
@@ -297,6 +305,11 @@ where
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
+    /// # Errors
+    ///
+    /// Returns an error when the zip-up contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn contract_zipup_with(
         &self,
         other: &Self,
@@ -304,7 +317,7 @@ where
         form: CanonicalForm,
         svd_policy: Option<SvdTruncationPolicy>,
         max_rank: Option<usize>,
-    ) -> Result<Self>
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id:
@@ -318,6 +331,7 @@ where
             max_rank,
             ZipupTopologyMode::PruneScalarSubtrees,
         )
+        .map_err(TreeTNOperationError::from)
     }
 
     pub(crate) fn contract_zipup_preserving_topology_with(
@@ -672,7 +686,12 @@ where
     /// # Note
     /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
     /// Use `contract_zipup` for efficient contraction of large networks.
-    pub fn contract_naive(&self, other: &Self) -> Result<T>
+    /// # Errors
+    ///
+    /// Returns an error when the naive contraction fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
+    pub fn contract_naive(&self, other: &Self) -> std::result::Result<T, TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id:
@@ -680,9 +699,9 @@ where
     {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
-            return Err(anyhow::anyhow!(
-                "contract_naive: networks have incompatible topologies"
-            ));
+            return Err(
+                anyhow::anyhow!("contract_naive: networks have incompatible topologies").into(),
+            );
         }
 
         // 2. Replace internal indices with fresh IDs to avoid collision
@@ -701,7 +720,9 @@ where
         // explicitly asks for a reference product with no common site indices
         // (for example partial_contract with an empty spec), this is the
         // corresponding outer product reference.
-        tensor1.contract_pair(&tensor2)
+        tensor1
+            .contract_pair(&tensor2)
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
     }
 
     /// Validate that `canonical_region` and edge `ortho_towards` are consistent.
@@ -709,20 +730,28 @@ where
     /// Rules:
     /// - If `canonical_region` is empty (not canonicalized), all indices must have `ortho_towards == None`.
     /// - If `canonical_region` is non-empty:
+    ///
     ///   - It must form a connected subtree
     ///   - All edges from outside the center region must have `ortho_towards` pointing towards the center
     ///   - Edges entirely inside the center region may have `ortho_towards == None`
-    pub fn validate_ortho_consistency(&self) -> Result<()> {
+    /// # Errors
+    ///
+    /// Returns an error when the orthogonality structure is inconsistent (an
+    /// /// graph consistency failure).
+    ///
+    pub fn validate_ortho_consistency(&self) -> std::result::Result<(), TreeTNOperationError> {
         // If not canonicalized, require no ortho_towards at all
         if self.canonical_region.is_empty() {
             if !self.ortho_towards.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Found {} ortho_towards entries but canonical_region is empty",
-                    self.ortho_towards.len()
-                ))
-                .context(
-                    "validate_ortho_consistency: canonical_region empty implies no ortho_towards",
-                );
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Found {} ortho_towards entries but canonical_region is empty",
+                        self.ortho_towards.len()
+                    )
+                    .context(
+                        "validate_ortho_consistency: canonical_region empty implies no ortho_towards",
+                    ),
+                ));
             }
             return Ok(());
         }
@@ -739,9 +768,11 @@ where
 
         // Check canonical_region connectivity
         if !self.site_index_network.is_connected_subset(&center_indices) {
-            return Err(anyhow::anyhow!("canonical_region is not connected")).context(
-                "validate_ortho_consistency: canonical_region must form a connected subtree",
-            );
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("canonical_region is not connected").context(
+                    "validate_ortho_consistency: canonical_region must form a connected subtree",
+                ),
+            ));
         }
 
         // Get expected edges from edges_to_canonicalize_to_region
@@ -780,22 +811,26 @@ where
             match self.ortho_towards.get(bond) {
                 Some(actual_dir) => {
                     if actual_dir != expected_dir {
-                        return Err(anyhow::anyhow!(
-                            "ortho_towards for bond {:?} points to {:?} but expected {:?}",
-                            bond,
-                            actual_dir,
-                            expected_dir
-                        ))
-                        .context("validate_ortho_consistency: wrong direction");
+                        return Err(TreeTNOperationError::from(
+                            anyhow::anyhow!(
+                                "ortho_towards for bond {:?} points to {:?} but expected {:?}",
+                                bond,
+                                actual_dir,
+                                expected_dir
+                            )
+                            .context("validate_ortho_consistency: wrong direction"),
+                        ));
                     }
                 }
                 None => {
-                    return Err(anyhow::anyhow!(
-                        "ortho_towards for bond {:?} is missing, expected to point to {:?}",
-                        bond,
-                        expected_dir
-                    ))
-                    .context("validate_ortho_consistency: missing ortho_towards");
+                    return Err(TreeTNOperationError::from(
+                        anyhow::anyhow!(
+                            "ortho_towards for bond {:?} is missing, expected to point to {:?}",
+                            bond,
+                            expected_dir
+                        )
+                        .context("validate_ortho_consistency: missing ortho_towards"),
+                    ));
                 }
             }
         }
@@ -813,13 +848,15 @@ where
         for idx in self.ortho_towards.keys() {
             if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
                 // This is a bond inside the canonical_region - should not have ortho_towards
-                return Err(anyhow::anyhow!(
-                    "Unexpected ortho_towards for bond {:?} (inside canonical_region)",
-                    idx
-                ))
-                .context(
-                    "validate_ortho_consistency: bonds inside center should not have ortho_towards",
-                );
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Unexpected ortho_towards for bond {:?} (inside canonical_region)",
+                        idx
+                    )
+                    .context(
+                        "validate_ortho_consistency: bonds inside center should not have ortho_towards",
+                    ),
+                ));
             }
         }
 
@@ -977,6 +1014,7 @@ impl ContractionOptions {
     ///
     /// # Arguments
     /// * `max_elements` - Maximum number of elements allowed in each full dense
+    ///
     ///   input tensor and in the dense contracted result. Typical values should
     ///   remain small and test-sized.
     ///
@@ -1001,6 +1039,7 @@ impl ContractionOptions {
     ///
     /// # Arguments
     /// * `max_elements` - Maximum number of elements allowed in each dense
+    ///
     ///   intermediate and in the dense contracted result. Typical values should
     ///   remain small and test-sized.
     ///
@@ -1097,12 +1136,17 @@ where
 ///
 /// This is the main entry point for TreeTN contraction. It dispatches to the
 /// appropriate algorithm based on the options.
+/// # Errors
+///
+/// Returns an error when the contraction fails (a shape or index mismatch,
+/// /// or a backend failure).
+///
 pub fn contract<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: ContractionOptions,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1160,6 +1204,11 @@ where
 ///
 /// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Returns an error when the contraction fails (a shape or index mismatch,
+/// /// or a backend failure).
+///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
@@ -1167,7 +1216,7 @@ pub fn contract_naive_to_treetn<T, V>(
     _max_rank: Option<usize>,
     _svd_policy: Option<SvdTruncationPolicy>,
     _qr_rtol: Option<f64>,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,

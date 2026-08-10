@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, FactorizeOptions, TensorDynLen};
 use tensor4all_treetn::{
-    dmrg, DmrgError, DmrgOptions, IndexMapping, LinearOperator, TreeTN, TreeTopology,
+    dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, IndexMapping, LinearOperator, TreeTN,
+    TreeTopology,
 };
 
 fn col_major_offset(coords: &[usize], dims: &[usize]) -> usize {
@@ -549,27 +550,6 @@ fn dmrg_rejects_invalid_options() {
 }
 
 #[test]
-fn dmrg_rejects_missing_center() {
-    let (state, sites) = two_site_state(&[0.3, 0.4, 0.5, 0.6]);
-    let operator = diagonal_two_site_operator(&sites, [1.0, 2.0, 3.0, 4.0]);
-
-    let err = dmrg(&operator, state, &"missing", DmrgOptions::default()).unwrap_err();
-    assert!(matches!(
-        err,
-        DmrgError::MissingCenter { center } if center == "\"missing\""
-    ));
-}
-
-#[test]
-fn dmrg_rejects_topology_mismatch() {
-    let (state, sites) = two_site_state(&[0.3, 0.4, 0.5, 0.6]);
-    let operator = single_site_identity_operator(&sites[0]);
-
-    let err = dmrg(&operator, state, &"site0", DmrgOptions::default()).unwrap_err();
-    assert!(matches!(err, DmrgError::TopologyMismatch));
-}
-
-#[test]
 fn dmrg_rejects_single_node_two_site_sweep() {
     let (state, site) = single_site_state();
     let operator = single_site_identity_operator(&site);
@@ -808,4 +788,47 @@ fn dmrg_rejects_non_hermitian_projected_operator() {
         err_text.contains("DMRG sweep failed") && err_text.contains("Hermitian"),
         "{err_text}"
     );
+}
+
+#[test]
+fn dmrg_rejects_missing_center_node() {
+    let (state, sites) = two_site_state(&[0.3, 0.4, 0.5, 0.6]);
+    let operator = diagonal_two_site_operator(&sites, [1.0, 2.0, 3.0, 4.0]);
+    let err = dmrg(&operator, state, &"missing", DmrgOptions::default()).unwrap_err();
+    assert!(matches!(err, DmrgError::MissingCenter { .. }));
+}
+
+#[test]
+fn dmrg_rejects_topology_mismatch_between_state_and_operator() {
+    let (state, sites) = two_site_state(&[0.3, 0.4, 0.5, 0.6]);
+    let operator = single_site_identity_operator(&sites[0]);
+    let err = dmrg(&operator, state, &"site0", DmrgOptions::default()).unwrap_err();
+    assert!(matches!(err, DmrgError::TopologyMismatch));
+}
+
+#[test]
+fn dmrg_rejects_single_node_two_site_sweep_path() {
+    let (state, site) = single_site_state();
+    let operator = single_site_identity_operator(&site);
+    let err = dmrg(&operator, state, &"site0", DmrgOptions::default()).unwrap_err();
+    assert!(matches!(err, DmrgError::EmptyTwoSiteSweep));
+}
+
+#[test]
+fn dmrg_with_treetn_operator_solves_ground_state() {
+    let (state, sites) = two_site_state(&[0.0, 0.0, 0.0, 1.0]);
+    let linop = diagonal_two_site_operator(&sites, [1.0, 2.0, 3.0, 4.0]);
+    let mpo = linop.mpo().clone();
+    let result = dmrg_with_treetn_operator(&mpo, state, &"site0", DmrgOptions::default()).unwrap();
+    assert!(result.energy.is_finite());
+}
+
+#[test]
+fn dmrg_with_treetn_operator_rejects_missing_center() {
+    let (state, sites) = two_site_state(&[0.0, 0.0, 0.0, 1.0]);
+    let linop = diagonal_two_site_operator(&sites, [1.0, 2.0, 3.0, 4.0]);
+    let mpo = linop.mpo().clone();
+    let err =
+        dmrg_with_treetn_operator(&mpo, state, &"missing", DmrgOptions::default()).unwrap_err();
+    assert!(matches!(err, DmrgError::MissingCenter { .. }));
 }

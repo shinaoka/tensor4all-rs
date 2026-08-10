@@ -9,6 +9,7 @@
 //!
 //! This is the V_in = V_out specialized version.
 
+use crate::error::TreeTNOperationError;
 use std::hash::Hash;
 
 use anyhow::Result;
@@ -79,12 +80,17 @@ where
     /// * `region` - The nodes in the local update region
     /// * `reference_state` - The current solution state (used as reference for environments)
     /// * `topology` - The network topology
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
         reference_state: &TreeTN<T, V>,
         topology: &NT,
-    ) -> Result<T> {
+    ) -> std::result::Result<T, TreeTNOperationError> {
         let reference_storage;
         let reference_state = if self.has_link_collision_with_rhs(reference_state, topology)? {
             // A bra/ket overlap needs two independent copies of every open link:
@@ -132,7 +138,7 @@ where
 
         // Use T::contract for optimal contraction ordering
         let tensor_refs: Vec<&T> = all_tensors.iter().collect();
-        T::contract(&tensor_refs)
+        T::contract(&tensor_refs).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
     }
 
     fn has_link_collision_with_rhs<NT: NetworkTopology<V>>(
@@ -248,7 +254,7 @@ where
         } else {
             let mut all_tensors: Vec<&T> = vec![&bra_ket];
             all_tensors.extend(child_envs);
-            T::contract(&all_tensors)
+            T::contract(&all_tensors).map_err(anyhow::Error::new)
         }
     }
 

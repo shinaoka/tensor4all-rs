@@ -26,6 +26,7 @@ pub(crate) mod local_linop;
 mod projected_state;
 mod updater;
 
+use crate::error::TreeTNOperationError;
 pub use projected_state::ProjectedState;
 pub use updater::{LinsolveVerifyReport, NodeVerifyDetail, SquareLinsolveUpdater};
 
@@ -113,13 +114,20 @@ where
 /// * `center` - Node to use as sweep center
 /// * `options` - Solver options
 /// * `input_mapping` - Optional per-node mapping from state site index to operator input index.
+///
 ///   Required when the operator (MPO) uses internal indices distinct from the state's site indices.
 /// * `output_mapping` - Optional per-node mapping from state site index to operator output index.
+///
 ///   Required when the operator (MPO) uses internal indices distinct from the state's site indices.
 ///
 /// # Returns
 ///
 /// The solution TreeTN, or an error if solving fails.
+///
+/// # Errors
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
 ///
 /// # Example
 ///
@@ -230,7 +238,7 @@ pub fn square_linsolve<T, V>(
     options: LinsolveOptions,
     input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
     output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
-) -> Result<SquareLinsolveResult<T, V>>
+) -> std::result::Result<SquareLinsolveResult<T, V>, TreeTNOperationError>
 where
     T: TensorLike + 'static,
     <T::Index as IndexLike>::Id:
@@ -248,7 +256,8 @@ where
             options,
             input_mapping,
             output_mapping,
-        );
+        )
+        .map_err(TreeTNOperationError::from);
     }
 
     // Canonicalize initial guess towards center
@@ -279,7 +288,8 @@ where
         _ => {
             return Err(anyhow::anyhow!(
                 "input_mapping and output_mapping must both be Some or both be None"
-            ));
+            )
+            .into());
         }
     };
 
@@ -410,7 +420,9 @@ where
 {
     match (input_mapping, output_mapping) {
         (Some(input), Some(output)) => Ok(LinearOperator::new(operator.clone(), input, output)),
-        (None, None) => LinearOperator::from_mpo_and_state(operator.clone(), state),
+        (None, None) => {
+            LinearOperator::from_mpo_and_state(operator.clone(), state).map_err(anyhow::Error::from)
+        }
         _ => Err(anyhow::anyhow!(
             "input_mapping and output_mapping must both be Some or both be None"
         )),
@@ -431,14 +443,16 @@ where
 /// * `a0` - Identity coefficient.
 /// * `a1` - Operator coefficient.
 /// * `apply_options` - Options for applying `A`; use [`ApplyOptions::naive`] for
+///
 ///   an exact residual of the represented TreeTN.
 ///
 /// # Returns
 /// The relative residual norm, or the absolute residual norm for zero RHS.
 ///
 /// # Errors
-/// Returns an error if operator application, TreeTN addition, scaling, or norm
-/// computation fails.
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
 ///
 /// # Examples
 /// ```
@@ -481,7 +495,7 @@ pub fn relative_linear_system_residual<T, V, A0, A1>(
     a0: A0,
     a1: A1,
     apply_options: ApplyOptions,
-) -> Result<f64>
+) -> std::result::Result<f64, TreeTNOperationError>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,

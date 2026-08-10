@@ -5,7 +5,7 @@
 //!
 //! This module provides convenience wrappers around `TensorConstructionLike::delta()`.
 
-use anyhow::Result;
+use crate::error::TreeTNOperationError;
 
 use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 
@@ -27,6 +27,11 @@ use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 ///
 /// A tensor representing the identity operator on the given site space.
 ///
+/// # Errors
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
+///
 /// # Example
 ///
 /// For a single site index of dimension 2:
@@ -36,8 +41,9 @@ use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 pub fn build_identity_operator_tensor(
     site_indices: &[DynIndex],
     output_site_indices: &[DynIndex],
-) -> Result<TensorDynLen> {
+) -> std::result::Result<TensorDynLen, TreeTNOperationError> {
     <TensorDynLen as TensorConstructionLike>::delta(site_indices, output_site_indices)
+        .map_err(TreeTNOperationError::from)
 }
 
 #[cfg(test)]

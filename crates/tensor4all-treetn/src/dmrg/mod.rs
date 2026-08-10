@@ -13,6 +13,7 @@ use tensor4all_core::krylov::{hermitian_lanczos_lowest_eigenpair, HermitianLancz
 use tensor4all_core::{AnyScalar, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike};
 use thiserror::Error;
 
+use crate::error::TreeTNOperationError;
 use crate::linsolve::common::ProjectedOperator;
 use crate::linsolve::square::local_linop::LocalLinOp;
 use crate::local_update_support::{
@@ -407,13 +408,13 @@ where
         );
 
         let result = hermitian_lanczos_lowest_eigenpair(
-            |x: &T| linop.apply_projected(x),
+            |x: &T| linop.apply_projected(x).map_err(anyhow::Error::from),
             init,
             &self.options.lanczos,
         )
         .map_err(|source| DmrgError::Algorithm {
             context: "DMRG local Hermitian eigensolve failed",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
         self.last_energy = Some(result.eigenvalue);
@@ -426,7 +427,7 @@ where
             .extract_subtree(region)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to extract final Rayleigh region",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let local = contract_region(&subtree, region).map_err(|source| DmrgError::Algorithm {
             context: "DMRG failed to contract final Rayleigh region",
@@ -443,19 +444,19 @@ where
             .apply_projected(&local)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to apply final projected operator",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let numerator = local
             .inner_product(&h_local)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to compute Rayleigh numerator",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let denominator = local
             .inner_product(&local)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to compute Rayleigh denominator",
-                source,
+                source: anyhow::Error::new(source),
             })?;
 
         let numerator = checked_real_scalar(
@@ -487,12 +488,14 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_before: &TreeTN<T, V>,
-    ) -> anyhow::Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         if step.nodes.len() != 2 {
-            return Err(anyhow::Error::new(DmrgError::UnsupportedNsite {
-                requested: step.nodes.len(),
-                supported: 2,
-            }));
+            return Err(TreeTNOperationError::from(anyhow::Error::new(
+                DmrgError::UnsupportedNsite {
+                    requested: step.nodes.len(),
+                    supported: 2,
+                },
+            )));
         }
         initialize_reference_state_if_empty(&mut self.reference_state, full_treetn_before)?;
         Ok(())
@@ -503,7 +506,7 @@ where
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> anyhow::Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         let init_local = contract_region(&subtree, &step.nodes)?;
         let solved_local = self
             .solve_local(&step.nodes, &init_local, full_treetn)
@@ -543,7 +546,7 @@ where
         &mut self,
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<T, V>,
-    ) -> anyhow::Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         sync_reference_state_region(&mut self.reference_state, None, step, full_treetn_after)?;
         let topology = full_treetn_after.site_index_network();
         let mut projected_operator = self
@@ -560,8 +563,10 @@ where
 /// # Arguments
 ///
 /// * `operator` - Hamiltonian as a [`LinearOperator`]. The v1 implementation
+///
 ///   supports exactly one input and one output site mapping per node.
 /// * `init` - Initial TreeTN state. It is canonicalized at `center` before
+///
 ///   sweeping.
 /// * `center` - Initial sweep center node.
 /// * `options` - Sweep, truncation, and local eigensolver options.
@@ -628,7 +633,7 @@ pub fn dmrg<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: DmrgOptions,
-) -> Result<DmrgResult<T, V>, DmrgError>
+) -> std::result::Result<DmrgResult<T, V>, DmrgError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -652,7 +657,7 @@ where
         .canonicalize([center.clone()], CanonicalizationOptions::default())
         .map_err(|source| DmrgError::Algorithm {
             context: "DMRG failed to canonicalize initial state",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
     let plan =
@@ -679,7 +684,7 @@ where
         apply_local_update_sweep(&mut state, &plan, &mut updater).map_err(|source| {
             DmrgError::Algorithm {
                 context: "DMRG sweep failed",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
         sweeps_completed = sweep + 1;
@@ -725,6 +730,11 @@ where
 /// [`dmrg`]. Prefer explicit [`LinearOperator`] mappings when multiple same-dim
 /// operator site indices make input/output conventions ambiguous.
 ///
+/// # Errors
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};
@@ -753,7 +763,7 @@ pub fn dmrg_with_treetn_operator<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: DmrgOptions,
-) -> Result<DmrgResult<T, V>, DmrgError>
+) -> std::result::Result<DmrgResult<T, V>, DmrgError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -765,7 +775,7 @@ where
         LinearOperator::from_mpo_and_state(operator.clone(), &init).map_err(|source| {
             DmrgError::Algorithm {
                 context: "DMRG failed to build LinearOperator from TreeTN operator",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
     dmrg(&linear_operator, init, center, options)

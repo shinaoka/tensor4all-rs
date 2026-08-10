@@ -357,6 +357,11 @@ where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
 {
     /// Create a new empty TensorCI2
+    /// # Errors
+    ///
+    /// Returns an error when the options or input dimensions are invalid (an
+    /// /// invalid-configuration failure).
+    ///
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
             return Err(TCIError::DimensionMismatch {
@@ -421,8 +426,10 @@ where
     /// # Arguments
     ///
     /// * `tt` -- Tensor train whose site tensors are consumed by the
+    ///
     ///   resulting `TensorCI2`.
     /// * `options` -- One-site index extraction tolerance, rank cap, and
+    ///
     ///   sweep count.
     ///
     /// # Returns
@@ -471,12 +478,16 @@ where
     /// # Arguments
     ///
     /// * `local_dims` -- Number of values at each site. Every dimension must
+    ///
     ///   be nonzero and at least two sites are required.
     /// * `i_set` -- Left index sets. `i_set[p]` contains prefixes of length
+    ///
     ///   `p`, and `i_set[0]` must be `[[]]`.
     /// * `j_set` -- Right index sets. `j_set[p]` contains suffixes of length
+    ///
     ///   `n - p - 1`, and `j_set[n - 1]` must be `[[]]`.
     /// * `f` -- Function used to populate site tensors from the explicit
+    ///
     ///   pivot sets.
     ///
     /// # Returns
@@ -613,12 +624,22 @@ where
     }
 
     /// Convert to TensorTrain
+    /// # Errors
+    ///
+    /// Returns an error when the conversion fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn to_tensor_train(&self) -> Result<TensorTrain<T>> {
         let tensors = self.site_tensors.clone();
         TensorTrain::new(tensors).map_err(TCIError::TensorTrainError)
     }
 
     /// Add global pivots to the TCI
+    /// # Errors
+    ///
+    /// Returns an error when a pivot is invalid (an invalid-index or
+    /// /// out-of-bounds failure).
+    ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
         for pivot in pivots {
             if pivot.len() != self.len() {
@@ -677,6 +698,11 @@ where
     ///
     /// This is a public wrapper around the internal `update_pivots` logic,
     /// suitable for calling from C-API.
+    /// # Errors
+    ///
+    /// Returns an error when the two-site sweep fails (a shape or index mismatch,
+    /// /// a non-convergence failure, or a backend failure).
+    ///
     pub fn sweep2site<F, B>(
         &mut self,
         f: &F,
@@ -785,6 +811,11 @@ where
     /// canonical site tensors.
     ///
     /// Port of Julia's `sweep1site!` from `tensorci2.jl`.
+    /// # Errors
+    ///
+    /// Returns an error when the one-site sweep fails (a shape or index mismatch,
+    /// /// a non-convergence failure, or a backend failure).
+    ///
     pub fn sweep1site<F>(
         &mut self,
         f: &F,
@@ -959,6 +990,11 @@ where
     /// The last site tensor is set by direct evaluation.
     ///
     /// Port of Julia's `fillsitetensors!` / `setsitetensor!`.
+    /// # Errors
+    ///
+    /// Returns an error when the site tensors cannot be built (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn fill_site_tensors<F>(&mut self, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -1047,6 +1083,11 @@ where
     /// 3. Forward sweep (with truncation + update tensors)
     ///
     /// Port of Julia's `makecanonical!`.
+    /// # Errors
+    ///
+    /// Returns an error when the canonicalization fails (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn make_canonical<F>(
         &mut self,
         f: &F,
@@ -1291,13 +1332,17 @@ fn convergence_criterion(
 /// # Arguments
 ///
 /// * `f` -- Function to interpolate. Takes a multi-index `&Vec<usize>` where
+///
 ///   each element is in `0..local_dims[i]` (0-indexed) and returns a scalar.
 /// * `batched_f` -- Optional batch evaluation function for efficiency.
+///
 ///   Takes `&[Vec<usize>]` and returns `Vec<T>`. Pass `None` to use
 ///   element-wise evaluation only.
 /// * `local_dims` -- Number of values each index can take. Must have at
+///
 ///   least 2 elements (TCI requires at least 2 sites).
 /// * `initial_pivots` -- Starting multi-indices for the algorithm. At least
+///
 ///   one pivot must have a non-zero function value. Choose pivots where
 ///   `|f|` is large for best convergence. If empty, defaults to the
 ///   all-zeros index.
@@ -1412,9 +1457,11 @@ where
 /// # Arguments
 ///
 /// * `tci` -- Existing TCI2 state to optimize. It is consumed and returned
+///
 ///   after optimization.
 /// * `f` -- Scalar function to interpolate on zero-based multi-indices.
 /// * `batched_f` -- Optional Torch-style batch callback. It receives a slice of
+///
 ///   multi-indices and must return one value per input index.
 /// * `options` -- Sweep, convergence, and truncation settings.
 /// * `finder` -- Global pivot finder used after each two-site sweep.

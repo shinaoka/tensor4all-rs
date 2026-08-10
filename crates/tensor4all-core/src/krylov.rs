@@ -45,6 +45,65 @@ use tensor4all_tensorbackend::{
     hermitian_exponential_first_column, lowest_hermitian_eigenpair, Matrix,
 };
 
+/// Error returned by the matrix-free Krylov solvers.
+#[derive(Debug, thiserror::Error)]
+pub enum KrylovError {
+    /// Invalid solver options.
+    #[error("{solver}: invalid options: {reason}")]
+    InvalidOptions {
+        /// Solver that rejected the options.
+        solver: &'static str,
+        /// Description of the invalid option combination.
+        reason: String,
+    },
+    /// The initial vector is numerically zero.
+    #[error("{solver}: initial vector has norm below the breakdown tolerance; provide a nonzero initial vector")]
+    ZeroInitialVector {
+        /// Solver that rejected the initial vector.
+        solver: &'static str,
+    },
+    /// An affine GMRES call supplied only zero coefficients.
+    #[error("gmres_affine: at least one affine coefficient must be nonzero")]
+    NoAffineCoefficient,
+    /// The projected operator was not Hermitian.
+    #[error("{solver}: projected operator is not Hermitian: {source}")]
+    NonHermitian {
+        /// Solver that performed the projection.
+        solver: &'static str,
+        /// Original projected-matrix diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// An underlying tensor operation (operator application, vector-space
+    /// arithmetic, or backend call) failed.
+    #[error("{solver}: {source}")]
+    Operation {
+        /// Solver that performed the operation.
+        solver: &'static str,
+        /// Original tensor or backend diagnostic, preserving the full chain.
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl From<anyhow::Error> for KrylovError {
+    fn from(source: anyhow::Error) -> Self {
+        Self::Operation {
+            solver: "krylov",
+            source,
+        }
+    }
+}
+
+impl KrylovError {
+    fn from_anyhow_with_classification(source: anyhow::Error) -> Self {
+        match source.downcast::<KrylovError>() {
+            Ok(classified) => classified,
+            Err(source) => Self::from(source),
+        }
+    }
+}
+
 static GMRES_OP_PROFILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
@@ -129,12 +188,9 @@ impl GmresOpProfile {
 }
 
 /// Options for GMRES solver.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::GmresOptions;
-///
 /// let opts = GmresOptions {
 ///     max_iter: 50,
 ///     rtol: 1e-8,
@@ -208,20 +264,15 @@ impl GmresTolerance {
 }
 
 /// Result of GMRES solver.
-///
 /// Contains the solution, iteration count, final residual norm, and
 /// convergence status.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
 /// use tensor4all_core::krylov::{gmres, GmresOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 7.0]).unwrap();
 /// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
-///
 /// let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &GmresOptions::default()).unwrap();
 /// assert!(result.converged);
 /// assert!(result.residual_norm < 1e-10);
@@ -242,16 +293,12 @@ pub struct GmresResult<T> {
 }
 
 /// Options for [`hermitian_lanczos_lowest_eigenpair`].
-///
 /// These options control the maximum Krylov subspace dimension, convergence
 /// tolerance, and validation tolerance for the small projected Hermitian matrix.
 /// When in doubt, use [`Default::default`].
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianLanczosOptions;
-///
 /// let opts = HermitianLanczosOptions {
 ///     max_iter: 32,
 ///     rtol: 1.0e-9,
@@ -312,15 +359,11 @@ impl Default for HermitianLanczosOptions {
 }
 
 /// Result of [`hermitian_lanczos_lowest_eigenpair`].
-///
 /// Contains the lowest Ritz eigenpair, the final true residual norm, iteration
 /// count, and convergence status.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianLanczosResult;
-///
 /// let result = HermitianLanczosResult {
 ///     eigenvalue: 1.0,
 ///     eigenvector: vec![1.0_f64],
@@ -350,19 +393,15 @@ pub struct HermitianLanczosResult<T> {
 }
 
 /// Options for [`hermitian_krylov_expm_multiply`].
-///
 /// The routine builds a Hermitian Lanczos basis for a matrix-free operator,
 /// exponentiates the small projected Hermitian matrix, and combines the basis
 /// vectors without materializing the full operator. Scalar convergence checks
 /// and projected eigendecompositions are explicit non-differentiable
 /// boundaries; vector-space tensor operations preserve backend metadata when
 /// the underlying tensor implementation supports it.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianKrylovExpmOptions;
-///
 /// let options = HermitianKrylovExpmOptions {
 ///     max_iter: 32,
 ///     tol: 1.0e-10,
@@ -401,12 +440,9 @@ impl Default for HermitianKrylovExpmOptions {
 }
 
 /// Result of [`hermitian_krylov_expm_multiply`].
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::HermitianKrylovExpmResult;
-///
 /// let result = HermitianKrylovExpmResult {
 ///     output: vec![1.0_f64, 0.0],
 ///     iterations: 1,
@@ -443,33 +479,31 @@ struct HermitianRitzState {
 }
 
 /// Compute the lowest eigenpair of a Hermitian matrix-free operator.
-///
 /// The operator is supplied as `apply_a`, which maps a vector to `A * vector`.
 /// The algorithm builds an orthonormal Krylov basis using modified
 /// Gram-Schmidt with a second reorthogonalization pass, forms the small
 /// projected matrix `V^dagger A V`, and solves that small Hermitian problem via
 /// tensorbackend. The full operator matrix is never materialized.
-///
 /// # Arguments
 /// * `apply_a` - Matrix-free Hermitian operator application.
 /// * `initial` - Nonzero initial vector that defines the starting Krylov vector.
 /// * `options` - Krylov dimension, convergence tolerances, and Hermitian
-///   validation settings.
 ///
+///   validation settings.
 /// # Returns
 /// The lowest Ritz eigenpair and the true residual norm.
-///
 /// # Errors
-/// Returns an error if the initial vector is zero, a vector-space operation
-/// fails, `apply_a` fails, the projected operator is not Hermitian, or the small
-/// projected eigensolver fails.
-///
+/// Returns an error when the operator is not Hermitian-compatible (a shape
+/// mismatch or a [`KrylovError::NonHermitian`] projection failure), when the
+/// options are invalid (a [`KrylovError::InvalidOptions`]), when the initial
+/// vector is numerically zero (a [`KrylovError::ZeroInitialVector`]), or when
+/// an underlying tensor or backend operation fails (a
+/// [`KrylovError::Operation`]). Non-convergence is reported through
+/// [`HermitianLanczosResult::converged`] and does not produce an error.
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
 /// use tensor4all_core::krylov::{hermitian_lanczos_lowest_eigenpair, HermitianLanczosOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let initial = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 1.0]).unwrap();
 /// let result = hermitian_lanczos_lowest_eigenpair(
@@ -477,11 +511,23 @@ struct HermitianRitzState {
 ///     &initial,
 ///     &HermitianLanczosOptions::default(),
 /// ).unwrap();
-///
 /// assert!(result.converged);
 /// assert!((result.eigenvalue - 1.0).abs() < 1.0e-12);
 /// ```
 pub fn hermitian_lanczos_lowest_eigenpair<T, F>(
+    apply_a: F,
+    initial: &T,
+    options: &HermitianLanczosOptions,
+) -> std::result::Result<HermitianLanczosResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    hermitian_lanczos_lowest_eigenpair_impl(apply_a, initial, options)
+        .map_err(KrylovError::from_anyhow_with_classification)
+}
+
+fn hermitian_lanczos_lowest_eigenpair_impl<T, F>(
     apply_a: F,
     initial: &T,
     options: &HermitianLanczosOptions,
@@ -494,10 +540,11 @@ where
     initial.validate()?;
 
     let initial_norm = initial.norm()?;
-    anyhow::ensure!(
-        initial_norm > options.breakdown_tol,
-        "hermitian_lanczos_lowest_eigenpair: zero initial vector"
-    );
+    if initial_norm <= options.breakdown_tol {
+        return Err(anyhow::Error::new(KrylovError::ZeroInitialVector {
+            solver: "hermitian_lanczos_lowest_eigenpair",
+        }));
+    }
 
     let mut basis = Vec::with_capacity(options.max_iter + 1);
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
@@ -533,8 +580,13 @@ where
 
         let subspace_dim = j + 1;
         let projected = projected_matrix_from_columns(&h_cols, subspace_dim);
-        let ritz = lowest_hermitian_eigenpair(&projected, options.hermitian_tol)
-            .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
+        let ritz =
+            lowest_hermitian_eigenpair(&projected, options.hermitian_tol).map_err(|err| {
+                anyhow::Error::new(KrylovError::NonHermitian {
+                    solver: "hermitian_lanczos_lowest_eigenpair",
+                    source: anyhow::anyhow!("projected operator is not Hermitian: {err}"),
+                })
+            })?;
         let residual_estimate = beta * ritz.eigenvector[subspace_dim - 1].norm();
         let threshold = hermitian_lanczos_threshold(ritz.eigenvalue, options);
         let estimate_converged = residual_estimate <= threshold;
@@ -568,7 +620,10 @@ where
     }
 
     let ritz_state = last_ritz.ok_or_else(|| {
-        anyhow::anyhow!("hermitian_lanczos_lowest_eigenpair: max_iter must be greater than zero")
+        anyhow::Error::new(KrylovError::InvalidOptions {
+            solver: "hermitian_lanczos_lowest_eigenpair",
+            reason: "max_iter must be greater than zero".to_string(),
+        })
     })?;
     finalize_hermitian_lanczos_result(
         &apply_a,
@@ -579,34 +634,31 @@ where
 }
 
 /// Apply `exp(exponent * A)` to a vector using a matrix-free Hermitian Krylov method.
-///
 /// This routine only materializes small projected Krylov matrices. It never
 /// forms the full matrix for `A`, so it can be used by tensor-network local
 /// solvers whose operator application is available as a closure.
-///
 /// # Arguments
 /// * `apply_a` - Matrix-free Hermitian operator application.
 /// * `exponent` - Scalar exponent, for example `-im * dt` for real-time TDVP.
 /// * `initial` - Initial vector.
 /// * `options` - Krylov dimension, tolerance, and Hermitian validation options.
-///
 /// # Returns
 /// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
-///
 /// # Errors
-/// Returns an error if an option is invalid, a vector-space operation fails,
-/// the projected matrix is not Hermitian, or the requested tolerance is not met
-/// after the configured time splits.
-///
+/// Returns an error when the operator is not Hermitian-compatible (a shape
+/// mismatch or a [`KrylovError::NonHermitian`] projection failure), when the
+/// options are invalid (a [`KrylovError::InvalidOptions`]), when the initial
+/// vector is numerically zero (a [`KrylovError::ZeroInitialVector`]), or when
+/// an underlying tensor or backend operation fails (a
+/// [`KrylovError::Operation`]). Non-convergence is reported through
+/// [`HermitianKrylovExpmResult::converged`] and does not produce an error.
 /// # Examples
-///
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_core::krylov::{
 ///     hermitian_krylov_expm_multiply, HermitianKrylovExpmOptions,
 /// };
 /// use tensor4all_core::{DynIndex, TensorDynLen};
-///
 /// # fn main() -> anyhow::Result<()> {
 /// let index = DynIndex::new_dyn(2);
 /// let initial = TensorDynLen::from_dense(
@@ -625,6 +677,7 @@ where
 ///             vec![index.clone()],
 ///             vec![data[0], Complex64::new(2.0, 0.0) * data[1]],
 ///         )
+///         .map_err(anyhow::Error::from)
 ///     },
 ///     Complex64::new(0.0, -0.25),
 ///     &initial,
@@ -638,6 +691,20 @@ where
 /// # }
 /// ```
 pub fn hermitian_krylov_expm_multiply<T, F>(
+    apply_a: F,
+    exponent: Complex64,
+    initial: &T,
+    options: &HermitianKrylovExpmOptions,
+) -> std::result::Result<HermitianKrylovExpmResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: FnMut(&T) -> Result<T>,
+{
+    hermitian_krylov_expm_multiply_impl(apply_a, exponent, initial, options)
+        .map_err(KrylovError::from_anyhow_with_classification)
+}
+
+fn hermitian_krylov_expm_multiply_impl<T, F>(
     mut apply_a: F,
     exponent: Complex64,
     initial: &T,
@@ -851,42 +918,42 @@ where
         hermitian_tol,
         "hermitian_krylov_expm_multiply",
     )?;
-    unit_output.scale(AnyScalar::new_real(initial_norm))
+    unit_output
+        .scale(AnyScalar::new_real(initial_norm))
+        .map_err(anyhow::Error::new)
 }
 
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).
-///
 /// This implements the restarted GMRES algorithm that works with abstract tensor types
 /// through the [`TensorVectorSpace`] trait's vector space operations.
-///
 /// # Algorithm
-///
 /// GMRES builds an orthonormal basis for the Krylov subspace
 /// `K_m = span{r_0, A r_0, A^2 r_0, ..., A^{m-1} r_0}` and finds the
 /// solution that minimizes `||b - A x||` over this subspace.
-///
 /// # Type Parameters
-///
 /// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
-///
 /// # Arguments
-///
 /// * `apply_a` - Function that applies the linear operator A to a tensor
 /// * `b` - Right-hand side tensor
 /// * `x0` - Initial guess
 /// * `options` - Solver options
-///
 /// # Returns
-///
 /// A `GmresResult` containing the solution and convergence information.
-///
 /// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 ///
-/// Returns an error if:
-/// - Vector space operations (add, sub, scale, inner_product) fail
-/// - The linear operator application fails
-pub fn gmres<T, F>(apply_a: F, b: &T, x0: &T, options: &GmresOptions) -> Result<GmresResult<T>>
+pub fn gmres<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -899,19 +966,27 @@ where
         GmresTolerance::Relative(options.rtol),
         None,
     )
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 /// Solve `A x = b` using GMRES with an absolute residual tolerance.
-///
 /// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
 /// relative residual tolerance and is preferred for scale-independent solves.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
+///
 pub fn gmres_with_absolute_tolerance<T, F>(
     apply_a: F,
     b: &T,
     x0: &T,
     options: &GmresOptions,
     atol: f64,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -924,13 +999,21 @@ where
         GmresTolerance::Absolute(atol),
         None,
     )
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
-///
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
+///
 pub fn gmres_affine<T, F>(
     apply_a: F,
     b: &T,
@@ -938,7 +1021,7 @@ pub fn gmres_affine<T, F>(
     a0: AnyScalar,
     a1: AnyScalar,
     options: &GmresOptions,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -952,14 +1035,22 @@ where
         options,
         GmresTolerance::Relative(options.rtol),
     )
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with an absolute residual tolerance.
-///
 /// The Arnoldi basis is built from the unshifted `A` callback, while the affine
 /// coefficients are applied to the small Hessenberg problem. This mirrors
 /// KrylovKit's `linsolve(operator, b, a0, a1)` algorithm and avoids changing the
 /// Krylov basis when affine coefficients are present.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
+///
 pub fn gmres_affine_with_absolute_tolerance<T, F>(
     apply_a: F,
     b: &T,
@@ -968,7 +1059,7 @@ pub fn gmres_affine_with_absolute_tolerance<T, F>(
     a1: AnyScalar,
     options: &GmresOptions,
     atol: f64,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -982,6 +1073,7 @@ where
         options,
         GmresTolerance::Absolute(atol),
     )
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 fn gmres_affine_impl<T, F>(
@@ -1038,7 +1130,7 @@ where
         });
     }
     if a0.is_zero() && a1.is_zero() {
-        anyhow::bail!("gmres_affine: at least one affine coefficient must be nonzero");
+        return Err(anyhow::Error::new(KrylovError::NoAffineCoefficient));
     }
     if a1.is_zero() {
         let started = Instant::now();
@@ -1393,18 +1485,25 @@ where
 }
 
 /// Solve `A x = b` using GMRES while enforcing a total iteration limit.
-///
 /// [`GmresOptions::max_iter`] remains the restart cycle length and
 /// [`GmresOptions::max_restarts`] remains the maximum number of restart cycles.
 /// `max_total_iter` caps the total number of Arnoldi steps across all restart
 /// cycles; the final cycle is shortened when necessary.
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
+///
 pub fn gmres_with_total_iteration_limit<T, F>(
     apply_a: F,
     b: &T,
     x0: &T,
     options: &GmresOptions,
     max_total_iter: usize,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -1417,6 +1516,7 @@ where
         GmresTolerance::Relative(options.rtol),
         Some(max_total_iter),
     )
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 fn gmres_impl<T, F>(
@@ -1667,47 +1767,43 @@ where
 }
 
 /// Solve `A x = b` using GMRES with optional truncation after each iteration.
-///
 /// This is an extension of [`gmres`] that allows truncating Krylov basis vectors
 /// to control bond dimension growth in tensor network representations.
-///
 /// # Type Parameters
-///
 /// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 /// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
-///
 /// # Arguments
-///
 /// * `apply_a` - Function that applies the linear operator A to a tensor
 /// * `b` - Right-hand side tensor
 /// * `x0` - Initial guess
 /// * `options` - Solver options
 /// * `truncate` - Function that truncates a tensor to control bond dimension
-///
 /// # Note
-///
 /// Truncation is applied after each Gram-Schmidt orthogonalization step
 /// and after the final solution update. This helps control the bond dimension
 /// growth that would otherwise occur in MPS/MPO representations.
-///
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 /// # Examples
-///
 /// Solve `2x = b` with a no-op truncation function:
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{gmres_with_truncation, GmresOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 6.0]).unwrap();
 /// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
-///
 /// // Operator A = 2*I (scales input by 2)
-/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(2.0));
+/// let apply_a = |x: &TensorDynLen| {
+///     x.scale(AnyScalar::new_real(2.0)).map_err(anyhow::Error::from)
+/// };
 /// // No-op truncation
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
-///
 /// let result = gmres_with_truncation(apply_a, &b, &x0, &GmresOptions::default(), truncate).unwrap();
 /// assert!(result.converged);
 /// // Solution should be [2.0, 3.0]
@@ -1715,6 +1811,22 @@ where
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn gmres_with_truncation<T, F, Tr>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+    truncate: Tr,
+) -> std::result::Result<GmresResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    gmres_with_truncation_impl(apply_a, b, x0, options, truncate)
+        .map_err(KrylovError::from_anyhow_with_classification)
+}
+
+fn gmres_with_truncation_impl<T, F, Tr>(
     apply_a: F,
     b: &T,
     x0: &T,
@@ -1988,15 +2100,11 @@ where
 }
 
 /// Options for restarted GMRES with truncation.
-///
 /// This is used by [`restart_gmres_with_truncation`] which wraps the standard GMRES
 /// with an outer loop that recomputes the true residual at each restart.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::krylov::RestartGmresOptions;
-///
 /// let opts = RestartGmresOptions::new()
 ///     .with_max_outer_iters(10)
 ///     .with_rtol(1e-6)
@@ -2005,7 +2113,6 @@ where
 ///     .with_min_reduction(0.99)
 ///     .with_inner_rtol(0.01)
 ///     .with_verbose(false);
-///
 /// assert_eq!(opts.max_outer_iters, 10);
 /// assert_eq!(opts.rtol, 1e-6);
 /// assert_eq!(opts.inner_max_iter, 20);
@@ -2113,23 +2220,19 @@ impl RestartGmresOptions {
 }
 
 /// Result of restarted GMRES solver.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
-///
-/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(3.0));
+/// let apply_a = |x: &TensorDynLen| {
+///     x.scale(AnyScalar::new_real(3.0)).map_err(anyhow::Error::from)
+/// };
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
-///
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
 /// ).unwrap();
-///
 /// assert!(result.converged);
 /// assert!(result.residual_norm < 1e-10);
 /// assert!(result.outer_iterations <= 20);
@@ -2153,13 +2256,10 @@ pub struct RestartGmresResult<T> {
 }
 
 /// Solve `A x = b` using restarted GMRES with truncation.
-///
 /// This wraps [`gmres_with_truncation`] with an outer loop that recomputes the true residual
 /// at each restart. This is particularly useful for MPS/MPO computations where truncation
 /// can cause the inner GMRES residual to be inaccurate.
-///
 /// # Algorithm
-///
 /// ```text
 /// for outer_iter in 0..max_outer_iters:
 ///     r = b - A*x0          // Compute true residual
@@ -2169,48 +2269,60 @@ pub struct RestartGmresResult<T> {
 ///     x' = gmres_with_truncation(A, r, 0, inner_options, truncate)
 ///     x0 = truncate(x0 + x')
 /// ```
-///
 /// # Type Parameters
-///
 /// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 /// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
-///
 /// # Arguments
-///
 /// * `apply_a` - Function that applies the linear operator A to a tensor
 /// * `b` - Right-hand side tensor
 /// * `x0` - Initial guess (if None, starts from zero)
 /// * `options` - Solver options
 /// * `truncate` - Function that truncates a tensor to control bond dimension
-///
 /// # Returns
-///
 /// A `RestartGmresResult` containing the solution and convergence information.
-///
+/// # Errors
+/// Returns an error when the operator and vectors have incompatible shapes (a
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 /// # Examples
-///
 /// Solve `5x = b` with no truncation:
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
-///
 /// let i = DynIndex::new_dyn(3);
 /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0, 15.0]).unwrap();
-///
-/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(5.0));
+/// let apply_a = |x: &TensorDynLen| {
+///     x.scale(AnyScalar::new_real(5.0)).map_err(anyhow::Error::from)
+/// };
 /// let truncate = |_x: &mut TensorDynLen| Ok(());
-///
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
 /// ).unwrap();
-///
 /// assert!(result.converged);
 /// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(
+    apply_a: F,
+    b: &T,
+    x0: Option<&T>,
+    options: &RestartGmresOptions,
+    truncate: Tr,
+) -> std::result::Result<RestartGmresResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    restart_gmres_with_truncation_impl(apply_a, b, x0, options, truncate)
+        .map_err(KrylovError::from_anyhow_with_classification)
+}
+
+fn restart_gmres_with_truncation_impl<T, F, Tr>(
     apply_a: F,
     b: &T,
     x0: Option<&T>,
@@ -2320,7 +2432,8 @@ where
         // Solve A*x' = r using inner GMRES with zero initial guess
         // The zero initial guess is created by scaling r by 0
         let zero = r.scale(AnyScalar::new_real(0.0))?;
-        let inner_result = gmres_with_truncation(&apply_a, &r, &zero, &inner_options, &truncate)?;
+        let inner_result =
+            gmres_with_truncation_impl(&apply_a, &r, &zero, &inner_options, &truncate)?;
 
         total_inner_iters += inner_result.iterations;
 
@@ -2364,10 +2477,12 @@ where
 }
 
 fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Result<()> {
-    anyhow::ensure!(
-        options.max_iter > 0,
-        "hermitian_lanczos_lowest_eigenpair: max_iter must be greater than zero"
-    );
+    if options.max_iter == 0 {
+        return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+            solver: "hermitian_lanczos_lowest_eigenpair",
+            reason: "max_iter must be greater than zero".to_string(),
+        }));
+    }
     anyhow::ensure!(
         options.rtol.is_finite() && options.rtol >= 0.0,
         "hermitian_lanczos_lowest_eigenpair: rtol must be finite and non-negative"
@@ -2549,7 +2664,6 @@ where
 }
 
 /// Compute Givens rotation coefficients to eliminate b in (a, b).
-///
 /// This function keeps computation in `AnyScalar` space to preserve AD metadata
 /// as much as possible.
 fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScalar) {
@@ -2574,7 +2688,6 @@ fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScala
 
 /// Apply Givens rotation: (c, s) @ (x, y) -> (c*x + s*y, -conj(s)*x + c*y) for complex
 /// or (c*x + s*y, -s*x + c*y) for real.
-///
 /// This function keeps computation in `AnyScalar` space to preserve AD metadata
 /// as much as possible.
 fn apply_givens_rotation(

@@ -4,6 +4,7 @@
 //! This complements `SiteIndexNetwork` (which handles site/physical indices)
 //! by handling link/bond indices between nodes.
 
+use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::EdgeIndex;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -97,29 +98,35 @@ where
     ///
     /// # Returns
     /// Ok if successful, Err if old_index was not registered or edge mismatch.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    ///  a backend failure).
+    ///
     pub fn replace_index(
         &mut self,
         old_index: &I,
         new_index: &I,
         edge: EdgeIndex,
-    ) -> Result<(), String> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         match self.index_to_edge.remove(old_index) {
             Some(old_edge) => {
                 if old_edge != edge {
                     // Restore and return error
                     self.index_to_edge.insert(old_index.clone(), old_edge);
-                    return Err(format!(
+                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
                         "Edge mismatch: old_index was on edge {:?}, not {:?}",
-                        old_edge, edge
-                    ));
+                        old_edge,
+                        edge
+                    )));
                 }
                 self.index_to_edge.insert(new_index.clone(), edge);
                 Ok(())
             }
-            None => Err(format!(
+            None => Err(TreeTNOperationError::from(anyhow::anyhow!(
                 "Index {:?} not found in link_index_network",
                 old_index.id()
-            )),
+            ))),
         }
     }
 

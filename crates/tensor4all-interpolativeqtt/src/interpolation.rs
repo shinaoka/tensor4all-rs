@@ -14,24 +14,18 @@ use crate::interval::{Interval, NInterval};
 use crate::options::InterpolativeQttOptions;
 
 /// Construct a one-dimensional single-scale interpolative QTT.
-///
 /// `f` is sampled through a Chebyshev-Lobatto local basis on `[a, b)`.
 /// `num_bits` is the number of quantics sites, and `polynomial_degree`
 /// controls the local interpolation order. The result is a binary
 /// `TensorTrain<f64>` whose site indices are zero-based quantics digits.
-///
 /// # Errors
-///
-/// Returns an error if the interval, bit count, polynomial degree, options, or
-/// tensor train compression are invalid.
-///
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_single_scale(
 ///     |x| x * x,
 ///     0.0,
@@ -40,7 +34,6 @@ use crate::options::InterpolativeQttOptions;
 ///     8,
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// let value = tt.evaluate(&[0, 0, 0, 0]).unwrap();
 /// assert!(value.abs() < 1e-10);
 /// ```
@@ -66,23 +59,17 @@ where
 }
 
 /// Construct a fused multidimensional single-scale interpolative QTT.
-///
 /// `lower` and `upper` define the box. Each quantics site fuses all dimensions
 /// at the same bit level, so a `D`-dimensional interpolant has site dimension
 /// `2^D` and `num_bits` sites.
-///
 /// # Errors
-///
-/// Returns an error if dimensions are inconsistent, the fused site dimension
-/// overflows, or tensor train compression fails.
-///
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale_nd, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_single_scale_nd(
 ///     |x| x[0] + x[1],
 ///     &[0.0, 0.0],
@@ -91,7 +78,6 @@ where
 ///     5,
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.len(), 3);
 /// assert_eq!(tt.site_dims(), vec![4, 4, 4]);
 /// ```
@@ -128,22 +114,17 @@ where
 }
 
 /// Construct a one-dimensional multiscale interpolative QTT.
-///
 /// `cusp_locations` identifies points that should remain on a refinement path
 /// instead of being locally interpolated too early. This is useful for known
 /// nonsmooth points such as absolute-value cusps or removable singularities.
-///
 /// # Errors
-///
-/// Returns an error for invalid arguments or failed compression.
-///
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_multi_scale, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_multi_scale(
 ///     |x| x.abs(),
 ///     -1.0,
@@ -153,7 +134,6 @@ where
 ///     &[0.0],
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.len(), 4);
 /// assert!((tt.evaluate(&[0, 0, 0, 0]).unwrap() - 1.0).abs() < 1e-10);
 /// ```
@@ -182,22 +162,16 @@ where
 }
 
 /// Construct a fused multidimensional multiscale interpolative QTT.
-///
 /// `cusp_locations` contains points in the original coordinate box. Any
 /// interval containing one of these points is refined until the final level.
-///
 /// # Errors
-///
-/// Returns an error if cusp dimensions do not match the domain or if tensor
-/// train construction fails.
-///
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_multi_scale_nd, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_multi_scale_nd(
 ///     |x| x[0] * x[1],
 ///     &[0.0, 0.0],
@@ -207,7 +181,6 @@ where
 ///     &[vec![0.0, 0.0]],
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.site_dims(), vec![4, 4, 4]);
 /// ```
 pub fn interpolate_multi_scale_nd<F>(
@@ -239,22 +212,16 @@ where
 }
 
 /// Construct a one-dimensional adaptive interpolative QTT.
-///
 /// The interval is recursively refined where the local interpolation error
 /// exceeds `adaptive_tolerance`. Known singularities can be supplied to seed a
 /// refinement path and avoid evaluating the function at those points.
-///
 /// # Errors
-///
-/// Returns an error for invalid inputs or failed tensor train compression.
-///
+/// Returns an error when the inputs are invalid (an invalid-configuration failure) or the tensor train compression fails (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_adaptive, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_adaptive(
 ///     |x| x.sin(),
 ///     0.0,
@@ -265,10 +232,13 @@ where
 ///     &[],
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.len(), 4);
 /// ```
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
+///
 pub fn interpolate_adaptive<F>(
     f: F,
     a: f64,
@@ -296,23 +266,18 @@ where
 }
 
 /// Construct a fused multidimensional adaptive interpolative QTT.
-///
 /// The adaptive pass marks boxes whose local interpolation error exceeds
 /// `adaptive_tolerance`, then builds a multiscale QTT using those marked
 /// boxes.
-///
 /// # Errors
-///
-/// Returns an error if inputs are invalid, singularity dimensions do not match,
-/// or compression fails.
-///
+/// Returns an error if the inputs are invalid (an invalid-configuration
+/// failure), the singularity dimensions do not match (a shape mismatch), or
+/// the compression fails (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_adaptive_nd, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_adaptive_nd(
 ///     |x| x[0] + x[1],
 ///     &[0.0, 0.0],
@@ -323,10 +288,14 @@ where
 ///     &[],
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.len(), 3);
 /// ```
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+/// Returns an error if the inputs are invalid (an invalid-configuration
+/// failure), the singularity dimensions do not match (a shape mismatch), or
+/// the compression fails (a non-convergence failure).
+///
 pub fn interpolate_adaptive_nd<F>(
     f: F,
     lower: &[f64],
@@ -378,22 +347,16 @@ where
 }
 
 /// Construct a one-dimensional sparse single-scale interpolative QTT.
-///
 /// The sparse variant replaces the dense interpolation core by an angular
 /// local Lagrange core with radius `window_radius`.
-///
 /// # Errors
-///
-/// Returns an error if `polynomial_degree < 2 * window_radius`, or if other
-/// construction arguments are invalid.
-///
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale_sparse, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_single_scale_sparse(
 ///     |x| x.cos(),
 ///     0.0,
@@ -403,7 +366,6 @@ where
 ///     2,
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.len(), 4);
 /// ```
 pub fn interpolate_single_scale_sparse<F>(
@@ -430,21 +392,16 @@ where
 }
 
 /// Construct a fused multidimensional sparse single-scale interpolative QTT.
-///
 /// This is the multidimensional version of [`interpolate_single_scale_sparse`]
 /// with fused local site dimensions.
-///
 /// # Errors
-///
-/// Returns an error if inputs are invalid or compression fails.
-///
+/// Returns an error when the grid or ranks are invalid (an invalid-configuration
+/// failure) or interpolation fails to converge (a non-convergence failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     interpolate_single_scale_sparse_nd, AbstractTensorTrain, InterpolativeQttOptions,
 /// };
-///
 /// let tt = interpolate_single_scale_sparse_nd(
 ///     |x| x[0] + x[1],
 ///     &[0.0, 0.0],
@@ -454,7 +411,6 @@ where
 ///     2,
 ///     &InterpolativeQttOptions::default(),
 /// ).unwrap();
-///
 /// assert_eq!(tt.site_dims(), vec![4, 4, 4]);
 /// ```
 pub fn interpolate_single_scale_sparse_nd<F>(
@@ -491,23 +447,17 @@ where
 }
 
 /// Recover multiresolution Chebyshev-Lobatto values from a binary QTT.
-///
 /// The returned vector has one matrix per coarse level. Matrix `k - 1` has
 /// `2^k` rows and `basis.len()` columns, where each row corresponds to one
 /// subinterval and each column to one local Chebyshev-Lobatto node.
-///
 /// # Errors
-///
-/// Returns an error if `q != 1`, `q` is outside `1..tt.len()`, the TT is not
-/// binary, or internal dimensions are inconsistent.
-///
+/// Returns an error when the QTT is not invertible (a singular failure) or the
+/// inversion fails (a backend failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     get_chebyshev_grid, interpolate_single_scale, invert_qtt, InterpolativeQttOptions,
 /// };
-///
 /// let basis = get_chebyshev_grid(6).unwrap();
 /// let tt = interpolate_single_scale(
 ///     |x| (-x * x).exp(),
@@ -554,22 +504,17 @@ pub fn invert_qtt(
 }
 
 /// Estimate the local interpolation error on a one-dimensional interval.
-///
 /// The function is sampled at the basis nodes, then the interpolant is checked
 /// on a denser Chebyshev-Lobatto grid. The return value is a maximum absolute
 /// error estimate.
-///
 /// # Errors
-///
-/// Returns an error if basis evaluation fails.
-///
+/// Returns an error when the reference and interpolated functions have
+/// incompatible grids (a shape mismatch) or the estimation fails.
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     estimate_interpolation_error, get_chebyshev_grid,
 /// };
-///
 /// let basis = get_chebyshev_grid(6).unwrap();
 /// let err = estimate_interpolation_error(|x| x.sin(), 0.0, 1.0, &basis).unwrap();
 /// assert!(err >= 0.0);
@@ -611,21 +556,15 @@ where
 }
 
 /// Estimate the local interpolation error on a multidimensional box.
-///
 /// The function is sampled at tensor-product basis nodes, then checked on a
 /// denser tensor-product Chebyshev-Lobatto grid.
-///
 /// # Errors
-///
 /// Returns an error if basis evaluation fails or dimensions overflow.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_interpolativeqtt::{
 ///     estimate_interpolation_error_nd, get_chebyshev_grid,
 /// };
-///
 /// let basis = get_chebyshev_grid(4).unwrap();
 /// let err = estimate_interpolation_error_nd(
 ///     |x| x[0] + x[1],
@@ -700,7 +639,7 @@ fn validate_common(
     }
     if lower.len() != upper.len() {
         return Err(invalid_argument(format!(
-            "domain dimension mismatch: lower has {}, upper has {}",
+            "domain shape mismatch: lower has {}, upper has {}",
             lower.len(),
             upper.len()
         )));
@@ -733,7 +672,7 @@ fn validate_points(points: &[Vec<f64>], ndims: usize, name: &str) -> Result<()> 
     for point in points {
         if point.len() != ndims {
             return Err(invalid_argument(format!(
-                "{name} dimension mismatch: expected {ndims}, got {}",
+                "{name} shape mismatch: expected {ndims}, got {}",
                 point.len()
             )));
         }
@@ -1146,7 +1085,7 @@ fn invert_stage1(tt: &TensorTrain<f64>, basis: &LagrangePolynomials) -> Result<M
 
     if current.ncols() != decode.nrows() {
         return Err(invalid_argument(format!(
-            "matrix dimension mismatch: {}x{} times {}x{}",
+            "matrix shape mismatch: {}x{} times {}x{}",
             current.nrows(),
             current.ncols(),
             decode.nrows(),

@@ -1,5 +1,6 @@
 //! Cached batch evaluation for tree tensor networks.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -92,6 +93,11 @@ impl<V> ComponentCostIndex<V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn new(
         tree: &TreeTN<TensorDynLen, V>,
         indices: &[DynIndex],
@@ -307,6 +313,11 @@ impl<V> RootedMessagePlan<V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn new(tree: &TreeTN<TensorDynLen, V>, center: &V) -> Result<Self> {
         let neighbors = sorted_neighbors(tree);
         let (parent, order) = rooted_tree(&neighbors, center)?;
@@ -616,8 +627,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when `indices` are not all present in `tree`, when the
-    /// tree is empty, or when a fixed or initial center does not exist.
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -640,7 +651,7 @@ where
         tree: &'a TreeTN<TensorDynLen, V>,
         indices: &[DynIndex],
         options: CachedEvaluatorOptions<V>,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         let layout = build_layout(tree, indices)?;
         if let Some(center) = &options.center {
             ensure_node_exists(tree, center, "TreeTNCachedEvaluator::new: center")?;
@@ -699,9 +710,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if `values` has the wrong row count, if any site value
-    /// is outside the corresponding index dimension, or if tensor contraction
-    /// fails.
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///
@@ -728,7 +738,7 @@ where
     pub fn evaluate_batch(
         &mut self,
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Vec<AnyScalar>> {
+    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
         validate_values_shape(
             values,
             self.layout.n_indices,
@@ -1285,21 +1295,27 @@ fn slice_tensor(tensor: &TensorDynLen, index_vals: &[(DynIndex, usize)]) -> Resu
         .iter()
         .map(|(_, position)| *position)
         .collect::<Vec<_>>();
-    tensor.select_indices(&selected_indices, &positions)
+    tensor
+        .select_indices(&selected_indices, &positions)
+        .map_err(anyhow::Error::from)
 }
 
 fn tensor_values_any(tensor: &TensorDynLen) -> Result<Vec<AnyScalar>> {
     if tensor.is_complex() {
-        tensor.to_vec::<Complex64>().map(|values| {
-            values
-                .into_iter()
-                .map(|value| AnyScalar::new_complex(value.re, value.im))
-                .collect()
-        })
+        tensor
+            .to_vec::<Complex64>()
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| AnyScalar::new_complex(value.re, value.im))
+                    .collect()
+            })
+            .map_err(anyhow::Error::from)
     } else {
         tensor
             .to_vec::<f64>()
             .map(|values| values.into_iter().map(AnyScalar::new_real).collect())
+            .map_err(anyhow::Error::from)
     }
 }
 
@@ -1320,6 +1336,7 @@ fn stack_tensors_with_assignment_index(
 
     let tensor_refs = tensors.iter().collect::<Vec<_>>();
     TensorDynLen::stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
+        .map_err(anyhow::Error::from)
 }
 
 fn gather_stacked_tensor(
@@ -1339,11 +1356,13 @@ fn gather_stacked_tensor(
         target_assignment_index.dim()
     );
 
-    stacked.index_select(
-        source_assignment_index,
-        target_assignment_index.clone(),
-        selected_assignments,
-    )
+    stacked
+        .index_select(
+            source_assignment_index,
+            target_assignment_index.clone(),
+            selected_assignments,
+        )
+        .map_err(anyhow::Error::from)
 }
 
 fn ensure_assignment_axis_last(
@@ -1367,7 +1386,7 @@ fn ensure_assignment_axis_last(
             .cloned(),
     );
     new_order.push(assignment_index.clone());
-    tensor.permuteinds(&new_order)
+    tensor.permuteinds(&new_order).map_err(anyhow::Error::new)
 }
 
 fn sorted_neighbors<T, V>(tree: &TreeTN<T, V>) -> HashMap<V, Vec<V>>

@@ -60,7 +60,8 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if lengths or site dimensions do not match.
+    /// Returns an error when the contraction or operation fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -161,6 +162,11 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
 }
 
 /// Free-function wrapper for [`TensorTrain::dot`].
+///
+/// # Errors
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

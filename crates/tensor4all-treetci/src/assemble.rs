@@ -1,5 +1,5 @@
+use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::{OwnedGlobalIndexBatch, SubtreeKey};
-use anyhow::{ensure, Result};
 
 /// Multi-index type used by TreeTCI.
 ///
@@ -13,6 +13,11 @@ pub type MultiIndex = Vec<usize>;
 /// Each central assignment is a `(site, value)` pair.
 ///
 /// Returns the assembled global multi-index with one entry per site.
+///
+/// # Errors
+///
+/// Returns an error when the construction or conversion fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -42,57 +47,63 @@ pub fn assemble_global_point(
     n_sites: usize,
     subtree_assignments: &[(&SubtreeKey, &MultiIndex)],
     central_assignments: &[(usize, usize)],
-) -> Result<MultiIndex> {
+) -> TreeTciResult<MultiIndex> {
     let mut point = vec![usize::MAX; n_sites];
 
     for &(key, values) in subtree_assignments {
-        ensure!(
-            key.as_slice().len() == values.len(),
-            "subtree key of length {} cannot be filled from multi-index of length {}",
-            key.as_slice().len(),
-            values.len()
-        );
+        if !(key.as_slice().len() == values.len()) {
+            return Err(anyhow::anyhow!(
+                "subtree key of length {} cannot be filled from multi-index of length {}",
+                key.as_slice().len(),
+                values.len()
+            )
+            .into());
+        };
         for (&site, &value) in key.as_slice().iter().zip(values.iter()) {
-            ensure!(
-                site < n_sites,
-                "site {} is out of bounds for {} sites",
-                site,
-                n_sites
-            );
-            ensure!(
-                point[site] == usize::MAX,
-                "site {} was assigned more than once",
-                site
-            );
+            if site >= n_sites {
+                return Err(TreeTciError::IndexOutOfBounds {
+                    message: format!("site {site} is out of bounds for {n_sites} sites"),
+                });
+            }
+            if !(point[site] == usize::MAX) {
+                return Err(TreeTciError::IndexOutOfBounds {
+                    message: format!("site {site} was assigned more than once"),
+                });
+            };
             point[site] = value;
         }
     }
 
     for &(site, value) in central_assignments {
-        ensure!(
-            site < n_sites,
-            "site {} is out of bounds for {} sites",
-            site,
-            n_sites
-        );
-        ensure!(
-            point[site] == usize::MAX,
-            "site {} was assigned more than once",
-            site
-        );
+        if site >= n_sites {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("site {site} is out of bounds for {n_sites} sites"),
+            });
+        }
+        if !(point[site] == usize::MAX) {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("site {site} was assigned more than once"),
+            });
+        };
         point[site] = value;
     }
 
-    ensure!(
-        point.iter().all(|&value| value != usize::MAX),
-        "global point assembly left some sites unassigned"
-    );
+    if !(point.iter().all(|&value| value != usize::MAX)) {
+        return Err(TreeTciError::IndexOutOfBounds {
+            message: "global point assembly left some sites unassigned".to_string(),
+        });
+    };
     Ok(point)
 }
 
 /// Pack global points into column-major `(n_sites, n_points)` storage.
 ///
 /// All points must have the same length (the number of sites).
+///
+/// # Errors
+///
+/// Returns an error when the construction or conversion fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -109,15 +120,18 @@ pub fn assemble_global_point(
 /// assert_eq!(view.get(1, 0), Some(1)); // point 0, site 1
 /// assert_eq!(view.get(0, 2), Some(0)); // point 2, site 0
 /// ```
-pub fn assemble_points_column_major(points: &[MultiIndex]) -> Result<OwnedGlobalIndexBatch> {
+pub fn assemble_points_column_major(points: &[MultiIndex]) -> TreeTciResult<OwnedGlobalIndexBatch> {
     let n_points = points.len();
     let n_sites = points.first().map_or(0, Vec::len);
-    ensure!(n_sites > 0, "at least one point with one site is required");
-    ensure!(n_points > 0, "at least one point is required");
-    ensure!(
-        points.iter().all(|point| point.len() == n_sites),
-        "all points must have the same site count"
-    );
+    if !(n_sites > 0) {
+        return Err(anyhow::anyhow!("at least one point with one site is required").into());
+    };
+    if !(n_points > 0) {
+        return Err(anyhow::anyhow!("at least one point is required").into());
+    };
+    if !(points.iter().all(|point| point.len() == n_sites)) {
+        return Err(anyhow::anyhow!("all points must have the same site count").into());
+    };
 
     let mut data = Vec::with_capacity(n_sites * n_points);
     for point in points {

@@ -61,6 +61,11 @@ impl<T: Scalar> CrossFactors<T> {
     }
 
     /// Reconstruct factors from a source and pivot-only selection.
+    /// # Errors
+    ///
+    /// Returns an error when the matrix source is invalid (a shape mismatch) or
+    /// /// the factor construction fails.
+    ///
     pub fn from_source<S: CandidateMatrixSource<T>>(
         source: &S,
         selection: &PivotSelectionCore,
@@ -75,6 +80,11 @@ impl<T: Scalar> CrossFactors<T> {
     }
 
     /// Solve for `A[:, J] * A[I, J]^{-1}` without forming an explicit inverse.
+    /// # Errors
+    ///
+    /// Returns an error when the pivot solve fails (a singular or backend
+    /// /// failure).
+    ///
     pub fn cols_solve_pivot(&self) -> Result<Matrix<T>> {
         let pivot_t = transpose(&self.pivot);
         let pivot_cols_t = transpose(&self.pivot_cols);
@@ -87,6 +97,11 @@ impl<T: Scalar> CrossFactors<T> {
     }
 
     /// Solve for `A[I, J]^{-1} * A[I, :]` without forming an explicit inverse.
+    /// # Errors
+    ///
+    /// Returns an error when the pivot solve fails (a singular or backend
+    /// /// failure).
+    ///
     pub fn solve_pivot_rows(&self) -> Result<Matrix<T>> {
         solve_matrix(&self.pivot, &self.pivot_rows).map_err(|err| {
             MatrixLuciError::InvalidArgument {

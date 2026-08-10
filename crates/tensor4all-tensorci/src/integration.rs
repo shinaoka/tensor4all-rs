@@ -507,8 +507,8 @@ fn gk_nodes_weights(gk_order: usize) -> Result<(&'static [f64], &'static [f64])>
 ///
 /// # Errors
 ///
-/// Returns an error if `a` and `b` have different lengths, or if
-/// `gk_order` is not one of the embedded fixed rules.
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

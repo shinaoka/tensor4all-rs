@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorStorageError};
+use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorDynLenError};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
@@ -229,10 +229,12 @@ impl SubDomainTT {
         TensorTrain::new(new_tensors).map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
-    fn tensor_operation_error(error: anyhow::Error) -> PartitionedTTError {
-        match error.downcast::<TensorStorageError>() {
-            Ok(source) => PartitionedTTError::TensorStorage { source },
-            Err(source) => PartitionedTTError::TensorConstruction { source },
+    fn tensor_operation_error(error: TensorDynLenError) -> PartitionedTTError {
+        match error {
+            TensorDynLenError::Storage { source } => PartitionedTTError::TensorStorage { source },
+            other => PartitionedTTError::TensorConstruction {
+                source: anyhow::Error::new(other),
+            },
         }
     }
 
@@ -262,7 +264,10 @@ impl SubDomainTT {
     /// Compute the Frobenius norm.
     ///
     /// # Errors
-    /// Propagates tensor-train storage or contraction failures.
+    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// /// backend failure).
+    ///
     pub fn norm(&self) -> Result<f64> {
         self.data
             .norm()
@@ -272,7 +277,10 @@ impl SubDomainTT {
     /// Compute the squared Frobenius norm.
     ///
     /// # Errors
-    /// Propagates tensor-train storage or contraction failures.
+    ///
+    /// Returns an error when the norm cannot be evaluated (a materialization or
+    /// /// backend failure).
+    ///
     pub fn norm_squared(&self) -> Result<f64> {
         self.data
             .norm_squared()
@@ -280,6 +288,10 @@ impl SubDomainTT {
     }
 
     /// Truncate the tensor train.
+    /// # Errors
+    ///
+    /// Returns an error when the truncation fails (a backend or SVD failure).
+    ///
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         self.data
             .truncate(options)
@@ -382,6 +394,11 @@ impl SubDomainTT {
     }
 
     /// Inner product with another SubDomainTT.
+    /// # Errors
+    ///
+    /// Returns an error when the subdomains are incompatible (a shape mismatch)
+    /// /// or the inner product fails (a backend failure).
+    ///
     pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
         self.data
             .inner(other.data())

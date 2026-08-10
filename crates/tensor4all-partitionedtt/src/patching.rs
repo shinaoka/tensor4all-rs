@@ -110,11 +110,8 @@ impl Default for PatchingOptions {
 ///
 /// # Errors
 ///
-/// Returns an error if:
-/// - `options.rtol` is negative, NaN, or infinite
-/// - `options.max_bond_dim` is zero
-/// - the input or split projectors overlap
-/// - tensor train projection or truncation fails
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -202,8 +199,10 @@ pub fn add_with_patching(
 /// * `left` - Left partitioned tensor train.
 /// * `right` - Right partitioned tensor train.
 /// * `contract_options` - Contraction method, sweep count, and provisional
+///
 ///   truncation settings used by the underlying TT contraction.
 /// * `patching_options` - Global output tolerance and output rank cap. Split
+///
 ///   fields are validated but not used by this post-contraction truncation
 ///   pass.
 ///
@@ -214,8 +213,8 @@ pub fn add_with_patching(
 ///
 /// # Errors
 ///
-/// Returns an error if patching options are invalid, if the contraction fails,
-/// or if output truncation fails.
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

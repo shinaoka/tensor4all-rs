@@ -139,6 +139,11 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 /// version.
 ///
 /// This is a pure reporting helper around the TreeTN library object.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn print_treetn_summary(
     label: &str,
     tn: &TreeTN<TensorDynLen, usize>,
@@ -173,6 +178,11 @@ fn evaluate_tree_point(
 /// - the TreeTN library gives us `evaluate_point(...)` for the product networks
 /// - we combine all values into one row per grid point
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples<F, G>(
     cosh_qtci: &QuanticsTensorCI2<f64>,
     factor_b_qtci: &QuanticsTensorCI2<f64>,
@@ -227,6 +237,11 @@ where
 ///
 /// The factor QTTs are simple tensor trains, so we use `link_dims()` there.
 /// The product lives as TreeTN, so we use `TreeTN::link_dims()` for those rows.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_bond_profile(
     cosh_tt: &TensorTrain<f64>,
     factor_b_tt: &TensorTrain<f64>,
@@ -266,6 +281,11 @@ pub fn collect_bond_profile(
 ///
 /// Output-only helper: the Tensor4all APIs have already done the numerical work
 /// by the time this function is called.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
@@ -299,6 +319,11 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// Write the bond-dimension profile to CSV.
 ///
 /// Another output-only helper so the binary stays focused on the tensor logic.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(path: &Path, rows: &[BondProfileRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);

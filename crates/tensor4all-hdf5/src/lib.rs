@@ -72,8 +72,50 @@ mod index;
 mod itensor;
 mod mps;
 mod schema;
+/// Error returned by tensor4all-hdf5 save/load operations.
+///
+/// The full original diagnostic is preserved in [`Hdf5Error::source`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_hdf5::Hdf5Error;
+///
+/// let err = Hdf5Error::from(anyhow::anyhow!("file open failed"));
+/// assert!(err.to_string().contains("file open failed"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[error("HDF5 tensor operation failed: {source}")]
+pub struct Hdf5Error {
+    /// Original HDF5 or tensor diagnostic, preserving the full source chain.
+    #[source]
+    pub source: anyhow::Error,
+}
 
-use anyhow::Result;
+#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+impl From<hdf5_metno::Error> for Hdf5Error {
+    fn from(source: hdf5_metno::Error) -> Self {
+        Self {
+            source: anyhow::Error::new(source),
+        }
+    }
+}
+
+#[cfg(feature = "runtime-loading")]
+impl From<hdf5_rt::Error> for Hdf5Error {
+    fn from(source: hdf5_rt::Error) -> Self {
+        Self {
+            source: anyhow::Error::new(source),
+        }
+    }
+}
+
+impl From<anyhow::Error> for Hdf5Error {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
 use backend::File;
 use tensor4all_core::TensorDynLen;
 use tensor4all_itensorlike::TensorTrain;
@@ -147,10 +189,14 @@ pub use hdf5_rt::sys::{
 /// # Ok(())
 /// # }
 /// ```
-pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result<()> {
+pub fn save_itensor(
+    filepath: &str,
+    name: &str,
+    tensor: &TensorDynLen,
+) -> std::result::Result<(), Hdf5Error> {
     let file = File::create(filepath)?;
     let group = file.create_group(name)?;
-    itensor::write_itensor(&group, tensor)
+    itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
 }
 
 /// Append a [`TensorDynLen`] as an ITensors.jl-compatible `ITensor` to an HDF5 file.
@@ -161,8 +207,8 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened for appending, if `name`
-/// already exists, or if the tensor storage type is unsupported.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -184,10 +230,14 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
 /// # Ok(())
 /// # }
 /// ```
-pub fn append_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result<()> {
+pub fn append_itensor(
+    filepath: &str,
+    name: &str,
+    tensor: &TensorDynLen,
+) -> std::result::Result<(), Hdf5Error> {
     let file = File::append(filepath)?;
     let group = file.create_group(name)?;
-    itensor::write_itensor(&group, tensor)
+    itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
 }
 
 /// Load a [`TensorDynLen`] from an ITensors.jl-compatible `ITensor` in an HDF5 file.
@@ -240,10 +290,10 @@ pub fn append_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Resu
 /// # Ok(())
 /// # }
 /// ```
-pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
+pub fn load_itensor(filepath: &str, name: &str) -> std::result::Result<TensorDynLen, Hdf5Error> {
     let file = File::open(filepath)?;
     let group = file.group(name)?;
-    itensor::read_itensor(&group)
+    itensor::read_itensor(&group).map_err(Hdf5Error::from)
 }
 
 /// Save a [`TensorTrain`] as an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
@@ -295,10 +345,14 @@ pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
 /// # Ok(())
 /// # }
 /// ```
-pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
+pub fn save_mps(
+    filepath: &str,
+    name: &str,
+    tt: &TensorTrain,
+) -> std::result::Result<(), Hdf5Error> {
     let file = File::create(filepath)?;
     let group = file.create_group(name)?;
-    mps::write_mps(&group, tt)
+    mps::write_mps(&group, tt).map_err(Hdf5Error::from)
 }
 
 /// Append a [`TensorTrain`] as an ITensorMPS.jl-compatible `MPS` to an HDF5 file.
@@ -310,8 +364,8 @@ pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened for appending, if `name`
-/// already exists, or if any site tensor uses unsupported storage.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -336,10 +390,14 @@ pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
 /// # Ok(())
 /// # }
 /// ```
-pub fn append_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
+pub fn append_mps(
+    filepath: &str,
+    name: &str,
+    tt: &TensorTrain,
+) -> std::result::Result<(), Hdf5Error> {
     let file = File::append(filepath)?;
     let group = file.create_group(name)?;
-    mps::write_mps(&group, tt)
+    mps::write_mps(&group, tt).map_err(Hdf5Error::from)
 }
 
 /// Load a [`TensorTrain`] from an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
@@ -392,8 +450,8 @@ pub fn append_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
 /// # Ok(())
 /// # }
 /// ```
-pub fn load_mps(filepath: &str, name: &str) -> Result<TensorTrain> {
+pub fn load_mps(filepath: &str, name: &str) -> std::result::Result<TensorTrain, Hdf5Error> {
     let file = File::open(filepath)?;
     let group = file.group(name)?;
-    mps::read_mps(&group)
+    mps::read_mps(&group).map_err(Hdf5Error::from)
 }

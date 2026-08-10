@@ -23,6 +23,7 @@ mod tensor_like;
 mod transform;
 mod truncate;
 
+use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::{Dfs, EdgeRef};
 use std::collections::HashMap;
@@ -64,37 +65,27 @@ pub use partial_contraction::{
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
-///
 /// Maintains a graph of tensors connected by bonds (edges).
 /// Each node stores a tensor, and edges store `Connection` objects
 /// that hold the bond index.
-///
 /// The structure uses SiteIndexNetwork to manage:
 /// - **Topology**: Graph structure (which nodes connect to which)
 /// - **Site Space**: Physical indices organized by node
-///
 /// # Type Parameters
 /// - `T`: Tensor type implementing `TensorLike` (default: `TensorDynLen`)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
-///
 /// # Construction
-///
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
 /// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
-///
 /// # Examples
-///
 /// Build a 2-node chain manually and verify node count:
-///
 /// ```
 /// use tensor4all_treetn::TreeTN;
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-///
 /// // Create site and bond indices
 /// let s0 = DynIndex::new_dyn(2);
 /// let bond = DynIndex::new_dyn(3);
 /// let s1 = DynIndex::new_dyn(2);
-///
 /// // Build tensors
 /// let t0 = TensorDynLen::from_dense(
 ///     vec![s0.clone(), bond.clone()],
@@ -104,13 +95,11 @@ pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 ///     vec![bond.clone(), s1.clone()],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
-///
 /// // Use from_tensors (auto-connects nodes sharing the same index ID)
 /// let tn = TreeTN::<_, String>::from_tensors(
 ///     vec![t0, t1],
 ///     vec!["A".to_string(), "B".to_string()],
 /// ).unwrap();
-///
 /// assert_eq!(tn.node_count(), 2);
 /// assert_eq!(tn.edge_count(), 1);
 /// ```
@@ -147,7 +136,6 @@ where
 }
 
 /// Internal context for sweep-to-center operations.
-///
 /// Contains precomputed information needed for both canonicalization and truncation.
 #[derive(Debug)]
 pub(crate) struct SweepContext {
@@ -195,11 +183,12 @@ where
     /// A new TreeTN with tensors connected by common indices, or an error if:
     /// - The lengths of `tensors` and `node_names` don't match
     /// - An index ID appears in more than 2 tensors (TreeTN is a tree, so each bond connects exactly 2 nodes)
-    /// - Connection fails (e.g., dimension mismatch)
+    /// - Connection fails (e.g., shape mismatch)
     ///
     /// # Errors
-    /// Returns an error if validation fails or connection fails.
-    ///
+    /// Returns an error when `tensors` and `node_names` differ in length (a
+    /// shape mismatch) or a tensor structure is invalid (an invalid-state
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -227,7 +216,10 @@ where
     /// assert_eq!(tn.node_count(), 2);
     /// assert_eq!(tn.edge_count(), 1);
     /// ```
-    pub fn from_tensors(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
+    pub fn from_tensors(
+        tensors: Vec<T>,
+        node_names: Vec<V>,
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -315,8 +307,8 @@ where
                     return Err(anyhow::anyhow!(
                         "Index {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
                         shared_index, n
-                    ))
-                    .context("TreeTN::from_tensors: each bond index must connect exactly 2 nodes");
+                    )
+                    .context("TreeTN::from_tensors: each bond index must connect exactly 2 nodes"));
                 }
             }
         }
@@ -330,8 +322,18 @@ where
     ///
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
-    pub fn add_tensor(&mut self, node_name: V, tensor: T) -> Result<NodeIndex> {
+    /// # Errors
+    /// Returns an error when the tensor's site dimensions are incompatible with
+    /// its neighbors (a shape mismatch) or the node name is already in use
+    /// (a duplicate operation failure).
+    ///
+    pub fn add_tensor(
+        &mut self,
+        node_name: V,
+        tensor: T,
+    ) -> std::result::Result<NodeIndex, TreeTNOperationError> {
         self.add_tensor_internal(node_name, tensor)
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Add a tensor to the network using NodeIndex as the node name.
@@ -343,10 +345,8 @@ where
     /// Returns the NodeIndex for the newly added tensor.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the generated node name already exists or the
-    /// underlying graph rejects the tensor insertion.
-    ///
+    /// Returns an error when the tensor's site dimensions are incompatible with
+    /// its neighbors (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -363,7 +363,10 @@ where
     /// assert_eq!(node.index(), 0);
     /// assert_eq!(tn.node_count(), 1);
     /// ```
-    pub fn add_tensor_auto_name(&mut self, tensor: T) -> Result<NodeIndex>
+    pub fn add_tensor_auto_name(
+        &mut self,
+        tensor: T,
+    ) -> std::result::Result<NodeIndex, TreeTNOperationError>
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
@@ -376,6 +379,7 @@ where
 
         // Re-add with the correct name
         self.add_tensor_internal(node_name, tensor)
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Connect two tensors via a specified pair of indices.
@@ -390,14 +394,20 @@ where
     ///
     /// # Returns
     /// The EdgeIndex of the new connection, or an error if validation fails.
+    /// # Errors
+    /// Returns an error when the indices do not belong to the two nodes (a
+    /// missing-index failure) or their dimensions differ (a dimension
+    /// mismatch).
+    ///
     pub fn connect(
         &mut self,
         node_a: NodeIndex,
         index_a: &T::Index,
         node_b: NodeIndex,
         index_b: &T::Index,
-    ) -> Result<EdgeIndex> {
+    ) -> std::result::Result<EdgeIndex, TreeTNOperationError> {
         self.connect_internal(node_a, index_a, node_b, index_b)
+            .map_err(TreeTNOperationError::from)
     }
 }
 
@@ -451,8 +461,8 @@ where
 
         // Validate that nodes exist
         if !self.graph.contains_node(node_a) || !self.graph.contains_node(node_b) {
-            return Err(anyhow::anyhow!("One or both nodes do not exist"))
-                .context("Failed to connect tensors");
+            return Err(anyhow::anyhow!("One or both nodes do not exist")
+                .context("Failed to connect tensors"));
         }
 
         // Validate that indices exist in respective tensors
@@ -468,12 +478,12 @@ where
         let has_index_b = tensor_b.external_indices().iter().any(|idx| idx == index_b);
 
         if !has_index_a {
-            return Err(anyhow::anyhow!("Index not found in tensor_a"))
-                .context("Failed to connect: index_a must exist in tensor_a");
+            return Err(anyhow::anyhow!("Index not found in tensor_a")
+                .context("Failed to connect: index_a must exist in tensor_a"));
         }
         if !has_index_b {
-            return Err(anyhow::anyhow!("Index not found in tensor_b"))
-                .context("Failed to connect: index_b must exist in tensor_b");
+            return Err(anyhow::anyhow!("Index not found in tensor_b")
+                .context("Failed to connect: index_b must exist in tensor_b"));
         }
 
         // Clone the bond index.
@@ -760,7 +770,15 @@ where
     /// to this node. Returns an error if any connection index is missing.
     ///
     /// Returns the old tensor if the node exists and validation passes.
-    pub fn replace_tensor(&mut self, node: NodeIndex, new_tensor: T) -> Result<Option<T>> {
+    /// # Errors
+    /// Returns an error when `node` is out of range (an out of bounds failure) or
+    /// the new tensor has incompatible dimensions (a shape mismatch).
+    ///
+    pub fn replace_tensor(
+        &mut self,
+        node: NodeIndex,
+        new_tensor: T,
+    ) -> std::result::Result<Option<T>, TreeTNOperationError> {
         // Check if node exists
         if !self.graph.contains_node(node) {
             return Ok(None);
@@ -777,13 +795,15 @@ where
         let new_tensor_indices = new_tensor.external_indices();
         let common = common_inds(&connection_indices, &new_tensor_indices);
         if common.len() != connection_indices.len() {
-            return Err(anyhow::anyhow!(
-                "New tensor is missing {} connection index(es): found {} out of {} required indices",
-                connection_indices.len() - common.len(),
-                common.len(),
-                connection_indices.len()
-            ))
-            .context("replace_tensor: new tensor must contain all indices used in connections");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "New tensor is missing {} connection index(es): found {} out of {} required indices",
+                    connection_indices.len() - common.len(),
+                    common.len(),
+                    connection_indices.len()
+                )
+                .context("replace_tensor: new tensor must contain all indices used in connections"),
+            ));
         }
 
         // Get node name for site_index_network update
@@ -843,7 +863,15 @@ where
     ///
     /// Also updates site_index_network: the old bond index becomes physical again,
     /// and the new bond index is removed from physical indices.
-    pub fn replace_edge_bond(&mut self, edge: EdgeIndex, new_bond_index: T::Index) -> Result<()> {
+    /// # Errors
+    /// Returns an error when the edge is not found (a missing-edge failure) or
+    /// the new bond has an incompatible dimension (a shape mismatch).
+    ///
+    pub fn replace_edge_bond(
+        &mut self,
+        edge: EdgeIndex,
+        new_bond_index: T::Index,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         // Validate edge exists and get endpoints
         let (source, target) = self
             .graph
@@ -912,7 +940,11 @@ where
     /// Notes:
     /// - This keeps dimensions and conjugate states, but changes identities.
     /// - This updates both endpoint tensors and internal bookkeeping.
-    pub fn sim_linkinds(&self) -> Result<Self>
+    /// # Errors
+    /// Returns an error when the link-index relabeling fails (an invalid-index
+    /// failure).
+    ///
+    pub fn sim_linkinds(&self) -> std::result::Result<Self, TreeTNOperationError>
     where
         T::Index: IndexLike,
     {
@@ -924,7 +956,11 @@ where
     /// Replace all link/bond indices with fresh IDs in-place.
     ///
     /// See [`Self::sim_linkinds`] for details.
-    pub fn sim_linkinds_mut(&mut self) -> Result<()>
+    /// # Errors
+    /// Returns an error when the link-index relabeling fails (an invalid-index
+    /// failure).
+    ///
+    pub fn sim_linkinds_mut(&mut self) -> std::result::Result<(), TreeTNOperationError>
     where
         T::Index: IndexLike,
     {
@@ -959,7 +995,9 @@ where
                     .find(|idx| *idx == &old_bond)
                     .ok_or_else(|| anyhow::anyhow!("Bond index not found in endpoint tensor"))?
                     .clone();
-                let new_tensor = tensor.replaceind(&old_in_tensor, &new_bond)?;
+                let new_tensor = tensor
+                    .replaceind(&old_in_tensor, &new_bond)
+                    .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 self.replace_tensor(node, new_tensor)?;
             }
 
@@ -1013,11 +1051,14 @@ where
     ///
     /// The direction is specified as a node name (or None to clear).
     /// The node must be one of the edge's endpoints.
+    /// # Errors
+    /// Returns an error when the edge is not found (a missing-index failure).
+    ///
     pub fn set_edge_ortho_towards(
         &mut self,
         edge: petgraph::stable_graph::EdgeIndex,
         dir: Option<V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         // Get the bond index for this edge
         let bond = self
             .bond_index(edge)
@@ -1036,11 +1077,13 @@ where
             let target_name = self.graph.node_name(target);
 
             if source_name != Some(node_name) && target_name != Some(node_name) {
-                return Err(anyhow::anyhow!(
-                    "ortho_towards node {:?} must be one of the edge endpoints",
-                    node_name
-                ))
-                .context("set_edge_ortho_towards: invalid node");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "ortho_towards node {:?} must be one of the edge endpoints",
+                        node_name
+                    )
+                    .context("set_edge_ortho_towards: invalid node"),
+                ));
             }
         }
 
@@ -1072,7 +1115,11 @@ where
     /// Checks:
     /// - The graph is connected (all nodes reachable from the first node)
     /// - For each connected component: edges = nodes - 1 (tree condition)
-    pub fn validate_tree(&self) -> Result<()> {
+    /// # Errors
+    /// Returns an error when the graph is not a tree (an invalid-topology
+    /// failure) or an internal invariant is violated (an invalid-state failure).
+    ///
+    pub fn validate_tree(&self) -> std::result::Result<(), TreeTNOperationError> {
         let g = self.graph.graph();
         if g.node_count() == 0 {
             return Ok(()); // Empty graph is trivially valid
@@ -1086,18 +1133,22 @@ where
             .ok_or_else(|| anyhow::anyhow!("Graph has no nodes"))?;
 
         // DFS to count reachable nodes
+        // Single DFS pass (O(V + E)) to verify tree connectivity from the
+        // start node; visits each reachable node exactly once.
         let mut dfs = Dfs::new(g, start_node);
         while let Some(node) = dfs.next(g) {
             visited.insert(node);
         }
 
         if visited.len() != g.node_count() {
-            return Err(anyhow::anyhow!(
-                "Graph is not connected: {} nodes reachable out of {}",
-                visited.len(),
-                g.node_count()
-            ))
-            .context("validate_tree: graph must be connected");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "Graph is not connected: {} nodes reachable out of {}",
+                    visited.len(),
+                    g.node_count()
+                )
+                .context("validate_tree: graph must be connected"),
+            ));
         }
 
         // Check tree condition: edges = nodes - 1
@@ -1105,12 +1156,14 @@ where
         let edge_count = g.edge_count();
 
         if edge_count != node_count - 1 {
-            return Err(anyhow::anyhow!(
-                "Graph does not satisfy tree condition: {} edges != {} nodes - 1",
-                edge_count,
-                node_count
-            ))
-            .context("validate_tree: tree must have edges = nodes - 1");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "Graph does not satisfy tree condition: {} edges != {} nodes - 1",
+                    edge_count,
+                    node_count
+                )
+                .context("validate_tree: tree must have edges = nodes - 1"),
+            ));
         }
 
         Ok(())
@@ -1133,7 +1186,15 @@ where
 
     /// Rename an existing node while preserving topology, site space, and
     /// orthogonality metadata.
-    pub fn rename_node(&mut self, old_name: &V, new_name: V) -> Result<()> {
+    /// # Errors
+    /// Returns an error when `old_name` is not found (a missing-index failure) or
+    /// `new_name` is already in use (a duplicate operation failure).
+    ///
+    pub fn rename_node(
+        &mut self,
+        old_name: &V,
+        new_name: V,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         if old_name == &new_name {
             return Ok(());
         }
@@ -1220,17 +1281,22 @@ where
     /// Set the orthogonalization region (using node names).
     ///
     /// Validates that all specified nodes exist in the graph.
-    pub fn set_canonical_region(&mut self, region: impl IntoIterator<Item = V>) -> Result<()> {
+    /// # Errors
+    /// Returns an error when a region node is not found (a missing-index failure).
+    ///
+    pub fn set_canonical_region(
+        &mut self,
+        region: impl IntoIterator<Item = V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let region: HashSet<V> = region.into_iter().collect();
 
         // Validate that all nodes exist in the graph
         for node_name in &region {
             if !self.graph.has_node(node_name) {
-                return Err(anyhow::anyhow!(
-                    "Node {:?} does not exist in the graph",
-                    node_name
-                ))
-                .context("set_canonical_region: all nodes must be valid");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!("Node {:?} does not exist in the graph", node_name)
+                        .context("set_canonical_region: all nodes must be valid"),
+                ));
             }
         }
 
@@ -1256,13 +1322,18 @@ where
     /// Add a node to the orthogonalization region.
     ///
     /// Validates that the node exists in the graph.
-    pub fn add_to_canonical_region(&mut self, node_name: V) -> Result<()> {
+    /// # Errors
+    /// Returns an error when the node is not found (a missing-index failure).
+    ///
+    pub fn add_to_canonical_region(
+        &mut self,
+        node_name: V,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         if !self.graph.has_node(&node_name) {
-            return Err(anyhow::anyhow!(
-                "Node {:?} does not exist in the graph",
-                node_name
-            ))
-            .context("add_to_canonical_region: node must be valid");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("Node {:?} does not exist in the graph", node_name)
+                    .context("add_to_canonical_region: node must be valid"),
+            ));
         }
         self.canonical_region.insert(node_name);
         Ok(())
@@ -1568,12 +1639,14 @@ where
     /// * `options` - Truncation options for each SVD (default: no truncation, exact).
     ///
     /// # Errors
-    /// Returns an error if target nodes are missing, an index is unknown, or sweep fails.
+    /// Returns an error when the index permutation is invalid (an invalid-index
+    /// or shape mismatch failure).
+    ///
     pub fn swap_site_indices(
         &mut self,
         target_assignment: &HashMap<T::Index, V>,
         options: &swap::SwapOptions,
-    ) -> Result<()>
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1668,6 +1741,9 @@ where
     ///
     /// Alias for [`swap_site_indices`](Self::swap_site_indices).
     ///
+    /// # Errors
+    /// Returns an error when a target index is not found (a missing-index
+    /// failure) or the permutation is invalid.
     /// # Examples
     ///
     /// ```
@@ -1709,7 +1785,7 @@ where
         &mut self,
         target_assignment: &HashMap<T::Index, V>,
         options: &swap::SwapOptions,
-    ) -> Result<()>
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1740,7 +1816,11 @@ where
     ///
     /// # Returns
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
-    pub fn verify_internal_consistency(&self) -> Result<()>
+    /// # Errors
+    /// Returns an error when an internal invariant is violated (a graph
+    /// consistency failure).
+    ///
+    pub fn verify_internal_consistency(&self) -> std::result::Result<(), TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1752,18 +1832,19 @@ where
         if num_nodes > 1 {
             // Start DFS from any node
             if let Some(start_node) = self.graph.graph().node_indices().next() {
+                // Single DFS pass (O(V + E)) counting reachable nodes to
+                // verify the tree is connected.
                 let mut dfs = Dfs::new(self.graph.graph(), start_node);
                 let mut visited_count = 0;
                 while dfs.next(self.graph.graph()).is_some() {
                     visited_count += 1;
                 }
                 if visited_count != num_nodes {
-                    return Err(anyhow::anyhow!(
+                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
                         "TreeTN is disconnected: DFS visited {} of {} nodes. All tensors must be connected.",
                         visited_count,
                         num_nodes
-                    ))
-                    .context("verify_internal_consistency: graph must be connected");
+                    ).context("verify_internal_consistency: graph must be connected")));
                 }
             }
         }
@@ -1785,12 +1866,14 @@ where
         for (index, nodes) in &index_to_nodes {
             if nodes.len() > 2 {
                 // More than 2 nodes share the same index - always invalid for tree structure.
-                return Err(anyhow::anyhow!(
-                    "Index {:?} is shared by {} nodes, but tree structure allows at most 2",
-                    index,
-                    nodes.len()
-                ))
-                .context("verify_internal_consistency: index shared by too many nodes");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Index {:?} is shared by {} nodes, but tree structure allows at most 2",
+                        index,
+                        nodes.len()
+                    )
+                    .context("verify_internal_consistency: index shared by too many nodes"),
+                ));
             }
             if nodes.len() == 2 {
                 // Two nodes share the index - they must be adjacent (connected by an edge)
@@ -1801,14 +1884,16 @@ where
                 {
                     let name_a = self.graph.node_name(node_a);
                     let name_b = self.graph.node_name(node_b);
-                    return Err(anyhow::anyhow!(
-                        "Non-adjacent nodes {:?} and {:?} share index {:?}. \
+                    return Err(TreeTNOperationError::from(
+                        anyhow::anyhow!(
+                            "Non-adjacent nodes {:?} and {:?} share index {:?}. \
                         Only adjacent (edge-connected) nodes may share full bond indices.",
-                        name_a,
-                        name_b,
-                        index
-                    ))
-                    .context("verify_internal_consistency: non-adjacent nodes share index");
+                            name_a,
+                            name_b,
+                            index
+                        )
+                        .context("verify_internal_consistency: non-adjacent nodes share index"),
+                    ));
                 }
             }
         }
@@ -1824,11 +1909,11 @@ where
             .collect();
 
         if tensors.len() != node_names.len() {
-            return Err(anyhow::anyhow!(
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
                 "Internal inconsistency: {} node names but {} tensors found",
                 node_names.len(),
                 tensors.len()
-            ));
+            )));
         }
 
         // Step 2: Reconstruct TreeTN from scratch using from_tensors_unchecked
@@ -1838,10 +1923,12 @@ where
 
         // Step 3: Verify topology matches
         if !self.same_topology(&reconstructed) {
-            return Err(anyhow::anyhow!(
-                "Internal inconsistency: topology does not match after reconstruction"
-            ))
-            .context("verify_internal_consistency: topology mismatch");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "Internal inconsistency: topology does not match after reconstruction"
+                )
+                .context("verify_internal_consistency: topology mismatch"),
+            ));
         }
 
         // Step 4: Verify site index network matches
@@ -1849,10 +1936,12 @@ where
             .site_index_network
             .share_equivalent_site_index_network(&reconstructed.site_index_network)
         {
-            return Err(anyhow::anyhow!(
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
                 "Internal inconsistency: site index network does not match after reconstruction"
-            ))
-            .context("verify_internal_consistency: site space mismatch");
+            )
+                .context("verify_internal_consistency: site space mismatch"),
+            ));
         }
 
         // Step 5: Verify tensor data matches at each node
@@ -1881,22 +1970,26 @@ where
                 .into_iter()
                 .collect();
             if indices_self != indices_reconstructed {
-                return Err(anyhow::anyhow!(
-                    "Internal inconsistency: tensor indices differ at node {:?}",
-                    node_name
-                ))
-                .context("verify_internal_consistency: tensor index mismatch");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Internal inconsistency: tensor indices differ at node {:?}",
+                        node_name
+                    )
+                    .context("verify_internal_consistency: tensor index mismatch"),
+                ));
             }
 
             // Compare tensor dimensions
             if tensor_self.num_external_indices() != tensor_reconstructed.num_external_indices() {
-                return Err(anyhow::anyhow!(
-                    "Internal inconsistency: tensor dimensions differ at node {:?}: {} vs {}",
-                    node_name,
-                    tensor_self.num_external_indices(),
-                    tensor_reconstructed.num_external_indices()
-                ))
-                .context("verify_internal_consistency: tensor dimension mismatch");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!(
+                        "Internal inconsistency: tensor dimensions differ at node {:?}: {} vs {}",
+                        node_name,
+                        tensor_self.num_external_indices(),
+                        tensor_reconstructed.num_external_indices()
+                    )
+                    .context("verify_internal_consistency: tensor shape mismatch"),
+                ));
             }
         }
 

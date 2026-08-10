@@ -308,7 +308,8 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal factorization fails.
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///
@@ -456,6 +457,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// Return a compressed copy of the tensor train (non-mutating).
     ///
     /// Equivalent to cloning and calling [`compress`](Self::compress).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///

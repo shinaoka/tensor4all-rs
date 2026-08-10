@@ -106,6 +106,7 @@ struct PendingPatch {
 ///
 /// - `f`: scalar evaluator receiving one full, zero-based multi-index.
 /// - `batched_f`: optional batch evaluator receiving full multi-indices and
+///
 ///   returning values in the same order. Use `None` when batching is unavailable.
 /// - `site_indices`: one distinct [`DynIndex`] per TCI site, in evaluator order.
 /// - `initial_pivots`: full-domain, zero-based pivots. Empty input is allowed.

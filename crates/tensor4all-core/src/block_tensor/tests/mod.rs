@@ -123,8 +123,9 @@ fn test_gmres_identity_block() {
     let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1)).unwrap();
 
     // Identity operator: A x = x
-    let apply_a =
-        |x: &BlockTensor<TensorDynLen>| -> Result<BlockTensor<TensorDynLen>> { Ok(x.clone()) };
+    let apply_a = |x: &BlockTensor<TensorDynLen>| -> anyhow::Result<BlockTensor<TensorDynLen>> {
+        Ok(x.clone())
+    };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -177,30 +178,31 @@ fn test_gmres_diagonal_block() {
     let diag1 = [2.0, 3.0];
     let diag2 = [4.0, 5.0];
 
-    let apply_a = move |x: &BlockTensor<TensorDynLen>| -> Result<BlockTensor<TensorDynLen>> {
-        let x1 = x.get(0, 0).unwrap();
-        let x2 = x.get(1, 0).unwrap();
+    let apply_a =
+        move |x: &BlockTensor<TensorDynLen>| -> anyhow::Result<BlockTensor<TensorDynLen>> {
+            let x1 = x.get(0, 0).unwrap();
+            let x2 = x.get(1, 0).unwrap();
 
-        // Apply D1 to x1
-        let x1_data = x1.to_vec::<f64>()?;
-        let y1_data: Vec<f64> = x1_data
-            .iter()
-            .zip(diag1.iter())
-            .map(|(&xi, &di)| xi * di)
-            .collect();
-        let y1 = TensorDynLen::from_dense(x1.indices.clone(), y1_data).unwrap();
+            // Apply D1 to x1
+            let x1_data = x1.to_vec::<f64>()?;
+            let y1_data: Vec<f64> = x1_data
+                .iter()
+                .zip(diag1.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let y1 = TensorDynLen::from_dense(x1.indices.clone(), y1_data).unwrap();
 
-        // Apply D2 to x2
-        let x2_data = x2.to_vec::<f64>()?;
-        let y2_data: Vec<f64> = x2_data
-            .iter()
-            .zip(diag2.iter())
-            .map(|(&xi, &di)| xi * di)
-            .collect();
-        let y2 = TensorDynLen::from_dense(x2.indices.clone(), y2_data).unwrap();
+            // Apply D2 to x2
+            let x2_data = x2.to_vec::<f64>()?;
+            let y2_data: Vec<f64> = x2_data
+                .iter()
+                .zip(diag2.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let y2 = TensorDynLen::from_dense(x2.indices.clone(), y2_data).unwrap();
 
-        BlockTensor::new(vec![y1, y2], (2, 1))
-    };
+            BlockTensor::new(vec![y1, y2], (2, 1)).map_err(anyhow::Error::from)
+        };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -255,7 +257,7 @@ fn test_gmres_upper_triangular_block() {
     let expected = BlockTensor::new(vec![expected1, expected2], (2, 1)).unwrap();
 
     // Upper triangular block operator: A = [[I, I], [0, I]]
-    let apply_a = |x: &BlockTensor<TensorDynLen>| -> Result<BlockTensor<TensorDynLen>> {
+    let apply_a = |x: &BlockTensor<TensorDynLen>| -> anyhow::Result<BlockTensor<TensorDynLen>> {
         let x1 = x.get(0, 0).unwrap();
         let x2 = x.get(1, 0).unwrap();
 
@@ -264,7 +266,7 @@ fn test_gmres_upper_triangular_block() {
         // y2 = x2
         let y2 = x2.clone();
 
-        BlockTensor::new(vec![y1, y2], (2, 1))
+        BlockTensor::new(vec![y1, y2], (2, 1)).map_err(anyhow::Error::from)
     };
 
     let options = GmresOptions {

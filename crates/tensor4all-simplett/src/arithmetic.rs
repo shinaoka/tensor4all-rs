@@ -14,8 +14,8 @@ impl<T: TTScalar> TensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor trains have different lengths or
-    /// mismatched site dimensions.
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///
@@ -143,6 +143,11 @@ impl<T: TTScalar> TensorTrain<T> {
     ///
     /// Equivalent to `self.add(&other.negate())`.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -177,6 +182,11 @@ impl<T: TTScalar> TensorTrain<T> {
 impl<T: TTScalar> std::ops::Add for TensorTrain<T> {
     type Output = Result<Self>;
 
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn add(self, other: Self) -> Self::Output {
         TensorTrain::add(&self, &other)
     }
@@ -185,6 +195,11 @@ impl<T: TTScalar> std::ops::Add for TensorTrain<T> {
 impl<T: TTScalar> std::ops::Add for &TensorTrain<T> {
     type Output = Result<TensorTrain<T>>;
 
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn add(self, other: Self) -> Self::Output {
         TensorTrain::add(self, other)
     }
@@ -193,6 +208,11 @@ impl<T: TTScalar> std::ops::Add for &TensorTrain<T> {
 impl<T: TTScalar> std::ops::Sub for TensorTrain<T> {
     type Output = Result<Self>;
 
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn sub(self, other: Self) -> Self::Output {
         TensorTrain::sub(&self, &other)
     }
@@ -201,6 +221,11 @@ impl<T: TTScalar> std::ops::Sub for TensorTrain<T> {
 impl<T: TTScalar> std::ops::Sub for &TensorTrain<T> {
     type Output = Result<TensorTrain<T>>;
 
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn sub(self, other: Self) -> Self::Output {
         TensorTrain::sub(self, other)
     }

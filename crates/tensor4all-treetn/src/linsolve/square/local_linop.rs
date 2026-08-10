@@ -3,6 +3,7 @@
 //! This module provides a wrapper that applies the local projected operator
 //! to tensors, enabling GMRES solving via `tensor4all_core::krylov::gmres`.
 
+use crate::error::TreeTNOperationError;
 use std::hash::Hash;
 use std::sync::{Arc, RwLock};
 
@@ -116,7 +117,12 @@ where
     }
 
     /// Apply the projected local operator: `y = H * x`.
-    pub fn apply_projected(&self, x: &T) -> Result<T> {
+    /// # Errors
+    ///
+    /// Returns an error when the contraction or operation fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
+    pub fn apply_projected(&self, x: &T) -> std::result::Result<T, TreeTNOperationError> {
         let mut proj_op = self
             .projected_operator
             .write()
@@ -126,6 +132,7 @@ where
             .context("LocalLinOp::apply: lock poisoned")?;
 
         self.apply_projected_with_operator(x, &mut proj_op, self.state.site_index_network())
+            .map_err(TreeTNOperationError::from)
     }
 }
 

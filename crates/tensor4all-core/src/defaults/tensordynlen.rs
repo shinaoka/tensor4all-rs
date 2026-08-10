@@ -47,26 +47,20 @@ struct PairwiseContractProfileEntry {
 }
 
 /// Hermitian eigendecomposition of a rank-2 [`TensorDynLen`].
-///
 /// Eigenvectors are returned as a rank-2 tensor whose first index is the input
 /// matrix row index and whose second index labels eigenvector columns. The
 /// eigenvalues are detached primal values intended for nonsmooth selection
 /// logic such as truncation cutoffs.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};
-///
 /// let row = DynIndex::new_dyn(2);
 /// let col = DynIndex::new_dyn(2);
 /// let matrix = TensorDynLen::from_dense(
 ///     vec![row.clone(), col],
 ///     vec![1.0_f64, 0.0, 0.0, 2.0],
 /// ).unwrap();
-///
 /// let decomp = matrix.hermitian_eigendecomposition(1.0e-12).unwrap();
-///
 /// assert_eq!(decomp.eigenvalues, vec![1.0, 2.0]);
 /// assert_eq!(
 ///     decomp.eigenvectors.indices(),
@@ -178,7 +172,6 @@ fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
 
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
-///
 /// This enables the generic [`TensorDynLen::random`] constructor.
 pub trait RandomScalar: TensorElement {
     /// Generate a random value from the standard normal distribution.
@@ -198,45 +191,39 @@ impl RandomScalar for Complex64 {
 }
 
 /// Compute the permutation array from original indices to new indices.
-///
 /// This function finds the mapping from new indices to original indices by
 /// matching index IDs. The result is a permutation array `perm` such that
 /// `new_indices[i]` corresponds to `original_indices[perm[i]]`.
-///
 /// # Arguments
 /// * `original_indices` - The original indices in their current order
 /// * `new_indices` - The desired new indices order (must be a permutation of original_indices)
-///
 /// # Returns
 /// A `Vec<usize>` representing the permutation: `perm[i]` is the position in
 /// `original_indices` of the index that should be at position `i` in `new_indices`.
-///
 /// # Errors
-/// Returns an error if the slices have different lengths, if `new_indices`
-/// is not a permutation of `original_indices`, or if `new_indices` contains
-/// duplicate indices.
-///
+/// Returns an error when `new_order` contains indices not present in
+/// `original` (a missing-index failure) or the two lists differ in length
+/// (a length mismatch).
 /// # Example
 /// ```
 /// use tensor4all_core::tensor::compute_permutation_from_indices;
 /// use tensor4all_core::DynIndex;
-///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let original = vec![i.clone(), j.clone()];
 /// let new_order = vec![j.clone(), i.clone()];
-///
 /// let perm = compute_permutation_from_indices(&original, &new_order).unwrap();
 /// assert_eq!(perm, vec![1, 0]);  // j is at position 1, i is at position 0
 /// ```
 pub fn compute_permutation_from_indices(
     original_indices: &[DynIndex],
     new_indices: &[DynIndex],
-) -> Result<Vec<usize>> {
-    anyhow::ensure!(
-        new_indices.len() == original_indices.len(),
-        "new_indices length must match original_indices length"
-    );
+) -> std::result::Result<Vec<usize>, TensorDynLenError> {
+    if !(new_indices.len() == original_indices.len()) {
+        return Err(
+            anyhow::anyhow!("new_indices length must match original_indices length").into(),
+        );
+    };
 
     let mut perm = Vec::with_capacity(new_indices.len());
     let mut used = std::collections::HashSet::new();
@@ -251,7 +238,9 @@ pub fn compute_permutation_from_indices(
                 anyhow::anyhow!("new_indices must be a permutation of original_indices")
             })?;
 
-        anyhow::ensure!(used.insert(pos), "duplicate index in new_indices");
+        if !(used.insert(pos)) {
+            return Err(anyhow::anyhow!("duplicate index in new_indices").into());
+        };
         perm.push(pos);
     }
 
@@ -259,7 +248,6 @@ pub fn compute_permutation_from_indices(
 }
 
 /// Compact structured payload kept in the authoritative eager representation.
-///
 /// The payload may use any supported eager dtype (`f32`, `f64`, `c32`, or
 /// `c64`) and may be either tracked or untracked. Tracking is a property of
 /// `payload`, never of the presence of this metadata container.
@@ -273,19 +261,15 @@ pub(crate) struct StructuredPayload {
 /// Error returned when [`TensorDynLen::storage`] or
 /// [`TensorDynLen::to_storage`] cannot produce a compact `f64`/`Complex64`
 /// storage snapshot from the authoritative payload.
-///
 /// Backend diagnostics remain available through [`std::error::Error::source`]
 /// instead of being erased into a display string. The error is cloneable so a
 /// deferred failure can be retained by cloned tensors without rebuilding a
 /// detached primal value.
-///
 /// # Examples
-///
 /// ```
 /// use std::error::Error;
 /// use std::sync::Arc;
 /// use tensor4all_core::TensorStorageError;
-///
 /// let error = TensorStorageError::Materialization {
 ///     source: Arc::new(std::io::Error::other("backend unavailable")),
 /// };
@@ -321,17 +305,13 @@ pub enum TensorStorageError {
 
 /// Errors returned by the fallible numerical and comparison methods on
 /// [`TensorDynLen`].
-///
 /// The enum is intentionally owned by `tensor4all-core`: callers can match
 /// storage, shape, scalar, subtraction, and invalid-value failures without
 /// depending on the internal `anyhow` plumbing. Wrapped backend diagnostics
 /// retain their complete [`std::error::Error::source`] chain.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::TensorDynLenError;
-///
 /// let error = TensorDynLenError::NaNInput {
 ///     operation: "norm_squared",
 /// };
@@ -369,7 +349,9 @@ pub enum TensorDynLenError {
         /// Scalar dtype returned by the reduction.
         actual: String,
     },
-    /// Tensor shapes or index spaces cannot be aligned for comparison.
+    /// Tensor shapes, index spaces, or dimension metadata cannot be aligned
+    /// for an operation (comparison, index replacement, or other shape-sensitive
+    /// transformations).
     #[error("TensorDynLen shape mismatch during {operation}: expected {expected}, got {actual}")]
     ShapeMismatch {
         /// Operation that attempted the alignment.
@@ -415,6 +397,36 @@ pub enum TensorDynLenError {
 impl From<anyhow::Error> for TensorDynLenError {
     fn from(source: anyhow::Error) -> Self {
         Self::operation("TensorDynLen", source)
+    }
+}
+
+impl From<TensorStorageError> for TensorDynLenError {
+    fn from(source: TensorStorageError) -> Self {
+        Self::Storage { source }
+    }
+}
+
+impl From<tenferro_ad::Error> for TensorDynLenError {
+    fn from(source: tenferro_ad::Error) -> Self {
+        Self::Materialization {
+            source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
+        }
+    }
+}
+
+impl From<tensor4all_tensorbackend::EagerContextError> for TensorDynLenError {
+    fn from(source: tensor4all_tensorbackend::EagerContextError) -> Self {
+        Self::Materialization {
+            source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
+        }
+    }
+}
+
+impl From<tensor4all_tensorbackend::BridgeError> for TensorDynLenError {
+    fn from(source: tensor4all_tensorbackend::BridgeError) -> Self {
+        Self::Materialization {
+            source: Arc::new(source),
+        }
     }
 }
 
@@ -835,16 +847,12 @@ impl TensorDynLenStorage {
 }
 
 /// Errors returned when constructing a compact copy-selector tensor.
-///
 /// A copy-selector has logical values
 /// `scale * delta(left, right) * delta(site, selected_value)` and is used to
 /// carry a bond through a fixed physical site without dense bond-squared storage.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, StructuredSelectorError, TensorDynLen};
-///
 /// let left = DynIndex::new_dyn(2);
 /// let site = DynIndex::new_dyn(3);
 /// let right = DynIndex::new_dyn(4);
@@ -906,7 +914,6 @@ pub enum StructuredSelectorError {
 
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
-///
 /// `TensorDynLen` stores a logical multi-dimensional tensor of supported scalar
 /// values (`f32`, `f64`, `Complex32`, or `Complex64`) together with a list of
 /// [`DynIndex`] labels. `f64`/`Complex64` tensors may use compact [`Storage`]
@@ -916,9 +923,7 @@ pub enum StructuredSelectorError {
 /// structured. The indices carry unique
 /// identities (UUIDs) so that contraction, addition, and other binary
 /// operations can automatically match legs by identity rather than position.
-///
 /// # Key Operations
-///
 /// | Operation | Method |
 /// |-----------|--------|
 /// | Create from data | [`from_dense`](Self::from_dense), [`from_diag`](Self::from_diag), [`zeros`](Self::zeros) |
@@ -928,32 +933,24 @@ pub enum StructuredSelectorError {
 /// | Factorization | via [`TensorFactorizationLike::factorize`](crate::TensorFactorizationLike::factorize) |
 /// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
 /// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
-///
 /// # Data Layout
-///
 /// Logical dense extraction uses **column-major** order (first index varies
 /// fastest), matching Fortran, Julia, and ITensors.jl conventions. Compact
 /// structured payloads additionally carry explicit payload dimensions, strides,
 /// and logical-axis classes.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{TensorDynLen, DynIndex};
-///
 /// // Create a 2x3 real tensor
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 /// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
-///
 /// assert_eq!(t.dims(), vec![2, 3]);
 /// assert!(t.is_f64());
-///
 /// // Sum all elements: 1+2+3+4+5+6 = 21
 /// let s = t.sum().unwrap();
 /// assert!((s.real() - 21.0).abs() < 1e-12);
-///
 /// // Extract data back out
 /// let data_out = t.to_vec::<f64>().unwrap();
 /// assert_eq!(data_out, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -1037,10 +1034,11 @@ impl TensorDynLen {
         } else {
             axis
         };
-        anyhow::ensure!(
-            normalized >= 0 && normalized <= rank as isize,
-            "{op}: axis {axis} is out of bounds for inserting into rank {rank}"
-        );
+        if !(normalized >= 0 && normalized <= rank as isize) {
+            return Err(anyhow::anyhow!(
+                "{op}: axis {axis} is out of bounds for inserting into rank {rank}"
+            ));
+        };
         Ok(normalized as usize)
     }
 
@@ -1080,12 +1078,13 @@ impl TensorDynLen {
         rhs_rank: usize,
         axes_b: &[usize],
     ) -> Result<EinsumSubscripts> {
-        anyhow::ensure!(
-            axes_a.len() == axes_b.len(),
-            "contract axis length mismatch: lhs {:?}, rhs {:?}",
-            axes_a,
-            axes_b
-        );
+        if !(axes_a.len() == axes_b.len()) {
+            return Err(anyhow::anyhow!(
+                "contract axis length mismatch: lhs {:?}, rhs {:?}",
+                axes_a,
+                axes_b
+            ));
+        };
 
         let mut lhs_ids = vec![usize::MAX; lhs_rank];
         let mut rhs_ids = vec![usize::MAX; rhs_rank];
@@ -1095,22 +1094,18 @@ impl TensorDynLen {
         let mut seen_rhs = vec![false; rhs_rank];
 
         for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
-            anyhow::ensure!(
-                lhs_axis < lhs_rank,
-                "lhs contract axis {lhs_axis} out of range"
-            );
-            anyhow::ensure!(
-                rhs_axis < rhs_rank,
-                "rhs contract axis {rhs_axis} out of range"
-            );
-            anyhow::ensure!(
-                !seen_lhs[lhs_axis],
-                "duplicate lhs contract axis {lhs_axis}"
-            );
-            anyhow::ensure!(
-                !seen_rhs[rhs_axis],
-                "duplicate rhs contract axis {rhs_axis}"
-            );
+            if !(lhs_axis < lhs_rank) {
+                return Err(anyhow::anyhow!("lhs contract axis {lhs_axis} out of range"));
+            };
+            if !(rhs_axis < rhs_rank) {
+                return Err(anyhow::anyhow!("rhs contract axis {rhs_axis} out of range"));
+            };
+            if !(!seen_lhs[lhs_axis]) {
+                return Err(anyhow::anyhow!("duplicate lhs contract axis {lhs_axis}"));
+            };
+            if !(!seen_rhs[rhs_axis]) {
+                return Err(anyhow::anyhow!("duplicate rhs contract axis {rhs_axis}"));
+            };
             seen_lhs[lhs_axis] = true;
             seen_rhs[rhs_axis] = true;
             lhs_ids[lhs_axis] = next_id;
@@ -1138,12 +1133,13 @@ impl TensorDynLen {
     }
 
     fn binary_dot_general_config(axes_a: &[usize], axes_b: &[usize]) -> Result<DotGeneralConfig> {
-        anyhow::ensure!(
-            axes_a.len() == axes_b.len(),
-            "contract axis length mismatch: lhs {:?}, rhs {:?}",
-            axes_a,
-            axes_b
-        );
+        if !(axes_a.len() == axes_b.len()) {
+            return Err(anyhow::anyhow!(
+                "contract axis length mismatch: lhs {:?}, rhs {:?}",
+                axes_a,
+                axes_b
+            ));
+        };
         Ok(DotGeneralConfig {
             lhs_contracting_dims: axes_a.to_vec(),
             rhs_contracting_dims: axes_b.to_vec(),
@@ -1290,10 +1286,9 @@ impl TensorDynLen {
     fn validate_indices(indices: &[DynIndex]) -> Result<()> {
         let mut seen = HashSet::new();
         for idx in indices {
-            anyhow::ensure!(
-                seen.insert(idx.clone()),
-                "Tensor indices must all be unique"
-            );
+            if !(seen.insert(idx.clone())) {
+                return Err(anyhow::anyhow!("Tensor indices must all be unique"));
+            };
         }
         Ok(())
     }
@@ -1302,17 +1297,16 @@ impl TensorDynLen {
         if !dims.is_empty() {
             let first_dim = dims[0];
             for (i, &dim) in dims.iter().enumerate() {
-                anyhow::ensure!(
-                    dim == first_dim,
-                    "DiagTensor requires all indices to have the same dimension, but dims[{i}] = {dim} != dims[0] = {first_dim}"
-                );
+                if !(dim == first_dim) {
+                    return Err(anyhow::anyhow!("DiagTensor requires all indices to have the same dimension, but dims[{i}] = {dim} != dims[0] = {first_dim}"));
+                };
             }
         }
         Ok(())
     }
 
     fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Result<NativeTensor> {
-        storage_to_native_tensor(storage, dims)
+        Ok(storage_to_native_tensor(storage, dims)?)
     }
 
     fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor>>> {
@@ -1347,26 +1341,29 @@ impl TensorDynLen {
             .max()
             .map(|class_id| class_id + 1)
             .unwrap_or(0);
-        anyhow::ensure!(
-            payload.data().shape().len() == payload_rank,
-            "structured payload rank {} does not match axis classes {:?}",
-            payload.data().shape().len(),
-            axis_classes
-        );
-        anyhow::ensure!(
-            logical_dims.len() == axis_classes.len(),
-            "logical rank {} does not match axis class rank {}",
-            logical_dims.len(),
-            axis_classes.len()
-        );
+        if !(payload.data().shape().len() == payload_rank) {
+            return Err(anyhow::anyhow!(
+                "structured payload rank {} does not match axis classes {:?}",
+                payload.data().shape().len(),
+                axis_classes
+            ));
+        };
+        if !(logical_dims.len() == axis_classes.len()) {
+            return Err(anyhow::anyhow!(
+                "logical rank {} does not match axis class rank {}",
+                logical_dims.len(),
+                axis_classes.len()
+            ));
+        };
 
         if axis_classes == Self::dense_axis_classes(logical_dims.len()) {
-            anyhow::ensure!(
-                payload.data().shape() == logical_dims,
-                "dense payload dims {:?} do not match logical dims {:?}",
-                payload.data().shape(),
-                logical_dims
-            );
+            if !(payload.data().shape() == logical_dims) {
+                return Err(anyhow::anyhow!(
+                    "dense payload dims {:?} do not match logical dims {:?}",
+                    payload.data().shape(),
+                    logical_dims
+                ));
+            };
             return Ok(payload.clone());
         }
 
@@ -1382,12 +1379,13 @@ impl TensorDynLen {
             };
             dense = dense.embed_diag(first_axis, logical_axis)?;
         }
-        anyhow::ensure!(
-            dense.data().shape() == logical_dims,
-            "expanded structured payload dims {:?} do not match logical dims {:?}",
-            dense.data().shape(),
-            logical_dims
-        );
+        if !(dense.data().shape() == logical_dims) {
+            return Err(anyhow::anyhow!(
+                "expanded structured payload dims {:?} do not match logical dims {:?}",
+                dense.data().shape(),
+                logical_dims
+            ));
+        };
         Ok(dense)
     }
 
@@ -1419,10 +1417,9 @@ impl TensorDynLen {
 
     fn ensure_shape_packing_preserves_ad(&self, op_name: &str) -> Result<()> {
         self.ensure_storage_ready()?;
-        anyhow::ensure!(
-            !self.uses_tracked_compact_storage(),
-            "{op_name}: structured AD tensors with compact storage are not supported because materializing compact storage would detach gradients"
-        );
+        if !(!self.uses_tracked_compact_storage()) {
+            return Err(anyhow::anyhow!("{op_name}: structured AD tensors with compact storage are not supported because materializing compact storage would detach gradients"));
+        };
         Ok(())
     }
 
@@ -1440,12 +1437,13 @@ impl TensorDynLen {
         rhs_rank: usize,
         axes_b: &[usize],
     ) -> Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
-        anyhow::ensure!(
-            axes_a.len() == axes_b.len(),
-            "contract axis length mismatch: lhs {:?}, rhs {:?}",
-            axes_a,
-            axes_b
-        );
+        if !(axes_a.len() == axes_b.len()) {
+            return Err(anyhow::anyhow!(
+                "contract axis length mismatch: lhs {:?}, rhs {:?}",
+                axes_a,
+                axes_b
+            ));
+        };
 
         let mut lhs_ids = vec![usize::MAX; lhs_rank];
         let mut rhs_ids = vec![usize::MAX; rhs_rank];
@@ -1455,22 +1453,18 @@ impl TensorDynLen {
         let mut seen_rhs = vec![false; rhs_rank];
 
         for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
-            anyhow::ensure!(
-                lhs_axis < lhs_rank,
-                "lhs contract axis {lhs_axis} out of range"
-            );
-            anyhow::ensure!(
-                rhs_axis < rhs_rank,
-                "rhs contract axis {rhs_axis} out of range"
-            );
-            anyhow::ensure!(
-                !seen_lhs[lhs_axis],
-                "duplicate lhs contract axis {lhs_axis}"
-            );
-            anyhow::ensure!(
-                !seen_rhs[rhs_axis],
-                "duplicate rhs contract axis {rhs_axis}"
-            );
+            if !(lhs_axis < lhs_rank) {
+                return Err(anyhow::anyhow!("lhs contract axis {lhs_axis} out of range"));
+            };
+            if !(rhs_axis < rhs_rank) {
+                return Err(anyhow::anyhow!("rhs contract axis {rhs_axis} out of range"));
+            };
+            if !(!seen_lhs[lhs_axis]) {
+                return Err(anyhow::anyhow!("duplicate lhs contract axis {lhs_axis}"));
+            };
+            if !(!seen_rhs[rhs_axis]) {
+                return Err(anyhow::anyhow!("duplicate rhs contract axis {rhs_axis}"));
+            };
             seen_lhs[lhs_axis] = true;
             seen_rhs[rhs_axis] = true;
             lhs_ids[lhs_axis] = next_id;
@@ -1508,12 +1502,13 @@ impl TensorDynLen {
         payload: &EagerTensor,
         roots: &[usize],
     ) -> Result<(Option<EagerTensor>, Vec<usize>)> {
-        anyhow::ensure!(
-            payload.data().shape().len() == roots.len(),
-            "payload rank {} does not match root label count {}",
-            payload.data().shape().len(),
-            roots.len()
-        );
+        if !(payload.data().shape().len() == roots.len()) {
+            return Err(anyhow::anyhow!(
+                "payload rank {} does not match root label count {}",
+                payload.data().shape().len(),
+                roots.len()
+            ));
+        };
 
         let mut current_payload = None;
         let mut current_roots = roots.to_vec();
@@ -1593,10 +1588,9 @@ impl TensorDynLen {
         input_labels: Vec<Vec<usize>>,
         output_labels: Vec<usize>,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            !operands.is_empty(),
-            "structured contraction needs operands"
-        );
+        if !(!operands.is_empty()) {
+            return Err(anyhow::anyhow!("structured contraction needs operands"));
+        };
         for operand in operands {
             operand.ensure_storage_ready()?;
         }
@@ -1724,12 +1718,14 @@ impl TensorDynLen {
         } else {
             DType::F32
         };
-        anyhow::ensure!(
-            dtypes.iter().all(|dtype| {
-                matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
-            }),
-            "structured contraction supports only f32, f64, c32, and c64 operands"
-        );
+        if !(dtypes
+            .iter()
+            .all(|dtype| matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)))
+        {
+            return Err(anyhow::anyhow!(
+                "structured contraction supports only f32, f64, c32, and c64 operands"
+            ));
+        };
         Ok(target)
     }
 
@@ -1817,14 +1813,14 @@ impl TensorDynLen {
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
-            Self::from_dense(kept_indices, data)
+            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.is_c64() {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
-            Self::from_dense(kept_indices, data)
+            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::F32) {
             let payload = self
                 .storage
@@ -1833,7 +1829,7 @@ impl TensorDynLen {
                 .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?
                 .to_vec();
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
-            Self::from_dense(kept_indices, data)
+            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::C32) {
             let payload = self
                 .storage
@@ -1842,7 +1838,7 @@ impl TensorDynLen {
                 .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?
                 .to_vec();
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
-            Self::from_dense(kept_indices, data)
+            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else {
             Err(anyhow::anyhow!("unsupported diagonal storage scalar type"))
         }
@@ -1870,7 +1866,7 @@ impl TensorDynLen {
         T: TensorElement + Zero,
     {
         let output_len = checked_product(kept_dims)?;
-        Self::from_dense(kept_indices, vec![T::zero(); output_len])
+        Self::from_dense(kept_indices, vec![T::zero(); output_len]).map_err(anyhow::Error::from)
     }
 
     fn selected_structured_class_positions(
@@ -2032,7 +2028,7 @@ impl TensorDynLen {
             output.push(payload[input_linear]);
         }
 
-        Self::from_dense(kept_indices, output)
+        Self::from_dense(kept_indices, output).map_err(anyhow::Error::from)
     }
 
     fn select_structured_indices(
@@ -2058,6 +2054,7 @@ impl TensorDynLen {
                 move |payload, dims, strides, classes| {
                     let storage = Storage::new_structured(payload, dims, strides, classes)?;
                     Self::from_storage(output_indices, Arc::new(storage))
+                        .map_err(anyhow::Error::from)
                 },
             )
         } else if self.storage.is_c64() {
@@ -2075,6 +2072,7 @@ impl TensorDynLen {
                 move |payload, dims, strides, classes| {
                     let storage = Storage::new_structured(payload, dims, strides, classes)?;
                     Self::from_storage(output_indices, Arc::new(storage))
+                        .map_err(anyhow::Error::from)
                 },
             )
         } else if self.storage.dtype() == Some(DType::F32) {
@@ -2247,8 +2245,10 @@ impl TensorDynLen {
     /// # Arguments
     ///
     /// * `selected_indices` - Indices to fix and remove from the result. Each
+    ///
     ///   index must appear exactly once in this tensor.
     /// * `positions` - Coordinates for `selected_indices`. Each coordinate must
+    ///
     ///   be less than the corresponding index dimension.
     ///
     /// # Returns
@@ -2261,10 +2261,9 @@ impl TensorDynLen {
     /// still be represented by axis classes.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the argument lengths differ, a selected index is not
-    /// present, a selected index is duplicated, or a coordinate is out of range.
-    ///
+    /// Returns an error when a selected coordinate is out of range for its index
+    /// (an out of bounds failure) or when `selected_indices` and `positions`
+    /// differ in length (a length mismatch).
     /// # Examples
     ///
     /// ```
@@ -2283,13 +2282,14 @@ impl TensorDynLen {
         &self,
         selected_indices: &[DynIndex],
         positions: &[usize],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TensorDynLenError> {
         if selected_indices.len() != positions.len() {
             return Err(anyhow::anyhow!(
                 "selected_indices length {} does not match positions length {}",
                 selected_indices.len(),
                 positions.len()
-            ));
+            )
+            .into());
         }
         if selected_indices.is_empty() {
             return Ok(self.clone());
@@ -2304,13 +2304,14 @@ impl TensorDynLen {
                 .position(|index| index == selected)
                 .ok_or_else(|| anyhow::anyhow!("selected index is not present in tensor"))?;
             if !seen_axes.insert(axis) {
-                return Err(anyhow::anyhow!("selected index appears more than once"));
+                return Err(anyhow::anyhow!("selected index appears more than once").into());
             }
             let dim = self.indices[axis].dim();
             if position >= dim {
                 return Err(anyhow::anyhow!(
                     "selected coordinate {position} is out of range for axis {axis} with dim {dim}"
-                ));
+                )
+                .into());
             }
             selected_axes.push(axis);
         }
@@ -2332,22 +2333,27 @@ impl TensorDynLen {
             .collect::<Vec<_>>();
 
         if self.storage.storage_kind() == StorageKind::Diagonal {
-            return self.select_diag_indices(kept_indices, kept_dims, positions);
+            return self
+                .select_diag_indices(kept_indices, kept_dims, positions)
+                .map_err(TensorDynLenError::from);
         }
         if self.storage.storage_kind() == StorageKind::Structured {
-            return self.select_structured_indices(
-                &kept_axes,
-                kept_indices,
-                kept_dims,
-                &selected_axes,
-                positions,
-            );
+            return self
+                .select_structured_indices(
+                    &kept_axes,
+                    kept_indices,
+                    kept_dims,
+                    &selected_axes,
+                    positions,
+                )
+                .map_err(TensorDynLenError::from);
         }
         if self.storage.storage_kind() != StorageKind::Dense {
             return Err(anyhow::anyhow!(
                 "select_indices got unsupported storage kind {:?}",
                 self.storage.storage_kind()
-            ));
+            )
+            .into());
         }
 
         let rank = self.indices.len();
@@ -2366,7 +2372,7 @@ impl TensorDynLen {
         let sliced = self
             .try_materialized_inner()?
             .dynamic_slice(&starts_tensor, &slice_sizes)?;
-        Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?)
+        Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?).map_err(TensorDynLenError::from)
     }
 
     /// Stack tensors along a newly inserted index.
@@ -2405,24 +2411,28 @@ impl TensorDynLen {
         tensors: &[&Self],
         new_index: DynIndex,
         axis: isize,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TensorDynLenError> {
         let first = tensors
             .first()
             .copied()
             .ok_or_else(|| anyhow::anyhow!("stack_along_new_index requires at least one tensor"))?;
-        anyhow::ensure!(
-            new_index.dim() == tensors.len(),
-            "stack_along_new_index: new index dim {} does not match tensor count {}",
-            new_index.dim(),
-            tensors.len()
-        );
+        if !(new_index.dim() == tensors.len()) {
+            return Err(anyhow::anyhow!(
+                "stack_along_new_index: new index dim {} does not match tensor count {}",
+                new_index.dim(),
+                tensors.len()
+            )
+            .into());
+        };
 
         let base_indices = first.indices.clone();
         for tensor in tensors.iter().copied().skip(1) {
-            anyhow::ensure!(
-                tensor.indices == base_indices,
-                "stack_along_new_index: input tensors must have identical index order"
-            );
+            if !(tensor.indices == base_indices) {
+                return Err(anyhow::anyhow!(
+                    "stack_along_new_index: input tensors must have identical index order"
+                )
+                .into());
+            };
         }
         for &tensor in tensors {
             tensor.ensure_shape_packing_preserves_ad("stack_along_new_index")?;
@@ -2438,7 +2448,7 @@ impl TensorDynLen {
             .map(|tensor| tensor.try_materialized_inner())
             .collect::<Result<Vec<_>>>()?;
         let stacked = EagerTensor::stack(&inner_refs, axis)?;
-        Self::from_inner(result_indices, stacked)
+        Self::from_inner(result_indices, stacked).map_err(TensorDynLenError::from)
     }
 
     /// Select positions along one index and replace it with a new index.
@@ -2450,12 +2460,9 @@ impl TensorDynLen {
     /// cotangents through tenferro's scatter-add gather transpose.
     ///
     /// # Errors
-    ///
-    /// Returns an error if `source_index` is not present, `target_index.dim()`
-    /// differs from `positions.len()`, or any position is out of range for the
-    /// source index. A tracked structured-AD tensor with compact storage is
-    /// also rejected because dense materialization would detach gradients.
-    ///
+    /// Returns an error when a selected position is out of range for the source
+    /// index (an out of bounds failure) or when the source and target index
+    /// dimensions are incompatible (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -2478,13 +2485,15 @@ impl TensorDynLen {
         source_index: &DynIndex,
         target_index: DynIndex,
         positions: &[usize],
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            target_index.dim() == positions.len(),
-            "index_select: target index dim {} does not match position count {}",
-            target_index.dim(),
-            positions.len()
-        );
+    ) -> std::result::Result<Self, TensorDynLenError> {
+        if !(target_index.dim() == positions.len()) {
+            return Err(anyhow::anyhow!(
+                "index_select: target index dim {} does not match position count {}",
+                target_index.dim(),
+                positions.len()
+            )
+            .into());
+        };
         let axis = self
             .indices
             .iter()
@@ -2492,10 +2501,12 @@ impl TensorDynLen {
             .ok_or_else(|| anyhow::anyhow!("index_select: source index is not present"))?;
         let source_dim = self.indices[axis].dim();
         for &position in positions {
-            anyhow::ensure!(
-                position < source_dim,
-                "index_select: position {position} is out of range for source dim {source_dim}"
-            );
+            if !(position < source_dim) {
+                return Err(anyhow::anyhow!(
+                    "index_select: position {position} is out of range for source dim {source_dim}"
+                )
+                .into());
+            };
         }
         self.ensure_shape_packing_preserves_ad("index_select")?;
 
@@ -2506,16 +2517,15 @@ impl TensorDynLen {
             .index_select(axis, positions)?;
         let mut result_indices = self.indices.clone();
         result_indices[axis as usize] = target_index;
-        Self::from_inner(result_indices, selected)
+        Self::from_inner(result_indices, selected).map_err(TensorDynLenError::from)
     }
 
     /// Create a new tensor with dynamic rank.
     ///
     /// # Errors
-    /// Returns an error if the storage logical dimensions do not match the
-    /// supplied indices, if diagonal storage has unequal logical dimensions,
-    /// or if duplicate indices are provided.
-    ///
+    /// Returns an error when the storage logical dimension does not match the
+    /// index dimension product (a shape mismatch) or when duplicate
+    /// indices are provided.
     /// # Examples
     ///
     /// ```
@@ -2528,7 +2538,10 @@ impl TensorDynLen {
     /// let t = TensorDynLen::new(vec![i], storage).unwrap();
     /// assert_eq!(t.dims(), vec![3]);
     /// ```
-    pub fn new(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+    pub fn new(
+        indices: Vec<DynIndex>,
+        storage: Arc<Storage>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         Self::from_storage(indices, storage)
     }
 
@@ -2537,10 +2550,9 @@ impl TensorDynLen {
     /// This is a convenience constructor that extracts dimensions from indices using `IndexLike::dim()`.
     ///
     /// # Errors
-    /// Returns an error if the storage logical dimensions do not match the
-    /// supplied indices, if diagonal storage has unequal logical dimensions,
-    /// or if duplicate indices are provided.
-    ///
+    /// Returns an error when the storage logical dimension does not match the
+    /// index dimension product (a shape mismatch) or when duplicate
+    /// indices are provided.
     /// # Examples
     ///
     /// ```
@@ -2553,12 +2565,19 @@ impl TensorDynLen {
     /// let t = TensorDynLen::from_indices(vec![i], storage).unwrap();
     /// assert_eq!(t.dims(), vec![4]);
     /// ```
-    pub fn from_indices(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+    pub fn from_indices(
+        indices: Vec<DynIndex>,
+        storage: Arc<Storage>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         Self::new(indices, storage)
     }
 
     /// Create a tensor from explicit compact storage.
     ///
+    /// # Errors
+    /// Returns an error when the storage scalar kind is incompatible with the
+    /// requested operations (a scalar-kind mismatch) or the storage cannot
+    /// represent the given index space (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -2572,7 +2591,10 @@ impl TensorDynLen {
     /// let t = TensorDynLen::from_storage(vec![i, j], storage).unwrap();
     /// assert_eq!(t.dims(), vec![2, 2]);
     /// ```
-    pub fn from_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+    pub fn from_storage(
+        indices: Vec<DynIndex>,
+        storage: Arc<Storage>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         Self::validate_indices(&indices)?;
         Self::validate_storage_matches_indices(&indices, storage.as_ref())?;
         Ok(Self {
@@ -2588,10 +2610,8 @@ impl TensorDynLen {
     /// emphasizes that compact structured metadata is preserved.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the storage logical dimensions do not match the
-    /// supplied indices, or if duplicate indices are provided.
-    ///
+    /// Returns an error when the structured storage is invalid (an invalid-storage
+    /// failure) or the index space is incompatible (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -2605,7 +2625,10 @@ impl TensorDynLen {
     /// let tensor = TensorDynLen::from_structured_storage(vec![i, j], storage).unwrap();
     /// assert_eq!(tensor.storage().unwrap().storage_kind(), StorageKind::Diagonal);
     /// ```
-    pub fn from_structured_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+    pub fn from_structured_storage(
+        indices: Vec<DynIndex>,
+        storage: Arc<Storage>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         Self::from_storage(indices, storage)
     }
 
@@ -2619,6 +2642,7 @@ impl TensorDynLen {
     /// # Arguments
     ///
     /// - `left`: left copy axis; its dimension must be positive and equal to
+    ///
     ///   `right.dim`.
     /// - `site`: physical axis whose selected coordinate remains active.
     /// - `right`: right copy axis paired with `left`.
@@ -2783,11 +2807,9 @@ impl TensorDynLen {
     /// as `1e-12` for numerically Hermitian inputs.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the tensor is not a non-empty square matrix, if the
-    /// backend eigensolver fails, or if complex eigenvalues have imaginary
-    /// parts larger than `hermitian_tol * max(|lambda|, 1)`.
-    ///
+    /// Returns an error when the tensor is not rank-2, when the two indices have
+    /// unequal dimensions (a shape or shape mismatch), or when the
+    /// eigensolver fails to converge (a non-convergence failure).
     /// # Examples
     ///
     /// ```
@@ -2814,27 +2836,32 @@ impl TensorDynLen {
     pub fn hermitian_eigendecomposition(
         &self,
         hermitian_tol: f64,
-    ) -> Result<TensorHermitianEigendecomposition> {
-        anyhow::ensure!(
-            self.indices.len() == 2,
-            "TensorDynLen::hermitian_eigendecomposition requires a rank-2 tensor, got rank {}",
-            self.indices.len()
-        );
+    ) -> std::result::Result<TensorHermitianEigendecomposition, TensorDynLenError> {
+        if !(self.indices.len() == 2) {
+            return Err(anyhow::anyhow!(
+                "TensorDynLen::hermitian_eigendecomposition requires a rank-2 tensor, got rank {}",
+                self.indices.len()
+            )
+            .into());
+        };
         let dims = self.dims();
-        anyhow::ensure!(
-            dims[0] == dims[1],
-            "TensorDynLen::hermitian_eigendecomposition requires a square matrix, got {}x{}",
-            dims[0],
-            dims[1]
-        );
-        anyhow::ensure!(
-            dims[0] > 0,
-            "TensorDynLen::hermitian_eigendecomposition requires a non-empty matrix"
-        );
-        anyhow::ensure!(
-            hermitian_tol.is_finite() && hermitian_tol >= 0.0,
-            "TensorDynLen::hermitian_eigendecomposition requires a finite non-negative tolerance"
-        );
+        if !(dims[0] == dims[1]) {
+            return Err(anyhow::anyhow!(
+                "TensorDynLen::hermitian_eigendecomposition requires a square matrix, got {}x{}",
+                dims[0],
+                dims[1]
+            )
+            .into());
+        };
+        if !(dims[0] > 0) {
+            return Err(anyhow::anyhow!(
+                "TensorDynLen::hermitian_eigendecomposition requires a non-empty matrix"
+            )
+            .into());
+        };
+        if !(hermitian_tol.is_finite() && hermitian_tol >= 0.0) {
+            return Err(anyhow::anyhow!("TensorDynLen::hermitian_eigendecomposition requires a finite non-negative tolerance").into());
+        };
 
         let input = self.try_materialized_inner()?;
         let (values, vectors) = tenferro_linalg::eager_tensor::eigh(input)
@@ -2868,15 +2895,17 @@ impl TensorDynLen {
                 .map(|(index, value)| {
                     let imaginary = value.im.abs();
                     let allowed = hermitian_tol * value.norm().max(1.0);
-                    anyhow::ensure!(
-                        imaginary <= allowed,
-                        "Hermitian eigenvalue {index} has imaginary part {imaginary}, exceeding tolerance {allowed}"
-                    );
+                    if !matches!(
+                        imaginary.partial_cmp(&allowed),
+                        Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+                    ) {
+            return Err(anyhow::anyhow!("Hermitian eigenvalue {index} has imaginary part {imaginary}, exceeding tolerance {allowed}"));
+        };
                     Ok(value.re)
                 })
                 .collect()
         } else {
-            values.to_vec::<f64>()
+            values.to_vec::<f64>().map_err(anyhow::Error::from)
         }
     }
 
@@ -2962,7 +2991,11 @@ impl TensorDynLen {
     }
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
-    pub fn enable_grad(self) -> Result<Self> {
+    /// # Errors
+    /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
+    /// AD backend cannot track the tensor's dtype.
+    ///
+    pub fn enable_grad(self) -> std::result::Result<Self, TensorDynLenError> {
         self.ensure_storage_ready()?;
         // Keep the eager payload when available: compact Storage currently
         // stores only f64/C64 and must not promote f32/C32 leaves before AD.
@@ -3011,7 +3044,11 @@ impl TensorDynLen {
     }
 
     /// Return the accumulated gradient, if one has been stored.
-    pub fn grad(&self) -> Result<Option<Self>> {
+    /// # Errors
+    /// Returns an error when the tensor is not a tracked leaf or the gradient is
+    /// unavailable for the tensor's dtype (an unavailable-gradient failure).
+    ///
+    pub fn grad(&self) -> std::result::Result<Option<Self>, TensorDynLenError> {
         if let Some(value) = self.tracked_compact_payload_value() {
             return value
                 .payload
@@ -3024,12 +3061,13 @@ impl TensorDynLen {
                             value.axis_classes.clone(),
                         );
                     }
-                    anyhow::ensure!(
-                        grad.as_ref().shape() == value.payload_dims,
-                        "gradient payload dims {:?} do not match {:?}",
-                        grad.as_ref().shape(),
-                        value.payload_dims
-                    );
+                    if !(grad.as_ref().shape() == value.payload_dims) {
+                        return Err(anyhow::anyhow!(
+                            "gradient payload dims {:?} do not match {:?}",
+                            grad.as_ref().shape(),
+                            value.payload_dims
+                        ));
+                    };
                     let gradient =
                         EagerTensor::from_tensor_in(grad.as_ref().clone(), default_eager_ctx()?);
                     Self::from_structured_payload_inner(
@@ -3039,7 +3077,8 @@ impl TensorDynLen {
                         value.axis_classes.clone(),
                     )
                 })
-                .transpose();
+                .transpose()
+                .map_err(TensorDynLenError::from);
         }
         self.try_materialized_inner()?
             .grad()
@@ -3051,10 +3090,15 @@ impl TensorDynLen {
                 )
             })
             .transpose()
+            .map_err(TensorDynLenError::from)
     }
 
     /// Clear the accumulated gradient stored for this tensor.
-    pub fn clear_grad(&self) -> Result<()> {
+    /// # Errors
+    /// Returns an error when the tensor is not a tracked leaf (a missing-graph
+    /// failure).
+    ///
+    pub fn clear_grad(&self) -> std::result::Result<(), TensorDynLenError> {
         self.ensure_storage_ready()?;
         if let Some(value) = self.tracked_compact_payload_value() {
             value.payload.clear_grad();
@@ -3069,27 +3113,36 @@ impl TensorDynLen {
     }
 
     /// Run reverse-mode autodiff from this scalar tensor.
-    pub fn backward(&self) -> Result<()> {
+    /// # Errors
+    /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
+    /// reverse pass fails (a graph failure).
+    ///
+    pub fn backward(&self) -> std::result::Result<(), TensorDynLenError> {
         if let Some(value) = self.tracked_compact_payload_value() {
-            return value
-                .payload
-                .backward()
-                .map(|_| ())
-                .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"));
+            return value.payload.backward().map(|_| ()).map_err(|e| {
+                TensorDynLenError::from(anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
+            });
         }
         self.try_materialized_inner()?
             .backward()
             .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
+            .map_err(|e| {
+                TensorDynLenError::from(anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
+            })
     }
 
     /// Detach this tensor from the reverse graph.
-    pub fn detach(&self) -> Result<Self> {
+    /// # Errors
+    /// Returns an error when the tensor is not a tracked leaf (a missing-graph
+    /// failure).
+    ///
+    pub fn detach(&self) -> std::result::Result<Self, TensorDynLenError> {
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
             self.try_materialized_inner()?.detach(),
             self.storage.axis_classes().to_vec(),
         )
+        .map_err(TensorDynLenError::from)
     }
 
     /// Check if this tensor is already in canonical form.
@@ -3114,14 +3167,8 @@ impl TensorDynLen {
     /// Materializes and returns a compact storage snapshot.
     ///
     /// # Errors
-    ///
-    /// The authoritative payload remains eager for `f32`/`c32` and for tracked
-    /// tensors; this method is a fallible snapshot bridge to the compact
-    /// `Storage` representation. It returns an error when an eager backend
-    /// payload cannot be converted to compact storage, when its dtype is
-    /// `f32`/`c32` (compact storage supports only `f64`/`c64`), or when a
-    /// deferred eager operation failed.
-    ///
+    /// Returns an error when the compact storage cannot be materialized (a
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -3163,6 +3210,9 @@ impl TensorDynLen {
 
     /// Sum all elements, returning `AnyScalar`.
     ///
+    /// # Errors
+    /// Returns an error when the reduction fails (a backend or scalar-extraction
+    /// failure).
     /// # Examples
     ///
     /// ```
@@ -3173,23 +3223,27 @@ impl TensorDynLen {
     /// let s = t.sum().unwrap();
     /// assert!((s.real() - 6.0).abs() < 1e-12);
     /// ```
-    pub fn sum(&self) -> Result<AnyScalar> {
+    pub fn sum(&self) -> std::result::Result<AnyScalar, TensorDynLenError> {
         self.ensure_storage_ready()?;
         if self.indices.is_empty() {
-            return AnyScalar::from_tensor(self.clone());
+            return AnyScalar::from_tensor(self.clone()).map_err(TensorDynLenError::from);
         }
         if let Some(payload) = self.storage.eager().filter(|payload| payload.tracks_grad()) {
             let axes: Vec<usize> = (0..payload.data().shape().len()).collect();
             let reduced = payload.reduce_sum(&axes)?;
-            return AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?);
+            return AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?)
+                .map_err(TensorDynLenError::from);
         }
-        self.storage.sum_scalar()
+        self.storage.sum_scalar().map_err(TensorDynLenError::from)
     }
 
     /// Extract the scalar value from a 0-dimensional tensor (or 1-element tensor).
     ///
     /// This is similar to Julia's `only()` function.
     ///
+    /// # Errors
+    /// Returns an error when the tensor is not rank-0 and does not contain exactly
+    /// one element (a rank mismatch).
     /// # Panics
     ///
     /// Panics if the tensor has more than one element.
@@ -3206,15 +3260,17 @@ impl TensorDynLen {
     ///
     /// assert_eq!(tensor.only().unwrap().real(), 42.0);
     /// ```
-    pub fn only(&self) -> Result<AnyScalar> {
+    pub fn only(&self) -> std::result::Result<AnyScalar, TensorDynLenError> {
         let dims = self.dims();
         let total_size = checked_product(&dims)?;
-        anyhow::ensure!(
-            total_size == 1 || dims.is_empty(),
-            "only() requires a scalar tensor (1 element), got {} elements with dims {:?}",
-            if dims.is_empty() { 1 } else { total_size },
-            dims
-        );
+        if !(total_size == 1 || dims.is_empty()) {
+            return Err(anyhow::anyhow!(
+                "only() requires a scalar tensor (1 element), got {} elements with dims {:?}",
+                if dims.is_empty() { 1 } else { total_size },
+                dims
+            )
+            .into());
+        };
         self.sum()
     }
 
@@ -3227,8 +3283,12 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `new_indices` - The desired new indices order. Must be a permutation
+    ///
     ///   of `self.indices` (matched by ID).
     ///
+    /// # Errors
+    /// Returns an error when `new_order` does not contain exactly the tensor's
+    /// indices (an index-set mismatch or a missing-index failure).
     /// # Panics
     /// Panics if `new_indices.len() != self.indices.len()`, if any index ID
     /// doesn't match, or if there are duplicate indices.
@@ -3248,7 +3308,10 @@ impl TensorDynLen {
     /// let permuted = tensor.permute_indices(&[j, i]).unwrap();
     /// assert_eq!(permuted.dims(), vec![3, 2]);
     /// ```
-    pub fn permute_indices(&self, new_indices: &[DynIndex]) -> Result<Self> {
+    pub fn permute_indices(
+        &self,
+        new_indices: &[DynIndex],
+    ) -> std::result::Result<Self, TensorDynLenError> {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
         if perm.iter().copied().eq(0..perm.len()) {
@@ -3262,6 +3325,7 @@ impl TensorDynLen {
         let permuted = self.try_materialized_inner()?.transpose(&perm)?;
         let axis_classes = self.permute_axis_classes(&perm);
         Self::from_inner_with_axis_classes(new_indices.to_vec(), permuted, axis_classes)
+            .map_err(TensorDynLenError::from)
     }
 
     /// Permute the tensor dimensions, returning a new tensor.
@@ -3273,6 +3337,9 @@ impl TensorDynLen {
     /// # Arguments
     /// * `perm` - The permutation: `perm[i]` is the old axis index for new axis `i`
     ///
+    /// # Errors
+    /// Returns an error when `new_order` does not contain exactly the tensor's
+    /// indices (an index-set mismatch or a missing-index failure).
     /// # Panics
     /// Panics if `perm.len() != self.indices.len()` or if the permutation is invalid.
     ///
@@ -3292,18 +3359,18 @@ impl TensorDynLen {
     /// let permuted = tensor.permute(&[1, 0]).unwrap();
     /// assert_eq!(permuted.dims(), vec![3, 2]);
     /// ```
-    pub fn permute(&self, perm: &[usize]) -> Result<Self> {
-        anyhow::ensure!(
-            perm.len() == self.indices.len(),
-            "permutation length must match tensor rank"
-        );
+    pub fn permute(&self, perm: &[usize]) -> std::result::Result<Self, TensorDynLenError> {
+        if !(perm.len() == self.indices.len()) {
+            return Err(anyhow::anyhow!("permutation length must match tensor rank").into());
+        };
         let mut seen = HashSet::new();
         for &axis in perm {
-            anyhow::ensure!(
-                axis < self.indices.len(),
-                "permutation axis {axis} out of range"
-            );
-            anyhow::ensure!(seen.insert(axis), "duplicate axis {axis} in permutation");
+            if !(axis < self.indices.len()) {
+                return Err(anyhow::anyhow!("permutation axis {axis} out of range").into());
+            };
+            if !(seen.insert(axis)) {
+                return Err(anyhow::anyhow!("duplicate axis {axis} in permutation").into());
+            };
         }
         if perm.iter().copied().eq(0..perm.len()) {
             return Ok(self.clone());
@@ -3314,6 +3381,7 @@ impl TensorDynLen {
         let permuted = self.try_materialized_inner()?.transpose(perm)?;
         let axis_classes = self.permute_axis_classes(perm);
         Self::from_inner_with_axis_classes(new_indices, permuted, axis_classes)
+            .map_err(TensorDynLenError::from)
     }
 
     pub(crate) fn try_contract_pairwise_default(&self, other: &Self) -> Result<Self> {
@@ -3637,6 +3705,9 @@ impl TensorDynLen {
     /// * `rng` - Random number generator
     /// * `indices` - The indices for the tensor
     ///
+    /// # Errors
+    /// Returns an error when the dimension product overflows (an overflow failure)
+    /// or the backend cannot generate the requested scalar type.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -3650,7 +3721,10 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i, j]).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn random<T: RandomScalar, R: Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Result<Self> {
+    pub fn random<T: RandomScalar, R: Rng>(
+        rng: &mut R,
+        indices: Vec<DynIndex>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
         let size = checked_product(&dims)?;
         let data: Vec<T> = (0..size).map(|_| T::random_value(rng)).collect();
@@ -3673,6 +3747,9 @@ impl TensorDynLen {
     /// - The dimensions don't match
     /// - Storage types are incompatible
     ///
+    /// # Errors
+    /// Returns an error when the two tensors have different index sets (an
+    /// index-set mismatch) or the arithmetic reports a failure.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -3692,14 +3769,15 @@ impl TensorDynLen {
     /// let sum = tensor_a.add(&tensor_b).unwrap();
     /// // sum = [[2, 3, 4], [5, 6, 7]]
     /// ```
-    pub fn add(&self, other: &Self) -> Result<Self> {
+    pub fn add(&self, other: &Self) -> std::result::Result<Self, TensorDynLenError> {
         // Validate that both tensors have the same number of indices
         if self.indices.len() != other.indices.len() {
             return Err(anyhow::anyhow!(
                 "Index count mismatch: self has {} indices, other has {}",
                 self.indices.len(),
                 other.indices.len()
-            ));
+            )
+            .into());
         }
 
         // Validate that both tensors have the same set of indices
@@ -3707,9 +3785,9 @@ impl TensorDynLen {
         let other_set: HashSet<_> = other.indices.iter().collect();
 
         if self_set != other_set {
-            return Err(anyhow::anyhow!(
-                "Index set mismatch: tensors must have the same indices"
-            ));
+            return Err(
+                anyhow::anyhow!("Index set mismatch: tensors must have the same indices").into(),
+            );
         }
 
         // Permute other to match self's index order (no-op if already aligned)
@@ -3737,7 +3815,8 @@ impl TensorDynLen {
                 fmt(&self.indices),
                 other_expected_dims,
                 fmt(&other_aligned.indices)
-            ));
+            )
+            .into());
         }
 
         self.axpby(
@@ -3753,6 +3832,9 @@ impl TensorDynLen {
     /// If indices are in a different order, `other` is automatically permuted
     /// to match `self`.
     ///
+    /// # Errors
+    /// Returns an error when the tensors have different index sets (an index-set
+    /// mismatch) or the arithmetic reports a failure.
     /// # Examples
     ///
     /// ```
@@ -3768,23 +3850,29 @@ impl TensorDynLen {
     /// assert!((data[0] - 11.0).abs() < 1e-12);
     /// assert!((data[1] - 16.0).abs() < 1e-12);
     /// ```
-    pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
+    pub fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         // Validate that both tensors have the same number of indices.
         if self.indices.len() != other.indices.len() {
             return Err(anyhow::anyhow!(
                 "Index count mismatch: self has {} indices, other has {}",
                 self.indices.len(),
                 other.indices.len()
-            ));
+            )
+            .into());
         }
 
         // Validate that both tensors have the same set of indices.
         let self_set: HashSet<_> = self.indices.iter().collect();
         let other_set: HashSet<_> = other.indices.iter().collect();
         if self_set != other_set {
-            return Err(anyhow::anyhow!(
-                "Index set mismatch: tensors must have the same indices"
-            ));
+            return Err(
+                anyhow::anyhow!("Index set mismatch: tensors must have the same indices").into(),
+            );
         }
 
         // Align other tensor axis order to self.
@@ -3798,7 +3886,8 @@ impl TensorDynLen {
                 "Dimension mismatch after alignment: self={:?}, other_aligned={:?}",
                 self_expected_dims,
                 other_expected_dims
-            ));
+            )
+            .into());
         }
 
         let axis_classes = if self.storage.axis_classes() == other_aligned.storage.axis_classes() {
@@ -3848,7 +3937,8 @@ impl TensorDynLen {
                 self.indices.clone(),
                 combined,
                 axis_classes,
-            );
+            )
+            .map_err(TensorDynLenError::from);
         }
 
         let a_native = a.as_tensor()?.as_native()?;
@@ -3867,7 +3957,8 @@ impl TensorDynLen {
                 self.indices.clone(),
                 combined,
                 axis_classes,
-            );
+            )
+            .map_err(TensorDynLenError::from);
         }
 
         let lhs = self.scale(a)?;
@@ -3877,12 +3968,17 @@ impl TensorDynLen {
             .add(rhs.try_materialized_inner()?)
             .map_err(|e| anyhow::anyhow!("tensor addition failed: {e}"))?;
         Self::from_inner_with_axis_classes(self.indices.clone(), combined, axis_classes)
+            .map_err(TensorDynLenError::from)
     }
 
     /// Scalar multiplication.
     ///
     /// Multiplies every element by `scalar`.
     ///
+    /// # Errors
+    /// Returns an error when the scalar coefficient is invalid for the tensor's
+    /// scalar type (an invalid scalar dtype) or the backend reports a
+    /// failure.
     /// # Examples
     ///
     /// ```
@@ -3893,7 +3989,7 @@ impl TensorDynLen {
     /// let scaled = t.scale(AnyScalar::new_real(2.0)).unwrap();
     /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
-    pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
+    pub fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, TensorDynLenError> {
         if matches!(
             &self.storage,
             TensorDynLenStorage::Eager { .. }
@@ -3944,7 +4040,8 @@ impl TensorDynLen {
                 self.indices.clone(),
                 scaled,
                 self.storage.axis_classes().to_vec(),
-            );
+            )
+            .map_err(TensorDynLenError::from);
         }
         if self_native.dtype() != scalar_native.dtype() {
             let scaled = scale_native_tensor(self_native, &scalar.to_backend_scalar())?;
@@ -3952,7 +4049,8 @@ impl TensorDynLen {
                 self.indices.clone(),
                 scaled,
                 self.storage.axis_classes().to_vec(),
-            );
+            )
+            .map_err(TensorDynLenError::from);
         }
 
         let scaled = if self.indices.is_empty() {
@@ -3975,12 +4073,16 @@ impl TensorDynLen {
             scaled,
             self.storage.axis_classes().to_vec(),
         )
+        .map_err(TensorDynLenError::from)
     }
 
     /// Inner product (dot product) of two tensors.
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
     ///
+    /// # Errors
+    /// Returns an error when the tensors have different index sets (an index-set
+    /// mismatch) or the contraction reports a failure.
     /// # Examples
     ///
     /// ```
@@ -3994,7 +4096,7 @@ impl TensorDynLen {
     /// let ip = a.inner_product(&b).unwrap();
     /// assert!((ip.real() - 32.0).abs() < 1e-12);
     /// ```
-    pub fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
+    pub fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, TensorDynLenError> {
         if self.indices.len() == other.indices.len() {
             let self_set: HashSet<_> = self.indices.iter().collect();
             let other_set: HashSet<_> = other.indices.iter().collect();
@@ -4027,11 +4129,12 @@ impl TensorDynLen {
 impl TensorDynLen {
     /// Replace an index in the tensor with a new index.
     ///
-    /// This replaces the index matching `old_index` by ID with `new_index`.
+    /// This replaces every index equal to `old_index` (full index equality,
+    /// including id, prime level, and tags) with `new_index`.
     /// The storage data is not modified, only the index metadata is changed.
     ///
     /// # Arguments
-    /// * `old_index` - The index to replace (matched by ID)
+    /// * `old_index` - The index to replace (matched by full index equality)
     /// * `new_index` - The new index to use
     ///
     /// # Returns
@@ -4039,8 +4142,8 @@ impl TensorDynLen {
     /// returns a clone of the original tensor.
     ///
     /// # Errors
-    /// Returns an error if the replacement index has a different dimension.
-    ///
+    /// Returns an error when the new index has an incompatible dimension
+    /// (a shape mismatch: the replacement dimension must equal the original).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -4058,14 +4161,18 @@ impl TensorDynLen {
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, j.id);
     /// ```
-    pub fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
+    pub fn replaceind(
+        &self,
+        old_index: &DynIndex,
+        new_index: &DynIndex,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
-            return Err(anyhow::anyhow!(
-                "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
-                old_index.dim(),
-                new_index.dim()
-            ));
+            return Err(TensorDynLenError::ShapeMismatch {
+                operation: "replaceind",
+                expected: format!("dimension {}", old_index.dim()),
+                actual: format!("dimension {}", new_index.dim()),
+            });
         }
 
         let new_indices: Vec<_> = self
@@ -4089,11 +4196,12 @@ impl TensorDynLen {
 
     /// Replace multiple indices in the tensor.
     ///
-    /// This replaces each index in `old_indices` (matched by ID) with the corresponding
-    /// index in `new_indices`. The storage data is not modified.
+    /// This replaces each index in `old_indices` (matched by full index equality,
+    /// including id, prime level, and tags) with the corresponding index in
+    /// `new_indices`. The storage data is not modified.
     ///
     /// # Arguments
-    /// * `old_indices` - The indices to replace (matched by ID)
+    /// * `old_indices` - The indices to replace (matched by full index equality)
     /// * `new_indices` - The new indices to use
     ///
     /// # Returns
@@ -4101,9 +4209,10 @@ impl TensorDynLen {
     /// are kept unchanged.
     ///
     /// # Errors
-    /// Returns an error if `old_indices` and `new_indices` have different
-    /// lengths or if any replacement index has a different dimension.
-    ///
+    /// Returns an error when `old_indices` and `new_indices` differ in length
+    /// (a shape mismatch), or when any replacement index has an incompatible
+    /// dimension (a shape mismatch: the replacement dimension must equal the
+    /// original).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -4124,20 +4233,27 @@ impl TensorDynLen {
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
-        anyhow::ensure!(
-            old_indices.len() == new_indices.len(),
-            "old_indices and new_indices must have the same length"
-        );
+    pub fn replaceinds(
+        &self,
+        old_indices: &[DynIndex],
+        new_indices: &[DynIndex],
+    ) -> std::result::Result<Self, TensorDynLenError> {
+        if old_indices.len() != new_indices.len() {
+            return Err(TensorDynLenError::ShapeMismatch {
+                operation: "replaceinds",
+                expected: format!("{} indices", old_indices.len()),
+                actual: format!("{} indices", new_indices.len()),
+            });
+        }
 
         // Validate dimension matches for all replacements
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             if old.dim() != new.dim() {
-                return Err(anyhow::anyhow!(
-                    "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
-                    old.dim(),
-                    new.dim()
-                ));
+                return Err(TensorDynLenError::ShapeMismatch {
+                    operation: "replaceinds",
+                    expected: format!("dimension {}", old.dim()),
+                    actual: format!("dimension {}", new.dim()),
+                });
             }
         }
 
@@ -4486,19 +4602,21 @@ impl TensorDynLen {
         native: &NativeTensor,
         payload_coords: &[usize],
     ) -> Result<Complex64> {
-        anyhow::ensure!(
-            payload_coords.len() == native.shape().len(),
-            "payload coordinate rank {} does not match payload rank {}",
-            payload_coords.len(),
-            native.shape().len()
-        );
+        if !(payload_coords.len() == native.shape().len()) {
+            return Err(anyhow::anyhow!(
+                "payload coordinate rank {} does not match payload rank {}",
+                payload_coords.len(),
+                native.shape().len()
+            ));
+        };
         let mut offset = 0usize;
         let mut stride = 1usize;
         for (&coordinate, &dim) in payload_coords.iter().zip(native.shape().iter()) {
-            anyhow::ensure!(
-                coordinate < dim,
-                "payload coordinate {coordinate} is out of bounds for dim {dim}"
-            );
+            if !(coordinate < dim) {
+                return Err(anyhow::anyhow!(
+                    "payload coordinate {coordinate} is out of bounds for dim {dim}"
+                ));
+            };
             offset = offset
                 .checked_add(
                     coordinate
@@ -4611,16 +4729,20 @@ impl TensorDynLen {
     /// [`TensorVectorSpace`](crate::TensorVectorSpace).
     ///
     /// # Errors
-    /// Returns an error if the tensors cannot be aligned or subtracted.
-    pub fn sub(&self, other: &Self) -> Result<Self> {
+    /// Returns an error when the tensors have different index sets (an index-set
+    /// mismatch) or the arithmetic reports a failure.
+    ///
+    pub fn sub(&self, other: &Self) -> std::result::Result<Self, TensorDynLenError> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
 
     /// Negate all elements.
     ///
     /// # Errors
-    /// Returns an error if scalar multiplication fails for the tensor storage.
-    pub fn neg(&self) -> Result<Self> {
+    /// Returns an error when scalar multiplication fails for the tensor storage
+    /// (a dtype mismatch) or the backend reports a failure.
+    ///
+    pub fn neg(&self) -> std::result::Result<Self, TensorDynLenError> {
         self.scale(AnyScalar::new_real(-1.0))
     }
 
@@ -4814,8 +4936,13 @@ impl TensorDynLen {
     /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
     ///
     /// # Errors
-    /// Returns an error if the two indices have different dimensions.
-    pub fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
+    /// Returns an error when the two indices have different dimensions (an
+    /// index shape mismatch).
+    ///
+    pub fn diagonal(
+        input_index: &DynIndex,
+        output_index: &DynIndex,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         <Self as TensorConstructionLike>::diagonal(input_index, output_index)
     }
 
@@ -4824,31 +4951,42 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the index lists have different lengths or paired
     /// dimensions do not match.
-    pub fn delta(input_indices: &[DynIndex], output_indices: &[DynIndex]) -> Result<Self> {
+    pub fn delta(
+        input_indices: &[DynIndex],
+        output_indices: &[DynIndex],
+    ) -> std::result::Result<Self, TensorDynLenError> {
         <Self as TensorConstructionLike>::delta(input_indices, output_indices)
     }
 
     /// Create a scalar tensor equal to one.
     ///
     /// # Errors
-    /// Returns an error if dense scalar construction fails.
-    pub fn scalar_one() -> Result<Self> {
+    /// Returns an error when dense scalar construction fails for the element type
+    /// (an invalid scalar dtype or a construction failure).
+    ///
+    pub fn scalar_one() -> std::result::Result<Self, TensorDynLenError> {
         <Self as TensorConstructionLike>::scalar_one()
     }
 
     /// Create a tensor filled with ones over the given indices.
     ///
     /// # Errors
-    /// Returns an error if the tensor size overflows or dense construction fails.
-    pub fn ones(indices: &[DynIndex]) -> Result<Self> {
+    /// Returns an error when the tensor size overflows (an overflow failure) or
+    /// dense construction fails.
+    ///
+    pub fn ones(indices: &[DynIndex]) -> std::result::Result<Self, TensorDynLenError> {
         <Self as TensorConstructionLike>::ones(indices)
     }
 
     /// Create a one-hot tensor with value one at the specified index positions.
     ///
     /// # Errors
-    /// Returns an error if any coordinate is outside its index dimension.
-    pub fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
+    /// Returns an error when any coordinate is outside its index dimension (an
+    /// out of bounds failure).
+    ///
+    pub fn onehot(
+        index_vals: &[(DynIndex, usize)],
+    ) -> std::result::Result<Self, TensorDynLenError> {
         <Self as TensorConstructionLike>::onehot(index_vals)
     }
 
@@ -4865,14 +5003,12 @@ impl TensorDynLen {
     ///
     /// * `index` - Existing tensor index to mask.
     /// * `position` - Zero-based coordinate to keep; all other coordinates become
+    ///
     ///   zero.
     ///
     /// # Errors
-    ///
-    /// Returns an error if `index` is absent, repeated, or if `position` is out
-    /// of range for the index dimension, or if the backend cannot execute the
-    /// differentiable tensor operations.
-    ///
+    /// Returns an error when the coordinate is outside the index dimension (an
+    /// out of bounds failure) or the mask construction fails.
     /// # Examples
     ///
     /// ```
@@ -4892,16 +5028,21 @@ impl TensorDynLen {
     /// .mask_index(&DynIndex::new_dyn(2), 0)
     /// .is_err());
     /// ```
-    pub fn mask_index(&self, index: &DynIndex, position: usize) -> Result<Self> {
-        anyhow::ensure!(
-            self.indices.iter().any(|candidate| candidate == index),
-            "mask_index: index is not present in tensor"
-        );
-        anyhow::ensure!(
-            position < index.dim(),
-            "mask_index: position {position} is out of range for dimension {}",
-            index.dim()
-        );
+    pub fn mask_index(
+        &self,
+        index: &DynIndex,
+        position: usize,
+    ) -> std::result::Result<Self, TensorDynLenError> {
+        if !(self.indices.iter().any(|candidate| candidate == index)) {
+            return Err(anyhow::anyhow!("mask_index: index is not present in tensor").into());
+        };
+        if !(position < index.dim()) {
+            return Err(anyhow::anyhow!(
+                "mask_index: position {position} is out of range for dimension {}",
+                index.dim()
+            )
+            .into());
+        };
 
         // Retaining the shared index turns contraction into a backend-level
         // elementwise product instead of materializing a host mask. Construct
@@ -4945,9 +5086,7 @@ impl TensorDynLen {
                     .collect(),
             ),
             dtype => {
-                return Err(anyhow::anyhow!(
-                    "mask_index does not support dtype {dtype:?}"
-                ))
+                return Err(anyhow::anyhow!("mask_index does not support dtype {dtype:?}").into())
             }
         }?;
         super::contract::contract_pair_with_options(
@@ -4996,12 +5135,8 @@ impl TensorDynLen {
         let norm_self = self.norm()?;
 
         // Compute A - B = A + (-1) * B
-        let neg_other = other
-            .scale(AnyScalar::new_real(-1.0))
-            .map_err(|error| TensorDynLenError::operation("distance", error))?;
-        let diff = self
-            .add(&neg_other)
-            .map_err(|error| TensorDynLenError::operation("distance", error))?;
+        let neg_other = other.scale(AnyScalar::new_real(-1.0))?;
+        let diff = self.add(&neg_other)?;
         let norm_diff = diff.norm()?;
 
         if norm_self > 0.0 {
@@ -5023,7 +5158,6 @@ impl std::fmt::Debug for TensorDynLen {
 }
 
 /// Create a diagonal tensor with dynamic rank from diagonal data.
-///
 /// # Arguments
 /// * `indices` - The indices for the tensor (all must have the same dimension)
 /// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
@@ -5032,21 +5166,24 @@ impl std::fmt::Debug for TensorDynLen {
 /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
 /// representation.
 ///
+/// # Errors
+/// Returns an error when the index dimensions are unequal (a dimension
+/// mismatch) or the diagonal construction fails.
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
-///
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, diag_tensor_dyn_len};
-///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert_eq!(t.dims(), vec![3, 3]);
 /// assert!(t.is_diag());
 /// ```
-pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> Result<TensorDynLen> {
+pub fn diag_tensor_dyn_len(
+    indices: Vec<DynIndex>,
+    diag_data: Vec<f64>,
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     TensorDynLen::from_diag(indices, diag_data)
 }
 
@@ -5061,14 +5198,11 @@ pub(crate) type UnfoldSplitInnerResult = (
 );
 
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
-///
 /// This function validates the split, permutes the tensor so that left indices
 /// come first, and returns a rank-2 native tenferro tensor along with metadata.
-///
 /// # Arguments
 /// * `t` - Input tensor
 /// * `left_inds` - Indices to place on the left (row) side of the matrix
-///
 /// # Returns
 /// A tuple `(matrix_tensor, left_len, m, n, left_indices, right_indices)` where:
 /// - `matrix_tensor` is a rank-2 `tenferro::Tensor` with shape `[m, n]`
@@ -5077,19 +5211,16 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// - `n` is the product of right index dimensions
 /// - `left_indices` is the vector of left indices (cloned)
 /// - `right_indices` is the vector of right indices (cloned)
-///
 /// # Errors
-/// Returns an error if:
-/// - The tensor rank is < 2
-/// - `left_inds` is empty or contains all indices
-/// - `left_inds` contains indices not in the tensor or duplicates
-/// - Native reshape fails
 ///
+/// Returns an error when the tensor rank is less than 2 (a rank mismatch),
+/// when `left_inds` is empty or contains all indices (an invalid split), when
+/// `left_inds` contains indices not present in the tensor (a missing-index
+/// failure) or duplicates, or when the native reshape fails (a backend
+/// failure).
 /// # Examples
-///
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, unfold_split};
-///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// // 2x3 dense tensor with data [1..6]
@@ -5097,7 +5228,6 @@ pub(crate) type UnfoldSplitInnerResult = (
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
-///
 /// let (matrix, left_len, m, n, left_indices, right_indices) =
 ///     unfold_split(&t, &[i]).unwrap();
 /// assert_eq!(left_len, 1);
@@ -5110,14 +5240,17 @@ pub(crate) type UnfoldSplitInnerResult = (
 pub fn unfold_split(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
-) -> Result<(
-    NativeTensor,
-    usize,
-    usize,
-    usize,
-    Vec<DynIndex>,
-    Vec<DynIndex>,
-)> {
+) -> std::result::Result<
+    (
+        NativeTensor,
+        usize,
+        usize,
+        usize,
+        Vec<DynIndex>,
+        Vec<DynIndex>,
+    ),
+    TensorDynLenError,
+> {
     let (matrix_inner, left_len, m, n, left_indices, right_indices) =
         unfold_split_inner(t, left_inds)?;
 
@@ -5138,28 +5271,33 @@ pub(crate) fn unfold_split_inner(
     let rank = t.indices.len();
 
     // Validate rank
-    anyhow::ensure!(rank >= 2, "Tensor must have rank >= 2, got rank {}", rank);
+    if !(rank >= 2) {
+        return Err(anyhow::anyhow!(
+            "Tensor must have rank >= 2, got rank {}",
+            rank
+        ));
+    };
 
     let left_len = left_inds.len();
 
     // Validate split: must be a proper subset
-    anyhow::ensure!(
-        left_len > 0 && left_len < rank,
-        "Left indices must be a non-empty proper subset of tensor indices (0 < left_len < rank), got left_len={}, rank={}",
+    if !(left_len > 0 && left_len < rank) {
+        return Err(anyhow::anyhow!("Left indices must be a non-empty proper subset of tensor indices (0 < left_len < rank), got left_len={}, rank={}",
         left_len,
-        rank
-    );
+        rank));
+    };
 
     // Validate that all left_inds are in the tensor and there are no duplicates
     let tensor_set: HashSet<_> = t.indices.iter().collect();
     let mut left_set = HashSet::new();
 
     for left_idx in left_inds {
-        anyhow::ensure!(
-            tensor_set.contains(left_idx),
-            "Index in left_inds not found in tensor"
-        );
-        anyhow::ensure!(left_set.insert(left_idx), "Duplicate index in left_inds");
+        if !(tensor_set.contains(left_idx)) {
+            return Err(anyhow::anyhow!("Index in left_inds not found in tensor"));
+        };
+        if !(left_set.insert(left_idx)) {
+            return Err(anyhow::anyhow!("Duplicate index in left_inds"));
+        };
     }
 
     // Build right_inds: all indices not in left_inds, in original order
@@ -5203,6 +5341,7 @@ use crate::tensor_index::TensorIndex;
 
 impl TensorIndex for TensorDynLen {
     type Index = DynIndex;
+    type Error = TensorDynLenError;
 
     fn external_indices(&self) -> Vec<DynIndex> {
         // For TensorDynLen, all indices are external.
@@ -5213,13 +5352,21 @@ impl TensorIndex for TensorDynLen {
         self.indices.len()
     }
 
-    fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
-        // Delegate to the inherent method
+    fn replaceind(
+        &self,
+        old_index: &DynIndex,
+        new_index: &DynIndex,
+    ) -> std::result::Result<Self, Self::Error> {
+        // Delegate to the inherent method.
         TensorDynLen::replaceind(self, old_index, new_index)
     }
 
-    fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
-        // Delegate to the inherent method
+    fn replaceinds(
+        &self,
+        old_indices: &[DynIndex],
+        new_indices: &[DynIndex],
+    ) -> std::result::Result<Self, Self::Error> {
+        // Delegate to the inherent method.
         TensorDynLen::replaceinds(self, old_indices, new_indices)
     }
 }
@@ -5234,8 +5381,6 @@ use crate::tensor_like::{
 };
 
 impl TensorVectorSpace for TensorDynLen {
-    type Error = TensorDynLenError;
-
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         TensorDynLen::norm_squared(self)
     }
@@ -5253,15 +5398,20 @@ impl TensorVectorSpace for TensorDynLen {
         TensorDynLen::isapprox(self, other, atol, rtol)
     }
 
-    fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
+    fn axpby(
+        &self,
+        a: crate::AnyScalar,
+        other: &Self,
+        b: crate::AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
         TensorDynLen::axpby(self, a, other, b)
     }
 
-    fn scale(&self, scalar: crate::AnyScalar) -> Result<Self> {
+    fn scale(&self, scalar: crate::AnyScalar) -> std::result::Result<Self, Self::Error> {
         TensorDynLen::scale(self, scalar)
     }
 
-    fn inner_product(&self, other: &Self) -> Result<crate::AnyScalar> {
+    fn inner_product(&self, other: &Self) -> std::result::Result<crate::AnyScalar, Self::Error> {
         TensorDynLen::inner_product(self, other)
     }
 }
@@ -5295,7 +5445,7 @@ impl TensorContractionLike for TensorDynLen {
         &self,
         other: &Self,
         pairs: &[(DynIndex, DynIndex)],
-    ) -> Result<crate::tensor_like::DirectSumResult<Self>> {
+    ) -> std::result::Result<crate::tensor_like::DirectSumResult<Self>, Self::Error> {
         let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
         Ok(crate::tensor_like::DirectSumResult {
             tensor,
@@ -5303,11 +5453,11 @@ impl TensorContractionLike for TensorDynLen {
         })
     }
 
-    fn outer_product(&self, other: &Self) -> Result<Self> {
+    fn outer_product(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         super::contract::outer_product(self, other)
     }
 
-    fn permuteinds(&self, new_order: &[DynIndex]) -> Result<Self> {
+    fn permuteinds(&self, new_order: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method
         TensorDynLen::permute_indices(self, new_order)
     }
@@ -5317,32 +5467,40 @@ impl TensorContractionLike for TensorDynLen {
         old_indices: &[DynIndex],
         new_index: DynIndex,
         order: LinearizationOrder,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         TensorDynLen::fuse_indices(self, old_indices, new_index, order)
     }
 
-    fn contract(tensors: &[&Self]) -> Result<Self> {
+    fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
         super::contract::contract(tensors)
     }
 
-    fn contract_pair(&self, other: &Self) -> Result<Self> {
+    fn contract_pair(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         super::contract::contract_pair(self, other)
     }
 }
 
 impl TensorConstructionLike for TensorDynLen {
-    fn select_indices(&self, selected_indices: &[DynIndex], positions: &[usize]) -> Result<Self> {
+    fn select_indices(
+        &self,
+        selected_indices: &[DynIndex],
+        positions: &[usize],
+    ) -> std::result::Result<Self, Self::Error> {
         TensorDynLen::select_indices(self, selected_indices, positions)
     }
 
-    fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
+    fn diagonal(
+        input_index: &DynIndex,
+        output_index: &DynIndex,
+    ) -> std::result::Result<Self, Self::Error> {
         let dim = input_index.dim();
         if dim != output_index.dim() {
             return Err(anyhow::anyhow!(
                 "Dimension mismatch: input index has dim {}, output has dim {}",
                 dim,
                 output_index.dim(),
-            ));
+            )
+            .into());
         }
 
         TensorDynLen::from_diag(
@@ -5351,22 +5509,22 @@ impl TensorConstructionLike for TensorDynLen {
         )
     }
 
-    fn scalar_one() -> Result<Self> {
+    fn scalar_one() -> std::result::Result<Self, Self::Error> {
         TensorDynLen::from_dense(vec![], vec![1.0_f64])
     }
 
-    fn ones(indices: &[DynIndex]) -> Result<Self> {
+    fn ones(indices: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
         if indices.is_empty() {
-            return Self::scalar_one();
+            return <Self as TensorConstructionLike>::scalar_one();
         }
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size = checked_total_size(&dims)?;
         TensorDynLen::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
     }
 
-    fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
+    fn onehot(index_vals: &[(DynIndex, usize)]) -> std::result::Result<Self, Self::Error> {
         if index_vals.is_empty() {
-            return Self::scalar_one();
+            return <Self as TensorConstructionLike>::scalar_one();
         }
         let indices: Vec<DynIndex> = index_vals.iter().map(|(idx, _)| idx.clone()).collect();
         let vals: Vec<usize> = index_vals.iter().map(|(_, v)| *v).collect();
@@ -5379,14 +5537,15 @@ impl TensorConstructionLike for TensorDynLen {
                     v,
                     k,
                     d
-                ));
+                )
+                .into());
             }
         }
 
-        let total_size = checked_total_size(&dims)?;
+        let total_size = checked_total_size(&dims).map_err(Self::Error::from)?;
         let mut data = vec![0.0_f64; total_size];
 
-        let offset = column_major_offset(&dims, &vals)?;
+        let offset = column_major_offset(&dims, &vals).map_err(Self::Error::from)?;
         data[offset] = 1.0;
 
         Self::from_dense(indices, data)
@@ -5461,28 +5620,31 @@ impl TensorDynLen {
 
     fn validate_dense_payload_len(data_len: usize, dims: &[usize]) -> Result<()> {
         let expected_len = checked_total_size(dims)?;
-        anyhow::ensure!(
-            data_len == expected_len,
-            "dense payload length {} does not match dims {:?} (expected {})",
-            data_len,
-            dims,
-            expected_len
-        );
+        if !(data_len == expected_len) {
+            return Err(anyhow::anyhow!(
+                "dense payload length {} does not match dims {:?} (expected {})",
+                data_len,
+                dims,
+                expected_len
+            ));
+        };
         Ok(())
     }
 
     fn validate_diag_payload_len(data_len: usize, dims: &[usize]) -> Result<()> {
-        anyhow::ensure!(
-            !dims.is_empty(),
-            "diagonal tensor construction requires at least one index"
-        );
+        if !(!dims.is_empty()) {
+            return Err(anyhow::anyhow!(
+                "diagonal tensor construction requires at least one index"
+            ));
+        };
         Self::validate_diag_dims(dims)?;
-        anyhow::ensure!(
-            data_len == dims[0],
-            "diagonal payload length {} does not match diagonal dimension {}",
-            data_len,
-            dims[0]
-        );
+        if !(data_len == dims[0]) {
+            return Err(anyhow::anyhow!(
+                "diagonal payload length {} does not match diagonal dimension {}",
+                data_len,
+                dims[0]
+            ));
+        };
         Ok(())
     }
 
@@ -5499,9 +5661,8 @@ impl TensorDynLen {
     /// * `data` - Tensor data in column-major order
     ///
     /// # Errors
-    /// Returns an error if indices are duplicated, or if data length does not
-    /// match the checked product of index dimensions.
-    ///
+    /// Returns an error when the data length does not match the index dimension
+    /// product (a shape mismatch).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5513,12 +5674,15 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i, j], data).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn from_dense<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
+    pub fn from_dense<T: TensorElement>(
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_dense_payload_len(data.len(), &dims)?;
         let native = dense_native_tensor_from_col_major(&data, &dims)?;
-        Self::from_native(indices, native)
+        Self::from_native(indices, native).map_err(TensorDynLenError::from)
     }
 
     /// Create a tensor from dense payload data provided as [`AnyScalar`] values.
@@ -5526,6 +5690,9 @@ impl TensorDynLen {
     /// This is the preferred public API when the caller only knows the scalar
     /// type at runtime.
     ///
+    /// # Errors
+    /// Returns an error when the payload length does not match the index dimension
+    /// product (a shape mismatch) or a scalar conversion fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5546,7 +5713,10 @@ impl TensorDynLen {
     /// assert!(tensor.is_complex());
     /// assert_eq!(tensor.dims(), vec![2, 2]);
     /// ```
-    pub fn from_dense_any(indices: Vec<DynIndex>, data: Vec<AnyScalar>) -> Result<Self> {
+    pub fn from_dense_any(
+        indices: Vec<DynIndex>,
+        data: Vec<AnyScalar>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         if data.iter().any(AnyScalar::is_complex) {
             Self::from_dense(indices, Self::any_scalar_payload_to_complex(data))
         } else {
@@ -5566,9 +5736,8 @@ impl TensorDynLen {
     /// never promoted into compact `f64`/`Complex64` storage.
     ///
     /// # Errors
-    /// Returns an error if indices are duplicated, if no indices are supplied,
-    /// if dimensions differ, or if the diagonal payload length is incorrect.
-    ///
+    /// Returns an error when the index dimensions are unequal or the payload
+    /// length does not match the diagonal dimension (a shape mismatch).
     /// # Examples
     ///
     /// ```
@@ -5586,12 +5755,16 @@ impl TensorDynLen {
     /// assert!((data[8] - 3.0).abs() < 1e-12);
     /// assert!((data[1]).abs() < 1e-12);  // off-diagonal is zero
     /// ```
-    pub fn from_diag<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
+    pub fn from_diag<T: TensorElement>(
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_diag_payload_len(data.len(), &dims)?;
         let native = diag_native_tensor_from_col_major(&data, dims.len())?;
         Self::from_native_with_axis_classes(indices, native, Self::diag_axis_classes(dims.len()))
+            .map_err(TensorDynLenError::from)
     }
 
     /// Create a diagonal tensor from diagonal payload data provided as
@@ -5600,6 +5773,10 @@ impl TensorDynLen {
     /// This is the preferred public API when the caller only knows the scalar
     /// type at runtime.
     ///
+    /// # Errors
+    /// Returns an error when the index dimensions are unequal or the payload
+    /// length does not match (a shape mismatch), or a scalar conversion
+    /// fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5615,7 +5792,10 @@ impl TensorDynLen {
     /// assert!(tensor.is_complex());
     /// assert_eq!(tensor.dims(), vec![2, 2]);
     /// ```
-    pub fn from_diag_any(indices: Vec<DynIndex>, data: Vec<AnyScalar>) -> Result<Self> {
+    pub fn from_diag_any(
+        indices: Vec<DynIndex>,
+        data: Vec<AnyScalar>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         if data.iter().any(AnyScalar::is_complex) {
             Self::from_diag(indices, Self::any_scalar_payload_to_complex(data))
         } else {
@@ -5628,6 +5808,9 @@ impl TensorDynLen {
     /// For indices `[i, j, k]`, the returned tensor satisfies
     /// `T[i, j, k] = value` when `i = j = k`, and zero otherwise.
     ///
+    /// # Errors
+    /// Returns an error when the index dimensions are unequal (a dimension
+    /// mismatch) or the construction fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, TensorDynLen};
@@ -5643,7 +5826,10 @@ impl TensorDynLen {
     ///
     /// assert_eq!(tensor.dims(), vec![2, 2, 2]);
     /// ```
-    pub fn copy_tensor(indices: Vec<DynIndex>, value: AnyScalar) -> Result<Self> {
+    pub fn copy_tensor(
+        indices: Vec<DynIndex>,
+        value: AnyScalar,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         if indices.is_empty() {
             return Self::from_dense_any(vec![], vec![value]);
         }
@@ -5664,12 +5850,15 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `old_indices` - Non-empty list of existing tensor indices to replace.
+    ///
     ///   Each index is matched by ID, must appear exactly once in the tensor,
     ///   must have the same dimension as the matched tensor axis, and must not
     ///   be duplicated in this list.
     /// * `new_index` - Replacement index whose dimension must equal the product
+    ///
     ///   of the dimensions in `old_indices`.
     /// * `order` - Linearization convention used to encode the old coordinates
+    ///
     ///   into the single coordinate of `new_index`.
     ///
     /// # Returns
@@ -5710,38 +5899,40 @@ impl TensorDynLen {
         old_indices: &[DynIndex],
         new_index: DynIndex,
         order: LinearizationOrder,
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            !old_indices.is_empty(),
-            "fuse_indices requires at least one index to fuse"
-        );
+    ) -> std::result::Result<Self, TensorDynLenError> {
+        if !(!old_indices.is_empty()) {
+            return Err(anyhow::anyhow!("fuse_indices requires at least one index to fuse").into());
+        };
 
         let old_dims = self.dims();
         let mut seen_indices = HashSet::new();
         let mut old_axes = Vec::with_capacity(old_indices.len());
         for old_index in old_indices {
-            anyhow::ensure!(
-                seen_indices.insert(old_index),
-                "duplicate index in old_indices"
-            );
+            if !(seen_indices.insert(old_index)) {
+                return Err(anyhow::anyhow!("duplicate index in old_indices").into());
+            };
             let axis = self
                 .indices
                 .iter()
                 .position(|idx| idx == old_index)
                 .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index))?;
-            anyhow::ensure!(
-                old_index.dim() == old_dims[axis],
-                "old index dimension does not match tensor axis dimension"
-            );
+            if !(old_index.dim() == old_dims[axis]) {
+                return Err(anyhow::anyhow!(
+                    "old index dimension does not match tensor axis dimension"
+                )
+                .into());
+            };
             old_axes.push(axis);
         }
 
         let fused_dims: Vec<usize> = old_axes.iter().map(|&axis| old_dims[axis]).collect();
         let fused_product = checked_product(&fused_dims)?;
-        anyhow::ensure!(
-            fused_product == new_index.dim(),
-            "product of old index dimensions must match the replacement index dimension"
-        );
+        if !(fused_product == new_index.dim()) {
+            return Err(anyhow::anyhow!(
+                "product of old index dimensions must match the replacement index dimension"
+            )
+            .into());
+        };
 
         let insertion_axis =
             old_axes.iter().copied().min().ok_or_else(|| {
@@ -5761,10 +5952,11 @@ impl TensorDynLen {
         }
         let mut result_seen = HashSet::new();
         for index in &result_indices {
-            anyhow::ensure!(
-                result_seen.insert(index),
-                "fuse_indices result would contain duplicate index"
-            );
+            if !(result_seen.insert(index)) {
+                return Err(
+                    anyhow::anyhow!("fuse_indices result would contain duplicate index").into(),
+                );
+            };
         }
         Self::validate_indices(&result_indices)?;
 
@@ -5794,7 +5986,7 @@ impl TensorDynLen {
 
         let packed = self.permute(&perm)?;
         let reshaped = packed.try_materialized_inner()?.reshape(&new_dims)?;
-        Self::from_inner(result_indices, reshaped)
+        Self::from_inner(result_indices, reshaped).map_err(TensorDynLenError::from)
     }
 
     /// Replace one fused index with multiple indices using an exact reshape.
@@ -5802,6 +5994,9 @@ impl TensorDynLen {
     /// The caller must specify how the old fused index should be decoded into
     /// the new indices via `order`.
     ///
+    /// # Errors
+    /// Returns an error when the fused dimension does not equal the product of
+    /// the new index dimensions (a shape mismatch).
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
@@ -5823,11 +6018,12 @@ impl TensorDynLen {
         old_index: &DynIndex,
         new_indices: &[DynIndex],
         order: LinearizationOrder,
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            !new_indices.is_empty(),
-            "unfuse_index requires at least one replacement index"
-        );
+    ) -> std::result::Result<Self, TensorDynLenError> {
+        if !(!new_indices.is_empty()) {
+            return Err(
+                anyhow::anyhow!("unfuse_index requires at least one replacement index").into(),
+            );
+        };
 
         let axis = self
             .indices
@@ -5837,10 +6033,12 @@ impl TensorDynLen {
 
         let replacement_dims: Vec<usize> = new_indices.iter().map(DynIndex::dim).collect();
         let replacement_product = checked_product(&replacement_dims)?;
-        anyhow::ensure!(
-            replacement_product == old_index.dim(),
-            "product of new index dimensions must match the replaced index dimension"
-        );
+        if !(replacement_product == old_index.dim()) {
+            return Err(anyhow::anyhow!(
+                "product of new index dimensions must match the replaced index dimension"
+            )
+            .into());
+        };
 
         let mut result_indices =
             Vec::with_capacity(self.indices.len() - 1usize + new_indices.len());
@@ -5885,6 +6083,9 @@ impl TensorDynLen {
 
     /// Create a scalar (0-dimensional) tensor from a supported element value.
     ///
+    /// # Errors
+    /// Returns an error when the element type is not supported (an
+    /// unsupported-dtype failure).
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5893,12 +6094,15 @@ impl TensorDynLen {
     /// assert_eq!(scalar.dims(), Vec::<usize>::new());
     /// assert_eq!(scalar.only().unwrap().real(), 42.0);
     /// ```
-    pub fn scalar<T: TensorElement>(value: T) -> Result<Self> {
+    pub fn scalar<T: TensorElement>(value: T) -> std::result::Result<Self, TensorDynLenError> {
         Self::from_dense(vec![], vec![value])
     }
 
     /// Create a tensor filled with zeros of a supported element type.
     ///
+    /// # Errors
+    /// Returns an error when the dimension product overflows (an overflow failure)
+    /// or the element type is unsupported.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5909,7 +6113,9 @@ impl TensorDynLen {
     /// let tensor = TensorDynLen::zeros::<f64>(vec![i, j]).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn zeros<T: TensorElement + Zero + Clone>(indices: Vec<DynIndex>) -> Result<Self> {
+    pub fn zeros<T: TensorElement + Zero + Clone>(
+        indices: Vec<DynIndex>,
+    ) -> std::result::Result<Self, TensorDynLenError> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
         let size: usize = dims.iter().product();
         Self::from_dense(indices, vec![T::zero(); size])
@@ -5925,17 +6131,15 @@ impl TensorDynLen {
     ///
     /// # Type Parameters
     /// * `T` - The scalar element type (`f32`, `f64`, `Complex32`, or
+    ///
     ///   `Complex64`).
     ///
     /// # Returns
     /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
-    /// Returns an error if the tensor's scalar type does not match `T`, if a
-    /// deferred eager operation failed, if authoritative storage cannot be
-    /// materialized, or if the eager backend context cannot be initialized for
-    /// materialization. Extraction preserves all four supported dtypes.
-    ///
+    /// Returns an error when the tensor dtype does not match the requested element
+    /// type (a scalar-kind mismatch) or materialization fails.
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -5946,8 +6150,8 @@ impl TensorDynLen {
     /// let data = tensor.to_vec::<f64>().unwrap();
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
-    pub fn to_vec<T: TensorElement>(&self) -> Result<Vec<T>> {
-        native_tensor_primal_to_dense_col_major(self.as_native()?)
+    pub fn to_vec<T: TensorElement>(&self) -> std::result::Result<Vec<T>, TensorDynLenError> {
+        native_tensor_primal_to_dense_col_major(self.as_native()?).map_err(TensorDynLenError::from)
     }
 
     /// Consume the tensor and return its indices with dense column-major values.
@@ -5959,16 +6163,15 @@ impl TensorDynLen {
     ///
     /// # Type Parameters
     /// * `T` - The scalar element type to extract: `f32`, `f64`, `Complex32`,
+    ///
     ///   or `Complex64`.
     ///
     /// # Returns
     /// The tensor's original indices and dense column-major flat data.
     ///
     /// # Errors
-    /// Returns an error if the tensor has tracked autodiff state, if the
-    /// requested scalar type does not match the tensor payload, or if dense
-    /// materialization fails.
-    ///
+    /// Returns an error when the tensor dtype does not match the requested element
+    /// type (a scalar-kind mismatch) or materialization fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, TensorDynLen};
@@ -5985,11 +6188,12 @@ impl TensorDynLen {
     /// assert_eq!(indices, vec![i, j]);
     /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
     /// ```
-    pub fn into_dense_col_major_parts<T: TensorElement>(self) -> Result<(Vec<DynIndex>, Vec<T>)> {
-        anyhow::ensure!(
-            !self.tracks_grad(),
-            "TensorDynLen::into_dense_col_major_parts cannot consume tensors with tracked autodiff state"
-        );
+    pub fn into_dense_col_major_parts<T: TensorElement>(
+        self,
+    ) -> std::result::Result<(Vec<DynIndex>, Vec<T>), TensorDynLenError> {
+        if !(!self.tracks_grad()) {
+            return Err(anyhow::anyhow!("TensorDynLen::into_dense_col_major_parts cannot consume tensors with tracked autodiff state").into());
+        };
         let data = self.to_vec::<T>()?;
         Ok((self.indices, data))
     }
@@ -5998,7 +6202,11 @@ impl TensorDynLen {
     ///
     /// Prefer the generic [`to_vec::<f64>()`](Self::to_vec) method.
     /// This wrapper is kept for C API compatibility.
-    pub fn as_slice_f64(&self) -> Result<Vec<f64>> {
+    /// # Errors
+    /// Returns an error when the tensor is not f64-compatible (a dtype mismatch)
+    /// or materialization fails.
+    ///
+    pub fn as_slice_f64(&self) -> std::result::Result<Vec<f64>, TensorDynLenError> {
         self.to_vec::<f64>()
     }
 
@@ -6006,7 +6214,11 @@ impl TensorDynLen {
     ///
     /// Prefer the generic [`to_vec::<Complex64>()`](Self::to_vec) method.
     /// This wrapper is kept for C API compatibility.
-    pub fn as_slice_c64(&self) -> Result<Vec<Complex64>> {
+    /// # Errors
+    /// Returns an error when the tensor is not c64-compatible (a dtype mismatch)
+    /// or materialization fails.
+    ///
+    pub fn as_slice_c64(&self) -> std::result::Result<Vec<Complex64>, TensorDynLenError> {
         self.to_vec::<Complex64>()
     }
 
@@ -6198,12 +6410,13 @@ fn map_payload_support_coordinate(
 
 fn decode_col_major_linear(linear: usize, dims: &[usize]) -> Result<Vec<usize>> {
     let total = checked_product(dims)?;
-    anyhow::ensure!(
-        linear < total,
-        "linear offset {} out of bounds for dims {:?}",
-        linear,
-        dims
-    );
+    if !(linear < total) {
+        return Err(anyhow::anyhow!(
+            "linear offset {} out of bounds for dims {:?}",
+            linear,
+            dims
+        ));
+    };
     let mut remaining = linear;
     let mut out = Vec::with_capacity(dims.len());
     for &dim in dims {
@@ -6214,21 +6427,23 @@ fn decode_col_major_linear(linear: usize, dims: &[usize]) -> Result<Vec<usize>> 
 }
 
 fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
-    anyhow::ensure!(
-        indices.len() == dims.len(),
-        "index rank {} does not match dims {:?}",
-        indices.len(),
-        dims
-    );
+    if !(indices.len() == dims.len()) {
+        return Err(anyhow::anyhow!(
+            "index rank {} does not match dims {:?}",
+            indices.len(),
+            dims
+        ));
+    };
     let mut linear = 0usize;
     let mut stride = 1usize;
     for (&index, &dim) in indices.iter().zip(dims.iter()) {
-        anyhow::ensure!(
-            index < dim,
-            "index {} out of bounds for dimension {}",
-            index,
-            dim
-        );
+        if !(index < dim) {
+            return Err(anyhow::anyhow!(
+                "index {} out of bounds for dimension {}",
+                index,
+                dim
+            ));
+        };
         linear += index * stride;
         stride = stride
             .checked_mul(dim)

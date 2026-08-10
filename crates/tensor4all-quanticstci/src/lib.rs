@@ -83,10 +83,12 @@
 //! | Vector/tensor-valued function | [`quanticscrossinterpolate_batched`] |
 
 mod batched;
+mod error;
 mod options;
 mod quantics_tci;
 
 pub use batched::{quanticscrossinterpolate_batched, QuanticsTensorCI2Batched};
+pub use error::QuanticsTCIError;
 pub use options::QtciOptions;
 pub use quantics_tci::{
     quanticscrossinterpolate, quanticscrossinterpolate_discrete,

@@ -77,6 +77,7 @@ use tensor4all_core::{
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
 use super::Operator;
+use crate::error::TreeTNOperationError;
 use crate::error::{
     format_anyhow_error, LinearOperatorIndexApplyError, LinearOperatorIndexBindingError,
     LinearOperatorTaggedApplyError,
@@ -238,6 +239,11 @@ impl ApplyOptions {
 ///
 /// The result `A|x⟩` as a TreeTN, or an error if application fails.
 ///
+/// # Errors
+///
+/// Returns an error when the operator and state are incompatible (a shape or
+/// /// index mismatch) or the application fails (a backend failure).
+///
 /// # Example
 ///
 /// ```
@@ -301,7 +307,7 @@ pub fn apply_linear_operator<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
     options: ApplyOptions,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
@@ -327,7 +333,8 @@ where
             "Operator nodes {:?} are not a subset of state nodes {:?}",
             op_nodes,
             state_nodes
-        ));
+        )
+        .into());
     };
 
     // 2. Transform state's site indices to operator's input indices
@@ -385,9 +392,9 @@ where
 /// A new operator with the requested true-index bindings.
 ///
 /// # Errors
-/// Returns an error if a replacement changes dimension, names an index not
-/// present in the corresponding mapping, or names the same source index more
-/// than once.
+///
+/// Returns an error when the index binding fails (a shape or index mismatch,
+/// /// or a missing-index failure).
 ///
 /// # Examples
 /// ```
@@ -457,7 +464,9 @@ where
 /// The result of applying the explicitly rebound operator to `state`.
 ///
 /// # Errors
-/// Returns an error if binding fails or if [`apply_linear_operator`] fails.
+///
+/// Returns an error when the operator and state are incompatible (a shape or
+/// /// index mismatch) or a mapped index is missing (a missing-index failure).
 ///
 /// # Examples
 /// ```
@@ -512,7 +521,7 @@ where
     let rebound = bind_linear_operator_indices(operator, input_pairs, output_pairs)?;
     apply_linear_operator(&rebound, state, options).map_err(|error| {
         LinearOperatorIndexApplyError::ApplyFailed {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })
 }
@@ -535,6 +544,7 @@ where
 /// * `state` - State containing numbered-tagged external indices.
 /// * `tag_prefix` - Prefix before the equals sign, such as `"k"` or `"x"`.
 /// * `start_index` - First numbered tag to select. Use `1` for Quantics.jl-style
+///
 ///   tags such as `"k=1"`, `"k=2"`, ...
 /// * `options` - Apply algorithm and truncation options.
 ///
@@ -542,9 +552,9 @@ where
 /// The result of applying `operator` to the selected state indices.
 ///
 /// # Errors
-/// Returns an error if numbered-tag selection fails, if the operator has
-/// unequal input/output mapping counts, if binding selected indices fails, or
-/// if the underlying apply algorithm fails.
+///
+/// Returns an error when a numbered tag is ambiguous or missing (a
+/// /// missing-index failure) or the application fails (a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1347,6 +1357,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     type Index = T::Index;
+    type Error = crate::TreeTNOperationError;
 
     /// Return all external indices (true input and output indices).
     fn external_indices(&self) -> Vec<Self::Index> {
@@ -1371,14 +1382,19 @@ where
     /// Replace an external index (true index) in this operator.
     ///
     /// This updates the mapping but does NOT modify the internal MPO tensors.
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
             return Err(anyhow::anyhow!(
                 "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
                 old_index.dim(),
                 new_index.dim()
-            ));
+            )
+            .into());
         }
 
         let mut result = self.clone();
@@ -1411,7 +1427,8 @@ where
         Err(anyhow::anyhow!(
             "Index {:?} not found in LinearOperator mappings",
             old_index.id()
-        ))
+        )
+        .into())
     }
 
     /// Replace multiple external indices.
@@ -1419,13 +1436,14 @@ where
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         if old_indices.len() != new_indices.len() {
             return Err(anyhow::anyhow!(
                 "Length mismatch: {} old indices, {} new indices",
                 old_indices.len(),
                 new_indices.len()
-            ));
+            )
+            .into());
         }
         let mut seen = HashSet::new();
         for old in old_indices {
@@ -1433,7 +1451,8 @@ where
                 return Err(anyhow::anyhow!(
                     "Duplicate old index {:?} in LinearOperator::replaceinds",
                     old.id()
-                ));
+                )
+                .into());
             }
         }
 

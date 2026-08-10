@@ -242,9 +242,11 @@ impl SplitOptions {
 ///
 /// Related types:
 /// - [`SplitOptions`] controls exact splitting plus any optional final sweep
+///
 ///   inside the split primitive.
 /// - [`SwapOptions`] controls bond truncation during site-index transport.
 /// - [`TruncationOptions`] can be applied once at the end of the full
+///
 ///   restructure to clean up bond dimensions on the final topology.
 ///
 /// When in doubt, start with `RestructureOptions::default()`: exact splitting,
@@ -382,6 +384,7 @@ impl RestructureOptions {
     ///
     /// # Arguments
     /// * `final_truncation` - Final cleanup sweep to run on the target
+    ///
     ///   topology.
     ///
     /// # Returns

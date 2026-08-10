@@ -7,8 +7,8 @@
 //! This is a foundation for `SiteIndexNetwork` and can be used independently
 //! when only the graph structure (without index information) is needed.
 
+use crate::error::TreeTNOperationError;
 use crate::named_graph::NamedGraph;
-use anyhow::Result;
 use petgraph::algo::astar;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::visit::{Bfs, DfsPostOrder};
@@ -25,8 +25,10 @@ use std::hash::Hash;
 ///
 /// # Note on ordering
 /// - For path-based canonicalization (moving ortho center), edges are connected:
+///
 ///   each edge's `to` equals the next edge's `from`.
 /// - For full canonicalization (from scratch), edges represent parent edges in
+///
 ///   post-order DFS traversal, which may not be connected as a path but
 ///   guarantees correct processing order (children before parents).
 ///
@@ -151,7 +153,15 @@ where
     /// Add a node to the network.
     ///
     /// Returns an error if the node already exists.
-    pub fn add_node(&mut self, node_name: NodeName) -> Result<NodeIndex> {
+    /// # Errors
+    ///
+    /// Returns an error when the node is a duplicate (a duplicate operation
+    ///  failure) or the network is invalid (an invalid-topology failure).
+    ///
+    pub fn add_node(
+        &mut self,
+        node_name: NodeName,
+    ) -> std::result::Result<NodeIndex, TreeTNOperationError> {
         self.graph.add_node(node_name, ())
     }
 
@@ -163,7 +173,16 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
-    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
+    /// # Errors
+    ///
+    /// Returns an error when an endpoint node is not found (a missing-index
+    ///  failure) or the edge is a duplicate (a duplicate operation failure).
+    ///
+    pub fn add_edge(
+        &mut self,
+        n1: &NodeName,
+        n2: &NodeName,
+    ) -> std::result::Result<EdgeIndex, TreeTNOperationError> {
         self.graph.add_edge(n1, n2, ())
     }
 
@@ -178,7 +197,16 @@ where
     }
 
     /// Rename an existing node.
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
+    /// # Errors
+    ///
+    /// Returns an error when the node is not found (a missing-index failure) or
+    ///  the new name is a duplicate (a duplicate operation failure).
+    ///
+    pub fn rename_node(
+        &mut self,
+        old_name: &NodeName,
+        new_name: NodeName,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         self.graph.rename_node(old_name, new_name)
     }
 
@@ -474,7 +502,9 @@ where
         let g = self.graph.graph();
         let mut edges = Vec::with_capacity(nodes.len().saturating_sub(1));
 
-        // Build parent map using BFS from root
+        // Build parent map using BFS from root: a single O(V + E) pass where
+        // each vertex's first discoverer becomes its parent, yielding a rooted
+        // tree orientation over the connected component.
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut bfs = Bfs::new(g, root);
         while let Some(node) = bfs.next(g) {
@@ -509,6 +539,7 @@ where
     ///
     /// # Arguments
     /// * `target_region` - Set of NodeIndex that forms the canonical center region
+    ///
     ///   (must be non-empty and connected)
     ///
     /// # Returns

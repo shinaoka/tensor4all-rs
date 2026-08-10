@@ -58,6 +58,11 @@ impl Default for FitOptions {
 ///
 /// # Returns
 /// The contracted MPO C with bond dimension controlled by options
+/// # Errors
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
+///
 pub fn contract_fit<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,

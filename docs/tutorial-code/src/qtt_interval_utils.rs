@@ -24,6 +24,11 @@ pub struct SamplePoint {
 }
 
 /// Evaluate the QTT at every grid point and compare it with the analytic target.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples<F>(
     qtci: &QuanticsTensorCI2<f64>,
     grid: &DiscretizedGrid,
@@ -138,6 +143,11 @@ pub fn print_summary(
 }
 
 /// Write the point-wise comparison table used by Julia for plotting.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     // Plain CSV output: one row per grid point so Julia can recreate the figure.
     let file = File::create(path)?;
@@ -156,6 +166,11 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 }
 
 /// Write the bond-dimension profile used by the Julia line plot.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(path: &Path, bond_dims: &[usize]) -> Result<(), Box<dyn Error>> {
     // Plain CSV output: one row per bond in the QTT.
     let file = File::create(path)?;

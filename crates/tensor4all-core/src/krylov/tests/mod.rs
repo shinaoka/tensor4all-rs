@@ -41,12 +41,17 @@ struct PlainVector {
 
 impl TensorIndex for PlainVector {
     type Index = DynIndex;
+    type Error = TensorVectorSpaceError;
 
     fn external_indices(&self) -> Vec<Self::Index> {
         Vec::new()
     }
 
-    fn replaceind(&self, _old_index: &Self::Index, _new_index: &Self::Index) -> Result<Self> {
+    fn replaceind(
+        &self,
+        _old_index: &Self::Index,
+        _new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         Ok(self.clone())
     }
 
@@ -54,27 +59,32 @@ impl TensorIndex for PlainVector {
         &self,
         _old_indices: &[Self::Index],
         _new_indices: &[Self::Index],
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         Ok(self.clone())
     }
 }
 
 impl TensorVectorSpace for PlainVector {
-    type Error = TensorVectorSpaceError;
-
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|x| x * x).sum())
     }
 
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
-        anyhow::ensure!(
-            self.data.len() == other.data.len(),
-            "vector lengths must match"
-        );
-        anyhow::ensure!(
-            a.is_real() && b.is_real(),
-            "PlainVector test helper only supports real coefficients"
-        );
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        if self.data.len() != other.data.len() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "vector lengths must match"
+            )));
+        }
+        if !(a.is_real() && b.is_real()) {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "PlainVector test helper only supports real coefficients"
+            )));
+        }
         let data = self
             .data
             .iter()
@@ -84,21 +94,23 @@ impl TensorVectorSpace for PlainVector {
         Ok(Self { data })
     }
 
-    fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        anyhow::ensure!(
-            scalar.is_real(),
-            "PlainVector test helper only supports real coefficients"
-        );
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        if !scalar.is_real() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "PlainVector test helper only supports real coefficients"
+            )));
+        }
         Ok(Self {
             data: self.data.iter().map(|&x| scalar.real() * x).collect(),
         })
     }
 
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
-        anyhow::ensure!(
-            self.data.len() == other.data.len(),
-            "vector lengths must match"
-        );
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        if self.data.len() != other.data.len() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "vector lengths must match"
+            )));
+        }
         Ok(AnyScalar::new_real(
             self.data
                 .iter()
@@ -701,6 +713,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
                 calls.set(call + 1);
                 if call == 2 {
                     x.scale(AnyScalar::new_real(2.0))
+                        .map_err(anyhow::Error::from)
                 } else {
                     Ok(x.clone())
                 }
@@ -1162,6 +1175,7 @@ fn test_gmres_with_good_initial_guess() {
     let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> {
         // A = 2*I
         x.scale(AnyScalar::new_real(2.0))
+            .map_err(anyhow::Error::from)
     };
 
     let options = GmresOptions {

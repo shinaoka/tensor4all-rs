@@ -5,7 +5,6 @@
 //! can be implemented by both dense tensors and tensor networks (like TreeTN).
 
 use crate::IndexLike;
-use anyhow::Result;
 use std::fmt::Debug;
 
 /// Trait for objects that have external indices and support index operations.
@@ -22,6 +21,13 @@ use std::fmt::Debug;
 pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// The index type used by this object.
     type Index: IndexLike;
+
+    /// Error type for fallible index operations.
+    ///
+    /// Implementations map their internal diagnostics into a typed,
+    /// source-preserving error; callers propagating into `anyhow::Result`
+    /// keep working through `From`.
+    type Error: std::error::Error + Send + Sync + 'static + From<anyhow::Error>;
 
     /// Return flattened external indices for this object.
     ///
@@ -56,7 +62,17 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the index replaced.
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `old_index` is not present (a
+    /// missing-index failure) or the replacement violates an index identity
+    /// invariant (an invalid replacement).
+    fn replaceind(
+        &self,
+        old_index: &Self::Index,
+        new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Replace multiple indices in this object.
     ///
@@ -71,8 +87,18 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the indices replaced.
-    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index])
-        -> Result<Self>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when an `old_indices` entry is not present
+    /// (a missing-index failure), when `old_indices` and `new_indices` differ
+    /// in length (a length mismatch), or when the replacement violates an
+    /// index identity invariant (an invalid replacement).
+    fn replaceinds(
+        &self,
+        old_indices: &[Self::Index],
+        new_indices: &[Self::Index],
+    ) -> std::result::Result<Self, Self::Error>;
 
     /// Replace indices using pairs of (old, new).
     ///
@@ -85,7 +111,17 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the indices replaced.
-    fn replaceinds_pairs(&self, pairs: &[(Self::Index, Self::Index)]) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when an `old` entry is not present (a
+    /// missing-index failure) or when the replacement violates an index
+    /// identity invariant (an invalid replacement); propagates failures from
+    /// [`Self::replaceinds`].
+    fn replaceinds_pairs(
+        &self,
+        pairs: &[(Self::Index, Self::Index)],
+    ) -> std::result::Result<Self, Self::Error> {
         let (old, new): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
         self.replaceinds(&old, &new)
     }

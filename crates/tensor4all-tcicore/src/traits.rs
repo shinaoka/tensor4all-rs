@@ -320,6 +320,11 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
 
     /// Find a new pivot that maximizes the local error
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -348,6 +353,11 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Find a new pivot in the given row/column subsets
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///

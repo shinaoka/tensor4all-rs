@@ -208,12 +208,11 @@ fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
 
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
     match tensor.dtype() {
-        DType::F64 => {
-            native_tensor_primal_to_dense_f64_col_major(tensor).map_err(SvdError::ComputationError)
-        }
+        DType::F64 => native_tensor_primal_to_dense_f64_col_major(tensor)
+            .map_err(|e| SvdError::ComputationError(e.source)),
         DType::C64 => native_tensor_primal_to_dense_c64_col_major(tensor)
             .map(|values| values.into_iter().map(|value| value.re).collect())
-            .map_err(SvdError::ComputationError),
+            .map_err(|e| SvdError::ComputationError(e.source)),
         other => Err(SvdError::ComputationError(anyhow::anyhow!(
             "native SVD returned unsupported singular-value scalar type {other:?}"
         ))),
@@ -287,6 +286,11 @@ fn svd_truncated_inner(
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Examples
 ///
 /// ```
@@ -318,6 +322,11 @@ pub fn svd<T>(
 ///
 /// This function allows per-call control of the truncation policy via `SvdOptions`.
 /// If `options.policy` is `None`, it uses the global default policy.
+///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -376,7 +385,7 @@ pub fn svd_with<T>(
     let v = vh
         .conj()
         .permute(&perm)
-        .map_err(SvdError::ComputationError)?;
+        .map_err(|e| SvdError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok((u, s, v))
 }

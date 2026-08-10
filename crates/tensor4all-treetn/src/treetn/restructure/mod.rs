@@ -23,6 +23,7 @@ use petgraph::stable_graph::NodeIndex;
 use tensor4all_core::{IndexLike, TensorLike};
 
 use super::TreeTN;
+use crate::error::TreeTNOperationError;
 use crate::{RestructureOptions, SiteIndexNetwork};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1199,7 +1200,10 @@ where
             let split = tree
                 .split_to(split_target.as_ref(), &options.split)
                 .context("restructure_to: split phase")?;
-            split.fuse_to(target).context("restructure_to: fuse phase")
+            split
+                .fuse_to(target)
+                .context("restructure_to: fuse phase")
+                .map_err(TreeTNOperationError::from)
         }
     }?;
 
@@ -1230,15 +1234,20 @@ where
     ///
     /// The current staged implementation already handles:
     /// - fuse-only restructures, where each current node maps to exactly one
+    ///
     ///   target node;
     /// - split-only restructures, where each target node maps to exactly one
+    ///
     ///   current node;
     /// - swap-only restructures, where the current and target topologies are
+    ///
     ///   tree-isomorphic and only the site assignments differ;
     /// - conservative path-based swap-then-fuse restructures, where the
+    ///
     ///   current nodes already map uniquely to target nodes but their target
     ///   groups must be rearranged into contiguous path blocks before fusing;
     /// - conservative mixed split-then-fuse restructures, where each current
+    ///
     ///   node has at most one cross-node target fragment that must retain the
     ///   original external bonds.
     ///
@@ -1249,16 +1258,20 @@ where
     ///
     /// Related types:
     /// - [`RestructureOptions`] configures the split, transport, and optional
+    ///
     ///   final truncation phases.
     /// - [`SiteIndexNetwork`] describes the desired final topology plus site
+    ///
     ///   grouping.
     /// - [`TreeTN::split_to`](crate::treetn::TreeTN::split_to) and
+    ///
     ///   [`TreeTN::swap_site_indices`](crate::treetn::TreeTN::swap_site_indices)
     ///   remain the lower-level building blocks that the executor will use.
     ///
     /// # Arguments
     /// * `target` - Desired final topology and site grouping.
     /// * `options` - Phase-specific options for split, transport, and optional
+    ///
     ///   final truncation.
     ///
     /// # Returns
@@ -1266,9 +1279,9 @@ where
     /// network.
     ///
     /// # Errors
-    /// Returns an error when the target is structurally incompatible with the
-    /// current network, or when the requested restructure still needs the
-    /// staged planner paths for mixed split/move/fuse execution.
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///
@@ -1307,7 +1320,7 @@ where
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
         options: &RestructureOptions,
-    ) -> Result<TreeTN<T, TargetV>>
+    ) -> std::result::Result<TreeTN<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
         <T::Index as IndexLike>::Id:
@@ -1315,7 +1328,9 @@ where
     {
         let plan = build_plan::<T, V, TargetV>(self.site_index_network(), target, &self.graph)
             .context("restructure_to: build plan")?;
-        execute_plan(self, plan, target, options).context("restructure_to: execute plan")
+        execute_plan(self, plan, target, options)
+            .context("restructure_to: execute plan")
+            .map_err(TreeTNOperationError::from)
     }
 }
 

@@ -72,6 +72,11 @@ impl TagSet {
 
     /// Create a tag set from a comma-separated string.
     #[allow(clippy::should_implement_trait)]
+    /// # Errors
+    ///
+    /// Returns an error when the string cannot be parsed as an index (an
+    /// /// invalid-input failure).
+    ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         Ok(Self(Arc::new(InlineTagSet::from_str(s)?)))
     }
@@ -79,6 +84,11 @@ impl TagSet {
     /// Create a tag set from a slice of tag strings.
     ///
     /// Returns an error if any tag contains a comma (reserved as separator in `from_str`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tag string is invalid (an invalid-input
+    /// /// failure).
     ///
     /// # Example
     /// ```
@@ -333,6 +343,10 @@ impl Index<DynId, TagSet> {
     /// For sharing the same tag across many indices, create the `TagSet`
     /// once and use `new_dyn_with_tags` instead.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the tag is invalid (an invalid-input failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -355,6 +369,11 @@ impl Index<DynId, TagSet> {
     ///
     /// This is a convenience method for creating bond indices commonly used in tensor
     /// decompositions like SVD and QR factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tag construction fails (an invalid-input
+    /// failure). No dimension validation is performed.
     ///
     /// # Examples
     ///
@@ -513,7 +532,7 @@ impl IndexLike for DynIndex {
             acc.checked_mul(idx.dim())
                 .ok_or_else(|| anyhow::anyhow!("product link dimension overflow"))
         })?;
-        DynIndex::new_bond(dim)
+        DynIndex::new_bond(dim).map_err(|e| anyhow::anyhow!("failed to create bond index: {e}"))
     }
 }
 
@@ -529,6 +548,10 @@ impl DynIndex {
     /// # Returns
     /// A new index with a unique identity and the specified dimension.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the bond dimension is invalid (a shape mismatch).
+    ///
     /// # Examples
     ///
     /// ```
@@ -537,8 +560,8 @@ impl DynIndex {
     /// let bond = DynIndex::new_bond(8).unwrap();
     /// assert_eq!(bond.dim(), 8);
     /// ```
-    pub fn new_bond(dim: usize) -> Result<Self> {
-        Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
+    pub fn new_bond(dim: usize) -> std::result::Result<Self, TagSetError> {
+        Index::new_link(dim)
     }
 
     /// Return a copy of this index with its prime level incremented by one.

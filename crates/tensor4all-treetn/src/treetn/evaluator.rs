@@ -1,3 +1,4 @@
+use crate::error::TreeTNOperationError;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -79,6 +80,7 @@ where
     /// # Arguments
     ///
     /// * `tree` - Tree tensor network whose local tensors and index mapping
+    ///
     ///   are captured by the evaluator.
     /// * `indices` - Complete input row order for future batch value arrays.
     ///
@@ -89,9 +91,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the tree is empty, `indices` is incomplete, contains
-    /// duplicates, contains an unknown site index, or a site index is not found
-    /// on its owning node tensor.
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -107,28 +108,35 @@ where
     /// assert_eq!(evaluator.input_count(), 1);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn new(tree: &TreeTN<T, V>, indices: &[T::Index]) -> Result<Self> {
+    pub fn new(
+        tree: &TreeTN<T, V>,
+        indices: &[T::Index],
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         if tree.node_count() == 0 {
-            return Err(anyhow::anyhow!("Cannot evaluate empty TreeTN"))
-                .context("TreeTNEvaluator::new: network must have at least one node");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("Cannot evaluate empty TreeTN")
+                    .context("TreeTNEvaluator::new: network must have at least one node"),
+            ));
         }
 
         let n_indices = indices.len();
         let total_site_indices = tree.site_index_network.site_index_count();
-        anyhow::ensure!(
-            n_indices == total_site_indices,
-            "TreeTNEvaluator::new: indices.len() ({}) != total site indices ({})",
-            n_indices,
-            total_site_indices
-        );
+        if !(n_indices == total_site_indices) {
+            return Err(anyhow::anyhow!(
+                "TreeTNEvaluator::new: indices.len() ({}) != total site indices ({})",
+                n_indices,
+                total_site_indices
+            )
+            .into());
+        };
 
         let mut seen = HashSet::with_capacity(n_indices);
         for index in indices {
-            anyhow::ensure!(
-                seen.insert(index),
-                "TreeTNEvaluator::new: duplicate index {:?}",
-                index
-            );
+            if !(seen.insert(index)) {
+                return Err(
+                    anyhow::anyhow!("TreeTNEvaluator::new: duplicate index {:?}", index).into(),
+                );
+            };
         }
 
         let mut entries_by_node: HashMap<V, Vec<EvaluatorSiteEntry<T::Index>>> = HashMap::new();
@@ -226,6 +234,7 @@ where
     /// # Arguments
     ///
     /// * `values` - Column-major coordinate array with one row per evaluator
+    ///
     ///   input index and one column per point.
     ///
     /// # Returns
@@ -234,8 +243,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if `values` is not rank-2, has the wrong leading
-    /// dimension, contains out-of-range coordinates, or contraction fails.
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///
@@ -254,18 +263,25 @@ where
     /// assert!((result[0].real() - 9.0).abs() < 1.0e-12);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn evaluate_batch(&self, values: ColMajorArrayRef<'_, usize>) -> Result<Vec<AnyScalar>> {
-        anyhow::ensure!(
-            values.shape().len() == 2,
-            "TreeTNEvaluator::evaluate_batch: values must be 2D, got {}D",
-            values.shape().len()
-        );
-        anyhow::ensure!(
-            values.shape()[0] == self.n_indices,
-            "TreeTNEvaluator::evaluate_batch: values.shape()[0] ({}) != indices.len() ({})",
-            values.shape()[0],
-            self.n_indices
-        );
+    pub fn evaluate_batch(
+        &self,
+        values: ColMajorArrayRef<'_, usize>,
+    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
+        if !(values.shape().len() == 2) {
+            return Err(anyhow::anyhow!(
+                "TreeTNEvaluator::evaluate_batch: values must be 2D, got {}D",
+                values.shape().len()
+            )
+            .into());
+        };
+        if !(values.shape()[0] == self.n_indices) {
+            return Err(anyhow::anyhow!(
+                "TreeTNEvaluator::evaluate_batch: values.shape()[0] ({}) != indices.len() ({})",
+                values.shape()[0],
+                self.n_indices
+            )
+            .into());
+        };
         let n_points = values.shape()[1];
 
         let mut results = Vec::with_capacity(n_points);

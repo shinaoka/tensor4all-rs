@@ -4,18 +4,18 @@
 //! - [`MergedBondInfo`]: Information about merged bond indices
 //! - [`compute_merged_bond_indices`]: Compute merged bond index information from two networks
 
+use crate::error::TreeTNOperationError;
 use petgraph::visit::EdgeRef;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use tensor4all_core::{sort_indices_deterministic, AnyScalar, IndexLike, TensorIndex, TensorLike};
 
 use super::TreeTN;
 
 /// Information about a merged bond index for direct-sum addition.
-///
 /// When adding two TreeTNs, each bond index in the result has dimension
 /// `dim_a + dim_b`, where `dim_a` and `dim_b` are the original bond dimensions.
 #[derive(Debug, Clone)]
@@ -61,8 +61,9 @@ where
     /// rewritten to match `template`.
     ///
     /// # Errors
-    /// Returns an error if the two networks have different topologies or
-    /// incompatible site-space dimensions on any node.
+    ///
+    /// Returns an error when the site spaces are incompatible (a shape mismatch)
+    /// /// or the reindexing fails.
     ///
     /// # Examples
     /// ```
@@ -81,7 +82,10 @@ where
     /// let aligned = state_b.reindex_site_space_like(&state_a).unwrap();
     /// assert!(aligned.share_equivalent_site_index_network(&state_a));
     /// ```
-    pub fn reindex_site_space_like(&self, template: &Self) -> Result<Self>
+    pub fn reindex_site_space_like(
+        &self,
+        template: &Self,
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         T::Index: Clone,
@@ -89,7 +93,10 @@ where
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         if !self.same_topology(template) {
-            bail!("reindex_site_space_like: networks have incompatible topologies");
+            return Err(anyhow::anyhow!(
+                "reindex_site_space_like: networks have incompatible topologies"
+            )
+            .into());
         }
 
         let mut old_indices = Vec::new();
@@ -104,12 +111,12 @@ where
             })?;
 
             if self_site_space.len() != template_site_space.len() {
-                bail!(
+                return Err(anyhow::anyhow!(
                     "reindex_site_space_like: node {:?} has {} site indices in self but {} in template",
                     node_name,
                     self_site_space.len(),
                     template_site_space.len()
-                );
+                ).into());
             }
 
             let self_sorted = Self::sorted_site_space(self_site_space);
@@ -117,12 +124,13 @@ where
 
             for (old_index, new_index) in self_sorted.iter().zip(template_sorted.iter()) {
                 if old_index.dim() != new_index.dim() {
-                    bail!(
-                        "reindex_site_space_like: node {:?} site dimension mismatch {} != {}",
+                    return Err(anyhow::anyhow!(
+                        "reindex_site_space_like: node {:?} site shape mismatch {} != {}",
                         node_name,
                         old_index.dim(),
                         new_index.dim()
-                    );
+                    )
+                    .into());
                 }
                 old_indices.push(old_index.clone());
                 new_indices.push(new_index.clone());
@@ -146,8 +154,9 @@ where
     /// The direct-sum addition result with site IDs matching `self`.
     ///
     /// # Errors
-    /// Returns an error if the two TreeTNs cannot be reindexed to the same site
-    /// space, or if the strict addition fails after reindexing.
+    ///
+    /// Returns an error when the site spaces are incompatible (a shape mismatch)
+    /// /// or the addition fails.
     ///
     /// # Examples
     /// ```
@@ -167,7 +176,10 @@ where
     /// assert_eq!(sum.node_count(), 2);
     /// assert!(sum.share_equivalent_site_index_network(&state_a));
     /// ```
-    pub fn add_reindexed_like_self(&self, other: &Self) -> Result<Self>
+    pub fn add_reindexed_like_self(
+        &self,
+        other: &Self,
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         T::Index: Clone,
@@ -190,14 +202,20 @@ where
     /// A HashMap mapping edge keys (node_name_pair in canonical order) to MergedBondInfo.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - Networks have incompatible topologies
-    /// - Bond indices cannot be found
+    /// Returns an error when the networks have incompatible topologies (a shape
+    /// or index mismatch) or a bond index cannot be found (a missing-index
+    /// failure).
     #[allow(clippy::type_complexity)]
+    /// # Errors
+    ///
+    /// Returns an error when the networks have incompatible topologies (a shape
+    ///     /// or index mismatch) or a bond index cannot be found (a missing-index
+    ///     /// failure).
+    ///
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
-    ) -> Result<HashMap<(V, V), MergedBondInfo<T::Index>>>
+    ) -> std::result::Result<HashMap<(V, V), MergedBondInfo<T::Index>>, TreeTNOperationError>
     where
         V: Ord,
     {
@@ -301,7 +319,9 @@ where
     /// A new TreeTN representing the sum.
     ///
     /// # Errors
-    /// Returns an error if the networks have incompatible structures.
+    ///
+    /// Returns an error when the networks are incompatible (a shape or index
+    /// /// mismatch) or the addition fails (a backend failure).
     ///
     /// # Examples
     ///
@@ -319,7 +339,7 @@ where
     /// let expected = TensorDynLen::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
     /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// ```
-    pub fn add(&self, other: &Self) -> Result<Self>
+    pub fn add(&self, other: &Self) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         T::Index: Eq + Hash,
@@ -328,9 +348,7 @@ where
     {
         // Verify same topology
         if !self.same_topology(other) {
-            return Err(anyhow::anyhow!(
-                "Cannot add TreeTNs with different topologies"
-            ));
+            return Err(anyhow::anyhow!("Cannot add TreeTNs with different topologies").into());
         }
         self.ensure_same_site_spaces(other)?;
 
@@ -394,15 +412,18 @@ where
             // For nodes with no bonds (single-node network), use element-wise addition
             // instead of direct_sum (which requires at least one index pair).
             if bond_pairs.is_empty() {
-                let sum_tensor =
-                    tensor_a.axpby(AnyScalar::new_real(1.0), tensor_b, AnyScalar::new_real(1.0))?;
+                let sum_tensor = tensor_a
+                    .axpby(AnyScalar::new_real(1.0), tensor_b, AnyScalar::new_real(1.0))
+                    .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 result_tensors.push(sum_tensor);
                 result_node_names.push(node_name);
                 continue;
             }
 
             // Compute direct sum
-            let direct_sum_result = tensor_a.direct_sum(tensor_b, &bond_pairs)?;
+            let direct_sum_result = tensor_a
+                .direct_sum(tensor_b, &bond_pairs)
+                .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
             let mut result_tensor = direct_sum_result.tensor;
 
             // For each edge, ensure we use consistent merged indices:
@@ -420,7 +441,9 @@ where
 
                 if let Some(stored_index) = edge_merged_indices.get(&edge_key) {
                     // Edge already processed - replace auto-generated index with stored one
-                    result_tensor = result_tensor.replaceind(new_index, stored_index)?;
+                    result_tensor = result_tensor
+                        .replaceind(new_index, stored_index)
+                        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 } else {
                     // First time seeing this edge - store the auto-generated index
                     edge_merged_indices.insert(edge_key, new_index.clone());
@@ -450,8 +473,9 @@ where
     /// A direct-sum TreeTN representing `a * self + b * other`.
     ///
     /// # Errors
-    /// Returns an error if scaling fails, or if strict direct-sum addition fails
-    /// because topology or site indices do not match.
+    ///
+    /// Returns an error when the networks are incompatible (a shape or index
+    /// /// mismatch) or the axpby fails (a backend failure).
     ///
     /// # Examples
     /// ```
@@ -471,7 +495,12 @@ where
     /// let expected = TensorDynLen::from_dense(vec![site], vec![-1.0, 0.0]).unwrap();
     /// assert!(dense.isapprox(&expected, 1.0e-12, 0.0).unwrap());
     /// ```
-    pub fn axpby<A, B>(&self, a: A, other: &Self, b: B) -> Result<Self>
+    pub fn axpby<A, B>(
+        &self,
+        a: A,
+        other: &Self,
+        b: B,
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         T::Index: Eq + Hash,
@@ -500,10 +529,10 @@ where
                 .site_space(&node_name)
                 .ok_or_else(|| anyhow::anyhow!("site space not found for node {:?}", node_name))?;
             if self_site_space != other_site_space {
-                bail!(
+                return Err(anyhow::anyhow!(
                     "Cannot add TreeTNs with different site indices at node {:?}",
                     node_name
-                );
+                ));
             }
         }
         Ok(())

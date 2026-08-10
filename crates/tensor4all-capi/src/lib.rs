@@ -246,6 +246,7 @@ pub(crate) fn panic_message(info: &(dyn std::any::Any + Send)) -> String {
 ///
 /// # Arguments
 /// * `buf` - Output buffer for the error message (UTF-8, null-terminated).
+///
 ///   Pass null to query required length only.
 /// * `buf_len` - Size of the buffer in bytes.
 /// * `out_len` - Output: required buffer length including null terminator.

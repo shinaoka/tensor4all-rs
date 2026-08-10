@@ -49,6 +49,11 @@ pub fn exact_integral(config: &IntervalTutorialConfig) -> f64 {
 }
 
 /// Build the one-dimensional physical grid used by the interval tutorials.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_interval_grid(
     config: &IntervalTutorialConfig,
 ) -> Result<DiscretizedGrid, Box<dyn Error>> {
@@ -60,6 +65,11 @@ pub fn build_interval_grid(
 }
 
 /// Build the QTT for a scalar function on the fixed interval grid.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_interval_qtt<F>(
     grid: &DiscretizedGrid,
     target_fn: F,

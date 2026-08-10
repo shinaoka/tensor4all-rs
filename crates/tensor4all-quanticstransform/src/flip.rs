@@ -2,6 +2,7 @@
 //!
 //! This transformation maps x -> 2^R - x in quantics representation.
 
+use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
@@ -25,9 +26,9 @@ use crate::common::{
 /// LinearOperator representing the flip transformation
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when one-site flip construction is
-/// requested, when the MPO site-list allocation exceeds checked bounds, or
-/// when internal MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -40,14 +41,17 @@ use crate::common::{
 /// // The operator has one MPO tensor per bit
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
-pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator> {
+pub fn flip_operator(
+    r: usize,
+    bc: BoundaryCondition,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     if r == 1 {
-        return Err(anyhow::anyhow!(
-            "MPO with one tensor is not supported for flip operator"
-        ));
+        return Err(
+            anyhow::anyhow!("MPO with one tensor is not supported for flip operator").into(),
+        );
     }
 
     let mpo = flip_mpo(r, bc)?;
@@ -69,8 +73,9 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
 /// * `target_var` - Which variable to flip (0-indexed, must be < nvariables)
 ///
 /// # Errors
-/// Returns an error when `r` is zero or one, when `nvariables` or `target_var`
-/// is invalid, or when embedding/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -86,14 +91,14 @@ pub fn flip_operator_multivar(
     bc: BoundaryCondition,
     nvariables: usize,
     target_var: usize,
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     if r == 1 {
-        return Err(anyhow::anyhow!(
-            "MPO with one tensor is not supported for flip operator"
-        ));
+        return Err(
+            anyhow::anyhow!("MPO with one tensor is not supported for flip operator").into(),
+        );
     }
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;

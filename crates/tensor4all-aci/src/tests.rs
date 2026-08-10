@@ -1226,7 +1226,7 @@ fn validate_inputs_rejects_site_dim_mismatch() {
     let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
     let b = TensorTrain::<f64>::constant(&[2, 4], 1.0);
     let err = validate_inputs(&[a, b]).unwrap_err();
-    assert!(err.to_string().contains("site dimension mismatch"));
+    assert!(err.to_string().contains("site shape mismatch"));
 }
 
 #[test]

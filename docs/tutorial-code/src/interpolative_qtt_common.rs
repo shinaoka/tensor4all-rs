@@ -99,6 +99,11 @@ pub fn interpolation_options(config: &InterpolativeQttTutorialConfig) -> Interpo
 }
 
 /// Build the smooth one-dimensional single-scale QTT.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_single_scale_smooth_qtt(
     config: &InterpolativeQttTutorialConfig,
 ) -> Result<TensorTrain<f64>, Box<dyn Error>> {
@@ -114,6 +119,11 @@ pub fn build_single_scale_smooth_qtt(
 }
 
 /// Build the one-dimensional multiscale inverse-square QTT.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_multi_scale_inverse_square_1d_qtt(
     config: &InterpolativeQttTutorialConfig,
 ) -> Result<TensorTrain<f64>, Box<dyn Error>> {
@@ -131,6 +141,11 @@ pub fn build_multi_scale_inverse_square_1d_qtt(
 }
 
 /// Build the two-dimensional multiscale radial inverse-square QTT.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_multi_scale_inverse_square_2d_qtt(
     config: &InterpolativeQttTutorialConfig,
 ) -> Result<TensorTrain<f64>, Box<dyn Error>> {
@@ -182,6 +197,11 @@ fn quantics_to_tt_indices(quantics: &[i64]) -> Result<Vec<usize>, Box<dyn Error>
 }
 
 /// Collect full one-dimensional grid samples for plotting and verification.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_1d_samples<F>(
     case_name: &'static str,
     tt: &TensorTrain<f64>,
@@ -219,6 +239,11 @@ where
 }
 
 /// Collect full two-dimensional grid samples for plotting and verification.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_2d_samples<F>(
     tt: &TensorTrain<f64>,
     bits: usize,
@@ -301,6 +326,11 @@ pub fn max_abs_error_2d(samples: &[InterpolativeQtt2dSample]) -> f64 {
 }
 
 /// Write one-dimensional samples to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_1d_samples_csv(
     path: &Path,
     samples: &[InterpolativeQtt1dSample],
@@ -321,6 +351,11 @@ pub fn write_1d_samples_csv(
 }
 
 /// Write two-dimensional samples to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_2d_samples_csv(
     path: &Path,
     samples: &[InterpolativeQtt2dSample],
@@ -347,6 +382,11 @@ pub fn write_2d_samples_csv(
 }
 
 /// Write bond dimensions to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(
     path: &Path,
     bond_dims: &[InterpolativeBondDimRow],

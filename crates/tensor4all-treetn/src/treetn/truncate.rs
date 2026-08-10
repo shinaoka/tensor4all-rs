@@ -10,6 +10,7 @@
 //!
 //! This ensures all bonds are optimally truncated in both directions.
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashSet;
 use std::hash::Hash;
 
@@ -38,6 +39,11 @@ where
     /// 1. Canonicalize the network towards the center (required for truncation)
     /// 2. Generate a two-site sweep plan using Euler tour traversal
     /// 3. Apply SVD-based truncation at each step, visiting each edge twice
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///
@@ -77,7 +83,7 @@ where
         mut self,
         canonical_region: impl IntoIterator<Item = V>,
         options: TruncationOptions,
-    ) -> Result<Self>
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
@@ -94,11 +100,16 @@ where
     /// Truncate the network in-place towards the specified center using options.
     ///
     /// This is the `&mut self` version of [`Self::truncate`].
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     pub fn truncate_mut(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
         options: TruncationOptions,
-    ) -> Result<()>
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
@@ -109,6 +120,7 @@ where
             options.truncation.max_rank,
             "truncate_mut",
         )
+        .map_err(TreeTNOperationError::from)
     }
 
     /// Internal implementation for truncation.
@@ -137,8 +149,8 @@ where
             return Err(anyhow::anyhow!(
                 "truncate currently requires a single-node center, got {} nodes",
                 center_nodes.len()
-            ))
-            .context(format!("{}: multi-node center not supported", context_name));
+            )
+            .context(format!("{context_name}: multi-node center not supported")));
         }
 
         let center_node = center_nodes

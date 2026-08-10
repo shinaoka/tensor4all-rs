@@ -28,9 +28,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TENSORBACKEND = "tensor4all-tensorbackend"
 
-# Exact temporary exceptions: normal tenferro deps permitted outside the
-# tensorbackend route. Tuples are exact: adding a dependency to the tuple, or
-# keeping the tuple when the crate drops the dependency, both fail.
+# Approved exceptions: normal tenferro deps permitted outside the
+# tensorbackend route. These encode the sanctioned tenferro-backed abstractions
+# per the architecture rules (use tensorbackend and established tenferro-backed
+# abstractions rather than local dense/linalg implementations):
+# - tensor4all-core: eager autodiff integration (tenferro-ad EagerTensor
+#   reverse-mode graph, tenferro-einsum AD einsum, tenferro-linalg eager
+#   full-piv-LU) and the DType/tensor interop used by the native eager path;
+#   the tensorbackend crate cannot host the AD layer.
+# - tensor4all-simplett: the tensor abstraction layer (tenferro-tensor
+#   Tensor/TypedTensor/TensorScalar) and einsum subscripts used by MPO/TT
+#   construction; routing every tensor op through tensorbackend would create a
+#   circular dependency.
+# - tensor4all-tcicore: tenferro-tensor TensorScalar bound on the CI factor
+#   scalar traits (a marker trait only, no backend calls).
+# - tensor4all-treetci: tenferro-linalg LinalgBackend + tenferro-tensor for
+#   materializing TreeTN site tensors during cross-interpolation assembly.
+# Tuples are exact: adding a dependency to the tuple, or keeping the tuple when
+# the crate drops the dependency, both fail.
 TENFERRO_EXCEPTIONS: dict[str, frozenset[str]] = {
     "tensor4all-core": frozenset(
         {"tenferro-ad", "tenferro-einsum", "tenferro-linalg", "tenferro-tensor"}

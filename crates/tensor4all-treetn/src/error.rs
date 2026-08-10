@@ -61,12 +61,12 @@ pub enum NumberedTagSelectionError {
 ///     old_dim: 2,
 ///     new_dim: 3,
 /// };
-/// assert!(err.to_string().contains("input index dimension mismatch"));
+/// assert!(err.to_string().contains("input index shape mismatch"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LinearOperatorIndexBindingError {
     /// A replacement would change an index dimension.
-    #[error("{role} index dimension mismatch: old dimension {old_dim} vs new dimension {new_dim}")]
+    #[error("{role} index shape mismatch: old dimension {old_dim} vs new dimension {new_dim}")]
     DimensionMismatch {
         /// Binding role, currently `"input"` or `"output"`.
         role: &'static str,
@@ -272,7 +272,7 @@ mod tests {
                 new_dim: 3,
             }
             .to_string(),
-            "input index dimension mismatch: old dimension 2 vs new dimension 3"
+            "input index shape mismatch: old dimension 2 vs new dimension 3"
         );
         assert_eq!(
             LinearOperatorIndexBindingError::DuplicateSourceIndex {
@@ -395,5 +395,31 @@ mod tests {
         let error = anyhow::anyhow!("root").context("outer context");
 
         assert_eq!(format_anyhow_error(error), "outer context: root");
+    }
+}
+
+/// Error returned by general TreeTN and operator index operations.
+///
+/// Wraps the source diagnostic from the underlying tensor operation, so
+/// callers propagating into `anyhow::Result` keep the full source chain.
+#[derive(Debug, thiserror::Error)]
+#[error("TreeTN operation failed: {source}")]
+pub struct TreeTNOperationError {
+    /// Original tensor/network diagnostic.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for TreeTNOperationError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
+impl From<tensor4all_core::TensorDynLenError> for TreeTNOperationError {
+    fn from(source: tensor4all_core::TensorDynLenError) -> Self {
+        Self {
+            source: anyhow::Error::new(source),
+        }
     }
 }

@@ -8,12 +8,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::error::{QuanticsTCIError, Result as QtciResult};
 use anyhow::{anyhow, Result};
 use quanticsgrids::DiscretizedGrid;
 use tensor4all_core::TensorElement;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
-use tensor4all_treetci::materialize::FullPivLuScalar;
+use tensor4all_tensorbackend::FullPivLuScalar;
 
 use crate::options::QtciOptions;
 use crate::quantics_tci::quanticscrossinterpolate;
@@ -166,6 +167,7 @@ where
 /// * `grid` - Discretized grid describing the function domain
 /// * `f` - Function to interpolate, returns a `Vec<V>` of length `product(output_dims)`
 /// * `output_dims` - Shape of the function output (e.g., `&[3]` for 3-vector,
+///
 ///   `&[2, 2]` for 2x2 matrix)
 /// * `initial_pivots` - Initial pivot grid indices (optional)
 /// * `options` - TCI options
@@ -173,6 +175,13 @@ where
 /// # Returns
 ///
 /// Tuple of ([`QuanticsTensorCI2Batched`], max_ranks_across_components, max_errors_across_components)
+///
+/// # Errors
+///
+/// Returns an error when the grid, output dimensions, or options are invalid (a
+/// [`QuanticsTCIError::InvalidConfiguration`]), an initial pivot conversion
+/// fails, or the underlying TCI construction fails (a
+/// [`QuanticsTCIError::Operation`]).
 ///
 /// # Examples
 ///
@@ -209,21 +218,28 @@ pub fn quanticscrossinterpolate_batched<V, F>(
     output_dims: &[usize],
     initial_pivots: Option<Vec<Vec<i64>>>,
     options: QtciOptions,
-) -> Result<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
+) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
     F: Fn(&[f64]) -> Vec<V> + 'static,
-    V: TTScalar + Default + Clone + 'static + TensorElement + FullPivLuScalar,
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + TensorElement
+        + tensor4all_tcicore::MatrixLuciScalar
+        + FullPivLuScalar,
 {
     // Validate output_dims
     if output_dims.is_empty() {
-        return Err(anyhow!("output_dims must not be empty"));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: "output_dims must not be empty".to_string(),
+        });
     }
     let n_components: usize = output_dims.iter().product();
     if n_components == 0 {
-        return Err(anyhow!(
-            "product of output_dims must be positive, got 0 from {:?}",
-            output_dims
-        ));
+        return Err(QuanticsTCIError::InvalidConfiguration {
+            message: format!("product of output_dims must be positive, got 0 from {output_dims:?}"),
+        });
     }
 
     // Shared cache: maps coordinate bits to function output vector.
@@ -307,9 +323,11 @@ where
 ///
 /// The combination strategy ensures TensorTrain validity:
 /// - **First site** (`left_dim = 1` for all components): the component tensors
+///
 ///   are concatenated along the right bond, giving shape `(1, site_dim, sum_right)`.
 /// - **Middle sites**: block-diagonal in both bond dimensions.
 /// - **Last grid site** (`right_dim = 1` for all components): block-diagonal in
+///
 ///   left bond, concatenated right bond gives `(sum_left, site_dim, n_components)`.
 ///
 /// A final selector site of shape `(total_right_bond, n_components, 1)` is

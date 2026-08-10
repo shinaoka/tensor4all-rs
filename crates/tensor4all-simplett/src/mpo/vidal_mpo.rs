@@ -24,6 +24,11 @@ pub struct VidalMPO<T: TTScalar> {
 
 impl<T: TTScalar> VidalMPO<T> {
     /// Create a VidalMPO from an MPO
+    /// # Errors
+    ///
+    /// Returns an error when the MPO cannot be converted (a shape or index
+    /// /// mismatch, or a backend failure).
+    ///
     pub fn from_mpo(_mpo: MPO<T>) -> Result<Self> {
         // TODO: Implement SVD-based conversion to Vidal form
         Err(MPOError::InvalidOperation {
@@ -96,6 +101,11 @@ impl<T: TTScalar> VidalMPO<T> {
     }
 
     /// Convert to basic MPO
+    /// # Errors
+    ///
+    /// Returns an error when the conversion fails (a shape or index mismatch,
+    /// /// or a backend failure).
+    ///
     pub fn into_mpo(self) -> Result<MPO<T>> {
         // TODO: Implement conversion back to MPO
         Err(MPOError::InvalidOperation {

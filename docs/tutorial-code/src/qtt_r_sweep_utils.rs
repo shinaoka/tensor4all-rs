@@ -39,6 +39,11 @@ pub fn discrete_index_to_unit_interval(index_1based: i64, npoints: usize) -> f64
 
 /// Re-evaluate one QTT on all grid points and collect the error against the
 /// analytic target function.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples<F>(
     r: usize,
     npoints: usize,
@@ -143,6 +148,11 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 }
 
 /// Write the sample table to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(path: &Path, samples: &[SweepSample]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
@@ -167,6 +177,11 @@ pub fn write_samples_csv(path: &Path, samples: &[SweepSample]) -> Result<(), Box
 }
 
 /// Write the per-R summary table to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_stats_csv(path: &Path, stats: &[SweepStats]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);

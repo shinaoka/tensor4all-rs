@@ -4,9 +4,10 @@
 //!
 //! Note: Currently only supports `DynId` indices (the default dynamic index type).
 
+use crate::error::TreeTNOperationError;
 use crate::site_index_network::SiteIndexNetwork;
 use crate::treetn::TreeTN;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use rand::Rng;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -77,6 +78,11 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// * `site_network` - Network topology and site (physical) indices
 /// * `link_space` - Specification for bond dimensions
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Example
 /// ```
 /// use tensor4all_treetn::{SiteIndexNetwork, random_treetn, LinkSpace};
@@ -102,7 +108,7 @@ pub fn random_treetn<T, R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
 where
     T: RandomScalar,
     R: Rng,

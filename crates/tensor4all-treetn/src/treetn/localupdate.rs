@@ -7,11 +7,12 @@
 //!
 //! These operations are fundamental for local update algorithms in tensor networks.
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 
 use tensor4all_core::{IndexLike, TensorLike};
 
@@ -214,10 +215,15 @@ where
 ///
 /// # Returns
 /// Vector of boundary edges, each containing the node in region, neighbor outside, and bond index.
+/// # Errors
+///
+/// Returns an error when the region or graph is invalid (an invalid-topology
+/// /// failure).
+///
 pub fn get_boundary_edges<T, V>(
     treetn: &TreeTN<T, V>,
     region: &[V],
-) -> Result<Vec<BoundaryEdge<T, V>>>
+) -> std::result::Result<Vec<BoundaryEdge<T, V>>, TreeTNOperationError>
 where
     T: TensorLike,
     T::Index: IndexLike,
@@ -276,11 +282,16 @@ where
     ///
     /// This is called with the full TreeTN state *before* the update is applied.
     /// Implementors can use it to validate assumptions or prefetch/update caches.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn before_step(
         &mut self,
         _step: &LocalUpdateStep<V>,
         _full_treetn_before: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         Ok(())
     }
 
@@ -290,6 +301,7 @@ where
     /// * `subtree` - The extracted subtree to update
     /// * `step` - The current step information (nodes and new_center)
     /// * `full_treetn` - Reference to the full (global) TreeTN. This provides global context
+    ///
     ///   (e.g., topology, neighbor relations, and index/bond metadata) that some update
     ///   algorithms may need. It may be unused by simple updaters.
     ///
@@ -298,13 +310,16 @@ where
     /// (same nodes, same external indices, same ortho_towards structure).
     ///
     /// # Errors
-    /// Returns an error if the update fails (e.g., SVD doesn't converge).
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn update(
         &mut self,
         subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>>;
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>;
 
     /// Optional hook called after an update step has been applied to the full TreeTN.
     ///
@@ -313,11 +328,16 @@ where
     /// - The canonical center has been moved to `step.new_center`
     ///
     /// Implementors can use this to update caches that must see the post-update state.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn after_step(
         &mut self,
         _step: &LocalUpdateStep<V>,
         _full_treetn_after: &TreeTN<T, V>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         Ok(())
     }
 }
@@ -345,18 +365,20 @@ where
 /// `Ok(())` if the sweep completes successfully.
 ///
 /// # Errors
-/// Returns an error if:
-/// - TreeTN is not canonicalized (canonical_region is empty)
-/// - canonical_region is not a single node
-/// - canonical_region is not within the extracted subtree
-/// - Subtree extraction fails
-/// - The updater returns an error
-/// - Subtree replacement fails
+///
+/// Returns an error when a local update in the sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
+/// # Errors
+///
+/// Returns an error when a local update in the sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 pub fn apply_local_update_sweep<T, V, U>(
     treetn: &mut TreeTN<T, V>,
     plan: &LocalUpdateSweepPlan<V>,
     updater: &mut U,
-) -> Result<()>
+) -> std::result::Result<(), TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -367,31 +389,35 @@ where
         // Validate: canonical_region must be a single node within the step's nodes
         let canonical_region = treetn.canonical_region();
         if canonical_region.is_empty() {
-            return Err(anyhow::anyhow!(
-                "TreeTN is not canonicalized: canonical_region is empty"
-            ))
-            .context("apply_local_update_sweep: TreeTN must be canonicalized before sweep");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("TreeTN is not canonicalized: canonical_region is empty")
+                    .context("apply_local_update_sweep: TreeTN must be canonicalized before sweep"),
+            ));
         }
         if canonical_region.len() != 1 {
-            return Err(anyhow::anyhow!(
-                "canonical_region must be a single node, got {} nodes",
-                canonical_region.len()
-            ))
-            .context("apply_local_update_sweep: canonical_region must be a single node");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "canonical_region must be a single node, got {} nodes",
+                    canonical_region.len()
+                )
+                .context("apply_local_update_sweep: canonical_region must be a single node"),
+            ));
         }
         let center_node = canonical_region.iter().next().ok_or_else(|| {
             anyhow::anyhow!("canonical_region reported one node but yielded none")
         })?;
         let step_nodes_set: HashSet<V> = step.nodes.iter().cloned().collect();
         if !step_nodes_set.contains(center_node) {
-            return Err(anyhow::anyhow!(
-                "canonical_region {:?} is not within the extracted subtree {:?}",
-                center_node,
-                step.nodes
-            ))
-            .context(
-                "apply_local_update_sweep: canonical_region must be within extracted subtree",
-            );
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "canonical_region {:?} is not within the extracted subtree {:?}",
+                    center_node,
+                    step.nodes
+                )
+                .context(
+                    "apply_local_update_sweep: canonical_region must be within extracted subtree",
+                ),
+            ));
         }
 
         updater
@@ -489,18 +515,24 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn update(
         &mut self,
         mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         _full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTN<T, V>> {
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
         // TruncateUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
                 "TruncateUpdater requires exactly 2 nodes, got {}",
                 step.nodes.len()
-            ));
+            )
+            .into());
         }
 
         let node_a = &step.nodes[0];
@@ -603,21 +635,31 @@ where
     /// - Bond indices to excluded nodes become external (site) indices in the sub-tree
     /// - ortho_towards directions are copied for edges within the sub-tree
     /// - canonical_region is intersected with the extracted nodes
-    pub fn extract_subtree(&self, node_names: &[V]) -> Result<Self>
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
+    pub fn extract_subtree(
+        &self,
+        node_names: &[V],
+    ) -> std::result::Result<Self, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Ord,
     {
         if node_names.is_empty() {
-            return Err(anyhow::anyhow!("Cannot extract empty subtree"));
+            return Err(anyhow::anyhow!("Cannot extract empty subtree").into());
         }
 
         // Validate all nodes exist
         for name in node_names {
             if self.graph.node_index(name).is_none() {
-                return Err(anyhow::anyhow!("Node {:?} does not exist", name))
-                    .context("extract_subtree: invalid node name");
+                return Err(TreeTNOperationError::from(
+                    anyhow::anyhow!("Node {:?} does not exist", name)
+                        .context("extract_subtree: invalid node name"),
+                ));
             }
         }
 
@@ -628,10 +670,10 @@ where
             .collect();
 
         if !self.site_index_network.is_connected_subset(&node_indices) {
-            return Err(anyhow::anyhow!(
-                "Specified nodes do not form a connected subtree"
-            ))
-            .context("extract_subtree: nodes must be connected");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("Specified nodes do not form a connected subtree")
+                    .context("extract_subtree: nodes must be connected"),
+            ));
         }
 
         let node_name_set: HashSet<V> = node_names.iter().cloned().collect();
@@ -764,7 +806,16 @@ where
     /// - Bond dimensions may differ (this is the typical use case for truncation)
     /// - ortho_towards may differ (will be copied from replacement)
     /// - The original TreeTN is modified in-place
-    pub fn replace_subtree(&mut self, node_names: &[V], replacement: &Self) -> Result<()>
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
+    pub fn replace_subtree(
+        &mut self,
+        node_names: &[V],
+        replacement: &Self,
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -780,10 +831,12 @@ where
         // Verify that replacement has the same topology (nodes and edges)
         // Note: site index network may differ due to bond dimension changes in truncation
         if !current_subtree.same_topology(replacement) {
-            return Err(anyhow::anyhow!(
-                "Replacement TreeTN does not have the same topology as the current subtree"
-            ))
-            .context("replace_subtree: topology mismatch");
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!(
+                    "Replacement TreeTN does not have the same topology as the current subtree"
+                )
+                .context("replace_subtree: topology mismatch"),
+            ));
         }
 
         let node_name_set: HashSet<V> = node_names.iter().cloned().collect();

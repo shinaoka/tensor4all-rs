@@ -3,6 +3,7 @@
 //! This module provides functions to decompose a dense tensor into a TreeTN
 //! using factorization algorithms.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
@@ -41,25 +42,31 @@ impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
     }
 
     /// Validate that this topology describes a tree.
-    pub fn validate(&self) -> Result<()> {
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
+    pub fn validate(&self) -> std::result::Result<(), TreeTNOperationError> {
         let n = self.nodes.len();
         if n == 0 {
-            return Err(anyhow::anyhow!("Tree topology must have at least one node"));
+            return Err(anyhow::anyhow!("Tree topology must have at least one node").into());
         }
         if n > 1 && self.edges.len() != n - 1 {
             return Err(anyhow::anyhow!(
                 "Tree must have exactly n-1 edges: got {} nodes and {} edges",
                 n,
                 self.edges.len()
-            ));
+            )
+            .into());
         }
         // Check all edge endpoints are valid nodes
         for (a, b) in &self.edges {
             if !self.nodes.contains_key(a) {
-                return Err(anyhow::anyhow!("Edge refers to unknown node"));
+                return Err(anyhow::anyhow!("Edge refers to unknown node").into());
             }
             if !self.nodes.contains_key(b) {
-                return Err(anyhow::anyhow!("Edge refers to unknown node"));
+                return Err(anyhow::anyhow!("Edge refers to unknown node").into());
             }
         }
         Ok(())
@@ -97,7 +104,7 @@ pub fn factorize_tensor_to_treetn<T, V>(
     tensor: &T,
     topology: &TreeTopology<V, T::Index>,
     root: &V,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -135,13 +142,14 @@ pub fn factorize_tensor_to_treetn_with<T, V>(
     topology: &TreeTopology<V, T::Index>,
     options: FactorizeOptions,
     root: &V,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     factorize_tensor_to_treetn_with_root_impl(tensor, topology, options, root)
+        .map_err(TreeTNOperationError::from)
 }
 
 fn factorize_tensor_to_treetn_with_root_impl<T, V>(

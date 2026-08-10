@@ -79,6 +79,11 @@ pub fn periodic_difference(x: usize, xprime: usize, n: usize) -> usize {
 }
 
 /// Build the one-dimensional kernel QTT.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_kernel_qtt(
     config: &DifferenceKernelTutorialConfig,
 ) -> Result<DifferenceKernelQttOutput, Box<dyn Error>> {
@@ -113,6 +118,11 @@ pub fn build_kernel_qtt(
 }
 
 /// Convert a real QTT to the complex-valued QTT expected by quantics transforms.
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape mismatch or backend
+/// /// failure).
+///
 pub fn real_qtt_to_complex(
     tt: &TensorTrain<f64>,
 ) -> Result<TensorTrain<Complex64>, Box<dyn Error>> {
@@ -139,6 +149,11 @@ pub fn real_qtt_to_complex(
 }
 
 /// Build `A[x, x'] = f((x - x') mod 2^R)` as a periodic difference-kernel MPO.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn build_periodic_difference_kernel_mpo(
     kernel_tt: &TensorTrain<f64>,
 ) -> Result<TensorTrain<Complex64>, Box<dyn Error>> {
@@ -155,6 +170,11 @@ pub fn integer_to_quantics_sites(value: usize, bits: usize) -> Vec<usize> {
 }
 
 /// Evaluate the fused-site MPO at a matrix entry `(x, x')`.
+/// # Errors
+///
+/// Returns an error when the construction or evaluation fails (a shape
+/// /// mismatch or backend failure).
+///
 pub fn evaluate_difference_kernel_mpo(
     mpo: &TensorTrain<Complex64>,
     x: usize,
@@ -172,6 +192,11 @@ pub fn evaluate_difference_kernel_mpo(
 }
 
 /// Collect dense matrix samples against the analytic periodic reference.
+/// # Errors
+///
+/// Returns an error when the collection fails (a shape mismatch or
+/// /// backend failure).
+///
 pub fn collect_samples(
     kernel: &QuanticsTensorCI2<f64>,
     mpo: &TensorTrain<Complex64>,
@@ -227,6 +252,11 @@ fn write_optional_usize(value: Option<usize>) -> String {
 }
 
 /// Write dense matrix samples to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_samples_csv(
     path: &Path,
     samples: &[DifferenceKernelSamplePoint],
@@ -260,6 +290,11 @@ pub fn write_samples_csv(
 }
 
 /// Write bond dimensions to CSV.
+/// # Errors
+///
+/// Returns an error when the CSV output cannot be written (an I/O
+/// /// failure).
+///
 pub fn write_bond_dims_csv(
     path: &Path,
     rows: &[DifferenceKernelBondDimRow],

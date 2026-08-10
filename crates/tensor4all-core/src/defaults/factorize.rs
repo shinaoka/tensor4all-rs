@@ -267,8 +267,11 @@ fn factorize_svd_with_options(
     match canonical {
         Canonical::Left => {
             // L = U (orthogonal), R = S * V^H
-            let right_contracted = contract_pair(&s, &vh)?;
-            let right = right_contracted.replaceind(&sim_bond_index, &bond_index)?;
+            let right_contracted = contract_pair(&s, &vh)
+                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
+            let right = right_contracted
+                .replaceind(&sim_bond_index, &bond_index)
+                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
             Ok(FactorizeResult {
                 left: u,
                 right,
@@ -279,8 +282,11 @@ fn factorize_svd_with_options(
         }
         Canonical::Right => {
             // L = U * S, R = V^H
-            let left_contracted = contract_pair(&u, &s)?;
-            let left = left_contracted.replaceind(&sim_bond_index, &bond_index)?;
+            let left_contracted = contract_pair(&u, &s)
+                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
+            let left = left_contracted
+                .replaceind(&sim_bond_index, &bond_index)
+                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
             Ok(FactorizeResult {
                 left,
                 right: vh,
@@ -447,15 +453,15 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let left =
-        TensorDynLen::from_dense(l_indices, l_vec).map_err(FactorizeError::ComputationError)?;
+    let left = TensorDynLen::from_dense(l_indices, l_vec)
+        .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     // Convert U matrix back to tensor
     let u_vec = matrix_to_vec(&u_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let right =
-        TensorDynLen::from_dense(r_indices, u_vec).map_err(FactorizeError::ComputationError)?;
+    let right = TensorDynLen::from_dense(r_indices, u_vec)
+        .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok(FactorizeResult {
         left,
@@ -509,6 +515,16 @@ where
     factorize_ci_with_options::<T>(t, left_inds, canonical, usize::MAX, 0.0)
 }
 
+// CI-factorization default seam.
+//
+// The default LU/CI factorization implementations in this module consume
+// tensor4all-tcicore's foundational matrix-CI seam (rrlu, MatrixLUCI,
+// MatrixLuciScalar) below the algorithm layer. tensor4all-tcicore has no
+// dependency on tensor4all-core, so the direction core -> tcicore is
+// high-to-low and acyclic: the crate-boundary script rejects any reverse or
+// dev-dependency cycle. TensorDynLen data is unfolded into a column-major
+// eager matrix at this boundary, and fixed-pivot CI factors are rebuilt from
+// that primal value.
 fn factorize_ci_with_options<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],

@@ -118,6 +118,11 @@ impl SVDScalar for Complex64 {
 ///
 /// Note: Only SVD method is fully supported. LU and CI require additional
 /// traits and should use `factorize_lu` directly.
+/// # Errors
+///
+/// Returns an error when the factorization fails (a non-convergence, singular,
+/// /// or backend failure).
+///
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
@@ -308,6 +313,11 @@ fn factorize_rsvd<T: SVDScalar>(
 /// [`FactorizeOptions::tolerance`] is passed as `RrLUOptions::rel_tol` with
 /// `abs_tol` set to zero, so the cutoff is relative to the largest pivot,
 /// matching the SVD path.
+/// # Errors
+///
+/// Returns an error when the LU factorization fails (a singular or backend
+/// /// failure).
+///
 pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
@@ -372,6 +382,11 @@ where
 ///
 /// This function requires the tensor4all_tcicore::Scalar trait.
 /// Use this directly when you need CI-based factorization.
+/// # Errors
+///
+/// Returns an error when the cross-interpolation factorization fails (a
+/// /// non-convergence or backend failure).
+///
 pub fn factorize_ci<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,

@@ -146,8 +146,40 @@ fn initialize_tensor<T: ScalarTensorElement>(
     }
 
     TensorDynLen::scalar(value).map_err(|source| AnyScalarTensorError::Initialization {
-        source: Arc::from(source.into_boxed_dyn_error()),
+        source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
     })
+}
+
+/// Error returned by eager-tensor `AnyScalar` operations (autodiff, conjugation,
+/// and complex composition).
+///
+/// The full original diagnostic is preserved in [`AnyScalarError::source`], so
+/// callers can inspect the underlying tensor, AD-runtime, or configuration
+/// failure without losing context.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{AnyScalar, AnyScalarError};
+///
+/// let result: Result<AnyScalar, AnyScalarError> =
+///     AnyScalar::compose_complex(AnyScalar::new_real(1.0), AnyScalar::new_complex(0.0, 1.0));
+/// let err = result.unwrap_err();
+/// assert!(err.source.to_string().contains("real-valued"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[error("AnyScalar eager-tensor operation failed: {source}")]
+pub struct AnyScalarError {
+    /// Original tensor, AD-runtime, or configuration diagnostic, including any
+    /// operation-specific context added by the failing call.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for AnyScalarError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
 }
 
 fn operation_error<E>(op: &'static str, source: E) -> anyhow::Error
@@ -171,7 +203,6 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 }
 
 /// Dynamic scalar compatibility wrapper for tensor4all-core.
-///
 /// This owns a rank-0 [`TensorDynLen`] so that scalar values can participate in
 /// the same eager autodiff graph as tensors while preserving the existing
 /// dynamic scalar API shape. The infallible scalar constructors retain a
@@ -485,6 +516,11 @@ impl AnyScalar {
     ///
     /// A scalar with the same value and no gradient tracking.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
+    /// /// failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -494,7 +530,7 @@ impl AnyScalar {
     /// assert_eq!(primal.real(), 5.0);
     /// assert!(!primal.tracks_grad());
     /// ```
-    pub fn primal(&self) -> Result<Self> {
+    pub fn primal(&self) -> std::result::Result<Self, AnyScalarError> {
         self.detach()
     }
 
@@ -518,9 +554,10 @@ impl AnyScalar {
     /// let scalar = AnyScalar::new_real(2.0).enable_grad().unwrap();
     /// assert!(scalar.tracks_grad());
     /// ```
-    pub fn enable_grad(self) -> Result<Self> {
+    pub fn enable_grad(self) -> std::result::Result<Self, AnyScalarError> {
         let tensor = self.tensor.map_err(anyhow::Error::new)?;
-        Self::from_tensor(tensor.enable_grad()?)
+        Self::from_tensor(tensor.enable_grad().map_err(anyhow::Error::from)?)
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns whether this scalar tracks gradients.
@@ -551,8 +588,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Propagates autodiff or tensor access failures from the underlying
-    /// tensor runtime.
+    /// Returns an error when the scalar is not a tracked leaf or the gradient is
+    /// /// unavailable (a missing-graph or dtype mismatch failure).
     ///
     /// # Examples
     ///
@@ -566,10 +603,12 @@ impl AnyScalar {
     /// let grad = x.grad().unwrap().unwrap();
     /// assert_eq!(grad.real(), 4.0);
     /// ```
-    pub fn grad(&self) -> Result<Option<Self>> {
+    pub fn grad(&self) -> std::result::Result<Option<Self>, AnyScalarError> {
         self.as_tensor()?
             .grad()
+            .map_err(anyhow::Error::from)
             .and_then(|maybe_grad| maybe_grad.map(Self::from_tensor).transpose())
+            .map_err(AnyScalarError::from)
     }
 
     /// Clears the stored gradient for this scalar.
@@ -580,7 +619,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Propagates tensor runtime failures from the underlying autodiff state.
+    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
+    /// /// failure).
     ///
     /// # Examples
     ///
@@ -595,8 +635,11 @@ impl AnyScalar {
     /// x.clear_grad().unwrap();
     /// assert!(x.grad().unwrap().is_none());
     /// ```
-    pub fn clear_grad(&self) -> Result<()> {
-        self.as_tensor()?.clear_grad()
+    pub fn clear_grad(&self) -> std::result::Result<(), AnyScalarError> {
+        self.as_tensor()?
+            .clear_grad()
+            .map_err(anyhow::Error::from)
+            .map_err(AnyScalarError::from)
     }
 
     /// Runs reverse-mode autodiff starting from this scalar.
@@ -607,7 +650,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Propagates failures from the underlying tensor autodiff engine.
+    /// Returns an error when the scalar is not a scalar-valued leaf or the reverse
+    /// /// pass fails (a graph failure).
     ///
     /// # Examples
     ///
@@ -621,8 +665,11 @@ impl AnyScalar {
     /// let grad = x.grad().unwrap().unwrap();
     /// assert_eq!(grad.real(), 4.0);
     /// ```
-    pub fn backward(&self) -> Result<()> {
-        self.as_tensor()?.backward()
+    pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
+        self.as_tensor()?
+            .backward()
+            .map_err(anyhow::Error::from)
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns a detached copy of this scalar.
@@ -630,6 +677,11 @@ impl AnyScalar {
     /// # Returns
     ///
     /// A scalar with the same value but without gradient tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
+    /// /// failure).
     ///
     /// # Examples
     ///
@@ -644,8 +696,9 @@ impl AnyScalar {
     /// assert_eq!(detached.real(), 7.0);
     /// assert!(!detached.tracks_grad());
     /// ```
-    pub fn detach(&self) -> Result<Self> {
-        Self::from_tensor(self.as_tensor()?.detach()?)
+    pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
+        Self::from_tensor(self.as_tensor()?.detach().map_err(anyhow::Error::from)?)
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns the real part of this scalar.
@@ -811,6 +864,11 @@ impl AnyScalar {
     ///
     /// The conjugated scalar. Real-valued inputs are returned unchanged.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the conjugation fails (a dtype mismatch or backend
+    /// /// failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -819,18 +877,18 @@ impl AnyScalar {
     /// let scalar = AnyScalar::new_complex(3.0, -4.0).conj();
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, 4.0)));
     /// ```
-    pub fn try_conj(&self) -> Result<Self> {
+    pub fn try_conj(&self) -> std::result::Result<Self, AnyScalarError> {
         self.as_tensor()?;
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().conj()));
         }
-        Self::from_eager_unary(self, "conj", |tensor| tensor.conj())
+        Self::from_eager_unary(self, "conj", |tensor| tensor.conj()).map_err(AnyScalarError::from)
     }
 
     /// Returns the complex conjugate of this scalar.
     pub fn conj(&self) -> Self {
         Self::fallback_result(
-            self.try_conj(),
+            self.try_conj().map_err(|error| error.source),
             "conj",
             || Self::scalar_value_from_backend(self.to_backend_scalar().conj()),
             self.tracks_grad(),
@@ -899,7 +957,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error if either input is not real-valued.
+    /// Returns an error when the components cannot be composed (a dtype mismatch
+    /// or a backend failure).
     ///
     /// # Examples
     ///
@@ -913,12 +972,12 @@ impl AnyScalar {
     /// .unwrap();
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, -4.0)));
     /// ```
-    pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
+    pub fn compose_complex(real: Self, imag: Self) -> std::result::Result<Self, AnyScalarError> {
         if !real.is_real() || !imag.is_real() {
-            return Err(anyhow!("compose_complex requires real-valued inputs"));
+            return Err(anyhow!("compose_complex requires real-valued inputs").into());
         }
         let imag_term = imag.try_mul(&Self::new_complex(0.0, 1.0))?;
-        real.try_add(&imag_term)
+        real.try_add(&imag_term).map_err(AnyScalarError::from)
     }
 
     /// Returns the square root of this scalar.
@@ -978,6 +1037,7 @@ impl AnyScalar {
     /// # Arguments
     ///
     /// * `exponent` - The integer exponent to apply. Negative exponents return
+    ///
     ///   the reciprocal power.
     ///
     /// # Returns
@@ -1546,8 +1606,12 @@ mod tests {
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
 
         let error = scalar.clone().enable_grad().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
         assert!(error
+            .source
+            .downcast_ref::<AnyScalarTensorError>()
+            .is_some());
+        assert!(error
+            .source
             .chain()
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
     }
@@ -1570,8 +1634,12 @@ mod tests {
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
 
         let error = result.clone().enable_grad().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
         assert!(error
+            .source
+            .downcast_ref::<AnyScalarTensorError>()
+            .is_some());
+        assert!(error
+            .source
             .chain()
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
     }

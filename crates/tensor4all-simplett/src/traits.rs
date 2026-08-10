@@ -42,6 +42,7 @@ impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 /// - [`TensorTrain`](crate::TensorTrain) -- primary container
 /// - [`SiteTensorTrain`](crate::SiteTensorTrain) -- center-canonical form
 /// - [`VidalTensorTrain`](crate::VidalTensorTrain) -- Vidal form (after
+///
 ///   conversion to `TensorTrain`)
 ///
 /// # Examples
@@ -122,6 +123,11 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     }
 
     /// Evaluate the tensor train at a given index set
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///

@@ -259,6 +259,11 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     /// Create a new TTCache with custom site dimensions
     ///
     /// This allows treating a single tensor site as multiple logical indices.
+    /// # Errors
+    ///
+    /// Returns an error when the site dimensions are invalid (a shape mismatch)
+    /// /// or the cache cannot be configured.
+    ///
     pub fn with_site_dims<TT: AbstractTensorTrain<T>>(
         tt: &TT,
         site_dims: Vec<Vec<usize>>,
@@ -490,6 +495,11 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     }
 
     /// Evaluate the tensor train at a given index set using cache
+    /// # Errors
+    ///
+    /// Returns an error when the cached evaluation fails (a missing-index or
+    /// /// invalid-state failure).
+    ///
     pub fn evaluate(&mut self, indices: &[LocalIndex]) -> Result<T> {
         let n = self.len();
         if indices.len() != n {
@@ -512,7 +522,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         if left.len() != right.len() {
             return Err(TensorTrainError::InvalidOperation {
                 message: format!(
-                    "Left/right dimension mismatch: {} vs {}",
+                    "Left/right shape mismatch: {} vs {}",
                     left.len(),
                     right.len()
                 ),
@@ -535,9 +545,15 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     /// # Arguments
     /// * `indices` - The indices to evaluate
     /// * `split` - Optional split position. If `None`, uses a simple heuristic
+    ///
     ///   (checks 1/4, 1/2, 3/4 positions and picks the best).
     ///   If you know the optimal split position (e.g., from TCI), pass `Some(split)`
     ///   to avoid the search overhead.
+    /// # Errors
+    ///
+    /// Returns an error when a cached evaluation fails (a missing-index or
+    /// /// invalid-state failure).
+    ///
     pub fn evaluate_many(
         &mut self,
         indices: &[MultiIndex],
