@@ -34,8 +34,8 @@ use anyhow::Result;
 
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
-    reset_contract_profile, reset_native_einsum_profile, Canonical, FactorizeAlg, FactorizeOptions,
-    FactorizeResult, IndexLike, SvdTruncationPolicy, TensorLike,
+    reset_contract_profile, reset_native_einsum_profile, sort_indices_deterministic, Canonical,
+    FactorizeAlg, FactorizeOptions, FactorizeResult, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
@@ -791,7 +791,7 @@ where
             })
             .cloned()
             .collect();
-        left_inds.sort_by(|a, b| a.id().cmp(b.id()));
+        sort_indices_deterministic(&mut left_inds);
         if let Some(left_inds_started) = left_inds_started {
             with_fit_profile(|profile| {
                 profile.left_inds_time += left_inds_started.elapsed();

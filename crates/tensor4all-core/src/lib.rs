@@ -48,7 +48,7 @@ pub mod defaults;
 pub use defaults::index;
 
 pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
-pub use index_like::{ConjState, IndexLike};
+pub use index_like::{sort_indices_deterministic, ConjState, IndexLike};
 
 /// Index operations (replacement, set operations, contraction preparation).
 pub mod index_ops;

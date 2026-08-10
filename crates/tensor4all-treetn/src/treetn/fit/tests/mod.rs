@@ -369,6 +369,90 @@ fn test_fit_updater_after_step_invalidates_cached_region() {
 }
 
 #[test]
+fn test_fit_updater_update_pins_same_id_prime_pair_leg_order() {
+    // Node A carries a same-ID primed pair (s, s.prime()) in its site space.
+    // Both survive the 2-site contraction as external legs, so `left_inds`
+    // contains two indices that compare equal by `.id()` alone. The left
+    // factor's leg order must follow the canonical full-index sort (unprimed
+    // before primed), not the contraction output order.
+    let s = DynIndex::new_dyn(2);
+    let s_prime = s.prime();
+    let t_a = DynIndex::new_dyn(2);
+    let t_b = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(3);
+
+    // The primed index appears first in the first contracted tensor, so the
+    // unsorted left_inds insertion order is [s', s] (the buggy stable sort
+    // preserves it; the full-index sort must pin [s, s']).
+    let a_u = TensorDynLen::from_dense(
+        vec![s_prime.clone(), bond.clone()],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )
+    .unwrap();
+    let b_u = TensorDynLen::from_dense(
+        vec![s.clone(), bond.clone()],
+        vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
+    )
+    .unwrap();
+    let a_v = TensorDynLen::from_dense(
+        vec![bond.clone(), t_a.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let b_v = TensorDynLen::from_dense(
+        vec![bond.clone(), t_b.clone()],
+        vec![0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+    )
+    .unwrap();
+
+    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![a_u, a_v],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![b_u, b_v],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    // Full network C: node A's site space holds the same-ID primed pair.
+    let c_a = TensorDynLen::from_dense(
+        vec![s_prime.clone(), s.clone(), bond.clone()],
+        vec![1.0; 12],
+    )
+    .unwrap();
+    let c_b = TensorDynLen::from_dense(vec![bond.clone(), t_a.clone(), t_b.clone()], vec![1.0; 12])
+        .unwrap();
+    let full_treetn = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![c_a, c_b],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let site_c_u = full_treetn.site_space(&"A".to_string()).unwrap();
+    assert!(site_c_u.contains(&s));
+    assert!(site_c_u.contains(&s_prime));
+
+    let mut updater = FitUpdater::new(tn_a, tn_b, None, None);
+    let step = LocalUpdateStep {
+        nodes: vec!["A".to_string(), "B".to_string()],
+        new_center: "B".to_string(),
+    };
+    let updated = updater
+        .update(full_treetn.clone(), &step, &full_treetn)
+        .unwrap();
+
+    let a_idx = updated.node_index(&"A".to_string()).unwrap();
+    let new_a_inds = updated.tensor(a_idx).unwrap().indices();
+    let pos_s = new_a_inds.iter().position(|i| i == &s).unwrap();
+    let pos_s_prime = new_a_inds.iter().position(|i| i == &s_prime).unwrap();
+    assert!(
+        pos_s < pos_s_prime,
+        "left factor must order unprimed before primed; got indices {new_a_inds:?}"
+    );
+}
+
+#[test]
 fn test_contract_fit_rejects_topology_mismatch() {
     let tn_a = make_two_node_treetn();
     let tn_b = make_single_node_treetn();
