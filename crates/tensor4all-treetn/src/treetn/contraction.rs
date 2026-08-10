@@ -725,6 +725,7 @@ where
     /// Rules:
     /// - If `canonical_region` is empty (not canonicalized), all indices must have `ortho_towards == None`.
     /// - If `canonical_region` is non-empty:
+    ///
     ///   - It must form a connected subtree
     ///   - All edges from outside the center region must have `ortho_towards` pointing towards the center
     ///   - Edges entirely inside the center region may have `ortho_towards == None`
@@ -998,6 +999,7 @@ impl ContractionOptions {
     ///
     /// # Arguments
     /// * `max_elements` - Maximum number of elements allowed in each full dense
+    ///
     ///   input tensor and in the dense contracted result. Typical values should
     ///   remain small and test-sized.
     ///
@@ -1022,6 +1024,7 @@ impl ContractionOptions {
     ///
     /// # Arguments
     /// * `max_elements` - Maximum number of elements allowed in each dense
+    ///
     ///   intermediate and in the dense contracted result. Typical values should
     ///   remain small and test-sized.
     ///

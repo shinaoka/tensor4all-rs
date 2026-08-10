@@ -1391,6 +1391,7 @@ pub fn einsum_native_tensors_owned(
 ///
 /// # Arguments
 /// * `operands` - Native tensors paired with numeric einsum labels for each axis.
+///
 ///   Each label slice must have the same length as the corresponding tensor rank.
 /// * `output_ids` - Numeric labels to keep in the result, in output axis order.
 ///

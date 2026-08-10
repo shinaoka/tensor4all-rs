@@ -78,6 +78,7 @@ pub trait GlobalPivotFinder {
     /// * `input` -- current TCI state (tensor train, index sets, etc.)
     /// * `f` -- the function being interpolated
     /// * `abs_tol` -- absolute tolerance; pivots with error above this
+    ///
     ///   threshold (times `tol_margin`) are interesting
     /// * `rng` -- random number generator for stochastic search
     ///

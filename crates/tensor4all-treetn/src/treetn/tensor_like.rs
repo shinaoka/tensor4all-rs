@@ -240,10 +240,13 @@ where
     ///
     /// # Arguments
     /// * `tag_prefix` - Prefix before the equals sign, such as `"k"` or `"x"`.
+    ///
     ///   It must not contain `=`.
     /// * `start_index` - First numeric suffix to request. Use `1` for the
+    ///
     ///   usual quantics convention, or `0` for zero-based tags.
     /// * `count` - Number of consecutive tags to request. `0` returns an
+    ///
     ///   empty vector.
     ///
     /// # Returns

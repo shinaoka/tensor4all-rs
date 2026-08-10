@@ -30,8 +30,10 @@ use super::{localupdate::LocalUpdateSweepPlan, TreeTN};
 /// With `Canonical::Left` (the only mode used by swap):
 /// - **Normal case**: delegates to `TensorFactorizationLike::factorize`.
 /// - **Empty `left_inds`**: `left = [1]` (dim-1 scalar isometry),
+///
 ///   `right = tensor ⊗ [1]` (acquires the trivial bond).
 /// - **Full `left_inds`**: `left = (tensor ⊗ [1]) / ‖tensor‖`,
+///
 ///   `right = [‖tensor‖]` (norm on the right side, left is isometric).
 pub(crate) fn factorize_or_trivial<T>(
     tensor: &T,

@@ -14,8 +14,10 @@ use crate::common::{tensortrain_to_linear_operator, try_vec_with_capacity, Quant
 /// # Variants
 ///
 /// - **`Lower`**: Strict lower triangle, M\[i,j\] = 1 when i > j.
+///
 ///   Computes the prefix sum: y\_i = sum of x\_j for j < i.
 /// - **`Upper`**: Strict upper triangle, M\[i,j\] = 1 when i < j.
+///
 ///   Computes the suffix sum: y\_i = sum of x\_j for j > i.
 ///
 /// # Examples

@@ -110,6 +110,7 @@ impl LinearConstraintRow {
     /// # Arguments
     ///
     /// * `coefficients` - Coefficients of the left-hand side. The entries may
+    ///
     ///   share a positive common factor with `rhs`; that factor is removed.
     /// * `rhs` - Right-hand side of the equality or inequality constraint.
     ///
@@ -160,9 +161,11 @@ impl LinearConstraintRow {
     /// # Arguments
     ///
     /// * `coefficients` - Rational coefficients of the left-hand side. The
+    ///
     ///   least common multiple of all denominators is used to clear
     ///   denominators before gcd reduction.
     /// * `rhs` - Rational right-hand side of the equality or inequality
+    ///
     ///   constraint.
     ///
     /// # Returns
@@ -620,8 +623,10 @@ fn remap_affine_site_indices(
 /// # Arguments
 /// * `r` — bits per variable (number of sites in the output MPO).
 /// * `params` — rational `M × N` matrix `A` and `M`-vector `b` describing
+///
 ///   the affine map.
 /// * `bc` — length `M` array of boundary conditions for each output variable.
+///
 ///   `Periodic` wraps output coordinates modulo `2^r`; `Open` zeroes the
 ///   out-of-range contributions.
 /// # Errors
@@ -1338,6 +1343,7 @@ impl UnfusedTensorInfo {
 /// This implements the algorithm from Quantics.jl that handles:
 /// - Carry propagation for multi-bit arithmetic
 /// - Scaling factor s from rational to integer conversion
+///
 /// Uses big-endian convention: site 0 = MSB, site R-1 = LSB.
 /// Carry propagation direction (matching shift.rs):
 /// - Arithmetic carry flows LSB → MSB (physical fact)

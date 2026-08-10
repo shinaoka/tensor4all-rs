@@ -542,6 +542,7 @@ where
 /// * `state` - State containing numbered-tagged external indices.
 /// * `tag_prefix` - Prefix before the equals sign, such as `"k"` or `"x"`.
 /// * `start_index` - First numbered tag to select. Use `1` for Quantics.jl-style
+///
 ///   tags such as `"k=1"`, `"k=2"`, ...
 /// * `options` - Apply algorithm and truncation options.
 ///

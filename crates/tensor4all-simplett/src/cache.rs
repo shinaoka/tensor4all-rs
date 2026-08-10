@@ -545,6 +545,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     /// # Arguments
     /// * `indices` - The indices to evaluate
     /// * `split` - Optional split position. If `None`, uses a simple heuristic
+    ///
     ///   (checks 1/4, 1/2, 3/4 positions and picks the best).
     ///   If you know the optimal split position (e.g., from TCI), pass `Some(split)`
     ///   to avoid the search overhead.

@@ -429,6 +429,7 @@ struct HermitianRitzState {
 /// * `apply_a` - Matrix-free Hermitian operator application.
 /// * `initial` - Nonzero initial vector that defines the starting Krylov vector.
 /// * `options` - Krylov dimension, convergence tolerances, and Hermitian
+///
 ///   validation settings.
 /// # Returns
 /// The lowest Ritz eigenpair and the true residual norm.

@@ -134,6 +134,7 @@ where
 ///
 /// # Arguments
 /// * `treetn` - A consumed linear-chain tree tensor network whose node names
+///
 ///   identify tensor-train site positions. Each node must contain one site
 ///   index and zero, one, or two adjacent bond indices.
 ///
@@ -271,6 +272,7 @@ where
 /// - `0` inserts before the first site;
 /// - `len` inserts after the last site;
 /// - any `1..len` inserts on the chain edge between `position - 1` and
+///
 ///   `position`.
 ///
 /// The inserted site is fixed to `value`, so the new tensor evaluates to the
@@ -280,6 +282,7 @@ where
 /// # Arguments
 ///
 /// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///
 ///   Each node must carry exactly one site index.
 /// - `position`: insertion point in `0..=n`; `0` prepends and `n` appends.
 /// - `site_index`: site index to attach to the inserted node.
@@ -379,6 +382,7 @@ where
 /// # Arguments
 ///
 /// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///
 ///   Each node must carry exactly one site index.
 /// - `position`: chain site to fix and remove, in `0..n`.
 /// - `value`: local coordinate retained at the removed site.
@@ -461,6 +465,7 @@ where
 /// # Arguments
 ///
 /// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///
 ///   Each node must carry exactly one site index.
 /// - `position`: chain site to contract and remove, in `0..n`.
 /// - `weights`: one weight per local coordinate of the removed site.

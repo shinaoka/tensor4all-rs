@@ -300,6 +300,7 @@ where
     /// * `subtree` - The extracted subtree to update
     /// * `step` - The current step information (nodes and new_center)
     /// * `full_treetn` - Reference to the full (global) TreeTN. This provides global context
+    ///
     ///   (e.g., topology, neighbor relations, and index/bond metadata) that some update
     ///   algorithms may need. It may be unused by simple updaters.
     ///

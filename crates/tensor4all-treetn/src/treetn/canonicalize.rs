@@ -26,9 +26,11 @@ where
     ///
     /// # Behavior
     /// - If `options.force` is false (default):
+    ///
     ///   - Already at target with same form: returns unchanged (no-op)
     ///   - Different form: returns an error (use `options.force()` to override)
     /// - If `options.force` is true:
+    ///
     ///   - Always performs full canonicalization
     ///
     /// # Errors

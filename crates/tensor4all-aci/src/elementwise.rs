@@ -24,12 +24,15 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 /// # Arguments
 ///
 /// * `op` - Batched callback. For each point, write the elementwise output to
+///
 ///   the corresponding entry of the output slice. Return
 ///   [`AciError::Operator`](crate::AciError::Operator) or another ACI error to
 ///   stop the sweep.
 /// * `inputs` - Non-empty tensor trains with the same length and site
+///
 ///   dimensions. Core dimensions must be positive.
 /// * `options` - Sweep limits, tolerance, maximum bond dimension, random seed,
+///
 ///   and optional initial guess. When in doubt, start with
 ///   [`AciOptions::default`].
 ///
@@ -168,10 +171,13 @@ where
 /// # Arguments
 ///
 /// * `op` - Scalar callback applied to one interpolation point. The input slice
+///
 ///   has length `inputs.len()`.
 /// * `inputs` - Non-empty tensor trains with the same length and site
+///
 ///   dimensions. Core dimensions must be positive.
 /// * `options` - Sweep limits, tolerance, maximum bond dimension, random seed,
+///
 ///   and optional initial guess.
 ///
 /// # Returns

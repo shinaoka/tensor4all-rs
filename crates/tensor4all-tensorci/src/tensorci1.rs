@@ -177,6 +177,7 @@ where
     /// # Arguments
     ///
     /// * `local_dims` -- Number of values at each site. Must contain at least
+    ///
     ///   two nonzero dimensions.
     ///
     /// # Returns
@@ -237,8 +238,10 @@ where
     ///
     /// * `f` -- Function to interpolate on zero-based multi-indices.
     /// * `local_dims` -- Number of values at each site. Every dimension must
+    ///
     ///   be nonzero and at least two sites are required.
     /// * `first_pivot` -- Initial multi-index. It must be in range and
+    ///
     ///   evaluate to a nonzero value.
     ///
     /// # Returns
@@ -485,8 +488,10 @@ where
     ///
     /// * `bond` -- Zero-based bond index in `0..self.len() - 1`.
     /// * `f` -- Function being interpolated. It must match the function used
+    ///
     ///   to initialize the state.
     /// * `tolerance` -- Absolute local pivot error below which no pivot is
+    ///
     ///   inserted. Typical values are `1e-8` to `1e-12`.
     ///
     /// # Returns
@@ -545,10 +550,13 @@ where
     /// # Arguments
     ///
     /// * `f` -- Function being interpolated. It must match the function used
+    ///
     ///   to initialize the state.
     /// * `pivot` -- Zero-based global multi-index with one coordinate per
+    ///
     ///   site.
     /// * `abstol` -- Absolute error threshold. If the current approximation is
+    ///
     ///   already within this threshold at `pivot`, no new pivots are inserted.
     ///
     /// # Returns
@@ -842,10 +850,13 @@ where
 ///
 /// * `f` -- Function to interpolate on zero-based multi-indices.
 /// * `local_dims` -- Number of values at each site. Must have at least two
+///
 ///   nonzero dimensions.
 /// * `first_pivot` -- Initial pivot. It must have one in-range coordinate per
+///
 ///   site and evaluate to a nonzero value.
 /// * `options` -- Tolerance, sweep, normalization, and additional pivot
+///
 ///   settings.
 ///
 /// # Returns

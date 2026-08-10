@@ -24,6 +24,7 @@ use tensor4all_tensorbackend::TensorElement;
 /// * `a` - First tensor
 /// * `b` - Second tensor
 /// * `pairs` - Pairs of (a_index, b_index) to be summed. Each pair creates
+///
 ///   a new index in the result with dimension = dim(a_index) + dim(b_index).
 ///
 /// # Returns

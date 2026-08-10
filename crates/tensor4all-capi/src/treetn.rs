@@ -1104,6 +1104,7 @@ pub extern "C" fn t4a_treetn_linkind(
 /// When `force == 0`, this uses smart canonicalization:
 /// - If the network is already canonical at `vertex` with `form`, the call is a no-op.
 /// - If the network is already canonicalized with a different form, the call returns
+///
 ///   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_orthogonalize(

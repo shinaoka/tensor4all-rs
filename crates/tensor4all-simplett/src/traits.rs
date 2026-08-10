@@ -42,6 +42,7 @@ impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 /// - [`TensorTrain`](crate::TensorTrain) -- primary container
 /// - [`SiteTensorTrain`](crate::SiteTensorTrain) -- center-canonical form
 /// - [`VidalTensorTrain`](crate::VidalTensorTrain) -- Vidal form (after
+///
 ///   conversion to `TensorTrain`)
 ///
 /// # Examples

@@ -49,6 +49,7 @@ use tensor4all_tcicore::{MultiIndex, Scalar};
 /// * `tt` -- the tensor train approximation
 /// * `f` -- the exact function
 /// * `nsearch` -- number of random starting points (ignored when
+///
 ///   `initial_points` is `Some`)
 /// * `initial_points` -- explicit starting points for the search
 /// * `rng` -- random number generator
@@ -134,6 +135,7 @@ where
 /// * `local_dims` -- number of values each index can take
 /// * `init_p` -- starting point (`None` defaults to the all-zeros index)
 /// * `early_stop_tol` -- stop early once the error exceeds this value
+///
 ///   (use `f64::MAX` to search exhaustively)
 ///
 /// # Returns

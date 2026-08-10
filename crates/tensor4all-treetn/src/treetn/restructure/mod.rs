@@ -1230,15 +1230,20 @@ where
     ///
     /// The current staged implementation already handles:
     /// - fuse-only restructures, where each current node maps to exactly one
+    ///
     ///   target node;
     /// - split-only restructures, where each target node maps to exactly one
+    ///
     ///   current node;
     /// - swap-only restructures, where the current and target topologies are
+    ///
     ///   tree-isomorphic and only the site assignments differ;
     /// - conservative path-based swap-then-fuse restructures, where the
+    ///
     ///   current nodes already map uniquely to target nodes but their target
     ///   groups must be rearranged into contiguous path blocks before fusing;
     /// - conservative mixed split-then-fuse restructures, where each current
+    ///
     ///   node has at most one cross-node target fragment that must retain the
     ///   original external bonds.
     ///
@@ -1249,16 +1254,20 @@ where
     ///
     /// Related types:
     /// - [`RestructureOptions`] configures the split, transport, and optional
+    ///
     ///   final truncation phases.
     /// - [`SiteIndexNetwork`] describes the desired final topology plus site
+    ///
     ///   grouping.
     /// - [`TreeTN::split_to`](crate::treetn::TreeTN::split_to) and
+    ///
     ///   [`TreeTN::swap_site_indices`](crate::treetn::TreeTN::swap_site_indices)
     ///   remain the lower-level building blocks that the executor will use.
     ///
     /// # Arguments
     /// * `target` - Desired final topology and site grouping.
     /// * `options` - Phase-specific options for split, transport, and optional
+    ///
     ///   final truncation.
     ///
     /// # Returns

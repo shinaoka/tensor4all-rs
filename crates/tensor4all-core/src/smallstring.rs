@@ -59,6 +59,7 @@ impl SmallChar for char {
 ///
 /// # Character Type Options
 /// - `u16` (default): 2 bytes per character, supports BMP (Basic Multilingual Plane)
+///
 ///   - Covers ASCII, Japanese, Chinese, Korean, and most practical characters
 ///   - Does NOT support emoji or rare characters outside BMP
 /// - `char`: 4 bytes per character, full Unicode support

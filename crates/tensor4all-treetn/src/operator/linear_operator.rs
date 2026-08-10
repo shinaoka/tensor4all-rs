@@ -149,8 +149,10 @@ where
     ///
     /// * `mpo` - The MPO with internal index IDs.
     /// * `input_mapping` - Mapping from node names to all true/internal input
+    ///
     ///   index pairs for that node.
     /// * `output_mapping` - Mapping from node names to all true/internal output
+    ///
     ///   index pairs for that node.
     ///
     /// # Examples
@@ -426,6 +428,7 @@ where
     /// # Arguments
     ///
     /// * `mapping` - Pairs of `(old_node, new_node)`. Nodes not listed in the
+    ///
     ///   mapping keep their existing names.
     ///
     /// # Returns
@@ -690,6 +693,7 @@ where
     /// # Arguments
     ///
     /// * `state` - The target state whose site indices define the true index space.
+    ///
     ///   Each node in the operator's mappings must exist in the state with exactly one
     ///   site index of matching dimension.
     ///
@@ -960,8 +964,10 @@ where
     ///
     /// * `old_true_index` - Existing true input index to replace.
     /// * `new_true_indices` - Ordered true input indices whose dimensions
+    ///
     ///   multiply to `old_true_index.dim()`.
     /// * `order` - Linearization convention used to decode the old fused
+    ///
     ///   coordinate into the new coordinates.
     ///
     /// # Returns
@@ -1032,8 +1038,10 @@ where
     ///
     /// * `old_true_index` - Existing true output index to replace.
     /// * `new_true_indices` - Ordered true output indices whose dimensions
+    ///
     ///   multiply to `old_true_index.dim()`.
     /// * `order` - Linearization convention used to decode the old fused
+    ///
     ///   coordinate into the new coordinates.
     ///
     /// # Returns

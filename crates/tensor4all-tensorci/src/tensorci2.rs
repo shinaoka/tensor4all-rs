@@ -426,8 +426,10 @@ where
     /// # Arguments
     ///
     /// * `tt` -- Tensor train whose site tensors are consumed by the
+    ///
     ///   resulting `TensorCI2`.
     /// * `options` -- One-site index extraction tolerance, rank cap, and
+    ///
     ///   sweep count.
     ///
     /// # Returns
@@ -476,12 +478,16 @@ where
     /// # Arguments
     ///
     /// * `local_dims` -- Number of values at each site. Every dimension must
+    ///
     ///   be nonzero and at least two sites are required.
     /// * `i_set` -- Left index sets. `i_set[p]` contains prefixes of length
+    ///
     ///   `p`, and `i_set[0]` must be `[[]]`.
     /// * `j_set` -- Right index sets. `j_set[p]` contains suffixes of length
+    ///
     ///   `n - p - 1`, and `j_set[n - 1]` must be `[[]]`.
     /// * `f` -- Function used to populate site tensors from the explicit
+    ///
     ///   pivot sets.
     ///
     /// # Returns
@@ -1326,13 +1332,17 @@ fn convergence_criterion(
 /// # Arguments
 ///
 /// * `f` -- Function to interpolate. Takes a multi-index `&Vec<usize>` where
+///
 ///   each element is in `0..local_dims[i]` (0-indexed) and returns a scalar.
 /// * `batched_f` -- Optional batch evaluation function for efficiency.
+///
 ///   Takes `&[Vec<usize>]` and returns `Vec<T>`. Pass `None` to use
 ///   element-wise evaluation only.
 /// * `local_dims` -- Number of values each index can take. Must have at
+///
 ///   least 2 elements (TCI requires at least 2 sites).
 /// * `initial_pivots` -- Starting multi-indices for the algorithm. At least
+///
 ///   one pivot must have a non-zero function value. Choose pivots where
 ///   `|f|` is large for best convergence. If empty, defaults to the
 ///   all-zeros index.
@@ -1447,9 +1457,11 @@ where
 /// # Arguments
 ///
 /// * `tci` -- Existing TCI2 state to optimize. It is consumed and returned
+///
 ///   after optimization.
 /// * `f` -- Scalar function to interpolate on zero-based multi-indices.
 /// * `batched_f` -- Optional Torch-style batch callback. It receives a slice of
+///
 ///   multi-indices and must return one value per input index.
 /// * `options` -- Sweep, convergence, and truncation settings.
 /// * `finder` -- Global pivot finder used after each two-site sweep.

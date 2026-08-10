@@ -113,8 +113,10 @@ where
 /// * `center` - Node to use as sweep center
 /// * `options` - Solver options
 /// * `input_mapping` - Optional per-node mapping from state site index to operator input index.
+///
 ///   Required when the operator (MPO) uses internal indices distinct from the state's site indices.
 /// * `output_mapping` - Optional per-node mapping from state site index to operator output index.
+///
 ///   Required when the operator (MPO) uses internal indices distinct from the state's site indices.
 ///
 /// # Returns
@@ -436,6 +438,7 @@ where
 /// * `a0` - Identity coefficient.
 /// * `a1` - Operator coefficient.
 /// * `apply_options` - Options for applying `A`; use [`ApplyOptions::naive`] for
+///
 ///   an exact residual of the represented TreeTN.
 ///
 /// # Returns

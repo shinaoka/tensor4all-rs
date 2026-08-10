@@ -995,6 +995,7 @@ impl AnyScalar {
     /// # Arguments
     ///
     /// * `exponent` - The integer exponent to apply. Negative exponents return
+    ///
     ///   the reciprocal power.
     ///
     /// # Returns

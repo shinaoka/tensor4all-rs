@@ -560,8 +560,10 @@ where
 /// # Arguments
 ///
 /// * `operator` - Hamiltonian as a [`LinearOperator`]. The v1 implementation
+///
 ///   supports exactly one input and one output site mapping per node.
 /// * `init` - Initial TreeTN state. It is canonicalized at `center` before
+///
 ///   sweeping.
 /// * `center` - Initial sweep center node.
 /// * `options` - Sweep, truncation, and local eigensolver options.

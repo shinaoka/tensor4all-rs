@@ -79,6 +79,7 @@ where
     /// # Arguments
     ///
     /// * `tree` - Tree tensor network whose local tensors and index mapping
+    ///
     ///   are captured by the evaluator.
     /// * `indices` - Complete input row order for future batch value arrays.
     ///
@@ -225,6 +226,7 @@ where
     /// # Arguments
     ///
     /// * `values` - Column-major coordinate array with one row per evaluator
+    ///
     ///   input index and one column per point.
     ///
     /// # Returns

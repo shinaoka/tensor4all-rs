@@ -524,6 +524,7 @@ where
     /// # Arguments
     ///
     /// * `indices` - Complete site-index order used as the row order of future
+    ///
     ///   batch value arrays.
     ///
     /// # Returns
@@ -564,9 +565,11 @@ where
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by full `Index` value (from
+    ///
     ///   [`all_site_indices()`](Self::all_site_indices)).
     ///   Must enumerate every site index exactly once.
     /// * `values` - Column-major array of shape `[n_indices, n_points]`.
+    ///
     ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
     ///
     /// # Returns
@@ -599,6 +602,7 @@ where
     /// # Arguments
     ///
     /// * `indices` - Identifies each site index by full `Index` value. It must
+    ///
     ///   enumerate every site index exactly once.
     /// * `values` - One site value for each entry in `indices`.
     ///
@@ -764,9 +768,11 @@ where
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by its `Index` object
+    ///
     ///   (e.g. from [`all_site_indices()`](Self::all_site_indices)).
     ///   Must enumerate every site index exactly once.
     /// * `values` - Column-major array of shape `[n_indices, n_points]`.
+    ///
     ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
     ///
     /// # Returns

@@ -1088,6 +1088,7 @@ impl TensorTrain {
     ///
     /// * `site` - The target site for the orthogonality center (0-indexed)
     /// * `form` - The canonical form to use:
+    ///
     ///   - `Unitary`: Uses QR decomposition, each tensor is isometric
     ///   - `LU`: Uses LU decomposition, one factor has unit diagonal
     ///   - `CI`: Uses Cross Interpolation
@@ -1717,6 +1718,7 @@ impl TensorTrain {
     /// # Arguments
     ///
     /// * `other` - The tensor train to reindex and add. It must have the same
+    ///
     ///   chain length and compatible site dimensions as `self`.
     ///
     /// # Returns
@@ -1906,7 +1908,7 @@ impl TensorIndex for TensorTrain {
             .treetn
             .replaceind(old, new)
             .map_err(anyhow::Error::new)?;
-        Self::from_inner(treetn, None).map_err(Self::Error::from)
+        Self::from_inner(treetn, None)
     }
 
     fn replaceinds(
@@ -1918,7 +1920,7 @@ impl TensorIndex for TensorTrain {
             .treetn
             .replaceinds(old, new)
             .map_err(anyhow::Error::new)?;
-        Self::from_inner(treetn, None).map_err(Self::Error::from)
+        Self::from_inner(treetn, None)
     }
 }
 
@@ -1937,15 +1939,15 @@ impl TensorVectorSpace for TensorTrain {
         other: &Self,
         b: AnyScalar,
     ) -> std::result::Result<Self, Self::Error> {
-        TensorTrain::axpby(self, a, other, b).map_err(Self::Error::from)
+        TensorTrain::axpby(self, a, other, b)
     }
 
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
-        TensorTrain::scale(self, scalar).map_err(Self::Error::from)
+        TensorTrain::scale(self, scalar)
     }
 
     fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
-        self.inner(other).map_err(Self::Error::from)
+        self.inner(other)
     }
 
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
@@ -2045,22 +2047,22 @@ impl TensorConstructionLike for TensorTrain {
     ) -> std::result::Result<Self, Self::Error> {
         // Create a single-site TensorTrain with an identity tensor
         let delta = TensorDynLen::diagonal(input, output)?;
-        Ok(Self::new(vec![delta])?)
+        Self::new(vec![delta])
     }
 
     fn scalar_one() -> std::result::Result<Self, Self::Error> {
         // Empty tensor train represents scalar 1
-        Ok(Self::new(vec![])?)
+        Self::new(vec![])
     }
 
     fn ones(indices: &[Self::Index]) -> std::result::Result<Self, Self::Error> {
         let t = TensorDynLen::ones(indices)?;
-        Ok(Self::new(vec![t])?)
+        Self::new(vec![t])
     }
 
     fn onehot(index_vals: &[(Self::Index, usize)]) -> std::result::Result<Self, Self::Error> {
         let t = TensorDynLen::onehot(index_vals)?;
-        Ok(Self::new(vec![t])?)
+        Self::new(vec![t])
     }
 }
 

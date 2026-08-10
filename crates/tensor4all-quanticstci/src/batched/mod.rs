@@ -166,6 +166,7 @@ where
 /// * `grid` - Discretized grid describing the function domain
 /// * `f` - Function to interpolate, returns a `Vec<V>` of length `product(output_dims)`
 /// * `output_dims` - Shape of the function output (e.g., `&[3]` for 3-vector,
+///
 ///   `&[2, 2]` for 2x2 matrix)
 /// * `initial_pivots` - Initial pivot grid indices (optional)
 /// * `options` - TCI options
@@ -312,9 +313,11 @@ where
 ///
 /// The combination strategy ensures TensorTrain validity:
 /// - **First site** (`left_dim = 1` for all components): the component tensors
+///
 ///   are concatenated along the right bond, giving shape `(1, site_dim, sum_right)`.
 /// - **Middle sites**: block-diagonal in both bond dimensions.
 /// - **Last grid site** (`right_dim = 1` for all components): block-diagonal in
+///
 ///   left bond, concatenated right bond gives `(sum_left, site_dim, n_components)`.
 ///
 /// A final selector site of shape `(total_right_bond, n_components, 1)` is

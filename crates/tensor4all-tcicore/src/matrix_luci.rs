@@ -335,6 +335,7 @@ where
 ///
 /// * `a` - Dense matrix to factorize.
 /// * `options` - Optional rank and tolerance controls. `None` uses the
+///
 ///   default LUCI settings.
 ///
 /// # Returns
@@ -402,6 +403,7 @@ where
 /// * `nrows` - Number of matrix rows.
 /// * `ncols` - Number of matrix columns.
 /// * `fill_block` - Closure that fills `out` with `A[rows, cols]` in
+///
 ///   column-major order.
 /// * `options` - Rank and tolerance controls.
 ///

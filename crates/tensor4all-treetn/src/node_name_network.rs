@@ -25,8 +25,10 @@ use std::hash::Hash;
 ///
 /// # Note on ordering
 /// - For path-based canonicalization (moving ortho center), edges are connected:
+///
 ///   each edge's `to` equals the next edge's `from`.
 /// - For full canonicalization (from scratch), edges represent parent edges in
+///
 ///   post-order DFS traversal, which may not be connected as a path but
 ///   guarantees correct processing order (children before parents).
 ///
@@ -524,6 +526,7 @@ where
     ///
     /// # Arguments
     /// * `target_region` - Set of NodeIndex that forms the canonical center region
+    ///
     ///   (must be non-empty and connected)
     ///
     /// # Returns

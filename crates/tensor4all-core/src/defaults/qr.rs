@@ -177,6 +177,7 @@ where
 /// A tuple `(Q, R)` where:
 /// - `Q` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
 /// - `R` is a tensor with indices `[bond_index, right_inds...]` and dimensions `[r, right_dims...]`
+///
 ///   where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// # Errors
@@ -239,6 +240,7 @@ pub fn qr<T>(
 /// A tuple `(Q, R)` where:
 /// - `Q` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
 /// - `R` is a tensor with indices `[bond_index, right_inds...]` and dimensions `[r, right_dims...]`
+///
 ///   where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// # Errors

@@ -21,10 +21,13 @@ pub type DynIndex = Index<DynId, TagSet>;
 /// `[0, 2^R)`.
 /// # Variants
 /// - **`Periodic`** (default): Results wrap around modulo 2^R.
+///
 ///   Use when functions are periodic or when wraparound is acceptable.
 /// - **`AntiPeriodic`**: Results wrap around modulo 2^R and receive a sign
+///
 ///   `(-1)^q`, where `q` is the integer wrap quotient.
 /// - **`Open`**: Out-of-range results produce zeros.
+///
 ///   Use when the function has compact support or when boundary effects matter.
 /// # Examples
 /// ```

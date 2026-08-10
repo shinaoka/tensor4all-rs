@@ -232,6 +232,7 @@ impl ContractOptions {
     ///
     /// # Arguments
     /// * `max_elements` - Maximum element count allowed for each dense input
+    ///
     ///   and output tensor materialized by the reference path. Use small,
     ///   test-sized values unless you have explicitly budgeted memory.
     ///

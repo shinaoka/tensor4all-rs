@@ -59,6 +59,7 @@ pub enum ConjState {
 ///
 /// - **`Id` as associated type**: Lightweight identifier (conjugate-independent)
 /// - **`Eq` by object equality**: Two indices are equal iff they represent the same object
+///
 ///   (including ID, dimension, and conjugate state if applicable)
 /// - **`dim()`**: Returns the dimension of the index
 /// - **`conj_state()`**: Returns the conjugate state (direction) of the index
@@ -80,6 +81,7 @@ pub enum ConjState {
 /// Two indices are contractable if:
 /// - Their dimensions match
 /// - Their full index identity is compatible:
+///
 ///   - `(Undirected, Undirected)` → equal indices
 ///   - `(Ket, Bra)` or `(Bra, Ket)` → one index is the other's conjugate
 ///   - Mixed `(Undirected, Ket/Bra)` → **not contractable** (mixing forbidden)
@@ -153,6 +155,7 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Two indices are contractable if:
     /// - They have the same dimension
     /// - Their full identity is compatible:
+    ///
     ///   - `(Undirected, Undirected)` → equal indices
     ///   - `(Ket, Bra)` or `(Bra, Ket)` → one index is the other's conjugate
     ///   - Mixed `(Undirected, Ket/Bra)` → **not contractable** (mixing forbidden)
@@ -228,6 +231,7 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     ///
     /// # Arguments
     /// * `indices` - Non-empty input indices whose tensor-product space is represented by
+    ///
     ///   the output. Typical inputs are link or bond indices being fused into one link.
     ///
     /// # Returns

@@ -164,6 +164,7 @@ where
     ///
     /// # Arguments
     /// * `indices` - Grid indices (1-indexed). For a grid of size N,
+    ///
     ///   valid indices are `1..=N`.
     ///
     /// # Returns
@@ -624,6 +625,7 @@ where
 ///
 /// # Arguments
 /// * `xvals` - Arrays of grid points for each dimension. All dimensions must have the
+///
 ///   **same** number of points and each must be a power of 2.
 /// * `f` - Function to interpolate, takes original coordinates as `&[f64]`
 /// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)
@@ -730,6 +732,7 @@ where
 ///
 /// # Arguments
 /// * `size` - Grid size in each dimension. All dimensions must have the **same** number of
+///
 ///   points and each must be a power of 2 (e.g., `&[16, 16]`).
 /// * `f` - Function to interpolate, taking **1-indexed** grid indices as `&[i64]`
 /// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)

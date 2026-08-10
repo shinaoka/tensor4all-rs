@@ -534,6 +534,7 @@ impl<T> Matrix<T> {
 /// # Arguments
 /// * `matrix` - Small dense Hermitian matrix in column-major [`Matrix`] layout.
 /// * `hermitian_tol` - Relative tolerance for `A[i, j] = conj(A[j, i])`,
+///
 ///   applied as `hermitian_tol * max(1, |A[i,j]|, |A[j,i]|)`.
 ///   Typical values are `1e-12` for `f64`/`Complex64` projected matrices.
 ///
@@ -595,6 +596,7 @@ where
 ///
 /// * `matrix` - Square Hermitian matrix in column-major [`Matrix`] layout.
 /// * `hermitian_tol` - Relative tolerance for checking `A = A†`, applied per
+///
 ///   entry pair with scale `max(1, |A[i,j]|, |A[j,i]|)`.
 ///
 /// # Returns
@@ -660,6 +662,7 @@ where
 /// * `matrix` - Square Hermitian matrix in column-major [`Matrix`] layout.
 /// * `exponent` - Scalar multiplier in `exp(exponent * A)`.
 /// * `hermitian_tol` - Relative tolerance for checking `A = A†`; accepted
+///
 ///   roundoff is symmetrized before eigensolving.
 ///
 /// # Returns

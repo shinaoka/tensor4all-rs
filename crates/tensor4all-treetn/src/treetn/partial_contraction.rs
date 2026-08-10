@@ -33,6 +33,7 @@ type DiagonalPairApplication<V> = (
 ///
 /// - `contract_pairs`: Site index pairs to sum over and remove from the result.
 /// - `diagonal_pairs`: Site index pairs to identify through diagonal/copy
+///
 ///   structure while keeping the left-hand site leg in the result.
 /// - Remaining (unmentioned) site indices pass through as external legs.
 ///
@@ -810,6 +811,7 @@ where
 /// * `a` - First tensor network
 /// * `b` - Second tensor network
 /// * `spec` - Which site indices to contract versus link through diagonal
+///
 ///   structure
 /// * `center` - Canonical center node for the result
 /// * `options` - Contraction algorithm options
@@ -817,8 +819,10 @@ where
 /// # Index handling
 ///
 /// - **contract_pairs**: Both indices are traced over (inner product).
+///
 ///   Neither appears in the result.
 /// - **diagonal_pairs**: The two indices are linked through explicit diagonal
+///
 ///   structure so that only matching values contribute, while the left-hand site
 ///   index remains in the result.
 /// - **Unmentioned indices**: Pass through unchanged as external legs.
@@ -921,12 +925,15 @@ where
 /// * `a` - First tensor network. Left indices in `spec` must be site indices of this network.
 /// * `b` - Second tensor network. Right indices in `spec` must be site indices of this network.
 /// * `spec` - Site-index contraction and diagonal-pair specification. `output_order`
+///
 ///   must be `None` because `target` supplies the output layout.
 /// * `center` - Canonical center node used for the intermediate contraction.
 /// * `target` - Target site-index network containing exactly the surviving result
+///
 ///   indices, assigned to the desired output nodes and topology.
 /// * `options` - Contraction algorithm options.
 /// * `restructure_options` - Split, swap, and optional final truncation settings
+///
 ///   used when transforming the intermediate result to `target`.
 ///
 /// # Returns
@@ -1177,6 +1184,7 @@ where
 /// # Arguments
 /// * `state` - Input TreeTN.
 /// * `sum_indices` - External indices of `state` to sum over. Each index must
+///
 ///   be present exactly once in the list.
 /// * `center` - Canonical center node for the result.
 /// * `options` - Contraction algorithm options.

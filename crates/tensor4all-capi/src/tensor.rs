@@ -856,14 +856,18 @@ pub extern "C" fn t4a_tensor_svd(
 /// # Arguments
 /// * `tensor` - Input tensor handle to factorize.
 /// * `left_inds` - Pointers to the indices that should appear on the left side
+///
 ///   of the factorization.
 /// * `n_left` - Number of entries in `left_inds`.
 /// * `rtol` - Relative truncation tolerance for QR row-norm truncation. Pass
+///
 ///   `0.0` to disable truncation and keep the exact QR rank. Pass any other
 ///   finite, non-negative value to request truncation for this call.
 /// * `out_q` - Output slot that receives a newly allocated `Q` tensor handle on
+///
 ///   success.
 /// * `out_r` - Output slot that receives a newly allocated `R` tensor handle on
+///
 ///   success.
 ///
 /// # Returns
@@ -874,11 +878,14 @@ pub extern "C" fn t4a_tensor_svd(
 /// # Errors
 /// Returns:
 /// - `T4A_NULL_POINTER` if `tensor`, any required index pointer, `out_q`, or
+///
 ///   `out_r` is null.
 /// - `T4A_INVALID_ARGUMENT` if the index split is invalid, QR factorization
+///
 ///   fails, or `rtol` is negative or non-finite (for example `NaN` or
 ///   `+/-inf`).
 /// - `T4A_INTERNAL_ERROR` if the Rust implementation panics while processing
+///
 ///   the request.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_qr(

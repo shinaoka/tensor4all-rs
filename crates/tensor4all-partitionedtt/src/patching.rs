@@ -199,8 +199,10 @@ pub fn add_with_patching(
 /// * `left` - Left partitioned tensor train.
 /// * `right` - Right partitioned tensor train.
 /// * `contract_options` - Contraction method, sweep count, and provisional
+///
 ///   truncation settings used by the underlying TT contraction.
 /// * `patching_options` - Global output tolerance and output rank cap. Split
+///
 ///   fields are validated but not used by this post-contraction truncation
 ///   pass.
 ///

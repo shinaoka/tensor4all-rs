@@ -214,6 +214,7 @@ where
     /// * `region` - The nodes in the open region
     /// * `ket_state` - The current state |ket⟩ (used for ket in environment computation)
     /// * `bra_state` - The reference state ⟨bra| (used for bra in environment computation)
+    ///
     ///   For V_in = V_out, this is the same as ket_state.
     ///   For V_in ≠ V_out, this should be a state in V_out.
     /// * `topology` - Network topology for traversal

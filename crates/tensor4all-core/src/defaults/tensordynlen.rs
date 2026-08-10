@@ -2209,8 +2209,10 @@ impl TensorDynLen {
     /// # Arguments
     ///
     /// * `selected_indices` - Indices to fix and remove from the result. Each
+    ///
     ///   index must appear exactly once in this tensor.
     /// * `positions` - Coordinates for `selected_indices`. Each coordinate must
+    ///
     ///   be less than the corresponding index dimension.
     ///
     /// # Returns
@@ -2577,6 +2579,7 @@ impl TensorDynLen {
     /// # Arguments
     ///
     /// - `left`: left copy axis; its dimension must be positive and equal to
+    ///
     ///   `right.dim`.
     /// - `site`: physical axis whose selected coordinate remains active.
     /// - `right`: right copy axis paired with `left`.
@@ -3203,6 +3206,7 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `new_indices` - The desired new indices order. Must be a permutation
+    ///
     ///   of `self.indices` (matched by ID).
     ///
     /// # Errors
@@ -4877,6 +4881,7 @@ impl TensorDynLen {
     ///
     /// * `index` - Existing tensor index to mask.
     /// * `position` - Zero-based coordinate to keep; all other coordinates become
+    ///
     ///   zero.
     ///
     /// # Errors
@@ -5035,9 +5040,11 @@ impl std::fmt::Debug for TensorDynLen {
 /// # Arguments
 /// * `indices` - The indices for the tensor (all must have the same dimension)
 /// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
+///
 /// The returned tensor preserves compact diagonal payload metadata; use
 /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
 /// representation.
+///
 /// # Errors
 /// Returns an error when the index dimensions are unequal (a dimension
 /// mismatch) or the diagonal construction fails.
@@ -5695,12 +5702,15 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `old_indices` - Non-empty list of existing tensor indices to replace.
+    ///
     ///   Each index is matched by ID, must appear exactly once in the tensor,
     ///   must have the same dimension as the matched tensor axis, and must not
     ///   be duplicated in this list.
     /// * `new_index` - Replacement index whose dimension must equal the product
+    ///
     ///   of the dimensions in `old_indices`.
     /// * `order` - Linearization convention used to encode the old coordinates
+    ///
     ///   into the single coordinate of `new_index`.
     ///
     /// # Returns
@@ -5965,6 +5975,7 @@ impl TensorDynLen {
     ///
     /// # Type Parameters
     /// * `T` - The scalar element type (`f32`, `f64`, `Complex32`, or
+    ///
     ///   `Complex64`).
     ///
     /// # Returns
@@ -5996,6 +6007,7 @@ impl TensorDynLen {
     ///
     /// # Type Parameters
     /// * `T` - The scalar element type to extract: `f32`, `f64`, `Complex32`,
+    ///
     ///   or `Complex64`.
     ///
     /// # Returns
