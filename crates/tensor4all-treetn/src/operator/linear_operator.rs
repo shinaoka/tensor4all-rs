@@ -20,6 +20,7 @@
 //!
 //! When applying to `x`, it automatically handles the index transformations.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -219,7 +220,10 @@ where
     /// Returns an error when the MPO and state are incompatible (a shape or index
     /// /// mismatch) or the binding fails.
     ///
-    pub fn from_mpo_and_state(mpo: TreeTN<T, V>, state: &TreeTN<T, V>) -> Result<Self> {
+    pub fn from_mpo_and_state(
+        mpo: TreeTN<T, V>,
+        state: &TreeTN<T, V>,
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
 
@@ -242,7 +246,8 @@ where
                             node,
                             state_indices.len(),
                             mpo_indices.len()
-                        ));
+                        )
+                        .into());
                     }
 
                     // For each state site index, find matching MPO indices by dimension
@@ -259,7 +264,8 @@ where
                                 node,
                                 dim,
                                 matching_mpo.len()
-                            ));
+                            )
+                            .into());
                         }
 
                         // Convention: first matching is s_in_tmp, second is s_out_tmp
@@ -289,7 +295,8 @@ where
                     return Err(anyhow::anyhow!(
                         "Node {:?}: Mismatched site space presence between state and MPO",
                         node
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -318,14 +325,19 @@ where
     /// Returns an error when the local application fails (a shape or index
     /// /// mismatch, or a backend failure).
     ///
-    pub fn apply_local(&self, local_tensor: &T, region: &[V]) -> Result<T> {
+    pub fn apply_local(
+        &self,
+        local_tensor: &T,
+        region: &[V],
+    ) -> std::result::Result<T, TreeTNOperationError> {
         // Step 1: Replace input indices in local_tensor with internal indices
         let mut transformed = local_tensor.clone();
         for node in region {
             if let Some(mappings) = self.input_mapping.get(node) {
                 for mapping in mappings {
-                    transformed =
-                        transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
+                    transformed = transformed
+                        .replaceind(&mapping.true_index, &mapping.internal_index)
+                        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 }
             }
         }
@@ -345,21 +357,25 @@ where
 
             op_tensor = Some(match op_tensor {
                 None => tensor,
-                Some(t) => T::contract(&[&t, &tensor])?,
+                Some(t) => T::contract(&[&t, &tensor])
+                    .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?,
             });
         }
 
         let op_tensor = op_tensor.ok_or_else(|| anyhow::anyhow!("Empty region"))?;
 
         // Contract transformed tensor with operator
-        let contracted = T::contract(&[&transformed, &op_tensor])?;
+        let contracted = T::contract(&[&transformed, &op_tensor])
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
 
         // Step 3: Replace output indices back to true indices
         let mut result = contracted;
         for node in region {
             if let Some(mappings) = self.output_mapping.get(node) {
                 for mapping in mappings {
-                    result = result.replaceind(&mapping.internal_index, &mapping.true_index)?;
+                    result = result
+                        .replaceind(&mapping.internal_index, &mapping.true_index)
+                        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 }
             }
         }
@@ -477,23 +493,30 @@ where
     /// assert!(renamed.get_output_mapping(&2).is_some());
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn rename_nodes(mut self, mapping: &[(V, V)]) -> Result<Self> {
+    pub fn rename_nodes(
+        mut self,
+        mapping: &[(V, V)],
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         let mut rename_map = HashMap::with_capacity(mapping.len());
         for (old_node, new_node) in mapping {
             let previous = rename_map.insert(old_node.clone(), new_node.clone());
-            anyhow::ensure!(
-                previous.is_none(),
-                "LinearOperator::rename_nodes: duplicate old node {:?}",
-                old_node
-            );
+            if !(previous.is_none()) {
+                return Err(anyhow::anyhow!(
+                    "LinearOperator::rename_nodes: duplicate old node {:?}",
+                    old_node
+                )
+                .into());
+            }
         }
 
         for old_node in rename_map.keys() {
-            anyhow::ensure!(
-                self.mpo.node_index(old_node).is_some(),
-                "LinearOperator::rename_nodes: unknown old node {:?}",
-                old_node
-            );
+            if !(self.mpo.node_index(old_node).is_some()) {
+                return Err(anyhow::anyhow!(
+                    "LinearOperator::rename_nodes: unknown old node {:?}",
+                    old_node
+                )
+                .into());
+            }
         }
 
         let old_names = self.mpo.node_names();
@@ -504,11 +527,13 @@ where
                 .get(old_name)
                 .cloned()
                 .unwrap_or_else(|| old_name.clone());
-            anyhow::ensure!(
-                seen_names.insert(new_name.clone()),
-                "LinearOperator::rename_nodes: duplicate node name {:?} after renaming",
-                new_name
-            );
+            if !(seen_names.insert(new_name.clone())) {
+                return Err(anyhow::anyhow!(
+                    "LinearOperator::rename_nodes: duplicate node name {:?} after renaming",
+                    new_name
+                )
+                .into());
+            }
             new_names.push(new_name);
         }
 
@@ -610,7 +635,10 @@ where
     /// Returns an error when the state site space is incompatible (a shape
     /// /// mismatch) or the binding fails.
     ///
-    pub fn set_input_space_from_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+    pub fn set_input_space_from_state(
+        &mut self,
+        state: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let nodes: Vec<V> = self.input_mapping.keys().cloned().collect();
         for node in nodes {
             let new_true_index = Self::single_site_index_from_state(state, &node)?;
@@ -622,7 +650,7 @@ where
                 return Err(anyhow::anyhow!(
                     "Node {:?}: set_input_space_from_state only supports one input mapping per node; use explicit index binding for multi-index nodes",
                     node
-                ));
+                ).into());
             }
             let mapping = mappings
                 .first_mut()
@@ -633,7 +661,8 @@ where
                     node,
                     mapping.internal_index.dim(),
                     new_true_index.dim()
-                ));
+                )
+                .into());
             }
             mapping.true_index = new_true_index;
         }
@@ -648,7 +677,10 @@ where
     /// Returns an error when the state site space is incompatible (a shape
     /// /// mismatch) or the binding fails.
     ///
-    pub fn set_output_space_from_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+    pub fn set_output_space_from_state(
+        &mut self,
+        state: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let nodes: Vec<V> = self.output_mapping.keys().cloned().collect();
         for node in nodes {
             let new_true_index = Self::single_site_index_from_state(state, &node)?;
@@ -660,7 +692,7 @@ where
                 return Err(anyhow::anyhow!(
                     "Node {:?}: set_output_space_from_state only supports one output mapping per node; use explicit index binding for multi-index nodes",
                     node
-                ));
+                ).into());
             }
             let mapping = mappings
                 .first_mut()
@@ -671,7 +703,8 @@ where
                     node,
                     mapping.internal_index.dim(),
                     new_true_index.dim()
-                ));
+                )
+                .into());
             }
             mapping.true_index = new_true_index;
         }
@@ -747,7 +780,10 @@ where
     /// assert_eq!(op.get_input_mapping(&0).unwrap().true_index, state_index);
     /// assert_eq!(op.get_output_mapping(&0).unwrap().true_index, state_index);
     /// ```
-    pub fn align_to_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+    pub fn align_to_state(
+        &mut self,
+        state: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         self.set_input_space_from_state(state)?;
         self.set_output_space_from_state(state)?;
         Ok(())
@@ -893,7 +929,7 @@ where
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
         options: &RestructureOptions,
-    ) -> Result<LinearOperator<T, TargetV>>
+    ) -> std::result::Result<LinearOperator<T, TargetV>, TreeTNOperationError>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
@@ -1023,8 +1059,9 @@ where
         old_true_index: &DynIndex,
         new_true_indices: &[DynIndex],
         order: LinearizationOrder,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         self.unfuse_mapping_index(old_true_index, new_true_indices, order, MappingKind::Input)
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Replace one fused output mapping with several ordered output mappings.
@@ -1097,8 +1134,9 @@ where
         old_true_index: &DynIndex,
         new_true_indices: &[DynIndex],
         order: LinearizationOrder,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         self.unfuse_mapping_index(old_true_index, new_true_indices, order, MappingKind::Output)
+            .map_err(TreeTNOperationError::from)
     }
 
     fn unfuse_mapping_index(
@@ -1108,10 +1146,11 @@ where
         order: LinearizationOrder,
         kind: MappingKind,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            !new_true_indices.is_empty(),
-            "LinearOperator::{kind}: replacement indices must not be empty"
-        );
+        if !(!new_true_indices.is_empty()) {
+            return Err(anyhow::anyhow!(
+                "LinearOperator::{kind}: replacement indices must not be empty"
+            ));
+        }
         let product = new_true_indices
             .iter()
             .try_fold(1usize, |acc, index| acc.checked_mul(index.dim()))

@@ -1261,7 +1261,7 @@ where
         LinearOperator::from_mpo_and_state(operator.clone(), &init).map_err(|source| {
             TdvpError::Algorithm {
                 context: "TDVP failed to build LinearOperator from TreeTN operator",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
     tdvp(&linear_operator, init, center, options)

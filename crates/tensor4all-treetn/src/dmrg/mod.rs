@@ -772,7 +772,7 @@ where
         LinearOperator::from_mpo_and_state(operator.clone(), &init).map_err(|source| {
             DmrgError::Algorithm {
                 context: "DMRG failed to build LinearOperator from TreeTN operator",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
     dmrg(&linear_operator, init, center, options)
