@@ -17,6 +17,24 @@ use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::BackendSessionHost;
 
 use crate::any_scalar::promote_scalar_native;
+/// Error returned by the storage/tensor bridge helpers.
+///
+/// Wraps the underlying tensor-element or backend diagnostic, preserving its
+/// source chain.
+#[derive(Debug, thiserror::Error)]
+#[error("native tensor bridge operation failed: {source}")]
+pub struct BridgeError {
+    /// Original tensor-element or backend diagnostic.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+impl From<anyhow::Error> for BridgeError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
 use crate::context::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
     with_default_backend, with_default_graph_runtime,
@@ -767,7 +785,10 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
 /// # Errors
 ///
 /// Returns an error when the storage cannot be converted to a native tensor (a scalar-kind mismatch or backend failure).
-pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<NativeTensor> {
+pub fn storage_to_native_tensor(
+    storage: &Storage,
+    logical_dims: &[usize],
+) -> std::result::Result<NativeTensor, BridgeError> {
     if storage.is_c64() {
         dense_native_tensor_from_col_major(
             &storage
@@ -775,6 +796,7 @@ pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Re
                 .map_err(|e| anyhow!("dense c64 materialization failed: {e}"))?,
             logical_dims,
         )
+        .map_err(BridgeError::from)
     } else {
         dense_native_tensor_from_col_major(
             &storage
@@ -782,6 +804,7 @@ pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Re
                 .map_err(|e| anyhow!("dense f64 materialization failed: {e}"))?,
             logical_dims,
         )
+        .map_err(BridgeError::from)
     }
 }
 
@@ -792,14 +815,17 @@ pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Re
 /// # Errors
 ///
 /// Returns an error when the storage payload cannot be read into a native buffer (a scalar-kind mismatch or backend failure).
-pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTensorReadInput<'_>> {
+pub fn storage_payload_native_read_input(
+    storage: &Storage,
+) -> std::result::Result<NativeTensorReadInput<'_>, BridgeError> {
     if storage.is_f64() {
         if let Some(view) = storage
             .payload_f64_col_major_view_if_contiguous()
             .map_err(anyhow::Error::msg)?
         {
             return Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
-                TensorView::f64(storage.payload_dims(), view)?,
+                TensorView::f64(storage.payload_dims(), view)
+                    .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
             )));
         }
         Ok(NativeTensorReadInput::Owned(
@@ -816,7 +842,8 @@ pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTens
             .map_err(anyhow::Error::msg)?
         {
             return Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
-                TensorView::c64(storage.payload_dims(), view)?,
+                TensorView::c64(storage.payload_dims(), view)
+                    .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
             )));
         }
         Ok(NativeTensorReadInput::Owned(
@@ -828,7 +855,7 @@ pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTens
             ),
         ))
     } else {
-        Err(anyhow!("unsupported storage scalar type"))
+        Err(anyhow!("unsupported storage scalar type").into())
     }
 }
 
@@ -836,7 +863,9 @@ pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTens
 /// # Errors
 ///
 /// Returns an error when the native tensor cannot be converted to storage (a scalar-kind mismatch or backend failure).
-pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage> {
+pub fn native_tensor_primal_to_storage(
+    tensor: &NativeTensor,
+) -> std::result::Result<Storage, BridgeError> {
     match tensor.dtype() {
         DType::F32 => Storage::from_dense_col_major(
             tensor
@@ -846,14 +875,16 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .map(|&value| value as f64)
                 .collect::<Vec<_>>(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
         DType::F64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<f64>()
                 .ok_or_else(|| anyhow!("failed to read f64 native tensor"))?
                 .to_vec(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
         DType::I32 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<i32>()
@@ -862,7 +893,8 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .map(|&value| value as f64)
                 .collect::<Vec<_>>(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
         DType::I64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<i64>()
@@ -871,7 +903,8 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .map(|&value| value as f64)
                 .collect::<Vec<_>>(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
         DType::Bool => Storage::from_dense_col_major(
             tensor
                 .as_slice::<bool>()
@@ -880,7 +913,8 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .map(|&value| if value { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
         DType::C32 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<Complex32>()
@@ -889,23 +923,26 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .map(|&value| Complex64::new(value.re as f64, value.im as f64))
                 .collect::<Vec<_>>(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
         DType::C64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<Complex64>()
                 .ok_or_else(|| anyhow!("failed to read c64 native tensor"))?
                 .to_vec(),
             tensor.shape(),
-        ),
+        )
+        .map_err(BridgeError::from),
     }
-    .map_err(|e| anyhow!("native tensor snapshot materialization failed: {e}"))
 }
 
 /// Materialize dense f64 values from a native tensor.
 /// # Errors
 ///
 /// Returns an error when the native tensor is not f64-compatible (a dtype mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Result<Vec<f64>> {
+pub fn native_tensor_primal_to_dense_f64_col_major(
+    tensor: &NativeTensor,
+) -> std::result::Result<Vec<f64>, BridgeError> {
     match tensor.dtype() {
         DType::F32 => Ok(tensor
             .as_slice::<f32>()
@@ -913,7 +950,8 @@ pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Res
             .iter()
             .map(|&value| value as f64)
             .collect()),
-        DType::F64 => <f64 as TensorElement>::dense_values_from_native_col_major(tensor),
+        DType::F64 => <f64 as TensorElement>::dense_values_from_native_col_major(tensor)
+            .map_err(BridgeError::from),
         DType::I32 => Ok(tensor
             .as_slice::<i32>()
             .ok_or_else(|| anyhow!("failed to read i32 native tensor"))?
@@ -932,7 +970,7 @@ pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Res
             .iter()
             .map(|&value| if value { 1.0 } else { 0.0 })
             .collect()),
-        other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
+        other => Err(anyhow!("expected real native tensor, got dtype {other:?}").into()),
     }
 }
 
@@ -942,7 +980,7 @@ pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Res
 /// Returns an error when the native tensor is not c64-compatible (a dtype mismatch) or the materialization fails.
 pub fn native_tensor_primal_to_dense_c64_col_major(
     tensor: &NativeTensor,
-) -> Result<Vec<Complex64>> {
+) -> std::result::Result<Vec<Complex64>, BridgeError> {
     match tensor.dtype() {
         DType::C32 => Ok(tensor
             .as_slice::<Complex32>()
@@ -950,10 +988,9 @@ pub fn native_tensor_primal_to_dense_c64_col_major(
             .iter()
             .map(|&value| Complex64::new(value.re as f64, value.im as f64))
             .collect()),
-        DType::C64 => <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor),
-        other => Err(anyhow!(
-            "expected complex native tensor, got dtype {other:?}"
-        )),
+        DType::C64 => <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)
+            .map_err(BridgeError::from),
+        other => Err(anyhow!("expected complex native tensor, got dtype {other:?}").into()),
     }
 }
 
@@ -971,26 +1008,34 @@ pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
 /// # Errors
 ///
 /// Returns an error when the native tensor is not f64-diagonal-compatible (a dtype or shape mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
+pub fn native_tensor_primal_to_diag_f64(
+    tensor: &NativeTensor,
+) -> std::result::Result<Vec<f64>, BridgeError> {
     match tensor.dtype() {
         DType::F32 => {
             let promoted = convert_tensor(tensor, DType::F64)?;
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+                .map_err(BridgeError::from)
         }
-        DType::F64 => <f64 as TensorElement>::diag_values_from_native_temp(tensor),
+        DType::F64 => {
+            <f64 as TensorElement>::diag_values_from_native_temp(tensor).map_err(BridgeError::from)
+        }
         DType::I32 => {
             let promoted = convert_tensor(tensor, DType::F64)?;
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+                .map_err(BridgeError::from)
         }
         DType::I64 => {
             let promoted = convert_tensor(tensor, DType::F64)?;
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+                .map_err(BridgeError::from)
         }
         DType::Bool => {
             let promoted = convert_tensor(tensor, DType::F64)?;
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+                .map_err(BridgeError::from)
         }
-        other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
+        other => Err(anyhow!("expected real native tensor, got dtype {other:?}").into()),
     }
 }
 
@@ -998,16 +1043,18 @@ pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64
 /// # Errors
 ///
 /// Returns an error when the native tensor is not c64-diagonal-compatible (a dtype or shape mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
+pub fn native_tensor_primal_to_diag_c64(
+    tensor: &NativeTensor,
+) -> std::result::Result<Vec<Complex64>, BridgeError> {
     match tensor.dtype() {
         DType::C32 => {
             let promoted = convert_tensor(tensor, DType::C64)?;
             <Complex64 as TensorElement>::diag_values_from_native_temp(&promoted)
+                .map_err(BridgeError::from)
         }
-        DType::C64 => <Complex64 as TensorElement>::diag_values_from_native_temp(tensor),
-        other => Err(anyhow!(
-            "expected complex native tensor, got dtype {other:?}"
-        )),
+        DType::C64 => <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)
+            .map_err(BridgeError::from),
+        other => Err(anyhow!("expected complex native tensor, got dtype {other:?}").into()),
     }
 }
 
@@ -1027,7 +1074,9 @@ pub fn reshape_col_major_native_tensor(
 /// # Errors
 ///
 /// Returns an error when the QR factorization fails (a backend or non-convergence failure).
-pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
+pub fn qr_native_tensor(
+    tensor: &NativeTensor,
+) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
     let outputs = with_default_backend(|backend| backend.qr(tensor))
         .map_err(|e| anyhow!("native QR failed: {e}"))?;
     let [q, r]: [NativeTensor; 2] = outputs.try_into().map_err(|outputs: Vec<NativeTensor>| {
@@ -1056,7 +1105,7 @@ pub fn svd_native_tensor(
 /// # Errors
 ///
 /// Returns an error when the native reduction fails (a backend or dtype mismatch failure).
-pub fn sum_native_tensor(tensor: &NativeTensor) -> Result<AnyScalar> {
+pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<AnyScalar, BridgeError> {
     let reduced = if tensor.shape().is_empty() {
         tensor.clone()
     } else {
@@ -1064,7 +1113,7 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> Result<AnyScalar> {
         with_default_backend(|backend| tenferro::tensor::reduce_sum(tensor, &axes, backend))
             .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
-    AnyScalar::from_native(reduced)
+    Ok(AnyScalar::from_native(reduced)?)
 }
 
 /// Return the tangent tensor when present.
@@ -1079,7 +1128,10 @@ pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
 /// # Errors
 ///
 /// Returns an error when the native scaling fails (a backend or dtype mismatch failure).
-pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<NativeTensor> {
+pub fn scale_native_tensor(
+    tensor: &NativeTensor,
+    scalar: &AnyScalar,
+) -> std::result::Result<NativeTensor, BridgeError> {
     let target = common_dtype(&[tensor.dtype(), scalar.as_native().dtype()]);
     let tensor = convert_tensor(tensor, target)?;
     let scalar = promote_scalar_native(scalar.as_native(), target)?;
@@ -1149,9 +1201,9 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 values,
             ))
         }
-        DType::I32 | DType::I64 | DType::Bool => Err(anyhow!(
-            "scale_native_tensor does not support integer/bool tensors"
-        )),
+        DType::I32 | DType::I64 | DType::Bool => {
+            Err(anyhow!("scale_native_tensor does not support integer/bool tensors").into())
+        }
     }
 }
 
@@ -1536,9 +1588,13 @@ pub fn einsum_native_tensor_reads(
 /// # Errors
 ///
 /// Returns an error when the native permutation fails (a shape or index mismatch, or a backend failure).
-pub fn permute_native_tensor(tensor: &NativeTensor, perm: &[usize]) -> Result<NativeTensor> {
+pub fn permute_native_tensor(
+    tensor: &NativeTensor,
+    perm: &[usize],
+) -> std::result::Result<NativeTensor, BridgeError> {
     with_default_backend(|backend| tenferro::tensor::transpose(tensor, perm, backend))
         .map_err(|e| anyhow!("native permute failed: {e}"))
+        .map_err(BridgeError::from)
 }
 
 /// Contract two native tensors along matching axes.
@@ -1567,15 +1623,18 @@ pub fn contract_native_tensor(
 /// # Errors
 ///
 /// Returns an error when the native outer product fails (a shared-index or shape mismatch, or a backend failure).
-pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Result<NativeTensor> {
-    contract_native_tensor(lhs, &[], rhs, &[])
+pub fn outer_product_native_tensor(
+    lhs: &NativeTensor,
+    rhs: &NativeTensor,
+) -> std::result::Result<NativeTensor, BridgeError> {
+    contract_native_tensor(lhs, &[], rhs, &[]).map_err(BridgeError::from)
 }
 
 /// Conjugate a native tensor.
 /// # Errors
 ///
 /// Returns an error when the native conjugation fails (a dtype mismatch or backend failure).
-pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
+pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTensor, BridgeError> {
     match tensor.dtype() {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => Ok(tensor.clone()),
         DType::C32 => Ok(NativeTensor::from_vec_col_major(
@@ -1607,7 +1666,7 @@ pub fn permute_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
     perm: &[usize],
-) -> Result<Storage> {
+) -> std::result::Result<Storage, BridgeError> {
     let native = storage_to_native_tensor(storage, logical_dims)?;
     let permuted = permute_native_tensor(&native, perm)?;
     native_tensor_primal_to_storage(&permuted)
@@ -1625,7 +1684,7 @@ pub fn contract_storage_native(
     dims_b: &[usize],
     axes_b: &[usize],
     _result_dims: &[usize],
-) -> Result<Storage> {
+) -> std::result::Result<Storage, BridgeError> {
     let lhs = storage_to_native_tensor(storage_a, dims_a)?;
     let rhs = storage_to_native_tensor(storage_b, dims_b)?;
     let result = contract_native_tensor(&lhs, axes_a, &rhs, axes_b)?;
@@ -1642,7 +1701,7 @@ pub fn outer_product_storage_native(
     rhs: &Storage,
     rhs_dims: &[usize],
     _result_dims: &[usize],
-) -> Result<Storage> {
+) -> std::result::Result<Storage, BridgeError> {
     let lhs = storage_to_native_tensor(lhs, lhs_dims)?;
     let rhs = storage_to_native_tensor(rhs, rhs_dims)?;
     let result = outer_product_native_tensor(&lhs, &rhs)?;
@@ -1657,7 +1716,7 @@ pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
     scalar: &AnyScalar,
-) -> Result<Storage> {
+) -> std::result::Result<Storage, BridgeError> {
     let native = storage_to_native_tensor(storage, logical_dims)?;
     let scaled = scale_native_tensor(&native, scalar)?;
     native_tensor_primal_to_storage(&scaled)
@@ -1674,7 +1733,7 @@ pub fn axpby_storage_native(
     rhs: &Storage,
     rhs_dims: &[usize],
     b: &AnyScalar,
-) -> Result<Storage> {
+) -> std::result::Result<Storage, BridgeError> {
     let lhs = storage_to_native_tensor(lhs, lhs_dims)?;
     let rhs = storage_to_native_tensor(rhs, rhs_dims)?;
     let combined = axpby_native_tensor(&lhs, a, &rhs, b)?;

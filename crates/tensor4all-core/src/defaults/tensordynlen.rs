@@ -1274,7 +1274,7 @@ impl TensorDynLen {
     }
 
     fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Result<NativeTensor> {
-        storage_to_native_tensor(storage, dims)
+        Ok(storage_to_native_tensor(storage, dims)?)
     }
 
     fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor>>> {

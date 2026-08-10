@@ -208,12 +208,11 @@ fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
 
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
     match tensor.dtype() {
-        DType::F64 => {
-            native_tensor_primal_to_dense_f64_col_major(tensor).map_err(SvdError::ComputationError)
-        }
+        DType::F64 => native_tensor_primal_to_dense_f64_col_major(tensor)
+            .map_err(|e| SvdError::ComputationError(e.source)),
         DType::C64 => native_tensor_primal_to_dense_c64_col_major(tensor)
             .map(|values| values.into_iter().map(|value| value.re).collect())
-            .map_err(SvdError::ComputationError),
+            .map_err(|e| SvdError::ComputationError(e.source)),
         other => Err(SvdError::ComputationError(anyhow::anyhow!(
             "native SVD returned unsupported singular-value scalar type {other:?}"
         ))),

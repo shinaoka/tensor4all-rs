@@ -274,12 +274,12 @@ pub fn qr_with<T>(
         match r_inner.data().dtype() {
             DType::F64 => {
                 let values = native_tensor_primal_to_dense_f64_col_major(r_inner.data())
-                    .map_err(QrError::ComputationError)?;
+                    .map_err(|e| QrError::ComputationError(e.source))?;
                 compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
             }
             DType::C64 => {
                 let values = native_tensor_primal_to_dense_c64_col_major(r_inner.data())
-                    .map_err(QrError::ComputationError)?;
+                    .map_err(|e| QrError::ComputationError(e.source))?;
                 compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
             }
             other => {
