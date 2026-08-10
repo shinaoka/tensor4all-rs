@@ -11,12 +11,9 @@ use crate::einsum_helper::{
 use crate::traits::TTScalar;
 
 /// Matrix Product Operator representation
-///
 /// An MPO represents a high-dimensional operator as a product of
 /// lower-dimensional tensors:
-///
 /// O[i1, j1, i2, j2, ..., iL, jL] = A1[i1, j1] * A2[i2, j2] * ... * AL[iL, jL]
-///
 /// where each Ak[ik, jk] is a matrix of shape (rk-1, rk) with physical indices ik, jk.
 #[derive(Debug, Clone)]
 pub struct MPO<T: TTScalar> {
@@ -321,8 +318,9 @@ impl<T: TTScalar> MPO<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if a tenferro-backed contraction fails or if an
-    /// internally constructed MPO has inconsistent bond dimensions.
+    /// Returns an error when the tenferro-backed contraction fails (a backend
+    /// failure) or an internally constructed MPO has inconsistent bond
+    /// dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -336,8 +334,9 @@ impl<T: TTScalar> MPO<T> {
     #[allow(clippy::needless_range_loop)]
     /// # Errors
     ///
-    /// Returns an error when the MPO addition fails (a shape or index mismatch,
-    /// /// or a backend failure).
+    /// Returns an error when the tenferro-backed contraction fails (a backend
+    ///     /// failure) or an internally constructed MPO is inconsistent (an
+    ///     /// invalid-state failure).
     ///
     pub fn sum(&self) -> Result<T>
     where

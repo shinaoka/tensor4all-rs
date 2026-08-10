@@ -174,6 +174,11 @@ where
 ///
 /// Tuple of ([`QuanticsTensorCI2Batched`], max_ranks_across_components, max_errors_across_components)
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Examples
 ///
 /// ```

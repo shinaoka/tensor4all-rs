@@ -31,6 +31,11 @@ where
     /// - If `options.force` is true:
     ///   - Always performs full canonicalization
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -95,6 +100,11 @@ where
     /// Canonicalize the network in-place towards the specified center using options.
     ///
     /// This is the `&mut self` version of [`Self::canonicalize`].
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     pub fn canonicalize_mut(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,

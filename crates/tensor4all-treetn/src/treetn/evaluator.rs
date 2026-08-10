@@ -89,9 +89,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the tree is empty, `indices` is incomplete, contains
-    /// duplicates, contains an unknown site index, or a site index is not found
-    /// on its owning node tensor.
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -234,8 +233,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if `values` is not rank-2, has the wrong leading
-    /// dimension, contains out-of-range coordinates, or contraction fails.
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///

@@ -79,6 +79,11 @@ where
     /// * `region` - The nodes in the local update region
     /// * `reference_state` - The current solution state (used as reference for environments)
     /// * `topology` - The network topology
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],

@@ -15,7 +15,6 @@ use tensor4all_core::{AnyScalar, IndexLike, TensorIndex, TensorLike};
 use super::TreeTN;
 
 /// Information about a merged bond index for direct-sum addition.
-///
 /// When adding two TreeTNs, each bond index in the result has dimension
 /// `dim_a + dim_b`, where `dim_a` and `dim_b` are the original bond dimensions.
 #[derive(Debug, Clone)]
@@ -198,13 +197,15 @@ where
     /// A HashMap mapping edge keys (node_name_pair in canonical order) to MergedBondInfo.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - Networks have incompatible topologies
-    /// - Bond indices cannot be found
+    /// Returns an error when the networks have incompatible topologies (a shape
+    /// or index mismatch) or a bond index cannot be found (a missing-index
+    /// failure).
     #[allow(clippy::type_complexity)]
     /// # Errors
     ///
-    /// Returns an error when the bond spaces are incompatible (a shape mismatch).
+    /// Returns an error when the networks have incompatible topologies (a shape
+    ///     /// or index mismatch) or a bond index cannot be found (a missing-index
+    ///     /// failure).
     ///
     pub fn compute_merged_bond_indices(
         &self,

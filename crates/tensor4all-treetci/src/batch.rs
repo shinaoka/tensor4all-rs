@@ -38,6 +38,11 @@ impl<'a> GlobalIndexBatch<'a> {
     ///
     /// Returns an error if `data.len() != n_sites * n_points`.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -118,6 +123,11 @@ impl OwnedGlobalIndexBatch {
     /// Create an owned batch buffer with column-major `(n_sites, n_points)` storage.
     ///
     /// Returns an error if `data.len() != n_sites * n_points`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///

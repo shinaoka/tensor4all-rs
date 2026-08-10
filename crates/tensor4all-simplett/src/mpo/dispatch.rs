@@ -37,6 +37,11 @@ use crate::einsum_helper::EinsumScalar;
 /// # Returns
 /// The contracted MPO
 ///
+/// # Errors
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
+///
 /// # Example
 ///
 /// ```

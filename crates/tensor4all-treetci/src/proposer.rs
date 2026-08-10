@@ -23,6 +23,11 @@ pub trait PivotCandidateProposer {
     ///
     /// `I_candidates` are multi-indices for the left (u-side) subtree,
     /// `J_candidates` for the right (v-side) subtree.
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
@@ -48,6 +53,11 @@ pub trait PivotCandidateProposer {
 pub struct DefaultProposer;
 
 impl PivotCandidateProposer for DefaultProposer {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
@@ -120,6 +130,11 @@ impl Default for SimpleProposer {
 }
 
 impl PivotCandidateProposer for SimpleProposer {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
@@ -192,6 +207,11 @@ impl Default for TruncatedDefaultProposer {
 }
 
 impl PivotCandidateProposer for TruncatedDefaultProposer {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,

@@ -1266,9 +1266,9 @@ where
     /// network.
     ///
     /// # Errors
-    /// Returns an error when the target is structurally incompatible with the
-    /// current network, or when the requested restructure still needs the
-    /// staged planner paths for mixed split/move/fuse execution.
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///

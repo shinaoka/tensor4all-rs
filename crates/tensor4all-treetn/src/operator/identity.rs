@@ -27,6 +27,11 @@ use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 ///
 /// A tensor representing the identity operator on the given site space.
 ///
+/// # Errors
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
+///
 /// # Example
 ///
 /// For a single site index of dimension 2:

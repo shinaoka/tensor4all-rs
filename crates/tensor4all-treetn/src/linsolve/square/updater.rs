@@ -226,6 +226,11 @@ where
     /// 3. Environment computation requirements are satisfiable
     ///
     /// Returns a detailed report of any inconsistencies found.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn verify(&self, state: &TreeTN<T, V>) -> Result<LinsolveVerifyReport<V>> {
         let mut report = LinsolveVerifyReport::default();
 

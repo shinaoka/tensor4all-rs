@@ -21,6 +21,11 @@ pub struct InverseMPO<T: TTScalar> {
 
 impl<T: TTScalar> InverseMPO<T> {
     /// Create an InverseMPO from an MPO
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn from_mpo(_mpo: MPO<T>) -> Result<Self> {
         // TODO: Implement conversion to inverse form
         Err(MPOError::InvalidOperation {
@@ -99,6 +104,11 @@ impl<T: TTScalar> InverseMPO<T> {
     }
 
     /// Convert to basic MPO
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn into_mpo(self) -> Result<MPO<T>> {
         // TODO: Implement conversion back to MPO
         Err(MPOError::InvalidOperation {

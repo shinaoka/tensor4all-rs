@@ -27,10 +27,10 @@ use crate::tensortrain::TensorTrain;
 /// The solution `x` as a TensorTrain.
 ///
 /// # Errors
-/// Returns an error if:
-/// - Any tensor train is empty
-/// - `nhalfsweeps` is not a multiple of 2
-/// - The solver fails internally
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 pub fn linsolve(
     operator: &TensorTrain,
     rhs: &TensorTrain,
@@ -264,6 +264,11 @@ impl TensorTrain {
     /// `self` is the operator `A`, `rhs` is `b`, `init` is the initial guess.
     ///
     /// See [`linsolve`] for details.
+    /// # Errors
+    ///
+    /// Returns an error when the solve or sweep fails (a shape or index
+    /// /// mismatch, a non-convergence failure, or a backend failure).
+    ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)
     }

@@ -22,9 +22,9 @@ use crate::common::{
 ///
 /// # Errors
 ///
-/// Returns an error when `f` is empty, when any site dimension is not binary,
-/// when `boundary` is [`BoundaryCondition::Open`], when a bond-dimension
-/// product overflows, or when a tensor/site-list allocation fails.
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
+///
 pub fn difference_kernel_mpo(
     f: &TensorTrain<Complex64>,
     boundary: BoundaryCondition,
@@ -124,9 +124,9 @@ fn checked_difference_tensor_dims(
 ///
 /// # Errors
 ///
-/// Returns an error when [`difference_kernel_mpo`] fails, when site-dimension
-/// list allocation fails, or when the MPO cannot be wrapped as a
-/// [`QuanticsOperator`].
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
+///
 pub fn difference_kernel_operator(
     f: &TensorTrain<Complex64>,
     boundary: BoundaryCondition,

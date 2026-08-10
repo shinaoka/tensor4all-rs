@@ -456,6 +456,11 @@ where
 {
     /// Create a MatrixLUCI from a dense matrix.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     /// # Examples
     ///
     /// ```

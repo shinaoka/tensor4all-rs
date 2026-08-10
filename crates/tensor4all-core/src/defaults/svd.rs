@@ -287,6 +287,11 @@ fn svd_truncated_inner(
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Examples
 ///
 /// ```
@@ -318,6 +323,11 @@ pub fn svd<T>(
 ///
 /// This function allows per-call control of the truncation policy via `SvdOptions`.
 /// If `options.policy` is `None`, it uses the global default policy.
+///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///

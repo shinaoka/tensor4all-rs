@@ -25,9 +25,9 @@ use crate::common::{
 /// LinearOperator representing the flip transformation
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when one-site flip construction is
-/// requested, when the MPO site-list allocation exceeds checked bounds, or
-/// when internal MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -69,8 +69,9 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
 /// * `target_var` - Which variable to flip (0-indexed, must be < nvariables)
 ///
 /// # Errors
-/// Returns an error when `r` is zero or one, when `nvariables` or `target_var`
-/// is invalid, or when embedding/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///

@@ -19,19 +19,14 @@ use crate::site_index_network::SiteIndexNetwork;
 use crate::treetn::TreeTN;
 
 /// Check if a set of operators are exclusive (non-overlapping) on the target network.
-///
 /// Operators are exclusive if:
 /// 1. **Vertex-disjoint**: No two operators share a node
 /// 2. **Connected subtrees**: Each operator's nodes form a connected subtree
 /// 3. **Path-exclusive**: Paths between different operators don't cross other operators
-///
 /// # Arguments
-///
 /// * `target` - The target site index network (full space)
 /// * `operators` - The operators to check
-///
 /// # Returns
-///
 /// `true` if operators are exclusive, `false` otherwise.
 pub fn are_exclusive_operators<T, V, O>(
     target: &SiteIndexNetwork<V, T::Index>,
@@ -143,32 +138,25 @@ where
 }
 
 /// Compose exclusive LinearOperators into a single LinearOperator.
-///
 /// This function takes multiple non-overlapping operators and combines them into
 /// a single operator that acts on the full target space. Gap positions (nodes not
 /// covered by any operator) are filled with identity operators using `T::delta()`.
-///
 /// # Arguments
-///
 /// * `target` - The full site index network (defines the output structure)
 /// * `operators` - Non-overlapping LinearOperators to compose
 /// * `gap_site_indices` - Site indices for gap nodes: node_name -> [(input_index, output_index), ...]
-///
 /// # Returns
-///
 /// A LinearOperator representing the composed operator on the full target space.
-///
 /// # Errors
-///
-/// Returns an error if:
-/// - Operators are not exclusive (overlapping)
-/// - Operator nodes don't exist in target
-/// - Gap node site indices not provided
+/// Returns an error when the operators overlap (an invalid-configuration
+/// failure), an operator node is missing (a missing-index failure), or the
+/// gap node site indices are not provided (a missing-index failure).
 #[allow(clippy::type_complexity)]
 /// # Errors
 ///
-/// Returns an error when the operator spaces are incompatible (a shape or index
-/// /// mismatch) or the composition fails (a backend failure).
+/// Returns an error when the operators overlap (an invalid-configuration
+///     /// failure), a node is missing (a missing-index failure), or the
+///     /// composition fails (a backend failure).
 ///
 pub fn compose_exclusive_linear_operators<T, V>(
     target: &SiteIndexNetwork<V, T::Index>,

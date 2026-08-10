@@ -15,6 +15,11 @@ use tensor4all_treetn::TreeTN;
 
 #[doc(hidden)]
 pub trait FullPivLuScalar: Scalar + TensorElement + TensorScalar {
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn solve_right_full_piv_lu(
         lhs_values: &[Self],
         lhs_rows: usize,
@@ -28,6 +33,11 @@ pub trait FullPivLuScalar: Scalar + TensorElement + TensorScalar {
 macro_rules! impl_full_piv_lu_scalar {
     ($t:ty) => {
         impl FullPivLuScalar for $t {
+            /// # Errors
+            ///
+            /// Returns an error when the operation fails (a shape or index mismatch, or
+            /// /// a backend failure).
+            ///
             fn solve_right_full_piv_lu(
                 lhs_values: &[Self],
                 lhs_rows: usize,
@@ -84,6 +94,11 @@ impl_full_piv_lu_scalar!(Complex64);
 /// (default: site 0).
 ///
 /// This function is called internally by [`crossinterpolate2`](crate::crossinterpolate2).
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,
     evaluate: F,

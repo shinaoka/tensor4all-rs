@@ -116,6 +116,11 @@ where
     }
 
     /// Apply the projected local operator: `y = H * x`.
+    /// # Errors
+    ///
+    /// Returns an error when the contraction or operation fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn apply_projected(&self, x: &T) -> Result<T> {
         let mut proj_op = self
             .projected_operator

@@ -123,6 +123,11 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
 
     /// Evaluate the tensor train at a given index set
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     /// # Examples
     ///
     /// ```

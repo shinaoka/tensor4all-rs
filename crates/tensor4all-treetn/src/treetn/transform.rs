@@ -134,6 +134,11 @@ where
     /// - **Bond dimension**: Unchanged (pure contraction, no truncation)
     /// - **Commutative**: Non-overlapping groups can be merged in any order
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     /// # Example
     /// ```text
     /// Before: x1_1---x2_1---x1_2---x2_2---x1_3---x2_3  (6 nodes)
@@ -456,6 +461,11 @@ where
     /// # Properties
     /// - **Bond dimension**: May increase during split, controlled by truncation
     /// - **Exact (Phase 1)**: Without truncation, represents the same tensor
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Example
     /// ```text

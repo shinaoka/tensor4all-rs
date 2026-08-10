@@ -37,6 +37,11 @@ use tenferro_tensor::TypedTensor;
 ///
 /// # Returns
 /// The contracted and compressed MPO C
+/// # Errors
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
+///
 pub fn contract_zipup<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,

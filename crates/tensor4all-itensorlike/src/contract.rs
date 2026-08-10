@@ -27,8 +27,8 @@ use crate::tensortrain::TensorTrain;
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction fails (a shape or index mismatch,
-/// /// or a backend failure).
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 pub fn contract(
     a: &TensorTrain,
@@ -130,10 +130,10 @@ impl TensorTrain {
     /// A new tensor train resulting from the contraction.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - Either tensor train is empty
-    /// - The tensor trains have different lengths
-    /// - The contraction algorithm fails
+    ///
+    /// Returns an error when the contraction or operation fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         contract(self, other, options)
     }

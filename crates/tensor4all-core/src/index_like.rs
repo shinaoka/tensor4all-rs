@@ -235,8 +235,9 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// dimensions.
     ///
     /// # Errors
-    /// Returns an error when `indices` is empty, when the product dimension overflows `usize`,
-    /// or when the implementation cannot represent the exact product-link structure.
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///
@@ -320,6 +321,11 @@ mod tests {
             (test_index(0, 1), test_index(0, 1))
         }
 
+        /// # Errors
+        ///
+        /// Returns an error when the operation fails (a shape or index mismatch, or
+        /// /// a backend failure).
+        ///
         fn product_link(indices: &[Self]) -> anyhow::Result<Self> {
             anyhow::ensure!(
                 !indices.is_empty(),

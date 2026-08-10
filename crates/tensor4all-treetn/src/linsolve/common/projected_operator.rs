@@ -220,6 +220,11 @@ where
     ///
     /// # Returns
     /// The result of applying H to v: `H|v⟩`, with same index set and order as `v`.
+    /// # Errors
+    ///
+    /// Returns an error when the contraction or operation fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn apply<NT: NetworkTopology<V>>(
         &mut self,
         v: &T,

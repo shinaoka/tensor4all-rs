@@ -161,8 +161,8 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened for appending, if `name`
-/// already exists, or if the tensor storage type is unsupported.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///
@@ -310,8 +310,8 @@ pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened for appending, if `name`
-/// already exists, or if any site tensor uses unsupported storage.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///

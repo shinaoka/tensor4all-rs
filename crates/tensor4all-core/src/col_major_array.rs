@@ -98,8 +98,8 @@ impl<'a, T> ColMajorArrayRef<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the array length does not match the dimensions (a
-    /// /// shape mismatch) or the dimensions are invalid.
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     pub fn new(data: &'a [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -165,8 +165,9 @@ impl<'a, T> ColMajorArrayMut<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `data.len()` does not match the product of `shape`,
-    /// or if the shape product overflows `usize`.
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn new(data: &'a mut [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
             checked_shape_numel(shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
@@ -243,6 +244,11 @@ impl<T> ColMajorArray<T> {
     ///
     /// Returns an error if `data.len()` does not equal the product of the
     /// shape dimensions.
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn new(data: Vec<T>, shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
         let expected =
             checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {

@@ -65,6 +65,11 @@ impl std::error::Error for ReplaceIndsError {}
 /// # Returns
 /// `Ok(())` if all indices are unique, or `Err(ReplaceIndsError::DuplicateIndices)` if duplicates are found.
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Example
 /// ```
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};

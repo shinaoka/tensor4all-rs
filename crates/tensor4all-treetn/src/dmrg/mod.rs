@@ -725,6 +725,11 @@ where
 /// [`dmrg`]. Prefer explicit [`LinearOperator`] mappings when multiple same-dim
 /// operator site indices make input/output conventions ambiguous.
 ///
+/// # Errors
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};

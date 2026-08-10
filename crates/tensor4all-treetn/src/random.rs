@@ -77,6 +77,11 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// * `site_network` - Network topology and site (physical) indices
 /// * `link_space` - Specification for bond dimensions
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Example
 /// ```
 /// use tensor4all_treetn::{SiteIndexNetwork, random_treetn, LinkSpace};

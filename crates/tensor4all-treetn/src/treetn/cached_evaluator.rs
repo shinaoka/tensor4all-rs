@@ -92,6 +92,11 @@ impl<V> ComponentCostIndex<V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn new(
         tree: &TreeTN<TensorDynLen, V>,
         indices: &[DynIndex],
@@ -307,6 +312,11 @@ impl<V> RootedMessagePlan<V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     fn new(tree: &TreeTN<TensorDynLen, V>, center: &V) -> Result<Self> {
         let neighbors = sorted_neighbors(tree);
         let (parent, order) = rooted_tree(&neighbors, center)?;
@@ -616,8 +626,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when `indices` are not all present in `tree`, when the
-    /// tree is empty, or when a fixed or initial center does not exist.
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -699,9 +709,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if `values` has the wrong row count, if any site value
-    /// is outside the corresponding index dimension, or if tensor contraction
-    /// fails.
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///

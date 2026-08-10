@@ -121,6 +121,11 @@ where
 ///
 /// The solution TreeTN, or an error if solving fails.
 ///
+/// # Errors
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 /// # Example
 ///
 /// ```
@@ -437,8 +442,9 @@ where
 /// The relative residual norm, or the absolute residual norm for zero RHS.
 ///
 /// # Errors
-/// Returns an error if operator application, TreeTN addition, scaling, or norm
-/// computation fails.
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
 ///
 /// # Examples
 /// ```

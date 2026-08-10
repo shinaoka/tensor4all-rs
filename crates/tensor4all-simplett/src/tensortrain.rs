@@ -422,7 +422,8 @@ impl<T: TTScalar> TensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if any element of `dims` is out of range.
+    /// Returns an error when the contraction or operation fails (a shape or
+    /// /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///

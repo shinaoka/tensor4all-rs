@@ -54,8 +54,9 @@ pub enum TriangleType {
 /// LinearOperator representing the cumulative sum
 ///
 /// # Errors
-/// Returns an error when `r < 2`, when the MPO site-list allocation exceeds
-/// checked bounds, or when internal MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -90,8 +91,9 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// * `triangle` - Which triangle to use
 ///
 /// # Errors
-/// Returns an error when `r < 2`, when the MPO site-list allocation exceeds
-/// checked bounds, or when internal MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///

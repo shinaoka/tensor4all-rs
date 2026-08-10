@@ -39,6 +39,11 @@ where
     /// 2. Generate a two-site sweep plan using Euler tour traversal
     /// 3. Apply SVD-based truncation at each step, visiting each edge twice
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     /// # Examples
     ///
     /// ```
@@ -94,6 +99,11 @@ where
     /// Truncate the network in-place towards the specified center using options.
     ///
     /// This is the `&mut self` version of [`Self::truncate`].
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, an
+    /// /// SVD or non-convergence failure, or a backend failure).
+    ///
     pub fn truncate_mut(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,

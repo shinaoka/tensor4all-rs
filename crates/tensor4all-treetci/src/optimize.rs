@@ -91,6 +91,11 @@ impl Default for TreeTciOptions {
 /// This is a convenience wrapper around [`optimize_with_proposer`] with the
 /// default neighbor-product proposer.
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Examples
 ///
 /// ```
@@ -144,6 +149,11 @@ where
 ///
 /// Use this when you need a custom proposer (e.g., [`SimpleProposer`](crate::SimpleProposer)
 /// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)).
+///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
 ///
 /// # Examples
 ///

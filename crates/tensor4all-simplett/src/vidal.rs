@@ -204,7 +204,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain from a regular TensorTrain
     /// # Errors
     ///
-    /// Returns an error when the tensor train cannot be converted (a shape or
+    /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
     pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
@@ -658,6 +658,11 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     }
 
     /// Create an InverseTensorTrain from a regular TensorTrain
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
     where
         T: ComplexFloat + BackendLinalgScalar + Copy + 'static,

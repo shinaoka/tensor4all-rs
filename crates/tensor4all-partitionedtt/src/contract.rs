@@ -18,8 +18,8 @@ use tensor4all_itensorlike::ContractOptions;
 ///
 /// # Errors
 ///
-/// Propagates projector validation, typed tensor storage/construction, and
-/// tensor-train errors from [`SubDomainTT::contract`].
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -53,8 +53,8 @@ pub fn contract(
 ///
 /// # Errors
 ///
-/// Propagates projector validation, typed tensor storage/construction, and
-/// tensor-train errors from projection and contraction.
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

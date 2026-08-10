@@ -41,6 +41,11 @@ impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
     }
 
     /// Validate that this topology describes a tree.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn validate(&self) -> Result<()> {
         let n = self.nodes.len();
         if n == 0 {

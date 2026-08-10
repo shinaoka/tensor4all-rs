@@ -1186,8 +1186,9 @@ where
 /// returns `state.clone()`.
 ///
 /// # Errors
-/// Returns an error if an index is duplicated, is not external to `state`, or
-/// the underlying contraction fails.
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 /// ```

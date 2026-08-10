@@ -32,6 +32,11 @@ use tensor4all_tensorbackend::TensorElement;
 /// - The direct sum tensor
 /// - The new indices created for the summed dimensions (one per pair)
 ///
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 /// # Example
 ///
 /// ```

@@ -75,39 +75,28 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 }
 
 /// Tensor Train with orthogonality tracking.
-///
 /// This type represents a tensor train as a sequence of tensors with tracked
 /// orthogonality limits. It is inspired by ITensorMPS.jl but uses
 /// 0-indexed sites (Rust convention).
-///
 /// Unlike traditional MPS which assumes one physical index per site, this
 /// implementation allows each site to have multiple site indices.
-///
 /// # Orthogonality Tracking
-///
 /// The tensor train tracks orthogonality using `ortho_region` from the underlying TreeTN:
 /// - When `ortho_region` is empty, no orthogonality is assumed
 /// - When `ortho_region` contains a single site, that site is the orthogonality center
-///
 /// # Implementation
-///
 /// Internally wraps `TreeTN<TensorDynLen, usize>` where node names are site indices.
 /// This allows reuse of TreeTN's canonicalization and contraction algorithms.
-///
 /// # Examples
-///
 /// Build a 2-site tensor train and query its properties:
-///
 /// ```
 /// use tensor4all_itensorlike::TensorTrain;
 /// use tensor4all_core::{DynIndex, TensorDynLen, Index};
 /// use tensor4all_core::DynId;
-///
 /// // Site indices and link index
 /// let s0 = Index::new_with_size(DynId(0), 2);
 /// let link = Index::new_with_size(DynId(1), 3);
 /// let s1 = Index::new_with_size(DynId(2), 2);
-///
 /// let t0 = TensorDynLen::from_dense(
 ///     vec![s0.clone(), link.clone()],
 ///     (0..6).map(|i| i as f64).collect(),
@@ -116,7 +105,6 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 ///     vec![link.clone(), s1.clone()],
 ///     (0..6).map(|i| i as f64).collect(),
 /// ).unwrap();
-///
 /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 /// assert_eq!(tt.len(), 2);
 /// assert_eq!(tt.maxbonddim(), 3);
@@ -595,12 +583,13 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal site-to-node mapping is inconsistent.
+    /// Returns an error when the internal site-to-node mapping is inconsistent (a
+    /// graph consistency failure).
     #[inline]
     /// # Errors
     ///
-    /// Returns an error when the tensor train is in an inconsistent state (an
-    /// /// invalid-state failure).
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     pub fn tensors_mut(&mut self) -> Result<Vec<&mut TensorDynLen>> {
         self.tensors_mut_checked()
@@ -610,8 +599,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor train is in an inconsistent state (an
-    /// /// invalid-state failure).
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     /// # Examples
     ///

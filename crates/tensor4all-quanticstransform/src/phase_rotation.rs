@@ -31,9 +31,9 @@ use crate::common::{
 /// LinearOperator representing the phase rotation
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when `theta` is not finite, when the
-/// MPO site-list allocation exceeds checked bounds, or when internal
-/// MPO/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -81,9 +81,9 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
 /// * `target_var` - Which variable to apply phase rotation to (0-indexed)
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when `theta` is not finite, when
-/// `nvariables` or `target_var` is invalid, or when embedding/operator
-/// construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///

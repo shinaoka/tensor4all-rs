@@ -1215,6 +1215,11 @@ where
 /// This is a convenience wrapper over [`LinearOperator::from_mpo_and_state`] and
 /// [`tdvp`].
 ///
+/// # Errors
+///
+/// Returns an error when the solve or sweep fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};

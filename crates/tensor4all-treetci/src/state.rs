@@ -60,6 +60,11 @@ pub type SimpleTreeTci<T> = TreeTCI2<T>;
 
 impl<T> TreeTCI2<T> {
     /// Create a new TreeTCI state from local dimensions and a tree graph.
+    /// # Errors
+    ///
+    /// Returns an error when the construction or conversion fails (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn new(local_dims: Vec<usize>, graph: TreeTciGraph) -> Result<Self> {
         ensure!(
             local_dims.len() > 1,
@@ -91,6 +96,11 @@ impl<T> TreeTCI2<T> {
     }
 
     /// Add global pivots and project them to every edge bipartition.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
         let n_sites = self.local_dims.len();
         ensure!(

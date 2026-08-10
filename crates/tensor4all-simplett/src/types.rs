@@ -158,7 +158,8 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
 ///
 /// # Errors
 ///
-/// Returns an error if `data.len() != left_dim * site_dim * right_dim`.
+/// Returns an error when the construction or conversion fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

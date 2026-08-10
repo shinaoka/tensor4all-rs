@@ -281,6 +281,11 @@ where
     ///
     /// This is called with the full TreeTN state *before* the update is applied.
     /// Implementors can use it to validate assumptions or prefetch/update caches.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn before_step(
         &mut self,
         _step: &LocalUpdateStep<V>,
@@ -303,7 +308,10 @@ where
     /// (same nodes, same external indices, same ortho_towards structure).
     ///
     /// # Errors
-    /// Returns an error if the update fails (e.g., SVD doesn't converge).
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn update(
         &mut self,
         subtree: TreeTN<T, V>,
@@ -318,6 +326,11 @@ where
     /// - The canonical center has been moved to `step.new_center`
     ///
     /// Implementors can use this to update caches that must see the post-update state.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn after_step(
         &mut self,
         _step: &LocalUpdateStep<V>,
@@ -496,6 +509,11 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     fn update(
         &mut self,
         mut subtree: TreeTN<T, V>,
@@ -612,8 +630,8 @@ where
     /// - canonical_region is intersected with the extracted nodes
     /// # Errors
     ///
-    /// Returns an error when the subtree structure is invalid (an
-    /// /// invalid-topology failure).
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     pub fn extract_subtree(&self, node_names: &[V]) -> Result<Self>
     where
@@ -778,8 +796,8 @@ where
     /// - The original TreeTN is modified in-place
     /// # Errors
     ///
-    /// Returns an error when the subtree structure is invalid (an
-    /// /// invalid-topology failure).
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
     ///
     pub fn replace_subtree(&mut self, node_names: &[V], replacement: &Self) -> Result<()>
     where

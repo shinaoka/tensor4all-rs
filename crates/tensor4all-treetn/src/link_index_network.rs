@@ -97,6 +97,11 @@ where
     ///
     /// # Returns
     /// Ok if successful, Err if old_index was not registered or edge mismatch.
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn replace_index(
         &mut self,
         old_index: &I,

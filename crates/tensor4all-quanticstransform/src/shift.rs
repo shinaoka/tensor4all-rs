@@ -68,8 +68,9 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
 /// * `target_var` - Which variable to shift (0-indexed, must be < nvariables)
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when `r > 63`, when `nvariables` or
-/// `target_var` is invalid, or when embedding/operator construction fails.
+///
+/// Returns an error when the operator construction fails (an overflow or
+/// /// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///

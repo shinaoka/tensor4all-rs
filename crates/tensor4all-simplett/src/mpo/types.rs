@@ -168,6 +168,11 @@ pub fn tensor4_zeros<T: Clone + Default + TensorScalar>(
 }
 
 /// Create a Tensor4 from flat data (column-major order)
+/// # Errors
+///
+/// Returns an error when the construction or conversion fails (a shape or
+/// /// index mismatch, or a backend failure).
+///
 pub fn tensor4_from_data<T: TensorScalar>(
     data: Vec<T>,
     left_dim: usize,

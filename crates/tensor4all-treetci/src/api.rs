@@ -74,6 +74,11 @@ pub type TreeTciRunResult = (
 /// assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
 /// ```
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// /// a backend failure).
+///
 pub fn crossinterpolate2<T, F, P>(
     evaluate: F,
     local_dims: Vec<usize>,

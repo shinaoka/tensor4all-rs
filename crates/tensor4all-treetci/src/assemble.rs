@@ -14,6 +14,11 @@ pub type MultiIndex = Vec<usize>;
 ///
 /// Returns the assembled global multi-index with one entry per site.
 ///
+/// # Errors
+///
+/// Returns an error when the construction or conversion fails (a shape or
+/// /// index mismatch, or a backend failure).
+///
 /// # Examples
 ///
 /// ```
@@ -93,6 +98,11 @@ pub fn assemble_global_point(
 /// Pack global points into column-major `(n_sites, n_points)` storage.
 ///
 /// All points must have the same length (the number of sites).
+///
+/// # Errors
+///
+/// Returns an error when the construction or conversion fails (a shape or
+/// /// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

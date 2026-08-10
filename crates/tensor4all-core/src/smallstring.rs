@@ -115,6 +115,11 @@ impl<const MAX_LEN: usize, C: SmallChar> SmallString<MAX_LEN, C> {
     ///
     /// This function is allocation-free (no heap allocation).
     #[allow(clippy::should_implement_trait)]
+    /// # Errors
+    ///
+    /// Returns an error when the operation fails (a shape or index mismatch, or
+    /// /// a backend failure).
+    ///
     pub fn from_str(s: &str) -> Result<Self, SmallStringError> {
         let mut data = [C::ZERO; MAX_LEN];
         let mut len = 0;
