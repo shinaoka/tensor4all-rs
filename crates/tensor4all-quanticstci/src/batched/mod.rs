@@ -14,7 +14,7 @@ use quanticsgrids::DiscretizedGrid;
 use tensor4all_core::TensorElement;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
-use tensor4all_treetci::materialize::FullPivLuScalar;
+use tensor4all_tensorbackend::FullPivLuScalar;
 
 use crate::options::QtciOptions;
 use crate::quantics_tci::quanticscrossinterpolate;
@@ -221,7 +221,13 @@ pub fn quanticscrossinterpolate_batched<V, F>(
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
     F: Fn(&[f64]) -> Vec<V> + 'static,
-    V: TTScalar + Default + Clone + 'static + TensorElement + FullPivLuScalar,
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + TensorElement
+        + tensor4all_tcicore::MatrixLuciScalar
+        + FullPivLuScalar,
 {
     // Validate output_dims
     if output_dims.is_empty() {

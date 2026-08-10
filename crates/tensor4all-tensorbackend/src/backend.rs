@@ -78,6 +78,113 @@ pub struct FullPivLuMatrixResult<T> {
 /// Scalar bound accepted by tensor4all's typed linalg wrappers.
 pub trait BackendLinalgScalar: TensorScalar {}
 
+/// Scalar types that can solve `T * P = Pi1` via a right full-pivoting LU
+/// solve on the tenferro backend.
+///
+/// This is the foundational seam for matrix cross-interpolation (CI)
+/// materialization: it lets an algorithm layer ask for the backend's
+/// full-pivot LU solve without depending on any higher crate. The four
+/// supported scalar types (f32, f64, Complex32, Complex64) are implemented
+/// here; `f32`/`Complex32` inputs are solved in double precision by the
+/// backend and converted back.
+///
+/// # Errors
+///
+/// Returns an error when the pivot matrix is not square, the shapes are
+/// incompatible, or the backend solve fails.
+pub trait FullPivLuScalar: BackendLinalgScalar {
+    /// Solve `T * P = Pi1` for `T`, where `P` is the pivot matrix (column-major).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BackendLinalgError`] when the pivot matrix is not square
+    /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
+    /// pivot_rows`, a shape mismatch), or when the backend full-pivot LU solve
+    /// fails (a backend failure).
+    fn solve_right_full_piv_lu(
+        lhs_values: &[Self],
+        lhs_rows: usize,
+        lhs_cols: usize,
+        pivot_values: &[Self],
+        pivot_rows: usize,
+        pivot_cols: usize,
+    ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
+}
+
+macro_rules! impl_full_piv_lu_scalar {
+    ($t:ty) => {
+        impl FullPivLuScalar for $t {
+            fn solve_right_full_piv_lu(
+                lhs_values: &[Self],
+                lhs_rows: usize,
+                lhs_cols: usize,
+                pivot_values: &[Self],
+                pivot_rows: usize,
+                pivot_cols: usize,
+            ) -> std::result::Result<Vec<Self>, BackendLinalgError> {
+                if pivot_rows != pivot_cols {
+                    return Err(BackendLinalgError::from(anyhow::anyhow!(
+                        "full-pivot solve requires a square pivot matrix, got {}x{}",
+                        pivot_rows,
+                        pivot_cols
+                    )));
+                }
+                if lhs_cols != pivot_rows {
+                    return Err(BackendLinalgError::from(anyhow::anyhow!(
+                        "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
+                        lhs_rows,
+                        lhs_cols,
+                        pivot_rows,
+                        pivot_cols
+                    )));
+                }
+
+                let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
+                let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
+                let pivot_tensor = tenferro_tensor::Tensor::from_vec_col_major(
+                    vec![pivot_cols, pivot_rows],
+                    pivot_t,
+                );
+                let lhs_tensor =
+                    tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
+                let solved_t = with_default_backend(|backend| {
+                    backend.full_piv_lu_solve(&pivot_tensor, &lhs_tensor, false)
+                })
+                .map_err(|e| {
+                    BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {e}"))
+                })?;
+
+                let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
+                    BackendLinalgError::from(anyhow::anyhow!(
+                        "full_piv_lu_solve returned unexpected dtype"
+                    ))
+                })?;
+                Ok(transpose_column_major(solved_t_values, lhs_cols, lhs_rows))
+            }
+        }
+    };
+}
+
+impl_full_piv_lu_scalar!(f32);
+impl_full_piv_lu_scalar!(f64);
+impl_full_piv_lu_scalar!(num_complex::Complex32);
+impl_full_piv_lu_scalar!(num_complex::Complex64);
+
+/// Transpose a column-major flat buffer.
+fn transpose_column_major<T: Copy + num_traits::Zero>(
+    values: &[T],
+    nrows: usize,
+    ncols: usize,
+) -> Vec<T> {
+    let mut out = vec![T::zero(); nrows * ncols];
+    for col in 0..ncols {
+        for row in 0..nrows {
+            out[col + ncols * row] = values[row + nrows * col];
+        }
+    }
+    out
+}
+
 impl<T: TensorScalar> BackendLinalgScalar for T {}
 
 /// Scalar types supported by [`solve_matrix`].

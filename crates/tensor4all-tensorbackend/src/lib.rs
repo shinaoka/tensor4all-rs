@@ -32,7 +32,7 @@ pub use backend::{
     full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,
     solve_matrix_owned, svd_backend, triangular_solve_backend, triangular_solve_matrix,
     triangular_solve_matrix_owned, BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult,
-    FullPivLuResult, MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
+    FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
 };
 pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 pub use matrix::{

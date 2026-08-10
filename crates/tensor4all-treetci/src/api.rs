@@ -1,11 +1,11 @@
 use crate::error::Result as TreeTciResult;
 use crate::{
-    materialize::{to_treetn, FullPivLuScalar},
-    optimize_with_proposer, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
-    TreeTciGraph, TreeTciOptions,
+    materialize::to_treetn, optimize_with_proposer, GlobalIndexBatch, MultiIndex,
+    PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
 use tensor4all_core::CommonScalar;
+use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
 
 /// High-level TreeTCI return type:
@@ -90,7 +90,10 @@ pub fn crossinterpolate2<T, F, P>(
     proposer: &P,
 ) -> TreeTciResult<TreeTciRunResult>
 where
-    T: FullPivLuScalar + CommonScalar,
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {

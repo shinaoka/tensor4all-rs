@@ -6,90 +6,11 @@ use crate::{
 };
 use anyhow::Result;
 
-use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
-use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{Tensor, TensorScalar};
-use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen, TensorElement};
+use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen};
 use tensor4all_tcicore::MatrixLuciScalar as Scalar;
-use tensor4all_tensorbackend::with_default_backend;
+use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
-
-#[doc(hidden)]
-pub trait FullPivLuScalar: Scalar + TensorElement + TensorScalar {
-    /// # Errors
-    ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
-    ///
-    fn solve_right_full_piv_lu(
-        lhs_values: &[Self],
-        lhs_rows: usize,
-        lhs_cols: usize,
-        pivot_values: &[Self],
-        pivot_rows: usize,
-        pivot_cols: usize,
-    ) -> TreeTciResult<Vec<Self>>;
-}
-
-macro_rules! impl_full_piv_lu_scalar {
-    ($t:ty) => {
-        impl FullPivLuScalar for $t {
-            /// # Errors
-            ///
-            /// Returns an error when the operation fails (a shape or index mismatch, or
-            /// /// a backend failure).
-            ///
-            fn solve_right_full_piv_lu(
-                lhs_values: &[Self],
-                lhs_rows: usize,
-                lhs_cols: usize,
-                pivot_values: &[Self],
-                pivot_rows: usize,
-                pivot_cols: usize,
-            ) -> TreeTciResult<Vec<Self>> {
-                if !(pivot_rows == pivot_cols) {
-                    return Err(anyhow::anyhow!(
-                        "full-pivot solve requires a square pivot matrix, got {}x{}",
-                        pivot_rows,
-                        pivot_cols
-                    )
-                    .into());
-                };
-                if !(lhs_cols == pivot_rows) {
-                    return Err(anyhow::anyhow!(
-                        "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
-                        lhs_rows,
-                        lhs_cols,
-                        pivot_rows,
-                        pivot_cols
-                    )
-                    .into());
-                };
-
-                let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
-                let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
-                let pivot_tensor =
-                    Tensor::from_vec_col_major(vec![pivot_cols, pivot_rows], pivot_t);
-                let lhs_tensor = Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
-                let solved_t = with_default_backend(|backend| {
-                    backend.full_piv_lu_solve(&pivot_tensor, &lhs_tensor, false)
-                })
-                .map_err(|e| anyhow::anyhow!("full_piv_lu_solve failed: {e}"))?;
-
-                let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
-                    anyhow::anyhow!("full_piv_lu_solve returned unexpected dtype")
-                })?;
-                Ok(transpose_column_major(solved_t_values, lhs_cols, lhs_rows))
-            }
-        }
-    };
-}
-
-impl_full_piv_lu_scalar!(f32);
-impl_full_piv_lu_scalar!(f64);
-impl_full_piv_lu_scalar!(Complex32);
-impl_full_piv_lu_scalar!(Complex64);
 
 /// Materialize a converged TreeTCI state as a `TreeTN`.
 ///
@@ -112,7 +33,7 @@ pub fn to_treetn<T, F>(
     center_site: Option<usize>,
 ) -> TreeTciResult<TreeTN<TensorDynLen, usize>>
 where
-    T: FullPivLuScalar,
+    T: FullPivLuScalar + tensor4all_tcicore::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     let root = center_site.unwrap_or(0);
@@ -203,7 +124,7 @@ fn site_tensor_with_parent<T, F>(
     evaluate: &F,
 ) -> Result<Vec<T>>
 where
-    T: FullPivLuScalar,
+    T: FullPivLuScalar + tensor4all_tcicore::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     if !(out_keys.len() == 1) {
@@ -381,16 +302,6 @@ fn central_assignments(local_dims: &[usize], central_sites: &[usize]) -> Vec<Vec
     } else {
         combos
     }
-}
-
-fn transpose_column_major<T: Scalar>(values: &[T], nrows: usize, ncols: usize) -> Vec<T> {
-    let mut out = vec![T::zero(); nrows * ncols];
-    for col in 0..ncols {
-        for row in 0..nrows {
-            out[col + ncols * row] = values[row + nrows * col];
-        }
-    }
-    out
 }
 
 #[cfg(test)]
