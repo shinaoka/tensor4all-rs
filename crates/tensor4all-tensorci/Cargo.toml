@@ -34,3 +34,7 @@ tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-featu
 approx.workspace = true
 criterion.workspace = true
 uint.workspace = true
+
+[[bench]]
+name = "end_to_end_chain_tci"
+harness = false
