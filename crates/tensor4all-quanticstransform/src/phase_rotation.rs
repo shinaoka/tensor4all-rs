@@ -62,7 +62,9 @@ pub fn phase_rotation_operator(
         return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     if !theta.is_finite() {
-        return Err(anyhow::anyhow!("theta must be finite, got {theta}").into());
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("theta must be finite, got {theta}"),
+        });
     }
 
     let mpo = phase_rotation_mpo(r, theta)?;
@@ -109,7 +111,9 @@ pub fn phase_rotation_operator_multivar(
         return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     if !theta.is_finite() {
-        return Err(anyhow::anyhow!("theta must be finite, got {theta}").into());
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("theta must be finite, got {theta}"),
+        });
     }
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;

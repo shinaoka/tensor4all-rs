@@ -3,6 +3,15 @@
 use thiserror::Error;
 
 /// Error returned by quantics transform operator construction.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::QuanticsTransformError;
+///
+/// let err = QuanticsTransformError::from(anyhow::anyhow!("backend failed"));
+/// assert!(err.to_string().contains("backend failed"));
+/// ```
 #[derive(Debug, Error)]
 pub enum QuanticsTransformError {
     /// Invalid transform configuration or grid parameters.

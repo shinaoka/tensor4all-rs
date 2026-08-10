@@ -1,7 +1,7 @@
 //! Difference-kernel MPO construction.
 
 use crate::error::QuanticsTransformError;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use num_complex::Complex64;
 use num_traits::Zero;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3Ops, TensorTrain};
@@ -101,7 +101,8 @@ pub fn difference_kernel_mpo(
     }
 
     TensorTrain::new(tensors)
-        .map_err(|e| anyhow::anyhow!("Failed to create difference-kernel MPO: {e}"))
+        .map_err(anyhow::Error::new)
+        .context("Failed to create difference-kernel MPO")
         .map_err(QuanticsTransformError::from)
 }
 

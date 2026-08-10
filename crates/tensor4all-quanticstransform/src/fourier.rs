@@ -161,7 +161,9 @@ impl FTCore {
         options: FourierOptions,
     ) -> std::result::Result<Self, QuanticsTransformError> {
         if r < 2 {
-            return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
+            return Err(QuanticsTransformError::InvalidConfiguration {
+                message: format!("Number of sites must be at least 2, got {r}"),
+            });
         }
         let forward_options = FourierOptions {
             sign: -1.0,
@@ -332,8 +334,9 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         tensors.push(t);
     }
 
-    let mut tt = TensorTrain::new(tensors)
-        .map_err(|e| anyhow::anyhow!("Failed to create Fourier MPO: {}", e))?;
+    let mut tt = TensorTrain::new(tensors).map_err(|e| {
+        QuanticsTransformError::from(anyhow::Error::new(e).context("Failed to create Fourier MPO"))
+    })?;
 
     // Compress the tensor train
     let compress_options = CompressionOptions {
@@ -342,8 +345,11 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         max_bond_dim: options.maxbonddim,
         normalize_error: true,
     };
-    tt.compress(&compress_options)
-        .map_err(|err| anyhow::anyhow!("Fourier MPO compression failed: {err}"))?;
+    tt.compress(&compress_options).map_err(|err| {
+        QuanticsTransformError::from(
+            anyhow::Error::new(err).context("Fourier MPO compression failed"),
+        )
+    })?;
 
     // Normalize if requested
     if options.normalize {

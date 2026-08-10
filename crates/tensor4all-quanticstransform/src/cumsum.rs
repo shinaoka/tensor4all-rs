@@ -3,7 +3,7 @@
 //! This transformation computes cumulative sums: y_i = Σ_{j < i} x_j
 
 use crate::error::QuanticsTransformError;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
@@ -75,7 +75,9 @@ pub enum TriangleType {
 /// ```
 pub fn cumsum_operator(r: usize) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("Number of sites must be at least 2, got {r}"),
+        });
     }
 
     let mpo = cumsum_mpo(r)?;
@@ -114,7 +116,9 @@ pub fn triangle_operator(
     triangle: TriangleType,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("Number of sites must be at least 2, got {r}"),
+        });
     }
 
     let mpo = triangle_mpo(r, triangle)?;
@@ -204,7 +208,9 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
         }
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create cumsum MPO: {}", e))
+    TensorTrain::new(tensors)
+        .map_err(anyhow::Error::new)
+        .context("Failed to create cumsum MPO")
 }
 
 /// Create a triangular matrix MPO as a TensorTrain.

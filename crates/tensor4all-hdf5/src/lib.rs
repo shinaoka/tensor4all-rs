@@ -73,6 +73,17 @@ mod itensor;
 mod mps;
 mod schema;
 /// Error returned by tensor4all-hdf5 save/load operations.
+///
+/// The full original diagnostic is preserved in [`Hdf5Error::source`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_hdf5::Hdf5Error;
+///
+/// let err = Hdf5Error::from(anyhow::anyhow!("file open failed"));
+/// assert!(err.to_string().contains("file open failed"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[error("HDF5 tensor operation failed: {source}")]
 pub struct Hdf5Error {
@@ -105,7 +116,6 @@ impl From<anyhow::Error> for Hdf5Error {
     }
 }
 
-use anyhow::Result;
 use backend::File;
 use tensor4all_core::TensorDynLen;
 use tensor4all_itensorlike::TensorTrain;
