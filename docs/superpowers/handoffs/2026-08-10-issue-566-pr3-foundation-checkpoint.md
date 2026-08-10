@@ -59,3 +59,20 @@
 - スライス単位のコミットはブランチに蓄積済み（未 push）。1 つの PR として
   全スライス完了後に push する想定（設計の「crate 単位コミット・1 PR」方針）。
 - tensordynlen.rs の # Errors バックログ 46 件が core の最大クラスタ。
+
+## 追記（2026-08-10 続行分）
+
+- ブランチ: `chore/issue-566-pr3-errors`（origin/main から 22 コミット、未 push）。
+- **バックログ燃焼**: # Errors ドキュメントバックログを 545 → 321 まで削減。
+  対象: tensordynlen(46) / tenferro_bridge(26) / itensorlike tensortrain /
+  treetn mod・ops・named_graph / storage / interpolation / affine / graph /
+  contract / krylov / backend / site_index_network ほか。
+- **教訓（繰り返す場合）**: ① doc 挿入は行番号シフトを避けるため降順処理。
+  ② 継続行はファイルの実際のインデント（`    /// ` or `/// `）と完全一致させる
+  （二重 `/// ///` 事故）。③ regex 語彙: `dimension`/`length`/`out-of-bounds`/
+  `invalid-coefficient` は非対応。信頼語彙は shape/index/dtype/backend/graph/
+  configuration + mismatch/failure/overflow/out of bounds 等。④ 既存の非具体
+  # Errors セクション（箇条書き・"backend rejects"・"Returns Err if"）は
+  属性より上にあり、挿入では置換されない → チェッカー抽出セクションを直接置換
+  するか、列 0 の旧セクションを削除する。
+- 残り 321 件 + 型付け（設計 step 2–6）+ レイヤリング項目 + ゲート切替。
