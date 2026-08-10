@@ -45,16 +45,16 @@ fn test_inner_wrong_with_nonstandard_index_order() {
     // relative to each index), so they must have the same dense norm
     let dense_std = tt_std.to_dense().unwrap();
     let dense_ns = tt_ns.to_dense().unwrap();
-    let norm_sq_std = dense_std.norm() * dense_std.norm();
-    let norm_sq_ns = dense_ns.norm() * dense_ns.norm();
+    let norm_sq_std = dense_std.norm().unwrap() * dense_std.norm().unwrap();
+    let norm_sq_ns = dense_ns.norm().unwrap() * dense_ns.norm().unwrap();
 
     eprintln!("dense norm² std={:.6e}, ns={:.6e}", norm_sq_std, norm_sq_ns);
 
     // inner(x, x) for both must be real, non-negative, and match dense norm²
     let inner_std = tt_std.inner(&tt_std).unwrap();
     let inner_ns = tt_ns.inner(&tt_ns).unwrap();
-    let norm_sq_std_tt = tt_std.norm_squared();
-    let norm_sq_ns_tt = tt_ns.norm_squared();
+    let norm_sq_std_tt = tt_std.norm_squared().unwrap();
+    let norm_sq_ns_tt = tt_ns.norm_squared().unwrap();
 
     eprintln!("inner std={:?}", inner_std);
     eprintln!("inner ns ={:?}", inner_ns);
@@ -131,9 +131,9 @@ fn test_inner_wrong_3site_nonstandard() {
     .unwrap();
 
     let inner = tt.inner(&tt).unwrap();
-    let norm_sq_tt = tt.norm_squared();
+    let norm_sq_tt = tt.norm_squared().unwrap();
     let dense = tt.to_dense().unwrap();
-    let dense_norm_sq = dense.norm() * dense.norm();
+    let dense_norm_sq = dense.norm().unwrap() * dense.norm().unwrap();
 
     eprintln!("inner={:?}, dense_norm²={:.6e}", inner, dense_norm_sq);
 
@@ -198,9 +198,9 @@ fn test_inner_wrong_with_two_site_indices_per_site_nonstandard_order() {
     .unwrap();
 
     let inner = tt.inner(&tt).unwrap();
-    let norm_sq_tt = tt.norm_squared();
+    let norm_sq_tt = tt.norm_squared().unwrap();
     let dense = tt.to_dense().unwrap();
-    let dense_norm_sq = dense.norm() * dense.norm();
+    let dense_norm_sq = dense.norm().unwrap() * dense.norm().unwrap();
 
     assert!(
         inner.imag().abs() < 1e-10,

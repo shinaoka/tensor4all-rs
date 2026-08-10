@@ -3,10 +3,13 @@
 use anyhow::{bail, Result};
 use num_complex::Complex64;
 use num_traits::Zero;
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::affine::{affine_transform_tensors_unfused, AffineParams};
-use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
+use crate::common::{
+    checked_allocation_len, tensortrain_to_linear_operator, try_vec_with_capacity,
+    BoundaryCondition, QuanticsOperator,
+};
 
 /// Build an MPO for the one-dimensional difference kernel `A[x, x'] = f(x - x')`.
 ///
@@ -20,7 +23,8 @@ use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsO
 /// # Errors
 ///
 /// Returns an error when `f` is empty, when any site dimension is not binary,
-/// or when `boundary` is [`BoundaryCondition::Open`].
+/// when `boundary` is [`BoundaryCondition::Open`], when a bond-dimension
+/// product overflows, or when a tensor/site-list allocation fails.
 pub fn difference_kernel_mpo(
     f: &TensorTrain<Complex64>,
     boundary: BoundaryCondition,
@@ -43,7 +47,10 @@ pub fn difference_kernel_mpo(
 
     let params = AffineParams::from_integers(vec![1, -1], vec![0], 1, 2)?;
     let delta = affine_transform_tensors_unfused(f.len(), &params, &[boundary])?;
-    let mut tensors = Vec::with_capacity(f.len());
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "difference-kernel MPO site list",
+        f.len(),
+    )?;
 
     for (site, delta_core) in delta.iter().enumerate() {
         let f_core = f.site_tensor(site);
@@ -53,7 +60,12 @@ pub fn difference_kernel_mpo(
         let f_left = f_core.left_dim();
         let f_right = f_core.right_dim();
 
-        let mut out = tensor3_zeros(delta_left * f_left, 4, delta_right * f_right);
+        let (left_dim, right_dim, total_size) =
+            checked_difference_tensor_dims(delta_left, f_left, delta_right, f_right)?;
+        let mut data = try_vec_with_capacity::<Complex64>("difference-kernel tensor", total_size)?;
+        data.resize(total_size, Complex64::zero());
+        let mut out = tensor3_from_data(data, left_dim, 4, right_dim)
+            .map_err(|err| anyhow::anyhow!("Failed to allocate difference-kernel tensor: {err}"))?;
 
         for dl in 0..delta_left {
             for fl in 0..f_left {
@@ -88,6 +100,23 @@ pub fn difference_kernel_mpo(
         .map_err(|e| anyhow::anyhow!("Failed to create difference-kernel MPO: {e}"))
 }
 
+fn checked_difference_tensor_dims(
+    delta_left: usize,
+    f_left: usize,
+    delta_right: usize,
+    f_right: usize,
+) -> Result<(usize, usize, usize)> {
+    let left_dim = delta_left
+        .checked_mul(f_left)
+        .ok_or_else(|| anyhow::anyhow!("difference-kernel left bond product overflows usize"))?;
+    let right_dim = delta_right
+        .checked_mul(f_right)
+        .ok_or_else(|| anyhow::anyhow!("difference-kernel right bond product overflows usize"))?;
+    let total_size =
+        checked_allocation_len::<Complex64>(&[left_dim, 4, right_dim], "difference-kernel tensor")?;
+    Ok((left_dim, right_dim, total_size))
+}
+
 /// Build a linear operator for the one-dimensional difference kernel.
 ///
 /// See [`difference_kernel_mpo`] for the exact boundary convention and tensor
@@ -95,13 +124,40 @@ pub fn difference_kernel_mpo(
 ///
 /// # Errors
 ///
-/// Returns an error when [`difference_kernel_mpo`] fails or when the MPO cannot
-/// be wrapped as a [`QuanticsOperator`].
+/// Returns an error when [`difference_kernel_mpo`] fails, when site-dimension
+/// list allocation fails, or when the MPO cannot be wrapped as a
+/// [`QuanticsOperator`].
 pub fn difference_kernel_operator(
     f: &TensorTrain<Complex64>,
     boundary: BoundaryCondition,
 ) -> Result<QuanticsOperator> {
     let mpo = difference_kernel_mpo(f, boundary)?;
-    let site_dims = vec![2; f.len()];
+    let mut site_dims =
+        try_vec_with_capacity::<usize>("difference-kernel site dimensions", f.len())?;
+    site_dims.resize(f.len(), 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn difference_tensor_dimensions_reject_product_overflow() {
+        let error = checked_difference_tensor_dims(usize::MAX, 2, 1, 1).unwrap_err();
+        assert!(error.to_string().contains("left bond product"));
+
+        let error = checked_difference_tensor_dims(1, 1, usize::MAX, 2).unwrap_err();
+        assert!(error.to_string().contains("right bond product"));
+    }
+
+    #[test]
+    fn difference_tensor_backing_reservation_reports_failure() {
+        let error =
+            try_vec_with_capacity::<Complex64>("difference-kernel tensor", usize::MAX).unwrap_err();
+        assert!(
+            error.to_string().contains("allocation failed"),
+            "unexpected error: {error}"
+        );
+    }
 }

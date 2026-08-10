@@ -115,7 +115,7 @@ fn test_truncate_drops_significant_singular_values() {
     eprintln!(
         "before truncate: bonds={:?} norm={:.6e}",
         bond_dims(&f),
-        f.norm()
+        f.norm().unwrap()
     );
 
     // truncate with rtol=1e-15: should keep bonddim=2
@@ -131,13 +131,13 @@ fn test_truncate_drops_significant_singular_values() {
     eprintln!(
         "after truncate(rtol=1e-15): bonds={:?} norm={:.6e}",
         bond_dims(&f_truncated),
-        f_truncated.norm()
+        f_truncated.norm().unwrap()
     );
 
     let diff = f_dense_before
         .add(&f_dense_after.scale(AnyScalar::new_real(-1.0)).unwrap())
         .unwrap();
-    let rel_err = diff.norm() / f_dense_before.norm();
+    let rel_err = diff.norm().unwrap() / f_dense_before.norm().unwrap();
     eprintln!("rel_err = {:.6e}", rel_err);
 
     // truncate with rtol=0.0 should also preserve the function
@@ -151,7 +151,7 @@ fn test_truncate_drops_significant_singular_values() {
     let diff_0 = f_dense_before
         .add(&f_dense_0.scale(AnyScalar::new_real(-1.0)).unwrap())
         .unwrap();
-    let rel_err_0 = diff_0.norm() / f_dense_before.norm();
+    let rel_err_0 = diff_0.norm().unwrap() / f_dense_before.norm().unwrap();
     eprintln!(
         "truncate(rtol=0.0): bonds={:?} rel_err={:.6e}",
         bond_dims(&f_trunc0),
@@ -213,7 +213,7 @@ fn test_truncate_drops_sv_various_sizes() {
         let diff = f_dense_before
             .add(&f_dense_after.scale(AnyScalar::new_real(-1.0)).unwrap())
             .unwrap();
-        let rel_err = diff.norm() / f_dense_before.norm();
+        let rel_err = diff.norm().unwrap() / f_dense_before.norm().unwrap();
 
         eprintln!(
             "nbit={}: bonds {:?} → {:?}, rel_err={:.6e}",
@@ -281,7 +281,7 @@ fn test_zipup_small_error_with_accumulated_tt() {
         let diff = dense_direct
             .add(&dense_accum.scale(AnyScalar::new_real(-1.0)).unwrap())
             .unwrap();
-        let rel_err = diff.norm() / dense_direct.norm();
+        let rel_err = diff.norm().unwrap() / dense_direct.norm().unwrap();
 
         eprintln!(
             "nbit={}: bonds direct={:?} accum={:?} rel_err={:.6e}",

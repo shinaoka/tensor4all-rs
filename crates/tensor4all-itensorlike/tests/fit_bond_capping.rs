@@ -45,6 +45,7 @@ fn relative_error(result: &TensorTrain, reference: &TensorTrain, ref_norm: f64) 
         .axpby(1.0.into(), reference, (-1.0).into())
         .unwrap()
         .norm()
+        .unwrap()
         / ref_norm
 }
 
@@ -83,7 +84,7 @@ fn setup_test_mpos(length: usize, phys_dim: usize, bond_dim: usize) -> TestMPOs 
     let mpo_b = create_random_mpo(length, &s_shared, &s_output, &links_b, &mut rng2);
 
     let exact = mpo_a.contract(&mpo_b, &ContractOptions::zipup()).unwrap();
-    let exact_norm = exact.norm();
+    let exact_norm = exact.norm().unwrap();
     let exact_bd = exact.maxbonddim();
 
     TestMPOs {
@@ -394,7 +395,7 @@ fn test_fit_more_sweeps_stable() {
     );
 
     // Accuracy should not degrade significantly with more sweeps.
-    // Note: relative_error uses (result - exact).norm() via sequential contraction,
+    // Note: relative_error uses (result - exact).norm().unwrap() via sequential contraction,
     // which loses precision when result ≈ exact (massive cancellation). When err_1sw
     // is near zero, err_4sw may be dominated by this floating-point noise rather than
     // actual approximation error. We use an absolute floor of 1e-6 to account for this.

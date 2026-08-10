@@ -13,10 +13,10 @@ ITensors.jl-inspired TensorTrain API with orthogonality tracking and multiple ca
 ## Conventions
 
 - Dense data passed to `TensorDynLen::from_dense` is **column-major**: the
-  last listed index varies fastest.
+  first listed index varies fastest.
 - Complex tensors use `num_complex::Complex64`; `inner()` conjugates the left
-  operand, so `tt.inner(&tt)` equals `tt.norm().powi(2)` for real and complex
-  tensor trains.
+  operand, so `tt.inner(&tt)` equals the square of `tt.norm()?` for real and
+  complex tensor trains.
 - Import `tensor4all_core::IndexLike` when calling trait methods such as
   `.dim()` on dynamic indices.
 - Use `DynIndex::new_dyn(dim)` for ordinary site indices and
@@ -54,7 +54,7 @@ tt.truncate(&TruncateOptions::svd()
 
 assert!(tt.isortho());
 assert_eq!(s1.dim(), 2);
-let norm = tt.norm();
+let norm = tt.norm()?;
 assert!(norm.is_finite());
 
 // Inner product: <tt|tt> = norm^2

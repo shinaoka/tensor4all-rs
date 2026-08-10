@@ -6,9 +6,9 @@ use std::sync::Arc;
 use num_complex::Complex64;
 use tensor4all_core::{
     contract_pair, contract_pair_with_options, contract_with_options, qr_with, svd_with,
-    ContractionOptions, QrOptions, SvdOptions, SvdTruncationPolicy,
+    ContractionOptions, QrOptions, SvdOptions, SvdTruncationPolicy, TensorStorageError,
 };
-use tensor4all_tensorbackend::Storage;
+use tensor4all_tensorbackend::{Storage, StorageError};
 
 use crate::types::{
     t4a_index, t4a_scalar_kind, t4a_storage_kind, t4a_svd_truncation_policy, t4a_tensor,
@@ -82,6 +82,9 @@ fn read_indices_from_ptrs(
     if index_ptrs.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, "index_ptrs is null"));
     }
+    // Reject an impossible pointer-array byte length before any allocation
+    // or pointer arithmetic, matching the scalar raw-slice contract.
+    validate_raw_slice_len::<*const t4a_index>("index_ptrs", rank)?;
 
     let mut indices = Vec::with_capacity(rank);
     for i in 0..rank {
@@ -101,6 +104,46 @@ fn dims_from_indices(indices: &[InternalIndex]) -> Vec<usize> {
     indices.iter().map(|index| index.size()).collect()
 }
 
+fn tensor_storage_error(error: TensorStorageError) -> (t4a_status_code, String) {
+    capi_error(
+        T4A_INTERNAL_ERROR,
+        format!("tensor storage materialization failed: {error}"),
+    )
+}
+
+fn storage_payload_error(error: StorageError) -> (t4a_status_code, String) {
+    let status = match error {
+        StorageError::ScalarKindMismatch { .. } => T4A_INVALID_ARGUMENT,
+        _ => T4A_INTERNAL_ERROR,
+    };
+    capi_error(
+        status,
+        format!("tensor storage payload operation failed: {error}"),
+    )
+}
+
+fn checked_dims_product(name: &str, dims: &[usize]) -> CapiResult<usize> {
+    dims.iter().try_fold(1usize, |product, &dim| {
+        product.checked_mul(dim).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{name} dimension product overflows usize for dims {dims:?}"),
+            )
+        })
+    })
+}
+
+fn validate_raw_slice_len<T>(name: &str, len: usize) -> CapiResult<()> {
+    let element_size = std::mem::size_of::<T>();
+    if element_size != 0 && len > isize::MAX as usize / element_size {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name} byte length overflows isize::MAX"),
+        ));
+    }
+    Ok(())
+}
+
 fn read_plain_slice<T: Copy>(
     name: &str,
     ptr: *const T,
@@ -112,6 +155,7 @@ fn read_plain_slice<T: Copy>(
     if ptr.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, format!("{name} is null")));
     }
+    validate_raw_slice_len::<T>(name, len)?;
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
 }
 
@@ -132,6 +176,7 @@ fn read_c64_slice(
             format!("{name} length overflows usize"),
         )
     })?;
+    validate_raw_slice_len::<f64>(name, raw_len)?;
     let raw = unsafe { std::slice::from_raw_parts(ptr, raw_len) };
     Ok((0..n_complex)
         .map(|i| Complex64::new(raw[2 * i], raw[2 * i + 1]))
@@ -391,6 +436,11 @@ pub extern "C" fn t4a_tensor_scalar_kind(
 }
 
 /// Get the storage layout kind of a tensor.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_storage_kind(
     ptr: *const t4a_tensor,
@@ -402,13 +452,19 @@ pub extern "C" fn t4a_tensor_storage_kind(
             return Err(capi_error(T4A_NULL_POINTER, "out_kind is null"));
         }
         unsafe {
-            *out_kind = t4a_storage_kind::from(tensor.inner().storage().storage_kind());
+            let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
+            *out_kind = t4a_storage_kind::from(storage.storage_kind());
         }
         Ok(())
     })
 }
 
 /// Get the rank of the compact payload tensor.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_rank(
     ptr: *const t4a_tensor,
@@ -420,13 +476,19 @@ pub extern "C" fn t4a_tensor_payload_rank(
             return Err(capi_error(T4A_NULL_POINTER, "out_rank is null"));
         }
         unsafe {
-            *out_rank = tensor.inner().storage().payload_dims().len();
+            let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
+            *out_rank = storage.payload_dims().len();
         }
         Ok(())
     })
 }
 
 /// Get the compact payload length in scalar elements.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_len(
     ptr: *const t4a_tensor,
@@ -438,13 +500,19 @@ pub extern "C" fn t4a_tensor_payload_len(
             return Err(capi_error(T4A_NULL_POINTER, "out_len is null"));
         }
         unsafe {
-            *out_len = tensor.inner().storage().payload_len();
+            let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
+            *out_len = storage.payload_len();
         }
         Ok(())
     })
 }
 
 /// Copy compact payload dimensions.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_dims(
     ptr: *const t4a_tensor,
@@ -454,7 +522,7 @@ pub extern "C" fn t4a_tensor_payload_dims(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor.inner().storage();
+        let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
         copy_plain_slice(
             "payload_dims",
             storage.payload_dims(),
@@ -466,6 +534,11 @@ pub extern "C" fn t4a_tensor_payload_dims(
 }
 
 /// Copy compact payload strides in scalar elements.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_payload_strides(
     ptr: *const t4a_tensor,
@@ -475,7 +548,7 @@ pub extern "C" fn t4a_tensor_payload_strides(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor.inner().storage();
+        let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
         copy_plain_slice(
             "payload_strides",
             storage.payload_strides(),
@@ -487,6 +560,11 @@ pub extern "C" fn t4a_tensor_payload_strides(
 }
 
 /// Copy logical-axis to payload-axis class mapping.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
+/// retrieve the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_axis_classes(
     ptr: *const t4a_tensor,
@@ -496,7 +574,7 @@ pub extern "C" fn t4a_tensor_axis_classes(
 ) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
-        let storage = tensor.inner().storage();
+        let storage = tensor.inner().storage().map_err(tensor_storage_error)?;
         copy_plain_slice(
             "axis_classes",
             storage.axis_classes(),
@@ -508,6 +586,11 @@ pub extern "C" fn t4a_tensor_axis_classes(
 }
 
 /// Copy dense `f64` data in column-major order.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
+/// the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_f64(
     ptr: *const t4a_tensor,
@@ -521,11 +604,29 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
     if out_len.is_null() {
         return err_null_pointer("out_len");
     }
+    #[cfg(test)]
+    if let Some(error) = unsafe { (*ptr).test_storage_error() } {
+        return crate::err_status(
+            format!("tensor dense f64 materialization failed: {error}"),
+            T4A_INTERNAL_ERROR,
+        );
+    }
+    if unsafe { !(*ptr).inner().is_f64() } {
+        return crate::err_status(
+            "tensor dense f64 copy requires an f64 tensor",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         let data = match (*ptr).inner().as_slice_f64() {
             Ok(data) => data,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+            Err(e) => {
+                return crate::err_status(
+                    format!("tensor dense f64 materialization failed: {e}"),
+                    T4A_INTERNAL_ERROR,
+                )
+            }
         };
         *out_len = data.len();
 
@@ -544,6 +645,11 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
 }
 
 /// Copy dense `Complex64` data as interleaved doubles in column-major order.
+///
+/// # Returns
+///
+/// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
+/// the diagnostic with `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_c64(
     ptr: *const t4a_tensor,
@@ -557,11 +663,22 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
     if out_len.is_null() {
         return err_null_pointer("out_len");
     }
+    if unsafe { !(*ptr).inner().is_complex() } {
+        return crate::err_status(
+            "tensor dense c64 copy requires a complex tensor",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         let data = match (*ptr).inner().as_slice_c64() {
             Ok(data) => data,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+            Err(e) => {
+                return crate::err_status(
+                    format!("tensor dense c64 materialization failed: {e}"),
+                    T4A_INTERNAL_ERROR,
+                )
+            }
         };
         *out_len = data.len();
 
@@ -583,6 +700,11 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
 }
 
 /// Copy compact payload `f64` data in payload column-major order.
+///
+/// # Returns
+///
+/// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
+/// diagnostic preserved in `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_payload_f64(
     ptr: *const t4a_tensor,
@@ -595,13 +717,19 @@ pub extern "C" fn t4a_tensor_copy_payload_f64(
         let data = tensor
             .inner()
             .storage()
+            .map_err(tensor_storage_error)?
             .payload_f64_col_major_vec()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            .map_err(storage_payload_error)?;
         copy_plain_slice("payload_f64", &data, buf, buf_len, out_len)
     })
 }
 
 /// Copy compact payload `Complex64` data as interleaved doubles.
+///
+/// # Returns
+///
+/// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
+/// diagnostic preserved in `t4a_last_error_message`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_payload_c64(
     ptr: *const t4a_tensor,
@@ -614,8 +742,9 @@ pub extern "C" fn t4a_tensor_copy_payload_c64(
         let data = tensor
             .inner()
             .storage()
+            .map_err(tensor_storage_error)?
             .payload_c64_col_major_vec()
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            .map_err(storage_payload_error)?;
         copy_c64_interleaved("payload_c64", &data, buf_interleaved, n_complex, out_len)
     })
 }
@@ -793,7 +922,8 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let expected_len: usize = dims_from_indices(&indices).iter().product();
+        let dims = dims_from_indices(&indices);
+        let expected_len = checked_dims_product("dense tensor", &dims)?;
         if expected_len > 0 && data.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "data is null"));
         }
@@ -804,7 +934,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
             ));
         }
 
-        let values = unsafe { std::slice::from_raw_parts(data, data_len) }.to_vec();
+        let values = read_plain_slice("data", data, data_len)?;
         let tensor = InternalTensor::from_dense(indices, values)
             .map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?;
         Ok(t4a_tensor::new(tensor))
@@ -822,7 +952,8 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let expected_len: usize = dims_from_indices(&indices).iter().product();
+        let dims = dims_from_indices(&indices);
+        let expected_len = checked_dims_product("dense tensor", &dims)?;
         if expected_len > 0 && data_interleaved.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "data_interleaved is null"));
         }
@@ -833,10 +964,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             ));
         }
 
-        let raw = unsafe { std::slice::from_raw_parts(data_interleaved, 2 * n_complex) };
-        let values = (0..n_complex)
-            .map(|i| Complex64::new(raw[2 * i], raw[2 * i + 1]))
-            .collect::<Vec<_>>();
+        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
         let tensor = InternalTensor::from_dense(indices, values)
             .map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?;
         Ok(t4a_tensor::new(tensor))
@@ -860,11 +988,30 @@ pub extern "C" fn t4a_tensor_new_structured_f64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let values = read_plain_slice("data", data, data_len)?;
+        // Validate compact metadata and the exact required payload length
+        // BEFORE copying the payload, so an inconsistent or attacker-sized
+        // length is rejected without a large allocation.
         let payload_dims = read_plain_slice("payload_dims", payload_dims, payload_rank)?;
         let payload_strides =
             read_plain_slice("payload_strides", payload_strides, payload_strides_len)?;
         let axis_classes = read_plain_slice("axis_classes", axis_classes, axis_classes_len)?;
+        let required_len =
+            Storage::validate_structured_metadata(&payload_dims, &payload_strides, &axis_classes)
+                .map_err(|err| {
+                capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    format!("structured payload metadata invalid: {err}"),
+                )
+            })?;
+        if data_len != required_len {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "data length {data_len} does not match structured payload length {required_len}"
+                ),
+            ));
+        }
+        let values = read_plain_slice("data", data, data_len)?;
         let storage = Storage::new_structured(values, payload_dims, payload_strides, axis_classes)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let tensor = InternalTensor::from_structured_storage(indices, Arc::new(storage))
@@ -890,11 +1037,27 @@ pub extern "C" fn t4a_tensor_new_structured_c64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
-        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
         let payload_dims = read_plain_slice("payload_dims", payload_dims, payload_rank)?;
         let payload_strides =
             read_plain_slice("payload_strides", payload_strides, payload_strides_len)?;
         let axis_classes = read_plain_slice("axis_classes", axis_classes, axis_classes_len)?;
+        let required_len =
+            Storage::validate_structured_metadata(&payload_dims, &payload_strides, &axis_classes)
+                .map_err(|err| {
+                capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    format!("structured payload metadata invalid: {err}"),
+                )
+            })?;
+        if n_complex != required_len {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "data length {n_complex} does not match structured payload length {required_len}"
+                ),
+            ));
+        }
+        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
         let storage = Storage::new_structured(values, payload_dims, payload_strides, axis_classes)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let tensor = InternalTensor::from_structured_storage(indices, Arc::new(storage))
@@ -914,6 +1077,18 @@ pub extern "C" fn t4a_tensor_new_diag_f64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        // The diagonal payload must match the declared index dimension; reject
+        // a mismatched length BEFORE copying the payload. The diagonal
+        // constructor remains the authority on index-dimension equality.
+        let expected = indices.first().map(|index| index.size()).unwrap_or(0);
+        if diag_len != expected {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "diagonal data length {diag_len} does not match index dimension {expected}"
+                ),
+            ));
+        }
         let values = read_plain_slice("diag_data", diag_data, diag_len)?;
         let tensor = InternalTensor::from_diag(indices, values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
@@ -932,6 +1107,15 @@ pub extern "C" fn t4a_tensor_new_diag_c64(
 ) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        let expected = indices.first().map(|index| index.size()).unwrap_or(0);
+        if n_complex != expected {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "diagonal data length {n_complex} does not match index dimension {expected}"
+                ),
+            ));
+        }
         let values = read_c64_slice("diag_data_interleaved", diag_data_interleaved, n_complex)?;
         let tensor = InternalTensor::from_diag(indices, values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;

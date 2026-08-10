@@ -8,7 +8,7 @@ description = "HDF5 serialization for tensor4all-rs (ITensors.jl compatible form
 
 [features]
 default = ["link", "tenferro-cpu-faer"]
-link = ["dep:hdf5-metno"]
+link = ["dep:hdf5-metno", "dep:hdf5-metno-sys"]
 runtime-loading = ["dep:hdf5-rt"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
@@ -23,6 +23,7 @@ tenferro-provider-inject = [
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike", default-features = false }
 hdf5-metno = { workspace = true, default-features = false, features = ["complex"], optional = true }
+hdf5-metno-sys = { version = "0.12", default-features = false, optional = true }
 hdf5-rt = { workspace = true, default-features = false, features = ["complex"], optional = true }
 num-complex = { workspace = true }
 anyhow = { workspace = true }

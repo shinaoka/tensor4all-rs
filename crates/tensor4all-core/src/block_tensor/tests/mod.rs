@@ -148,7 +148,7 @@ fn test_gmres_identity_block() {
         .solution
         .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
         .unwrap();
-    assert!(diff.norm() < 1e-10, "Solution should equal b");
+    assert!(diff.norm().unwrap() < 1e-10, "Solution should equal b");
 }
 
 // ========================================================================
@@ -224,9 +224,9 @@ fn test_gmres_diagonal_block() {
         )
         .unwrap();
     assert!(
-        diff.norm() < 1e-8,
+        diff.norm().unwrap() < 1e-8,
         "Solution error too large: {}",
-        diff.norm()
+        diff.norm().unwrap()
     );
 }
 
@@ -289,9 +289,9 @@ fn test_gmres_upper_triangular_block() {
         )
         .unwrap();
     assert!(
-        diff.norm() < 1e-8,
+        diff.norm().unwrap() < 1e-8,
         "Solution error too large: {}",
-        diff.norm()
+        diff.norm().unwrap()
     );
 }
 
@@ -307,8 +307,28 @@ fn test_norm_squared() {
     let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     // norm_squared = 1^2 + 2^2 + 3^2 + 4^2 = 1 + 4 + 9 + 16 = 30
-    let norm_sq = block.norm_squared();
+    let norm_sq = block.norm_squared().unwrap();
     assert!((norm_sq - 30.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_isapprox_uses_trait_default_with_error_propagation() {
+    let idx = DynIndex::new_dyn(2);
+    let a = BlockTensor::new(vec![make_vector_with_index(vec![1.0, 2.0], &idx)], (1, 1)).unwrap();
+    let b = BlockTensor::new(
+        vec![make_vector_with_index(vec![1.0 + 1.0e-13, 2.0], &idx)],
+        (1, 1),
+    )
+    .unwrap();
+    assert!(TensorVectorSpace::isapprox(&a, &b, 1.0e-12, 0.0).unwrap());
+
+    // A NaN block makes the default norm fail; the trait default propagates it.
+    let nan = BlockTensor::new(vec![TensorDynLen::scalar(f64::NAN).unwrap()], (1, 1)).unwrap();
+    assert!(TensorVectorSpace::isapprox(&nan, &a, 1.0e-12, 1.0e-12).is_err());
+
+    // A shape mismatch makes the default sub fail before any norm is taken.
+    let wide = BlockTensor::new(vec![TensorDynLen::scalar(1.0).unwrap(); 2], (2, 1)).unwrap();
+    assert!(TensorVectorSpace::isapprox(&a, &wide, 1.0e-12, 1.0e-12).is_err());
 }
 
 #[test]
@@ -332,7 +352,7 @@ fn test_scale() {
             AnyScalar::new_real(-1.0),
         )
         .unwrap();
-    assert!(diff.norm() < 1e-10);
+    assert!(diff.norm().unwrap() < 1e-10);
 }
 
 #[test]
@@ -363,7 +383,7 @@ fn test_conj() {
     let diff = conjugated
         .axpby(AnyScalar::new_real(1.0), &block, AnyScalar::new_real(-1.0))
         .unwrap();
-    assert!(diff.norm() < 1e-10);
+    assert!(diff.norm().unwrap() < 1e-10);
 }
 
 // ========================================================================
@@ -591,7 +611,7 @@ fn test_maxabs() {
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
     let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
-    let m = block.maxabs();
+    let m = block.maxabs().unwrap();
     assert!((m - 5.0).abs() < 1e-10);
 }
 

@@ -179,7 +179,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
             .context("log_norm: center tensor must exist")?;
 
-        let norm_sq = center_tensor.norm_squared();
+        let norm_sq = center_tensor.norm_squared()?;
         let norm = norm_sq.sqrt();
 
         Ok(norm.ln())

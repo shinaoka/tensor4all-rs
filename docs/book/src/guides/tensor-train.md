@@ -175,14 +175,14 @@ let t2 = TensorDynLen::from_dense(
 
 // Assemble and orthogonalize with center at site 1
 let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
-let norm_before = tt.norm();
+let norm_before = tt.norm()?;
 tt.orthogonalize(1)?;
 
 assert!(tt.isortho());
 assert_eq!(tt.orthocenter(), Some(1));
 
 // Orthogonalization preserves the tensor train value
-assert!((tt.norm() - norm_before).abs() < 1e-10);
+assert!((tt.norm()? - norm_before).abs() < 1e-10);
 # Ok(())
 # }
 ```
@@ -246,7 +246,7 @@ To emulate ITensor-style discarded-weight cutoffs, use
 #     vec![1.0, 0.0, 0.0, 1.0],
 # )?;
 # let tt = TensorTrain::new(vec![t0, t1])?;
-let norm = tt.norm();
+let norm = tt.norm()?;
 assert!(norm.is_finite());
 
 // <tt|tt> = ||tt||^2
@@ -288,7 +288,7 @@ let t1 = TensorDynLen::from_dense(
 let tt = TensorTrain::new(vec![t0, t1])?;
 
 // Norm is sqrt(<tt|tt>) = sqrt(conj(tt) * tt summed over all indices)
-let norm = tt.norm();
+let norm = tt.norm()?;
 assert!(norm > 0.0);
 
 // For complex tensors, inner product uses complex conjugation on self

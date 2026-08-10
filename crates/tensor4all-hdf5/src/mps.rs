@@ -3,12 +3,44 @@
 //! MPS is simply metadata (length, llim, rlim) + a sequence of ITensors,
 //! so this module is a thin wrapper around [`crate::itensor`].
 
-use crate::backend::Group;
+use crate::backend::{self, Group};
 use anyhow::{Context, Result};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
+use crate::index;
 use crate::itensor;
 use crate::schema;
+
+fn read_i32(name: &'static str, value: i64, length: usize) -> Result<i32> {
+    i32::try_from(value).with_context(|| {
+        format!("HDF5 dataset {name} does not fit in i32, got {value} for MPS length {length}")
+    })
+}
+
+fn validate_ortho_limits(llim: i32, rlim: i32, length: usize) -> Result<()> {
+    let length_i32 = i32::try_from(length).map_err(|_| {
+        anyhow::anyhow!(
+            "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; length does not fit in i32"
+        )
+    })?;
+    let default_rlim = length_i32.checked_add(1).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; length + 1 overflows i32"
+        )
+    })?;
+    let center_in_bounds = llim
+        .checked_add(1)
+        .map(|center| center < length_i32)
+        .unwrap_or(false);
+    let single_center = llim >= -1 && center_in_bounds && llim.checked_add(2) == Some(rlim);
+    let no_center = llim == -1 && rlim == default_rlim;
+    if !single_center && !no_center {
+        anyhow::bail!(
+            "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; expected llim=-1 and rlim={default_rlim}, or llim + 2 = rlim with a center in 0..{length}"
+        );
+    }
+    Ok(())
+}
 
 const CANONICAL_FORM_ATTR: &str = "canonical_form";
 
@@ -27,16 +59,16 @@ fn write_canonical_form(group: &Group, tt: &TensorTrain) -> Result<()> {
 }
 
 fn read_canonical_form(group: &Group) -> Result<Option<CanonicalForm>> {
-    if !group
-        .attr_names()?
-        .iter()
-        .any(|name| name == CANONICAL_FORM_ATTR)
+    if !backend::attribute_exists(group, CANONICAL_FORM_ATTR)
+        .context("Failed to check MPS canonical_form attribute existence")?
     {
         return Ok(None);
     }
 
-    let value: i32 = group
-        .attr(CANONICAL_FORM_ATTR)?
+    let attr = group
+        .attr(CANONICAL_FORM_ATTR)
+        .context("Failed to open MPS canonical_form attribute")?;
+    let value: i32 = attr
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS canonical_form")?;
@@ -109,31 +141,45 @@ pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS length")?;
+    let length = index::read_nonnegative_usize("length", length)?;
 
     let llim: i64 = group
         .dataset("llim")?
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS llim")?;
+    let llim = read_i32("llim", llim, length)?;
 
     let rlim: i64 = group
         .dataset("rlim")?
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS rlim")?;
+    let rlim = read_i32("rlim", rlim, length)?;
+    validate_ortho_limits(llim, rlim, length)?;
     let canonical_form = read_canonical_form(group)?;
 
-    let mut tensors = Vec::with_capacity(length as usize);
-    for i in 1..=length {
-        let name = format!("MPS[{}]", i);
-        let tensor_group = group.group(&name)?;
+    index::validate_expected_child_groups(
+        group,
+        length,
+        "MPS",
+        "MPS[",
+        Some(']'),
+        &["length", "llim", "rlim"],
+    )?;
+    let mut tensors = Vec::with_capacity(length);
+    for ordinal in 1..=length {
+        let name = index::expected_child_name("MPS[", ordinal, Some(']'));
+        let tensor_group = group
+            .group(&name)
+            .with_context(|| format!("Failed to open HDF5 MPS child group {name}"))?;
         tensors.push(itensor::read_itensor(&tensor_group)?);
     }
 
     Ok(TensorTrain::with_ortho(
         tensors,
-        llim as i32,
-        rlim as i32,
+        llim,
+        rlim,
         canonical_form,
     )?)
 }

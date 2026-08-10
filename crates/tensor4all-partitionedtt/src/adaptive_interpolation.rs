@@ -194,9 +194,9 @@ where
                 })
                 .collect();
             let core = tensor3_from_data(data, 1, dim, 1)
-                .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))?;
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
             let exact = tensor4all_simplett::TensorTrain::new(vec![core])
-                .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))?;
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
             let tt = embed_active_tt(exact, &site_indices, &active_positions, &patch.projector)?;
             accepted.push(SubDomainTT::new(tt, patch.projector));
             continue;
@@ -594,8 +594,9 @@ where
                 indices.push(index.clone());
             }
             tensors.push(
-                TensorDynLen::from_dense(indices, core.to_col_major_vec())
-                    .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))?,
+                TensorDynLen::from_dense(indices, core.to_col_major_vec()).map_err(|error| {
+                    PartitionedTTError::tensor_train_operation(error.to_string())
+                })?,
             );
             next_active += 1;
         } else {
@@ -614,7 +615,7 @@ where
         }
     }
     TensorTrain::new(tensors)
-        .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))
+        .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
 }
 
 fn projected_site_tensor<T>(
@@ -635,10 +636,10 @@ where
             value,
             scale,
         )
-        .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string())),
+        .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string())),
         (None, Some(right)) => {
             if right.dim != 1 {
-                return Err(PartitionedTTError::TensorTrainError(format!(
+                return Err(PartitionedTTError::tensor_train_operation(format!(
                     "projected first site requires a unit right bond, got {}",
                     right.dim
                 )));
@@ -646,11 +647,11 @@ where
             let mut data = vec![T::zero(); site.dim];
             data[value] = scale;
             TensorDynLen::from_dense(vec![site.clone(), right.clone()], data)
-                .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
         }
         (Some(left), None) => {
             if left.dim != 1 {
-                return Err(PartitionedTTError::TensorTrainError(format!(
+                return Err(PartitionedTTError::tensor_train_operation(format!(
                     "projected last site requires a unit left bond, got {}",
                     left.dim
                 )));
@@ -658,13 +659,13 @@ where
             let mut data = vec![T::zero(); site.dim];
             data[value] = scale;
             TensorDynLen::from_dense(vec![left.clone(), site.clone()], data)
-                .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
         }
         (None, None) => {
             let mut data = vec![T::zero(); site.dim];
             data[value] = scale;
             TensorDynLen::from_dense(vec![site.clone()], data)
-                .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
         }
     }
 }
@@ -703,13 +704,14 @@ where
                 indices.push(index.clone());
             }
             tensors.push(
-                TensorDynLen::from_dense(indices, vec![local_scale; site.dim])
-                    .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))?,
+                TensorDynLen::from_dense(indices, vec![local_scale; site.dim]).map_err(
+                    |error| PartitionedTTError::tensor_train_operation(error.to_string()),
+                )?,
             );
         }
     }
     TensorTrain::new(tensors)
-        .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))
+        .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
 }
 
 #[cfg(test)]

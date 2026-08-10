@@ -2,6 +2,41 @@ use super::*;
 use num_complex::Complex64;
 use tenferro::TypedTensor;
 
+#[test]
+fn hermitian_eigendecomposition_maps_eager_context_error_with_source_chain() {
+    let matrix = Matrix::from_col_major_vec(1, 1, vec![2.0_f64]);
+    let error = crate::context::with_forced_eager_context_failure(|| {
+        hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap_err()
+    });
+
+    let HermitianEigenError::Backend { source } = error else {
+        panic!("expected backend error from forced eager context failure");
+    };
+    let context_error = source
+        .downcast_ref::<crate::context::EagerContextError>()
+        .expect("backend source should retain EagerContextError");
+    let registration_source = std::error::Error::source(context_error).unwrap();
+    assert_eq!(
+        registration_source.to_string(),
+        "forced default eager context registration failure"
+    );
+    assert!(registration_source.source().is_none());
+}
+
+#[test]
+fn hermitian_backend_error_preserves_source_chain() {
+    let source = std::io::Error::other("forced eigensolver failure");
+    let error = HermitianEigenError::Backend {
+        source: Box::new(source),
+    };
+
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(
+        std::error::Error::source(&error).unwrap().to_string(),
+        "forced eigensolver failure"
+    );
+}
+
 fn real_eigen_residual_norm(matrix: &Matrix<f64>, eigenvalue: f64, vector: &[f64]) -> f64 {
     let mut max_abs = 0.0_f64;
     for row in 0..matrix.nrows() {
@@ -187,6 +222,97 @@ fn test_matrix_column_major_storage() {
 }
 
 #[test]
+fn matrix_constructors_reject_shape_product_overflow() {
+    let panic =
+        std::panic::catch_unwind(|| Matrix::from_col_major_vec(usize::MAX, 2, Vec::<u8>::new()))
+            .unwrap_err();
+    assert_eq!(
+        *panic
+            .downcast::<String>()
+            .expect("shape overflow should panic with a String message"),
+        format!(
+            "matrix shape product overflow: {} rows * 2 columns",
+            usize::MAX
+        )
+    );
+
+    let panic = std::panic::catch_unwind(|| Matrix::from_elem(usize::MAX, 2, 0_u8)).unwrap_err();
+    assert_eq!(
+        *panic
+            .downcast::<String>()
+            .expect("shape overflow should panic with a String message"),
+        format!(
+            "matrix shape product overflow: {} rows * 2 columns",
+            usize::MAX
+        )
+    );
+
+    let panic = std::panic::catch_unwind(|| Matrix::<u8>::zeros(usize::MAX, 2)).unwrap_err();
+    assert_eq!(
+        *panic
+            .downcast::<String>()
+            .expect("shape overflow should panic with a String message"),
+        format!(
+            "matrix shape product overflow: {} rows * 2 columns",
+            usize::MAX
+        )
+    );
+
+    let zero = Matrix::<u8>::zeros(0, usize::MAX);
+    assert_eq!(zero.nrows(), 0);
+    assert_eq!(zero.ncols(), usize::MAX);
+    assert!(zero.as_col_major_slice().is_empty());
+}
+
+#[test]
+fn matrix_indexing_rejects_each_axis_before_linearization() {
+    let mut matrix = Matrix::from_col_major_vec(2, 2, vec![1, 3, 2, 4]);
+    assert!(std::panic::catch_unwind(|| matrix[[2, 0]]).is_err());
+    assert!(std::panic::catch_unwind(|| matrix[[0, 2]]).is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        matrix[[2, 0]] = 99;
+    }))
+    .is_err());
+    assert_eq!(matrix.as_col_major_slice(), &[1, 3, 2, 4]);
+    matrix[[1, 1]] = 8;
+    assert_eq!(matrix[[1, 1]], 8);
+}
+
+#[test]
+fn matrix_multiplication_rejects_output_shape_overflow_before_backend() {
+    // A zero-column matrix may legitimately have an arbitrary row count (the
+    // checked shape product is 0). Multiplying it by a 0 x 2 matrix would
+    // produce an overflowing usize::MAX x 2 output; the multiplication must
+    // reject the output element count before any backend call.
+    let left = Matrix::<f64>::from_col_major_vec(usize::MAX, 0, Vec::new());
+    let right = Matrix::<f64>::from_col_major_vec(0, 2, Vec::new());
+    let error = mat_mul(&left, &right).unwrap_err().to_string();
+    assert!(error.contains("overflows"), "got: {error}");
+
+    let error = mat_mul_owned(left, right).unwrap_err().to_string();
+    assert!(error.contains("overflows"), "got: {error}");
+}
+
+#[test]
+fn matrix_complex64_construction_preserves_column_major_indexing() {
+    let i = Complex64::new(0.0, 1.0);
+    let matrix = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![Complex64::new(1.0, 0.0), i, Complex64::new(2.0, 0.0), -i],
+    );
+
+    assert_eq!(matrix[[0, 0]], Complex64::new(1.0, 0.0));
+    assert_eq!(matrix[[1, 0]], i);
+    assert_eq!(matrix[[0, 1]], Complex64::new(2.0, 0.0));
+    assert_eq!(matrix[[1, 1]], -i);
+    assert_eq!(
+        matrix.as_col_major_slice(),
+        &[Complex64::new(1.0, 0.0), i, Complex64::new(2.0, 0.0), -i]
+    );
+}
+
+#[test]
 fn matrix_into_col_major_vec_consumes_storage() {
     let m = Matrix::from_col_major_vec(2, 2, vec![1.0, 3.0, 2.0, 4.0]);
 
@@ -271,6 +397,39 @@ fn try_from_vec2d_rejects_shorter_rows() {
 #[should_panic(expected = "row 1 has length 3, expected 2")]
 fn from_vec2d_panics_with_shape_error_for_ragged_rows() {
     let _ = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0, 5.0]]);
+}
+
+#[test]
+fn matrix_public_precondition_assertions_reject_invalid_axes() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
+
+    assert!(std::panic::catch_unwind(|| submatrix(&matrix, &[2], &[0])).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix(&matrix, &[0], &[2])).is_err());
+
+    let mut rows = matrix.clone();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_rows(&mut rows, 2, 0);
+    }))
+    .is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_rows(&mut rows, 0, 2);
+    }))
+    .is_err());
+
+    let mut cols = matrix.clone();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_cols(&mut cols, 2, 0);
+    }))
+    .is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        swap_cols(&mut cols, 0, 2);
+    }))
+    .is_err());
+
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..0, 0..2)).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..2, 0..0)).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..3, 0..2)).is_err());
+    assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..2, 0..3)).is_err());
 }
 
 #[test]

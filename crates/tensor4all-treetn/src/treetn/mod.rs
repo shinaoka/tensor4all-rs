@@ -647,7 +647,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
                 .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-            let src_norm = tensor_src.norm();
+            let src_norm = tensor_src.norm()?;
             let updated_src_tensor = if src_norm > 0.0 {
                 tensor_src
                     .scale(tensor4all_core::AnyScalar::new_real(1.0 / src_norm))

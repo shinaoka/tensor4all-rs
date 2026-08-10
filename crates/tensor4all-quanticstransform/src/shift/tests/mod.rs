@@ -1,4 +1,5 @@
 use super::*;
+use crate::{flip_operator_multivar, phase_rotation_operator_multivar};
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
@@ -85,4 +86,48 @@ fn test_shift_r_63_ok() {
     // r = 63 should be the max valid value
     let result = shift_operator(63, 1, BoundaryCondition::Periodic);
     assert!(result.is_ok());
+}
+
+#[test]
+fn shift_multivar_rejects_usize_shift_width() {
+    let error = shift_operator_multivar(1, 0, BoundaryCondition::Periodic, usize::BITS as usize, 0)
+        .unwrap_err();
+    assert!(error.to_string().contains("nvariables"));
+}
+
+#[test]
+fn multivar_dims_reject_squared_site_dimension_overflow() {
+    let nvariables = usize::BITS as usize / 2;
+    assert!(checked_multivar_dims(nvariables)
+        .unwrap_err()
+        .to_string()
+        .contains("site dimension"));
+}
+
+#[test]
+fn multivar_dims_reject_site_byte_limit_before_tensor_allocation() {
+    let nvariables = usize::BITS as usize / 2 - 1;
+    let error = checked_multivar_dims(nvariables).unwrap_err();
+    assert!(error.to_string().contains("byte length"));
+}
+
+#[test]
+fn sibling_multivar_operators_reject_usize_shift_width() {
+    let nvariables = usize::BITS as usize;
+
+    let flip_error =
+        flip_operator_multivar(2, BoundaryCondition::Periodic, nvariables, 0).unwrap_err();
+    assert!(flip_error.to_string().contains("nvariables"));
+
+    let phase_error = phase_rotation_operator_multivar(1, 0.0, nvariables, 0).unwrap_err();
+    assert!(phase_error.to_string().contains("nvariables"));
+}
+
+#[test]
+fn multivar_rejects_fewer_than_two_variables_and_invalid_target() {
+    let error = shift_operator_multivar(1, 0, BoundaryCondition::Periodic, 1, 0).unwrap_err();
+    assert!(error.to_string().contains("at least 2"));
+
+    let error = shift_operator_multivar(1, 0, BoundaryCondition::Periodic, 2, 2).unwrap_err();
+    assert!(error.to_string().contains("target_var"));
 }

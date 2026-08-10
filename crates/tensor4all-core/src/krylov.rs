@@ -30,7 +30,7 @@
 //! let result = gmres(apply_operator, &rhs, &initial_guess, &GmresOptions::default())?;
 //!
 //! assert!(result.converged);
-//! assert!(result.solution.sub(&rhs)?.maxabs() < 1e-12);
+//! assert!(result.solution.sub(&rhs)?.maxabs()? < 1e-12);
 //! # Ok(())
 //! # }
 //! ```
@@ -493,7 +493,7 @@ where
     validate_hermitian_lanczos_options(options)?;
     initial.validate()?;
 
-    let initial_norm = initial.norm();
+    let initial_norm = initial.norm()?;
     anyhow::ensure!(
         initial_norm > options.breakdown_tol,
         "hermitian_lanczos_lowest_eigenpair: zero initial vector"
@@ -527,7 +527,7 @@ where
             w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
         }
 
-        let beta = w_orth.norm();
+        let beta = w_orth.norm()?;
         h_col.push(Complex64::new(beta, 0.0));
         h_cols.push(h_col);
 
@@ -660,7 +660,7 @@ where
             time_splits: 1,
         });
     }
-    if initial.norm() <= options.breakdown_tol {
+    if initial.norm()? <= options.breakdown_tol {
         return Ok(HermitianKrylovExpmResult {
             output: initial.clone(),
             iterations: 0,
@@ -730,7 +730,7 @@ where
     T: TensorVectorSpace,
     F: FnMut(&T) -> Result<T>,
 {
-    let initial_norm = initial.norm();
+    let initial_norm = initial.norm()?;
     if initial_norm <= options.breakdown_tol {
         return Ok(HermitianKrylovExpmResult {
             output: initial.clone(),
@@ -772,7 +772,7 @@ where
             w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
         }
 
-        let beta_next = w_orth.norm();
+        let beta_next = w_orth.norm()?;
         h_col.push(Complex64::new(beta_next, 0.0));
         h_cols.push(h_col);
 
@@ -1025,7 +1025,7 @@ where
     }
 
     let started = Instant::now();
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     if profile_enabled {
         profile.b_norm += started.elapsed();
     }
@@ -1084,7 +1084,7 @@ where
             profile.axpby_calls += 1;
         }
         let started = Instant::now();
-        let r_norm = r.norm();
+        let r_norm = r.norm()?;
         if profile_enabled {
             profile.norm += started.elapsed();
             profile.norm_calls += 1;
@@ -1166,7 +1166,7 @@ where
             }
 
             let started = Instant::now();
-            let h_jp1_j_real = w_orth.norm();
+            let h_jp1_j_real = w_orth.norm()?;
             if profile_enabled {
                 profile.norm += started.elapsed();
                 profile.norm_calls += 1;
@@ -1247,7 +1247,7 @@ where
                         profile.axpby_calls += 1;
                     }
                     let started = Instant::now();
-                    let true_abs_res = r_check.norm();
+                    let true_abs_res = r_check.norm()?;
                     if profile_enabled {
                         profile.norm += started.elapsed();
                         profile.norm_calls += 1;
@@ -1322,7 +1322,7 @@ where
                     profile.axpby_calls += 1;
                 }
                 let started = Instant::now();
-                let final_abs_res = r_final.norm();
+                let final_abs_res = r_final.norm()?;
                 if profile_enabled {
                     profile.norm += started.elapsed();
                     profile.norm_calls += 1;
@@ -1377,7 +1377,7 @@ where
         profile.axpby_calls += 1;
     }
     let started = Instant::now();
-    let final_abs_res = r_final.norm();
+    let final_abs_res = r_final.norm()?;
     if profile_enabled {
         profile.norm += started.elapsed();
         profile.norm_calls += 1;
@@ -1435,7 +1435,7 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     if b_norm < 1e-15 {
         // b is effectively zero, return x0
         return Ok(GmresResult {
@@ -1472,7 +1472,7 @@ where
         }
         // r = 1.0 * b + (-1.0) * ax
         let r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
-        let r_norm = r.norm();
+        let r_norm = r.norm()?;
         let residual_value = tolerance.residual_value(r_norm, b_norm);
 
         if options.verbose {
@@ -1533,7 +1533,7 @@ where
                 w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
             }
 
-            let h_jp1_j_real = w_orth.norm();
+            let h_jp1_j_real = w_orth.norm()?;
             let h_jp1_j = AnyScalar::new_real(h_jp1_j_real);
             h_col.push(h_jp1_j);
 
@@ -1585,7 +1585,7 @@ where
                         &ax_check,
                         AnyScalar::new_real(-1.0),
                     )?;
-                    let true_abs_res = r_check.norm();
+                    let true_abs_res = r_check.norm()?;
                     let true_residual_value = tolerance.residual_value(true_abs_res, b_norm);
 
                     if options.verbose {
@@ -1629,7 +1629,7 @@ where
                     &ax_final,
                     AnyScalar::new_real(-1.0),
                 )?;
-                let final_abs_res = r_final.norm();
+                let final_abs_res = r_final.norm()?;
                 let final_res = tolerance.residual_value(final_abs_res, b_norm);
                 return Ok(GmresResult {
                     solution: x,
@@ -1655,7 +1655,7 @@ where
         &ax_final,
         AnyScalar::new_real(-1.0),
     )?;
-    let final_abs_res = r_final.norm();
+    let final_abs_res = r_final.norm()?;
     let final_res = tolerance.residual_value(final_abs_res, b_norm);
 
     Ok(GmresResult {
@@ -1712,7 +1712,7 @@ where
 /// assert!(result.converged);
 /// // Solution should be [2.0, 3.0]
 /// let expected = TensorDynLen::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
-/// assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-8);
+/// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn gmres_with_truncation<T, F, Tr>(
     apply_a: F,
@@ -1730,7 +1730,7 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     if b_norm < 1e-15 {
         return Ok(GmresResult {
             solution: x0.clone(),
@@ -1751,7 +1751,7 @@ where
         }
         let mut r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
         truncate(&mut r)?;
-        let r_norm = r.norm();
+        let r_norm = r.norm()?;
         let rel_res = r_norm / b_norm;
 
         if options.verbose {
@@ -1779,7 +1779,7 @@ where
         // We need to:
         // 1. Renormalize v0 to unit norm for numerical stability
         // 2. Recompute g[0] = <r, v0> to maintain the correct relationship
-        let v0_norm = v0.norm();
+        let v0_norm = v0.norm()?;
         let effective_g0 = if v0_norm > 1e-15 {
             v0 = v0.scale(AnyScalar::new_real(1.0 / v0_norm))?;
             // g[0] should be the component of r in the direction of v0
@@ -1821,9 +1821,9 @@ where
             let mut reorth_iter_count = 0;
             for reorth_iter in 0..MAX_REORTH_ITERS {
                 reorth_iter_count = reorth_iter + 1;
-                let norm_before_truncate = w_orth.norm();
+                let norm_before_truncate = w_orth.norm()?;
                 truncate(&mut w_orth)?;
-                let norm_after_truncate = w_orth.norm();
+                let norm_after_truncate = w_orth.norm()?;
 
                 let mut max_correction = 0.0;
                 for (i, v_i) in v_basis.iter().enumerate() {
@@ -1857,7 +1857,7 @@ where
                 eprintln!("  (needed {} reorth iterations)", reorth_iter_count);
             }
 
-            let h_jp1_j_real = w_orth.norm();
+            let h_jp1_j_real = w_orth.norm()?;
             let h_jp1_j = AnyScalar::new_real(h_jp1_j_real);
             h_col.push(h_jp1_j);
 
@@ -1906,7 +1906,7 @@ where
                         AnyScalar::new_real(-1.0),
                     )?;
                     truncate(&mut r_check)?;
-                    let true_rel_res = r_check.norm() / b_norm;
+                    let true_rel_res = r_check.norm()? / b_norm;
 
                     if options.verbose {
                         eprintln!(
@@ -1954,7 +1954,7 @@ where
                     &ax_final,
                     AnyScalar::new_real(-1.0),
                 )?;
-                let final_res = r_final.norm() / b_norm;
+                let final_res = r_final.norm()? / b_norm;
                 return Ok(GmresResult {
                     solution: x,
                     iterations: total_iters,
@@ -1977,7 +1977,7 @@ where
         &ax_final,
         AnyScalar::new_real(-1.0),
     )?;
-    let final_res = r_final.norm() / b_norm;
+    let final_res = r_final.norm()? / b_norm;
 
     Ok(GmresResult {
         solution: x,
@@ -2208,7 +2208,7 @@ pub struct RestartGmresResult<T> {
 ///
 /// assert!(result.converged);
 /// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
-/// assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-8);
+/// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(
     apply_a: F,
@@ -2228,7 +2228,7 @@ where
         x.validate()?;
     }
 
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     if b_norm < 1e-15 {
         // b is effectively zero, return x0 or zero
         let solution = match x0 {
@@ -2275,7 +2275,7 @@ where
         let mut r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
         truncate(&mut r)?;
 
-        let r_norm = r.norm();
+        let r_norm = r.norm()?;
         let rel_res = r_norm / b_norm;
 
         if options.verbose {
@@ -2352,7 +2352,7 @@ where
     let ax = apply_a(&x)?;
     let mut r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
     truncate(&mut r)?;
-    let final_rel_res = r.norm() / b_norm;
+    let final_rel_res = r.norm()? / b_norm;
 
     Ok(RestartGmresResult {
         solution: x,
@@ -2453,7 +2453,7 @@ where
         &lambda_v,
         AnyScalar::new_real(-1.0),
     )?;
-    Ok(residual.norm())
+    Ok(residual.norm()?)
 }
 
 fn finalize_hermitian_lanczos_result<T, F>(
@@ -2652,7 +2652,7 @@ where
     // When x is created via scale(0.0), it preserves the original bond structure
     // (e.g., bond dim 4), causing axpby to double bond dimensions unnecessarily.
     // By detecting zero, we can use scaled_vi directly, avoiding the doubling.
-    let mut result_is_zero = x.norm() == 0.0;
+    let mut result_is_zero = x.norm()? == 0.0;
 
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
         let scaled_vi = vi.scale(yi.clone())?;

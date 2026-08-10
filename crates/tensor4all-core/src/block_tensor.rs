@@ -36,7 +36,7 @@ use crate::tensor_index::TensorIndex;
 use crate::tensor_like::{
     DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult, LinearizationOrder,
     TensorConstructionLike, TensorContractionLike, TensorFactorizationLike, TensorLike,
-    TensorVectorSpace,
+    TensorVectorSpace, TensorVectorSpaceError,
 };
 use anyhow::Result;
 
@@ -414,22 +414,28 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
 // ============================================================================
 
 impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
+    type Error = TensorVectorSpaceError;
+
     // ------------------------------------------------------------------------
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------
 
-    fn norm_squared(&self) -> f64 {
-        self.blocks.iter().map(|b| b.norm_squared()).sum()
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
+        self.blocks.iter().try_fold(0.0, |sum, block| {
+            let value = block
+                .norm_squared()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            Ok(sum + value)
+        })
     }
 
-    fn try_maxabs(&self) -> Result<f64> {
-        self.blocks
-            .iter()
-            .try_fold(0.0_f64, |acc, block| Ok(acc.max(block.try_maxabs()?)))
-    }
-
-    fn maxabs(&self) -> f64 {
-        self.try_maxabs().unwrap_or(f64::NAN)
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
+        self.blocks.iter().try_fold(0.0_f64, |acc, block| {
+            let value = block
+                .maxabs()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            Ok(acc.max(value))
+        })
     }
 
     fn scale(&self, scalar: AnyScalar) -> Result<Self> {

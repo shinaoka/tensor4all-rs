@@ -4,7 +4,7 @@ use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
 fn test_chebyshev_grid() {
-    let (grid, weights) = chebyshev_grid(4);
+    let (grid, weights) = chebyshev_grid(4).unwrap();
 
     // Check endpoints
     assert_relative_eq!(grid[0], 0.0, epsilon = 1e-10);
@@ -22,8 +22,7 @@ fn test_chebyshev_grid() {
 
 #[test]
 fn test_lagrange_polynomial_at_grid_points() {
-    let (grid, weights) = chebyshev_grid(5);
-
+    let (grid, weights) = chebyshev_grid(5).unwrap();
     // P_alpha(grid[alpha]) = 1
     for alpha in 0..=5 {
         let val = lagrange_polynomial(&grid, &weights, alpha, grid[alpha]);
@@ -103,10 +102,68 @@ fn test_fourier_error_one_site() {
 }
 
 #[test]
+fn test_fourier_error_oversized_site_list() {
+    let error = quantics_fourier_operator(usize::MAX, FourierOptions::default()).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}
+
+#[test]
 fn test_ftcore_error_one_site() {
     let options = FourierOptions::default();
     let result = FTCore::new(1, options);
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
     assert!(msg.contains("at least 2"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_fourier_rejects_zero_chebyshev_order() {
+    let options = FourierOptions {
+        k: 0,
+        ..FourierOptions::default()
+    };
+    let error = quantics_fourier_operator(2, options).unwrap_err();
+    assert!(error.to_string().contains("k must be positive"));
+}
+
+#[test]
+fn test_fourier_rejects_quadratic_core_element_overflow() {
+    let options = FourierOptions {
+        k: usize::MAX / 4,
+        ..FourierOptions::default()
+    };
+    let error = quantics_fourier_operator(2, options).unwrap_err();
+    assert!(
+        error.to_string().contains("Fourier core tensor"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn test_fourier_grid_reports_actual_capacity_failure() {
+    let error = chebyshev_grid(usize::MAX - 1).unwrap_err();
+    assert!(
+        error.to_string().contains("allocation failed"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn test_fourier_tensor3_checks_byte_limit_before_wrapper() {
+    let count = isize::MAX as usize / (4 * std::mem::size_of::<Complex64>()) + 1;
+    let error = checked_tensor3_size(1, 4, count, "Fourier test tensor").unwrap_err();
+    assert!(error.to_string().contains("byte length"));
+}
+
+#[test]
+fn test_fourier_core_size_checks_product() {
+    let error = checked_fourier_core_size(usize::MAX / 4).unwrap_err();
+    assert!(error.to_string().contains("Fourier core tensor"));
+}
+
+#[test]
+fn test_fourier_tensor4_checks_byte_limit_before_wrapper() {
+    let count = isize::MAX as usize / std::mem::size_of::<Complex64>() + 1;
+    let error = checked_tensor4_size([1, 1, 1, count], "Fourier test core").unwrap_err();
+    assert!(error.to_string().contains("byte length"));
 }

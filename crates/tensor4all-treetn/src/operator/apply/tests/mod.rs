@@ -897,11 +897,14 @@ fn naive_apply_noncontiguous_bonded_identity_uses_compact_bridge_delta() {
     let middle_tensor = extended.mpo.tensor(middle).unwrap();
 
     assert_eq!(
-        middle_tensor.storage().storage_kind(),
+        middle_tensor.storage().unwrap().storage_kind(),
         StorageKind::Structured
     );
-    assert_eq!(middle_tensor.storage().payload_dims(), &[2, 2]);
-    assert_eq!(middle_tensor.storage().axis_classes(), &[0, 0, 1, 1]);
+    assert_eq!(middle_tensor.storage().unwrap().payload_dims(), &[2, 2]);
+    assert_eq!(
+        middle_tensor.storage().unwrap().axis_classes(),
+        &[0, 0, 1, 1]
+    );
 
     let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
     let result_dense = result.to_dense().unwrap();

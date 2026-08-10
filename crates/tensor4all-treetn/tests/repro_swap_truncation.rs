@@ -131,7 +131,7 @@ fn swap_with_transport_must_not_truncate() {
         let mut tn = tn.clone();
         tn.swap_site_indices(&target, &opts).unwrap();
         let after = tn.contract_to_tensor().unwrap();
-        let err = before.sub(&after).unwrap().maxabs();
+        let err = before.sub(&after).unwrap().maxabs().unwrap();
         let dim = bond_dim_at(&tn, "1", &[&s1]);
         assert_eq!(dim, 4, "{label}: middle bond rank must be preserved");
         assert!(err < 1e-15, "{label}: swap must be exact, err={err:e}");
@@ -178,7 +178,7 @@ fn swap_without_transport_must_not_truncate() {
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
     let after = tn.contract_to_tensor().unwrap();
-    let err = before.sub(&after).unwrap().maxabs();
+    let err = before.sub(&after).unwrap().maxabs().unwrap();
     let dim = bond_dim_at(&tn, "A", &[&sb]);
     assert_eq!(dim, 2, "rtol: None must not drop the 1e-13 singular value");
     assert!(err < 1e-15, "rtol: None must be exact, err={err:e}");

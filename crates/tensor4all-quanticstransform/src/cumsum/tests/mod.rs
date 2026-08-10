@@ -65,6 +65,18 @@ fn test_cumsum_error_one_site() {
 }
 
 #[test]
+fn test_cumsum_error_oversized_site_list() {
+    let error = cumsum_operator(usize::MAX).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}
+
+#[test]
+fn test_triangle_error_oversized_site_list() {
+    let error = triangle_operator(usize::MAX, TriangleType::Lower).unwrap_err();
+    assert!(error.to_string().contains("site list"));
+}
+
+#[test]
 fn test_triangle_error_one_site() {
     let result = triangle_operator(1, TriangleType::Lower);
     assert!(result.is_err());

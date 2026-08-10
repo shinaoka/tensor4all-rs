@@ -16,6 +16,112 @@ fn extract_c64(storage: &Storage) -> Vec<Complex64> {
     }
 }
 
+#[test]
+fn referenced_strided_entries_ignore_unreferenced_stride_gaps() {
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, f64::NAN, 3.0, 4.0],
+        vec![2, 2],
+        vec![3, 1],
+        vec![0, 1],
+    )
+    .unwrap();
+
+    assert_eq!(storage.payload_nonfinite_flags(), (false, false));
+    assert_eq!(storage.sum::<f64>(), 10.0);
+    assert_eq!(storage.max_abs(), 4.0);
+    assert_eq!(storage.scalar_at(&[1, 0]).unwrap().real(), 3.0);
+    assert_eq!(storage.scalar_at(&[1, 1]).unwrap().real(), 4.0);
+
+    let complex_storage = Storage::new_structured(
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+        vec![2, 2],
+        vec![3, 1],
+        vec![0, 1],
+    )
+    .unwrap();
+    assert_eq!(complex_storage.payload_nonfinite_flags(), (false, false));
+    assert_eq!(
+        complex_storage.sum::<Complex64>(),
+        Complex64::new(10.0, 0.0)
+    );
+    assert_eq!(complex_storage.max_abs(), 4.0);
+}
+
+#[test]
+fn scalar_at_returns_the_stored_dynamic_scalar_kind() {
+    let real = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
+    let complex = Storage::from_dense_col_major(
+        vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)],
+        &[2],
+    )
+    .unwrap();
+
+    assert_eq!(real.scalar_at(&[1]).unwrap().real(), 2.0);
+    assert_eq!(
+        complex.scalar_at(&[0]).unwrap().as_c64(),
+        Some(Complex64::new(1.0, -2.0))
+    );
+}
+
+#[test]
+fn structured_storage_rejects_payload_length_product_overflow() {
+    let error =
+        StructuredStorage::<u8>::new(Vec::new(), vec![usize::MAX, 2], vec![0, 0], vec![0, 1])
+            .unwrap_err();
+    assert!(error.to_string().contains("payload length overflow"));
+
+    let dense_error =
+        Storage::from_dense_col_major(Vec::<f64>::new(), &[usize::MAX, 2]).unwrap_err();
+    assert!(dense_error.to_string().contains("overflow"));
+}
+
+#[test]
+fn to_dense_rejects_logical_product_overflow_fail_closed() {
+    // axis_classes [0,0,0,0] make the logical dims [n,n,n,n]; n = 2^17 gives
+    // a 1 MiB payload while n^4 overflows usize, so dense materialization
+    // must fail closed instead of returning an empty buffer.
+    let n = 1 << 17;
+    let structured =
+        StructuredStorage::<f64>::new(vec![1.0; n], vec![n], vec![1], vec![0, 0, 0, 0]).unwrap();
+    let storage = Storage::from_repr(StorageRepr::F64(structured));
+    let error = storage
+        .to_dense_f64_col_major_vec(&[n, n, n, n])
+        .unwrap_err();
+    assert!(error.to_string().contains("overflow"));
+
+    let structured = StructuredStorage::<Complex64>::new(
+        vec![Complex64::new(1.0, 0.0); n],
+        vec![n],
+        vec![1],
+        vec![0, 0, 0, 0],
+    )
+    .unwrap();
+    let storage = Storage::from_repr(StorageRepr::C64(structured));
+    assert!(storage.to_dense_c64_col_major_vec(&[n, n, n, n]).is_err());
+}
+
+#[test]
+fn scalar_at_reads_compact_payload_coordinates_directly() {
+    let storage = Storage::new_structured(
+        vec![10.0_f64, 20.0, -1.0, 30.0, 40.0],
+        vec![2, 2],
+        vec![1, 3],
+        vec![0, 1],
+    )
+    .unwrap();
+    assert_eq!(storage.scalar_at(&[0, 0]).unwrap().real(), 10.0);
+    assert_eq!(storage.scalar_at(&[0, 1]).unwrap().real(), 30.0);
+    assert_eq!(storage.scalar_at(&[1, 0]).unwrap().real(), 20.0);
+    assert_eq!(storage.scalar_at(&[1, 1]).unwrap().real(), 40.0);
+    assert!(storage.scalar_at(&[2, 0]).is_err());
+}
+
 // ===== Type inspection tests =====
 
 #[test]
@@ -714,6 +820,30 @@ fn test_storage_max_abs_structured() {
     )
     .unwrap();
     assert!((s_c64.max_abs() - 5.0).abs() < 1e-10);
+}
+
+#[test]
+fn storage_max_abs_propagates_nan_and_infinity() {
+    let nan = Storage::from_dense_col_major(vec![1.0, f64::NAN], &[2]).unwrap();
+    assert!(nan.max_abs().is_nan());
+
+    let nan_complex = Storage::from_dense_col_major(
+        vec![Complex64::new(1.0, 0.0), Complex64::new(f64::NAN, 0.0)],
+        &[2],
+    )
+    .unwrap();
+    assert!(nan_complex.max_abs().is_nan());
+
+    for value in [
+        Complex64::new(f64::INFINITY, f64::NAN),
+        Complex64::new(f64::NAN, f64::INFINITY),
+    ] {
+        let mixed = Storage::from_dense_col_major(vec![value], &[1]).unwrap();
+        assert!(mixed.max_abs().is_nan());
+    }
+
+    let infinity = Storage::from_dense_col_major(vec![1.0, f64::INFINITY], &[2]).unwrap();
+    assert!(infinity.max_abs().is_infinite());
 }
 
 // ===== Storage permute_storage for structured variants =====

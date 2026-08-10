@@ -1,4 +1,6 @@
 use super::*;
+use std::error::Error;
+use std::io;
 use std::time::Duration;
 use tensor4all_core::{DynId, Index, LinearizationOrder, TensorContractionLike, TensorVectorSpace};
 
@@ -23,6 +25,14 @@ fn test_empty_tt() {
     assert_eq!(tt.llim(), -1);
     assert_eq!(tt.rlim(), 1);
     assert!(!tt.isortho());
+}
+
+#[test]
+fn tensor_train_error_from_anyhow_retains_source_chain() {
+    let source = anyhow::Error::new(io::Error::other("typed backend failure"));
+    let error = TensorTrainError::from(source);
+    assert!(error.source().is_some());
+    assert!(error.to_string().contains("typed backend failure"));
 }
 
 #[test]
@@ -52,7 +62,7 @@ fn profile_helpers_and_basic_accessors_cover_paths() {
         .to_string()
         .contains("out of bounds"));
     assert_eq!(tt.clone().into_treetn().node_count(), 1);
-    assert!(tt.norm_squared() >= 0.0);
+    assert!(tt.norm_squared().unwrap() >= 0.0);
 }
 
 #[test]
@@ -99,7 +109,7 @@ fn add_reindexed_like_self_aligns_site_indices_before_addition() {
             AnyScalar::new_real(1.0),
         )
         .unwrap();
-    assert!(dense.sub(&expected).unwrap().maxabs() < 1e-12);
+    assert!(dense.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -421,7 +431,8 @@ fn test_contract_with_fit_method() {
     assert!(result_tt
         .to_dense()
         .unwrap()
-        .isapprox(&naive_result, 1e-10, 0.0));
+        .isapprox(&naive_result, 1e-10, 0.0)
+        .unwrap());
 }
 
 #[test]
@@ -450,7 +461,8 @@ fn test_contract_with_naive_method() {
     assert!(result_tt
         .to_dense()
         .unwrap()
-        .isapprox(&naive_result, 1e-10, 0.0));
+        .isapprox(&naive_result, 1e-10, 0.0)
+        .unwrap());
 }
 
 #[test]
@@ -485,7 +497,8 @@ fn test_contract_nhalfsweeps_conversion() {
     assert!(result_tt
         .to_dense()
         .unwrap()
-        .isapprox(&naive_result, 1e-10, 0.0));
+        .isapprox(&naive_result, 1e-10, 0.0)
+        .unwrap());
 }
 
 #[test]
@@ -538,11 +551,11 @@ fn test_inner_product() {
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     // Compute norm squared
-    let norm_sq = tt.norm_squared();
+    let norm_sq = tt.norm_squared().unwrap();
     assert!(norm_sq > 0.0);
 
     // Compute norm
-    let norm = tt.norm();
+    let norm = tt.norm().unwrap();
     assert!((norm * norm - norm_sq).abs() < 1e-10);
 }
 
@@ -925,8 +938,8 @@ fn test_scale() {
     let scaled = tt.scale(AnyScalar::new_real(2.0)).unwrap();
 
     // Verify: norm of scaled should be 2 * norm of original
-    let orig_norm = tt.norm();
-    let scaled_norm = scaled.norm();
+    let orig_norm = tt.norm().unwrap();
+    let scaled_norm = scaled.norm().unwrap();
     assert!(
         (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
         "Expected scaled_norm = {}, got {}",
@@ -996,8 +1009,8 @@ fn test_tensor_like_scale() {
     // Use TensorVectorSpace::scale
     let scaled = TensorVectorSpace::scale(&tt, AnyScalar::new_real(2.0)).unwrap();
 
-    let orig_norm = tt.norm();
-    let scaled_norm = TensorVectorSpace::norm(&scaled);
+    let orig_norm = tt.norm().unwrap();
+    let scaled_norm = TensorVectorSpace::norm(&scaled).unwrap();
     assert!(
         (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
         "Expected scaled_norm = {}, got {}",
@@ -1371,7 +1384,7 @@ fn test_dense_maxabs_is_explicit_dense_reference_api() {
 
     let maxabs = tt.dense_maxabs().unwrap();
     let dense = tt.to_dense().unwrap();
-    let dense_maxabs = dense.maxabs();
+    let dense_maxabs = dense.maxabs().unwrap();
     assert!((maxabs - dense_maxabs).abs() < 1e-10);
 }
 
@@ -1386,9 +1399,8 @@ fn test_tensor_like_maxabs_is_not_hidden_dense_for_tensor_train() {
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    let err = TensorVectorSpace::try_maxabs(&tt).unwrap_err();
+    let err = TensorVectorSpace::maxabs(&tt).unwrap_err();
     assert!(err.to_string().contains("explicit dense materialization"));
-    assert!(TensorVectorSpace::maxabs(&tt).is_nan());
 }
 
 #[test]

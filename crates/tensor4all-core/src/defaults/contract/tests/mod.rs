@@ -160,10 +160,13 @@ fn test_contract_diag_diag_partial_preserves_diagonal_storage() {
 
     assert_eq!(result.dims(), vec![3, 3]);
     assert!(result.is_diag());
-    assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
+    assert_eq!(
+        result.storage().unwrap().storage_kind(),
+        StorageKind::Diagonal
+    );
 
     let expected = TensorDynLen::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -509,10 +512,13 @@ fn test_contract_owned_with_options_falls_back_for_structured_storage() {
     let borrowed = contract_with_options(&[&a, &b], options).unwrap();
 
     assert_eq!(owned.indices(), borrowed.indices());
-    assert_eq!(owned.storage().storage_kind(), StorageKind::Diagonal);
-    assert!(owned.isapprox(&borrowed, 1e-12, 0.0));
+    assert_eq!(
+        owned.storage().unwrap().storage_kind(),
+        StorageKind::Diagonal
+    );
+    assert!(owned.isapprox(&borrowed, 1e-12, 0.0).unwrap());
     let expected = TensorDynLen::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
-    assert!(owned.isapprox(&expected, 1e-12, 0.0));
+    assert!(owned.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]

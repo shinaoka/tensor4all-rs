@@ -62,7 +62,7 @@ fn test_swap_preserves_values_nontrivial_data() {
     let treetn_before: TreeTN<TensorDynLen, usize> =
         TreeTN::from_tensors(tensors.clone(), node_names.clone()).unwrap();
     let dense_before = treetn_before.contract_to_tensor().unwrap();
-    let norm_before = dense_before.norm();
+    let norm_before = dense_before.norm().unwrap();
 
     // Swap sites 1 and 2: [z1=1, z1=2, z2=1, z2=2] → [z1=1, z2=1, z1=2, z2=2]
     let mut treetn: TreeTN<TensorDynLen, usize> =
@@ -81,7 +81,7 @@ fn test_swap_preserves_values_nontrivial_data() {
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = dense_before.add(&neg).unwrap();
-    let rel_err = diff.norm() / norm_before;
+    let rel_err = diff.norm().unwrap() / norm_before;
 
     assert!(
         rel_err < 1e-10,
@@ -118,7 +118,7 @@ fn test_canonicalize_preserves_contract_to_tensor() {
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = dense_before.add(&neg).unwrap();
-    let rel_err = diff.norm() / dense_before.norm();
+    let rel_err = diff.norm().unwrap() / dense_before.norm().unwrap();
     assert!(
         rel_err < 1e-10,
         "contract_to_tensor changed after canonicalization: relative error = {rel_err:.3e}"
@@ -189,7 +189,7 @@ fn test_contract_factorize_roundtrip() {
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = contracted.add(&neg).unwrap();
-    let rel_err = diff.norm() / contracted.norm();
+    let rel_err = diff.norm().unwrap() / contracted.norm().unwrap();
     assert!(rel_err < 1e-10, "roundtrip error = {rel_err:.3e}");
 }
 
@@ -228,7 +228,7 @@ fn test_manual_sweep_edge_steps() {
             .scale(tensor4all_core::AnyScalar::new_real(-1.0))
             .unwrap();
         let diff = aligned.add(&neg).unwrap();
-        diff.norm() / full_ref.norm()
+        diff.norm().unwrap() / full_ref.norm().unwrap()
     };
 
     // Helper: find shared index between two tensors
@@ -301,7 +301,7 @@ fn test_qr_roundtrip_tall_matrix() {
     let recon_aligned = recon.permute_indices(&t.external_indices()).unwrap();
     let neg = t.scale(tensor4all_core::AnyScalar::new_real(-1.0)).unwrap();
     let diff = recon_aligned.add(&neg).unwrap();
-    let rel_err = diff.norm() / t.norm();
+    let rel_err = diff.norm().unwrap() / t.norm().unwrap();
     assert!(rel_err < 1e-10, "QR roundtrip error = {rel_err:.3e}");
 }
 
@@ -356,7 +356,7 @@ fn test_swap_preserves_values_plain_mps() {
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = dense_before.add(&neg).unwrap();
-    let rel_err = diff.norm() / dense_before.norm();
+    let rel_err = diff.norm().unwrap() / dense_before.norm().unwrap();
 
     assert!(
         rel_err < 1e-10,

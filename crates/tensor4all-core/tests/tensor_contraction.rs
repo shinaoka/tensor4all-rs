@@ -1,8 +1,8 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
 use tensor4all_core::{
-    contract_pair, contract_pair_with_operand_options, tensordot, DynIndex,
+    contract, contract_pair, contract_pair_with_operand_options, tensordot, DynIndex,
     PairwiseContractionOptions, TensorContractionLike, TensorDynLen,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
@@ -138,7 +138,7 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
         ],
     )
     .unwrap();
-    assert!(result.isapprox(&expected, 1e-12, 0.0));
+    assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn structured_tensor_contract_materializes_to_correct_dense_result() {
     let result = diag.contract_pair(&dense).unwrap();
 
     let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
-    assert!(result.sub(&expected).unwrap().maxabs() < 1e-12);
+    assert!(result.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -183,10 +183,17 @@ fn general_structured_contract_preserves_output_axis_classes() {
     let result = structured.contract_pair(&dense).unwrap();
 
     assert_eq!(result.indices, vec![i, k, l]);
-    assert_eq!(result.storage().storage_kind(), StorageKind::Structured);
-    assert_eq!(result.storage().axis_classes(), &[0, 0, 1]);
     assert_eq!(
-        result.storage().payload_f64_col_major_vec().unwrap(),
+        result.storage().unwrap().storage_kind(),
+        StorageKind::Structured
+    );
+    assert_eq!(result.storage().unwrap().axis_classes(), &[0, 0, 1]);
+    assert_eq!(
+        result
+            .storage()
+            .unwrap()
+            .payload_f64_col_major_vec()
+            .unwrap(),
         vec![220.0, 280.0, 2200.0, 2800.0]
     );
     assert_eq!(
@@ -218,6 +225,79 @@ fn test_contract_three_indices() {
     assert_eq!(result.indices[1].id, l.id);
 
     assert_all_f64(&result, 10, 12.0);
+}
+
+#[test]
+fn structured_mixed_dtype_nary_contract_preserves_compact_result() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let k = Index::new_dyn(2);
+    let l = Index::new_dyn(2);
+    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f32, 2.0]).unwrap();
+    let b = TensorDynLen::from_diag(
+        vec![j.clone(), k.clone()],
+        vec![Complex32::new(3.0, 1.0), Complex32::new(4.0, -2.0)],
+    )
+    .unwrap();
+    let c = TensorDynLen::from_diag(vec![k, l.clone()], vec![2.0_f64, 3.0]).unwrap();
+
+    let result = contract(&[&a, &b, &c]).unwrap();
+    assert_eq!(result.storage_kind(), StorageKind::Diagonal);
+    assert_eq!(
+        result.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(6.0, 2.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(24.0, -12.0),
+        ]
+    );
+    assert!(result.isapprox(&result, 0.0, 0.0).unwrap());
+}
+
+#[test]
+fn structured_mixed_dtype_ad_contract_preserves_gradient() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let b = TensorDynLen::from_diag(
+        vec![j, Index::new_dyn(2)],
+        vec![Complex64::new(3.0, 0.0), Complex64::new(4.0, 0.0)],
+    )
+    .unwrap();
+
+    let result = a.contract_pair(&b).unwrap();
+    assert!(result.tracks_grad());
+    let loss = result.sum().unwrap();
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+    let gradient = a.grad().unwrap().unwrap();
+    assert_eq!(gradient.to_vec::<f64>().unwrap(), vec![3.0, 0.0, 0.0, 4.0]);
+}
+
+#[test]
+fn dense_mixed_dtype_ad_contract_preserves_gradient() {
+    let i = Index::new_dyn(2);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let b = TensorDynLen::from_dense(
+        vec![i],
+        vec![Complex64::new(3.0, 0.0), Complex64::new(4.0, 0.0)],
+    )
+    .unwrap();
+
+    let loss = a.contract_pair(&b).unwrap().sum().unwrap();
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+    assert_eq!(
+        a.grad().unwrap().unwrap().to_vec::<f64>().unwrap(),
+        vec![3.0, 4.0]
+    );
 }
 
 #[test]
@@ -339,7 +419,7 @@ fn test_contract_pair_with_lhs_conj_matches_materialized_conj() {
     .unwrap();
     let materialized = contract_pair(&lhs.conj(), &rhs).unwrap();
 
-    assert!(flagged.isapprox(&materialized, 1e-12, 0.0));
+    assert!(flagged.isapprox(&materialized, 1e-12, 0.0).unwrap());
     assert_eq!(flagged.indices[0].id, i.id);
     assert_eq!(flagged.indices[1].id, k.id);
 }
@@ -377,7 +457,7 @@ fn test_contract_pair_with_rhs_conj_matches_materialized_conj() {
     .unwrap();
     let materialized = contract_pair(&lhs, &rhs.conj()).unwrap();
 
-    assert!(flagged.isapprox(&materialized, 1e-12, 0.0));
+    assert!(flagged.isapprox(&materialized, 1e-12, 0.0).unwrap());
     assert_eq!(flagged.indices[0].id, i.id);
     assert_eq!(flagged.indices[1].id, k.id);
 }

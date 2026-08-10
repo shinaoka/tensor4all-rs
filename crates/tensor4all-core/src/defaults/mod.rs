@@ -41,7 +41,7 @@ pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len,
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile, unfold_split,
-    TensorDynLen,
+    TensorDynLen, TensorStorageError,
 };
 
 // Re-export linear algebra functions and types

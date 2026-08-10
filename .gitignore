@@ -54,3 +54,6 @@ docs/book/book/
 # Git worktrees
 .worktrees/
 experimental/
+
+# Agent session infrastructure (never commit)
+.pi-subagents/

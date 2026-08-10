@@ -70,16 +70,16 @@ fn main() -> anyhow::Result<()> {
         let identity = create_identity_mpo(&indices)?;
         let pauli_x = create_pauli_x_operator(&indices)?;
 
-        println!("Identity MPO norm: {:.6}", identity.norm());
-        println!("Pauli-X operator norm: {:.6}", pauli_x.norm());
+        println!("Identity MPO norm: {:.6}", identity.norm()?);
+        println!("Pauli-X operator norm: {:.6}", pauli_x.norm()?);
 
         // Apply Pauli-X to identity with zipup
         let result_zipup = apply_with_zipup(&pauli_x, &identity, &indices)?;
-        println!("\n[zipup] Result norm: {:.6}", result_zipup.norm());
+        println!("\n[zipup] Result norm: {:.6}", result_zipup.norm()?);
 
         // Apply Pauli-X to identity with fit
         let result_fit = apply_with_fit(&pauli_x, &identity, &indices)?;
-        println!("[fit]   Result norm: {:.6}", result_fit.norm());
+        println!("[fit]   Result norm: {:.6}", result_fit.norm()?);
 
         // Compare results
         let diff = result_zipup.axpby(
@@ -87,7 +87,7 @@ fn main() -> anyhow::Result<()> {
             &result_fit,
             AnyScalar::new_real(-1.0),
         )?;
-        println!("\n||zipup - fit|| = {:.6e}", diff.norm());
+        println!("\n||zipup - fit|| = {:.6e}", diff.norm()?);
 
         // Apply Pauli-X twice: σ_x² = I
         println!("\n--- Applying Pauli-X twice (should give identity) ---");
@@ -108,11 +108,11 @@ fn main() -> anyhow::Result<()> {
 
         println!(
             "[zipup] ||σ_x²(I) - I|| = {:.6e}",
-            diff_from_identity_zipup.norm()
+            diff_from_identity_zipup.norm()?
         );
         println!(
             "[fit]   ||σ_x²(I) - I|| = {:.6e}",
-            diff_from_identity_fit.norm()
+            diff_from_identity_fit.norm()?
         );
 
         // Inner products with identity
@@ -146,8 +146,8 @@ fn main() -> anyhow::Result<()> {
                 println!(
                     "After {} iters: [zipup] ||result - I|| = {:.6e}, [fit] ||result - I|| = {:.6e}",
                     iter,
-                    diff_zipup.norm(),
-                    diff_fit.norm()
+                    diff_zipup.norm()?,
+                    diff_fit.norm()?
                 );
             }
         }
@@ -155,10 +155,10 @@ fn main() -> anyhow::Result<()> {
         // Final norms
         println!(
             "\nFinal norms after 10 iters: [zipup] {:.6}, [fit] {:.6}",
-            current_zipup.norm(),
-            current_fit.norm()
+            current_zipup.norm()?,
+            current_fit.norm()?
         );
-        println!("Expected norm (σ_x^10 = I): {:.6}", identity.norm());
+        println!("Expected norm (σ_x^10 = I): {:.6}", identity.norm()?);
 
         // GMRES-like operations test
         println!("\n--- GMRES-like operations test ---");
@@ -190,22 +190,22 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     // Initial residual: r0 = b - A(x0) = σ_x - σ_x*(0.5*σ_x) = σ_x - 0.5*I
 
     println!("=== Setup ===");
-    println!("||b|| = {:.6}", b.norm());
-    println!("||x0|| = {:.6}", x0.norm());
-    println!("||x_true|| = {:.6}", x_true.norm());
+    println!("||b|| = {:.6}", b.norm()?);
+    println!("||x0|| = {:.6}", x0.norm()?);
+    println!("||x_true|| = {:.6}", x_true.norm()?);
 
     // Compute A(x0)
     let ax0 = apply_with_zipup(&pauli_x, &x0, &indices)?;
-    println!("||A(x0)|| = {:.6}", ax0.norm());
+    println!("||A(x0)|| = {:.6}", ax0.norm()?);
 
     // r0 = b - A(x0)
     let r0 = b.axpby(AnyScalar::new_real(1.0), &ax0, AnyScalar::new_real(-1.0))?;
-    let beta = r0.norm();
+    let beta = r0.norm()?;
     println!("||r0|| = beta = {:.6}", beta);
 
     // v1 = r0 / ||r0||
     let v1 = r0.scale(AnyScalar::new_real(1.0 / beta))?;
-    println!("||v1|| = {:.6}", v1.norm());
+    println!("||v1|| = {:.6}", v1.norm()?);
 
     // Check: <v1, v1> should be 1
     let v1v1 = v1.inner(&v1)?;
@@ -213,7 +213,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
 
     // w = A(v1)
     let w = apply_with_zipup(&pauli_x, &v1, &indices)?;
-    println!("||w|| = ||A(v1)|| = {:.6}", w.norm());
+    println!("||w|| = ||A(v1)|| = {:.6}", w.norm()?);
 
     // h11 = <w, v1>
     let h11 = w.inner(&v1)?;
@@ -222,12 +222,12 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
 
     // v2_tilde = w - h11 * v1
     let v2_tilde = w.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(-h11_val))?;
-    let h21 = v2_tilde.norm();
+    let h21 = v2_tilde.norm()?;
     println!("h21 = ||w - h11*v1|| = {:.6}", h21);
 
     // v2 = v2_tilde / h21
     let v2 = v2_tilde.scale(AnyScalar::new_real(1.0 / h21))?;
-    println!("||v2|| = {:.6}", v2.norm());
+    println!("||v2|| = {:.6}", v2.norm()?);
 
     // Check orthogonality
     let v1v2 = v1.inner(&v2)?;
@@ -235,7 +235,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
 
     // w2 = A(v2)
     let w2 = apply_with_zipup(&pauli_x, &v2, &indices)?;
-    println!("||w2|| = ||A(v2)|| = {:.6}", w2.norm());
+    println!("||w2|| = ||A(v2)|| = {:.6}", w2.norm()?);
 
     // h12 = <w2, v1>, h22 = <w2, v2>
     let h12 = w2.inner(&v1)?;
@@ -249,7 +249,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     let v3_tilde_temp = w2.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(-h12_val))?;
     let v3_tilde =
         v3_tilde_temp.axpby(AnyScalar::new_real(1.0), &v2, AnyScalar::new_real(-h22_val))?;
-    let h32 = v3_tilde.norm();
+    let h32 = v3_tilde.norm()?;
     println!("h32 = ||w2 - h12*v1 - h22*v2|| = {:.6}", h32);
 
     println!("\n=== Hessenberg Matrix ===");
@@ -297,7 +297,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     println!("After G2: g=[{:.6}, {:.6}, {:.6}]", g1, g2_new, g3);
 
     // GMRES residual estimate = |g3| / ||b||
-    let gmres_residual = g3.abs() / b.norm();
+    let gmres_residual = g3.abs() / b.norm()?;
     println!(
         "GMRES residual estimate = |g3|/||b|| = {:.6e}",
         gmres_residual
@@ -313,19 +313,19 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     // x_sol = x0 + V*y = x0 + y1*v1 + y2*v2
     let temp = x0.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(y1))?;
     let x_sol = temp.axpby(AnyScalar::new_real(1.0), &v2, AnyScalar::new_real(y2))?;
-    println!("||x_sol|| = {:.6}", x_sol.norm());
+    println!("||x_sol|| = {:.6}", x_sol.norm()?);
 
     // Actual residual
     let ax_sol = apply_with_zipup(&pauli_x, &x_sol, &indices)?;
     let actual_r = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let actual_residual = actual_r.norm() / b.norm();
+    let actual_residual = actual_r.norm()? / b.norm()?;
     println!("\n=== Compare Residuals ===");
     println!("GMRES estimated residual: {:.6e}", gmres_residual);
     println!("Actual residual:          {:.6e}", actual_residual);
 
     // Check x_sol vs x_true
     let sol_error = x_sol.axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    println!("||x_sol - x_true|| = {:.6e}", sol_error.norm());
+    println!("||x_sol - x_true|| = {:.6e}", sol_error.norm()?);
 
     // Check inner product with x_true
     let inner_sol_true = x_sol.inner(&x_true)?;
@@ -337,7 +337,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     let a_x_true = apply_with_zipup(&pauli_x, &x_true, &indices)?;
     let check_diff = a_x_true.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
     println!("\n=== Verify A(x_true) = b ===");
-    println!("||A(x_true) - b|| = {:.6e}", check_diff.norm());
+    println!("||A(x_true) - b|| = {:.6e}", check_diff.norm()?);
 
     // Check: does A(V) span the right space?
     // V = [v1, v2] forms the Krylov subspace
@@ -351,7 +351,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
         &av1_computed,
         AnyScalar::new_real(-1.0),
     )?;
-    println!("||A*v1 - (h11*v1 + h21*v2)|| = {:.6e}", av1_diff.norm());
+    println!("||A*v1 - (h11*v1 + h21*v2)|| = {:.6e}", av1_diff.norm()?);
 
     // A*v2 should = h12*v1 + h22*v2 + h32*v3
     let v3 = if h32 > 1e-14 {
@@ -372,7 +372,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     )?;
     println!(
         "||A*v2 - (h12*v1 + h22*v2 + h32*v3)|| = {:.6e}",
-        av2_diff.norm()
+        av2_diff.norm()?
     );
 
     Ok(())
@@ -393,11 +393,11 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     let b = apply_with_zipup(&pauli_x, &x_true, &indices)?;
     let x0 = b.scale(AnyScalar::new_real(0.5))?;
 
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
 
     println!("=== Setup ===");
     println!("||b|| = {:.6}", b_norm);
-    println!("||x0|| = {:.6}", x0.norm());
+    println!("||x0|| = {:.6}", x0.norm()?);
 
     // Manually run GMRES algorithm step by step with detailed debug
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> {
@@ -407,7 +407,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     // r = b - A*x0
     let ax0 = apply_a(&x0)?;
     let r = b.axpby(AnyScalar::new_real(1.0), &ax0, AnyScalar::new_real(-1.0))?;
-    let r_norm = r.norm();
+    let r_norm = r.norm()?;
 
     println!("\n=== Initial residual ===");
     println!("||r0|| = {:.6}", r_norm);
@@ -416,11 +416,11 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     // v0 = r / ||r||
     let v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
     println!("\n=== Arnoldi iteration 1 ===");
-    println!("||v0|| = {:.6}", v0.norm());
+    println!("||v0|| = {:.6}", v0.norm()?);
 
     // w = A*v0
     let w = apply_a(&v0)?;
-    println!("||A*v0|| = {:.6}", w.norm());
+    println!("||A*v0|| = {:.6}", w.norm()?);
 
     // h00 = <v0, w>
     let h00 = v0.inner(&w)?;
@@ -429,18 +429,18 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
 
     // w_orth = w - h00*v0
     let w_orth = w.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h00_val))?;
-    let h10 = w_orth.norm();
+    let h10 = w_orth.norm()?;
     println!("h10 = ||w - h00*v0|| = {:.6}", h10);
 
     // v1 = w_orth / h10
     let v1 = w_orth.scale(AnyScalar::new_real(1.0 / h10))?;
-    println!("||v1|| = {:.6}", v1.norm());
+    println!("||v1|| = {:.6}", v1.norm()?);
     println!("<v0, v1> = {:?}", v0.inner(&v1)?);
 
     // Arnoldi iteration 2
     println!("\n=== Arnoldi iteration 2 ===");
     let w2 = apply_a(&v1)?;
-    println!("||A*v1|| = {:.6}", w2.norm());
+    println!("||A*v1|| = {:.6}", w2.norm()?);
 
     let h01 = v0.inner(&w2)?;
     let h11 = v1.inner(&w2)?;
@@ -452,7 +452,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     // w2_orth = w2 - h01*v0 - h11*v1
     let temp = w2.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h01_val))?;
     let w2_orth = temp.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(-h11_val))?;
-    let h21 = w2_orth.norm();
+    let h21 = w2_orth.norm()?;
     println!("h21 = ||w2 - h01*v0 - h11*v1|| = {:.6}", h21);
 
     // Hessenberg matrix
@@ -516,7 +516,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
         &scaled_v1,
         AnyScalar::new_real(1.0),
     )?;
-    println!("Direct method: ||x_sol|| = {:.6}", x_sol_direct.norm());
+    println!("Direct method: ||x_sol|| = {:.6}", x_sol_direct.norm()?);
 
     // Method 2: Like GMRES code
     let mut x_sol_gmres = x0.clone();
@@ -526,14 +526,14 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
         &scaled_v0_2,
         AnyScalar::new_real(1.0),
     )?;
-    println!("After adding y0*v0: ||x_sol|| = {:.6}", x_sol_gmres.norm());
+    println!("After adding y0*v0: ||x_sol|| = {:.6}", x_sol_gmres.norm()?);
     let scaled_v1_2 = v1.scale(AnyScalar::new_real(y1))?;
     x_sol_gmres = x_sol_gmres.axpby(
         AnyScalar::new_real(1.0),
         &scaled_v1_2,
         AnyScalar::new_real(1.0),
     )?;
-    println!("After adding y1*v1: ||x_sol|| = {:.6}", x_sol_gmres.norm());
+    println!("After adding y1*v1: ||x_sol|| = {:.6}", x_sol_gmres.norm()?);
 
     // Check difference between methods
     let diff = x_sol_direct.axpby(
@@ -541,27 +541,27 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
         &x_sol_gmres,
         AnyScalar::new_real(-1.0),
     )?;
-    println!("||direct - gmres|| = {:.6e}", diff.norm());
+    println!("||direct - gmres|| = {:.6e}", diff.norm()?);
 
     // Check actual residual
     let ax_sol = apply_a(&x_sol_gmres)?;
     let r_sol = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let actual_residual = r_sol.norm() / b_norm;
+    let actual_residual = r_sol.norm()? / b_norm;
     println!("\n=== Verify ===");
-    println!("||x_sol|| = {:.6}", x_sol_gmres.norm());
-    println!("||x_true|| = {:.6}", x_true.norm());
+    println!("||x_sol|| = {:.6}", x_sol_gmres.norm()?);
+    println!("||x_true|| = {:.6}", x_true.norm()?);
     println!("GMRES residual: {:.6e}", gmres_residual);
     println!("Actual residual: {:.6e}", actual_residual);
 
     // Check solution error
     let sol_error =
         x_sol_gmres.axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    println!("||x_sol - x_true|| = {:.6e}", sol_error.norm());
+    println!("||x_sol - x_true|| = {:.6e}", sol_error.norm()?);
 
     // Check intermediate values
     println!("\n=== Debug intermediates ===");
-    println!("y0*v0 norm: {:.6}", scaled_v0.norm());
-    println!("y1*v1 norm: {:.6}", scaled_v1.norm());
+    println!("y0*v0 norm: {:.6}", scaled_v0.norm()?);
+    println!("y1*v1 norm: {:.6}", scaled_v1.norm()?);
     println!("x0 + y0*v0 bond dims: {:?}", temp1.bond_dims());
     println!("x_sol bond dims: {:?}", x_sol_gmres.bond_dims());
 
@@ -585,14 +585,14 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
         "GMRES reported residual: {:.6e}",
         gmres_result.residual_norm
     );
-    println!("||x_sol|| from gmres: {:.6}", gmres_result.solution.norm());
+    println!("||x_sol|| from gmres: {:.6}", gmres_result.solution.norm()?);
 
     // Check actual residual
     let ax_gmres = apply_a(&gmres_result.solution)?;
     let r_gmres = ax_gmres.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
     println!(
         "Actual residual from gmres: {:.6e}",
-        r_gmres.norm() / b_norm
+        r_gmres.norm()? / b_norm
     );
 
     // Test gmres_with_truncation with no-op truncation
@@ -609,7 +609,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     );
     println!(
         "||x_sol|| from gmres_trunc: {:.6}",
-        gmres_trunc_result.solution.norm()
+        gmres_trunc_result.solution.norm()?
     );
 
     // Check actual residual
@@ -618,7 +618,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
         ax_gmres_trunc.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
     println!(
         "Actual residual from gmres_trunc: {:.6e}",
-        r_gmres_trunc.norm() / b_norm
+        r_gmres_trunc.norm()? / b_norm
     );
 
     Ok(())
@@ -640,15 +640,15 @@ fn debug_solution_update() -> anyhow::Result<()> {
     let b_fit = apply_with_fit(&pauli_x, &x_true, &indices)?;
 
     println!("=== Initial setup ===");
-    println!("||b_zipup|| = {:.6}", b_zipup.norm());
-    println!("||b_fit||   = {:.6}", b_fit.norm());
+    println!("||b_zipup|| = {:.6}", b_zipup.norm()?);
+    println!("||b_fit||   = {:.6}", b_fit.norm()?);
 
     // Initial guess: x0 = 0.5 * b
     let x0_zipup = b_zipup.scale(AnyScalar::new_real(0.5))?;
     let x0_fit = b_fit.scale(AnyScalar::new_real(0.5))?;
 
-    println!("||x0_zipup|| = {:.6}", x0_zipup.norm());
-    println!("||x0_fit||   = {:.6}", x0_fit.norm());
+    println!("||x0_zipup|| = {:.6}", x0_zipup.norm()?);
+    println!("||x0_fit||   = {:.6}", x0_fit.norm()?);
 
     // Check index structure of x0
     println!("\n=== Index structure ===");
@@ -683,7 +683,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
         &ax0_zipup,
         AnyScalar::new_real(-1.0),
     )?;
-    let beta_zipup = r0_zipup.norm();
+    let beta_zipup = r0_zipup.norm()?;
     let v0_zipup = r0_zipup.scale(AnyScalar::new_real(1.0 / beta_zipup))?;
 
     println!("r0_zipup bond dims: {:?}", r0_zipup.bond_dims());
@@ -736,7 +736,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
     // Using y1 = something (we'll use 1.0 for testing)
     println!("\n=== Manual solution update ===");
     let scaled_v0 = v0_zipup.scale(AnyScalar::new_real(1.0))?;
-    println!("||scaled_v0|| = {:.6}", scaled_v0.norm());
+    println!("||scaled_v0|| = {:.6}", scaled_v0.norm()?);
 
     // Try axpby: x_new = 1.0 * x0 + 1.0 * scaled_v0
     let x_new_zipup = x0_zipup.axpby(
@@ -744,7 +744,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
         &scaled_v0,
         AnyScalar::new_real(1.0),
     )?;
-    println!("||x_new|| after axpby = {:.6}", x_new_zipup.norm());
+    println!("||x_new|| after axpby = {:.6}", x_new_zipup.norm()?);
 
     // Check if x_new has expected indices
     println!(
@@ -766,7 +766,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
         &ax0_fit,
         AnyScalar::new_real(-1.0),
     )?;
-    let beta_fit = r0_fit.norm();
+    let beta_fit = r0_fit.norm()?;
     let v0_fit = r0_fit.scale(AnyScalar::new_real(1.0 / beta_fit))?;
 
     println!("r0_fit bond dims: {:?}", r0_fit.bond_dims());
@@ -801,7 +801,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
         &scaled_v0_fit,
         AnyScalar::new_real(1.0),
     )?;
-    println!("||x_new_fit|| after axpby = {:.6}", x_new_fit.norm());
+    println!("||x_new_fit|| after axpby = {:.6}", x_new_fit.norm()?);
 
     // Key check: do the resulting MPOs have the same structure?
     println!("\n=== Result comparison ===");
@@ -838,7 +838,7 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     let mut r0 = b.axpby(AnyScalar::new_real(1.0), &ax0, AnyScalar::new_real(-1.0))?;
 
     println!("=== Before truncation ===");
-    println!("r0 norm: {:.6}", r0.norm());
+    println!("r0 norm: {:.6}", r0.norm()?);
     println!("r0 bond dims: {:?}", r0.bond_dims());
 
     // Apply truncation
@@ -848,23 +848,23 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     r0.truncate(&truncate_opts)?;
 
     println!("\n=== After truncation ===");
-    println!("r0 norm: {:.6}", r0.norm());
+    println!("r0 norm: {:.6}", r0.norm()?);
     println!("r0 bond dims: {:?}", r0.bond_dims());
 
-    let r_norm = r0.norm();
+    let r_norm = r0.norm()?;
     let mut v0 = r0.scale(AnyScalar::new_real(1.0 / r_norm))?;
     v0.truncate(&truncate_opts)?;
-    let v0_norm = v0.norm();
+    let v0_norm = v0.norm()?;
     v0 = v0.scale(AnyScalar::new_real(1.0 / v0_norm))?;
 
     println!("\n=== v0 after truncation and renormalization ===");
-    println!("v0 norm: {:.6}", v0.norm());
+    println!("v0 norm: {:.6}", v0.norm()?);
     println!("v0 bond dims: {:?}", v0.bond_dims());
 
     // w = A(v0)
     let w = apply_with_zipup(&pauli_x, &v0, &indices)?;
     println!("\n=== w = A(v0) ===");
-    println!("w norm: {:.6}", w.norm());
+    println!("w norm: {:.6}", w.norm()?);
 
     // h10 = <v0, w>
     let h10 = v0.inner(&w)?;
@@ -874,23 +874,23 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     // w_orth = w - h10 * v0
     let mut w_orth = w.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h10_val))?;
     println!("\n=== w_orth before truncation ===");
-    println!("w_orth norm: {:.6}", w_orth.norm());
+    println!("w_orth norm: {:.6}", w_orth.norm()?);
     println!("<v0, w_orth>: {:?}", v0.inner(&w_orth)?);
 
     // Truncate w_orth
     w_orth.truncate(&truncate_opts)?;
     println!("\n=== w_orth after truncation ===");
-    println!("w_orth norm: {:.6}", w_orth.norm());
+    println!("w_orth norm: {:.6}", w_orth.norm()?);
     println!("<v0, w_orth>: {:?}", v0.inner(&w_orth)?); // Should still be ~0 if truncation preserves orthogonality
 
-    let h20 = w_orth.norm();
+    let h20 = w_orth.norm()?;
     let mut v1 = w_orth.scale(AnyScalar::new_real(1.0 / h20))?;
     v1.truncate(&truncate_opts)?;
-    let v1_norm = v1.norm();
+    let v1_norm = v1.norm()?;
     v1 = v1.scale(AnyScalar::new_real(1.0 / v1_norm))?;
 
     println!("\n=== v1 after truncation and renormalization ===");
-    println!("v1 norm: {:.6}", v1.norm());
+    println!("v1 norm: {:.6}", v1.norm()?);
     println!("<v0, v1>: {:?}", v0.inner(&v1)?); // This should be ~0, but may not be!
 
     // Now check if Arnoldi relation holds
@@ -904,7 +904,7 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     )?;
 
     println!("\n=== Arnoldi relation check ===");
-    println!("||A*v0 - (h10*v0 + h20*v1)||: {:.6e}", av0_diff.norm());
+    println!("||A*v0 - (h10*v0 + h20*v1)||: {:.6e}", av0_diff.norm()?);
 
     // Second iteration
     let w2 = apply_with_zipup(&pauli_x, &v1, &indices)?;
@@ -920,9 +920,9 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     let temp = w2.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h11_val))?;
     let mut w2_orth = temp.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(-h21_val))?;
 
-    println!("w2_orth norm before trunc: {:.6}", w2_orth.norm());
+    println!("w2_orth norm before trunc: {:.6}", w2_orth.norm()?);
     w2_orth.truncate(&truncate_opts)?;
-    println!("w2_orth norm after trunc:  {:.6}", w2_orth.norm());
+    println!("w2_orth norm after trunc:  {:.6}", w2_orth.norm()?);
 
     // Check orthogonality after truncation
     println!("<v0, w2_orth>: {:?}", v0.inner(&w2_orth)?);
@@ -1027,14 +1027,14 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
 
     // x0 = 0.5 * b
     let x0 = b.scale(AnyScalar::new_real(0.5))?;
-    println!("x0 norm: {:.6}", x0.norm());
+    println!("x0 norm: {:.6}", x0.norm()?);
 
     // r0 = b - A(x0) for both methods
     let ax0_zipup = apply_with_zipup(&pauli_x, &x0, &indices)?;
     let ax0_fit = apply_with_fit(&pauli_x, &x0, &indices)?;
 
-    println!("\nA(x0) with zipup norm: {:.6}", ax0_zipup.norm());
-    println!("A(x0) with fit norm:   {:.6}", ax0_fit.norm());
+    println!("\nA(x0) with zipup norm: {:.6}", ax0_zipup.norm()?);
+    println!("A(x0) with fit norm:   {:.6}", ax0_fit.norm()?);
 
     // Check if A(x0) results are the same
     let ax0_diff = ax0_zipup.axpby(
@@ -1042,7 +1042,7 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
         &ax0_fit,
         AnyScalar::new_real(-1.0),
     )?;
-    println!("||A(x0)_zipup - A(x0)_fit||: {:.6e}", ax0_diff.norm());
+    println!("||A(x0)_zipup - A(x0)_fit||: {:.6e}", ax0_diff.norm()?);
 
     // r0 = b - A(x0)
     let r0_zipup = b.axpby(
@@ -1056,27 +1056,27 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
         AnyScalar::new_real(-1.0),
     )?;
 
-    println!("\nr0_zipup norm: {:.6}", r0_zipup.norm());
-    println!("r0_fit norm:   {:.6}", r0_fit.norm());
+    println!("\nr0_zipup norm: {:.6}", r0_zipup.norm()?);
+    println!("r0_fit norm:   {:.6}", r0_fit.norm()?);
 
     // Check inner products - this is crucial for GMRES
     println!("\n=== Step 4: Check Arnoldi process inner products ===");
 
     // v1 = r0 / ||r0|| (normalized)
-    let beta_zipup = r0_zipup.norm();
-    let beta_fit = r0_fit.norm();
+    let beta_zipup = r0_zipup.norm()?;
+    let beta_fit = r0_fit.norm()?;
     let v1_zipup = r0_zipup.scale(AnyScalar::new_real(1.0 / beta_zipup))?;
     let v1_fit = r0_fit.scale(AnyScalar::new_real(1.0 / beta_fit))?;
 
-    println!("v1_zipup norm: {:.6}", v1_zipup.norm());
-    println!("v1_fit norm:   {:.6}", v1_fit.norm());
+    println!("v1_zipup norm: {:.6}", v1_zipup.norm()?);
+    println!("v1_fit norm:   {:.6}", v1_fit.norm()?);
 
     // w = A(v1)
     let w_zipup = apply_with_zipup(&pauli_x, &v1_zipup, &indices)?;
     let w_fit = apply_with_fit(&pauli_x, &v1_fit, &indices)?;
 
-    println!("\nw_zipup = A(v1_zipup) norm: {:.6}", w_zipup.norm());
-    println!("w_fit = A(v1_fit) norm:     {:.6}", w_fit.norm());
+    println!("\nw_zipup = A(v1_zipup) norm: {:.6}", w_zipup.norm()?);
+    println!("w_fit = A(v1_fit) norm:     {:.6}", w_fit.norm()?);
 
     // h11 = <w, v1> - this is where the issue might be
     let h11_zipup = w_zipup.inner(&v1_zipup)?;
@@ -1106,8 +1106,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
         AnyScalar::new_real(-h11_val_fit),
     )?;
 
-    let h21_zipup = v2_tilde_zipup.norm();
-    let h21_fit = v2_tilde_fit.norm();
+    let h21_zipup = v2_tilde_zipup.norm()?;
+    let h21_fit = v2_tilde_fit.norm()?;
 
     println!("\nh21_zipup = ||v2_tilde||: {:.6}", h21_zipup);
     println!("h21_fit = ||v2_tilde||:   {:.6}", h21_fit);
@@ -1116,8 +1116,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     let v2_zipup = v2_tilde_zipup.scale(AnyScalar::new_real(1.0 / h21_zipup))?;
     let v2_fit = v2_tilde_fit.scale(AnyScalar::new_real(1.0 / h21_fit))?;
 
-    println!("\nv2_zipup norm: {:.6}", v2_zipup.norm());
-    println!("v2_fit norm:   {:.6}", v2_fit.norm());
+    println!("\nv2_zipup norm: {:.6}", v2_zipup.norm()?);
+    println!("v2_fit norm:   {:.6}", v2_fit.norm()?);
 
     // Check orthogonality <v1, v2>
     let v1v2_zipup = v1_zipup.inner(&v2_zipup)?;
@@ -1131,8 +1131,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     let w2_zipup = apply_with_zipup(&pauli_x, &v2_zipup, &indices)?;
     let w2_fit = apply_with_fit(&pauli_x, &v2_fit, &indices)?;
 
-    println!("w2_zipup = A(v2) norm: {:.6}", w2_zipup.norm());
-    println!("w2_fit = A(v2) norm:   {:.6}", w2_fit.norm());
+    println!("w2_zipup = A(v2) norm: {:.6}", w2_zipup.norm()?);
+    println!("w2_fit = A(v2) norm:   {:.6}", w2_fit.norm()?);
 
     // h12 = <w2, v1>, h22 = <w2, v2>
     let h12_zipup = w2_zipup.inner(&v1_zipup)?;
@@ -1176,8 +1176,8 @@ fn test_gmres_with_both(
 ) -> anyhow::Result<()> {
     // b = A(x_true) = σ_x * I (using zipup for reference)
     let b = apply_with_zipup(op, x_true, indices)?;
-    println!("b norm: {:.6}", b.norm());
-    println!("x_true norm: {:.6}", x_true.norm());
+    println!("b norm: {:.6}", b.norm()?);
+    println!("x_true norm: {:.6}", x_true.norm()?);
 
     // Initial guess: 0.5 * b
     let x0 = b.scale(AnyScalar::new_real(0.5))?;
@@ -1214,17 +1214,17 @@ fn test_gmres_with_both(
         ax_zipup_notrunc.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
     let r_fit_notrunc =
         ax_fit_notrunc.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
 
     println!(
         "[zipup no-trunc] Actual residual: {:.6e}, ||x_sol||: {:.6}",
-        r_zipup_notrunc.norm() / b_norm,
-        result_zipup_notrunc.solution.norm()
+        r_zipup_notrunc.norm()? / b_norm,
+        result_zipup_notrunc.solution.norm()?
     );
     println!(
         "[fit no-trunc]   Actual residual: {:.6e}, ||x_sol||: {:.6}",
-        r_fit_notrunc.norm() / b_norm,
-        result_fit_notrunc.solution.norm()
+        r_fit_notrunc.norm()? / b_norm,
+        result_fit_notrunc.solution.norm()?
     );
 
     println!("\n--- GMRES WITH truncation ---");
@@ -1260,14 +1260,14 @@ fn test_gmres_with_both(
     let r_zipup = ax_zipup.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
     let r_fit = ax_fit.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
 
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!(
         "[zipup] Actual residual |Ax-b|/|b|: {:.6e}",
-        r_zipup.norm() / b_norm
+        r_zipup.norm()? / b_norm
     );
     println!(
         "[fit]   Actual residual |Ax-b|/|b|: {:.6e}",
-        r_fit.norm() / b_norm
+        r_fit.norm()? / b_norm
     );
 
     // Check inner products with x_true
@@ -1284,9 +1284,9 @@ fn test_gmres_with_both(
     );
 
     // Check solution norms
-    println!("[zipup] ||x_sol||: {:.6}", result_zipup.solution.norm());
-    println!("[fit]   ||x_sol||: {:.6}", result_fit.solution.norm());
-    println!("Expected ||x_true||: {:.6}", x_true.norm());
+    println!("[zipup] ||x_sol||: {:.6}", result_zipup.solution.norm()?);
+    println!("[fit]   ||x_sol||: {:.6}", result_fit.solution.norm()?);
+    println!("Expected ||x_true||: {:.6}", x_true.norm()?);
 
     Ok(())
 }
@@ -1309,8 +1309,8 @@ fn test_gmres_like_operations(
     let b_zipup = apply_with_zipup(op, &x_true, indices)?;
     let b_fit = apply_with_fit(op, &x_true, indices)?;
 
-    println!("b_zipup norm: {:.6}", b_zipup.norm());
-    println!("b_fit norm: {:.6}", b_fit.norm());
+    println!("b_zipup norm: {:.6}", b_zipup.norm()?);
+    println!("b_fit norm: {:.6}", b_fit.norm()?);
 
     // Initial guess: x0 = 0.5 * b
     let x0_zipup = b_zipup.scale(AnyScalar::new_real(0.5))?;
@@ -1320,8 +1320,8 @@ fn test_gmres_like_operations(
     let ax0_zipup = apply_with_zipup(op, &x0_zipup, indices)?;
     let ax0_fit = apply_with_fit(op, &x0_fit, indices)?;
 
-    println!("A(x0) zipup norm: {:.6}", ax0_zipup.norm());
-    println!("A(x0) fit norm: {:.6}", ax0_fit.norm());
+    println!("A(x0) zipup norm: {:.6}", ax0_zipup.norm()?);
+    println!("A(x0) fit norm: {:.6}", ax0_fit.norm()?);
 
     // Compute residual r0 = A(x0) - b
     let r0_zipup = ax0_zipup.axpby(
@@ -1331,8 +1331,8 @@ fn test_gmres_like_operations(
     )?;
     let r0_fit = ax0_fit.axpby(AnyScalar::new_real(1.0), &b_fit, AnyScalar::new_real(-1.0))?;
 
-    println!("||r0|| zipup: {:.6e}", r0_zipup.norm());
-    println!("||r0|| fit: {:.6e}", r0_fit.norm());
+    println!("||r0|| zipup: {:.6e}", r0_zipup.norm()?);
+    println!("||r0|| fit: {:.6e}", r0_fit.norm()?);
 
     // Compute inner products
     let inner_r0_r0_zipup = r0_zipup.inner(&r0_zipup)?;
@@ -1344,8 +1344,8 @@ fn test_gmres_like_operations(
     let ar0_zipup = apply_with_zipup(op, &r0_zipup, indices)?;
     let ar0_fit = apply_with_fit(op, &r0_fit, indices)?;
 
-    println!("||A(r0)|| zipup: {:.6e}", ar0_zipup.norm());
-    println!("||A(r0)|| fit: {:.6e}", ar0_fit.norm());
+    println!("||A(r0)|| zipup: {:.6e}", ar0_zipup.norm()?);
+    println!("||A(r0)|| fit: {:.6e}", ar0_fit.norm()?);
 
     // Check <A(r0), r0>
     let inner_ar0_r0_zipup = ar0_zipup.inner(&r0_zipup)?;
@@ -1682,13 +1682,13 @@ fn debug_contract_result(
     println!("\nNorms:");
     println!(
         "  zipup before: {:.6}, after: {:.6}",
-        result_zipup.norm(),
-        result_zipup_trunc.norm()
+        result_zipup.norm()?,
+        result_zipup_trunc.norm()?
     );
     println!(
         "  fit before:   {:.6}, after: {:.6}",
-        result_fit.norm(),
-        result_fit_trunc.norm()
+        result_fit.norm()?,
+        result_fit_trunc.norm()?
     );
 
     Ok(())

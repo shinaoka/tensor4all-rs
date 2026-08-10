@@ -6,7 +6,8 @@ Core tensor library: Index system, dynamic-rank Tensor, contraction, SVD/QR/LU f
 
 - `Index` — flexible index with tags and prime levels
 - `TensorDynLen` — dynamic-rank tensor with flexible index types
-- `Storage` — dense or diagonal storage for `f64` and `Complex64`
+- `Storage` — compact dense/diagonal/structured snapshots for `f64` and
+  `Complex64`; `f32` and `Complex32` tensors retain eager authoritative payloads
 - `contract()` / `contract_with_options()` — connected tensor-network contraction
 - `svd()` / `qr()` — factorizations with truncation support
 

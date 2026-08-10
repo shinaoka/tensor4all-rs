@@ -112,7 +112,7 @@ fn test_restart_gmres_mpo(n: usize, operator: &str) -> anyhow::Result<(bool, usi
 
     // Create x_true: all-ones MPO
     let x_true = create_ones_mpo(&indices)?;
-    println!("x_true (all-ones MPO) norm: {:.6}", x_true.norm());
+    println!("x_true (all-ones MPO) norm: {:.6}", x_true.norm()?);
 
     // Define the superoperator and compute b = A(x_true)
     let (apply_a, b): (
@@ -138,7 +138,7 @@ fn test_restart_gmres_mpo(n: usize, operator: &str) -> anyhow::Result<(bool, usi
         _ => anyhow::bail!("Unknown operator: {}", operator),
     };
 
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A(x_true), norm: {:.6}", b_norm);
 
     // Truncation options
@@ -166,7 +166,7 @@ fn test_restart_gmres_mpo(n: usize, operator: &str) -> anyhow::Result<(bool, usi
     // Compute true residual
     let ax = apply_a(&result.solution)?;
     let r = ax.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let true_residual = r.norm() / b_norm;
+    let true_residual = r.norm()? / b_norm;
 
     println!("Converged: {}", result.converged);
     println!("Outer iterations: {}", result.outer_iterations);
@@ -179,7 +179,7 @@ fn test_restart_gmres_mpo(n: usize, operator: &str) -> anyhow::Result<(bool, usi
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    println!("Error ||x - x_true||: {:.6e}", diff.norm());
+    println!("Error ||x - x_true||: {:.6e}", diff.norm()?);
 
     Ok((result.converged, result.outer_iterations, true_residual))
 }
@@ -204,11 +204,11 @@ fn test_restart_gmres_mpo_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
 
     // Create x_true: all-ones MPO
     let x_true = create_ones_mpo(&indices)?;
-    println!("x_true (all-ones MPO) norm: {:.6}", x_true.norm());
+    println!("x_true (all-ones MPO) norm: {:.6}", x_true.norm()?);
 
     // Compute b = A(x_true)
     let b = apply_operator_to_mpo(&diag_op, &x_true, &indices)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A(x_true), norm: {:.6}", b_norm);
 
     // AGGRESSIVE truncation to make the problem harder
@@ -250,7 +250,7 @@ fn test_restart_gmres_mpo_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     // Compute true residual
     let ax = apply_a(&result.solution)?;
     let r = ax.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let true_residual = r.norm() / b_norm;
+    let true_residual = r.norm()? / b_norm;
 
     println!("Converged: {}", result.converged);
     println!("Outer iterations: {}", result.outer_iterations);
@@ -263,7 +263,7 @@ fn test_restart_gmres_mpo_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
         result
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
-    println!("Error ||x - x_true||: {:.6e}", diff.norm());
+    println!("Error ||x - x_true||: {:.6e}", diff.norm()?);
 
     Ok((result.converged, result.outer_iterations, true_residual))
 }
@@ -289,11 +289,11 @@ fn test_restart_gmres_mpo_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, 
     // Create x_true = i * all-ones MPO
     let ones_real = create_ones_mpo(&indices)?;
     let x_true = ones_real.scale(AnyScalar::new_complex(0.0, 1.0))?;
-    println!("x_true (i * all-ones MPO) norm: {:.6}", x_true.norm());
+    println!("x_true (i * all-ones MPO) norm: {:.6}", x_true.norm()?);
 
     // Compute b = A(x_true)
     let b = apply_operator_to_mpo(&diag_op, &x_true, &indices)?;
-    let b_norm = b.norm();
+    let b_norm = b.norm()?;
     println!("b = A(x_true), norm: {:.6}", b_norm);
 
     // Aggressive truncation
@@ -335,7 +335,7 @@ fn test_restart_gmres_mpo_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, 
     // Compute true residual
     let ax = apply_a(&result.solution)?;
     let r = ax.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
-    let true_residual = r.norm() / b_norm;
+    let true_residual = r.norm()? / b_norm;
 
     println!("Converged: {}", result.converged);
     println!("Outer iterations: {}", result.outer_iterations);
@@ -349,11 +349,11 @@ fn test_restart_gmres_mpo_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, 
         .solution
         .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))
     {
-        Ok(diff) => println!("Error ||x - x_true||: {:.6e}", diff.norm()),
+        Ok(diff) => println!("Error ||x - x_true||: {:.6e}", diff.norm()?),
         Err(_) => {
             // F64/C64 storage mismatch: compute via norms
-            let sol_norm = result.solution.norm();
-            let xt_norm = x_true.norm();
+            let sol_norm = result.solution.norm()?;
+            let xt_norm = x_true.norm()?;
             println!(
                 "Error (norm comparison): ||x||={:.6e}, ||x_true||={:.6e}",
                 sol_norm, xt_norm

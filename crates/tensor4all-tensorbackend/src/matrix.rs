@@ -51,6 +51,10 @@ pub struct Matrix<T> {
     ncols: usize,
 }
 
+fn checked_matrix_len(nrows: usize, ncols: usize) -> Option<usize> {
+    nrows.checked_mul(ncols)
+}
+
 /// Error returned when converting a [`TypedTensor`] into a [`Matrix`].
 ///
 /// Use this when accepting dynamic tensor-shaped values at a dense-matrix
@@ -120,12 +124,11 @@ pub enum MatrixShapeError {
 
 /// Error returned by [`lowest_hermitian_eigenpair`].
 ///
-/// The eigensolver is intended for small Rayleigh-Ritz projected matrices. It
-/// validates shape and Hermitian structure before calling the backend Hermitian
+/// The eigensolver is intended for small Rayleigh-Ritz projected matrices; it validates shape and Hermitian structure before calling the backend Hermitian
 /// eigendecomposition, symmetrizing only roundoff that is within the requested
 /// tolerance. Non-Hermitian effective operators are rejected explicitly instead
 /// of silently taking a real part.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum HermitianEigenError {
     /// The matrix has zero rows and columns, so it has no eigenpair.
     #[error("Hermitian eigenpair requires a non-empty matrix")]
@@ -191,10 +194,11 @@ pub enum HermitianEigenError {
         tolerance: f64,
     },
     /// The tenferro backend rejected or failed the eigendecomposition.
-    #[error("Hermitian eigendecomposition failed: {message}")]
+    #[error("Hermitian eigendecomposition failed: {source}")]
     Backend {
-        /// Backend error message.
-        message: String,
+        /// Original backend diagnostic.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
 
@@ -332,7 +336,7 @@ impl<T> Matrix<T> {
     ///
     /// # Panics
     ///
-    /// Panics if `data.len() != nrows * ncols`.
+    /// Panics if `nrows * ncols` overflows or if `data.len() != nrows * ncols`.
     ///
     /// # Examples
     ///
@@ -346,7 +350,13 @@ impl<T> Matrix<T> {
     /// assert_eq!(m[[1, 1]], 4.0);
     /// ```
     pub fn from_col_major_vec(nrows: usize, ncols: usize, data: Vec<T>) -> Self {
-        assert_eq!(data.len(), nrows * ncols);
+        let expected = checked_matrix_len(nrows, ncols);
+        assert!(
+            expected.is_some(),
+            "matrix shape product overflow: {nrows} rows * {ncols} columns"
+        );
+        let expected = expected.map_or(0, |expected| expected);
+        assert_eq!(data.len(), expected);
         Self { data, nrows, ncols }
     }
 
@@ -488,6 +498,16 @@ impl<T> Matrix<T> {
     }
 
     fn offset(&self, row: usize, col: usize) -> usize {
+        assert!(
+            row < self.nrows,
+            "matrix row index {row} out of bounds (bound: {})",
+            self.nrows
+        );
+        assert!(
+            col < self.ncols,
+            "matrix column index {col} out of bounds (bound: {})",
+            self.ncols
+        );
         row + self.nrows * col
     }
 
@@ -607,10 +627,13 @@ where
 
     let n = matrix.nrows();
     let input_tensor = T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec());
-    let input = EagerTensor::from_tensor_in(input_tensor, crate::default_eager_ctx());
+    let eager_ctx = crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
+        source: Box::new(source),
+    })?;
+    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx);
     let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&input).map_err(|source| {
         HermitianEigenError::Backend {
-            message: source.to_string(),
+            source: Box::new(source),
         }
     })?;
 
@@ -768,6 +791,10 @@ fn ensure_eigh_shape(
 impl<T: Clone> Matrix<T> {
     /// Create a new matrix filled with a constant value.
     ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows.
+    ///
     /// # Examples
     ///
     /// ```
@@ -778,8 +805,14 @@ impl<T: Clone> Matrix<T> {
     /// assert_eq!(m[[1, 2]], 7.0);
     /// ```
     pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
+        let len = checked_matrix_len(nrows, ncols);
+        assert!(
+            len.is_some(),
+            "matrix shape product overflow: {nrows} rows * {ncols} columns"
+        );
+        let len = len.map_or(0, |len| len);
         Self {
-            data: vec![elem; nrows * ncols],
+            data: vec![elem; len],
             nrows,
             ncols,
         }
@@ -788,6 +821,10 @@ impl<T: Clone> Matrix<T> {
 
 impl<T: Clone + Zero> Matrix<T> {
     /// Create a zeros matrix
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nrows * ncols` overflows.
     ///
     /// # Examples
     ///
@@ -801,8 +838,14 @@ impl<T: Clone + Zero> Matrix<T> {
     /// assert_eq!(m[[1, 2]], 0.0);
     /// ```
     pub fn zeros(nrows: usize, ncols: usize) -> Self {
+        let len = checked_matrix_len(nrows, ncols);
+        assert!(
+            len.is_some(),
+            "matrix shape product overflow: {nrows} rows * {ncols} columns"
+        );
+        let len = len.map_or(0, |len| len);
         Self {
-            data: vec![T::zero(); nrows * ncols],
+            data: vec![T::zero(); len],
             nrows,
             ncols,
         }
@@ -880,8 +923,10 @@ pub fn try_from_vec2d<T: Clone + Zero>(
 ///
 /// # Panics
 ///
-/// Panics if the row lengths are not all equal. Use [`try_from_vec2d`] when
-/// row-shaped input comes from users, files, or other fallible boundaries.
+/// Panics if the row lengths are not all equal or if the rectangular shape's
+/// element count overflows `usize`. Use [`try_from_vec2d`] when row-shaped
+/// input comes from users, files, or other fallible boundaries to receive a
+/// typed error for ragged rows.
 ///
 /// # Examples
 ///
@@ -898,10 +943,28 @@ pub fn try_from_vec2d<T: Clone + Zero>(
 /// assert_eq!(m[[1, 0]], 3.0);
 /// ```
 pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
-    try_from_vec2d(data).unwrap_or_else(|err| panic!("{err}"))
+    let result = try_from_vec2d(data);
+    let error_message = match &result {
+        Ok(_) => String::new(),
+        Err(error) => error.to_string(),
+    };
+    assert!(result.is_ok(), "{error_message}");
+    match result {
+        Ok(matrix) => matrix,
+        Err(_) => Matrix {
+            data: Vec::new(),
+            nrows: 0,
+            ncols: 0,
+        },
+    }
 }
 
 /// Get a submatrix by selecting specific rows and columns.
+///
+/// # Panics
+///
+/// Panics if any row is not less than `m.nrows()` or any column is not less
+/// than `m.ncols()`.
 ///
 /// # Examples
 ///
@@ -947,6 +1010,10 @@ pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize])
 ///
 /// No-op if `a == b`.
 ///
+/// # Panics
+///
+/// Panics if `a` or `b` is not less than `m.nrows()` when they differ.
+///
 /// # Examples
 ///
 /// ```
@@ -974,6 +1041,10 @@ pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
 /// Swap two columns in a matrix in-place.
 ///
 /// No-op if `a == b`.
+///
+/// # Panics
+///
+/// Panics if `a` or `b` is not less than `m.ncols()` when they differ.
 ///
 /// # Examples
 ///
@@ -1035,7 +1106,7 @@ pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
 ///
 /// # Panics
 ///
-/// Panics if either range is empty.
+/// Panics if either range is empty or either end is out of bounds (`rows.end > a.nrows()` or `cols.end > a.ncols()`).
 ///
 /// # Examples
 ///
@@ -1111,6 +1182,7 @@ fn dot_general_matrices<T>(
     b_tensor: Tensor,
     m: usize,
     n: usize,
+    expected_len: usize,
 ) -> Result<Matrix<T>>
 where
     T: TensorScalar,
@@ -1140,7 +1212,7 @@ where
         n
     );
     ensure!(
-        result.as_col_major_slice().len() == m * n,
+        result.as_col_major_slice().len() == expected_len,
         "matrix multiplication returned {} values for expected shape {}x{}",
         result.as_col_major_slice().len(),
         m,
@@ -1165,10 +1237,17 @@ macro_rules! impl_blas_mul {
                     b.nrows(),
                     n
                 );
+                // Reject an overflowing output element count before any tensor
+                // conversion or backend call, matching the constructor contract.
+                let expected_len = m.checked_mul(n).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "matrix multiplication output shape {m}x{n} overflows usize"
+                    )
+                })?;
 
                 let a_tensor: Tensor = a.to_typed_tensor().into();
                 let b_tensor: Tensor = b.to_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n)
+                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
             }
 
             fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
@@ -1183,10 +1262,15 @@ macro_rules! impl_blas_mul {
                     b.nrows(),
                     n
                 );
+                let expected_len = m.checked_mul(n).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "matrix multiplication output shape {m}x{n} overflows usize"
+                    )
+                })?;
 
                 let a_tensor: Tensor = a.into_typed_tensor().into();
                 let b_tensor: Tensor = b.into_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n)
+                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
             }
         }
         )*

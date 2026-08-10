@@ -8,14 +8,55 @@ use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
 use std::f64::consts::PI;
+use tensor4all_simplett::mpo::{tensor4_from_data, Tensor4};
 use tensor4all_simplett::{
     compression::{CompressionMethod, CompressionOptions},
-    types::tensor3_zeros,
-    Tensor3Ops, TensorTrain,
+    tensor3_from_data, Tensor3Ops, TensorTrain,
 };
 
-use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
-use tensor4all_simplett::tensor::Tensor4;
+use crate::common::{
+    checked_allocation_len, tensortrain_to_linear_operator, try_vec_with_capacity, QuanticsOperator,
+};
+
+fn checked_fourier_order(k: usize) -> Result<usize> {
+    if k == 0 {
+        anyhow::bail!("Fourier Chebyshev order k must be positive");
+    }
+    k.checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("Fourier Chebyshev grid size overflows usize for k={k}"))
+}
+
+fn checked_tensor4_size(dims: [usize; 4], name: &str) -> Result<usize> {
+    checked_allocation_len::<Complex64>(&dims, name)
+}
+
+fn checked_fourier_core_size(k: usize) -> Result<(usize, usize)> {
+    let count = checked_fourier_order(k)?;
+    let total = checked_tensor4_size([count, 2, 2, count], "Fourier core tensor")?;
+    Ok((count, total))
+}
+
+fn checked_tensor3_size(
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+    name: &str,
+) -> Result<usize> {
+    checked_allocation_len::<Complex64>(&[left_dim, site_dim, right_dim], name)
+}
+
+fn zero_tensor3(
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+    name: &str,
+) -> Result<tensor4all_simplett::Tensor3<Complex64>> {
+    let total_size = checked_tensor3_size(left_dim, site_dim, right_dim, name)?;
+    let mut data = try_vec_with_capacity::<Complex64>(name, total_size)?;
+    data.resize(total_size, Complex64::zero());
+    tensor3_from_data(data, left_dim, site_dim, right_dim)
+        .map_err(|err| anyhow::anyhow!("Failed to allocate {name}: {err}"))
+}
 
 /// Options for Fourier transform construction.
 ///
@@ -52,7 +93,7 @@ pub struct FourierOptions {
     pub maxbonddim: usize,
     /// Tolerance for compression
     pub tolerance: f64,
-    /// Number of Chebyshev basis functions (K+1 points)
+    /// Number of Chebyshev basis functions (K+1 points); must be positive.
     pub k: usize,
     /// Whether to normalize as an isometry
     pub normalize: bool,
@@ -115,7 +156,9 @@ impl FTCore {
     /// Create a new FTCore for r bits.
     ///
     /// # Errors
-    /// Returns an error when `r < 2` or when Fourier MPO construction fails.
+    /// Returns an error when `r < 2`, `options.k == 0`, a Fourier tensor
+    /// dimension/product or backing allocation exceeds checked bounds, or
+    /// Fourier MPO construction fails.
     pub fn new(r: usize, options: FourierOptions) -> Result<Self> {
         if r < 2 {
             anyhow::bail!("Number of sites must be at least 2, got {r}");
@@ -136,17 +179,19 @@ impl FTCore {
     ///
     /// # Errors
     /// Returns an error when converting the cached Fourier MPO to a linear
-    /// operator fails.
+    /// operator fails or a required site-dimension allocation fails.
     pub fn forward(&self) -> Result<QuanticsOperator> {
-        let site_dims = vec![2; self.r];
+        let mut site_dims =
+            try_vec_with_capacity::<usize>("Fourier forward site dimensions", self.r)?;
+        site_dims.resize(self.r, 2);
         tensortrain_to_linear_operator(&self.forward_mpo, &site_dims)
     }
 
     /// Get the backward (inverse) Fourier transform operator.
     ///
     /// # Errors
-    /// Returns an error when inverse Fourier MPO construction or conversion to
-    /// a linear operator fails.
+    /// Returns an error when inverse Fourier MPO construction, site-dimension
+    /// allocation, or conversion to a linear operator fails.
     pub fn backward(&self) -> Result<QuanticsOperator> {
         let inverse_options = FourierOptions {
             sign: 1.0,
@@ -154,7 +199,9 @@ impl FTCore {
             ..self.options.clone()
         };
         let inverse_mpo = quantics_fourier_mpo(self.r, &inverse_options)?;
-        let site_dims = vec![2; self.r];
+        let mut site_dims =
+            try_vec_with_capacity::<usize>("Fourier inverse site dimensions", self.r)?;
+        site_dims.resize(self.r, 2);
         tensortrain_to_linear_operator(&inverse_mpo, &site_dims)
     }
 
@@ -185,8 +232,9 @@ impl FTCore {
 /// LinearOperator representing the QFT
 ///
 /// # Errors
-/// Returns an error when `r < 2` or when Fourier MPO/operator construction
-/// fails.
+/// Returns an error when `r < 2`, `options.k == 0`, a Fourier tensor
+/// dimension/product or backing allocation exceeds checked bounds, or when
+/// Fourier MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -205,7 +253,8 @@ pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<Qu
     }
 
     let mpo = quantics_fourier_mpo(r, &options)?;
-    let site_dims = vec![2; r];
+    let mut site_dims = try_vec_with_capacity::<usize>("Fourier operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -217,27 +266,31 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
 
     let k = options.k;
     let sign = options.sign;
+    let (count, _) = checked_fourier_core_size(k)?;
 
     // Get Chebyshev grid and barycentric weights
-    let (grid, bary_weights) = chebyshev_grid(k);
+    let (grid, bary_weights) = chebyshev_grid(k)?;
 
     // Build core tensor A[alpha, tau, sigma, beta]
     // alpha, beta in 0..=K (K+1 values each)
     // tau, sigma in 0..1 (2 values each)
-    let core_tensor = build_dft_core_tensor(&grid, &bary_weights, sign);
+    let core_tensor = build_dft_core_tensor(&grid, &bary_weights, sign)?;
 
     // Construct tensor train
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "Fourier MPO site list",
+        r,
+    )?;
 
     // First tensor: sum over alpha (contract with ones vector)
     // Shape: (1, 4, K+1) where 4 = 2*2 for (tau, sigma)
     {
-        let mut t = tensor3_zeros(1, 4, k + 1);
+        let mut t = zero_tensor3(1, 4, count, "Fourier first tensor")?;
         for tau in 0..2 {
             for sigma in 0..2 {
-                for beta in 0..=k {
+                for beta in 0..count {
                     let mut sum = Complex64::zero();
-                    for alpha in 0..=k {
+                    for alpha in 0..count {
                         sum += core_tensor[[alpha, tau, sigma, beta]];
                     }
                     let s = tau * 2 + sigma;
@@ -251,11 +304,11 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
     // Middle tensors: full core tensor
     // Shape: (K+1, 4, K+1)
     for _ in 1..r - 1 {
-        let mut t = tensor3_zeros(k + 1, 4, k + 1);
-        for alpha in 0..=k {
+        let mut t = zero_tensor3(count, 4, count, "Fourier middle tensor")?;
+        for alpha in 0..count {
             for tau in 0..2 {
                 for sigma in 0..2 {
-                    for beta in 0..=k {
+                    for beta in 0..count {
                         let s = tau * 2 + sigma;
                         t.set3(alpha, s, beta, core_tensor[[alpha, tau, sigma, beta]]);
                     }
@@ -268,8 +321,8 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
     // Last tensor: select beta = 0
     // Shape: (K+1, 4, 1)
     if r > 1 {
-        let mut t = tensor3_zeros(k + 1, 4, 1);
-        for alpha in 0..=k {
+        let mut t = zero_tensor3(count, 4, 1, "Fourier last tensor")?;
+        for alpha in 0..count {
             for tau in 0..2 {
                 for sigma in 0..2 {
                     let s = tau * 2 + sigma;
@@ -290,7 +343,8 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         max_bond_dim: options.maxbonddim,
         normalize_error: true,
     };
-    let _ = tt.compress(&compress_options);
+    tt.compress(&compress_options)
+        .map_err(|err| anyhow::anyhow!("Fourier MPO compression failed: {err}"))?;
 
     // Normalize if requested
     if options.normalize {
@@ -317,20 +371,21 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
 /// Returns (grid, bary_weights) where:
 /// - grid[j] = 0.5 * (1 - cos(π*j/K)) for j = 0, ..., K
 /// - bary_weights are the barycentric interpolation weights
-fn chebyshev_grid(k: usize) -> (Vec<f64>, Vec<f64>) {
-    let mut grid = Vec::with_capacity(k + 1);
-    let mut bary_weights = Vec::with_capacity(k + 1);
+fn chebyshev_grid(k: usize) -> Result<(Vec<f64>, Vec<f64>)> {
+    let count = checked_fourier_order(k)?;
+    let mut grid = try_vec_with_capacity::<f64>("Fourier Chebyshev grid", count)?;
+    let mut bary_weights = try_vec_with_capacity::<f64>("Fourier barycentric weights", count)?;
 
     // Compute Chebyshev grid points
-    for j in 0..=k {
+    for j in 0..count {
         let x = 0.5 * (1.0 - (PI * j as f64 / k as f64).cos());
         grid.push(x);
     }
 
     // Compute barycentric weights
-    for j in 0..=k {
+    for j in 0..count {
         let mut weight = 1.0;
-        for m in 0..=k {
+        for m in 0..count {
             if j != m {
                 weight /= grid[j] - grid[m];
             }
@@ -338,7 +393,7 @@ fn chebyshev_grid(k: usize) -> (Vec<f64>, Vec<f64>) {
         bary_weights.push(weight);
     }
 
-    (grid, bary_weights)
+    Ok((grid, bary_weights))
 }
 
 /// Evaluate Lagrange polynomial P_alpha(x).
@@ -363,11 +418,21 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 /// where x = (sigma + grid[beta]) / 2
 ///
 /// Returns tensor of shape (k+1, 2, 2, k+1)
-fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> Tensor4<Complex64> {
-    let k = grid.len() - 1;
-
-    // tensor[alpha, tau, sigma, beta] - shape: (k+1, 2, 2, k+1)
-    let mut tensor = Tensor4::from_elem([k + 1, 2, 2, k + 1], Complex64::zero());
+fn build_dft_core_tensor(
+    grid: &[f64],
+    bary_weights: &[f64],
+    sign: f64,
+) -> Result<Tensor4<Complex64>> {
+    if grid.is_empty() || grid.len() != bary_weights.len() {
+        anyhow::bail!("Fourier grid and barycentric weights have incompatible lengths");
+    }
+    let count = grid.len();
+    let k = count - 1;
+    let total_size = checked_tensor4_size([count, 2, 2, count], "Fourier core tensor")?;
+    let mut data = try_vec_with_capacity::<Complex64>("Fourier core tensor", total_size)?;
+    data.resize(total_size, Complex64::zero());
+    let mut tensor = tensor4_from_data(data, count, 2, 2, count)
+        .map_err(|err| anyhow::anyhow!("Failed to allocate Fourier core tensor: {err}"))?;
 
     for alpha in 0..=k {
         for tau in 0..2 {
@@ -383,7 +448,7 @@ fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> Tenso
         }
     }
 
-    tensor
+    Ok(tensor)
 }
 
 #[cfg(test)]

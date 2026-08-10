@@ -8,8 +8,9 @@ use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    embed_single_var_mpo, tensortrain_to_linear_operator,
-    tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
+    tensortrain_to_linear_operator_asymmetric, try_vec_with_capacity, BoundaryCondition,
+    QuanticsOperator,
 };
 
 /// Create a flip operator: f(x) = g(2^R - x)
@@ -25,7 +26,8 @@ use crate::common::{
 ///
 /// # Errors
 /// Returns an error when `r` is zero, when one-site flip construction is
-/// requested, or when internal MPO/operator construction fails.
+/// requested, when the MPO site-list allocation exceeds checked bounds, or
+/// when internal MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -49,7 +51,8 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
     }
 
     let mpo = flip_mpo(r, bc)?;
-    let site_dims = vec![2; r];
+    let mut site_dims = try_vec_with_capacity::<usize>("flip operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -93,10 +96,11 @@ pub fn flip_operator_multivar(
         ));
     }
 
+    let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = flip_mpo(r, bc)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
-    let dim_multi = 1 << nvariables;
-    let dims = vec![dim_multi; r];
+    let mut dims = try_vec_with_capacity::<usize>("flip multivariable site dimensions", r)?;
+    dims.resize(r, dim_multi);
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
@@ -119,8 +123,8 @@ pub fn flip_operator_multivar(
 #[allow(clippy::needless_range_loop)]
 fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
     let single_tensor = single_tensor_flip();
-
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors =
+        try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>("flip MPO site list", r)?;
 
     // Create link indices with dimension 2 (for carry states)
     // Carry states: index 0 = carry -1, index 1 = carry 0

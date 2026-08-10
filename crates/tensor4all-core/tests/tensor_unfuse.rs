@@ -19,7 +19,7 @@ fn unfuse_index_column_major_preserves_column_major_layout() {
         .unwrap();
 
     let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    assert!(unfused.isapprox(&expected, 1e-12, 0.0));
+    assert!(unfused.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn unfuse_index_row_major_reorders_fused_axis_meaning() {
         .unwrap();
 
     let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 3.0, 2.0, 4.0]).unwrap();
-    assert!(unfused.isapprox(&expected, 1e-12, 0.0));
+    assert!(unfused.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn fuse_indices_column_major_roundtrips_unfuse_index() {
     let roundtrip = fused_tensor
         .unfuse_index(&fused, &[i, j], LinearizationOrder::ColumnMajor)
         .unwrap();
-    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn fuse_indices_backward_preserves_source_gradient() {
     let grad = tensor.grad().unwrap().unwrap();
     let expected =
         TensorDynLen::from_dense(vec![i, j, k], (1..=12).map(|x| x as f64).collect()).unwrap();
-    assert!(grad.isapprox(&expected, 1e-12, 0.0));
+    assert!(grad.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn fuse_indices_trait_dispatch_on_tensordynlen_uses_old_index_order() {
         .unwrap()
         .permuteinds(tensor.indices())
         .unwrap();
-    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn unfuse_index_backward_preserves_source_gradient() {
     let grad = tensor.grad().unwrap().unwrap();
     let expected =
         TensorDynLen::from_dense(vec![fused, k], (1..=12).map(|x| x as f64).collect()).unwrap();
-    assert!(grad.isapprox(&expected, 1e-12, 0.0));
+    assert!(grad.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn fuse_indices_row_major_roundtrips_unfuse_index() {
     let roundtrip = fused_tensor
         .unfuse_index(&fused, &[i, j], LinearizationOrder::RowMajor)
         .unwrap();
-    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0).unwrap());
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn fuse_indices_supports_non_adjacent_axes() {
         .unwrap()
         .permuteinds(tensor.indices())
         .unwrap();
-    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0).unwrap());
 }
 
 #[test]

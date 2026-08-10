@@ -397,7 +397,7 @@ fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
 
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
-    assert!(fitted_dense.sub(&expected_dense).unwrap().maxabs() < 1e-10);
+    assert!(fitted_dense.sub(&expected_dense).unwrap().maxabs().unwrap() < 1e-10);
 }
 
 #[test]

@@ -11,7 +11,7 @@
 //!
 //! - `backend-tenferro` (default): Use tenferro backend for linalg/einsum
 
-/// Dynamic scalar types supporting f64 and Complex64.
+/// Dynamic scalar types supporting f32, f64, Complex32, and Complex64.
 mod any_scalar;
 /// Backend dispatch for dense linear algebra operations.
 mod backend;
@@ -34,7 +34,7 @@ pub use backend::{
     triangular_solve_matrix_owned, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
     MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
 };
-pub use context::{default_eager_ctx, with_default_backend};
+pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 pub use matrix::{
     batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d,
     hermitian_eigendecomposition, hermitian_exponential_first_column, lowest_hermitian_eigenpair,

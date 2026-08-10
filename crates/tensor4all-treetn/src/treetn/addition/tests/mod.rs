@@ -190,7 +190,7 @@ fn test_add_verifies_with_contraction() {
         )
         .unwrap();
     assert!(
-        tensor_sum.isapprox(&expected, 1e-10, 0.0),
+        tensor_sum.isapprox(&expected, 1e-10, 0.0).unwrap(),
         "contract(result) != contract(tn_a) + contract(tn_b): maxabs diff = {}",
         tensor_sum.distance(&expected).unwrap()
     );
@@ -238,7 +238,7 @@ fn test_add_single_site() {
     let dense = result.contract_to_tensor().unwrap();
     let expected = TensorDynLen::from_dense(vec![s.clone()], vec![11.0, 22.0, 33.0]).unwrap();
     assert!(
-        dense.isapprox(&expected, 1e-10, 0.0),
+        dense.isapprox(&expected, 1e-10, 0.0).unwrap(),
         "single-site add failed: maxabs diff = {}",
         dense.distance(&expected).unwrap()
     );
@@ -350,7 +350,7 @@ fn test_add_reindexed_like_self_accepts_equivalent_site_space_with_different_ids
         )
         .unwrap();
     assert!(
-        dense_sum.isapprox(&dense_expected, 1e-10, 0.0),
+        dense_sum.isapprox(&dense_expected, 1e-10, 0.0).unwrap(),
         "add_reindexed_like_self failed: maxabs diff = {}",
         dense_sum.distance(&dense_expected).unwrap()
     );
@@ -407,7 +407,7 @@ fn test_add_preserves_same_id_prime_pair_site_indices() {
         )
         .unwrap();
     assert!(
-        dense_result.isapprox(&dense_expected, 1e-10, 0.0),
+        dense_result.isapprox(&dense_expected, 1e-10, 0.0).unwrap(),
         "same-id prime-pair MPO-like add failed: maxabs diff = {}",
         dense_result.distance(&dense_expected).unwrap()
     );

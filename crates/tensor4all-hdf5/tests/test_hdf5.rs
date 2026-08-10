@@ -1,6 +1,8 @@
 use approx::assert_abs_diff_eq;
+use hdf5_metno::types::VarLenUnicode;
 use hdf5_metno::File;
 use num_complex::Complex64;
+use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 use tensor4all_hdf5::{append_itensor, append_mps, load_itensor, load_mps, save_itensor, save_mps};
@@ -11,6 +13,50 @@ fn temp_path(name: &str) -> String {
     dir.join(format!("tensor4all_hdf5_test_{}.h5", name))
         .to_string_lossy()
         .to_string()
+}
+
+struct TempHdf5Path(String);
+
+impl TempHdf5Path {
+    fn new(name: &str) -> Self {
+        let path = temp_path(name);
+        std::fs::remove_file(&path).ok();
+        Self(path)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for TempHdf5Path {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.0).ok();
+    }
+}
+
+fn itensor_error(name: &str, mutate: impl FnOnce(&hdf5_metno::Group)) -> String {
+    let path = temp_path(name);
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    mutate(&file.group("tensor").unwrap());
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    std::fs::remove_file(path).ok();
+    error
+}
+
+fn mps_error(name: &str, mutate: impl FnOnce(&hdf5_metno::Group)) -> String {
+    let path = temp_path(name);
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    mutate(&file.group("mps").unwrap());
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    std::fs::remove_file(path).ok();
+    error
 }
 
 /// Create a simple 2x3 f64 tensor with known data.
@@ -184,6 +230,184 @@ fn test_itensor_3d_roundtrip() {
     std::fs::remove_file(&path).ok();
 }
 
+#[test]
+fn negative_index_dimension_is_rejected() {
+    let path = temp_path("negative_index_dim");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("tensor/inds/index_1")
+        .unwrap()
+        .dataset("dim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&-1_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("dim"));
+    assert!(error.contains("-1"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn negative_index_set_length_is_rejected() {
+    let path = temp_path("negative_index_set_length");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("tensor/inds")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&-1_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("-1"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn index_set_length_exceeding_child_groups_is_rejected() {
+    let path = temp_path("index_set_length_exceeds_groups");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("tensor/inds")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&3_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("3"));
+    assert!(error.contains("child groups"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn index_set_excess_child_group_is_rejected() {
+    let error = itensor_error("index_set_excess_child_group", |tensor| {
+        tensor
+            .group("inds")
+            .unwrap()
+            .create_group("index_3")
+            .unwrap();
+    });
+    assert!(error.contains("index_3"));
+    assert!(error.contains("declared range"), "{error}");
+}
+
+#[test]
+fn index_set_misleading_prefix_child_is_rejected() {
+    let error = itensor_error("index_set_misleading_prefix", |tensor| {
+        tensor
+            .group("inds")
+            .unwrap()
+            .create_group("index_stale")
+            .unwrap();
+    });
+    assert!(error.contains("index_stale"));
+}
+
+#[test]
+fn index_set_expected_dataset_is_rejected() {
+    let error = itensor_error("index_set_expected_dataset", |tensor| {
+        let inds = tensor.group("inds").unwrap();
+        inds.unlink("index_1").unwrap();
+        inds.new_dataset::<i64>()
+            .shape(())
+            .create("index_1")
+            .unwrap();
+    });
+    assert!(error.contains("index_1"));
+}
+
+#[test]
+fn index_set_noncanonical_child_names_are_rejected() {
+    for (case, replacement) in [("leading_zero", "index_01"), ("ordinal_zero", "index_0")] {
+        let name = format!("index_set_noncanonical_{case}");
+        let error = itensor_error(&name, |tensor| {
+            tensor
+                .group("inds")
+                .unwrap()
+                .relink("index_1", replacement)
+                .unwrap();
+        });
+        assert!(error.contains(replacement), "{case}: {error}");
+    }
+}
+
+#[test]
+fn index_set_expected_soft_link_is_rejected() {
+    let path = temp_path("index_set_expected_soft_link");
+    save_itensor(&path, "tensor", &make_test_tensor_f64()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let tensor = file.group("tensor").unwrap();
+    let inds = tensor.group("inds").unwrap();
+    tensor.link_hard("inds/index_1", "target_index").unwrap();
+    inds.unlink("index_1").unwrap();
+    inds.link_soft("/tensor/target_index", "index_1").unwrap();
+    drop(file);
+
+    let error = load_itensor(&path, "tensor").unwrap_err().to_string();
+    assert!(error.contains("index_1"), "{error}");
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn index_set_zero_length_with_children_is_rejected() {
+    let error = itensor_error("index_set_zero_length_with_children", |tensor| {
+        tensor
+            .group("inds")
+            .unwrap()
+            .dataset("length")
+            .unwrap()
+            .as_writer()
+            .write_scalar(&0_i64)
+            .unwrap();
+    });
+    assert!(error.contains("index_1") || error.contains("length"));
+}
+
+#[test]
+fn index_set_zero_length_with_many_unrelated_members_is_rejected_without_panic() {
+    let path = TempHdf5Path::new("index_set_zero_length_many_unrelated");
+    save_itensor(path.as_str(), "tensor", &make_test_tensor_f64()).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let inds = file.group("tensor/inds").unwrap();
+        inds.dataset("length")
+            .unwrap()
+            .as_writer()
+            .write_scalar(&0_i64)
+            .unwrap();
+        for n in 0..64 {
+            let name = format!("unrelated_{n}");
+            inds.new_dataset::<u8>()
+                .shape(())
+                .create(name.as_str())
+                .unwrap()
+                .as_writer()
+                .write_scalar(&0_u8)
+                .unwrap();
+        }
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_itensor(path.as_str(), "tensor")
+    }));
+    assert!(result.is_ok(), "reader panicked: {:?}", result.err());
+    let error = result.unwrap().unwrap_err().to_string();
+    assert!(error.contains("length"), "{error}");
+}
+
 /// Create a simple 3-site MPS for testing.
 fn make_test_mps() -> TensorTrain {
     // Site 0: (1, d0=2, chi01=3) → indices: [link_left_dummy, site0, link01]
@@ -229,6 +453,251 @@ fn make_test_mps() -> TensorTrain {
     let t2 = TensorDynLen::from_dense(vec![link12_right, site2, right_dummy], data2).unwrap();
 
     TensorTrain::new(vec![t0, t1, t2]).unwrap()
+}
+
+#[test]
+fn negative_mps_length_is_rejected() {
+    let path = temp_path("negative_mps_length");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    file.group("mps")
+        .unwrap()
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&-1_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("-1"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn oversized_mps_limits_are_rejected() {
+    let path = temp_path("oversized_mps_limits");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    group
+        .dataset("llim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&i64::MAX)
+        .unwrap();
+    group
+        .dataset("rlim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&i64::MIN)
+        .unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("llim") || error.contains("rlim"));
+    assert!(error.contains("9223372036854775807") || error.contains("-9223372036854775808"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_length_exceeding_child_groups_is_rejected() {
+    let path = temp_path("mps_length_exceeds_groups");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    group
+        .dataset("length")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&4_i64)
+        .unwrap();
+    group
+        .dataset("rlim")
+        .unwrap()
+        .as_writer()
+        .write_scalar(&5_i64)
+        .unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("length"));
+    assert!(error.contains("4"));
+    assert!(
+        error.contains("MPS[4]") || error.contains("expected child groups"),
+        "{error}"
+    );
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_i32_max_limits_are_rejected() {
+    for field in ["llim", "rlim"] {
+        let name = format!("mps_i32_max_{field}");
+        let error = mps_error(&name, |group| {
+            group
+                .dataset(field)
+                .unwrap()
+                .as_writer()
+                .write_scalar(&(i32::MAX as i64))
+                .unwrap();
+        });
+        assert!(error.contains(field), "{field}: {error}");
+        assert!(error.contains("2147483647"), "{field}: {error}");
+        assert!(error.contains("length"), "{field}: {error}");
+    }
+}
+
+#[test]
+fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
+    for (name, llim, rlim) in [
+        ("below_left_boundary", -2_i64, 4_i64),
+        ("past_right_boundary", -1, 5),
+        ("wrong_gap", 0, 3),
+        ("center_past_end", 2, 4),
+    ] {
+        let name = format!("mps_invalid_ortho_{name}");
+        let error = mps_error(&name, |group| {
+            group
+                .dataset("llim")
+                .unwrap()
+                .as_writer()
+                .write_scalar(&llim)
+                .unwrap();
+            group
+                .dataset("rlim")
+                .unwrap()
+                .as_writer()
+                .write_scalar(&rlim)
+                .unwrap();
+        });
+        assert!(error.contains("llim"), "{llim}, {rlim}: {error}");
+        assert!(error.contains("rlim"), "{llim}, {rlim}: {error}");
+        assert!(error.contains(&llim.to_string()), "{llim}, {rlim}: {error}");
+        assert!(error.contains(&rlim.to_string()), "{llim}, {rlim}: {error}");
+        assert!(error.contains("length"), "{llim}, {rlim}: {error}");
+    }
+}
+
+#[test]
+fn valid_mps_orthogonality_boundaries_roundtrip() {
+    for (name, llim, rlim) in [("first", -1, 1), ("last", 1, 3)] {
+        let path = temp_path(&format!("mps_valid_ortho_{name}"));
+        let source = make_test_mps();
+        let tensors = source.tensors().into_iter().cloned().collect();
+        let mps =
+            TensorTrain::with_ortho(tensors, llim, rlim, Some(CanonicalForm::Unitary)).unwrap();
+
+        save_mps(&path, "mps", &mps).unwrap();
+        let loaded = load_mps(&path, "mps").unwrap();
+        assert_eq!(loaded.llim(), llim);
+        assert_eq!(loaded.rlim(), rlim);
+        std::fs::remove_file(path).ok();
+    }
+}
+
+#[test]
+fn mps_excess_child_group_is_rejected() {
+    let error = mps_error("mps_excess_child_group", |group| {
+        group.create_group("MPS[4]").unwrap();
+    });
+    assert!(error.contains("MPS[4]"));
+    assert!(error.contains("declared range"), "{error}");
+}
+
+#[test]
+fn mps_misleading_prefix_child_is_rejected() {
+    let error = mps_error("mps_misleading_prefix", |group| {
+        group.create_group("MPS[stale]").unwrap();
+    });
+    assert!(error.contains("MPS[stale]"));
+}
+
+#[test]
+fn mps_expected_dataset_is_rejected() {
+    let error = mps_error("mps_expected_dataset", |group| {
+        group.unlink("MPS[1]").unwrap();
+        group
+            .new_dataset::<i64>()
+            .shape(())
+            .create("MPS[1]")
+            .unwrap();
+    });
+    assert!(error.contains("MPS[1]"));
+}
+
+#[test]
+fn mps_noncanonical_child_names_are_rejected() {
+    for (case, replacement) in [
+        ("missing_closing_bracket", "MPS[1"),
+        ("leading_zero", "MPS[01]"),
+        ("ordinal_zero", "MPS[0]"),
+    ] {
+        let name = format!("mps_noncanonical_{case}");
+        let error = mps_error(&name, |group| {
+            group.relink("MPS[1]", replacement).unwrap();
+        });
+        assert!(error.contains(replacement), "{case}: {error}");
+    }
+}
+
+#[test]
+fn mps_expected_soft_link_is_rejected() {
+    let path = temp_path("mps_expected_soft_link");
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    file.link_hard("mps/MPS[1]", "mps_target").unwrap();
+    group.unlink("MPS[1]").unwrap();
+    group.link_soft("/mps_target", "MPS[1]").unwrap();
+    drop(file);
+
+    let error = load_mps(&path, "mps").unwrap_err().to_string();
+    assert!(error.contains("MPS[1]"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn mps_zero_length_with_children_is_rejected() {
+    let path = TempHdf5Path::new("mps_zero_length_with_children");
+    let mps = TensorTrain::new(Vec::new()).unwrap();
+    save_mps(path.as_str(), "mps", &mps).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        file.group("mps").unwrap().create_group("MPS[1]").unwrap();
+    }
+
+    let error = load_mps(path.as_str(), "mps").unwrap_err().to_string();
+    assert!(error.contains("MPS[1]"));
+}
+
+#[test]
+fn mps_zero_length_with_many_unrelated_members_is_rejected_without_panic() {
+    let path = TempHdf5Path::new("mps_zero_length_many_unrelated");
+    save_mps(path.as_str(), "mps", &TensorTrain::new(Vec::new()).unwrap()).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("mps").unwrap();
+        for n in 0..64 {
+            let name = format!("unrelated_{n}");
+            group
+                .new_dataset::<u8>()
+                .shape(())
+                .create(name.as_str())
+                .unwrap()
+                .as_writer()
+                .write_scalar(&0_u8)
+                .unwrap();
+        }
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_mps(path.as_str(), "mps")
+    }));
+    assert!(result.is_ok(), "reader panicked: {:?}", result.err());
+    let error = result.unwrap().unwrap_err().to_string();
+    assert!(error.contains("length"), "{error}");
 }
 
 #[test]
@@ -359,6 +828,73 @@ fn test_mps_canonical_form_roundtrip() {
     assert_eq!(loaded.rlim(), mps.rlim());
 
     std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn mps_missing_canonical_form_ignores_many_unrelated_attributes() {
+    let path = TempHdf5Path::new("mps_missing_canonical_form_many_attributes");
+    save_mps(path.as_str(), "mps", &make_test_mps()).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("mps").unwrap();
+        for n in 0..64 {
+            let name = format!("unrelated_{n}");
+            group
+                .new_attr::<i32>()
+                .shape(())
+                .create(name.as_str())
+                .unwrap()
+                .as_writer()
+                .write_scalar(&n)
+                .unwrap();
+        }
+    }
+
+    let loaded = load_mps(path.as_str(), "mps").unwrap();
+    assert_eq!(loaded.canonical_form(), None);
+}
+
+#[test]
+fn mps_invalid_canonical_form_value_is_rejected_with_context() {
+    let error = mps_error("mps_invalid_canonical_form_value", |group| {
+        let attr = group
+            .new_attr::<i32>()
+            .shape(())
+            .create("canonical_form")
+            .unwrap();
+        attr.as_writer().write_scalar(&999_i32).unwrap();
+    });
+    assert!(error.contains("canonical_form"), "{error}");
+    assert!(error.contains("999"), "{error}");
+}
+
+#[test]
+fn mps_invalid_canonical_form_type_is_rejected_with_context() {
+    let error = mps_error("mps_invalid_canonical_form_type", |group| {
+        let attr = group
+            .new_attr::<VarLenUnicode>()
+            .shape(())
+            .create("canonical_form")
+            .unwrap();
+        attr.as_writer()
+            .write_scalar(&VarLenUnicode::from_str("LU").unwrap())
+            .unwrap();
+    });
+    assert!(error.contains("canonical_form"), "{error}");
+    assert!(error.contains("read"), "{error}");
+}
+
+#[test]
+fn mps_attribute_lookup_does_not_enumerate_attribute_names() {
+    for (path, source) in [
+        ("src/mps.rs", include_str!("../src/mps.rs")),
+        ("src/backend.rs", include_str!("../src/backend.rs")),
+    ] {
+        assert!(
+            !source.contains("attr_names("),
+            "{path} must use constant-space attribute lookup"
+        );
+    }
 }
 
 #[test]

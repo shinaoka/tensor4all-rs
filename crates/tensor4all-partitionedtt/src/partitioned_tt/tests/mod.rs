@@ -1,6 +1,7 @@
 use super::*;
 use tensor4all_core::index::Index;
 use tensor4all_core::{TensorContractionLike, TensorDynLen};
+use tensor4all_itensorlike::TensorTrainError;
 
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
@@ -80,7 +81,7 @@ fn test_partitioned_tt_norm() {
     let subdomain = SubDomainTT::from_tt(tt);
     let partitioned = PartitionedTT::from_subdomain(subdomain);
 
-    let norm = partitioned.norm();
+    let norm = partitioned.norm().unwrap();
     assert!(norm > 0.0);
 }
 
@@ -282,8 +283,8 @@ fn test_subdomain_tt_norm_with_projector() {
 
     // Current norm() returns the norm of the underlying TT data without projection
     // This test documents current behavior
-    let norm_raw = subdomain.norm();
-    let tt_norm = tt.norm();
+    let norm_raw = subdomain.norm().unwrap();
+    let tt_norm = tt.norm().unwrap();
     assert!((norm_raw - tt_norm).abs() < 1e-10);
 
     // Compute expected norm if projection were applied:
@@ -297,6 +298,27 @@ fn test_subdomain_tt_norm_with_projector() {
     // Note: Current implementation returns raw TT norm, not projected norm
     // If we want projected norm, we'd need to modify the implementation
     // For now, this test just verifies current behavior is consistent
+}
+
+#[test]
+fn test_partitioned_tt_add_preserves_tensor_train_error_variant() {
+    let left_index = make_index(2);
+    let right_index = make_index(3);
+    let left = SubDomainTT::from_tt(TensorTrain::new(vec![make_tensor(vec![left_index])]).unwrap());
+    let right =
+        SubDomainTT::from_tt(TensorTrain::new(vec![make_tensor(vec![right_index])]).unwrap());
+    let left_partitioned = PartitionedTT::from_subdomain(left);
+    let right_partitioned = PartitionedTT::from_subdomain(right);
+
+    let error = left_partitioned
+        .add(&right_partitioned, &TruncateOptions::svd())
+        .unwrap_err();
+    match error {
+        PartitionedTTError::TensorTrain { source } => {
+            assert!(matches!(source, TensorTrainError::InvalidStructure { .. }));
+        }
+        other => panic!("expected preserved tensor-train error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -367,14 +389,14 @@ fn test_partitioned_tt_add_missing_patch() {
     let proj0 = Projector::from_pairs([(site_inds[0].clone(), 0)]);
     let summed0 = result.get(&proj0).unwrap();
     let original = make_tt_with_indices(&site_inds, &link_ind);
-    let original_norm = original.norm();
+    let original_norm = original.norm().unwrap();
     // Norm of 2*TT is 2*norm(TT)
-    assert!((summed0.norm() - 2.0 * original_norm).abs() < 1e-10);
+    assert!((summed0.norm().unwrap() - 2.0 * original_norm).abs() < 1e-10);
 
     // s0=1 patch should be unchanged (only in partitioned1)
     let proj1 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
     let unchanged = result.get(&proj1).unwrap();
-    assert!((unchanged.norm() - original_norm).abs() < 1e-10);
+    assert!((unchanged.norm().unwrap() - original_norm).abs() < 1e-10);
 }
 
 #[test]
@@ -395,7 +417,7 @@ fn test_partitioned_tt_values() {
 
     // Check that each value has non-zero norm
     for subdomain in partitioned.values() {
-        assert!(subdomain.norm() > 0.0);
+        assert!(subdomain.norm().unwrap() > 0.0);
     }
 }
 
@@ -414,7 +436,7 @@ fn test_partitioned_tt_values_mut() {
     }
 
     assert_eq!(partitioned.len(), 1);
-    assert!(partitioned.norm() > 0.0);
+    assert!(partitioned.norm().unwrap() > 0.0);
 }
 
 #[test]
@@ -556,7 +578,7 @@ fn test_partitioned_tt_contract_with_duplicate_projectors() {
     assert!(!result.is_empty());
 
     // Verify the result is non-zero
-    assert!(result.norm() > 0.0);
+    assert!(result.norm().unwrap() > 0.0);
 }
 
 #[test]
@@ -587,7 +609,7 @@ fn test_partitioned_tt_contract_with_rtol_and_max_rank() {
     let result = partitioned1.contract(&partitioned2, &options).unwrap();
 
     assert!(!result.is_empty());
-    assert!(result.norm() > 0.0);
+    assert!(result.norm().unwrap() > 0.0);
 }
 
 #[test]
@@ -619,8 +641,8 @@ fn test_partitioned_tt_add_disjoint_patches() {
     // Each should have the same norm as the original
     let proj0 = Projector::from_pairs([(site_inds[0].clone(), 0)]);
     let proj1 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    assert!((result.get(&proj0).unwrap().norm() - tt1.norm()).abs() < 1e-10);
-    assert!((result.get(&proj1).unwrap().norm() - tt2.norm()).abs() < 1e-10);
+    assert!((result.get(&proj0).unwrap().norm().unwrap() - tt1.norm().unwrap()).abs() < 1e-10);
+    assert!((result.get(&proj1).unwrap().norm().unwrap() - tt2.norm().unwrap()).abs() < 1e-10);
 }
 
 #[test]

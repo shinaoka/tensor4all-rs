@@ -63,7 +63,7 @@ fn test_svd_identity() {
     // For identity matrix, singular values should be [1, 1].
     // We avoid direct storage slice inspection and verify through tensor invariants.
     assert!((s.sum().unwrap().real() - 2.0).abs() < 1e-10);
-    assert!((s.norm_squared() - 2.0).abs() < 1e-10);
+    assert!((s.norm_squared().unwrap() - 2.0).abs() < 1e-10);
 }
 
 #[test]
@@ -119,9 +119,9 @@ fn test_svd_reconstruction() {
 
     // Check reconstruction accuracy
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "SVD reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -222,9 +222,9 @@ fn test_svd_nontrivial_split_reconstruction() {
     let reconstructed = reconstruct_from_svd(&u, &s, &v);
 
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "SVD nontrivial split reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -248,9 +248,9 @@ fn test_svd_complex_reconstruction() {
 
     let reconstructed = reconstruct_from_svd(&u, &s, &v);
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "Complex SVD reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -274,9 +274,9 @@ fn test_svd_complex_rectangular_reconstruction() {
     let reconstructed = reconstruct_from_svd(&u, &s, &v);
 
     assert!(
-        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        tensor.isapprox(&reconstructed, 1e-8, 0.0).unwrap(),
         "Complex rectangular SVD reconstruction failed: maxabs diff = {}",
-        tensor.sub(&reconstructed).unwrap().maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs().unwrap()
     );
 }
 
@@ -317,7 +317,7 @@ fn test_svd_truncation() {
 
     // Retained singular value should be approximately 1.0
     assert!((s.sum().unwrap().real() - 1.0).abs() < 1e-10);
-    assert!((s.norm_squared() - 1.0).abs() < 1e-10);
+    assert!((s.norm_squared().unwrap() - 1.0).abs() < 1e-10);
 }
 
 #[test]
@@ -433,7 +433,7 @@ fn svd_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
     let diff = t.add(&neg).unwrap();
-    diff.norm()
+    diff.norm().unwrap()
 }
 
 /// Regression: SVD roundtrip with dim-1 axes.
@@ -481,9 +481,9 @@ fn test_svd_tall_matrix_preserves_left_axis_order() {
     );
 
     assert!(
-        u.isapprox(&expected, 1e-10, 0.0),
+        u.isapprox(&expected, 1e-10, 0.0).unwrap(),
         "left-axis order changed in tall-matrix SVD: maxabs diff = {}",
-        u.sub(&expected).unwrap().maxabs()
+        u.sub(&expected).unwrap().maxabs().unwrap()
     );
 }
 

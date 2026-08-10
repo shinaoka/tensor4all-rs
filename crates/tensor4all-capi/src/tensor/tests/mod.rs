@@ -5,7 +5,8 @@ use crate::types::{
 };
 use num_complex::Complex64;
 use std::ffi::CStr;
-use tensor4all_core::{AnyScalar, TensorContractionLike};
+use std::sync::Arc;
+use tensor4all_core::{AnyScalar, TensorContractionLike, TensorStorageError};
 
 fn last_error() -> String {
     let mut len = 0usize;
@@ -178,7 +179,7 @@ fn read_payload_c64(tensor: *const t4a_tensor) -> Vec<f64> {
 fn assert_tensors_close(actual: &InternalTensor, expected: &InternalTensor, tol: f64) {
     let neg_expected = expected.scale(AnyScalar::new_real(-1.0)).unwrap();
     let diff = actual.add(&neg_expected).unwrap();
-    let maxabs = diff.maxabs();
+    let maxabs = diff.maxabs().unwrap();
     assert!(
         maxabs < tol,
         "tensor maxabs diff {maxabs} exceeded tolerance {tol}"
@@ -314,6 +315,300 @@ fn test_tensor_dense_c64_roundtrip() {
     t4a_tensor_release(tensor);
     t4a_index_release(i);
     t4a_index_release(j);
+}
+
+#[test]
+fn dense_constructor_rejects_dimension_product_overflow() {
+    let huge = new_index(usize::MAX);
+    let two = new_index(2);
+    let indices = [huge as *const t4a_index, two as *const t4a_index];
+
+    let mut real = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_f64(
+            indices.len(),
+            indices.as_ptr(),
+            std::ptr::null(),
+            0,
+            &mut real,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(real.is_null());
+    assert!(last_error().contains("dimension product"));
+
+    let mut complex = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_c64(
+            indices.len(),
+            indices.as_ptr(),
+            std::ptr::null(),
+            0,
+            &mut complex,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(complex.is_null());
+    assert!(last_error().contains("dimension product"));
+
+    t4a_index_release(two);
+    t4a_index_release(huge);
+}
+
+#[test]
+fn c64_reader_rejects_interleaved_length_overflow_before_dereference() {
+    let error = read_c64_slice(
+        "data_interleaved",
+        std::ptr::NonNull::<f64>::dangling().as_ptr(),
+        usize::MAX,
+    )
+    .unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("overflows"));
+}
+
+#[test]
+fn raw_slice_rejects_byte_length_overflow() {
+    let len = isize::MAX as usize / std::mem::size_of::<f64>() + 1;
+    let error =
+        read_plain_slice("data", std::ptr::NonNull::<f64>::dangling().as_ptr(), len).unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("byte length"));
+}
+
+#[test]
+fn c64_reader_rejects_interleaved_byte_length_overflow() {
+    let n_complex = isize::MAX as usize / (2 * std::mem::size_of::<f64>()) + 1;
+    let error = read_c64_slice(
+        "data_interleaved",
+        std::ptr::NonNull::<f64>::dangling().as_ptr(),
+        n_complex,
+    )
+    .unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("byte length"));
+}
+
+#[test]
+fn tensor_storage_materialization_failure_maps_to_internal_error_with_diagnostic() {
+    let error = TensorStorageError::Materialization {
+        source: Arc::new(std::io::Error::other(
+            "forced backend materialization failure",
+        )),
+    };
+    let (status, message) = tensor_storage_error(error);
+
+    assert_eq!(status, T4A_INTERNAL_ERROR);
+    assert!(message.contains("forced backend materialization failure"));
+}
+
+#[test]
+fn exported_payload_function_preserves_status_and_last_error_message() {
+    let index = new_index(2);
+    let tensor = new_tensor_c64(&[index], &[1.0, 2.0, 3.0, 4.0]);
+    let mut out_len = 0usize;
+
+    assert_eq!(
+        t4a_tensor_copy_payload_f64(tensor, std::ptr::null_mut(), 0, &mut out_len,),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("tensor storage payload operation failed"));
+    assert!(last_error().contains("expected f64 storage"));
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(index);
+}
+
+#[test]
+fn exported_dense_function_preserves_real_deferred_backend_diagnostic() {
+    let index = new_index(2);
+    let core_index = unsafe { (*index).inner().clone() };
+    let internal = InternalTensor::from_dense(vec![core_index], vec![1.0_f64, 2.0]).unwrap();
+    let tensor = Box::into_raw(Box::new(t4a_tensor::with_test_storage_error(
+        internal,
+        TensorStorageError::Materialization {
+            source: Arc::new(std::io::Error::other(
+                "forced deferred C API backend failure",
+            )),
+        },
+    )));
+    let mut out_len = 0usize;
+
+    assert_eq!(
+        t4a_tensor_copy_dense_f64(tensor, std::ptr::null_mut(), 0, &mut out_len),
+        T4A_INTERNAL_ERROR
+    );
+    let error = last_error();
+    assert!(error.contains("forced deferred C API backend failure"));
+    assert!(error.contains("tensor dense f64 materialization failed"));
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(index);
+}
+
+#[test]
+fn raw_slice_null_pointer_precedes_byte_length_validation() {
+    let error = read_plain_slice::<f64>("data", std::ptr::null(), 1).unwrap_err();
+    assert_eq!(error.0, T4A_NULL_POINTER);
+    assert!(error.1.contains("data is null"));
+}
+
+#[test]
+fn raw_slice_accepts_positive_length_zst() {
+    let len = 3;
+    let values = read_plain_slice::<()>("data", std::ptr::NonNull::dangling().as_ptr(), len)
+        .expect("ZST slices should not panic or fail validation");
+    assert_eq!(values, vec![(); len]);
+}
+
+#[test]
+fn index_pointer_array_rejects_impossible_byte_length_before_use() {
+    let dangling = std::ptr::NonNull::<*const t4a_index>::dangling().as_ptr();
+    let error = read_indices_from_ptrs(usize::MAX, dangling).unwrap_err();
+    assert_eq!(error.0, T4A_INVALID_ARGUMENT);
+    assert!(error.1.contains("byte length overflows isize::MAX"));
+
+    // A null pointer still takes precedence over the length bound.
+    let error = read_indices_from_ptrs(2, std::ptr::null()).unwrap_err();
+    assert_eq!(error.0, T4A_NULL_POINTER);
+}
+
+#[test]
+fn structured_constructor_rejects_payload_length_mismatch_before_allocation() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    // An inconsistent attacker-sized payload length must be rejected from the
+    // metadata alone, before the payload is copied.
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            10_000,
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match structured payload length"));
+    t4a_index_release(i);
+    t4a_index_release(j);
+    t4a_index_release(k);
+}
+
+#[test]
+fn structured_constructor_rejects_inconsistent_metadata_before_allocation() {
+    let i = new_index(2);
+    let index_ptrs = [i as *const t4a_index];
+    let payload_dims = [2usize];
+    let payload_strides = [-1isize];
+    let axis_classes = [0usize];
+    let payload = [1.0f64, 2.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            1,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("negative strides"));
+    t4a_index_release(i);
+}
+
+#[test]
+fn structured_c64_constructor_rejects_interleaved_length_mismatch() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_c64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            10_000,
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match structured payload length"));
+    t4a_index_release(i);
+    t4a_index_release(j);
+    t4a_index_release(k);
+}
+
+#[test]
+fn diag_constructor_rejects_payload_length_mismatch_before_allocation() {
+    let i = new_index(2);
+    let index_ptrs = [i as *const t4a_index];
+    let diag = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_f64(1, index_ptrs.as_ptr(), diag.as_ptr(), 10_000, &mut tensor),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match index dimension"));
+    t4a_index_release(i);
+}
+
+#[test]
+fn diag_c64_constructor_rejects_interleaved_length_mismatch() {
+    let i = new_index(2);
+    let index_ptrs = [i as *const t4a_index];
+    let diag = [1.0f64];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_c64(1, index_ptrs.as_ptr(), diag.as_ptr(), 10_000, &mut tensor),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+    assert!(last_error().contains("does not match index dimension"));
+    t4a_index_release(i);
 }
 
 #[test]

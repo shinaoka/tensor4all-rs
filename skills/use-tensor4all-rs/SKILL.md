@@ -29,7 +29,7 @@ This skill tracks `main`; a release tag may not contain every API described belo
 
 - **Backend defaults to pure-Rust `faer` — no system BLAS.** Compute crates enable `tenferro-cpu-faer` by default, so a plain dependency compiles standalone. To link a system BLAS (OpenBLAS / MKL / Apple Accelerate) instead, set `default-features = false` and enable `tenferro-system-blas` on each directly imported crate where it is exposed.
 - **Build with `--release`.** Tensor linalg in debug is orders of magnitude slower; TCI and DMRG are unusable without optimization. For benchmarks set `opt-level = 3` (and `lto`, `codegen-units = 1`).
-- **Scalars** are `f64` and `Complex64` (`num-complex` 0.4). Recipes that build random tensors assume you add `rand` + `rand_chacha` (matching the library's `0.9`) as dev-dependencies.
+- **TensorDynLen scalars** are `f32`, `f64`, `Complex32`, and `Complex64` (`num-complex` 0.4). Compact `Storage` snapshots support only `f64`/`Complex64`; 32-bit tensors retain eager authoritative payloads without promotion. Recipes that build random tensors assume you add `rand` + `rand_chacha` (matching the library's `0.9`) as dev-dependencies.
 - **`tensor4all-tensorbackend` is internal** — never depend on it or instantiate `CpuBackend` directly; get scalars, storage, and linalg through the public crates. `tensor4all-tcicore` is the home of `CachedFunction` and `MultiIndex`: depend on it for `CachedFunction`, or take `MultiIndex` re-exported from `tensor4all-partitionedtt`.
 
 Done when `cargo build --release` succeeds and a constant TT evaluates:
@@ -87,7 +87,7 @@ These apply across crates and fail silently when ignored. Check them against eve
 
 **Quantics bits are big-endian.** Site 0 = most-significant bit, site R-1 = least-significant. `quantics_fourier_operator` output is **bit-reversed** frequency order. `quanticscrossinterpolate_discrete` requires all grid dimensions equal and powers of 2.
 
-**Prefer generic APIs over scalar-specific names.** `f64` and `Complex64` flow through the same generic entry points. `*_f64` / `*_c64` names exist only at the C-API / FFI boundary.
+**Prefer generic APIs over scalar-specific names.** `f32`, `f64`, `Complex32`, and `Complex64` flow through the same generic entry points. `*_f64` / `*_c64` names exist only at the C-API / FFI boundary.
 
 **No hidden dense materialization in production paths.** `to_dense()`, `contract_to_tensor()`, and full-network `evaluate`-every-element loops are for tests and small examples only — they scale as the product of index dimensions. For long TT / TreeTN comparisons use a direct-sum difference plus a tensor-network norm, or sampled `evaluate()` checks. `ApplyOptions::naive()` is local exact apply (bond dims may grow as products), not full dense.
 

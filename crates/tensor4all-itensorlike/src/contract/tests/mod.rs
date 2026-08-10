@@ -27,7 +27,7 @@ fn assert_matches_naive(tt1: &TensorTrain, tt2: &TensorTrain, result: &TensorTra
         .unwrap();
     let result_dense = result.to_dense().unwrap();
     assert!(
-        result_dense.isapprox(&naive_result, 1e-10, 0.0),
+        result_dense.isapprox(&naive_result, 1e-10, 0.0).unwrap(),
         "TT contraction result does not match naive: maxabs diff = {}",
         result_dense.distance(&naive_result).unwrap()
     );

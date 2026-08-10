@@ -370,8 +370,8 @@ fn test_diag_dense_contraction_svd_internals() {
 
 fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
     assert!(
-        a.isapprox(b, tol, 0.0),
+        a.isapprox(b, tol, 0.0).unwrap(),
         "Tensors differ: maxabs diff = {}",
-        a.sub(b).unwrap().maxabs()
+        a.sub(b).unwrap().maxabs().unwrap()
     );
 }

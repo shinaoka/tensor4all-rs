@@ -216,6 +216,10 @@ impl PartitionedTT {
 
     /// Compute the total Frobenius norm (sqrt of sum of squared norms).
     ///
+    /// # Errors
+    /// Propagates tensor-train storage or contraction failures from a
+    /// subdomain norm evaluation.
+    ///
     /// # Examples
     ///
     /// ```
@@ -234,12 +238,18 @@ impl PartitionedTT {
     /// let subdomain = SubDomainTT::new(tt, proj);
     /// let ptt = PartitionedTT::from_subdomain(subdomain);
     ///
-    /// let n = ptt.norm();
+    /// let n = ptt.norm().unwrap();
     /// assert!(n >= 0.0);
     /// ```
-    pub fn norm(&self) -> f64 {
-        let sum_sq: f64 = self.data.values().map(|s| s.norm_squared()).sum();
-        sum_sq.sqrt()
+    pub fn norm(&self) -> Result<f64> {
+        let sum_sq = self
+            .data
+            .values()
+            .map(SubDomainTT::norm_squared)
+            .try_fold(0.0, |sum, value| {
+                Ok::<f64, PartitionedTTError>(sum + value?)
+            })?;
+        Ok(sum_sq.sqrt())
     }
 
     /// Contract with another PartitionedTT.
@@ -260,12 +270,7 @@ impl PartitionedTT {
                     let mut summed_tt = existing
                         .data()
                         .add_reindexed_like_self(contracted.data())
-                        .map_err(|e| {
-                            PartitionedTTError::TensorTrainError(format!(
-                                "TT addition in contract failed: {}",
-                                e
-                            ))
-                        })?;
+                        .map_err(|source| PartitionedTTError::TensorTrain { source })?;
                     // Truncate after addition using the same truncation params as contraction
                     let mut truncate_opts = TruncateOptions::svd();
                     if let Some(policy) = options.svd_policy() {
@@ -274,12 +279,9 @@ impl PartitionedTT {
                     if let Some(max_rank) = options.max_rank() {
                         truncate_opts = truncate_opts.with_max_rank(max_rank);
                     }
-                    summed_tt.truncate(&truncate_opts).map_err(|e| {
-                        PartitionedTTError::TensorTrainError(format!(
-                            "TT truncation after addition failed: {}",
-                            e
-                        ))
-                    })?;
+                    summed_tt
+                        .truncate(&truncate_opts)
+                        .map_err(|source| PartitionedTTError::TensorTrain { source })?;
                     *existing = SubDomainTT::new(summed_tt, proj.clone());
                 } else {
                     result.insert(contracted);
@@ -324,18 +326,13 @@ impl PartitionedTT {
         for (proj, subdomain) in self.iter() {
             if let Some(other_subdomain) = other.get(proj) {
                 // Both have this projector: add and truncate
-                let mut summed_tt = subdomain.data().add(other_subdomain.data()).map_err(|e| {
-                    PartitionedTTError::TensorTrainError(format!(
-                        "TT addition in add failed: {}",
-                        e
-                    ))
-                })?;
-                summed_tt.truncate(options).map_err(|e| {
-                    PartitionedTTError::TensorTrainError(format!(
-                        "TT truncation after addition failed: {}",
-                        e
-                    ))
-                })?;
+                let mut summed_tt = subdomain
+                    .data()
+                    .add(other_subdomain.data())
+                    .map_err(|source| PartitionedTTError::TensorTrain { source })?;
+                summed_tt
+                    .truncate(options)
+                    .map_err(|source| PartitionedTTError::TensorTrain { source })?;
                 result.insert(SubDomainTT::new(summed_tt, proj.clone()));
             } else {
                 // Only self has this projector: clone it
@@ -427,9 +424,9 @@ impl PartitionedTT {
         let mut result = first.data().clone();
 
         for subdomain in iter {
-            result = result.add(subdomain.data()).map_err(|e| {
-                PartitionedTTError::TensorTrainError(format!("TT addition failed: {}", e))
-            })?;
+            result = result
+                .add(subdomain.data())
+                .map_err(|source| PartitionedTTError::TensorTrain { source })?;
         }
 
         Ok(result)

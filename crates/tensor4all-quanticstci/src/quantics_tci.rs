@@ -30,6 +30,16 @@ fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usi
         .collect()
 }
 
+fn evaluate_grid_point<V>(
+    quantics: &[i64],
+    to_coord: impl FnOnce(&[i64]) -> Result<Vec<f64>>,
+    evaluate: impl FnOnce(&[f64]) -> V,
+) -> Result<V> {
+    let coords = to_coord(quantics)
+        .map_err(|error| anyhow!("failed to convert quantics index {quantics:?}: {error}"))?;
+    Ok(evaluate(&coords))
+}
+
 /// TCI result wrapped with grid information.
 ///
 /// Combines a [`TensorTrain`] approximation with grid metadata so you
@@ -474,32 +484,29 @@ where
 
     // Wrap function to accept quantics indices (usize 0-indexed for TCI)
     let grid_clone = grid.clone();
-    let qf = move |q: &Vec<usize>| -> V {
+    let qf = move |q: &Vec<usize>| -> Result<V> {
         // Convert 0-indexed TCI values to 1-indexed for quanticsgrids
         let q_i64: Vec<i64> = q.iter().map(|&x| (x + 1) as i64).collect();
 
         // Check cache first
         if let Some(v) = cache_clone.borrow().get(&q_i64) {
             #[allow(clippy::clone_on_copy)]
-            return v.clone();
+            return Ok(v.clone());
         }
 
         // Compute and cache
-        let coords = match grid_clone.quantics_to_origcoord(&q_i64) {
-            Ok(coords) => coords,
-            Err(err) => {
-                debug_assert!(
-                    false,
-                    "Quantics index conversion failed for {:?}: {}",
-                    q_i64, err
-                );
-                return V::default();
-            }
-        };
-        let value = f(&coords);
+        let value = evaluate_grid_point(
+            &q_i64,
+            |quantics| {
+                grid_clone
+                    .quantics_to_origcoord(quantics)
+                    .map_err(|error| anyhow!("{error}"))
+            },
+            |coords| f(coords),
+        )?;
         #[allow(clippy::clone_on_copy)]
         cache_clone.borrow_mut().insert(q_i64, value.clone());
-        value
+        Ok(value)
     };
 
     // Batch adapter: treetci expects Fn(GlobalIndexBatch) -> Result<Vec<V>>
@@ -508,7 +515,7 @@ where
         let mut results = Vec::with_capacity(n_points);
         for p in 0..n_points {
             let point = point_from_batch(batch, p)?;
-            results.push(qf(&point));
+            results.push(qf(&point)?);
         }
         Ok(results)
     };
@@ -517,13 +524,13 @@ where
     let mut qinitialpivots: Vec<Vec<usize>> = if let Some(pivots) = initial_pivots {
         pivots
             .iter()
-            .filter_map(|p| {
-                grid.grididx_to_quantics(p)
-                    .ok()
+            .map(|pivot| {
+                grid.grididx_to_quantics(pivot)
+                    .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
                     // Convert 1-indexed quantics to 0-indexed for TCI
                     .map(|q| q.iter().map(|&x| (x - 1) as usize).collect())
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?
     } else {
         // Default to first grid point (0-indexed for TCI)
         vec![vec![0; n_sites]]
@@ -736,6 +743,11 @@ where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     F: Fn(&[i64]) -> V + 'static,
 {
+    if size.is_empty() {
+        return Err(anyhow!(
+            "This method requires at least one grid dimension, got an empty size"
+        ));
+    }
     // Validate sizes are powers of 2
     let dimensions: Vec<f64> = size.iter().map(|&s| (s as f64).log2()).collect();
 
@@ -805,13 +817,13 @@ where
     let mut qinitialpivots: Vec<Vec<usize>> = if let Some(pivots) = initial_pivots {
         pivots
             .iter()
-            .filter_map(|p| {
-                grid.grididx_to_quantics(p)
-                    .ok()
+            .map(|pivot| {
+                grid.grididx_to_quantics(pivot)
+                    .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
                     // Convert 1-indexed quantics to 0-indexed for TCI
                     .map(|q| q.iter().map(|&x| (x - 1) as usize).collect())
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?
     } else {
         // Default to first grid point (0-indexed for TCI)
         vec![vec![0; local_dims.len()]]

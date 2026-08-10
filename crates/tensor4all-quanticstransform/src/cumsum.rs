@@ -7,7 +7,7 @@ use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
-use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
+use crate::common::{tensortrain_to_linear_operator, try_vec_with_capacity, QuanticsOperator};
 
 /// Type of triangular matrix for cumsum-like operators.
 ///
@@ -54,8 +54,8 @@ pub enum TriangleType {
 /// LinearOperator representing the cumulative sum
 ///
 /// # Errors
-/// Returns an error when `r < 2` or when internal MPO/operator construction
-/// fails.
+/// Returns an error when `r < 2`, when the MPO site-list allocation exceeds
+/// checked bounds, or when internal MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -75,7 +75,8 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
     }
 
     let mpo = cumsum_mpo(r)?;
-    let site_dims = vec![2; r];
+    let mut site_dims = try_vec_with_capacity::<usize>("cumsum operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -89,8 +90,8 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// * `triangle` - Which triangle to use
 ///
 /// # Errors
-/// Returns an error when `r < 2` or when internal MPO/operator construction
-/// fails.
+/// Returns an error when `r < 2`, when the MPO site-list allocation exceeds
+/// checked bounds, or when internal MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -109,7 +110,8 @@ pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOpe
     }
 
     let mpo = triangle_mpo(r, triangle)?;
-    let site_dims = vec![2; r];
+    let mut site_dims = try_vec_with_capacity::<usize>("triangle operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -131,7 +133,10 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     }
 
     let single_tensor = upper_triangle_tensor();
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "cumulative-sum MPO site list",
+        r,
+    )?;
 
     for n in 0..r {
         if n == 0 {
@@ -207,7 +212,10 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex6
         TriangleType::Lower => upper_triangle_tensor(),
         TriangleType::Upper => lower_triangle_tensor(),
     };
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "triangle MPO site list",
+        r,
+    )?;
 
     for n in 0..r {
         if n == 0 {

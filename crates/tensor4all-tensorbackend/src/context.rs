@@ -8,6 +8,8 @@
 //! created from the same global CPU context, so thread-pool configuration is
 //! shared.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{GraphCompiler, GraphExecutor};
@@ -18,7 +20,42 @@ static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
 static DEFAULT_GRAPH_COMPILER: OnceLock<Mutex<GraphCompiler>> = OnceLock::new();
 static DEFAULT_GRAPH_EXECUTOR: OnceLock<Mutex<GraphExecutor<CpuBackend>>> = OnceLock::new();
-static DEFAULT_EAGER_RUNTIME: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
+/// Error returned when the process-global eager AD runtime cannot be initialized.
+///
+/// The original backend error is retained as the [`std::error::Error::source`]
+/// so callers can inspect the registration failure without parsing a string.
+///
+/// # Examples
+///
+/// ```
+/// use std::error::Error;
+/// use std::sync::Arc;
+/// use tensor4all_tensorbackend::EagerContextError;
+///
+/// let error = EagerContextError::Registration {
+///     source: Arc::new(std::io::Error::other("registration failed")),
+/// };
+/// assert!(error.source().is_some());
+/// assert!(error.to_string().contains("registration failed"));
+/// ```
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum EagerContextError {
+    /// The tenferro linalg AD extension rule could not be registered.
+    #[error("failed to register tenferro linalg AD rule: {source}")]
+    Registration {
+        /// Original diagnostic returned by tenferro.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+static DEFAULT_EAGER_RUNTIME: OnceLock<std::result::Result<Arc<EagerRuntime>, EagerContextError>> =
+    OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_EAGER_CONTEXT_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
 
 fn default_cpu_context() -> Arc<CpuContext> {
     DEFAULT_CPU_CONTEXT
@@ -108,14 +145,52 @@ pub(crate) fn reset_default_engine() {
 /// This context owns a separate `CpuBackend` from [`with_default_backend`] and
 /// the cached graph executor, but all backends share the same process-global
 /// tenferro CPU context.
-pub fn default_eager_ctx() -> Arc<EagerRuntime> {
-    DEFAULT_EAGER_RUNTIME
-        .get_or_init(|| {
-            tenferro_linalg::register_extension_rule()
-                .expect("tenferro linalg AD rule should register once");
-            EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
-        })
-        .clone()
+///
+/// # Errors
+///
+/// Returns [`EagerContextError::Registration`] if the tenferro linalg AD rule
+/// cannot be registered.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::default_eager_ctx;
+/// use std::sync::Arc;
+///
+/// let first = default_eager_ctx().unwrap();
+/// let second = default_eager_ctx().unwrap();
+/// assert!(Arc::ptr_eq(&first, &second));
+/// ```
+pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContextError> {
+    #[cfg(test)]
+    if FORCE_EAGER_CONTEXT_FAILURE.with(Cell::get) {
+        return Err(EagerContextError::Registration {
+            source: Arc::new(std::io::Error::other(
+                "forced default eager context registration failure",
+            )),
+        });
+    }
+
+    match DEFAULT_EAGER_RUNTIME.get_or_init(|| {
+        tenferro_linalg::register_extension_rule()
+            .map(|_| {
+                EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
+            })
+            .map_err(|source| EagerContextError::Registration {
+                source: Arc::new(source),
+            })
+    }) {
+        Ok(context) => Ok(Arc::clone(context)),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_forced_eager_context_failure<T>(f: impl FnOnce() -> T) -> T {
+    let previous = FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.replace(true));
+    let result = f();
+    FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.set(previous));
+    result
 }
 
 #[cfg(test)]
@@ -123,17 +198,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn eager_context_error_preserves_source_chain() {
+        let source = std::io::Error::other("forced registration failure");
+        let error = EagerContextError::Registration {
+            source: Arc::new(source),
+        };
+
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(
+            std::error::Error::source(&error).unwrap().to_string(),
+            "forced registration failure"
+        );
+    }
+
+    #[test]
+    fn eager_context_has_typed_error_contract() {
+        let result: std::result::Result<Arc<EagerRuntime>, EagerContextError> = default_eager_ctx();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn eager_context_failure_uses_production_path_and_preserves_source() {
+        with_forced_eager_context_failure(|| {
+            let error = match default_eager_ctx() {
+                Ok(_) => panic!("forced eager context failure unexpectedly succeeded"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, EagerContextError::Registration { .. }));
+            let source = std::error::Error::source(&error).unwrap();
+            assert_eq!(
+                source.to_string(),
+                "forced default eager context registration failure"
+            );
+            assert!(source.source().is_none());
+        });
+    }
+
+    #[test]
     fn eager_context_is_process_global() {
-        let first = default_eager_ctx();
-        let second = default_eager_ctx();
+        let first = default_eager_ctx().unwrap();
+        let second = default_eager_ctx().unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]
     fn eager_context_is_shared_across_threads() {
-        let main_context = default_eager_ctx();
-        let worker_context = std::thread::spawn(default_eager_ctx)
+        let main_context = default_eager_ctx().unwrap();
+        let worker_context = std::thread::spawn(|| default_eager_ctx().unwrap())
             .join()
             .expect("worker thread should complete");
 

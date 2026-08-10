@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorStorageError};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
@@ -135,132 +135,190 @@ impl SubDomainTT {
 
     /// Project to a more restrictive projector.
     ///
-    /// Returns `None` if the projectors are incompatible (conflicting values).
-    /// The resulting SubDomainTT has tensor values zeroed out where the
-    /// projection doesn't match.
-    pub fn project(&self, projector: &Projector) -> Option<Self> {
-        // Check if projectors are compatible
+    /// Returns `Ok(None)` if the projectors are incompatible (conflicting
+    /// values). The resulting SubDomainTT has tensor values zeroed out where
+    /// the projection does not match, while retaining tensor indices and
+    /// backend autodiff metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::ProjectorIndexNotFound`] for a projector
+    /// index absent from the tensor train,
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] for an invalid
+    /// coordinate, [`PartitionedTTError::TensorStorage`] for deferred or
+    /// failed storage materialization, [`PartitionedTTError::TensorConstruction`]
+    /// for a backend construction failure, or
+    /// [`PartitionedTTError::TensorTrain`] for invalid tensor-train structure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtt::{DynIndex, Projector, SubDomainTT, TensorDynLen, TensorTrain};
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let subdomain = SubDomainTT::from_tt(TensorTrain::new(vec![tensor]).unwrap());
+    /// let projected = subdomain
+    ///     .project(&Projector::from_pairs([(site.clone(), 1)]))
+    ///     .unwrap()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(projected.projector().get(&site), Some(1));
+    /// assert_eq!(projected.data().tensor(0).unwrap().to_vec::<f64>().unwrap(), vec![0.0, 4.0]);
+    /// ```
+    pub fn project(&self, projector: &Projector) -> Result<Option<Self>> {
+        self.validate_projector(projector)?;
+
+        // Check if projectors are compatible.
         if !self.projector.is_compatible_with(projector) {
-            return None;
+            return Ok(None);
         }
 
-        // Merge projectors
-        let merged_projector = self.projector.intersection(projector)?;
-
-        // Project tensor data
+        let merged_projector = self
+            .projector
+            .intersection(projector)
+            .ok_or(PartitionedTTError::ProjectorConflict)?;
         let projected_data = self.project_tensor_data(projector)?;
 
-        Some(Self {
+        Ok(Some(Self {
             data: projected_data,
             projector: merged_projector,
             budget_squared: self.budget_squared,
-        })
+        }))
     }
 
-    /// Project the tensor data by zeroing out non-matching slices.
-    fn project_tensor_data(&self, projector: &Projector) -> Option<TensorTrain> {
+    fn validate_projector(&self, projector: &Projector) -> Result<()> {
+        let all_indices: HashSet<_> = self.all_indices().into_iter().collect();
+        for (index, &value) in projector.iter() {
+            if !all_indices.contains(index) {
+                return Err(PartitionedTTError::ProjectorIndexNotFound {
+                    index: index.clone(),
+                });
+            }
+            if value >= index.dim {
+                return Err(PartitionedTTError::ProjectorCoordinateOutOfBounds {
+                    index: index.clone(),
+                    value,
+                    dim: index.dim,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Project the tensor data by differentiably masking each selected index.
+    fn project_tensor_data(&self, projector: &Projector) -> Result<TensorTrain> {
         let siteinds = self.data.siteinds();
         let mut new_tensors = Vec::with_capacity(self.data.len());
 
         for (site, site_indices) in siteinds.iter().enumerate() {
-            let tensor = self.data.tensor(site).ok()?;
-
-            // Check if any site index is projected
+            let tensor = self
+                .data
+                .tensor(site)
+                .map_err(|source| PartitionedTTError::TensorTrain { source })?;
             let mut projected_tensor = tensor.clone();
-            for idx in site_indices {
-                if let Some(projected_value) = projector.get(idx) {
+            for index in site_indices {
+                if let Some(value) = projector.get(index) {
                     projected_tensor =
-                        Self::project_tensor_at_index(&projected_tensor, idx, projected_value)?;
+                        Self::project_tensor_at_index(&projected_tensor, index, value)?;
                 }
             }
             new_tensors.push(projected_tensor);
         }
 
-        TensorTrain::new(new_tensors).ok()
+        TensorTrain::new(new_tensors).map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
-    /// Project a single tensor by zeroing out all slices except the specified one.
+    fn tensor_operation_error(error: anyhow::Error) -> PartitionedTTError {
+        match error.downcast::<TensorStorageError>() {
+            Ok(source) => PartitionedTTError::TensorStorage { source },
+            Err(source) => PartitionedTTError::TensorConstruction { source },
+        }
+    }
+
+    /// Project a single tensor by applying a backend-level one-hot mask.
     fn project_tensor_at_index(
         tensor: &TensorDynLen,
         index: &DynIndex,
         projected_value: usize,
-    ) -> Option<TensorDynLen> {
-        use num_complex::Complex64;
-
-        // Find the axis corresponding to this index
-        let indices = tensor.indices();
-        let axis = indices.iter().position(|i| i == index);
-
-        if let Some(axis) = axis {
-            let dim = indices[axis].dim;
-            let shape: Vec<usize> = indices.iter().map(|i| i.dim).collect();
-            let total_size: usize = shape.iter().product();
-            let axis_stride = shape[..axis].iter().copied().product::<usize>().max(1);
-
-            if projected_value >= dim {
-                // Invalid projection - zero out entire tensor
-                if tensor.is_f64() {
-                    return TensorDynLen::zeros::<f64>(indices.to_vec()).ok();
-                } else {
-                    return TensorDynLen::zeros::<num_complex::Complex64>(indices.to_vec()).ok();
-                }
-            }
-
-            // Create result tensor based on scalar type
-            if tensor.is_f64() {
-                let src_data = tensor.to_vec::<f64>().unwrap_or_default();
-                let mut result_data = vec![0.0_f64; total_size];
-
-                for flat_idx in 0..total_size {
-                    let axis_value = (flat_idx / axis_stride) % dim;
-                    if axis_value == projected_value && flat_idx < src_data.len() {
-                        result_data[flat_idx] = src_data[flat_idx];
-                    }
-                }
-
-                TensorDynLen::from_dense(indices.to_vec(), result_data).ok()
-            } else {
-                let src_data = tensor.to_vec::<Complex64>().unwrap_or_default();
-                let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
-
-                for flat_idx in 0..total_size {
-                    let axis_value = (flat_idx / axis_stride) % dim;
-                    if axis_value == projected_value && flat_idx < src_data.len() {
-                        result_data[flat_idx] = src_data[flat_idx];
-                    }
-                }
-
-                TensorDynLen::from_dense(indices.to_vec(), result_data).ok()
-            }
-        } else {
-            // Index not found - return tensor unchanged
-            Some(tensor.clone())
+    ) -> Result<TensorDynLen> {
+        if !tensor.indices().iter().any(|candidate| candidate == index) {
+            return Err(PartitionedTTError::ProjectorIndexNotFound {
+                index: index.clone(),
+            });
         }
+        if projected_value >= index.dim {
+            return Err(PartitionedTTError::ProjectorCoordinateOutOfBounds {
+                index: index.clone(),
+                value: projected_value,
+                dim: index.dim,
+            });
+        }
+        tensor
+            .mask_index(index, projected_value)
+            .map_err(Self::tensor_operation_error)
     }
 
     /// Compute the Frobenius norm.
-    pub fn norm(&self) -> f64 {
-        self.data.norm()
+    ///
+    /// # Errors
+    /// Propagates tensor-train storage or contraction failures.
+    pub fn norm(&self) -> Result<f64> {
+        self.data
+            .norm()
+            .map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
     /// Compute the squared Frobenius norm.
-    pub fn norm_squared(&self) -> f64 {
-        self.data.norm_squared()
+    ///
+    /// # Errors
+    /// Propagates tensor-train storage or contraction failures.
+    pub fn norm_squared(&self) -> Result<f64> {
+        self.data
+            .norm_squared()
+            .map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
     /// Truncate the tensor train.
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         self.data
             .truncate(options)
-            .map_err(|e| PartitionedTTError::TensorTrainError(format!("Truncation failed: {}", e)))
+            .map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
     /// Contract with another SubDomainTT.
     ///
-    /// Returns `None` if the projectors are incompatible.
+    /// Returns `Ok(None)` if the projectors are incompatible. Before
+    /// contraction, both inputs are projected to their subdomains (values
+    /// outside the subdomain are zeroed out).
     ///
-    /// Before contraction, both inputs are projected to their subdomains
-    /// (values outside the subdomain are zeroed out).
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::ProjectorIndexNotFound`] or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] for invalid
+    /// projectors, [`PartitionedTTError::TensorStorage`] for storage failures,
+    /// [`PartitionedTTError::TensorConstruction`] for backend failures, or
+    /// [`PartitionedTTError::TensorTrain`] for tensor-train validation or
+    /// contraction failures.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtt::{DynIndex, SubDomainTT, TensorDynLen, TensorTrain};
+    /// use tensor4all_itensorlike::ContractOptions;
+    ///
+    /// let left_index = DynIndex::new_dyn(2);
+    /// let right_index = DynIndex::new_dyn(2);
+    /// let left = SubDomainTT::from_tt(TensorTrain::new(vec![
+    ///     TensorDynLen::from_dense(vec![left_index], vec![1.0_f64, 2.0]).unwrap(),
+    /// ]).unwrap());
+    /// let right = SubDomainTT::from_tt(TensorTrain::new(vec![
+    ///     TensorDynLen::from_dense(vec![right_index], vec![3.0_f64, 4.0]).unwrap(),
+    /// ]).unwrap());
+    ///
+    /// let result = left.contract(&right, &ContractOptions::default()).unwrap();
+    /// assert!(result.is_some());
+    /// ```
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Option<Self>> {
         // Check if projectors are compatible
         if !self.projector.is_compatible_with(other.projector()) {
@@ -272,14 +330,12 @@ impl SubDomainTT {
 
         // Project both inputs to their subdomains before contraction
         // This ensures values outside the subdomain are zeroed out
-        let self_projected = self.apply_projection();
-        let other_projected = other.apply_projection();
+        let self_projected = self.apply_projection()?;
+        let other_projected = other.apply_projection()?;
 
         let contracted_data = self_projected
             .contract(&other_projected, options)
-            .map_err(|e| {
-                PartitionedTTError::TensorTrainError(format!("Contraction failed: {}", e))
-            })?;
+            .map_err(|source| PartitionedTTError::TensorTrain { source })?;
 
         // Create result with the new projector
         let result = Self::new(contracted_data, proj_after);
@@ -290,15 +346,12 @@ impl SubDomainTT {
     /// Apply the projector to the tensor data, zeroing out values outside the subdomain.
     ///
     /// Returns the TensorTrain with projection applied.
-    fn apply_projection(&self) -> TensorTrain {
+    fn apply_projection(&self) -> Result<TensorTrain> {
         if self.projector.is_empty() {
-            return self.data.clone();
+            return Ok(self.data.clone());
         }
 
-        match self.project_tensor_data(&self.projector) {
-            Some(tt) => tt,
-            None => self.data.clone(),
-        }
+        self.project_tensor_data(&self.projector)
     }
 
     /// Compute the projector after contracting two SubDomainTTs.
@@ -332,7 +385,7 @@ impl SubDomainTT {
     pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
         self.data
             .inner(other.data())
-            .map_err(|err| PartitionedTTError::TensorTrainError(err.to_string()))
+            .map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 }
 

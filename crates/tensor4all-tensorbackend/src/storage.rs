@@ -1,5 +1,5 @@
 use anyhow::{anyhow, ensure, Result};
-use num_complex::{Complex64, ComplexFloat};
+use num_complex::Complex64;
 use std::ops::Mul;
 use std::sync::Arc;
 
@@ -108,19 +108,15 @@ fn validate_canonical_axis_classes(axis_classes: &[usize]) -> Result<()> {
             "axis_classes must be canonical first-appearance labels, got {axis_classes:?}"
         );
         if class_id == next_class {
-            next_class += 1;
+            next_class = next_class
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("axis class index overflow"))?;
         }
     }
     Ok(())
 }
 
 fn required_storage_len(dims: &[usize], strides: &[isize]) -> Result<usize> {
-    if dims.is_empty() {
-        return Ok(1);
-    }
-    if dims.contains(&0) {
-        return Ok(0);
-    }
     ensure!(
         dims.len() == strides.len(),
         "payload dims {:?} and strides {:?} must have the same rank",
@@ -128,19 +124,38 @@ fn required_storage_len(dims: &[usize], strides: &[isize]) -> Result<usize> {
         strides
     );
 
+    // Validate the compact payload product even when a zero stride would make
+    // the referenced backing span look small. Iteration must never begin with
+    // a wrapped payload length.
+    let payload_len = dims.iter().try_fold(1usize, |length, &dim| {
+        length
+            .checked_mul(dim)
+            .ok_or_else(|| anyhow!("payload length overflow for dims {dims:?}"))
+    })?;
+
     let mut max_offset = 0usize;
     for (&dim, &stride) in dims.iter().zip(strides.iter()) {
         ensure!(
             stride >= 0,
             "negative strides are not supported in StructuredStorage: {strides:?}"
         );
+        let stride = usize::try_from(stride)
+            .map_err(|_| anyhow!("payload stride overflow for dims {dims:?}"))?;
         if dim > 1 {
+            let span = (dim - 1)
+                .checked_mul(stride)
+                .ok_or_else(|| anyhow!("payload stride overflow for dims {dims:?}"))?;
             max_offset = max_offset
-                .checked_add((dim - 1) * usize::try_from(stride).unwrap_or(usize::MAX))
+                .checked_add(span)
                 .ok_or_else(|| anyhow!("payload stride overflow for dims {dims:?}"))?;
         }
     }
-    Ok(max_offset + 1)
+    if payload_len == 0 {
+        return Ok(0);
+    }
+    max_offset
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("payload stride overflow for dims {dims:?}"))
 }
 
 fn logical_dims_from_axis_classes(payload_dims: &[usize], axis_classes: &[usize]) -> Vec<usize> {
@@ -175,7 +190,9 @@ fn offset_from_strides(index: &[usize], strides: &[isize]) -> usize {
 ///
 /// `data` and `strides` describe the payload tensor, while `axis_classes`
 /// describes how logical axes map onto payload axes. Logical flat-buffer
-/// semantics are column-major.
+/// semantics are column-major. A strided payload may contain unused backing
+/// gaps; reductions and nonfinite scans visit only entries addressed by the
+/// payload dimensions and strides.
 ///
 /// A **dense** tensor has `axis_classes = [0, 1, ..., rank-1]` (each logical
 /// axis maps to a distinct payload axis). A **diagonal** tensor has
@@ -246,26 +263,8 @@ impl<T> StructuredStorage<T> {
         strides: Vec<isize>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
-        validate_canonical_axis_classes(&axis_classes)?;
-        ensure!(
-            payload_dims.len()
-                == axis_classes
-                    .iter()
-                    .copied()
-                    .max()
-                    .map(|value| value + 1)
-                    .unwrap_or(0),
-            "payload rank {} does not match axis_classes {:?}",
-            payload_dims.len(),
-            axis_classes
-        );
-        ensure!(
-            strides.len() == payload_dims.len(),
-            "payload dims {:?} and strides {:?} must have the same rank",
-            payload_dims,
-            strides
-        );
-        let required_len = required_storage_len(&payload_dims, &strides)?;
+        let required_len =
+            Storage::validate_structured_metadata(&payload_dims, &strides, &axis_classes)?;
         ensure!(
             data.len() == required_len,
             "payload storage len {} does not match required len {} for dims {:?} and strides {:?}",
@@ -558,7 +557,14 @@ impl<T: Clone> StructuredStorage<T> {
     /// assert_eq!(s.payload_col_major_vec(), vec![1.0, 2.0, 3.0, 4.0]);
     /// ```
     pub fn payload_col_major_vec(&self) -> Vec<T> {
-        let payload_len: usize = self.payload_dims.iter().product();
+        let payload_len = self
+            .payload_dims
+            .iter()
+            .try_fold(1usize, |length, &dim| length.checked_mul(dim))
+            // `StructuredStorage::new` validates this invariant before any
+            // instance can be constructed; return an empty vector rather than
+            // wrapping if an invalid value ever reaches this private state.
+            .unwrap_or(0);
         if payload_len == 0 {
             return Vec::new();
         }
@@ -624,6 +630,39 @@ impl<T: Clone> StructuredStorage<T> {
 }
 
 impl<T: Copy> StructuredStorage<T> {
+    fn payload_scalar_at(&self, payload_coords: &[usize]) -> StorageResult<T> {
+        if payload_coords.len() != self.payload_dims.len() {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "payload coordinate rank {} does not match payload rank {}",
+                payload_coords.len(),
+                self.payload_dims.len()
+            )));
+        }
+        let offset = payload_coords
+            .iter()
+            .zip(self.payload_dims.iter())
+            .zip(self.strides.iter())
+            .try_fold(0usize, |offset, ((&coordinate, &dim), &stride)| {
+                if coordinate >= dim {
+                    return Err(StorageError::InvalidStructuredStorage(format!(
+                        "payload coordinate {coordinate} is out of bounds for dim {dim}"
+                    )));
+                }
+                let stride = usize::try_from(stride).map_err(|_| {
+                    StorageError::InvalidStructuredStorage("negative stride".into())
+                })?;
+                let term = coordinate.checked_mul(stride).ok_or_else(|| {
+                    StorageError::InvalidStructuredStorage("payload offset overflow".into())
+                })?;
+                offset.checked_add(term).ok_or_else(|| {
+                    StorageError::InvalidStructuredStorage("payload offset overflow".into())
+                })
+            })?;
+        self.data.get(offset).copied().ok_or_else(|| {
+            StorageError::InvalidStructuredStorage("payload offset outside storage".into())
+        })
+    }
+
     /// Maps payload elements while preserving payload metadata and axis classes.
     ///
     /// # Examples
@@ -646,11 +685,30 @@ impl<T: Copy> StructuredStorage<T> {
 }
 
 impl<T: Copy + Default> StructuredStorage<T> {
+    /// Returns the checked product of the logical dimensions, rejecting
+    /// overflow. The fallible dense exporters rely on this so that a logical
+    /// product that overflows `usize` fails closed instead of being treated
+    /// as an empty tensor.
+    fn checked_logical_len(&self) -> StorageResult<usize> {
+        let dims = self.logical_dims();
+        dims.iter()
+            .try_fold(1usize, |length, &dim| length.checked_mul(dim))
+            .ok_or_else(|| {
+                StorageError::InvalidStructuredStorage(format!(
+                    "logical dims product overflow for {dims:?}"
+                ))
+            })
+    }
+
     /// Materializes the logical tensor as a contiguous column-major dense buffer.
     ///
     /// Repeated entries in `axis_classes` encode equality constraints between
     /// logical axes. Logical indices that violate those constraints are
     /// structural zeros in the dense materialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the logical dimension product overflows `usize`.
     ///
     /// # Examples
     ///
@@ -659,41 +717,116 @@ impl<T: Copy + Default> StructuredStorage<T> {
     ///
     /// // Diagonal [1, 2] in 2x2 becomes [1, 0, 0, 2] column-major
     /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
-    /// assert_eq!(d.logical_dense_col_major_vec(), vec![1.0, 0.0, 0.0, 2.0]);
+    /// assert_eq!(d.logical_dense_col_major_vec().unwrap(), vec![1.0, 0.0, 0.0, 2.0]);
     /// ```
-    pub fn logical_dense_col_major_vec(&self) -> Vec<T> {
+    pub fn logical_dense_col_major_vec(&self) -> StorageResult<Vec<T>> {
         let logical_dims = self.logical_dims();
-        let logical_len: usize = logical_dims.iter().product();
+        let logical_len = self.checked_logical_len()?;
         if logical_len == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         if let Some(view) = self.dense_col_major_view_if_contiguous() {
-            return view.to_vec();
+            return Ok(view.to_vec());
         }
         if self.is_dense() {
-            return self.payload_col_major_vec();
+            return Ok(self.payload_col_major_vec());
         }
 
-        let payload_rank = self.payload_dims.len();
-        (0..logical_len)
+        let mut payload_index = vec![0usize; self.payload_dims.len()];
+        Ok((0..logical_len)
             .map(|linear| {
                 let logical_index = col_major_multi_index(linear, &logical_dims);
-                let mut payload_index = vec![0usize; payload_rank];
-                let mut seen = vec![false; payload_rank];
-                for (&value, &class_id) in logical_index.iter().zip(self.axis_classes.iter()) {
-                    if seen[class_id] {
-                        if payload_index[class_id] != value {
-                            return T::default();
-                        }
-                    } else {
-                        payload_index[class_id] = value;
-                        seen[class_id] = true;
-                    }
-                }
-                let offset = offset_from_strides(&payload_index, &self.strides);
-                self.data[offset]
+                self.value_at_with_dims(&logical_index, &logical_dims, &mut payload_index)
+                    .unwrap_or_default()
             })
-            .collect()
+            .collect())
+    }
+
+    fn for_each_payload_value(&self, mut f: impl FnMut(T)) {
+        if let Some(view) = self.payload_col_major_view_if_contiguous() {
+            for &value in view {
+                f(value);
+            }
+            return;
+        }
+        let payload_len = self
+            .payload_dims
+            .iter()
+            .try_fold(1usize, |length, &dim| length.checked_mul(dim))
+            .unwrap_or(0);
+        let mut payload_index = vec![0usize; self.payload_dims.len()];
+        for _ in 0..payload_len {
+            let offset = offset_from_strides(&payload_index, &self.strides);
+            f(self.data[offset]);
+            let mut carry = true;
+            for (coordinate, &dim) in payload_index.iter_mut().zip(self.payload_dims.iter()) {
+                if !carry {
+                    break;
+                }
+                *coordinate += 1;
+                if *coordinate == dim {
+                    *coordinate = 0;
+                } else {
+                    carry = false;
+                }
+            }
+        }
+    }
+
+    fn value_at_with_dims(
+        &self,
+        logical_index: &[usize],
+        logical_dims: &[usize],
+        payload_index: &mut [usize],
+    ) -> StorageResult<T> {
+        if logical_index.len() != logical_dims.len() {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "logical index rank {} does not match rank {}",
+                logical_index.len(),
+                logical_dims.len()
+            )));
+        }
+        if payload_index.len() < self.payload_dims.len() {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "payload scratch rank {} is smaller than {}",
+                payload_index.len(),
+                self.payload_dims.len()
+            )));
+        }
+        payload_index[..self.payload_dims.len()].fill(usize::MAX);
+        for ((&value, &dim), &class_id) in logical_index
+            .iter()
+            .zip(logical_dims.iter())
+            .zip(self.axis_classes.iter())
+        {
+            if value >= dim {
+                return Err(StorageError::InvalidStructuredStorage(format!(
+                    "logical index {value} is out of bounds for dim {dim}"
+                )));
+            }
+            if payload_index[class_id] == usize::MAX {
+                payload_index[class_id] = value;
+            } else if payload_index[class_id] != value {
+                return Ok(T::default());
+            }
+        }
+        let offset = payload_index[..self.payload_dims.len()]
+            .iter()
+            .zip(self.strides.iter())
+            .try_fold(0usize, |offset, (&value, &stride)| {
+                let stride = usize::try_from(stride).map_err(|_| {
+                    StorageError::InvalidStructuredStorage("negative stride".into())
+                })?;
+                let term = value.checked_mul(stride).ok_or_else(|| {
+                    StorageError::InvalidStructuredStorage("payload offset overflow".into())
+                })?;
+                offset.checked_add(term).ok_or_else(|| {
+                    StorageError::InvalidStructuredStorage("payload offset overflow".into())
+                })
+            })?;
+        self.data.get(offset).copied().ok_or_else(|| {
+            StorageError::InvalidStructuredStorage("payload offset outside storage".into())
+        })
     }
 }
 
@@ -846,19 +979,25 @@ pub trait SumFromStorage: Sized {
 
 impl SumFromStorage for f64 {
     fn sum_from_storage(storage: &Storage) -> Self {
+        let mut sum = 0.0;
         match &storage.0 {
-            StorageRepr::F64(v) => v.data().iter().copied().sum(),
-            StorageRepr::C64(v) => v.data().iter().map(|z| z.re).sum(),
+            StorageRepr::F64(v) => v.for_each_payload_value(|value| sum += value),
+            StorageRepr::C64(v) => v.for_each_payload_value(|value| sum += value.re),
         }
+        sum
     }
 }
 
 impl SumFromStorage for Complex64 {
     fn sum_from_storage(storage: &Storage) -> Self {
+        let mut sum = Complex64::new(0.0, 0.0);
         match &storage.0 {
-            StorageRepr::F64(v) => Complex64::new(v.data().iter().copied().sum(), 0.0),
-            StorageRepr::C64(v) => v.data().iter().copied().sum(),
+            StorageRepr::F64(v) => {
+                v.for_each_payload_value(|value| sum += Complex64::new(value, 0.0))
+            }
+            StorageRepr::C64(v) => v.for_each_payload_value(|value| sum += value),
         }
+        sum
     }
 }
 
@@ -880,7 +1019,11 @@ impl Storage {
     }
 
     fn validate_dense_len<T>(data: &[T], logical_dims: &[usize], label: &str) -> Result<()> {
-        let expected_len: usize = logical_dims.iter().product();
+        let expected_len = logical_dims.iter().try_fold(1usize, |length, &dim| {
+            length
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow!("{label} dimension product overflows for {logical_dims:?}"))
+        })?;
         ensure!(
             data.len() == expected_len,
             "{label} len {} does not match logical dims {:?} (expected {})",
@@ -1007,6 +1150,61 @@ impl Storage {
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
         T::build_structured_storage(data, payload_dims, strides, axis_classes)
+    }
+
+    /// Validate structured-storage metadata and return the required payload length.
+    ///
+    /// The metadata must be internally consistent: canonical axis classes, a
+    /// payload rank implied by the axis classes, matching dim/stride ranks,
+    /// non-negative strides, and size products that fit in `usize`. The
+    /// returned length is exactly what a constructed [`Storage`] would
+    /// require, so untrusted payload lengths can be rejected before any
+    /// allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metadata is inconsistent or its size products
+    /// overflow `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let required = Storage::validate_structured_metadata(
+    ///     &[2],
+    ///     &[1],
+    ///     &[0, 0],
+    /// ).unwrap();
+    /// assert_eq!(required, 2);
+    ///
+    /// assert!(Storage::validate_structured_metadata(&[2], &[-1], &[0]).is_err());
+    /// ```
+    pub fn validate_structured_metadata(
+        payload_dims: &[usize],
+        strides: &[isize],
+        axis_classes: &[usize],
+    ) -> Result<usize> {
+        validate_canonical_axis_classes(axis_classes)?;
+        let payload_rank = axis_classes.iter().try_fold(0usize, |rank, &class_id| {
+            let required_rank = class_id
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("axis class index overflow"))?;
+            Ok::<_, anyhow::Error>(rank.max(required_rank))
+        })?;
+        ensure!(
+            payload_dims.len() == payload_rank,
+            "payload rank {} does not match axis_classes {:?}",
+            payload_dims.len(),
+            axis_classes
+        );
+        ensure!(
+            strides.len() == payload_dims.len(),
+            "payload dims {:?} and strides {:?} must have the same rank",
+            payload_dims,
+            strides
+        );
+        required_storage_len(payload_dims, strides)
     }
 
     /// Create dense f64 storage from column-major logical values.
@@ -1452,7 +1650,10 @@ impl Storage {
         self.len() == 0
     }
 
-    /// Sum all elements, converting to type `T`.
+    /// Sum all referenced compact payload entries, converting to type `T`.
+    ///
+    /// Stride gaps and padding in a structured backing buffer are not tensor
+    /// values and are excluded from the reduction.
     ///
     /// # Example
     /// ```
@@ -1464,10 +1665,12 @@ impl Storage {
         T::sum_from_storage(self)
     }
 
-    /// Maximum absolute value over all stored elements.
+    /// Maximum absolute value over all referenced compact payload entries.
     ///
-    /// For real storage this is `max(|x|)`, and for complex storage this is
-    /// `max(norm(z))`.
+    /// Stride gaps and padding are excluded. For real storage this is `max(|x|)`, and for complex storage this is
+    /// `max(hypot(re, im))`. NaN payloads, including a NaN real or imaginary
+    /// component paired with infinity, propagate to a NaN result; positive
+    /// infinity is preserved.
     ///
     /// # Examples
     ///
@@ -1478,9 +1681,103 @@ impl Storage {
     /// assert!((s.max_abs() - 3.0).abs() < 1e-10);
     /// ```
     pub fn max_abs(&self) -> f64 {
+        fn fold_nan_propagating(values: impl IntoIterator<Item = f64>) -> f64 {
+            values.into_iter().fold(0.0_f64, |current, value| {
+                if current.is_nan() || value.is_nan() {
+                    f64::NAN
+                } else {
+                    current.max(value)
+                }
+            })
+        }
+
+        let mut current = 0.0_f64;
+        let mut update = |value: f64| {
+            current = fold_nan_propagating([current, value]);
+        };
         match &self.0 {
-            StorageRepr::F64(v) => v.data().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
-            StorageRepr::C64(v) => v.data().iter().map(|z| z.norm()).fold(0.0_f64, f64::max),
+            StorageRepr::F64(v) => v.for_each_payload_value(|value| update(value.abs())),
+            StorageRepr::C64(v) => v.for_each_payload_value(|z| {
+                update(if z.re.is_nan() || z.im.is_nan() {
+                    f64::NAN
+                } else {
+                    z.re.hypot(z.im)
+                });
+            }),
+        }
+        current
+    }
+
+    /// Scan the compact payload without copying it.
+    ///
+    /// The returned flags describe the stored payload, not the logical dense
+    /// tensor. Structural zeros cannot introduce non-finite values, so this is
+    /// sufficient for metric validation while preserving compact memory use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let storage = Storage::from_dense_col_major(vec![1.0_f64, f64::INFINITY], &[2]).unwrap();
+    /// assert_eq!(storage.payload_nonfinite_flags(), (false, true));
+    /// ```
+    pub fn payload_nonfinite_flags(&self) -> (bool, bool) {
+        match &self.0 {
+            StorageRepr::F64(value) => {
+                let mut flags = (false, false);
+                value.for_each_payload_value(|value| {
+                    flags.0 |= value.is_nan();
+                    flags.1 |= value.is_infinite();
+                });
+                flags
+            }
+            StorageRepr::C64(value) => {
+                let mut flags = (false, false);
+                value.for_each_payload_value(|value| {
+                    flags.0 |= value.re.is_nan() || value.im.is_nan();
+                    flags.1 |= value.re.is_infinite() || value.im.is_infinite();
+                });
+                flags
+            }
+        }
+    }
+
+    /// Return one compact payload value as a dynamic [`AnyScalar`].
+    ///
+    /// `payload_coords` are column-major payload coordinates, not logical
+    /// coordinates. Repeated logical axis classes are represented once in the
+    /// payload, so this lookup performs only rank-bounded stride arithmetic and
+    /// never allocates coordinates or scans the payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] when the coordinate rank or bounds are invalid
+    /// or the compact metadata points outside the backing payload.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let real = Storage::from_diag_col_major(vec![2.0_f64, 3.0], 2).unwrap();
+    /// assert_eq!(real.scalar_at(&[1]).unwrap().real(), 3.0);
+    ///
+    /// let complex = Storage::from_dense_col_major(
+    ///     vec![Complex64::new(1.0, -2.0)], &[1],
+    /// ).unwrap();
+    /// assert_eq!(complex.scalar_at(&[0]).unwrap().as_c64(),
+    ///     Some(Complex64::new(1.0, -2.0)));
+    /// ```
+    pub fn scalar_at(&self, payload_coords: &[usize]) -> StorageResult<AnyScalar> {
+        match &self.0 {
+            StorageRepr::F64(value) => value
+                .payload_scalar_at(payload_coords)
+                .map(AnyScalar::from_value),
+            StorageRepr::C64(value) => value
+                .payload_scalar_at(payload_coords)
+                .map(AnyScalar::from_value),
         }
     }
 
@@ -1512,7 +1809,7 @@ impl Storage {
                         logical_dims, structured_dims
                     )));
                 }
-                Ok(v.logical_dense_col_major_vec())
+                v.logical_dense_col_major_vec()
             }
             StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
                 expected: "f64",
@@ -1553,7 +1850,7 @@ impl Storage {
                         logical_dims, structured_dims
                     )));
                 }
-                Ok(v.logical_dense_col_major_vec())
+                v.logical_dense_col_major_vec()
             }
             StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
                 expected: "Complex64",

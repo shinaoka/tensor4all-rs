@@ -205,29 +205,20 @@ for direct use.
 #### 3.1.7 New: context.rs (paired thread-local execution objects)
 
 ```rust
-use std::cell::RefCell;
 use std::sync::Arc;
-use tenferro::{CpuBackend, EagerContext};
+use tenferro_ad::EagerRuntime;
+use tensor4all_tensorbackend::EagerContextError;
 
-thread_local! {
-    static DEFAULT_CPU_BACKEND: RefCell<CpuBackend> =
-        RefCell::new(CpuBackend::new());
-    static DEFAULT_EAGER_CTX: Arc<EagerContext<CpuBackend>> =
-        EagerContext::with_backend(CpuBackend::new());
-}
-
-pub fn with_default_backend<R>(f: impl FnOnce(&mut CpuBackend) -> R) -> R {
-    DEFAULT_CPU_BACKEND.with(|b| f(&mut b.borrow_mut()))
-}
-
-pub fn default_eager_ctx() -> Arc<EagerContext<CpuBackend>> {
-    DEFAULT_EAGER_CTX.with(Arc::clone)
-}
+pub fn default_eager_ctx()
+    -> std::result::Result<Arc<EagerRuntime>, EagerContextError>
 ```
 
+The runtime is process-global and its backends share the process-global CPU
+context, but registration can fail. Callers must propagate the typed
+`EagerContextError` rather than assuming initialization is infallible.
 This is intentionally *not* documented as "one shared backend instance."
 `TypedTensor` APIs need a mutable `CpuBackend`, while `EagerTensor` owns its
-backend through `EagerContext`. The migration should keep that distinction
+backend through `EagerRuntime`. The migration should keep that distinction
 explicit in both code and docs.
 
 ### 3.2 tcicore
@@ -276,7 +267,7 @@ pub struct TensorDynLen {
 
 **Construction pattern:**
 ```rust
-let ctx = tensor4all_tensorbackend::default_eager_ctx();
+let ctx = tensor4all_tensorbackend::default_eager_ctx()?;
 let inner = EagerTensor::from_tensor_in(native_tensor, ctx);
 ```
 

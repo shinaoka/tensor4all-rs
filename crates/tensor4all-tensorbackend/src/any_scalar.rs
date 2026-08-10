@@ -61,8 +61,20 @@ impl ScalarValue {
                     0.0
                 }
             }
-            Self::C32(value) => value.norm() as f64,
-            Self::C64(value) => value.norm(),
+            Self::C32(value) => {
+                if value.re.is_nan() || value.im.is_nan() {
+                    f64::NAN
+                } else {
+                    value.norm() as f64
+                }
+            }
+            Self::C64(value) => {
+                if value.re.is_nan() || value.im.is_nan() {
+                    f64::NAN
+                } else {
+                    value.norm()
+                }
+            }
         }
     }
 

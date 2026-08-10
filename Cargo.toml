@@ -16,6 +16,7 @@ members = [
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
     "tools/api-dump",
+    "tools/library-panic-audit",
     "xtask",
     "docs/book-tests",
     "docs/tutorial-code",
@@ -62,6 +63,7 @@ num-complex = "0.4"
 num-traits = "0.2"
 anyhow = "1.0"
 approx = "0.5"
+serde_json = "1"
 criterion = "0.5"
 bnum = "0.12"
 uint = "0.10"

@@ -1,0 +1,15 @@
+[package]
+name = "library-panic-audit"
+version = "0.1.0"
+edition = "2021"
+description = "Compiler-backed audit of production Rust panic paths"
+
+[[bin]]
+name = "library-panic-audit"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+proc-macro2 = { version = "1", features = ["span-locations"] }
+serde_json.workspace = true
+syn = { version = "2", features = ["full", "visit"] }

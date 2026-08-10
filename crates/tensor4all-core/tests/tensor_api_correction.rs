@@ -1,0 +1,532 @@
+use num_complex::{Complex32, Complex64};
+use std::error::Error;
+use std::sync::Arc;
+use tensor4all_core::{DynIndex, TensorDynLen, TensorDynLenError, TensorStorageError};
+use tensor4all_tensorbackend::{Storage, StorageKind};
+
+#[test]
+fn tensor_dyn_len_norm_and_comparison_operations_are_fallible() {
+    let index = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(vec![index.clone()], vec![3.0_f64, 4.0]).unwrap();
+
+    assert!((tensor.norm_squared().unwrap() - 25.0).abs() < 1.0e-12);
+    assert!((tensor.norm().unwrap() - 5.0).abs() < 1.0e-12);
+    assert!((tensor.maxabs().unwrap() - 4.0).abs() < 1.0e-12);
+    assert!(tensor.isapprox(&tensor, 0.0, 0.0).unwrap());
+
+    let other_index = DynIndex::new_dyn(2);
+    let incompatible = TensorDynLen::from_dense(vec![other_index], vec![3.0_f64, 4.0]).unwrap();
+    let error = tensor.isapprox(&incompatible, 1.0e-12, 0.0).unwrap_err();
+    assert!(error.to_string().contains("Index"));
+}
+
+#[test]
+fn tensor_dyn_len_norm_and_maxabs_preserve_complex_values() {
+    let index = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(
+        vec![index],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, -2.0)],
+    )
+    .unwrap();
+
+    assert!((tensor.norm_squared().unwrap() - 29.0).abs() < 1.0e-12);
+    assert!((tensor.norm().unwrap() - 29.0_f64.sqrt()).abs() < 1.0e-12);
+    assert!((tensor.maxabs().unwrap() - 5.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn tensor_dyn_len_operations_cover_f32_and_c32() {
+    let index = DynIndex::new_dyn(2);
+    let f32_tensor = TensorDynLen::from_dense(vec![index.clone()], vec![3.0_f32, 4.0]).unwrap();
+    assert!((f32_tensor.norm_squared().unwrap() - 25.0).abs() < 1.0e-6);
+    assert_eq!(f32_tensor.to_vec::<f32>().unwrap(), vec![3.0_f32, 4.0]);
+
+    let c32_tensor = TensorDynLen::from_dense(
+        vec![index],
+        vec![Complex32::new(3.0, 4.0), Complex32::new(0.0, -2.0)],
+    )
+    .unwrap();
+    assert!((c32_tensor.norm_squared().unwrap() - 29.0).abs() < 1.0e-5);
+    assert_eq!(
+        c32_tensor.to_vec::<Complex32>().unwrap(),
+        vec![Complex32::new(3.0, 4.0), Complex32::new(0.0, -2.0)]
+    );
+}
+
+#[test]
+fn arithmetic_does_not_promote_32_bit_tensors() {
+    let index = DynIndex::new_dyn(2);
+    let f32_tensor = TensorDynLen::from_dense(vec![index.clone()], vec![1.0_f32, 2.0]).unwrap();
+    let scaled_f32 = f32_tensor
+        .scale(tensor4all_core::AnyScalar::new_real(2.0))
+        .unwrap();
+    assert_eq!(scaled_f32.to_vec::<f32>().unwrap(), vec![2.0, 4.0]);
+    assert!(scaled_f32.to_vec::<f64>().is_err());
+
+    let complex_scaled_f32 = f32_tensor
+        .scale(tensor4all_core::AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    assert_eq!(
+        complex_scaled_f32.to_vec::<Complex32>().unwrap(),
+        vec![Complex32::new(0.0, 1.0), Complex32::new(0.0, 2.0)]
+    );
+    assert!(complex_scaled_f32.to_vec::<Complex64>().is_err());
+
+    let combined_f32 = f32_tensor
+        .axpby(
+            tensor4all_core::AnyScalar::new_real(2.0),
+            &f32_tensor,
+            tensor4all_core::AnyScalar::new_real(3.0),
+        )
+        .unwrap();
+    assert_eq!(combined_f32.to_vec::<f32>().unwrap(), vec![5.0, 10.0]);
+    assert!(combined_f32.to_vec::<f64>().is_err());
+
+    let c32_tensor = TensorDynLen::from_dense(
+        vec![index],
+        vec![Complex32::new(1.0, 0.5), Complex32::new(2.0, -0.25)],
+    )
+    .unwrap();
+    let scaled_c32 = c32_tensor
+        .scale(tensor4all_core::AnyScalar::new_real(2.0))
+        .unwrap();
+    assert_eq!(
+        scaled_c32.to_vec::<Complex32>().unwrap(),
+        vec![Complex32::new(2.0, 1.0), Complex32::new(4.0, -0.5)]
+    );
+    assert!(scaled_c32.to_vec::<Complex64>().is_err());
+
+    let combined_c32 = c32_tensor
+        .axpby(
+            tensor4all_core::AnyScalar::new_real(2.0),
+            &c32_tensor,
+            tensor4all_core::AnyScalar::new_real(3.0),
+        )
+        .unwrap();
+    assert_eq!(
+        combined_c32.to_vec::<Complex32>().unwrap(),
+        vec![Complex32::new(5.0, 2.5), Complex32::new(10.0, -1.25)]
+    );
+    assert!(combined_c32.to_vec::<Complex64>().is_err());
+}
+
+#[test]
+fn tensor_dyn_len_norm_api_has_crate_local_error_and_source_chain() {
+    fn assert_typed_result<T, E: Error + Send + Sync + 'static>(_: Result<T, E>) {}
+
+    let index = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(vec![index], vec![3.0_f64, 4.0]).unwrap();
+    assert_typed_result(tensor.norm_squared());
+    assert_typed_result(tensor.norm());
+    assert_typed_result(tensor.maxabs());
+    assert_typed_result(tensor.isapprox(&tensor, 0.0, 0.0));
+
+    let error = TensorDynLenError::Storage {
+        source: TensorStorageError::Materialization {
+            source: Arc::new(std::io::Error::other("backend unavailable")),
+        },
+    };
+    assert!(error.source().is_some());
+    assert!(error.source().and_then(Error::source).is_some());
+}
+
+#[test]
+fn tensor_dyn_len_norm_rejects_nan_and_preserves_infinity() {
+    for tensor in [
+        TensorDynLen::scalar(f64::NAN).unwrap(),
+        TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, f64::NAN]).unwrap(),
+    ] {
+        assert!(matches!(
+            tensor.norm_squared(),
+            Err(TensorDynLenError::NaNInput { .. })
+        ));
+        assert!(matches!(
+            tensor.norm(),
+            Err(TensorDynLenError::NaNInput { .. })
+        ));
+        assert!(matches!(
+            tensor.maxabs(),
+            Err(TensorDynLenError::NaNInput { .. })
+        ));
+    }
+
+    let tensor = TensorDynLen::scalar(f64::INFINITY).unwrap();
+    assert!(tensor.norm_squared().unwrap().is_infinite());
+    assert!(tensor.norm().unwrap().is_infinite());
+    assert!(tensor.maxabs().unwrap().is_infinite());
+
+    for tensor in [
+        TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0_f32, f32::NAN]).unwrap(),
+        TensorDynLen::from_dense(
+            vec![DynIndex::new_dyn(2)],
+            vec![Complex32::new(1.0, 0.0), Complex32::new(f32::NAN, 0.0)],
+        )
+        .unwrap(),
+    ] {
+        assert!(matches!(
+            tensor.norm_squared(),
+            Err(TensorDynLenError::NaNInput { .. })
+        ));
+        assert!(matches!(
+            tensor.maxabs(),
+            Err(TensorDynLenError::NaNInput { .. })
+        ));
+    }
+}
+
+#[test]
+fn compact_norms_promote_f32_extremes_to_stable_f64_metrics() {
+    let tensor = TensorDynLen::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![f32::MAX, f32::MIN_POSITIVE],
+    )
+    .unwrap();
+    let expected = f64::from(f32::MAX);
+    assert_eq!(tensor.maxabs().unwrap(), expected);
+    assert!(tensor.norm_squared().unwrap().is_finite());
+    assert!((tensor.norm().unwrap() - expected).abs() / expected < 1.0e-12);
+}
+
+#[test]
+fn tracked_scale_from_public_structured_storage_stays_compact() {
+    let bond_dim = 100_000;
+    let site_dim = 3;
+    let left = DynIndex::new_dyn(bond_dim);
+    let site = DynIndex::new_dyn(site_dim);
+    let right = DynIndex::new_dyn(bond_dim);
+    let storage = Storage::new_structured(
+        vec![2.0_f64; bond_dim * site_dim],
+        vec![bond_dim, site_dim],
+        vec![1, bond_dim as isize],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    let tensor = TensorDynLen::from_storage(vec![left, site, right], Arc::new(storage)).unwrap();
+    let scalar = tensor4all_core::AnyScalar::new_real(3.0)
+        .enable_grad()
+        .unwrap();
+    let scalar_alias = scalar.clone();
+    let scaled = tensor.scale(scalar).unwrap();
+
+    assert!(scaled.tracks_grad());
+    let scaled_storage = scaled.storage().unwrap();
+    assert_eq!(scaled_storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(scaled_storage.payload_dims(), &[bond_dim, site_dim]);
+    assert_eq!(scaled_storage.payload_len(), bond_dim * site_dim);
+    assert_eq!(scaled_storage.scalar_at(&[0, 1]).unwrap().real(), 6.0);
+
+    scaled.sum().unwrap().backward().unwrap();
+    assert_eq!(
+        scalar_alias.grad().unwrap().unwrap().real(),
+        2.0 * (bond_dim * site_dim) as f64
+    );
+}
+
+#[test]
+fn untracked_scale_of_gapped_structured_storage_stays_compact() {
+    let left = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(2);
+    // Backing offset 2 is a stride gap no payload coordinate references
+    // (strides [3,1] address offsets 0,1,3,4); scaling must not reproduce
+    // it in the resulting storage.
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, 999.0, 3.0, 4.0],
+        vec![2, 2],
+        vec![3, 1],
+        vec![0, 1],
+    )
+    .unwrap();
+    let tensor = TensorDynLen::from_storage(vec![left, right], Arc::new(storage)).unwrap();
+    assert!(!tensor.tracks_grad());
+    let scaled = tensor
+        .scale(tensor4all_core::AnyScalar::new_real(2.0))
+        .unwrap();
+    assert!(!scaled.tracks_grad());
+    let scaled_storage = scaled.storage().unwrap();
+    // Only the compact payload survives: the strided-gap layout must collapse
+    // to dense storage (the old whole-backing scale preserved it as
+    // Structured), and the referenced values must scale correctly.
+    assert_eq!(scaled_storage.storage_kind(), StorageKind::Dense);
+    assert_eq!(scaled_storage.payload_len(), 4);
+    // Payload coords (0,0),(1,0),(0,1),(1,1) read offsets 0,3,1,4 from the
+    // original backing [1,2,999,3,4] -> [1,3,2,4], doubled to [2,6,4,8].
+    assert_eq!(scaled_storage.scalar_at(&[0, 0]).unwrap().real(), 2.0);
+    assert_eq!(scaled_storage.scalar_at(&[1, 0]).unwrap().real(), 6.0);
+    assert_eq!(scaled_storage.scalar_at(&[0, 1]).unwrap().real(), 4.0);
+    assert_eq!(scaled_storage.scalar_at(&[1, 1]).unwrap().real(), 8.0);
+}
+
+#[test]
+fn mixed_complex_nonfinite_components_are_typed_nan_inputs() {
+    for value in [
+        Complex64::new(f64::INFINITY, f64::NAN),
+        Complex64::new(f64::NAN, f64::INFINITY),
+    ] {
+        let tensor = TensorDynLen::scalar(value).unwrap();
+        assert!(matches!(
+            tensor.norm_squared(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "norm_squared"
+            })
+        ));
+        assert!(matches!(
+            tensor.maxabs(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "maxabs"
+            })
+        ));
+    }
+    for value in [
+        Complex32::new(f32::INFINITY, f32::NAN),
+        Complex32::new(f32::NAN, f32::INFINITY),
+    ] {
+        let tensor = TensorDynLen::scalar(value).unwrap();
+        assert!(matches!(
+            tensor.norm_squared(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "norm_squared"
+            })
+        ));
+        assert!(matches!(
+            tensor.maxabs(),
+            Err(TensorDynLenError::NaNInput {
+                operation: "maxabs"
+            })
+        ));
+    }
+
+    let index = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(
+        vec![index],
+        vec![
+            Complex64::new(f64::INFINITY, f64::NAN),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .unwrap();
+    assert!(matches!(
+        tensor.maxabs(),
+        Err(TensorDynLenError::NaNInput {
+            operation: "maxabs"
+        })
+    ));
+}
+
+#[test]
+fn isapprox_handles_nonfinite_values_like_julia() {
+    let scalar_inf = TensorDynLen::scalar(f64::INFINITY).unwrap();
+    let scalar_inf_same = TensorDynLen::scalar(f64::INFINITY).unwrap();
+    let scalar_finite = TensorDynLen::scalar(1.0_f64).unwrap();
+    assert!(scalar_inf
+        .isapprox(&scalar_inf_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!scalar_inf
+        .isapprox(&scalar_finite, 1.0e-12, 1.0e-12)
+        .unwrap());
+
+    let real_index = DynIndex::new_dyn(2);
+    let real_tensor =
+        TensorDynLen::from_dense(vec![real_index.clone()], vec![f64::INFINITY, 2.0]).unwrap();
+    let real_tensor_same =
+        TensorDynLen::from_dense(vec![real_index.clone()], vec![f64::INFINITY, 2.0]).unwrap();
+    let real_tensor_different =
+        TensorDynLen::from_dense(vec![real_index], vec![f64::NEG_INFINITY, 2.0]).unwrap();
+    assert!(real_tensor
+        .isapprox(&real_tensor_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!real_tensor
+        .isapprox(&real_tensor_different, 1.0e-12, 1.0e-12)
+        .unwrap());
+
+    let complex_scalar = TensorDynLen::scalar(Complex64::new(0.0, f64::INFINITY)).unwrap();
+    let complex_scalar_same = TensorDynLen::scalar(Complex64::new(0.0, f64::INFINITY)).unwrap();
+    let complex_scalar_different =
+        TensorDynLen::scalar(Complex64::new(f64::INFINITY, 0.0)).unwrap();
+    assert!(complex_scalar
+        .isapprox(&complex_scalar_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!complex_scalar
+        .isapprox(&complex_scalar_different, 1.0e-12, 1.0e-12)
+        .unwrap());
+
+    let index = DynIndex::new_dyn(2);
+    let complex_inf = TensorDynLen::from_dense(
+        vec![index.clone()],
+        vec![Complex64::new(f64::INFINITY, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let complex_inf_same = TensorDynLen::from_dense(
+        vec![index.clone()],
+        vec![Complex64::new(f64::INFINITY, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let complex_inf_different = TensorDynLen::from_dense(
+        vec![index],
+        vec![Complex64::new(0.0, f64::INFINITY), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    assert!(complex_inf
+        .isapprox(&complex_inf_same, 1.0e-12, 1.0e-12)
+        .unwrap());
+    assert!(!complex_inf
+        .isapprox(&complex_inf_different, 1.0e-12, 1.0e-12)
+        .unwrap());
+}
+
+#[test]
+fn tensor_dyn_len_distance_uses_typed_metric_error() {
+    let tensor = TensorDynLen::scalar(f64::NAN).unwrap();
+    let result: Result<f64, TensorDynLenError> = tensor.distance(&tensor);
+    assert!(matches!(
+        result,
+        Err(TensorDynLenError::NaNInput {
+            operation: "norm_squared"
+        })
+    ));
+}
+
+#[test]
+fn structured_32_bit_selection_preserves_dtype() {
+    let f32_i = DynIndex::new_dyn(2);
+    let f32_j = DynIndex::new_dyn(2);
+    let f32_tensor =
+        TensorDynLen::from_diag(vec![f32_i.clone(), f32_j], vec![1.0_f32, 2.0]).unwrap();
+    let selected_f32 = f32_tensor.select_indices(&[f32_i], &[1]).unwrap();
+    assert_eq!(selected_f32.to_vec::<f32>().unwrap(), vec![0.0, 2.0]);
+    assert!(selected_f32.to_vec::<f64>().is_err());
+
+    let c32_i = DynIndex::new_dyn(2);
+    let c32_j = DynIndex::new_dyn(2);
+    let c32_tensor = TensorDynLen::from_diag(
+        vec![c32_i.clone(), c32_j],
+        vec![Complex32::new(1.0, 0.5), Complex32::new(2.0, -0.25)],
+    )
+    .unwrap();
+    let selected_c32 = c32_tensor.select_indices(&[c32_i], &[1]).unwrap();
+    assert_eq!(
+        selected_c32.to_vec::<Complex32>().unwrap(),
+        vec![Complex32::new(0.0, 0.0), Complex32::new(2.0, -0.25)]
+    );
+    assert!(selected_c32.to_vec::<Complex64>().is_err());
+
+    let selector_f32 = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+        DynIndex::new_dyn(2),
+        1,
+        2.0_f32,
+    )
+    .unwrap();
+    let selected_selector_f32 = selector_f32
+        .select_indices(&[selector_f32.indices()[1].clone()], &[1])
+        .unwrap();
+    assert_eq!(
+        selected_selector_f32.to_vec::<f32>().unwrap(),
+        vec![2.0, 0.0, 0.0, 2.0]
+    );
+    assert!(selected_selector_f32.to_vec::<f64>().is_err());
+
+    let selector_c32 = TensorDynLen::from_copy_selector(
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+        DynIndex::new_dyn(2),
+        1,
+        Complex32::new(2.0, -0.5),
+    )
+    .unwrap();
+    let selected_selector_c32 = selector_c32
+        .select_indices(&[selector_c32.indices()[1].clone()], &[1])
+        .unwrap();
+    assert_eq!(
+        selected_selector_c32.to_vec::<Complex32>().unwrap(),
+        vec![
+            Complex32::new(2.0, -0.5),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(2.0, -0.5),
+        ]
+    );
+    assert!(selected_selector_c32.to_vec::<Complex64>().is_err());
+}
+
+#[test]
+fn detach_preserves_32_bit_dtype_after_enabling_grad() {
+    let f32_tensor = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0_f32, 2.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let detached_f32 = f32_tensor.detach().unwrap();
+    assert_eq!(detached_f32.to_vec::<f32>().unwrap(), vec![1.0, 2.0]);
+    assert!(detached_f32.to_vec::<f64>().is_err());
+
+    let c32_tensor = TensorDynLen::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![Complex32::new(1.0, 0.5), Complex32::new(2.0, -0.25)],
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+    let detached_c32 = c32_tensor.detach().unwrap();
+    assert_eq!(
+        detached_c32.to_vec::<Complex32>().unwrap(),
+        vec![Complex32::new(1.0, 0.5), Complex32::new(2.0, -0.25)]
+    );
+    assert!(detached_c32.to_vec::<Complex64>().is_err());
+
+    let structured_f32 = TensorDynLen::from_diag(
+        vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)],
+        vec![1.0_f32, 2.0],
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+    let detached_structured_f32 = structured_f32.detach().unwrap();
+    assert_eq!(
+        detached_structured_f32.to_vec::<f32>().unwrap(),
+        vec![1.0, 0.0, 0.0, 2.0]
+    );
+    assert!(detached_structured_f32.to_vec::<f64>().is_err());
+}
+
+#[test]
+fn structured_constructors_preserve_f32_and_c32_dtype() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let f32_diag =
+        TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f32, 2.0_f32]).unwrap();
+    assert!(f32_diag.is_diag());
+    assert_eq!(f32_diag.to_vec::<f32>().unwrap(), vec![1.0, 0.0, 0.0, 2.0]);
+    assert!(f32_diag.to_vec::<f64>().is_err());
+
+    let c32_diag = TensorDynLen::from_diag(
+        vec![i, j],
+        vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
+    )
+    .unwrap();
+    assert!(c32_diag.is_diag());
+    assert_eq!(
+        c32_diag.to_vec::<Complex32>().unwrap(),
+        vec![
+            Complex32::new(1.0, 2.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(3.0, 4.0),
+        ]
+    );
+    assert!(c32_diag.to_vec::<Complex64>().is_err());
+
+    let left = DynIndex::new_dyn(2);
+    let site = DynIndex::new_dyn(3);
+    let right = DynIndex::new_dyn(2);
+    let selector = TensorDynLen::from_copy_selector(left, site, right, 1, 2.5_f32).unwrap();
+    assert_eq!(
+        selector
+            .to_vec::<f32>()
+            .unwrap()
+            .iter()
+            .filter(|v| **v != 0.0)
+            .count(),
+        2
+    );
+    assert!(selector.to_vec::<f64>().is_err());
+}

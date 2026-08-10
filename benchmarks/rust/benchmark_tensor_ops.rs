@@ -66,7 +66,7 @@ fn main() -> Result<()> {
     // Warm up caches and allocator paths.
     for _ in 0..32 {
         black_box(a.inner_product(&b)?);
-        black_box(a.norm());
+        black_box(a.norm()?);
         black_box(a.axpby(alpha.clone(), &b, beta.clone())?);
         black_box(a.conj().contract_pair(&b)?.sum()?);
     }
@@ -93,13 +93,14 @@ fn main() -> Result<()> {
         inner_checksum.im,
     );
 
-    let (norm_seconds, norm_checksum) = elapsed_seconds(|| {
+    let (norm_seconds, norm_checksum) = elapsed_seconds(|| -> Result<f64> {
         let mut checksum = 0.0;
         for _ in 0..repeats {
-            checksum += black_box(a.norm());
+            checksum += black_box(a.norm()?);
         }
-        checksum
+        Ok(checksum)
     });
+    let norm_checksum = norm_checksum?;
     println!(
         "norm_seconds = {:.6} per_call_us = {:.3} checksum = {:.6e}",
         norm_seconds,
@@ -111,7 +112,7 @@ fn main() -> Result<()> {
         let mut checksum = 0.0;
         for _ in 0..repeats {
             let out = black_box(a.axpby(alpha.clone(), black_box(&b), beta.clone())?);
-            checksum += black_box(out.maxabs());
+            checksum += black_box(out.maxabs()?);
         }
         Ok(checksum)
     });

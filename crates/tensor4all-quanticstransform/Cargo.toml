@@ -34,6 +34,7 @@ tensor4all-simplett = { path = "../tensor4all-simplett", default-features = fals
 quanticsgrids.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
+num-bigint = "0.4"
 num-rational = "0.4"
 num-integer = "0.1"
 anyhow.workspace = true

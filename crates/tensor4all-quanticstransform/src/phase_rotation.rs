@@ -9,8 +9,8 @@ use std::f64::consts::PI;
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
-    embed_single_var_mpo, tensortrain_to_linear_operator,
-    tensortrain_to_linear_operator_asymmetric, QuanticsOperator,
+    checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
+    tensortrain_to_linear_operator_asymmetric, try_vec_with_capacity, QuanticsOperator,
 };
 
 /// Create a phase rotation operator: f(x) = exp(i*θ*x) * g(x)
@@ -31,8 +31,9 @@ use crate::common::{
 /// LinearOperator representing the phase rotation
 ///
 /// # Errors
-/// Returns an error when `r` is zero, when `theta` is not finite, or when
-/// internal MPO/operator construction fails.
+/// Returns an error when `r` is zero, when `theta` is not finite, when the
+/// MPO site-list allocation exceeds checked bounds, or when internal
+/// MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -61,7 +62,9 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
     }
 
     let mpo = phase_rotation_mpo(r, theta)?;
-    let site_dims = vec![2; r];
+    let mut site_dims =
+        try_vec_with_capacity::<usize>("phase rotation operator site dimensions", r)?;
+    site_dims.resize(r, 2);
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
@@ -105,10 +108,12 @@ pub fn phase_rotation_operator_multivar(
         anyhow::bail!("theta must be finite, got {theta}");
     }
 
+    let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = phase_rotation_mpo(r, theta)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
-    let dim_multi = 1 << nvariables;
-    let dims = vec![dim_multi; r];
+    let mut dims =
+        try_vec_with_capacity::<usize>("phase rotation multivariable site dimensions", r)?;
+    dims.resize(r, dim_multi);
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
@@ -130,8 +135,10 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
 
     // Normalize theta to [0, 2π)
     let theta_mod = theta.rem_euclid(2.0 * PI);
-
-    let mut tensors = Vec::with_capacity(r);
+    let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
+        "phase rotation MPO site list",
+        r,
+    )?;
 
     for n in 0..r {
         // Phase for this site: θ * 2^(R-1-n) (big-endian: site 0 = MSB)

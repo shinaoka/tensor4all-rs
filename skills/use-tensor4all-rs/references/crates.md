@@ -15,10 +15,10 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
   - `.prime()` / `.noprime()` — raise / clear prime level (ket vs bra).
   - `.dim()`, `.plev()` via the `IndexLike` trait (`use tensor4all_core::IndexLike;`).
   - Two independently created indices are always distinct even with equal dim.
-- `TensorDynLen` — dynamic-rank tensor backed by compact (dense / diagonal / structured) storage; axes matched by index identity, no fixed ordering.
+- `TensorDynLen` — dynamic-rank tensor supporting `f32`, `f64`, `Complex32`, and `Complex64`; `f64`/`Complex64` may use compact dense/diagonal/structured snapshots while 32-bit tensors retain eager authoritative payloads. Axes are matched by index identity, with no fixed ordering.
   - `TensorDynLen::from_dense(indices, data)` — column-major `data`; first index varies fastest.
   - `TensorDynLen::zeros::<f64>(indices)`, `::random::<f64, _>(&mut rng, indices)`.
-  - `.to_vec::<f64>()`, `.sum()`, `.dims()`.
+  - `.to_vec::<f32>()` / `.to_vec::<f64>()` / `.to_vec::<Complex32>()` / `.to_vec::<Complex64>()`, `.sum()`, `.dims()`.
 - `contract(&[&a, &b, ...])` — sum over all shared indices; inputs must be connected (else error). `outer_product(&a, &b)` for disconnected products.
 - `factorize(&t, &[left_indices], &opts) -> FactorizeResult { left, right, rank, singular_values }`.
   - `FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol))` / `.with_max_rank(n)`.
@@ -26,7 +26,7 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
 
 ## tensor4all-simplett — lightweight TT/MPS
 
-Plain `f64` / `Complex64` tensor train; no named indices needed. The go-to for numerics.
+Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the selected operations support the dtype); no named indices needed. The go-to for numerics.
 
 - `TensorTrain::<f64>` / `::<Complex64>` — chain of 3-leg cores.
   - `TensorTrain::constant(&[dims], val)`, `::zeros(&[dims])`.

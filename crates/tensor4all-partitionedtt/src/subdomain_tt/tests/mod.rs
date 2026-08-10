@@ -1,5 +1,8 @@
 use super::*;
+use std::sync::Arc;
 use tensor4all_core::index::Index;
+use tensor4all_core::TensorStorageError;
+use tensor4all_itensorlike::TensorTrainError;
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
 }
@@ -52,7 +55,7 @@ fn test_subdomain_tt_project() {
 
     // Project to fix site 0 to value 1
     let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    let projected = subdomain.project(&projector);
+    let projected = subdomain.project(&projector).unwrap();
 
     assert!(projected.is_some());
     let projected = projected.unwrap();
@@ -68,7 +71,7 @@ fn test_subdomain_tt_project_value_one_numeric() {
 
     let subdomain = SubDomainTT::from_tt(tt);
     let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    let projected = subdomain.project(&projector).unwrap();
+    let projected = subdomain.project(&projector).unwrap().unwrap();
     let projected_full = projected.data().to_dense().unwrap();
     let projected_data = projected_full.to_vec::<f64>().unwrap();
 
@@ -87,7 +90,7 @@ fn test_subdomain_tt_project_incompatible() {
 
     // Try to project with incompatible projector (different value at same site)
     let projector2 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
-    let projected = subdomain.project(&projector2);
+    let projected = subdomain.project(&projector2).unwrap();
 
     assert!(projected.is_none());
 }
@@ -108,7 +111,7 @@ fn test_subdomain_tt_norm() {
     let (tt, _, _) = make_simple_tt();
     let subdomain = SubDomainTT::from_tt(tt);
 
-    let norm = subdomain.norm();
+    let norm = subdomain.norm().unwrap();
     assert!(norm > 0.0);
 }
 
@@ -125,4 +128,97 @@ fn test_subdomain_tt_trim_projector() {
     assert!(subdomain.is_projected_at(&site_inds[0]));
     assert!(!subdomain.is_projected_at(&fake_index));
     assert_eq!(subdomain.projector().len(), 1);
+}
+
+#[test]
+fn project_rejects_out_of_range_coordinate() {
+    let (tt, site_inds, _) = make_simple_tt();
+    let subdomain = SubDomainTT::from_tt(tt);
+    let projector = Projector::from_pairs([(site_inds[0].clone(), 2)]);
+
+    let error = subdomain.project(&projector).unwrap_err();
+    assert!(matches!(
+        error,
+        PartitionedTTError::ProjectorCoordinateOutOfBounds { .. }
+    ));
+}
+
+#[test]
+fn project_rejects_index_absent_from_tensor_train() {
+    let (tt, _, _) = make_simple_tt();
+    let subdomain = SubDomainTT::from_tt(tt);
+    let absent = make_index(2);
+    let projector = Projector::from_pairs([(absent, 0)]);
+
+    let error = subdomain.project(&projector).unwrap_err();
+    assert!(matches!(
+        error,
+        PartitionedTTError::ProjectorIndexNotFound { .. }
+    ));
+}
+
+#[test]
+fn project_preserves_autodiff_metadata_and_backward_values() {
+    let site = make_index(2);
+    let source = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 4.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let source_alias = source.clone();
+    let subdomain = SubDomainTT::from_tt(TensorTrain::new(vec![source]).unwrap());
+
+    let projected = subdomain
+        .project(&Projector::from_pairs([(site, 1)]))
+        .unwrap()
+        .unwrap();
+    let projected_tensor = projected.data().tensor(0).unwrap();
+    assert!(projected_tensor.tracks_grad());
+    assert_eq!(projected_tensor.to_vec::<f64>().unwrap(), vec![0.0, 4.0]);
+
+    projected_tensor.sum().unwrap().backward().unwrap();
+    assert_eq!(
+        source_alias
+            .grad()
+            .unwrap()
+            .unwrap()
+            .to_vec::<f64>()
+            .unwrap(),
+        vec![0.0, 1.0]
+    );
+}
+
+#[test]
+fn project_error_mapping_retains_typed_storage_source() {
+    let source = TensorStorageError::Materialization {
+        source: Arc::new(std::io::Error::other("forced projection storage failure")),
+    };
+    let error = SubDomainTT::tensor_operation_error(anyhow::Error::new(source));
+
+    match error {
+        PartitionedTTError::TensorStorage { source } => {
+            assert!(source
+                .to_string()
+                .contains("forced projection storage failure"));
+            assert!(std::error::Error::source(&source).is_some());
+        }
+        other => panic!("expected typed storage error, got {other:?}"),
+    }
+}
+
+#[test]
+fn subdomain_contract_preserves_tensor_train_error_variant_and_source() {
+    let (nonempty, _, _) = make_simple_tt();
+    let empty = SubDomainTT::from_tt(TensorTrain::new(vec![]).unwrap());
+    let nonempty = SubDomainTT::from_tt(nonempty);
+
+    let error = empty
+        .contract(&nonempty, &ContractOptions::default())
+        .unwrap_err();
+    match error {
+        PartitionedTTError::TensorTrain { source } => {
+            assert!(matches!(source, TensorTrainError::InvalidStructure { .. }));
+            assert!(std::error::Error::source(&source).is_none());
+        }
+        other => panic!("expected preserved tensor-train error, got {other:?}"),
+    }
 }

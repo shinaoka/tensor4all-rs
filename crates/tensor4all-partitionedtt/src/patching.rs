@@ -366,7 +366,7 @@ pub fn truncate_adaptive(
 
     let total_norm_squared: f64 = stats.iter().map(|stat| stat.norm_squared).sum();
     if !total_norm_squared.is_finite() {
-        return Err(PartitionedTTError::TensorTrainError(
+        return Err(PartitionedTTError::tensor_train_operation(
             "partitioned norm is not finite".to_string(),
         ));
     }
@@ -423,7 +423,7 @@ fn assign_volume_budgets(subdomains: Vec<SubDomainTT>, rtol: f64) -> Result<Vec<
     }
     let total_norm_squared: f64 = stats.iter().map(|stat| stat.norm_squared).sum();
     if !total_norm_squared.is_finite() {
-        return Err(PartitionedTTError::TensorTrainError(
+        return Err(PartitionedTTError::tensor_train_operation(
             "partitioned norm is not finite".to_string(),
         ));
     }
@@ -452,7 +452,7 @@ fn budget_truncate_for_split_decision(subdomains: Vec<SubDomainTT>) -> Result<Ve
                 "subdomain was missing a split-decision budget".to_string(),
             )
         })?;
-        if subdomain.norm_squared() <= budget_squared {
+        if subdomain.norm_squared()? <= budget_squared {
             continue;
         }
         truncate_subdomain_with_budget_only(&mut subdomain, budget_squared)?;
@@ -480,7 +480,7 @@ fn patch_stats(partitioned: &PartitionedTT) -> Result<Vec<PatchStats>> {
     for subdomain in partitioned.values() {
         let projected = projected_subdomain(subdomain)?;
         let volume = subdomain_volume(&projected)?;
-        let norm_squared = projected.norm_squared();
+        let norm_squared = projected.norm_squared()?;
         stats.push(PatchStats {
             subdomain: projected,
             volume,
@@ -494,7 +494,7 @@ fn projected_subdomain(subdomain: &SubDomainTT) -> Result<SubDomainTT> {
     if subdomain.projector().is_empty() {
         return Ok(subdomain.clone());
     }
-    subdomain.project(subdomain.projector()).ok_or_else(|| {
+    subdomain.project(subdomain.projector())?.ok_or_else(|| {
         PartitionedTTError::IncompatibleProjectors(
             "subdomain projector was incompatible with itself".to_string(),
         )
@@ -537,7 +537,7 @@ fn truncate_subdomain_with_optional_max_rank(
     budget_squared: f64,
     max_bond_dim: Option<usize>,
 ) -> Result<f64> {
-    let before = subdomain.norm_squared();
+    let before = subdomain.norm_squared()?;
     let policy = SvdTruncationPolicy::new(budget_squared)
         .with_absolute()
         .with_squared_values()
@@ -547,7 +547,7 @@ fn truncate_subdomain_with_optional_max_rank(
         options = options.with_max_rank(max_bond_dim);
     }
     subdomain.truncate(&options)?;
-    let after = subdomain.norm_squared();
+    let after = subdomain.norm_squared()?;
     let used = (before - after).max(0.0);
     Ok((budget_squared - used).max(0.0))
 }
@@ -629,7 +629,7 @@ fn split_child_parameter_count(
     children.into_iter().try_fold(0usize, |total, mut child| {
         let budget_squared = child.budget_squared().unwrap_or(0.0);
         let projected = projected_subdomain(&child)?;
-        if projected.norm_squared() <= budget_squared {
+        if projected.norm_squared()? <= budget_squared {
             return Ok(total);
         }
         truncate_subdomain_with_budget(&mut child, budget_squared, options.max_bond_dim)?;
@@ -676,7 +676,7 @@ fn split_subdomain(subdomain: &SubDomainTT, index: &DynIndex) -> Result<Vec<SubD
     let mut children = Vec::with_capacity(index.dim);
     for value in 0..index.dim {
         let projector = Projector::from_pairs([(index.clone(), value)]);
-        let child = subdomain.project(&projector).ok_or_else(|| {
+        let child = subdomain.project(&projector)?.ok_or_else(|| {
             PartitionedTTError::IncompatibleProjectors(
                 "split projector was incompatible with subdomain projector".to_string(),
             )

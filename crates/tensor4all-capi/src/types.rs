@@ -2,6 +2,8 @@
 
 use std::ffi::c_void;
 
+#[cfg(test)]
+use tensor4all_core::TensorStorageError;
 use tensor4all_core::{
     DynIndex, FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, TensorDynLen,
     ThresholdScale, TruncationRule,
@@ -115,6 +117,8 @@ impl From<StorageKind> for t4a_storage_kind {
 #[repr(C)]
 pub struct t4a_tensor {
     pub(crate) _private: *const c_void,
+    #[cfg(test)]
+    pub(crate) test_storage_error: Option<TensorStorageError>,
 }
 
 impl t4a_tensor {
@@ -122,6 +126,8 @@ impl t4a_tensor {
     pub(crate) fn new(tensor: InternalTensor) -> Self {
         Self {
             _private: Box::into_raw(Box::new(tensor)) as *const c_void,
+            #[cfg(test)]
+            test_storage_error: None,
         }
     }
 
@@ -129,10 +135,30 @@ impl t4a_tensor {
     pub(crate) fn inner(&self) -> &InternalTensor {
         unsafe { &*(self._private as *const InternalTensor) }
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_storage_error(
+        tensor: InternalTensor,
+        error: TensorStorageError,
+    ) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(tensor)) as *const c_void,
+            test_storage_error: Some(error),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_storage_error(&self) -> Option<TensorStorageError> {
+        self.test_storage_error.clone()
+    }
 }
 
 impl Clone for t4a_tensor {
     fn clone(&self) -> Self {
+        #[cfg(test)]
+        if let Some(error) = self.test_storage_error() {
+            return Self::with_test_storage_error(self.inner().clone(), error);
+        }
         Self::new(self.inner().clone())
     }
 }
@@ -650,7 +676,9 @@ impl InternalQttLayout {
                         "interleaved layouts require all variable_resolutions to match".to_string(),
                     );
                 }
-                first * variable_resolutions.len()
+                first
+                    .checked_mul(variable_resolutions.len())
+                    .ok_or_else(|| "interleaved layout site count overflows usize".to_string())?
             }
             t4a_qtt_layout_kind::Fused => {
                 if !all_equal {

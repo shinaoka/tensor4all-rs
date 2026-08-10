@@ -35,8 +35,8 @@
 //!   `b_{R-1} * 2^{R-1} + ... + b_0`.
 //! - Multi-variable operators use interleaved quantics encoding. At each bit
 //!   site, the local index is `bit_var0 + 2 * bit_var1 + ...`.
-//! - `AffineParams::a` is column-major: `[[1, 2], [3, 4]]` is stored as
-//!   `[1, 3, 2, 4]`.
+//! - `AffineParams::a()` returns column-major coefficients:
+//!   `[[1, 2], [3, 4]]` is stored as `[1, 3, 2, 4]`.
 //! - Dense materialization is appropriate only for small reference checks and
 //!   debugging. Production-size tensor-network workflows should use local
 //!   operator application and scalable residual checks.
@@ -71,7 +71,10 @@ pub use affine::{
     affine_operator, affine_operator_interleaved, affine_transform_matrix,
     affine_transform_tensors_unfused, AffineParams, LinearConstraintRow, UnfusedTensorInfo,
 };
-pub use common::{BoundaryCondition, CarryDirection};
+pub use common::{
+    identity_mpo, tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric,
+    BoundaryCondition, CarryDirection, QuanticsOperator,
+};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
 pub use difference_kernel::{difference_kernel_mpo, difference_kernel_operator};
 pub use flip::{flip_operator, flip_operator_multivar};

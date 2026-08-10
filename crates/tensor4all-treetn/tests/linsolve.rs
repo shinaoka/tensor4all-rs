@@ -328,7 +328,7 @@ fn test_projected_operator_apply_distinguishes_same_id_prime_level() {
             output.external_indices(),
             vec![site.clone(), site_prime.clone()]
         );
-        assert!(output.sub(&input).unwrap().maxabs() < 1e-12);
+        assert!(output.sub(&input).unwrap().maxabs().unwrap() < 1e-12);
     }
 }
 

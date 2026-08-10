@@ -1,5 +1,40 @@
 use super::*;
-use tensor4all_core::{IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+
+fn tensor_axis_lookup(template: &TensorDynLen) -> std::collections::HashMap<DynIndex, usize> {
+    template
+        .indices()
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(position, index)| (index, position))
+        .collect()
+}
+
+fn tensor_axis_position(
+    lookup: &std::collections::HashMap<DynIndex, usize>,
+    index: &DynIndex,
+) -> usize {
+    lookup
+        .get(index)
+        .copied()
+        .expect("tensor axis index not found in contracted tensor")
+}
+
+#[test]
+fn tensor_axis_lookup_uses_full_index_identity() {
+    let base = DynIndex::new_dyn(2);
+    let primed = base.prime();
+    let tensor = TensorDynLen::from_dense(
+        vec![base.clone(), primed.clone()],
+        vec![Complex64::new(0.0, 0.0); 4],
+    )
+    .unwrap();
+    let lookup = tensor_axis_lookup(&tensor);
+
+    assert_eq!(lookup.get(&base), Some(&0));
+    assert_eq!(lookup.get(&primed), Some(&1));
+}
 
 #[test]
 fn test_affine_params_new() {
@@ -12,6 +47,76 @@ fn test_affine_params_new() {
     let b = vec![Rational64::from_integer(0), Rational64::from_integer(0)];
     let params = AffineParams::new(a, b, 2, 2);
     assert!(params.is_ok());
+}
+
+#[test]
+fn test_linear_constraint_row_accepts_i64_extremes() {
+    let row = LinearConstraintRow::from_integers(vec![i64::MIN], i64::MIN);
+    assert_eq!(row.coefficients, vec![-1]);
+    assert_eq!(row.rhs, -1);
+
+    let error = LinearConstraintRow::from_rationals(
+        vec![Rational64::new(i64::MAX, 2)],
+        Rational64::new(1, 3),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("exceeds i64"));
+}
+
+#[test]
+fn test_rational_inputs_reject_zero_denominators() {
+    let malformed = Rational64::new_raw(1, 0);
+
+    let error =
+        AffineParams::new(vec![malformed], vec![Rational64::from_integer(0)], 1, 1).unwrap_err();
+    assert!(error.to_string().contains("zero denominator"));
+
+    let error = LinearConstraintRow::from_rationals(vec![malformed], Rational64::from_integer(1))
+        .unwrap_err();
+    assert!(error.to_string().contains("zero denominator"));
+
+    let error = LinearConstraintRow::from_rationals(vec![Rational64::from_integer(1)], malformed)
+        .unwrap_err();
+    assert!(error.to_string().contains("zero denominator"));
+}
+
+#[test]
+fn test_affine_extreme_i64_coefficients_are_exact() {
+    for &(coefficient, translation) in &[
+        (i64::MIN, i64::MIN),
+        (i64::MIN, i64::MAX),
+        (i64::MAX, i64::MIN),
+        (i64::MAX, i64::MAX),
+    ] {
+        let params =
+            AffineParams::from_integers(vec![coefficient], vec![translation], 1, 1).unwrap();
+        let matrix = affine_transform_matrix(2, &params, &[BoundaryCondition::Periodic]).unwrap();
+        let operator = affine_operator(2, &params, &[BoundaryCondition::Periodic]).unwrap();
+        let actual = operator.mpo().contract_to_tensor().unwrap();
+        let expected = affine_operator_expected_dense_tensor(&operator, &actual, 2, |y, x| {
+            let expected_y =
+                ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
+            Complex64::new(f64::from((y == expected_y) as u8), 0.0)
+        });
+        let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
+        assert!(
+            maxabs < 1e-12,
+            "MPO mismatch for a={coefficient}, b={translation}: {maxabs}"
+        );
+
+        for x in 0..4usize {
+            let expected_y =
+                ((coefficient as i128) * (x as i128) + translation as i128).rem_euclid(4) as usize;
+            for y in 0..4usize {
+                let expected = f64::from((y == expected_y) as u8);
+                assert_eq!(
+                    *matrix.get(y, x).unwrap_or(&0.0),
+                    expected,
+                    "reference matrix entry ({y}, {x}) for a={coefficient}, b={translation}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -45,12 +150,12 @@ fn test_affine_params_to_integer_scaled() {
     let b = vec![Rational64::new(1, 6)]; // 1/6
     let params = AffineParams::new(a, b, 1, 2).unwrap();
 
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled().unwrap();
 
     // LCM of denominators (2, 3, 6) = 6
-    assert_eq!(scale, 6);
-    assert_eq!(a_int, vec![3, 2]); // [1/2 * 6, 1/3 * 6]
-    assert_eq!(b_int, vec![1]); // [1/6 * 6]
+    assert_eq!(scale, BigInt::from(6));
+    assert_eq!(a_int, vec![BigInt::from(3), BigInt::from(2)]); // [1/2 * 6, 1/3 * 6]
+    assert_eq!(b_int, vec![BigInt::from(1)]); // [1/6 * 6]
 }
 
 #[test]
@@ -66,7 +171,8 @@ fn test_linear_constraint_row_from_rationals_clears_denominators_then_reduces() 
     let row = LinearConstraintRow::from_rationals(
         vec![Rational64::new(2, 3), Rational64::new(4, 3)],
         Rational64::from_integer(2),
-    );
+    )
+    .unwrap();
 
     assert_eq!(row.coefficients, vec![1, 2]);
     assert_eq!(row.rhs, 3);
@@ -92,11 +198,11 @@ fn test_linear_constraint_row_preserves_all_zero_row() {
 fn test_affine_params_to_integer_scaled_does_not_normalize_constraint_rows() {
     let params = AffineParams::from_integers(vec![16], vec![64], 1, 1).unwrap();
 
-    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let (a_int, b_int, scale) = params.to_integer_scaled().unwrap();
 
-    assert_eq!(a_int, vec![16]);
-    assert_eq!(b_int, vec![64]);
-    assert_eq!(scale, 1);
+    assert_eq!(a_int, vec![BigInt::from(16)]);
+    assert_eq!(b_int, vec![BigInt::from(64)]);
+    assert_eq!(scale, BigInt::from(1));
 }
 
 #[test]
@@ -161,8 +267,47 @@ fn test_affine_error_bc_mismatch() {
 }
 
 #[test]
+fn test_affine_operator_rejects_variable_shift_width() {
+    let params = AffineParams {
+        a: vec![Rational64::from_integer(0); usize::BITS as usize],
+        b: vec![Rational64::from_integer(0)],
+        m: 1,
+        n: usize::BITS as usize,
+    };
+    let error = affine_operator(1, &params, &[BoundaryCondition::Periodic]).unwrap_err();
+    assert!(error.to_string().contains("input variable count"));
+}
+
+#[test]
+fn test_affine_operator_rejects_site_dimension_overflow() {
+    let width = usize::BITS as usize / 2;
+    let params = AffineParams {
+        a: vec![Rational64::from_integer(0); width * width],
+        b: vec![Rational64::from_integer(0); width],
+        m: width,
+        n: width,
+    };
+    let bc = vec![BoundaryCondition::Periodic; width];
+    let error = affine_operator(1, &params, &bc).unwrap_err();
+    assert!(error.to_string().contains("site dimension"));
+}
+
+#[test]
+fn test_affine_params_reject_site_byte_limit_before_tensor_allocation() {
+    let width = usize::BITS as usize / 2 - 1;
+    let error = AffineParams::new(
+        vec![Rational64::from_integer(0); width * width],
+        vec![Rational64::from_integer(0); width],
+        width,
+        width,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("byte length"));
+}
+
+#[test]
 fn test_affine_pullback_bc_mismatch_via_transpose() {
-    // Boundary-condition length must equal params.m; affine_operator
+    // Boundary-condition length must equal params.m(); affine_operator
     // rejects mismatches regardless of whether the caller later transposes.
     let a = vec![1i64, 0];
     let b = vec![0i64];
@@ -191,6 +336,18 @@ fn test_affine_params_dimension_error() {
     let b = vec![Rational64::from_integer(0)]; // 1 element but m=2
     let params = AffineParams::new(a, b, 2, 2);
     assert!(params.is_err());
+
+    let error = AffineParams::new(Vec::new(), Vec::new(), usize::MAX, 2).unwrap_err();
+    assert!(error.to_string().contains("overflow"));
+
+    let error = AffineParams::new(
+        Vec::new(),
+        vec![Rational64::from_integer(0)],
+        1,
+        usize::BITS as usize,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("input variable count"));
 }
 
 #[test]
@@ -484,33 +641,24 @@ fn affine_matrix_to_dense_tensor(
 ) -> TensorDynLen {
     let indices = template.indices().to_vec();
     let dims = template.dims();
-    let mut id_to_pos = std::collections::HashMap::new();
-    for (pos, index) in indices.iter().enumerate() {
-        id_to_pos.insert(*index.id(), pos);
-    }
+    let axis_lookup = tensor_axis_lookup(template);
 
     let output_positions: Vec<usize> = (0..r)
         .map(|site| {
-            let internal_id = *op
+            let internal_index = &op
                 .get_output_mapping(&site)
                 .expect("missing output mapping")
-                .internal_index
-                .id();
-            *id_to_pos
-                .get(&internal_id)
-                .expect("output index not found in contracted tensor")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
         })
         .collect();
     let input_positions: Vec<usize> = (0..r)
         .map(|site| {
-            let internal_id = *op
+            let internal_index = &op
                 .get_input_mapping(&site)
                 .expect("missing input mapping")
-                .internal_index
-                .id();
-            *id_to_pos
-                .get(&internal_id)
-                .expect("input index not found in contracted tensor")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
         })
         .collect();
 
@@ -542,21 +690,14 @@ fn affine_interleaved_matrix_to_dense_tensor(
 ) -> TensorDynLen {
     let indices = template.indices().to_vec();
     let dims = template.dims();
-    let mut id_to_pos = std::collections::HashMap::new();
-    for (pos, index) in indices.iter().enumerate() {
-        id_to_pos.insert(*index.id(), pos);
-    }
+    let axis_lookup = tensor_axis_lookup(template);
 
     let output_positions = (0..r)
         .map(|site| {
             op.get_output_mappings(&site)
                 .expect("missing output mappings")
                 .iter()
-                .map(|mapping| {
-                    *id_to_pos
-                        .get(mapping.internal_index.id())
-                        .expect("output index not found in contracted tensor")
-                })
+                .map(|mapping| tensor_axis_position(&axis_lookup, &mapping.internal_index))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -565,11 +706,7 @@ fn affine_interleaved_matrix_to_dense_tensor(
             op.get_input_mappings(&site)
                 .expect("missing input mappings")
                 .iter()
-                .map(|mapping| {
-                    *id_to_pos
-                        .get(mapping.internal_index.id())
-                        .expect("input index not found in contracted tensor")
-                })
+                .map(|mapping| tensor_axis_position(&axis_lookup, &mapping.internal_index))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -612,10 +749,57 @@ fn affine_dense_reference_element_count(r: usize, m: usize, n: usize) -> Option<
     1usize.checked_shl(shift)
 }
 
+fn affine_operator_expected_dense_tensor(
+    op: &QuanticsOperator,
+    template: &TensorDynLen,
+    r: usize,
+    mut expected: impl FnMut(usize, usize) -> Complex64,
+) -> TensorDynLen {
+    let indices = template.indices().to_vec();
+    let dims = template.dims();
+    let axis_lookup = tensor_axis_lookup(template);
+
+    let output_positions: Vec<usize> = (0..r)
+        .map(|site| {
+            let internal_index = &op
+                .get_output_mapping(&site)
+                .expect("missing output mapping")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
+        })
+        .collect();
+    let input_positions: Vec<usize> = (0..r)
+        .map(|site| {
+            let internal_index = &op
+                .get_input_mapping(&site)
+                .expect("missing input mapping")
+                .internal_index;
+            tensor_axis_position(&axis_lookup, internal_index)
+        })
+        .collect();
+
+    let size = 1usize << r;
+    let mut data = vec![Complex64::new(0.0, 0.0); dims.iter().product()];
+    let mut coords = vec![0usize; dims.len()];
+    for x in 0..size {
+        for y in 0..size {
+            coords.fill(0);
+            for site in 0..r {
+                let bit_pos = r - 1 - site;
+                coords[output_positions[site]] = (y >> bit_pos) & 1;
+                coords[input_positions[site]] = (x >> bit_pos) & 1;
+            }
+            data[column_major_offset(&dims, &coords)] = expected(y, x);
+        }
+    }
+
+    TensorDynLen::from_dense(indices, data).expect("failed to build expected affine tensor")
+}
+
 #[allow(clippy::needless_range_loop)]
 fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
-    let m = params.m;
-    let n = params.n;
+    let m = params.m();
+    let n = params.n();
     let dense_elements = affine_dense_reference_element_count(r, m, n).unwrap_or(usize::MAX);
     assert!(
         dense_elements <= AFFINE_DENSE_REFERENCE_MAX_ELEMENTS,
@@ -626,7 +810,7 @@ fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[Bound
     let op = affine_operator(r, params, bc).unwrap();
     let actual = op.mpo().contract_to_tensor().unwrap();
     let expected = affine_matrix_to_dense_tensor(&matrix, &op, r, m, n, &actual);
-    let maxabs = actual.distance(&expected).unwrap();
+    let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
 
     assert!(
         maxabs < 1e-10,
@@ -652,8 +836,8 @@ fn test_affine_dense_reference_helper_rejects_large_cases() {
 /// Equivalent to Julia's test_affine_transform_matrix_multi_variables.
 #[allow(clippy::needless_range_loop)]
 fn assert_affine_matrix_correctness(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
-    let m = params.m;
-    let n = params.n;
+    let m = params.m();
+    let n = params.n();
     let modulus = 1i64 << r;
 
     let matrix = affine_transform_matrix(r, params, bc).unwrap();
@@ -671,9 +855,9 @@ fn assert_affine_matrix_correctness(r: usize, params: &AffineParams, bc: &[Bound
         // Compute y = A*x + b using Rational64 (independent of to_integer_scaled)
         let y_rational: Vec<Rational64> = (0..m)
             .map(|i| {
-                let mut val = params.b[i];
+                let mut val = params.b()[i];
                 for j in 0..n {
-                    val += params.a[i + m * j] * Rational64::from_integer(x_vals[j]);
+                    val += params.a()[i + m * j] * Rational64::from_integer(x_vals[j]);
                 }
                 val
             })
@@ -967,27 +1151,47 @@ fn test_affine_unfused_2d() {
 #[test]
 fn test_unfused_tensor_info() {
     let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
-    let info = UnfusedTensorInfo::new(&params);
+    let info = UnfusedTensorInfo::new(&params).unwrap();
 
-    assert_eq!(info.m, 2);
-    assert_eq!(info.n, 2);
-    assert_eq!(info.num_physical_dims, 4);
-    assert_eq!(info.physical_dim, 2);
+    assert_eq!(info.m(), 2);
+    assert_eq!(info.n(), 2);
+    assert_eq!(info.num_physical_dims(), 4);
+    assert_eq!(info.physical_dim(), 2);
 
     // Test shape
-    let shape = info.unfused_shape(3, 5);
+    let shape = info.unfused_shape(3, 5).unwrap();
     assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
 
     // Test index encoding/decoding
     // site_idx = y_bits | (x_bits << m)
     // y_bits = y0 + 2*y1, x_bits = x0 + 2*x1
     // Example: y0=1, y1=0, x0=0, x1=1 -> y_bits=1, x_bits=2 -> site_idx = 1 + 4*2 = 9
-    let (y_bits, x_bits) = info.decode_fused_index(9);
+    let (y_bits, x_bits) = info.decode_fused_index(9).unwrap();
     assert_eq!(y_bits, vec![1, 0]);
     assert_eq!(x_bits, vec![0, 1]);
 
-    let encoded = info.encode_fused_index(&[1, 0], &[0, 1]);
+    let encoded = info.encode_fused_index(&[1, 0], &[0, 1]).unwrap();
     assert_eq!(encoded, 9);
+}
+
+#[test]
+fn test_unfused_tensor_info_rejects_invalid_bits_and_indices() {
+    let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    let info = UnfusedTensorInfo::new(&params).unwrap();
+
+    assert!(info.encode_fused_index(&[], &[0]).is_err());
+    assert!(info.encode_fused_index(&[2], &[0]).is_err());
+    assert!(info.encode_fused_index(&[0], &[0, 0]).is_err());
+    assert!(info.decode_fused_index(4).is_err());
+
+    let malformed = AffineParams {
+        a: Vec::new(),
+        b: Vec::new(),
+        m: usize::MAX,
+        n: usize::MAX,
+    };
+    let error = UnfusedTensorInfo::new(&malformed).unwrap_err();
+    assert!(error.to_string().contains("physical dimension count"));
 }
 
 #[test]
@@ -1002,9 +1206,9 @@ fn test_unfused_vs_fused_equivalence() {
     let unfused = affine_transform_tensors_unfused(r, &params, &bc).unwrap();
 
     // Contract unfused tensors to matrix
-    let info = UnfusedTensorInfo::new(&params);
-    let m = info.m;
-    let n = info.n;
+    let info = UnfusedTensorInfo::new(&params).unwrap();
+    let m = info.m();
+    let n = info.n();
     let output_size = 1 << (m * r);
     let input_size = 1 << (n * r);
 
@@ -1081,8 +1285,8 @@ fn test_affine_operator_interleaved_matches_matrix() {
     let op = affine_operator_interleaved(r, &params, &bc).unwrap();
 
     for site in 0..r {
-        assert_eq!(op.get_output_mappings(&site).unwrap().len(), params.m);
-        assert_eq!(op.get_input_mappings(&site).unwrap().len(), params.n);
+        assert_eq!(op.get_output_mappings(&site).unwrap().len(), params.m());
+        assert_eq!(op.get_input_mappings(&site).unwrap().len(), params.n());
         for mapping in op.get_output_mappings(&site).unwrap() {
             assert_eq!(mapping.true_index.dim(), 2);
             assert_eq!(mapping.internal_index.dim(), 2);
@@ -1095,8 +1299,8 @@ fn test_affine_operator_interleaved_matches_matrix() {
 
     let actual = op.mpo().contract_to_tensor().unwrap();
     let expected =
-        affine_interleaved_matrix_to_dense_tensor(&matrix, &op, r, params.m, params.n, &actual);
-    let maxabs = actual.distance(&expected).unwrap();
+        affine_interleaved_matrix_to_dense_tensor(&matrix, &op, r, params.m(), params.n(), &actual);
+    let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
     assert!(maxabs < 1e-10, "interleaved affine maxabs={maxabs}");
 }
 
@@ -1278,4 +1482,25 @@ fn test_affine_antiperiodic_difference_delta_signs() {
             }
         }
     }
+}
+
+#[test]
+fn test_affine_antiperiodic_mpo_applies_outgoing_carry_parity() {
+    let r = 3;
+    let modulus = 1i64 << r;
+    let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
+    let operator = affine_operator(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();
+    let actual = operator.mpo().contract_to_tensor().unwrap();
+    let expected = affine_operator_expected_dense_tensor(&operator, &actual, r, |y, x| {
+        let raw = x as i64 + 1;
+        let expected_y = raw.rem_euclid(modulus) as usize;
+        let expected_sign = if raw.div_euclid(modulus).rem_euclid(2) == 0 {
+            1.0
+        } else {
+            -1.0
+        };
+        Complex64::new(if y == expected_y { expected_sign } else { 0.0 }, 0.0)
+    });
+    let maxabs = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(maxabs < 1e-12, "anti-periodic MPO mismatch: {maxabs}");
 }

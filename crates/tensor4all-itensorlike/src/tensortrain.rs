@@ -7,9 +7,10 @@
 //! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
 use num_complex::Complex64;
+use std::any::TypeId;
 use std::env;
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tensor4all_core::{
     common_inds, contract_pair, contract_pair_with_operand_options, hascommoninds, DynIndex,
@@ -18,8 +19,8 @@ use tensor4all_core::{
 use tensor4all_core::{
     AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg, FactorizeError,
     FactorizeOptions, FactorizeResult, LinearizationOrder, TensorConstructionLike,
-    TensorContractionLike, TensorDynLen, TensorElement, TensorFactorizationLike, TensorIndex,
-    TensorVectorSpace,
+    TensorContractionLike, TensorDynLen, TensorDynLenError, TensorElement, TensorFactorizationLike,
+    TensorIndex, TensorVectorSpace,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
@@ -701,9 +702,10 @@ impl TensorTrain {
             let mut new_tensor = tensor.clone();
             for (old_idx, new_idx) in &replacements {
                 new_tensor = new_tensor.replaceind(old_idx, new_idx).map_err(|err| {
-                    TensorTrainError::OperationError {
-                        message: format!("failed to replace simulated link index: {err}"),
-                    }
+                    TensorTrainError::operation_source(
+                        "failed to replace simulated link index",
+                        err,
+                    )
                 })?;
             }
             new_tensors.push(new_tensor);
@@ -719,42 +721,37 @@ impl TensorTrain {
         Ok(())
     }
 
-    fn has_simple_linear_links(&self) -> bool {
+    fn has_simple_linear_links(&self) -> Result<bool> {
         if self.len() <= 1 {
-            return true;
+            return Ok(true);
         }
 
-        (0..self.len() - 1).all(|site| {
-            let (Ok(left), Ok(right)) = (self.tensor_checked(site), self.tensor_checked(site + 1))
-            else {
-                return false;
-            };
-            common_inds(left.indices(), right.indices()).len() <= 1
-        })
+        for site in 0..self.len() - 1 {
+            let left = self.tensor_checked(site)?;
+            let right = self.tensor_checked(site + 1)?;
+            if common_inds(left.indices(), right.indices()).len() > 1 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
-    fn can_normalize_site_tensor_order(&self, site: usize) -> bool {
+    fn can_normalize_site_tensor_order(&self, site: usize) -> Result<bool> {
         let left_ok = if site > 0 {
-            let (Ok(left), Ok(current)) =
-                (self.tensor_checked(site - 1), self.tensor_checked(site))
-            else {
-                return false;
-            };
+            let left = self.tensor_checked(site - 1)?;
+            let current = self.tensor_checked(site)?;
             common_inds(left.indices(), current.indices()).len() <= 1
         } else {
             true
         };
         let right_ok = if site + 1 < self.len() {
-            let (Ok(current), Ok(right)) =
-                (self.tensor_checked(site), self.tensor_checked(site + 1))
-            else {
-                return false;
-            };
+            let current = self.tensor_checked(site)?;
+            let right = self.tensor_checked(site + 1)?;
             common_inds(current.indices(), right.indices()).len() <= 1
         } else {
             true
         };
-        left_ok && right_ok
+        Ok(left_ok && right_ok)
     }
 
     fn with_explicit_unit_links(&self) -> Result<Self> {
@@ -778,13 +775,13 @@ impl TensorTrain {
                 let fused_link = DynIndex::new_dyn(fused_dim);
                 tensors[site] = tensors[site]
                     .fuse_indices(&common, fused_link.clone(), LinearizationOrder::ColumnMajor)
-                    .map_err(|e| TensorTrainError::OperationError {
-                        message: format!("failed to fuse parallel TT links: {e}"),
+                    .map_err(|e| {
+                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
                     })?;
                 tensors[site + 1] = tensors[site + 1]
                     .fuse_indices(&common, fused_link, LinearizationOrder::ColumnMajor)
-                    .map_err(|e| TensorTrainError::OperationError {
-                        message: format!("failed to fuse parallel TT links: {e}"),
+                    .map_err(|e| {
+                        TensorTrainError::operation_source("failed to fuse parallel TT links", e)
                     })?;
                 continue;
             }
@@ -795,25 +792,25 @@ impl TensorTrain {
             let link = DynIndex::new_dyn(1);
             let left_link =
                 <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&link))
-                    .map_err(|e| TensorTrainError::OperationError {
-                        message: format!("failed to build implicit unit link tensor: {e}"),
+                    .map_err(|e| {
+                        TensorTrainError::operation_source(
+                            "failed to build implicit unit link tensor",
+                            e,
+                        )
                     })?;
             tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
-                TensorTrainError::OperationError {
-                    message: format!("failed to attach implicit unit link: {e}"),
-                }
+                TensorTrainError::operation_source("failed to attach implicit unit link", e)
             })?;
 
             let right_link =
                 <TensorDynLen as TensorConstructionLike>::ones(&[link]).map_err(|e| {
-                    TensorTrainError::OperationError {
-                        message: format!("failed to build implicit unit link tensor: {e}"),
-                    }
+                    TensorTrainError::operation_source(
+                        "failed to build implicit unit link tensor",
+                        e,
+                    )
                 })?;
             tensors[site + 1] = tensors[site + 1].outer_product(&right_link).map_err(|e| {
-                TensorTrainError::OperationError {
-                    message: format!("failed to attach implicit unit link: {e}"),
-                }
+                TensorTrainError::operation_source("failed to attach implicit unit link", e)
             })?;
         }
 
@@ -821,7 +818,7 @@ impl TensorTrain {
     }
 
     fn normalize_site_tensor_order(&mut self, site: usize) -> Result<()> {
-        if !self.can_normalize_site_tensor_order(site) {
+        if !self.can_normalize_site_tensor_order(site)? {
             return Ok(());
         }
 
@@ -1270,8 +1267,8 @@ impl TensorTrain {
                     &b0,
                     PairwiseContractionOptions::new().with_lhs_conj(true),
                 )
-                .map_err(|err| TensorTrainError::OperationError {
-                    message: format!("failed to contract leftmost tensors: {err}"),
+                .map_err(|err| {
+                    TensorTrainError::operation_source("failed to contract leftmost tensors", err)
                 })
             })?
         };
@@ -1300,14 +1297,20 @@ impl TensorTrain {
                     ai,
                     PairwiseContractionOptions::new().with_rhs_conj(true),
                 )
-                .map_err(|err| TensorTrainError::OperationError {
-                    message: format!("failed to contract environment with site {i}: {err}"),
+                .map_err(|err| {
+                    TensorTrainError::operation_source(
+                        format!("failed to contract environment with site {i}"),
+                        err,
+                    )
                 })
             })?;
             // Contract: result * B_i (over other's link index and site indices)
             env = profile_tt_inner_section(profile_enabled, &mut profile.contract, || {
-                contract_pair(&env, bi).map_err(|err| TensorTrainError::OperationError {
-                    message: format!("failed to contract right operand at site {i}: {err}"),
+                contract_pair(&env, bi).map_err(|err| {
+                    TensorTrainError::operation_source(
+                        format!("failed to contract right operand at site {i}"),
+                        err,
+                    )
                 })
             })?;
         }
@@ -1329,8 +1332,8 @@ impl TensorTrain {
             });
         }
         let result = profile_tt_inner_section(profile_enabled, &mut profile.sum, || {
-            env.sum().map_err(|err| TensorTrainError::OperationError {
-                message: format!("failed to sum scalar inner-product tensor: {err}"),
+            env.sum().map_err(|err| {
+                TensorTrainError::operation_source("failed to sum scalar inner-product tensor", err)
             })
         });
         if profile_enabled {
@@ -1343,86 +1346,163 @@ impl TensorTrain {
     ///
     /// Returns `<self | self>` = ||self||^2.
     ///
+    /// # Errors
+    /// Returns a [`TensorTrainError`] when storage or contraction diagnostics
+    /// prevent evaluating the norm.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    /// assert!((tt.norm_squared()? - 25.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Note
     /// For linear tensor trains with one site index per site, this uses a
     /// specialized chain contraction instead of the generic inner-product path.
     /// Due to numerical errors, the final scalar can be very slightly negative,
     /// so the returned value is clamped to be non-negative.
-    pub fn norm_squared(&self) -> f64 {
-        match self.norm_squared_fast_path() {
-            Some(value) => value,
-            None => self
-                .inner(self)
-                .map(|value| value.real().max(0.0))
-                .unwrap_or(f64::NAN),
+    pub fn norm_squared(&self) -> Result<f64> {
+        match self.norm_squared_fast_path()? {
+            Some(value) if value.is_nan() => Err(TensorTrainError::TensorDynLen {
+                source: TensorDynLenError::NaNInput {
+                    operation: "norm_squared",
+                },
+            }),
+            Some(value) => Ok(value),
+            None => self.inner(self).and_then(|value| {
+                let value = value.real();
+                if value.is_nan() {
+                    Err(TensorTrainError::TensorDynLen {
+                        source: TensorDynLenError::NaNInput {
+                            operation: "norm_squared",
+                        },
+                    })
+                } else {
+                    Ok(value.max(0.0))
+                }
+            }),
         }
     }
 
     /// Compute the norm of the tensor train.
     ///
     /// Returns ||self|| = sqrt(<self | self>).
-    pub fn norm(&self) -> f64 {
-        self.norm_squared().sqrt()
+    ///
+    /// # Errors
+    /// Returns a [`TensorTrainError`] when storage or contraction diagnostics
+    /// prevent evaluating the norm.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    /// assert!((tt.norm()? - 5.0).abs() < 1e-12);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn norm(&self) -> Result<f64> {
+        Ok(self.norm_squared()?.sqrt())
     }
 
-    fn norm_squared_fast_path(&self) -> Option<f64> {
+    fn norm_squared_fast_path(&self) -> Result<Option<f64>> {
         if self.is_empty() {
-            return Some(0.0);
+            return Ok(Some(0.0));
         }
-        if !self.has_simple_linear_links() {
-            return None;
+        if !self.has_simple_linear_links()? {
+            return Ok(None);
         }
         if self
             .siteinds()
             .iter()
             .any(|site_indices| site_indices.len() != 1)
         {
-            return None;
+            return Ok(None);
         }
 
         let mut normalized = self.clone();
-        normalized.normalize_site_tensor_orders().ok()?;
+        normalized.normalize_site_tensor_orders()?;
 
-        if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized) {
-            return Some(Self::norm_squared_from_packed_sites(&sites));
+        if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized)? {
+            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)));
         }
-        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized) {
-            return Some(Self::norm_squared_from_packed_sites(&sites));
+        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized)? {
+            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)));
         }
 
-        None
+        Ok(None)
     }
 
-    fn pack_normalized_sites<T: TensorElement>(tt: &Self) -> Option<Vec<PackedSiteTensor<T>>> {
+    fn pack_normalized_sites<T: TensorElement>(
+        tt: &Self,
+    ) -> Result<Option<Vec<PackedSiteTensor<T>>>> {
         let mut sites = Vec::with_capacity(tt.len());
 
         for site in 0..tt.len() {
-            let tensor = tt.tensor_checked(site).ok()?;
+            let tensor = tt.tensor_checked(site)?;
             let left_dim = if site == 0 {
                 1
             } else {
-                tt.linkind(site - 1)?.size()
+                match tt.linkind(site - 1) {
+                    Some(link) => link.size(),
+                    None => return Ok(None),
+                }
             };
             let right_dim = if site + 1 == tt.len() {
                 1
             } else {
-                tt.linkind(site)?.size()
+                match tt.linkind(site) {
+                    Some(link) => link.size(),
+                    None => return Ok(None),
+                }
             };
             let total_size: usize = tensor.dims().iter().product();
-            let boundary_size = left_dim.checked_mul(right_dim)?;
+            let boundary_size = match left_dim.checked_mul(right_dim) {
+                Some(size) => size,
+                None => return Ok(None),
+            };
             if boundary_size == 0 || !total_size.is_multiple_of(boundary_size) {
-                return None;
+                return Ok(None);
+            }
+
+            let dtype_matches = if TypeId::of::<T>() == TypeId::of::<f64>() {
+                tensor.is_f64()
+            } else if TypeId::of::<T>() == TypeId::of::<Complex64>() {
+                tensor.is_c64()
+            } else {
+                false
+            };
+            if !dtype_matches {
+                return Ok(None);
             }
 
             sites.push(PackedSiteTensor {
                 left_dim,
                 physical_dim: total_size / boundary_size,
                 right_dim,
-                data: tensor.to_vec::<T>().ok()?,
+                data: tensor
+                    .to_vec::<T>()
+                    .map_err(|err| TensorTrainError::TensorDynLen {
+                        source: TensorDynLenError::Materialization {
+                            source: Arc::from(err.into_boxed_dyn_error()),
+                        },
+                    })?,
             });
         }
 
-        Some(sites)
+        Ok(Some(sites))
     }
 
     fn norm_squared_from_packed_sites<T: NormAccumScalar>(sites: &[PackedSiteTensor<T>]) -> f64 {
@@ -1510,11 +1590,9 @@ impl TensorTrain {
             });
         }
 
-        self.treetn
-            .contract_to_tensor()
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Failed to contract to dense: {}", e),
-            })
+        self.treetn.contract_to_tensor().map_err(|source| {
+            TensorTrainError::operation_source("Failed to contract to dense", source)
+        })
     }
 
     /// Compute an explicit dense maximum absolute value.
@@ -1548,7 +1626,9 @@ impl TensorTrain {
     /// # }
     /// ```
     pub fn dense_maxabs(&self) -> Result<f64> {
-        self.to_dense().map(|t| t.maxabs())
+        self.to_dense()?
+            .maxabs()
+            .map_err(|source| TensorTrainError::TensorDynLen { source })
     }
 
     /// Add two tensor trains using direct-sum construction.
@@ -1717,12 +1797,9 @@ impl TensorTrain {
             let tensor = self.tensor_checked(site)?;
             if site == 0 {
                 // Scale only the first tensor
-                let scaled =
-                    tensor
-                        .scale(scalar.clone())
-                        .map_err(|e| TensorTrainError::OperationError {
-                            message: format!("Failed to scale tensor at site 0: {}", e),
-                        })?;
+                let scaled = tensor.scale(scalar.clone()).map_err(|e| {
+                    TensorTrainError::operation_source("failed to scale tensor at site 0", e)
+                })?;
                 tensors.push(scaled);
             } else {
                 tensors.push(tensor.clone());
@@ -1784,12 +1861,12 @@ impl TensorIndex for TensorTrain {
         // Delegate to the internal TreeTN's replaceind
         // After replacement, canonical form may be invalid, so set to None
         let treetn = self.treetn.replaceind(old, new)?;
-        Self::from_inner(treetn, None).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
     }
 
     fn replaceinds(&self, old: &[Self::Index], new: &[Self::Index]) -> anyhow::Result<Self> {
         let treetn = self.treetn.replaceinds(old, new)?;
-        Self::from_inner(treetn, None).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::from_inner(treetn, None).map_err(anyhow::Error::new)
     }
 }
 
@@ -1798,34 +1875,32 @@ impl TensorIndex for TensorTrain {
 // ============================================================================
 
 impl TensorVectorSpace for TensorTrain {
+    type Error = TensorTrainError;
+
     // ========================================================================
     // GMRES-required methods (fully supported)
     // ========================================================================
 
     fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::axpby(self, a, other, b).map_err(|e| anyhow::anyhow!("{}", e))
+        TensorTrain::axpby(self, a, other, b).map_err(anyhow::Error::new)
     }
 
     fn scale(&self, scalar: AnyScalar) -> anyhow::Result<Self> {
-        TensorTrain::scale(self, scalar).map_err(|e| anyhow::anyhow!("{}", e))
+        TensorTrain::scale(self, scalar).map_err(anyhow::Error::new)
     }
 
     fn inner_product(&self, other: &Self) -> anyhow::Result<AnyScalar> {
-        self.inner(other).map_err(|e| anyhow::anyhow!("{}", e))
+        self.inner(other).map_err(anyhow::Error::new)
     }
 
-    fn norm_squared(&self) -> f64 {
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         TensorTrain::norm_squared(self)
     }
 
-    fn try_maxabs(&self) -> anyhow::Result<f64> {
-        anyhow::bail!(
-            "TensorTrain does not support TensorVectorSpace::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains"
-        )
-    }
-
-    fn maxabs(&self) -> f64 {
-        f64::NAN
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support TensorVectorSpace::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains".to_string(),
+        })
     }
 }
 
@@ -1902,22 +1977,22 @@ impl TensorConstructionLike for TensorTrain {
     fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
         // Create a single-site TensorTrain with an identity tensor
         let delta = TensorDynLen::diagonal(input, output)?;
-        Self::new(vec![delta]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![delta]).map_err(anyhow::Error::new)
     }
 
     fn scalar_one() -> anyhow::Result<Self> {
         // Empty tensor train represents scalar 1
-        Self::new(vec![]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![]).map_err(anyhow::Error::new)
     }
 
     fn ones(indices: &[Self::Index]) -> anyhow::Result<Self> {
         let t = TensorDynLen::ones(indices)?;
-        Self::new(vec![t]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![t]).map_err(anyhow::Error::new)
     }
 
     fn onehot(index_vals: &[(Self::Index, usize)]) -> anyhow::Result<Self> {
         let t = TensorDynLen::onehot(index_vals)?;
-        Self::new(vec![t]).map_err(|e| anyhow::anyhow!("{}", e))
+        Self::new(vec![t]).map_err(anyhow::Error::new)
     }
 }
 

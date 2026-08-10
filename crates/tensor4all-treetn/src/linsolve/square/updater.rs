@@ -471,8 +471,8 @@ where
             eprintln!(
                 "T4A local_solve #{solve_index}: region={region:?} mode={:?} rhs_norm={:.6e} init_norm={:.6e} iterations={} residual={:.6e} converged={} apply_calls={} apply_ms={:.3} total_ms={:.3}",
                 self.options.gmres_tolerance_mode,
-                rhs_local.norm(),
-                init.norm(),
+                rhs_local.norm()?,
+                init.norm()?,
                 result.iterations,
                 result.residual_norm,
                 result.converged,
