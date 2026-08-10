@@ -377,22 +377,29 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"Baseline matched: {entry}"
         for entry in sorted(baseline, key=_finding_sort_key)
     ]
+    allow_panic_line = _line(FIXTURE_LIB, '    panic!("allow cannot hide this");')
+    unreachable_line = _line(FIXTURE_LIB, '    unreachable!("production unreachable");')
+    expect_line = _line(FIXTURE_LIB, '    let _ = option.expect("production expect");')
+    aliased_panic_line = _line(FIXTURE_LIB, '    fail!("aliased panic");')
+    macro_argument_line = _line(FIXTURE_LIB, '    passthrough!(panic!("invoked macro argument"));')
+    all_features_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
+    bin_panic_line = _line(FIXTURE_SHARED, '    std::panic!("production binary");')
     assert findings[len(baseline) :] == [
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"allow cannot hide this\");')}:panic",
+        f"crates/demo/src/lib.rs:{allow_panic_line}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 1)}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 2)}:unwrap",
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    unreachable!(\"production unreachable\");')}:unreachable",
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.expect(\"production expect\");')}:expect",
+        f"crates/demo/src/lib.rs:{unreachable_line}:unreachable",
+        f"crates/demo/src/lib.rs:{expect_line}:expect",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = Maybe::unwrap(option);')}:unwrap",
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    fail!(\"aliased panic\");')}:panic",
+        f"crates/demo/src/lib.rs:{aliased_panic_line}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(option.unwrap());')}:unwrap",
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(panic!(\"invoked macro argument\"));')}:panic",
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!(\"all-features production\");')}:panic",
+        f"crates/demo/src/lib.rs:{macro_argument_line}:panic",
+        f"crates/demo/src/lib.rs:{all_features_line}:panic",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        assert!(true);')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '            (_unused:expr) => { assert!(true); };')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'pub fn nested_macro_use() { assert!(true); }')}:assert",
-        f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, '    std::panic!(\"production binary\");')}:panic",
+        f"crates/demo/src/shared.rs:{bin_panic_line}:panic",
     ]
     assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :]} >= {
         "panic",
