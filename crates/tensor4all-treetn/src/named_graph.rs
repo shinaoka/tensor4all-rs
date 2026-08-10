@@ -66,7 +66,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the graph is invalid (an invalid-topology
-    /// /// failure).
+    ///  failure).
     ///
     pub fn add_node(
         &mut self,
@@ -106,7 +106,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the node is not found (a missing-index failure)
-    /// /// or the new name is already in use (a duplicate operation failure).
+    ///  or the new name is already in use (a duplicate operation failure).
     ///
     pub fn rename_node(
         &mut self,
@@ -163,7 +163,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the graph is invalid (an invalid-topology
-    /// /// failure).
+    ///  failure).
     ///
     pub fn add_edge(
         &mut self,

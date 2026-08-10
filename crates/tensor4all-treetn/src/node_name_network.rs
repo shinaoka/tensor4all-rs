@@ -156,7 +156,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the node is a duplicate (a duplicate operation
-    /// /// failure) or the network is invalid (an invalid-topology failure).
+    ///  failure) or the network is invalid (an invalid-topology failure).
     ///
     pub fn add_node(
         &mut self,
@@ -176,7 +176,7 @@ where
     /// # Errors
     ///
     /// Returns an error when an endpoint node is not found (a missing-index
-    /// /// failure) or the edge is a duplicate (a duplicate operation failure).
+    ///  failure) or the edge is a duplicate (a duplicate operation failure).
     ///
     pub fn add_edge(
         &mut self,
@@ -200,7 +200,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the node is not found (a missing-index failure) or
-    /// /// the new name is a duplicate (a duplicate operation failure).
+    ///  the new name is a duplicate (a duplicate operation failure).
     ///
     pub fn rename_node(
         &mut self,

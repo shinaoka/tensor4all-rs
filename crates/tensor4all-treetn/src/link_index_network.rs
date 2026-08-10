@@ -101,7 +101,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    ///  a backend failure).
     ///
     pub fn replace_index(
         &mut self,

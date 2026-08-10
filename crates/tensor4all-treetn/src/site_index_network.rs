@@ -99,7 +99,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the site space is invalid (a shape mismatch) or the
-    /// /// node is a duplicate (a duplicate operation failure).
+    ///  node is a duplicate (a duplicate operation failure).
     ///
     pub fn add_node(
         &mut self,
@@ -125,7 +125,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the node is not found (a missing-index failure) or
-    /// /// the new name is a duplicate (a duplicate operation failure).
+    ///  the new name is a duplicate (a duplicate operation failure).
     ///
     pub fn rename_node(
         &mut self,
@@ -207,7 +207,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the site index is already present (a duplicate-index
-    /// /// failure) or the node is not found (a missing-index failure).
+    ///  failure) or the node is not found (a missing-index failure).
     ///
     pub fn add_site_index(
         &mut self,
@@ -229,7 +229,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the site index is not present (a missing-index
-    /// /// failure).
+    ///  failure).
     ///
     pub fn remove_site_index(
         &mut self,
@@ -253,8 +253,8 @@ where
     /// # Errors
     ///
     /// Returns an error when the old site index is not present (a missing-index
-    /// /// failure) or the new index has an incompatible dimension (a shape
-    /// /// mismatch).
+    ///  failure) or the new index has an incompatible dimension (a shape
+    ///  mismatch).
     ///
     pub fn replace_site_index(
         &mut self,
@@ -287,7 +287,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the node is not found (a missing-index failure) or
-    /// /// the site space is invalid (a shape mismatch).
+    ///  the site space is invalid (a shape mismatch).
     ///
     pub fn set_site_space(
         &mut self,
@@ -330,7 +330,7 @@ where
     /// # Errors
     ///
     /// Returns an error when an endpoint node is not found (a missing-index
-    /// /// failure) or the edge already exists (a duplicate operation failure).
+    ///  failure) or the edge already exists (a duplicate operation failure).
     ///
     pub fn add_edge(
         &mut self,
@@ -548,7 +548,7 @@ where
     ///
     /// # Returns
     /// - `Ok(SiteIndexNetwork)` - The resulting state's site index network after the operator acts
-    /// - `Err(anyhow::Error)` - Error message if the operator cannot act on this state
+    /// - `Err(TreeTNOperationError)` - An error if the operator cannot act on this state
     ///
     /// # Note
     /// This is a simplified version that assumes the operator's output indices
@@ -559,7 +559,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operator topology is incompatible (a shape or
-    /// /// index mismatch failure).
+    ///  index mismatch failure).
     ///
     pub fn apply_operator_topology(
         &self,
