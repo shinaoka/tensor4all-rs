@@ -680,11 +680,12 @@ pub fn triangular_solve_matrix<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> Result<Matrix<T>>
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixTriangularSolveScalar,
 {
     T::triangular_solve_matrix_impl(a, b, left_side, lower, transpose_a, unit_diagonal)
+        .map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system while consuming column-major [`Matrix`] values.
@@ -714,11 +715,12 @@ pub fn triangular_solve_matrix_owned<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> Result<Matrix<T>>
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixTriangularSolveScalar,
 {
     T::triangular_solve_matrix_owned_impl(a, b, left_side, lower, transpose_a, unit_diagonal)
+        .map_err(BackendLinalgError::from)
 }
 
 /// Compute complete-pivoting LU with the configured tenferro backend.

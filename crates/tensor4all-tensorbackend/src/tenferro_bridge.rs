@@ -876,7 +876,11 @@ pub fn native_tensor_primal_to_storage(
                 .collect::<Vec<_>>(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
         DType::F64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<f64>()
@@ -884,7 +888,11 @@ pub fn native_tensor_primal_to_storage(
                 .to_vec(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
         DType::I32 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<i32>()
@@ -894,7 +902,11 @@ pub fn native_tensor_primal_to_storage(
                 .collect::<Vec<_>>(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
         DType::I64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<i64>()
@@ -904,7 +916,11 @@ pub fn native_tensor_primal_to_storage(
                 .collect::<Vec<_>>(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
         DType::Bool => Storage::from_dense_col_major(
             tensor
                 .as_slice::<bool>()
@@ -914,7 +930,11 @@ pub fn native_tensor_primal_to_storage(
                 .collect::<Vec<_>>(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
         DType::C32 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<Complex32>()
@@ -924,7 +944,11 @@ pub fn native_tensor_primal_to_storage(
                 .collect::<Vec<_>>(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
         DType::C64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<Complex64>()
@@ -932,7 +956,11 @@ pub fn native_tensor_primal_to_storage(
                 .to_vec(),
             tensor.shape(),
         )
-        .map_err(BridgeError::from),
+        .map_err(|e| {
+            BridgeError::from(anyhow!(
+                "native tensor snapshot materialization failed: {e}"
+            ))
+        }),
     }
 }
 
@@ -1216,13 +1244,14 @@ pub fn axpby_native_tensor(
     a: &AnyScalar,
     rhs: &NativeTensor,
     b: &AnyScalar,
-) -> Result<NativeTensor> {
-    ensure!(
-        lhs.shape() == rhs.shape(),
-        "axpby requires matching tensor shapes, got lhs {:?} and rhs {:?}",
-        lhs.shape(),
-        rhs.shape()
-    );
+) -> std::result::Result<NativeTensor, BridgeError> {
+    if lhs.shape() != rhs.shape() {
+        return Err(BridgeError::from(anyhow!(
+            "axpby requires matching tensor shapes, got lhs {:?} and rhs {:?}",
+            lhs.shape(),
+            rhs.shape()
+        )));
+    }
 
     let target = common_dtype(&[
         lhs.dtype(),
@@ -1336,9 +1365,9 @@ pub fn axpby_native_tensor(
                 values,
             ))
         }
-        DType::I32 | DType::I64 | DType::Bool => Err(anyhow!(
-            "axpby_native_tensor does not support integer/bool tensors"
-        )),
+        DType::I32 | DType::I64 | DType::Bool => {
+            Err(anyhow!("axpby_native_tensor does not support integer/bool tensors").into())
+        }
     }
 }
 
