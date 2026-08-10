@@ -4817,6 +4817,7 @@ impl TensorDynLen {
     /// Returns an error if the two indices have different dimensions.
     pub fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
         <Self as TensorConstructionLike>::diagonal(input_index, output_index)
+            .map_err(anyhow::Error::new)
     }
 
     /// Create a product of Kronecker-delta tensors for paired index lists.
@@ -4826,6 +4827,7 @@ impl TensorDynLen {
     /// dimensions do not match.
     pub fn delta(input_indices: &[DynIndex], output_indices: &[DynIndex]) -> Result<Self> {
         <Self as TensorConstructionLike>::delta(input_indices, output_indices)
+            .map_err(anyhow::Error::new)
     }
 
     /// Create a scalar tensor equal to one.
@@ -4833,7 +4835,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if dense scalar construction fails.
     pub fn scalar_one() -> Result<Self> {
-        <Self as TensorConstructionLike>::scalar_one()
+        <Self as TensorConstructionLike>::scalar_one().map_err(anyhow::Error::new)
     }
 
     /// Create a tensor filled with ones over the given indices.
@@ -4841,7 +4843,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the tensor size overflows or dense construction fails.
     pub fn ones(indices: &[DynIndex]) -> Result<Self> {
-        <Self as TensorConstructionLike>::ones(indices)
+        <Self as TensorConstructionLike>::ones(indices).map_err(anyhow::Error::new)
     }
 
     /// Create a one-hot tensor with value one at the specified index positions.
@@ -4849,7 +4851,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if any coordinate is outside its index dimension.
     pub fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
-        <Self as TensorConstructionLike>::onehot(index_vals)
+        <Self as TensorConstructionLike>::onehot(index_vals).map_err(anyhow::Error::new)
     }
 
     /// Keep one coordinate along an index while retaining that index axis.
@@ -5307,21 +5309,22 @@ impl TensorContractionLike for TensorDynLen {
         &self,
         other: &Self,
         pairs: &[(DynIndex, DynIndex)],
-    ) -> Result<crate::tensor_like::DirectSumResult<Self>> {
-        let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
+    ) -> std::result::Result<crate::tensor_like::DirectSumResult<Self>, Self::Error> {
+        let (tensor, new_indices) =
+            crate::direct_sum::direct_sum(self, other, pairs).map_err(Self::Error::from)?;
         Ok(crate::tensor_like::DirectSumResult {
             tensor,
             new_indices,
         })
     }
 
-    fn outer_product(&self, other: &Self) -> Result<Self> {
-        super::contract::outer_product(self, other)
+    fn outer_product(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
+        super::contract::outer_product(self, other).map_err(Self::Error::from)
     }
 
-    fn permuteinds(&self, new_order: &[DynIndex]) -> Result<Self> {
+    fn permuteinds(&self, new_order: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method
-        TensorDynLen::permute_indices(self, new_order)
+        TensorDynLen::permute_indices(self, new_order).map_err(Self::Error::from)
     }
 
     fn fuse_indices(
@@ -5329,56 +5332,66 @@ impl TensorContractionLike for TensorDynLen {
         old_indices: &[DynIndex],
         new_index: DynIndex,
         order: LinearizationOrder,
-    ) -> Result<Self> {
-        TensorDynLen::fuse_indices(self, old_indices, new_index, order)
+    ) -> std::result::Result<Self, Self::Error> {
+        TensorDynLen::fuse_indices(self, old_indices, new_index, order).map_err(Self::Error::from)
     }
 
-    fn contract(tensors: &[&Self]) -> Result<Self> {
-        super::contract::contract(tensors)
+    fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
+        super::contract::contract(tensors).map_err(Self::Error::from)
     }
 
-    fn contract_pair(&self, other: &Self) -> Result<Self> {
-        super::contract::contract_pair(self, other)
+    fn contract_pair(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
+        super::contract::contract_pair(self, other).map_err(Self::Error::from)
     }
 }
 
 impl TensorConstructionLike for TensorDynLen {
-    fn select_indices(&self, selected_indices: &[DynIndex], positions: &[usize]) -> Result<Self> {
-        TensorDynLen::select_indices(self, selected_indices, positions)
+    fn select_indices(
+        &self,
+        selected_indices: &[DynIndex],
+        positions: &[usize],
+    ) -> std::result::Result<Self, Self::Error> {
+        TensorDynLen::select_indices(self, selected_indices, positions).map_err(Self::Error::from)
     }
 
-    fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
+    fn diagonal(
+        input_index: &DynIndex,
+        output_index: &DynIndex,
+    ) -> std::result::Result<Self, Self::Error> {
         let dim = input_index.dim();
         if dim != output_index.dim() {
             return Err(anyhow::anyhow!(
                 "Dimension mismatch: input index has dim {}, output has dim {}",
                 dim,
                 output_index.dim(),
-            ));
+            )
+            .into());
         }
 
         TensorDynLen::from_diag(
             vec![input_index.clone(), output_index.clone()],
             vec![1.0_f64; dim],
         )
+        .map_err(Self::Error::from)
     }
 
-    fn scalar_one() -> Result<Self> {
-        TensorDynLen::from_dense(vec![], vec![1.0_f64])
+    fn scalar_one() -> std::result::Result<Self, Self::Error> {
+        TensorDynLen::from_dense(vec![], vec![1.0_f64]).map_err(Self::Error::from)
     }
 
-    fn ones(indices: &[DynIndex]) -> Result<Self> {
+    fn ones(indices: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
         if indices.is_empty() {
-            return Self::scalar_one();
+            return <Self as TensorConstructionLike>::scalar_one();
         }
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
-        let total_size = checked_total_size(&dims)?;
+        let total_size = checked_total_size(&dims).map_err(Self::Error::from)?;
         TensorDynLen::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
+            .map_err(Self::Error::from)
     }
 
-    fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
+    fn onehot(index_vals: &[(DynIndex, usize)]) -> std::result::Result<Self, Self::Error> {
         if index_vals.is_empty() {
-            return Self::scalar_one();
+            return <Self as TensorConstructionLike>::scalar_one();
         }
         let indices: Vec<DynIndex> = index_vals.iter().map(|(idx, _)| idx.clone()).collect();
         let vals: Vec<usize> = index_vals.iter().map(|(_, v)| *v).collect();
@@ -5391,17 +5404,18 @@ impl TensorConstructionLike for TensorDynLen {
                     v,
                     k,
                     d
-                ));
+                )
+                .into());
             }
         }
 
-        let total_size = checked_total_size(&dims)?;
+        let total_size = checked_total_size(&dims).map_err(Self::Error::from)?;
         let mut data = vec![0.0_f64; total_size];
 
-        let offset = column_major_offset(&dims, &vals)?;
+        let offset = column_major_offset(&dims, &vals).map_err(Self::Error::from)?;
         data[offset] = 1.0;
 
-        Self::from_dense(indices, data)
+        Self::from_dense(indices, data).map_err(Self::Error::from)
     }
 
     // delta() uses the default implementation via diagonal() and outer_product()

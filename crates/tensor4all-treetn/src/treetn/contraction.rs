@@ -239,7 +239,9 @@ where
 
         // Build permutation: for each expected index, find its position in current indices
         // Then use replaceind to reorder (permuting indices)
-        result.permuteinds(&expected_indices)
+        result
+            .permuteinds(&expected_indices)
+            .map_err(anyhow::Error::new)
     }
 
     /// Contract two TreeTNs with the same topology using the zip-up algorithm.
@@ -701,7 +703,7 @@ where
         // explicitly asks for a reference product with no common site indices
         // (for example partial_contract with an empty spec), this is the
         // corresponding outer product reference.
-        tensor1.contract_pair(&tensor2)
+        tensor1.contract_pair(&tensor2).map_err(anyhow::Error::new)
     }
 
     /// Validate that `canonical_region` and edge `ortho_towards` are consistent.

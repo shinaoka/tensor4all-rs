@@ -1278,7 +1278,7 @@ where
             <TensorDynLen as TensorConstructionLike>::ones(&indices).map_err(|error| {
                 SelectedIndexContractionError::BuildOnesTensor {
                     node: format!("{node:?}"),
-                    message: format_anyhow_error(error),
+                    message: format_anyhow_error(anyhow::Error::new(error)),
                 }
             })?,
         );

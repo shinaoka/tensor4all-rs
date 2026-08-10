@@ -795,22 +795,28 @@ impl TensorTrain {
                     .map_err(|e| {
                         TensorTrainError::operation_source(
                             "failed to build implicit unit link tensor",
-                            e,
+                            anyhow::Error::new(e),
                         )
                     })?;
             tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
-                TensorTrainError::operation_source("failed to attach implicit unit link", e)
+                TensorTrainError::operation_source(
+                    "failed to attach implicit unit link",
+                    anyhow::Error::new(e),
+                )
             })?;
 
             let right_link =
                 <TensorDynLen as TensorConstructionLike>::ones(&[link]).map_err(|e| {
                     TensorTrainError::operation_source(
                         "failed to build implicit unit link tensor",
-                        e,
+                        anyhow::Error::new(e),
                     )
                 })?;
             tensors[site + 1] = tensors[site + 1].outer_product(&right_link).map_err(|e| {
-                TensorTrainError::operation_source("failed to attach implicit unit link", e)
+                TensorTrainError::operation_source(
+                    "failed to attach implicit unit link",
+                    anyhow::Error::new(e),
+                )
             })?;
         }
 
@@ -1938,24 +1944,32 @@ impl TensorContractionLike for TensorTrain {
         result
     }
 
-    fn contract(_tensors: &[&Self]) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorContractionLike::contract; use TensorTrain::contract() method instead")
+    fn contract(_tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support TensorContractionLike::contract; use TensorTrain::contract() method instead".to_string(),
+        })
     }
 
     fn direct_sum(
         &self,
         _other: &Self,
         _pairs: &[(Self::Index, Self::Index)],
-    ) -> anyhow::Result<DirectSumResult<Self>> {
-        anyhow::bail!("TensorTrain does not support direct_sum; use add() instead")
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support direct_sum; use add() instead".to_string(),
+        })
     }
 
-    fn outer_product(&self, _other: &Self) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support outer_product")
+    fn outer_product(&self, _other: &Self) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support outer_product".to_string(),
+        })
     }
 
-    fn permuteinds(&self, _new_order: &[Self::Index]) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support permuteinds")
+    fn permuteinds(&self, _new_order: &[Self::Index]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support permuteinds".to_string(),
+        })
     }
 
     fn fuse_indices(
@@ -1963,8 +1977,10 @@ impl TensorContractionLike for TensorTrain {
         _old_indices: &[Self::Index],
         _new_index: Self::Index,
         _order: LinearizationOrder,
-    ) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorContractionLike::fuse_indices")
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorTrainError::OperationError {
+            message: "TensorTrain does not support TensorContractionLike::fuse_indices".to_string(),
+        })
     }
 }
 
@@ -1992,25 +2008,28 @@ impl TensorFactorizationLike for TensorTrain {
 }
 
 impl TensorConstructionLike for TensorTrain {
-    fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
+    fn diagonal(
+        input: &Self::Index,
+        output: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
         // Create a single-site TensorTrain with an identity tensor
         let delta = TensorDynLen::diagonal(input, output)?;
-        Self::new(vec![delta]).map_err(anyhow::Error::new)
+        Ok(Self::new(vec![delta])?)
     }
 
-    fn scalar_one() -> anyhow::Result<Self> {
+    fn scalar_one() -> std::result::Result<Self, Self::Error> {
         // Empty tensor train represents scalar 1
-        Self::new(vec![]).map_err(anyhow::Error::new)
+        Ok(Self::new(vec![])?)
     }
 
-    fn ones(indices: &[Self::Index]) -> anyhow::Result<Self> {
+    fn ones(indices: &[Self::Index]) -> std::result::Result<Self, Self::Error> {
         let t = TensorDynLen::ones(indices)?;
-        Self::new(vec![t]).map_err(anyhow::Error::new)
+        Ok(Self::new(vec![t])?)
     }
 
-    fn onehot(index_vals: &[(Self::Index, usize)]) -> anyhow::Result<Self> {
+    fn onehot(index_vals: &[(Self::Index, usize)]) -> std::result::Result<Self, Self::Error> {
         let t = TensorDynLen::onehot(index_vals)?;
-        Self::new(vec![t]).map_err(anyhow::Error::new)
+        Ok(Self::new(vec![t])?)
     }
 }
 

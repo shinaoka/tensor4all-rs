@@ -657,7 +657,7 @@ where
         .permuteinds(&basis_order)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to align old target row basis",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
     let q_left = fresh_indices_like(&q_indices);
@@ -669,7 +669,7 @@ where
     let trace_tensor = TensorDynLen::contract(&[&density, &trace_identity]).map_err(|source| {
         GseError::Algorithm {
             context: "GSE failed to compute local reference-density trace",
-            source,
+            source: anyhow::Error::new(source),
         }
     })?;
     let trace = trace_tensor.sum().map_err(|source| GseError::Algorithm {
@@ -706,7 +706,11 @@ where
                     LinearizationOrder::ColumnMajor,
                 )
             })
-            .and_then(|tensor| tensor.permuteinds(&[flat_left.clone(), flat_right]))
+            .and_then(|tensor| {
+                tensor
+                    .permuteinds(&[flat_left.clone(), flat_right])
+                    .map_err(anyhow::Error::new)
+            })
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to reshape projected reference density for eigensolve",
                 source,
@@ -743,7 +747,7 @@ where
         TensorDynLen::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
             GseError::Algorithm {
                 context: "GSE failed to absorb expanded coefficients into target parent",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
 
@@ -877,7 +881,7 @@ where
         TensorDynLen::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
             GseError::Algorithm {
                 context: "GSE failed to absorb expanded coefficients into reference parent",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
 
@@ -1136,7 +1140,7 @@ fn projected_missing_density_tensor(
     TensorDynLen::contract(&[&p_left_mid, &density_mid, &p_mid_right]).map_err(|source| {
         GseError::Algorithm {
             context: "GSE failed to contract projected missing reference density",
-            source,
+            source: anyhow::Error::new(source),
         }
     })
 }
@@ -1171,7 +1175,7 @@ fn identity_on_index_pairs(
                     .outer_product(&pair)
                     .map_err(|source| GseError::Algorithm {
                         context: "GSE failed to combine q-space identity factors",
-                        source,
+                        source: anyhow::Error::new(source),
                     })?
             }
             None => pair,

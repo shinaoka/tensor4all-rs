@@ -833,7 +833,7 @@ where
         )?;
         let mut local = T::contract(&[&q, &r_evolved]).map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to contract corrected one-site tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         let target_inds = evolved.external_indices();
         let local_inds = local.external_indices();
@@ -850,7 +850,7 @@ where
                 .permuteinds(&target_inds)
                 .map_err(|source| TdvpError::Algorithm {
                     context: "TDVP failed to align corrected one-site tensor indices",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         }
         Ok(local)

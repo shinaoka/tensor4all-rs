@@ -132,7 +132,7 @@ where
 
         // Use T::contract for optimal contraction ordering
         let tensor_refs: Vec<&T> = all_tensors.iter().collect();
-        T::contract(&tensor_refs)
+        T::contract(&tensor_refs).map_err(anyhow::Error::new)
     }
 
     fn has_link_collision_with_rhs<NT: NetworkTopology<V>>(
@@ -248,7 +248,7 @@ where
         } else {
             let mut all_tensors: Vec<&T> = vec![&bra_ket];
             all_tensors.extend(child_envs);
-            T::contract(&all_tensors)
+            T::contract(&all_tensors).map_err(anyhow::Error::new)
         }
     }
 

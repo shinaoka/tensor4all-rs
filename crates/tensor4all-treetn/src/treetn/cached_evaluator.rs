@@ -1367,7 +1367,7 @@ fn ensure_assignment_axis_last(
             .cloned(),
     );
     new_order.push(assignment_index.clone());
-    tensor.permuteinds(&new_order)
+    tensor.permuteinds(&new_order).map_err(anyhow::Error::new)
 }
 
 fn sorted_neighbors<T, V>(tree: &TreeTN<T, V>) -> HashMap<V, Vec<V>>

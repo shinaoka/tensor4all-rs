@@ -603,9 +603,11 @@ where
             .iter()
             .map(ContractOperand::as_ref)
             .collect::<Vec<_>>();
-        let contracted = T::contract(&tensor_refs)?;
+        let contracted = T::contract(&tensor_refs).map_err(anyhow::Error::new)?;
         if no_site_spectator {
-            contracted.contract_pair(tensor_op)
+            contracted
+                .contract_pair(tensor_op)
+                .map_err(anyhow::Error::new)
         } else {
             Ok(contracted)
         }

@@ -38,6 +38,7 @@ pub fn build_identity_operator_tensor(
     output_site_indices: &[DynIndex],
 ) -> Result<TensorDynLen> {
     <TensorDynLen as TensorConstructionLike>::delta(site_indices, output_site_indices)
+        .map_err(anyhow::Error::new)
 }
 
 #[cfg(test)]

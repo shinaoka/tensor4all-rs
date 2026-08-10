@@ -176,7 +176,7 @@ fn align_rhs_to_init(init: &TensorDynLen, rhs: TensorDynLen) -> anyhow::Result<T
     if same_index_order(&init_indices, &rhs_indices) {
         Ok(rhs)
     } else {
-        rhs.permuteinds(&init_indices)
+        rhs.permuteinds(&init_indices).map_err(anyhow::Error::new)
     }
 }
 

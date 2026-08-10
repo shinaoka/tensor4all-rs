@@ -531,16 +531,25 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         &self,
         _other: &Self,
         _pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
-    ) -> Result<DirectSumResult<Self>> {
-        anyhow::bail!("BlockTensor does not support direct_sum")
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support direct_sum"
+        )))
     }
 
-    fn outer_product(&self, _other: &Self) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support outer_product")
+    fn outer_product(&self, _other: &Self) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support outer_product"
+        )))
     }
 
-    fn permuteinds(&self, _new_order: &[<Self as TensorIndex>::Index]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support permuteinds")
+    fn permuteinds(
+        &self,
+        _new_order: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support permuteinds"
+        )))
     }
 
     fn fuse_indices(
@@ -548,11 +557,15 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         old_indices: &[Self::Index],
         new_index: Self::Index,
         order: LinearizationOrder,
-    ) -> Result<Self> {
-        let blocks: Result<Vec<T>> = self
+    ) -> std::result::Result<Self, Self::Error> {
+        let blocks: std::result::Result<Vec<T>, Self::Error> = self
             .blocks
             .iter()
-            .map(|block| block.fuse_indices(old_indices, new_index.clone(), order))
+            .map(|block| {
+                block
+                    .fuse_indices(old_indices, new_index.clone(), order)
+                    .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
+            })
             .collect();
         Ok(Self {
             blocks: blocks?,
@@ -560,8 +573,10 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         })
     }
 
-    fn contract(_tensors: &[&Self]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support contract")
+    fn contract(_tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support contract"
+        )))
     }
 }
 
@@ -592,20 +607,30 @@ impl<T: TensorLike> TensorConstructionLike for BlockTensor<T> {
     fn diagonal(
         _input_index: &<Self as TensorIndex>::Index,
         _output_index: &<Self as TensorIndex>::Index,
-    ) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support diagonal")
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support diagonal"
+        )))
     }
 
-    fn scalar_one() -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support scalar_one")
+    fn scalar_one() -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support scalar_one"
+        )))
     }
 
-    fn ones(_indices: &[<Self as TensorIndex>::Index]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support ones")
+    fn ones(_indices: &[<Self as TensorIndex>::Index]) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support ones"
+        )))
     }
 
-    fn onehot(_index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support onehot")
+    fn onehot(
+        _index_vals: &[(<Self as TensorIndex>::Index, usize)],
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+            "BlockTensor does not support onehot"
+        )))
     }
 }
 

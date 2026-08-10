@@ -182,7 +182,7 @@ where
         .collect::<Result<_>>()?;
 
     let tensor_refs: Vec<&T> = tensors.iter().collect();
-    T::contract(&tensor_refs)
+    T::contract(&tensor_refs).map_err(anyhow::Error::new)
 }
 
 /// Build a decomposition topology for a solved local tensor.
