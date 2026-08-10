@@ -188,7 +188,7 @@ where
 
         let mut result = self.clone();
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
-            result = result.replaceind(old, new).map_err(anyhow::Error::new)?;
+            result = result.replaceind(old, new)?;
         }
         Ok(result)
     }

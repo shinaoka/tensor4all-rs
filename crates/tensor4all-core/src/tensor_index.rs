@@ -5,7 +5,6 @@
 //! can be implemented by both dense tensors and tensor networks (like TreeTN).
 
 use crate::IndexLike;
-use anyhow::Result;
 use std::fmt::Debug;
 
 /// Trait for objects that have external indices and support index operations.
@@ -116,9 +115,8 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Errors
     ///
     /// Returns `Self::Error` when an `old` entry is not present (a
-    /// missing-index failure), when `old`/`new` differ in length (a length
-    /// mismatch), or when the replacement violates an index identity
-    /// invariant (an invalid replacement); propagates failures from
+    /// missing-index failure) or when the replacement violates an index
+    /// identity invariant (an invalid replacement); propagates failures from
     /// [`Self::replaceinds`].
     fn replaceinds_pairs(
         &self,

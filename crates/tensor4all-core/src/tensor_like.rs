@@ -663,9 +663,8 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     /// Returns `Self::Error` when the operands have incompatible index spaces
-    /// (an index-space mismatch), when a NaN or invalid tolerance is
-    /// encountered, or when norm evaluation reports a failure; propagates
-    /// failures from subtraction and norm evaluation.
+    /// (an index-space mismatch) or when norm evaluation reports a failure;
+    /// propagates failures from subtraction and norm evaluation.
     fn isapprox(
         &self,
         other: &Self,
