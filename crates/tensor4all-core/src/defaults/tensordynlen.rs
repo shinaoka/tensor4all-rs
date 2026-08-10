@@ -5081,11 +5081,12 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// - `left_indices` is the vector of left indices (cloned)
 /// - `right_indices` is the vector of right indices (cloned)
 /// # Errors
-/// Returns an error if:
-/// - The tensor rank is < 2
-/// - `left_inds` is empty or contains all indices
-/// - `left_inds` contains indices not in the tensor or duplicates
-/// - Native reshape fails
+///
+/// Returns an error when the tensor rank is less than 2 (a rank mismatch),
+/// when `left_inds` is empty or contains all indices (an invalid split), when
+/// `left_inds` contains indices not present in the tensor (a missing-index
+/// failure) or duplicates, or when the native reshape fails (a backend
+/// failure).
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, unfold_split};
@@ -5105,10 +5106,6 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// assert_eq!(right_indices.len(), 1);
 /// ```
 #[allow(clippy::type_complexity)]
-/// # Errors
-/// Returns an error when the index dimensions do not support the requested
-/// split (an invalid index split, a shape mismatch).
-///
 pub fn unfold_split(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
