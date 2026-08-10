@@ -67,7 +67,8 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `rows * cols != blocks.len()`.
+    /// Returns an error when the block count does not match the shape (a shape
+    /// /// mismatch).
     ///
     /// # Examples
     ///
@@ -108,7 +109,8 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if `rows * cols != blocks.len()`.
+    /// Returns an error when the block count does not match the shape (a shape
+    /// /// mismatch).
     ///
     /// # Examples
     ///
@@ -258,6 +260,11 @@ impl<T: TensorLike> BlockTensor<T> {
     /// - All blocks have the same number of external indices.
     /// - Blocks in the same row share some common index IDs (output indices).
     /// - Blocks in the same column share some common index IDs (input indices).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blocks have inconsistent indices (a shape or
+    /// /// index mismatch).
     ///
     /// # Examples
     ///

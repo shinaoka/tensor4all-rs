@@ -29,6 +29,11 @@ pub(crate) fn mpo_helper_error(context: &str, err: impl std::fmt::Display) -> MP
 /// - C: (left_a * left_b, s1_a, s2_b, right_a * right_b)
 ///
 /// This is the Rust equivalent of `_contractsitetensors` from Julia.
+/// # Errors
+///
+/// Returns an error when the site tensors are incompatible (a shape or index
+/// /// mismatch) or the contraction fails (a backend failure).
+///
 pub fn contract_site_tensors<T: SVDScalar + EinsumScalar>(
     a: &Tensor4<T>,
     b: &Tensor4<T>,
@@ -82,6 +87,11 @@ where
 ///
 /// L\[i\] has shape (left_a_i, left_b_i) representing the accumulated
 /// contraction from the left.
+/// # Errors
+///
+/// Returns an error when the environment construction fails (a shape or index
+/// /// mismatch, or a backend failure).
+///
 pub fn left_environment<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
@@ -156,6 +166,11 @@ where
 ///
 /// R\[i\] has shape (right_a_i, right_b_i) representing the accumulated
 /// contraction from the right.
+/// # Errors
+///
+/// Returns an error when the environment construction fails (a shape or index
+/// /// mismatch, or a backend failure).
+///
 pub fn right_environment<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,

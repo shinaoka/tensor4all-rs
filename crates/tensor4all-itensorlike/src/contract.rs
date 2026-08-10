@@ -26,10 +26,10 @@ use crate::tensortrain::TensorTrain;
 /// A new tensor train resulting from the contraction.
 ///
 /// # Errors
-/// Returns an error if:
-/// - Either tensor train is empty
-/// - The tensor trains have different lengths
-/// - The contraction algorithm fails
+///
+/// Returns an error when the contraction fails (a shape or index mismatch,
+/// /// or a backend failure).
+///
 pub fn contract(
     a: &TensorTrain,
     b: &TensorTrain,
@@ -145,8 +145,10 @@ impl TensorTrain {
     /// compression, rather than the dense tensor-level pair contraction.
     ///
     /// # Errors
-    /// Returns an error if the tensor trains cannot be contracted with the
-    /// requested options.
+    ///
+    /// Returns an error when the pair is incompatible (a shape or index mismatch)
+    /// /// or the contraction fails (a backend failure).
+    ///
     pub fn contract_pair(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         self.contract(other, options)
     }

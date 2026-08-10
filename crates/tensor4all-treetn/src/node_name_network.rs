@@ -151,6 +151,11 @@ where
     /// Add a node to the network.
     ///
     /// Returns an error if the node already exists.
+    /// # Errors
+    ///
+    /// Returns an error when the node is a duplicate (a duplicate operation
+    /// /// failure) or the network is invalid (an invalid-topology failure).
+    ///
     pub fn add_node(&mut self, node_name: NodeName) -> Result<NodeIndex> {
         self.graph.add_node(node_name, ())
     }
@@ -163,6 +168,11 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
+    /// # Errors
+    ///
+    /// Returns an error when an endpoint node is not found (a missing-index
+    /// /// failure) or the edge is a duplicate (a duplicate operation failure).
+    ///
     pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
         self.graph.add_edge(n1, n2, ())
     }
@@ -178,6 +188,11 @@ where
     }
 
     /// Rename an existing node.
+    /// # Errors
+    ///
+    /// Returns an error when the node is not found (a missing-index failure) or
+    /// /// the new name is a duplicate (a duplicate operation failure).
+    ///
     pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
         self.graph.rename_node(old_name, new_name)
     }

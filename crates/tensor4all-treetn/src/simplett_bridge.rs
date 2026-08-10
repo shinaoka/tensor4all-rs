@@ -293,9 +293,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if `position` is out of range, `value` is outside
-/// `site_index`, the input is not a numbered single-site chain, or the
-/// conversion between the chain `TreeTN` and `TensorTrain` fails.
+/// Returns an error when the insertion fails (a shape or index mismatch, or
+/// /// a missing-index failure).
 ///
 /// # Examples
 ///
@@ -392,10 +391,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if `position` is out of range, `value` is outside the site
-/// dimension, removing the only site would require an unsupported scalar
-/// zero-site `TreeTN`, the input is not a numbered single-site chain, or the
-/// conversion between the chain `TreeTN` and `TensorTrain` fails.
+/// Returns an error when the removal fails (a shape or index mismatch, or a
+/// /// missing-index failure).
 ///
 /// # Examples
 ///
@@ -475,11 +472,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if `position` is out of range, `weights.len()` does not
-/// match the removed site dimension, removing the only site would require an
-/// unsupported scalar zero-site `TreeTN`, the input is not a numbered
-/// single-site chain, or the conversion between the chain `TreeTN` and
-/// `TensorTrain` fails.
+/// Returns an error when the removal fails (a shape or index mismatch, or a
+/// /// missing-index failure).
 ///
 /// # Examples
 ///

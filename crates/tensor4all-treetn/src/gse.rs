@@ -264,6 +264,11 @@ struct EdgeExpansionStats {
 
 /// Build Krylov references from `operator`, expand the TreeTN state, and return
 /// the expanded state.
+/// # Errors
+///
+/// Returns an error when the subspace expansion fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 pub fn global_subspace_expand<V>(
     operator: &LinearOperator<TensorDynLen, V>,
     init: TreeTN<TensorDynLen, V>,
@@ -293,6 +298,11 @@ where
 /// The supplied references are cloned into internal work buffers. Their link
 /// indices are relabeled before the sweep, so callers should not rely on the
 /// references being returned or mutated.
+/// # Errors
+///
+/// Returns an error when the subspace expansion fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 pub fn global_subspace_expand_with_references<V>(
     init: TreeTN<TensorDynLen, V>,
     references: Vec<TreeTN<TensorDynLen, V>>,
@@ -356,6 +366,11 @@ where
 }
 
 /// Run GSE before selected TDVP sweeps and delegate each sweep to existing TDVP.
+/// # Errors
+///
+/// Returns an error when the global-subspace TDVP fails (a shape or index
+/// /// mismatch, a non-convergence failure, or a backend failure).
+///
 pub fn gse_tdvp<V>(
     operator: &LinearOperator<TensorDynLen, V>,
     init: TreeTN<TensorDynLen, V>,

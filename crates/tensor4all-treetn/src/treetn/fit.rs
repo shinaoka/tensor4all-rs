@@ -329,6 +329,11 @@ where
     /// * `tn_a` - First input TreeTN
     /// * `tn_b` - Second input TreeTN
     /// * `tn_c` - Current approximation TreeTN
+    /// # Errors
+    ///
+    /// Returns an error when the cached fit value cannot be computed (a shape or
+    /// /// index mismatch, or a backend failure).
+    ///
     pub fn get_or_compute(
         &mut self,
         from: &V,
@@ -453,6 +458,11 @@ where
     ///
     /// # Returns
     /// `Ok(())` if consistent, or an error describing the inconsistency.
+    /// # Errors
+    ///
+    /// Returns an error when the fitted structure is inconsistent (a graph
+    /// /// consistency failure).
+    ///
     pub fn verify_structural_consistency(&self, tn_c: &TreeTN<T, V>) -> Result<()>
     where
         V: Clone + Hash + Eq + std::fmt::Debug,
@@ -1050,6 +1060,11 @@ impl FitContractionOptions {
 ///
 /// # Returns
 /// A new TreeTN representing the contracted result.
+/// # Errors
+///
+/// Returns an error when the fit contraction fails (a shape or index
+/// /// mismatch, or a backend failure).
+///
 pub fn contract_fit<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
