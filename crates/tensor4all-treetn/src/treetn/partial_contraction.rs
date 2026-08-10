@@ -1305,7 +1305,7 @@ where
 
     let weights = TreeTN::from_tensors(tensors, node_names).map_err(|error| {
         SelectedIndexContractionError::BuildWeightsTree {
-            message: format_anyhow_error(error),
+            message: format_anyhow_error(anyhow::Error::new(error)),
         }
     })?;
     weighted_sum_over_index_pairs(state, &weights, &index_pairs, center, options)

@@ -45,3 +45,11 @@ impl From<tensor4all_core::TensorDynLenError> for TreeTciError {
         }
     }
 }
+
+impl From<tensor4all_treetn::TreeTNOperationError> for TreeTciError {
+    fn from(source: tensor4all_treetn::TreeTNOperationError) -> Self {
+        Self::Operation {
+            source: anyhow::Error::new(source),
+        }
+    }
+}

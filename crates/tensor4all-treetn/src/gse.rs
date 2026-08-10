@@ -341,7 +341,7 @@ where
             .sim_linkinds_mut()
             .map_err(|source| GseError::Algorithm {
                 context: "GSE failed to relabel reference link indices",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         reference_buffers.push(reference);
     }
@@ -593,7 +593,7 @@ where
         .set_canonical_region([center.clone()])
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to set final canonical center",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     Ok(stats)
 }
@@ -766,31 +766,31 @@ where
         .replace_edge_bond(edge, new_bond.clone())
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace target edge bond",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     state
         .replace_tensor(child_idx, target_child.clone())
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace target child tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     state
         .replace_tensor(parent_idx, target_parent)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace target parent tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     state
         .set_edge_ortho_towards(edge, Some(parent.clone()))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to set target edge orthogonality direction",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     state
         .set_canonical_region([parent.clone()])
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to move target canonical metadata after expansion",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
     for reference in references.iter_mut() {
@@ -900,31 +900,31 @@ where
         .replace_edge_bond(edge, new_bond)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace reference edge bond",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     reference
         .replace_tensor(child_idx, child_replacement)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace reference child tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     reference
         .replace_tensor(parent_idx, parent_replacement)
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace reference parent tensor",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     reference
         .set_edge_ortho_towards(edge, Some(parent.clone()))
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to set reference edge orthogonality direction",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     reference
         .set_canonical_region([parent.clone()])
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to move reference canonical metadata after expansion",
-            source,
+            source: anyhow::Error::new(source),
         })?;
     Ok(())
 }

@@ -447,7 +447,7 @@ where
         }
 
         // Build result TreeTN
-        TreeTN::from_tensors(result_tensors, result_node_names)
+        TreeTN::from_tensors(result_tensors, result_node_names).map_err(anyhow::Error::from)
     }
 
     /// Compute a strict linear combination `a * self + b * other`.

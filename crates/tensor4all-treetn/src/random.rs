@@ -170,7 +170,7 @@ where
     }
 
     // Step 3: Create TreeTN from tensors
-    TreeTN::from_tensors(tensors, node_names)
+    TreeTN::from_tensors(tensors, node_names).map_err(anyhow::Error::from)
 }
 
 #[cfg(test)]

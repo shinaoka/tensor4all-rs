@@ -681,7 +681,7 @@ where
             .replace_tensor(node_idx, evolved)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to replace one-site tensor",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(replace_started, |profile, elapsed| {
             profile.replace_subtree += elapsed;
@@ -691,7 +691,7 @@ where
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set one-site canonical center",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(center_started, |profile, elapsed| {
             profile.state_center += elapsed;
@@ -997,7 +997,7 @@ where
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set two-site subtree center",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(subtree_center_started, |profile, elapsed| {
             profile.subtree_center += elapsed;
@@ -1010,7 +1010,7 @@ where
                         .set_edge_ortho_towards(edge, Some(to))
                         .map_err(|source| TdvpError::Algorithm {
                             context: "TDVP failed to set subtree orthogonality direction",
-                            source,
+                            source: anyhow::Error::new(source),
                         })?;
                 }
             }
@@ -1033,7 +1033,7 @@ where
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set two-site canonical center",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(state_center_started, |profile, elapsed| {
             profile.state_center += elapsed;
