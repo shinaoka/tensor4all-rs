@@ -96,6 +96,11 @@ where
     /// * `site_space` - The physical indices at this node (order doesn't matter)
     ///
     /// Returns an error if the node already exists.
+    /// # Errors
+    ///
+    /// Returns an error when the site space is invalid (a shape mismatch) or the
+    /// /// node is a duplicate (a duplicate operation failure).
+    ///
     pub fn add_node(
         &mut self,
         node_name: NodeName,
@@ -117,6 +122,11 @@ where
     }
 
     /// Rename an existing node and preserve its site-space metadata.
+    /// # Errors
+    ///
+    /// Returns an error when the node is not found (a missing-index failure) or
+    /// /// the new name is a duplicate (a duplicate operation failure).
+    ///
     pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
         if old_name == &new_name {
             return Ok(());
@@ -190,6 +200,11 @@ where
     /// Add a site index to a node's site space.
     ///
     /// Updates both the site space and the reverse lookup.
+    /// # Errors
+    ///
+    /// Returns an error when the site index is already present (a duplicate-index
+    /// /// failure) or the node is not found (a missing-index failure).
+    ///
     pub fn add_site_index(&mut self, node_name: &NodeName, index: I) -> Result<()> {
         let site_space = self
             .site_spaces
@@ -203,6 +218,11 @@ where
     /// Remove a site index from a node's site space.
     ///
     /// Updates both the site space and the reverse lookup.
+    /// # Errors
+    ///
+    /// Returns an error when the site index is not present (a missing-index
+    /// /// failure).
+    ///
     pub fn remove_site_index(&mut self, node_name: &NodeName, index: &I) -> Result<bool> {
         let site_space = self
             .site_spaces
@@ -218,6 +238,12 @@ where
     /// Replace a site index in a node's site space.
     ///
     /// Updates both the site space and the reverse lookup.
+    /// # Errors
+    ///
+    /// Returns an error when the old site index is not present (a missing-index
+    /// /// failure) or the new index has an incompatible dimension (a shape
+    /// /// mismatch).
+    ///
     pub fn replace_site_index(
         &mut self,
         node_name: &NodeName,
@@ -245,6 +271,11 @@ where
     ///
     /// Updates both the site space and the reverse lookup.
     /// This is an atomic operation that removes all old indices and adds all new ones.
+    /// # Errors
+    ///
+    /// Returns an error when the node is not found (a missing-index failure) or
+    /// /// the site space is invalid (a shape mismatch).
+    ///
     pub fn set_site_space(&mut self, node_name: &NodeName, new_indices: HashSet<I>) -> Result<()> {
         let site_space = self
             .site_spaces
@@ -279,6 +310,11 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
+    /// # Errors
+    ///
+    /// Returns an error when an endpoint node is not found (a missing-index
+    /// /// failure) or the edge already exists (a duplicate operation failure).
+    ///
     pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
         self.topology.add_edge(n1, n2)
     }
@@ -499,6 +535,11 @@ where
     /// site index structure as the original state). For more complex operators
     /// with different input/output dimensions, a more sophisticated approach
     /// would be needed.
+    /// # Errors
+    ///
+    /// Returns an error when the operator topology is incompatible (a shape or
+    /// /// index mismatch failure).
+    ///
     pub fn apply_operator_topology(&self, operator: &Self) -> Result<Self> {
         // Check topology match
         if !self.topology.same_topology(&operator.topology) {
