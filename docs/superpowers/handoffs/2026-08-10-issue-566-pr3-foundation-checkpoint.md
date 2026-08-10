@@ -101,3 +101,24 @@
    union-find private 化、per-element 比較ループ置換、graph traversal
    正当化/重複解消/Euler-tour 再スキャン、work-log 規律。
 3. 最終: 各スライスの reviewer-gpt → 全検証 → PR（#566）→ CI → merge。
+
+## 追記（2026-08-10 続行分 3 — typed-error 移行 step 2 開始）
+
+- **storage スライス**: from_dense_col_major / from_diag_col_major /
+  permute_logical_axes / from_dense_f64|c64_col_major /
+  from_diag_f64|c64_col_major を `StorageResult`（typed StorageError）に。
+  StorageError に source 保存 `Operation` バリアント + `From<anyhow::Error>`
+  を追加し、invalid_storage_error が source チェーンを保持。
+- **matrix mul スライス**: mat_mul / mat_mul_owned /
+  batched_mat_mul_same_shape(_owned) を `Result<_, MatrixMulError>` に
+  （source 保存 thiserror ラッパー）。
+- 検証: tensorbackend 316 / core+treetn nextest 1319 / clippy -D warnings /
+  public-error-docs-ok — green。
+- ブランチ: origin/main から 37 コミット。
+
+### 残り（PR 3 完了まで）
+- typed-error 移行 step 2–6: tensorbackend 残り（backend linalg wrappers,
+  tenferro_bridge 等）+ core（krylov, contract, any_scalar 等）→ treetci/
+  quanticstci → treetn → quanticstransform/HDF5 → 残り全公開面。
+- レイヤリング（c..i）7 項目。
+- 最終: 各スライス reviewer-gpt → 全検証 → PR（#566）→ CI → merge。
