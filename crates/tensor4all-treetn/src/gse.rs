@@ -274,7 +274,7 @@ pub fn global_subspace_expand<V>(
     init: TreeTN<TensorDynLen, V>,
     center: &V,
     options: GseOptions,
-) -> Result<GseResult<V>, GseError>
+) -> std::result::Result<GseResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
@@ -308,7 +308,7 @@ pub fn global_subspace_expand_with_references<V>(
     references: Vec<TreeTN<TensorDynLen, V>>,
     center: &V,
     options: GseOptions,
-) -> Result<GseResult<V>, GseError>
+) -> std::result::Result<GseResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
@@ -376,7 +376,7 @@ pub fn gse_tdvp<V>(
     init: TreeTN<TensorDynLen, V>,
     center: &V,
     options: GseTdvpOptions,
-) -> Result<GseTdvpResult<V>, GseError>
+) -> std::result::Result<GseTdvpResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {

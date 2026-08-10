@@ -9,6 +9,7 @@
 //!
 //! This is the V_in = V_out specialized version.
 
+use crate::error::TreeTNOperationError;
 use std::hash::Hash;
 
 use anyhow::Result;
@@ -89,7 +90,7 @@ where
         region: &[V],
         reference_state: &TreeTN<T, V>,
         topology: &NT,
-    ) -> Result<T> {
+    ) -> std::result::Result<T, TreeTNOperationError> {
         let reference_storage;
         let reference_state = if self.has_link_collision_with_rhs(reference_state, topology)? {
             // A bra/ket overlap needs two independent copies of every open link:
@@ -137,7 +138,7 @@ where
 
         // Use T::contract for optimal contraction ordering
         let tensor_refs: Vec<&T> = all_tensors.iter().collect();
-        T::contract(&tensor_refs).map_err(anyhow::Error::new)
+        T::contract(&tensor_refs).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
     }
 
     fn has_link_collision_with_rhs<NT: NetworkTopology<V>>(

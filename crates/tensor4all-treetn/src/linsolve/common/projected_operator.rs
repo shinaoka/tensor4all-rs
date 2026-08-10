@@ -8,6 +8,7 @@
 //! site indices (required because a tensor cannot have two indices with the same ID),
 //! use `with_index_mappings` to define the correspondence.
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -233,7 +234,7 @@ where
         ket_state: &TreeTN<T, V>,
         bra_state: &TreeTN<T, V>,
         topology: &NT,
-    ) -> Result<T> {
+    ) -> std::result::Result<T, TreeTNOperationError> {
         self.ensure_environments(region, ket_state, bra_state, topology)?;
 
         let mut all_tensors = Vec::with_capacity(1 + region.len() + region.len().saturating_mul(2));
@@ -272,18 +273,19 @@ where
                             return Err(anyhow::anyhow!(
                                 "Missing index mappings for operator node {:?} with non-empty site space",
                                 node
-                            ));
+                            ).into());
                         }
                         per_node.push(None);
                     }
                     (None, Some(_)) => {
-                        return Err(anyhow::anyhow!("Missing input_mapping for node {:?}", node));
+                        return Err(
+                            anyhow::anyhow!("Missing input_mapping for node {:?}", node).into()
+                        );
                     }
                     (Some(_), None) => {
-                        return Err(anyhow::anyhow!(
-                            "Missing output_mapping for node {:?}",
-                            node
-                        ));
+                        return Err(
+                            anyhow::anyhow!("Missing output_mapping for node {:?}", node).into(),
+                        );
                     }
                 }
             }
@@ -297,7 +299,9 @@ where
             if per_node.iter().any(Option::is_some) {
                 let mut transformed_v = v.clone();
                 for mapping in per_node.iter().flatten() {
-                    transformed_v = transformed_v.replaceind(&mapping.true_in, &mapping.temp_in)?;
+                    transformed_v = transformed_v
+                        .replaceind(&mapping.true_in, &mapping.temp_in)
+                        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 }
                 all_tensors.push(ContractOperand::Owned(transformed_v));
             } else {
@@ -353,11 +357,14 @@ where
         }
 
         let tensor_refs: Vec<&T> = all_tensors.iter().map(ContractOperand::as_ref).collect();
-        let mut contracted = T::contract(&tensor_refs)?;
+        let mut contracted = T::contract(&tensor_refs)
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
 
         // Replace temp_out -> true_index
         for (temp_out, true_idx) in &temp_out_to_true {
-            contracted = contracted.replaceind(temp_out, true_idx)?;
+            contracted = contracted
+                .replaceind(temp_out, true_idx)
+                .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
         }
 
         // Bra -> ket boundary bonds in result so output lives in same space as v (ket bonds).
@@ -383,7 +390,9 @@ where
                     None => continue,
                 };
                 if contracted.external_indices().iter().any(|i| i == &bra_bond) {
-                    contracted = contracted.replaceind(&bra_bond, &ket_bond)?;
+                    contracted = contracted
+                        .replaceind(&bra_bond, &ket_bond)
+                        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
                 }
             }
         }
@@ -392,7 +401,9 @@ where
         let v_inds = v.external_indices();
         let res_inds = contracted.external_indices();
         if same_index_set(&v_inds, &res_inds) {
-            contracted = contracted.permuteinds(&v_inds)?;
+            contracted = contracted
+                .permuteinds(&v_inds)
+                .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
         }
 
         Ok(contracted)

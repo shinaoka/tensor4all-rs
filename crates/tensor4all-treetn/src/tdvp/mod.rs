@@ -1109,7 +1109,7 @@ pub fn tdvp<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: TdvpOptions,
-) -> Result<TdvpResult<T, V>, TdvpError>
+) -> std::result::Result<TdvpResult<T, V>, TdvpError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -1250,7 +1250,7 @@ pub fn tdvp_with_treetn_operator<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: TdvpOptions,
-) -> Result<TdvpResult<T, V>, TdvpError>
+) -> std::result::Result<TdvpResult<T, V>, TdvpError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,

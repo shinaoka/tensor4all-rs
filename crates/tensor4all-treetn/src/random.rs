@@ -4,9 +4,10 @@
 //!
 //! Note: Currently only supports `DynId` indices (the default dynamic index type).
 
+use crate::error::TreeTNOperationError;
 use crate::site_index_network::SiteIndexNetwork;
 use crate::treetn::TreeTN;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use rand::Rng;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -107,7 +108,7 @@ pub fn random_treetn<T, R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
 where
     T: RandomScalar,
     R: Rng,
@@ -170,7 +171,7 @@ where
     }
 
     // Step 3: Create TreeTN from tensors
-    TreeTN::from_tensors(tensors, node_names).map_err(anyhow::Error::from)
+    TreeTN::from_tensors(tensors, node_names)
 }
 
 #[cfg(test)]

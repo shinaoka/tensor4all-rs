@@ -3,6 +3,7 @@
 //! Uses GMRES (via tensor4all_core::krylov) to solve the local linear problem at each sweep step.
 //! This is the V_in = V_out specialized version.
 
+use crate::error::TreeTNOperationError;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -231,7 +232,10 @@ where
     /// Returns an error when the operation fails (a shape or index mismatch, or
     /// /// a backend failure).
     ///
-    pub fn verify(&self, state: &TreeTN<T, V>) -> Result<LinsolveVerifyReport<V>> {
+    pub fn verify(
+        &self,
+        state: &TreeTN<T, V>,
+    ) -> std::result::Result<LinsolveVerifyReport<V>, TreeTNOperationError> {
         let mut report = LinsolveVerifyReport::default();
 
         let proj_op = self
@@ -443,7 +447,7 @@ where
             apply_calls.set(apply_calls.get() + 1);
             apply_elapsed_micros
                 .set(apply_elapsed_micros.get() + apply_started.elapsed().as_micros());
-            result
+            result.map_err(anyhow::Error::from)
         };
 
         let mut gmres_options = local_gmres_options(&self.options)?;

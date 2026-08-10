@@ -407,7 +407,7 @@ where
         );
 
         let result = hermitian_lanczos_lowest_eigenpair(
-            |x: &T| linop.apply_projected(x),
+            |x: &T| linop.apply_projected(x).map_err(anyhow::Error::from),
             init,
             &self.options.lanczos,
         )
@@ -443,7 +443,7 @@ where
             .apply_projected(&local)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to apply final projected operator",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let numerator = local
             .inner_product(&h_local)
@@ -630,7 +630,7 @@ pub fn dmrg<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: DmrgOptions,
-) -> Result<DmrgResult<T, V>, DmrgError>
+) -> std::result::Result<DmrgResult<T, V>, DmrgError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -760,7 +760,7 @@ pub fn dmrg_with_treetn_operator<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: DmrgOptions,
-) -> Result<DmrgResult<T, V>, DmrgError>
+) -> std::result::Result<DmrgResult<T, V>, DmrgError>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
