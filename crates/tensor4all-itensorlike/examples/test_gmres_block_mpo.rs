@@ -162,7 +162,7 @@ fn create_block_ones_mpo(
     for block_idx in 0..indices.num_blocks {
         blocks.push(create_ones_mpo_for_block(indices, block_idx)?);
     }
-    BlockTensor::try_new(blocks, indices.block_shape)
+    BlockTensor::try_new(blocks, indices.block_shape).map_err(anyhow::Error::from)
 }
 
 /// Create an MPO with specified constant value for a specific block.
@@ -600,7 +600,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
             let result = apply_operator_for_block(op, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     // Initial guess: x0 = 0
@@ -691,7 +691,7 @@ fn test_block_diagonal_diagonal_operator() -> anyhow::Result<()> {
             let result = apply_operator_for_block(op, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -820,7 +820,7 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
             }
         }
 
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     // x_true: row 0 blocks = 2*ones, row 1 blocks = ones
@@ -938,7 +938,7 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
             let result = apply_operator_for_block(op, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -1086,7 +1086,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
             result_blocks.push(y);
         }
 
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -1244,7 +1244,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
             result_blocks.push(y);
         }
 
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -1372,7 +1372,7 @@ fn scaling_2x2_offdiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
             result_blocks.push(y);
         }
 
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     let b = apply_a(&x_true)?;
@@ -1512,7 +1512,7 @@ fn scaling_3x3_antidiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
             result_blocks.push(y);
         }
 
-        BlockTensor::try_new(result_blocks, indices.block_shape)
+        BlockTensor::try_new(result_blocks, indices.block_shape).map_err(anyhow::Error::from)
     };
 
     let b = apply_a(&x_true)?;

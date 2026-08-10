@@ -530,7 +530,10 @@ where
             init,
             &self.options.krylov,
         )
-        .map_err(|source| TdvpError::Algorithm { context, source })?;
+        .map_err(|source| TdvpError::Algorithm {
+            context,
+            source: anyhow::Error::new(source),
+        })?;
         record_tdvp_profile(evolve_started, |profile, elapsed| {
             profile.evolve_local += elapsed;
         });
@@ -899,7 +902,7 @@ where
         )
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP one-site bond-center Krylov exponential failed",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         record_tdvp_profile(evolve_started, |profile, elapsed| {
             profile.evolve_local += elapsed;

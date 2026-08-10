@@ -413,7 +413,7 @@ where
         )
         .map_err(|source| DmrgError::Algorithm {
             context: "DMRG local Hermitian eigensolve failed",
-            source,
+            source: anyhow::Error::new(source),
         })?;
 
         self.last_energy = Some(result.eigenvalue);

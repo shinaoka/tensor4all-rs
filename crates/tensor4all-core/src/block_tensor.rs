@@ -38,7 +38,6 @@ use crate::tensor_like::{
     TensorConstructionLike, TensorContractionLike, TensorFactorizationLike, TensorLike,
     TensorVectorSpace, TensorVectorSpaceError,
 };
-use anyhow::Result;
 
 /// A collection of tensors organized in a block structure.
 ///
@@ -87,16 +86,20 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let t3 = TensorDynLen::from_dense(vec![i], vec![5.0, 6.0]).unwrap();
     /// assert!(BlockTensor::try_new(vec![t3], (2, 1)).is_err());
     /// ```
-    pub fn try_new(blocks: Vec<T>, shape: (usize, usize)) -> Result<Self> {
+    pub fn try_new(
+        blocks: Vec<T>,
+        shape: (usize, usize),
+    ) -> std::result::Result<Self, TensorVectorSpaceError> {
         let (rows, cols) = shape;
-        anyhow::ensure!(
-            rows * cols == blocks.len(),
-            "Block count mismatch: shape ({}, {}) requires {} blocks, but got {}",
-            rows,
-            cols,
-            rows * cols,
-            blocks.len()
-        );
+        if rows * cols != blocks.len() {
+            return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block count mismatch: shape ({}, {}) requires {} blocks, but got {}",
+                rows,
+                cols,
+                rows * cols,
+                blocks.len()
+            )));
+        }
         Ok(Self { blocks, shape })
     }
 
@@ -123,7 +126,10 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// assert_eq!(bt.shape(), (1, 1));
     /// ```
-    pub fn new(blocks: Vec<T>, shape: (usize, usize)) -> Result<Self> {
+    pub fn new(
+        blocks: Vec<T>,
+        shape: (usize, usize),
+    ) -> std::result::Result<Self, TensorVectorSpaceError> {
         Self::try_new(blocks, shape)
     }
 
@@ -280,7 +286,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let bt = BlockTensor::new(vec![t1, t2], (2, 1)).unwrap();
     /// assert!(bt.validate_indices().is_ok());
     /// ```
-    pub fn validate_indices(&self) -> Result<()> {
+    pub fn validate_indices(&self) -> std::result::Result<(), TensorVectorSpaceError> {
         let (rows, cols) = self.shape;
 
         if cols <= 1 {
@@ -293,13 +299,14 @@ impl<T: TensorLike> BlockTensor<T> {
         let first_count = self.blocks[0].num_external_indices();
         for (i, block) in self.blocks.iter().enumerate().skip(1) {
             let n = block.num_external_indices();
-            anyhow::ensure!(
-                n == first_count,
-                "Block {} has {} external indices, but block 0 has {}",
-                i,
-                n,
-                first_count
-            );
+            if n != first_count {
+                return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                    "Block {} has {} external indices, but block 0 has {}",
+                    i,
+                    n,
+                    first_count
+                )));
+            }
         }
 
         // Same row: blocks should share at least one full output index.
@@ -320,15 +327,16 @@ impl<T: TensorLike> BlockTensor<T> {
                     .cloned()
                     .collect();
                 let common_count = ref_indices.intersection(&indices).count();
-                anyhow::ensure!(
-                    common_count > 0,
-                    "Matrix row {}: blocks ({},{}) and ({},{}) share no common indices",
-                    row,
-                    row,
-                    0,
-                    row,
-                    col
-                );
+                if common_count == 0 {
+                    return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                        "Matrix row {}: blocks ({},{}) and ({},{}) share no common indices",
+                        row,
+                        row,
+                        0,
+                        row,
+                        col
+                    )));
+                }
             }
         }
 
@@ -350,15 +358,16 @@ impl<T: TensorLike> BlockTensor<T> {
                     .cloned()
                     .collect();
                 let common_count = ref_indices.intersection(&indices).count();
-                anyhow::ensure!(
-                    common_count > 0,
-                    "Matrix col {}: blocks ({},{}) and ({},{}) share no common indices",
-                    col,
-                    0,
-                    col,
-                    row,
-                    col
-                );
+                if common_count == 0 {
+                    return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
+                        "Matrix col {}: blocks ({},{}) and ({},{}) share no common indices",
+                        col,
+                        0,
+                        col,
+                        row,
+                        col
+                    )));
+                }
             }
         }
 
@@ -517,7 +526,6 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
 
     fn validate(&self) -> std::result::Result<(), Self::Error> {
         self.validate_indices()
-            .map_err(TensorVectorSpaceError::from)
     }
 }
 

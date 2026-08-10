@@ -45,6 +45,56 @@ use tensor4all_tensorbackend::{
     hermitian_exponential_first_column, lowest_hermitian_eigenpair, Matrix,
 };
 
+/// Error returned by the matrix-free Krylov solvers.
+#[derive(Debug, thiserror::Error)]
+pub enum KrylovError {
+    /// Invalid solver options.
+    #[error("{solver}: invalid options: {reason}")]
+    InvalidOptions {
+        /// Solver that rejected the options.
+        solver: &'static str,
+        /// Description of the invalid option combination.
+        reason: String,
+    },
+    /// The initial vector is numerically zero.
+    #[error("{solver}: initial vector has norm below the breakdown tolerance; provide a nonzero initial vector")]
+    ZeroInitialVector {
+        /// Solver that rejected the initial vector.
+        solver: &'static str,
+    },
+    /// An affine GMRES call supplied only zero coefficients.
+    #[error("gmres_affine: at least one affine coefficient must be nonzero")]
+    NoAffineCoefficient,
+    /// The projected operator was not Hermitian.
+    #[error("{solver}: projected operator is not Hermitian: {source}")]
+    NonHermitian {
+        /// Solver that performed the projection.
+        solver: &'static str,
+        /// Original projected-matrix diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// An underlying tensor operation (operator application, vector-space
+    /// arithmetic, or backend call) failed.
+    #[error("{solver}: {source}")]
+    Operation {
+        /// Solver that performed the operation.
+        solver: &'static str,
+        /// Original tensor or backend diagnostic, preserving the full chain.
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl From<anyhow::Error> for KrylovError {
+    fn from(source: anyhow::Error) -> Self {
+        Self::Operation {
+            solver: "krylov",
+            source,
+        }
+    }
+}
+
 static GMRES_OP_PROFILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
@@ -450,8 +500,20 @@ struct HermitianRitzState {
 /// ).unwrap();
 /// assert!(result.converged);
 /// assert!((result.eigenvalue - 1.0).abs() < 1.0e-12);
-/// ```
 pub fn hermitian_lanczos_lowest_eigenpair<T, F>(
+    apply_a: F,
+    initial: &T,
+    options: &HermitianLanczosOptions,
+) -> std::result::Result<HermitianLanczosResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    hermitian_lanczos_lowest_eigenpair_impl(apply_a, initial, options).map_err(KrylovError::from)
+}
+
+/// ```
+fn hermitian_lanczos_lowest_eigenpair_impl<T, F>(
     apply_a: F,
     initial: &T,
     options: &HermitianLanczosOptions,
@@ -600,8 +662,22 @@ where
 /// assert!(evolved[1].norm() < 1.0e-12);
 /// # Ok(())
 /// # }
-/// ```
 pub fn hermitian_krylov_expm_multiply<T, F>(
+    apply_a: F,
+    exponent: Complex64,
+    initial: &T,
+    options: &HermitianKrylovExpmOptions,
+) -> std::result::Result<HermitianKrylovExpmResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: FnMut(&T) -> Result<T>,
+{
+    hermitian_krylov_expm_multiply_impl(apply_a, exponent, initial, options)
+        .map_err(KrylovError::from)
+}
+
+/// ```
+fn hermitian_krylov_expm_multiply_impl<T, F>(
     mut apply_a: F,
     exponent: Complex64,
     initial: &T,
@@ -842,7 +918,12 @@ where
 /// shape mismatch), when GMRES fails to converge (a non-convergence
 /// failure), or when the backend reports a failure.
 ///
-pub fn gmres<T, F>(apply_a: F, b: &T, x0: &T, options: &GmresOptions) -> Result<GmresResult<T>>
+pub fn gmres<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -855,6 +936,7 @@ where
         GmresTolerance::Relative(options.rtol),
         None,
     )
+    .map_err(KrylovError::from)
 }
 
 /// Solve `A x = b` using GMRES with an absolute residual tolerance.
@@ -871,7 +953,7 @@ pub fn gmres_with_absolute_tolerance<T, F>(
     x0: &T,
     options: &GmresOptions,
     atol: f64,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -884,6 +966,7 @@ where
         GmresTolerance::Absolute(atol),
         None,
     )
+    .map_err(KrylovError::from)
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
@@ -902,7 +985,7 @@ pub fn gmres_affine<T, F>(
     a0: AnyScalar,
     a1: AnyScalar,
     options: &GmresOptions,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -916,6 +999,7 @@ where
         options,
         GmresTolerance::Relative(options.rtol),
     )
+    .map_err(KrylovError::from)
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with an absolute residual tolerance.
@@ -936,7 +1020,7 @@ pub fn gmres_affine_with_absolute_tolerance<T, F>(
     a1: AnyScalar,
     options: &GmresOptions,
     atol: f64,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -950,6 +1034,7 @@ where
         options,
         GmresTolerance::Absolute(atol),
     )
+    .map_err(KrylovError::from)
 }
 
 fn gmres_affine_impl<T, F>(
@@ -1376,7 +1461,7 @@ pub fn gmres_with_total_iteration_limit<T, F>(
     x0: &T,
     options: &GmresOptions,
     max_total_iter: usize,
-) -> Result<GmresResult<T>>
+) -> std::result::Result<GmresResult<T>, KrylovError>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -1389,6 +1474,7 @@ where
         GmresTolerance::Relative(options.rtol),
         Some(max_total_iter),
     )
+    .map_err(KrylovError::from)
 }
 
 fn gmres_impl<T, F>(
@@ -1678,8 +1764,23 @@ where
 /// // Solution should be [2.0, 3.0]
 /// let expected = TensorDynLen::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
-/// ```
 pub fn gmres_with_truncation<T, F, Tr>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+    truncate: Tr,
+) -> std::result::Result<GmresResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    gmres_with_truncation_impl(apply_a, b, x0, options, truncate).map_err(KrylovError::from)
+}
+
+/// ```
+fn gmres_with_truncation_impl<T, F, Tr>(
     apply_a: F,
     b: &T,
     x0: &T,
@@ -2155,8 +2256,23 @@ pub struct RestartGmresResult<T> {
 /// assert!(result.converged);
 /// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
-/// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(
+    apply_a: F,
+    b: &T,
+    x0: Option<&T>,
+    options: &RestartGmresOptions,
+    truncate: Tr,
+) -> std::result::Result<RestartGmresResult<T>, KrylovError>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    restart_gmres_with_truncation_impl(apply_a, b, x0, options, truncate).map_err(KrylovError::from)
+}
+
+/// ```
+fn restart_gmres_with_truncation_impl<T, F, Tr>(
     apply_a: F,
     b: &T,
     x0: Option<&T>,

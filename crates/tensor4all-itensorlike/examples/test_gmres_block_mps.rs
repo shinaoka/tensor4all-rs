@@ -129,7 +129,7 @@ fn create_block_ones_mps(indices: &BlockSharedIndices) -> anyhow::Result<BlockTe
     for block_idx in 0..indices.num_blocks {
         blocks.push(create_ones_mps_for_block(indices, block_idx)?);
     }
-    BlockTensor::try_new(blocks, (indices.num_blocks, 1))
+    BlockTensor::try_new(blocks, (indices.num_blocks, 1)).map_err(anyhow::Error::from)
 }
 
 /// Create an MPS with specified constant value for a specific block.
@@ -523,7 +523,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
             let result = apply_mpo_for_block(mpo, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
-        BlockTensor::try_new(result_blocks, (num_blocks, 1))
+        BlockTensor::try_new(result_blocks, (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     // Initial guess: x0 = 0 (use zero-scaled b)
@@ -616,7 +616,7 @@ fn test_block_diagonal_diagonal_mpo() -> anyhow::Result<()> {
             let result = apply_mpo_for_block(mpo, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
-        BlockTensor::try_new(result_blocks, (num_blocks, 1))
+        BlockTensor::try_new(result_blocks, (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -728,7 +728,7 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
         let b_x2 = apply_cross_block_mpo(&cross_block_mpo, x2, &indices, 0)?;
         let y1 = i_x1.axpby(AnyScalar::new_real(1.0), &b_x2, AnyScalar::new_real(1.0))?;
 
-        BlockTensor::try_new(vec![y1, y2], (2, 1))
+        BlockTensor::try_new(vec![y1, y2], (2, 1)).map_err(anyhow::Error::from)
     };
 
     // x_true = [2*ones, ones]^T
@@ -846,7 +846,7 @@ fn test_restart_gmres_block_mps() -> anyhow::Result<()> {
             let result = apply_mpo_for_block(mpo, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
-        BlockTensor::try_new(result_blocks, (num_blocks, 1))
+        BlockTensor::try_new(result_blocks, (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -966,7 +966,7 @@ fn test_block_offdiagonal_complex_pauli_x() -> anyhow::Result<()> {
         // y2 = i*σ_x * x1 (cross-block: src=0 -> dst=1)
         let y2 = apply_cross_block_mpo(&mpo_0to1, x1, &indices, 1)?;
 
-        BlockTensor::try_new(vec![y1, y2], (num_blocks, 1))
+        BlockTensor::try_new(vec![y1, y2], (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -1084,7 +1084,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x() -> anyhow::Result<()> {
         let y1 = apply_cross_block_mpo(&mpo_1to1, x1, &indices, 1)?;
         let y2 = apply_cross_block_mpo(&mpo_0to2, x0, &indices, 2)?;
 
-        BlockTensor::try_new(vec![y0, y1, y2], (num_blocks, 1))
+        BlockTensor::try_new(vec![y0, y1, y2], (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     // Compute b = A * x_true
@@ -1189,7 +1189,7 @@ fn scaling_offdiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()> {
         let x2 = block_entry(x, 1, 0)?;
         let y1 = apply_cross_block_mpo(&mpo_1to0, x2, &indices, 0)?;
         let y2 = apply_cross_block_mpo(&mpo_0to1, x1, &indices, 1)?;
-        BlockTensor::try_new(vec![y1, y2], (num_blocks, 1))
+        BlockTensor::try_new(vec![y1, y2], (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     let b = apply_a(&x_true)?;
@@ -1290,7 +1290,7 @@ fn scaling_3x3_antidiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()
         let y0 = apply_cross_block_mpo(&mpo_2to0, x2, &indices, 0)?;
         let y1 = apply_cross_block_mpo(&mpo_1to1, x1, &indices, 1)?;
         let y2 = apply_cross_block_mpo(&mpo_0to2, x0, &indices, 2)?;
-        BlockTensor::try_new(vec![y0, y1, y2], (num_blocks, 1))
+        BlockTensor::try_new(vec![y0, y1, y2], (num_blocks, 1)).map_err(anyhow::Error::from)
     };
 
     let b = apply_a(&x_true)?;
