@@ -283,3 +283,13 @@
 - step 6: simplett（57 fn）
 - レイヤリング項目 c..i
 - PR 作成 → CI → merge → 完了監査
+
+## Session 2026-08-13 深夜3（step 5 review 修正完了）
+
+- `35975d8`: reviewer 4 指摘修正 — (1) TensorTrainError source チェーン保存（cumsum/difference_kernel/fourier で map_err(anyhow::Error::new).context(...)）、(2) InvalidConfiguration を公開検証失敗で構築（triangle/phase_rotation/fourier new）、(3) hdf5 の unused import 除去、(4) 新エラー型に実行可能 doc example 追加
+- doctests 843（新 doc examples 2 件追加分）
+
+### 残作業
+- step 6: simplett（57 fn）
+- レイヤリング項目 c..i
+- PR 作成 → CI → merge → 完了監査
