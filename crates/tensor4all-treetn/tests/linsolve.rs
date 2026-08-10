@@ -2461,6 +2461,61 @@ fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
     );
 }
 
+/// One-node linear systems must be rejected rather than silently returning init.
+#[test]
+fn test_square_linsolve_rejects_one_site_systems() {
+    use tensor4all_treetn::square_linsolve;
+
+    // A one-node state has no edges for the two-site sweep planner; the
+    // solver must reject it instead of silently returning the initial guess.
+    let site = DynIndex::new_dyn(2);
+    let s_in = DynIndex::new_dyn(2);
+    let s_out = DynIndex::new_dyn(2);
+    let operator = TreeTN::<TensorDynLen, usize>::from_tensors(
+        vec![TensorDynLen::from_dense(
+            vec![s_out.clone(), s_in.clone()],
+            vec![1.0_f64, 0.0, 0.0, 1.0],
+        )
+        .unwrap()],
+        vec![0],
+    )
+    .unwrap();
+    let rhs = TreeTN::<TensorDynLen, usize>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap()],
+        vec![0],
+    )
+    .unwrap();
+    let init = rhs.clone();
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        0usize,
+        IndexMapping {
+            true_index: site.clone(),
+            internal_index: s_in,
+        },
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        0usize,
+        IndexMapping {
+            true_index: site,
+            internal_index: s_out,
+        },
+    );
+    let error = square_linsolve(
+        &operator,
+        &rhs,
+        init,
+        &0usize,
+        LinsolveOptions::default(),
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("at least two sites"), "got: {error}");
+}
+
 /// The mapped solver must preserve the identity-term-only linear system.
 #[test]
 fn test_square_linsolve_with_mappings_identity_term_only() {

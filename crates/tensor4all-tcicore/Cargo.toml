@@ -39,7 +39,6 @@ criterion.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 tenferro-linalg.workspace = true
-tensor4all-tensorci = { path = "../tensor4all-tensorci", default-features = false, features = ["tenferro-cpu-faer"] }
 uint.workspace = true
 
 [[bench]]
@@ -52,10 +51,6 @@ harness = false
 
 [[bench]]
 name = "dense_vs_tenferro"
-harness = false
-
-[[bench]]
-name = "end_to_end_chain_tci"
 harness = false
 
 [[bench]]

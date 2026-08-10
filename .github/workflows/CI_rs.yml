@@ -103,6 +103,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install HDF5
         run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
@@ -113,6 +115,20 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Resolve audit base revision
+        id: base
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [[ "${base}" == "0000000000000000000000000000000000000000" || -z "${base}" ]]; then
+            echo "No usable base revision for the incremental audit (${base:-empty})." >&2
+            exit 1
+          fi
+          echo "base=${base}" >> "${GITHUB_OUTPUT}"
 
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
@@ -125,12 +141,26 @@ jobs:
         timeout-minutes: 40
         run: python3 scripts/audit-library-panics.py
 
+      - name: Test public-error-doc audit
+        run: python3 scripts/test-check-public-error-docs.py
+
+      - name: Audit added public Result APIs since base
+        run: python3 scripts/check-public-error-docs.py --changed-from "${{ steps.base.outputs.base }}"
+
+      - name: Test crate-boundary checker
+        run: python3 scripts/test-check-crate-boundaries.py
+
+      - name: Check crate boundaries and dev cycles
+        run: python3 scripts/check-crate-boundaries.py
+
+      - name: Test coverage threshold checker
+        run: python3 scripts/test-check-coverage.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-22.04
     env:
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
 
@@ -143,8 +173,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Generate coverage JSON
-        run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+      - name: Generate release coverage JSON
+        # Release-mode measurement: the repository's normal verification mode.
+        run: cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json

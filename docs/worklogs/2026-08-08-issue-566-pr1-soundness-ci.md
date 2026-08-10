@@ -155,3 +155,103 @@ fixed and verified in commit `cbfe040`:
   covered by `_comment_tooling` thresholds: they are exercised deterministically
   by the subprocess self-tests, which llvm-cov cannot attribute.
 - `.pi-subagents/` is untracked session infrastructure and now gitignored.
+
+## Shared-rules alignment: coverage ownership (2026-08-10)
+
+Maintainer decision: align local coverage requirements with the shared agent
+rules (`tensor4all-agent-rules`, `common/docs-and-tests.md`). Coverage is the
+canonical CI-owned gate; the local pre-PR gate is attestation-based, so local
+llvm-cov runs are no longer required for PR validation, deletion PRs, or the
+closure audit. The CI coverage job is authoritative. Revised: plan Task 12
+Step 5 and Task 13 step 4, the design Validation Contract, and AGENTS.md.
+Unchanged: CI release-mode coverage (Task 12), thresholds never lowered,
+rationale clusters required for exceptional files. The local
+always-`--release` test policy remains a documented repository-local stricter
+override (justification: heavy numerical test runtime in debug builds); it is
+a separate decision point for the #566 Phase 2 shared-rules adoption.
+
+## Task 10 — runnable doctests and kryst removal (2026-08-10)
+
+- Both prohibited `no_run` doctests in treetn were replaced with runnable
+  examples carrying numerical assertions:
+  - `partial_contract`: contracts [1,2] and [3,4] over the pair and asserts the
+    scalar result is 11.0 via `contract_to_tensor().only().real()`.
+  - `square_linsolve`: two-site identity MPO with explicit index mappings and a
+    zero initial guess; asserts relative residual < 1e-8 and that the solution
+    reproduces the RHS (Frobenius diff < 1e-6). A zero init (not the solution)
+    is used so the assertions actually exercise the solver.
+- One-site mapped systems silently returned the initial guess (residual 1.0)
+  because the two-site sweep planner produces an empty plan for a one-node
+  network. `square_linsolve` now rejects single-site inputs with an explicit
+  error ("requires at least two sites"), with a regression test
+  `test_square_linsolve_rejects_one_site_systems`. A real one-site local solve
+  remains a follow-up. The plan's one-site example therefore could not be used
+  verbatim; the two-site example mirrors the passing
+  `test_square_linsolve_with_mappings_identity`.
+- `kryst` removed from workspace and treetn manifests; stale "via kryst" and
+  the kryst link in `linsolve/square/mod.rs` now name
+  `tensor4all_core::krylov::gmres`. Cargo.lock is gitignored (regenerated
+  locally by Cargo). No live dependency on `kryst` remains; the only remaining
+  textual `kryst` mentions are intentional records in the worklog and the
+  historical plan under `docs/superpowers/plans/**` (not shipped, excluded by
+  the plan's own `:!docs/superpowers/specs/**`/`plans/**` grep convention).
+- `cargo test --doc --release --workspace` — 840 passed; treetn linsolve
+  35 tests pass; no `no_run`/`ignore` doctest fences remain in `.rs` (a
+  historical planning doc under `docs/superpowers/plans/` still contains
+  ```ignore fences; it is not shipped or compiled, out of scope).
+
+## Task 12 — release-mode coverage and threshold rationale (2026-08-10)
+
+- CI coverage job now runs `cargo llvm-cov --release --workspace --exclude
+  tensor4all-hdf5` (release is the repository's normal verification mode; the
+  debug-only `CARGO_PROFILE_DEV_DEBUG` env was removed). Coverage stays a
+  CI-owned gate; the local pre-PR gate is attestation-based per the shared
+  agent rules.
+- `scripts/check-coverage.py` gained `--thresholds PATH` so the self-test can
+  isolate fixtures; `scripts/test-check-coverage.py` (5 tests) proves default
+  pass/fail, exact per-file override, missing-file fallback to default, and
+  that top-level `_comment_*` keys are ignored for enforcement. Wired into
+  `jobs.scripts`.
+- `coverage-thresholds.json` gained rationale clusters (`_comment_tooling`,
+  `_comment_xtask`, `_comment_test_utils`, `_comment_capi`,
+  `_comment_expensive_algorithms`, `_comment_reference_crates`,
+  `_comment_boundary_modules`, `_comment_dmrg_release_only`) without changing
+  any number. The only release-mode deficit is `treetn/src/dmrg/mod.rs`
+  (72.4% vs 75; debug is 77.2% — release compiles out debug_assert paths);
+  pinned at 72 with a documented reason, consistent with PR 1's recorded
+  pre-existing deficit.
+- Local release measurement: 207/207 files pass with the new thresholds.
+
+## PR 2 round summary (2026-08-10)
+
+Branch `chore/issue-566-pr2-gates` completes Tasks 9-12 of the plan plus the
+permanent review-bot LLM removal:
+
+- Task 9: incremental public-error-doc + crate-boundary gates (ported from
+  tenferro, repository-specific tests; tcicore->tensorci dev cycle removed by
+  moving the end_to_end_chain_tci bench to tensorci; CI wiring with base-SHA
+  resolution).
+- Task 10: runnable doctests for partial_contract and square_linsolve; kryst
+  removed; one-site linsolve now rejected instead of silently returning init.
+- Task 11: debug.md, plan/, coverage-local.json, and the orphan
+  internal/tenferro-internal-ad-linalg test deleted; still-live linsolve and
+  contraction-API rationale migrated to docs/design/.
+- Task 12: CI coverage switched to release; check-coverage.py gains
+  --thresholds + 5-fixture self-test; _comment_* rationale clusters completed
+  per the spec contract (incl. _comment_hdf5 and the release-only dmrg pin).
+- review_bot.yml: external LLM review permanently removed; deterministic
+  --dry-run review is the default; waive label preserved.
+
+Per-task reviews ran reviewer-gpt (GPT-5.6 Sol) after Tasks 9, 10, 11, and a
+combined round for Task 12 + review bot; all Blocking/Important findings were
+fixed and re-verified (sub-table Cargo parser, multiline trait scope,
+multiline changed signatures, stale tuples, dev-cycle dedup, non-solution
+solver doctest, one-site rejection, durable design docs, rationale clusters).
+
+Final validation (all green): fmt, clippy -D warnings, nextest release
+2694/2694 (+10 skipped), hdf5 49, doctests 840, mdBook, cargo doc 0 errors,
+all five python self-tests, crate-boundary + incremental public-error-doc +
+repository-rules checks, and release coverage 207/207 (CI-owned gate; local
+attestation recorded here). Note: the coverage measurement was performed once
+locally to confirm the CI switch; the CI coverage job is the authoritative
+gate going forward.

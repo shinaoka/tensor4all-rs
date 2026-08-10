@@ -412,7 +412,7 @@ where
                     &init_indices,
                     &rhs_indices,
                     "Index structure mismatch between init and RHS (local tensors)",
-                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - full contraction may have over-contracted external indices in the environment\n\nSee `plan/linsolve-mpo.md` for analysis of external index handling.",
+                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - full contraction may have over-contracted external indices in the environment\n\nSee the rustdoc on [`ProjectedState`](crate::linsolve::square::ProjectedState) and `docs/design/treetn-linsolve-mpo.md` for analysis of external index handling.",
                 )
             ));
         };
@@ -741,7 +741,7 @@ where
                     &init_indices,
                     &rhs_indices,
                     "linsolve precheck failed (local index structure mismatch)",
-                    "This suggests `<ref|H|x>` vs `<ref|b>` conventions (or external-index contraction rules) are inconsistent for the current region. See `plan/linsolve-mpo.md` for analysis.",
+                    "This suggests `<ref|H|x>` vs `<ref|b>` conventions (or external-index contraction rules) are inconsistent for the current region. See `docs/design/treetn-linsolve-mpo.md` and the [`ProjectedState`](crate::linsolve::square::ProjectedState) rustdoc for analysis.",
                 )
             ));
         }

@@ -825,7 +825,7 @@ where
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};
 /// use tensor4all_treetn::{
 ///     contraction::ContractionOptions,
@@ -852,7 +852,8 @@ where
 /// };
 ///
 /// let result = partial_contract(&a, &b, &spec, &0usize, ContractionOptions::default()).unwrap();
-/// assert_eq!(result.node_count(), 1);
+/// let scalar = result.contract_to_tensor().unwrap().only().unwrap().real();
+/// assert!((scalar - 11.0).abs() < 1.0e-12);
 /// ```
 pub fn partial_contract<V>(
     a: &TreeTN<TensorDynLen, V>,

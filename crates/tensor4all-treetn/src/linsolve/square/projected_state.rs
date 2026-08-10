@@ -20,7 +20,8 @@ use crate::treetn::TreeTN;
 
 /// ProjectedState: Manages 2-chain environments for RHS computation.
 ///
-/// This computes `<b|x_local>` for each local region during the sweep.
+/// This computes `<ref|b>` (conjugated reference contracted with the RHS) for
+/// each local region during the sweep.
 ///
 /// For Tree Tensor Networks, the environment is computed by contracting
 /// all tensors outside the "open region" into environment tensors.
@@ -31,12 +32,12 @@ use crate::treetn::TreeTN;
 /// For each edge (from, to) pointing towards the open region, we cache:
 /// ```text
 /// env[(from, to)] = contraction of:
-///   - bra tensor at `from` (conjugated RHS)
-///   - ket tensor at `from` (current solution)
+///   - bra tensor at `from` (conjugated reference state)
+///   - ket tensor at `from` (RHS)
 ///   - all child environments (edges pointing away from `to`)
 /// ```
 ///
-/// This forms a "2-chain" overlap: `<b|x>` contracted over
+/// This forms a "2-chain" overlap: `<ref|b>` contracted over
 /// all nodes except the open region.
 pub struct ProjectedState<T, V>
 where

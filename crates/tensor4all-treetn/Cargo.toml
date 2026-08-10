@@ -27,7 +27,6 @@ anyhow.workspace = true
 num-complex.workspace = true
 dyn-clone.workspace = true
 rand.workspace = true
-kryst.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

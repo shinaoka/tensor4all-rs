@@ -8,15 +8,15 @@ from pathlib import Path
 
 def main():
     root = Path(__file__).resolve().parent.parent
-    thresholds_path = root / "coverage-thresholds.json"
+    parser = _argparse()
 
-    with open(thresholds_path) as f:
+    with open(parser.thresholds) as f:
         config = json.load(f)
     default_threshold = config.get("default", 80)
     file_thresholds = config.get("files", {})
 
-    if len(sys.argv) > 1:
-        with open(sys.argv[1]) as f:
+    if parser.coverage:
+        with open(parser.coverage) as f:
             cov_data = json.load(f)
     else:
         cov_data = json.load(sys.stdin)
@@ -54,6 +54,20 @@ def main():
         sys.exit(1)
     else:
         print("All files meet their coverage thresholds.")
+
+
+def _argparse():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--thresholds",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "coverage-thresholds.json",
+        help="path to the thresholds JSON (default: repository coverage-thresholds.json)",
+    )
+    parser.add_argument("coverage", nargs="?", type=Path, help="path to the coverage JSON")
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

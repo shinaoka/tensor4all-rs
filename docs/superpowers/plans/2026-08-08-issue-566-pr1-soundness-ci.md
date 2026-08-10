@@ -981,7 +981,7 @@ Remove or replace debug-profile-only environment settings. Wire `scripts/test-ch
 
 - [ ] **Step 5: Run release coverage and fix deficits with tests**
 
-Check disk first, then run:
+Coverage is a CI-owned gate (shared agent rules `common/docs-and-tests.md`: hosted CI owns the measurement for coverage, the canonical case; the local pre-PR gate is attestation-based). After Step 4 changes the CI job, the coverage job is authoritative and will report deficits on the pushed PR. A local pre-push measurement is optional, not required; when run, verify disk first:
 
 ```bash
 df -h /home/shinaoka
@@ -991,7 +991,7 @@ python3 scripts/check-coverage.py coverage.json
 python3 scripts/test-check-coverage.py
 ```
 
-If release coverage falls below an existing threshold, add meaningful path tests. Do not reduce thresholds. Record before/after percentages in the work log.
+If release coverage falls below an existing threshold, add meaningful path tests. Do not reduce thresholds. Record before/after percentages in the work log and state the coverage attestation in the PR body.
 
 - [ ] **Step 6: Commit**
 
@@ -1043,9 +1043,12 @@ python3 scripts/check-crate-boundaries.py
 python3 scripts/test-check-coverage.py
 python3 scripts/test-repository-rules-review.py
 ./scripts/repository-rules-review.py --base origin/main --worktree --dry-run
-cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
-python3 scripts/check-coverage.py coverage.json
 ```
+
+Coverage is CI-owned (shared agent rules `common/docs-and-tests.md`); the
+coverage job on the pushed PR is the authoritative measurement and the local
+pre-PR gate is attestation-based, so no local llvm-cov run is required here.
+The changed-surface attestation is recorded in the PR body.
 
 Expected: every command exits 0. Inspect docs/API output and the final diff, not only exit codes.
 
