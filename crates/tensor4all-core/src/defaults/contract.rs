@@ -31,6 +31,7 @@ use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
 use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{einsum_native_tensors, einsum_native_tensors_owned};
 
+use crate::defaults::TensorDynLenError;
 use crate::defaults::{DynId, DynIndex, TensorDynLen};
 
 use crate::index_like::IndexLike;
@@ -276,7 +277,7 @@ impl PairwiseContractionOptions {
 /// /// failure), when indices are incompatible (a shape or index mismatch), or
 /// /// when the contraction reports a failure (a backend failure).
 ///
-pub fn contract(tensors: &[&TensorDynLen]) -> Result<TensorDynLen> {
+pub fn contract(tensors: &[&TensorDynLen]) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     contract_with_options(tensors, ContractionOptions::new())
 }
 
@@ -290,8 +291,8 @@ pub fn contract(tensors: &[&TensorDynLen]) -> Result<TensorDynLen> {
 pub fn contract_with_options(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
-) -> Result<TensorDynLen> {
-    contract_with_options_impl(tensors, options)
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+    contract_with_options_impl(tensors, options).map_err(TensorDynLenError::from)
 }
 
 /// Contract owned tensors with the default connected-network semantics.
@@ -301,7 +302,9 @@ pub fn contract_with_options(
 /// /// failure), when indices are incompatible (a shape or index mismatch), or
 /// /// when the contraction reports a failure (a backend failure).
 ///
-pub fn contract_owned(tensors: Vec<TensorDynLen>) -> Result<TensorDynLen> {
+pub fn contract_owned(
+    tensors: Vec<TensorDynLen>,
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     contract_owned_with_options(tensors, ContractionOptions::new())
 }
 
@@ -315,17 +318,17 @@ pub fn contract_owned(tensors: Vec<TensorDynLen>) -> Result<TensorDynLen> {
 pub fn contract_owned_with_options(
     tensors: Vec<TensorDynLen>,
     options: ContractionOptions<'_>,
-) -> Result<TensorDynLen> {
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     let tensor_refs = tensors.iter().collect::<Vec<_>>();
     let components =
         find_tensor_connected_components_with_retained(&tensor_refs, options.retain_indices);
     if components.len() > 1 {
-        return Err(anyhow::anyhow!(
+        return Err(TensorDynLenError::from(anyhow::anyhow!(
             "Tensors form disconnected components; use explicit outer_product operations for an intentional disconnected product"
-        ));
+        )));
     }
     drop(tensor_refs);
-    contract_owned_with_options_impl(tensors, options)
+    contract_owned_with_options_impl(tensors, options).map_err(TensorDynLenError::from)
 }
 
 /// Contract two tensors with the default pairwise semantics.
@@ -339,8 +342,12 @@ pub fn contract_owned_with_options(
 /// /// (a shape or index mismatch), or when the contraction reports a failure (a
 /// /// backend failure).
 ///
-pub fn contract_pair(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDynLen> {
+pub fn contract_pair(
+    lhs: &TensorDynLen,
+    rhs: &TensorDynLen,
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     lhs.try_contract_pairwise_default_with_options(rhs, PairwiseContractionOptions::new())
+        .map_err(TensorDynLenError::from)
 }
 
 /// Contract two tensors with operand-level conjugation options.
@@ -388,8 +395,9 @@ pub fn contract_pair_with_operand_options(
     lhs: &TensorDynLen,
     rhs: &TensorDynLen,
     options: PairwiseContractionOptions,
-) -> Result<TensorDynLen> {
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     lhs.try_contract_pairwise_default_with_options(rhs, options)
+        .map_err(TensorDynLenError::from)
 }
 
 /// Contract two tensors with explicit contraction options.
@@ -403,7 +411,7 @@ pub fn contract_pair_with_options(
     lhs: &TensorDynLen,
     rhs: &TensorDynLen,
     options: ContractionOptions<'_>,
-) -> Result<TensorDynLen> {
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     contract_with_options(&[lhs, rhs], options)
 }
 
@@ -417,8 +425,9 @@ pub fn tensordot(
     lhs: &TensorDynLen,
     rhs: &TensorDynLen,
     pairs: &[(DynIndex, DynIndex)],
-) -> Result<TensorDynLen> {
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     lhs.try_tensordot_pairwise_explicit(rhs, pairs)
+        .map_err(TensorDynLenError::from)
 }
 
 /// Compute the outer product of two tensors.
@@ -431,8 +440,12 @@ pub fn tensordot(
 /// /// shared-index mismatch) or the construction reports a failure (a backend
 /// /// failure).
 ///
-pub fn outer_product(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDynLen> {
+pub fn outer_product(
+    lhs: &TensorDynLen,
+    rhs: &TensorDynLen,
+) -> std::result::Result<TensorDynLen, TensorDynLenError> {
     lhs.try_outer_product_pairwise(rhs)
+        .map_err(TensorDynLenError::from)
 }
 
 /// Contract multiple owned tensors into a single tensor.
@@ -470,7 +483,7 @@ fn contract_owned_with_options_impl(
             let requires_borrowed_path =
                 tensor_refs.iter().any(|tensor| tensor.tracks_grad()) || has_structured_storage;
             if requires_borrowed_path {
-                return contract_with_options(&tensor_refs, options);
+                return contract_with_options(&tensor_refs, options).map_err(anyhow::Error::from);
             }
 
             let components = find_tensor_connected_components_with_retained(

@@ -7,6 +7,7 @@
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
 use crate::defaults::DynIndex;
+use crate::defaults::TensorDynLenError;
 use crate::index_like::IndexLike;
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
@@ -60,15 +61,18 @@ pub fn direct_sum(
     a: &TensorDynLen,
     b: &TensorDynLen,
     pairs: &[(DynIndex, DynIndex)],
-) -> Result<(TensorDynLen, Vec<DynIndex>)> {
+) -> std::result::Result<(TensorDynLen, Vec<DynIndex>), TensorDynLenError> {
     if a.is_f64() && b.is_f64() {
-        direct_sum_typed::<f64>(a, b, pairs)
+        direct_sum_typed::<f64>(a, b, pairs).map_err(TensorDynLenError::from)
     } else if a.is_complex() && b.is_complex() {
-        direct_sum_typed::<num_complex::Complex64>(a, b, pairs)
+        direct_sum_typed::<num_complex::Complex64>(a, b, pairs).map_err(TensorDynLenError::from)
     } else {
-        Err(anyhow::anyhow!(
-            "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)"
-        ))
+        Err(TensorDynLenError::Operation {
+            operation: "direct_sum",
+            source: std::sync::Arc::new(std::io::Error::other(
+                "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)",
+            )),
+        })
     }
 }
 

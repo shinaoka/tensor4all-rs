@@ -1288,7 +1288,10 @@ impl TensorTrain {
                     PairwiseContractionOptions::new().with_lhs_conj(true),
                 )
                 .map_err(|err| {
-                    TensorTrainError::operation_source("failed to contract leftmost tensors", err)
+                    TensorTrainError::operation_source(
+                        "failed to contract leftmost tensors",
+                        anyhow::Error::new(err),
+                    )
                 })
             })?
         };
@@ -1320,7 +1323,7 @@ impl TensorTrain {
                 .map_err(|err| {
                     TensorTrainError::operation_source(
                         format!("failed to contract environment with site {i}"),
-                        err,
+                        anyhow::Error::new(err),
                     )
                 })
             })?;
@@ -1329,7 +1332,7 @@ impl TensorTrain {
                 contract_pair(&env, bi).map_err(|err| {
                     TensorTrainError::operation_source(
                         format!("failed to contract right operand at site {i}"),
-                        err,
+                        anyhow::Error::new(err),
                     )
                 })
             })?;

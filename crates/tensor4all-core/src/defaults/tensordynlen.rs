@@ -4970,6 +4970,7 @@ impl TensorDynLen {
             super::contract::ContractionOptions::new()
                 .with_retain_indices(std::slice::from_ref(index)),
         )
+        .map_err(anyhow::Error::from)
     }
 
     /// Compute the relative distance between two tensors.
@@ -5314,8 +5315,7 @@ impl TensorContractionLike for TensorDynLen {
         other: &Self,
         pairs: &[(DynIndex, DynIndex)],
     ) -> std::result::Result<crate::tensor_like::DirectSumResult<Self>, Self::Error> {
-        let (tensor, new_indices) =
-            crate::direct_sum::direct_sum(self, other, pairs).map_err(Self::Error::from)?;
+        let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
         Ok(crate::tensor_like::DirectSumResult {
             tensor,
             new_indices,
@@ -5323,7 +5323,7 @@ impl TensorContractionLike for TensorDynLen {
     }
 
     fn outer_product(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
-        super::contract::outer_product(self, other).map_err(Self::Error::from)
+        super::contract::outer_product(self, other)
     }
 
     fn permuteinds(&self, new_order: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
@@ -5341,11 +5341,11 @@ impl TensorContractionLike for TensorDynLen {
     }
 
     fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
-        super::contract::contract(tensors).map_err(Self::Error::from)
+        super::contract::contract(tensors)
     }
 
     fn contract_pair(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
-        super::contract::contract_pair(self, other).map_err(Self::Error::from)
+        super::contract::contract_pair(self, other)
     }
 }
 

@@ -1002,7 +1002,7 @@ where
         )
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to contract reference density contribution",
-            source,
+            source: anyhow::Error::new(source),
         })?;
         debug_assert!(!contribution.external_indices().contains(&ref_bond));
         density = Some(match density {
@@ -1083,7 +1083,7 @@ fn coefficient_tensor(
     )
     .map_err(|source| GseError::Algorithm {
         context: "GSE failed to build expansion coefficient tensor",
-        source,
+        source: anyhow::Error::new(source),
     })
 }
 
@@ -1117,7 +1117,7 @@ fn projected_missing_density_tensor(
     )
     .map_err(|source| GseError::Algorithm {
         context: "GSE failed to contract represented basis projector",
-        source,
+        source: anyhow::Error::new(source),
     })?;
     debug_assert!(!represented.external_indices().contains(basis_bond));
     let projector = identity

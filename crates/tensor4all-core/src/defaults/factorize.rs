@@ -267,7 +267,8 @@ fn factorize_svd_with_options(
     match canonical {
         Canonical::Left => {
             // L = U (orthogonal), R = S * V^H
-            let right_contracted = contract_pair(&s, &vh)?;
+            let right_contracted = contract_pair(&s, &vh)
+                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
             let right = right_contracted.replaceind(&sim_bond_index, &bond_index)?;
             Ok(FactorizeResult {
                 left: u,
@@ -279,7 +280,8 @@ fn factorize_svd_with_options(
         }
         Canonical::Right => {
             // L = U * S, R = V^H
-            let left_contracted = contract_pair(&u, &s)?;
+            let left_contracted = contract_pair(&u, &s)
+                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
             let left = left_contracted.replaceind(&sim_bond_index, &bond_index)?;
             Ok(FactorizeResult {
                 left,
