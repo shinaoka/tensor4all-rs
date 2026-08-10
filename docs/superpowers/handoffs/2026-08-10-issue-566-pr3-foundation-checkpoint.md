@@ -193,3 +193,13 @@
 - block_tensor + krylov（core 完）
 - step 3: treetci/quanticstci → step 4: treetn → step 5: quanticstransform/HDF5
 - レイヤリング項目 c..i
+
+## Session 2026-08-13（core 完了）
+
+### 完了: block_tensor + krylov（core の公開 anyhow 面ゼロ達成）
+- `cbd4eb2`: BlockTensor::try_new/new/validate_indices → TensorVectorSpaceError 再利用; 新規 KrylovError enum（InvalidOptions/ZeroInitialVector/NoAffineCoefficient/NonHermitian/Operation）で 9 公開ソルバーを型付け。本体は private `_impl`（anyhow）に抽出し public wrapper が `.map_err` — trait エラーは anyhow blanket From で境界変換
+- `6031f3d`: reviewer 指摘修正 — (1) 特殊 variant を明示サイトで構築 + downcast 復元（from_anyhow_with_classification）、(2) restart_impl は gmres_with_truncation_impl 直呼び（二重ラップ解消）、(3) # Errors ドキュメントを variant 基準に訂正（non-convergence はエラーでない旨）、(4) 抽出で分離した rustdoc 閉じフェンス復元
+- core 残り anyhow 公開 fn 0（検出の残り 35 は where 句の `Fn(&T) -> Result<T>` 誤検出）
+
+### 次のスライス
+- step 3: treetci/quanticstci の公開 anyhow 面
