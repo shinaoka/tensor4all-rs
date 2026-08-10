@@ -221,3 +221,37 @@ a separate decision point for the #566 Phase 2 shared-rules adoption.
   pinned at 72 with a documented reason, consistent with PR 1's recorded
   pre-existing deficit.
 - Local release measurement: 207/207 files pass with the new thresholds.
+
+## PR 2 round summary (2026-08-10)
+
+Branch `chore/issue-566-pr2-gates` completes Tasks 9-12 of the plan plus the
+permanent review-bot LLM removal:
+
+- Task 9: incremental public-error-doc + crate-boundary gates (ported from
+  tenferro, repository-specific tests; tcicore->tensorci dev cycle removed by
+  moving the end_to_end_chain_tci bench to tensorci; CI wiring with base-SHA
+  resolution).
+- Task 10: runnable doctests for partial_contract and square_linsolve; kryst
+  removed; one-site linsolve now rejected instead of silently returning init.
+- Task 11: debug.md, plan/, coverage-local.json, and the orphan
+  internal/tenferro-internal-ad-linalg test deleted; still-live linsolve and
+  contraction-API rationale migrated to docs/design/.
+- Task 12: CI coverage switched to release; check-coverage.py gains
+  --thresholds + 5-fixture self-test; _comment_* rationale clusters completed
+  per the spec contract (incl. _comment_hdf5 and the release-only dmrg pin).
+- review_bot.yml: external LLM review permanently removed; deterministic
+  --dry-run review is the default; waive label preserved.
+
+Per-task reviews ran reviewer-gpt (GPT-5.6 Sol) after Tasks 9, 10, 11, and a
+combined round for Task 12 + review bot; all Blocking/Important findings were
+fixed and re-verified (sub-table Cargo parser, multiline trait scope,
+multiline changed signatures, stale tuples, dev-cycle dedup, non-solution
+solver doctest, one-site rejection, durable design docs, rationale clusters).
+
+Final validation (all green): fmt, clippy -D warnings, nextest release
+2694/2694 (+10 skipped), hdf5 49, doctests 840, mdBook, cargo doc 0 errors,
+all five python self-tests, crate-boundary + incremental public-error-doc +
+repository-rules checks, and release coverage 207/207 (CI-owned gate; local
+attestation recorded here). Note: the coverage measurement was performed once
+locally to confirm the CI switch; the CI coverage job is the authoritative
+gate going forward.
