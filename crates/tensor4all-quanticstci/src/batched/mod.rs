@@ -178,8 +178,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// Returns an error when the grid, output dimensions, or options are invalid (a
+/// [`QuanticsTCIError::InvalidConfiguration`]), an initial pivot conversion
+/// fails, or the underlying TCI construction fails (a
+/// [`QuanticsTCIError::Operation`]).
 ///
 /// # Examples
 ///

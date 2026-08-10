@@ -207,8 +207,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the grid coordinate conversion fails (an
-    /// /// grid shape mismatch failure) or the summation fails.
+    /// This method is infallible and always returns `Ok`.
     ///
     /// # Examples
     ///
@@ -240,8 +239,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the grid coordinate conversion fails (an
-    /// /// grid shape mismatch failure) or the integration fails.
+    /// Returns an error when the underlying summation reports a failure (a
+    /// [`QuanticsTCIError::Operation`]).
     ///
     /// # Examples
     ///
@@ -321,8 +320,9 @@ where
     /// Returns a vector of (coordinates, value) pairs since f64 is not hashable.
     /// # Errors
     ///
-    /// Returns an error when the grid coordinate conversion fails (an
-    /// /// grid shape mismatch failure).
+    /// Returns an error when the grid is not discretized (a
+    /// [`QuanticsTCIError::DiscreteGridRequired`]) or the coordinate conversion
+    /// fails (a [`QuanticsTCIError::Operation`]).
     ///
     pub fn cachedata_origcoord(&self) -> std::result::Result<Vec<(Vec<f64>, V)>, QuanticsTCIError>
     where
