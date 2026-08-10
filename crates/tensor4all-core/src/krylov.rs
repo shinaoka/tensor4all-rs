@@ -95,6 +95,15 @@ impl From<anyhow::Error> for KrylovError {
     }
 }
 
+impl KrylovError {
+    fn from_anyhow_with_classification(source: anyhow::Error) -> Self {
+        match source.downcast::<KrylovError>() {
+            Ok(classified) => classified,
+            Err(source) => Self::from(source),
+        }
+    }
+}
+
 static GMRES_OP_PROFILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
@@ -485,8 +494,12 @@ struct HermitianRitzState {
 /// The lowest Ritz eigenpair and the true residual norm.
 /// # Errors
 /// Returns an error when the operator is not Hermitian-compatible (a shape
-/// mismatch), when the iteration fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// mismatch or a [`KrylovError::NonHermitian`] projection failure), when the
+/// options are invalid (a [`KrylovError::InvalidOptions`]), when the initial
+/// vector is numerically zero (a [`KrylovError::ZeroInitialVector`]), or when
+/// an underlying tensor or backend operation fails (a
+/// [`KrylovError::Operation`]). Non-convergence is reported through
+/// [`HermitianLanczosResult::converged`] and does not produce an error.
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
@@ -500,6 +513,7 @@ struct HermitianRitzState {
 /// ).unwrap();
 /// assert!(result.converged);
 /// assert!((result.eigenvalue - 1.0).abs() < 1.0e-12);
+/// ```
 pub fn hermitian_lanczos_lowest_eigenpair<T, F>(
     apply_a: F,
     initial: &T,
@@ -509,10 +523,10 @@ where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
 {
-    hermitian_lanczos_lowest_eigenpair_impl(apply_a, initial, options).map_err(KrylovError::from)
+    hermitian_lanczos_lowest_eigenpair_impl(apply_a, initial, options)
+        .map_err(KrylovError::from_anyhow_with_classification)
 }
 
-/// ```
 fn hermitian_lanczos_lowest_eigenpair_impl<T, F>(
     apply_a: F,
     initial: &T,
@@ -526,10 +540,11 @@ where
     initial.validate()?;
 
     let initial_norm = initial.norm()?;
-    anyhow::ensure!(
-        initial_norm > options.breakdown_tol,
-        "hermitian_lanczos_lowest_eigenpair: zero initial vector"
-    );
+    if initial_norm <= options.breakdown_tol {
+        return Err(anyhow::Error::new(KrylovError::ZeroInitialVector {
+            solver: "hermitian_lanczos_lowest_eigenpair",
+        }));
+    }
 
     let mut basis = Vec::with_capacity(options.max_iter + 1);
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
@@ -565,8 +580,13 @@ where
 
         let subspace_dim = j + 1;
         let projected = projected_matrix_from_columns(&h_cols, subspace_dim);
-        let ritz = lowest_hermitian_eigenpair(&projected, options.hermitian_tol)
-            .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
+        let ritz =
+            lowest_hermitian_eigenpair(&projected, options.hermitian_tol).map_err(|err| {
+                anyhow::Error::new(KrylovError::NonHermitian {
+                    solver: "hermitian_lanczos_lowest_eigenpair",
+                    source: anyhow::anyhow!("projected operator is not Hermitian: {err}"),
+                })
+            })?;
         let residual_estimate = beta * ritz.eigenvector[subspace_dim - 1].norm();
         let threshold = hermitian_lanczos_threshold(ritz.eigenvalue, options);
         let estimate_converged = residual_estimate <= threshold;
@@ -600,7 +620,10 @@ where
     }
 
     let ritz_state = last_ritz.ok_or_else(|| {
-        anyhow::anyhow!("hermitian_lanczos_lowest_eigenpair: max_iter must be greater than zero")
+        anyhow::Error::new(KrylovError::InvalidOptions {
+            solver: "hermitian_lanczos_lowest_eigenpair",
+            reason: "max_iter must be greater than zero".to_string(),
+        })
     })?;
     finalize_hermitian_lanczos_result(
         &apply_a,
@@ -623,8 +646,12 @@ where
 /// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
 /// # Errors
 /// Returns an error when the operator is not Hermitian-compatible (a shape
-/// mismatch), when the iteration fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// mismatch or a [`KrylovError::NonHermitian`] projection failure), when the
+/// options are invalid (a [`KrylovError::InvalidOptions`]), when the initial
+/// vector is numerically zero (a [`KrylovError::ZeroInitialVector`]), or when
+/// an underlying tensor or backend operation fails (a
+/// [`KrylovError::Operation`]). Non-convergence is reported through
+/// [`HermitianKrylovExpmResult::converged`] and does not produce an error.
 /// # Examples
 /// ```
 /// use num_complex::Complex64;
@@ -662,6 +689,7 @@ where
 /// assert!(evolved[1].norm() < 1.0e-12);
 /// # Ok(())
 /// # }
+/// ```
 pub fn hermitian_krylov_expm_multiply<T, F>(
     apply_a: F,
     exponent: Complex64,
@@ -673,10 +701,9 @@ where
     F: FnMut(&T) -> Result<T>,
 {
     hermitian_krylov_expm_multiply_impl(apply_a, exponent, initial, options)
-        .map_err(KrylovError::from)
+        .map_err(KrylovError::from_anyhow_with_classification)
 }
 
-/// ```
 fn hermitian_krylov_expm_multiply_impl<T, F>(
     mut apply_a: F,
     exponent: Complex64,
@@ -915,8 +942,11 @@ where
 /// A `GmresResult` containing the solution and convergence information.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 ///
 pub fn gmres<T, F>(
     apply_a: F,
@@ -936,7 +966,7 @@ where
         GmresTolerance::Relative(options.rtol),
         None,
     )
-    .map_err(KrylovError::from)
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 /// Solve `A x = b` using GMRES with an absolute residual tolerance.
@@ -944,8 +974,11 @@ where
 /// relative residual tolerance and is preferred for scale-independent solves.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 ///
 pub fn gmres_with_absolute_tolerance<T, F>(
     apply_a: F,
@@ -966,7 +999,7 @@ where
         GmresTolerance::Absolute(atol),
         None,
     )
-    .map_err(KrylovError::from)
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
@@ -975,8 +1008,11 @@ where
 /// KrylovKit's affine linear-solve convention.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -999,7 +1035,7 @@ where
         options,
         GmresTolerance::Relative(options.rtol),
     )
-    .map_err(KrylovError::from)
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with an absolute residual tolerance.
@@ -1009,8 +1045,11 @@ where
 /// Krylov basis when affine coefficients are present.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 ///
 pub fn gmres_affine_with_absolute_tolerance<T, F>(
     apply_a: F,
@@ -1034,7 +1073,7 @@ where
         options,
         GmresTolerance::Absolute(atol),
     )
-    .map_err(KrylovError::from)
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 fn gmres_affine_impl<T, F>(
@@ -1091,7 +1130,7 @@ where
         });
     }
     if a0.is_zero() && a1.is_zero() {
-        anyhow::bail!("gmres_affine: at least one affine coefficient must be nonzero");
+        return Err(anyhow::Error::new(KrylovError::NoAffineCoefficient));
     }
     if a1.is_zero() {
         let started = Instant::now();
@@ -1452,8 +1491,11 @@ where
 /// cycles; the final cycle is shortened when necessary.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 ///
 pub fn gmres_with_total_iteration_limit<T, F>(
     apply_a: F,
@@ -1474,7 +1516,7 @@ where
         GmresTolerance::Relative(options.rtol),
         Some(max_total_iter),
     )
-    .map_err(KrylovError::from)
+    .map_err(KrylovError::from_anyhow_with_classification)
 }
 
 fn gmres_impl<T, F>(
@@ -1743,8 +1785,11 @@ where
 /// growth that would otherwise occur in MPS/MPO representations.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 /// # Examples
 /// Solve `2x = b` with a no-op truncation function:
 /// ```
@@ -1764,6 +1809,7 @@ where
 /// // Solution should be [2.0, 3.0]
 /// let expected = TensorDynLen::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
+/// ```
 pub fn gmres_with_truncation<T, F, Tr>(
     apply_a: F,
     b: &T,
@@ -1776,10 +1822,10 @@ where
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
-    gmres_with_truncation_impl(apply_a, b, x0, options, truncate).map_err(KrylovError::from)
+    gmres_with_truncation_impl(apply_a, b, x0, options, truncate)
+        .map_err(KrylovError::from_anyhow_with_classification)
 }
 
-/// ```
 fn gmres_with_truncation_impl<T, F, Tr>(
     apply_a: F,
     b: &T,
@@ -2237,8 +2283,11 @@ pub struct RestartGmresResult<T> {
 /// A `RestartGmresResult` containing the solution and convergence information.
 /// # Errors
 /// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when GMRES fails to converge (a non-convergence
-/// failure), or when the backend reports a failure.
+/// shape mismatch), when the affine coefficients are all zero (a
+/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
+/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
+/// Non-convergence is reported through the result's `converged` flag and does
+/// not produce an error.
 /// # Examples
 /// Solve `5x = b` with no truncation:
 /// ```
@@ -2256,6 +2305,7 @@ pub struct RestartGmresResult<T> {
 /// assert!(result.converged);
 /// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
+/// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(
     apply_a: F,
     b: &T,
@@ -2268,10 +2318,10 @@ where
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
-    restart_gmres_with_truncation_impl(apply_a, b, x0, options, truncate).map_err(KrylovError::from)
+    restart_gmres_with_truncation_impl(apply_a, b, x0, options, truncate)
+        .map_err(KrylovError::from_anyhow_with_classification)
 }
 
-/// ```
 fn restart_gmres_with_truncation_impl<T, F, Tr>(
     apply_a: F,
     b: &T,
@@ -2382,7 +2432,8 @@ where
         // Solve A*x' = r using inner GMRES with zero initial guess
         // The zero initial guess is created by scaling r by 0
         let zero = r.scale(AnyScalar::new_real(0.0))?;
-        let inner_result = gmres_with_truncation(&apply_a, &r, &zero, &inner_options, &truncate)?;
+        let inner_result =
+            gmres_with_truncation_impl(&apply_a, &r, &zero, &inner_options, &truncate)?;
 
         total_inner_iters += inner_result.iterations;
 
@@ -2426,10 +2477,12 @@ where
 }
 
 fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Result<()> {
-    anyhow::ensure!(
-        options.max_iter > 0,
-        "hermitian_lanczos_lowest_eigenpair: max_iter must be greater than zero"
-    );
+    if options.max_iter == 0 {
+        return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+            solver: "hermitian_lanczos_lowest_eigenpair",
+            reason: "max_iter must be greater than zero".to_string(),
+        }));
+    }
     anyhow::ensure!(
         options.rtol.is_finite() && options.rtol >= 0.0,
         "hermitian_lanczos_lowest_eigenpair: rtol must be finite and non-negative"
