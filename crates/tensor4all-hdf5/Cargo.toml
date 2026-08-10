@@ -27,6 +27,7 @@ hdf5-metno-sys = { version = "0.12", default-features = false, optional = true }
 hdf5-rt = { workspace = true, default-features = false, features = ["complex"], optional = true }
 num-complex = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 ndarray = { workspace = true }
 
 [dev-dependencies]
