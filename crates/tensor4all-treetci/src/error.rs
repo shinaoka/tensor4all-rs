@@ -22,12 +22,6 @@ pub enum TreeTciError {
         /// Description of the invalid index.
         message: String,
     },
-    /// The interpolation failed to converge.
-    #[error("tree-TCI interpolation failed to converge after {iterations} iterations")]
-    ConvergenceFailure {
-        /// Number of iterations attempted before failure.
-        iterations: usize,
-    },
     /// An underlying construction, materialization, or backend operation
     /// failed.
     #[error("tree-TCI operation failed: {source}")]

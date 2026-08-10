@@ -1,4 +1,4 @@
-use crate::error::Result as TreeTciResult;
+use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::{OwnedGlobalIndexBatch, SubtreeKey};
 
 /// Multi-index type used by TreeTCI.
@@ -60,35 +60,38 @@ pub fn assemble_global_point(
             .into());
         };
         for (&site, &value) in key.as_slice().iter().zip(values.iter()) {
-            if !(site < n_sites) {
-                return Err(anyhow::anyhow!(
-                    "site {} is out of bounds for {} sites",
-                    site,
-                    n_sites
-                )
-                .into());
-            };
+            if site >= n_sites {
+                return Err(TreeTciError::IndexOutOfBounds {
+                    message: format!("site {site} is out of bounds for {n_sites} sites"),
+                });
+            }
             if !(point[site] == usize::MAX) {
-                return Err(anyhow::anyhow!("site {} was assigned more than once", site).into());
+                return Err(TreeTciError::IndexOutOfBounds {
+                    message: format!("site {site} was assigned more than once"),
+                });
             };
             point[site] = value;
         }
     }
 
     for &(site, value) in central_assignments {
-        if !(site < n_sites) {
-            return Err(
-                anyhow::anyhow!("site {} is out of bounds for {} sites", site, n_sites).into(),
-            );
-        };
+        if site >= n_sites {
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("site {site} is out of bounds for {n_sites} sites"),
+            });
+        }
         if !(point[site] == usize::MAX) {
-            return Err(anyhow::anyhow!("site {} was assigned more than once", site).into());
+            return Err(TreeTciError::IndexOutOfBounds {
+                message: format!("site {site} was assigned more than once"),
+            });
         };
         point[site] = value;
     }
 
     if !(point.iter().all(|&value| value != usize::MAX)) {
-        return Err(anyhow::anyhow!("global point assembly left some sites unassigned").into());
+        return Err(TreeTciError::IndexOutOfBounds {
+            message: "global point assembly left some sites unassigned".to_string(),
+        });
     };
     Ok(point)
 }

@@ -121,7 +121,10 @@ where
         .iter()
         .map(|v| CommonScalar::abs_val(*v))
         .fold(0.0f64, f64::max);
-    if tci.max_sample_value <= 0.0 {
+    if !matches!(
+        tci.max_sample_value.partial_cmp(&0.0),
+        Some(std::cmp::Ordering::Greater)
+    ) {
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 

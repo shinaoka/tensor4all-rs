@@ -29,7 +29,7 @@ pub trait FullPivLuScalar: Scalar + TensorElement + TensorScalar {
         pivot_values: &[Self],
         pivot_rows: usize,
         pivot_cols: usize,
-    ) -> Result<Vec<Self>>;
+    ) -> TreeTciResult<Vec<Self>>;
 }
 
 macro_rules! impl_full_piv_lu_scalar {
@@ -47,7 +47,7 @@ macro_rules! impl_full_piv_lu_scalar {
                 pivot_values: &[Self],
                 pivot_rows: usize,
                 pivot_cols: usize,
-            ) -> Result<Vec<Self>> {
+            ) -> TreeTciResult<Vec<Self>> {
                 if !(pivot_rows == pivot_cols) {
                     return Err(anyhow::anyhow!(
                         "full-pivot solve requires a square pivot matrix, got {}x{}",
@@ -74,7 +74,8 @@ macro_rules! impl_full_piv_lu_scalar {
                 let lhs_tensor = Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
                 let solved_t = with_default_backend(|backend| {
                     backend.full_piv_lu_solve(&pivot_tensor, &lhs_tensor, false)
-                })?;
+                })
+                .map_err(|e| anyhow::anyhow!("full_piv_lu_solve failed: {e}"))?;
 
                 let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
                     anyhow::anyhow!("full_piv_lu_solve returned unexpected dtype")
@@ -238,6 +239,7 @@ where
     };
 
     T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
+        .map_err(anyhow::Error::from)
 }
 
 fn site_side_key<T>(state: &TreeTCI2<T>, site: usize, edge: TreeTciEdge) -> Result<SubtreeKey> {
