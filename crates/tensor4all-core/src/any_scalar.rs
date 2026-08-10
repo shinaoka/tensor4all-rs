@@ -152,6 +152,21 @@ fn initialize_tensor<T: ScalarTensorElement>(
 
 /// Error returned by eager-tensor `AnyScalar` operations (autodiff, conjugation,
 /// and complex composition).
+///
+/// The full original diagnostic is preserved in [`AnyScalarError::source`], so
+/// callers can inspect the underlying tensor, AD-runtime, or configuration
+/// failure without losing context.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{AnyScalar, AnyScalarError};
+///
+/// let result: Result<AnyScalar, AnyScalarError> =
+///     AnyScalar::compose_complex(AnyScalar::new_real(1.0), AnyScalar::new_complex(0.0, 1.0));
+/// let err = result.unwrap_err();
+/// assert!(err.source.to_string().contains("real-valued"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[error("AnyScalar eager-tensor operation failed: {source}")]
 pub struct AnyScalarError {

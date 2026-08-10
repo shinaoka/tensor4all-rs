@@ -74,7 +74,7 @@ pub mod block_tensor;
 // Backwards compatibility: re-export defaults::tensordynlen as tensor
 pub use defaults::tensordynlen as tensor;
 
-pub use any_scalar::AnyScalar;
+pub use any_scalar::{AnyScalar, AnyScalarError};
 pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, StructuredSelectorError,
     TensorDynLen, TensorDynLenError, TensorStorageError,
