@@ -6,6 +6,7 @@
 //!
 //! Based on the algorithm from Quantics.jl/src/affine.jl
 
+use crate::error::QuanticsTransformError;
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -99,7 +100,7 @@ pub struct LinearConstraintRow {
 
 fn validate_rational_slice(values: &[Rational64], name: &str) -> Result<()> {
     if let Some(index) = values.iter().position(|value| *value.denom() == 0) {
-        anyhow::bail!("{name}[{index}] has zero denominator");
+        return Err(anyhow::anyhow!("{name}[{index}] has zero denominator"));
     }
     Ok(())
 }
@@ -192,10 +193,13 @@ impl LinearConstraintRow {
     /// assert_eq!(row.coefficients, vec![1, 2]);
     /// assert_eq!(row.rhs, 3);
     /// ```
-    pub fn from_rationals(coefficients: Vec<Rational64>, rhs: Rational64) -> Result<Self> {
+    pub fn from_rationals(
+        coefficients: Vec<Rational64>,
+        rhs: Rational64,
+    ) -> std::result::Result<Self, QuanticsTransformError> {
         validate_rational_slice(&coefficients, "constraint coefficients")?;
         if *rhs.denom() == 0 {
-            anyhow::bail!("constraint rhs has zero denominator");
+            return Err(anyhow::anyhow!("constraint rhs has zero denominator").into());
         }
 
         let mut denominator_lcm = BigInt::one();
@@ -215,6 +219,7 @@ impl LinearConstraintRow {
             BigInt::from(*rhs.numer()) * (&denominator_lcm / BigInt::from(*rhs.denom()));
 
         normalize_bigint_row(integer_coefficients, integer_rhs)
+            .map_err(QuanticsTransformError::from)
     }
 }
 
@@ -329,7 +334,12 @@ impl AffineParams {
     ///     2, 1, // expects 2 elements in A, got 1
     /// ).is_err());
     /// ```
-    pub fn new(a: Vec<Rational64>, b: Vec<Rational64>, m: usize, n: usize) -> Result<Self> {
+    pub fn new(
+        a: Vec<Rational64>,
+        b: Vec<Rational64>,
+        m: usize,
+        n: usize,
+    ) -> std::result::Result<Self, QuanticsTransformError> {
         validate_rational_slice(&a, "affine matrix")?;
         validate_rational_slice(&b, "affine translation")?;
 
@@ -344,14 +354,13 @@ impl AffineParams {
                 m,
                 n,
                 expected_a_len
-            ));
+            )
+            .into());
         }
         if b.len() != m {
-            return Err(anyhow::anyhow!(
-                "Vector b has {} elements but expected {}",
-                b.len(),
-                m
-            ));
+            return Err(
+                anyhow::anyhow!("Vector b has {} elements but expected {}", b.len(), m).into(),
+            );
         }
         let params = Self { a, b, m, n };
         params.validate()?;
@@ -460,7 +469,12 @@ impl AffineParams {
     /// assert_eq!(params.m(), 2);
     /// assert_eq!(params.n(), 2);
     /// ```
-    pub fn from_integers(a: Vec<i64>, b: Vec<i64>, m: usize, n: usize) -> Result<Self> {
+    pub fn from_integers(
+        a: Vec<i64>,
+        b: Vec<i64>,
+        m: usize,
+        n: usize,
+    ) -> std::result::Result<Self, QuanticsTransformError> {
         let mut a_rat = try_vec_with_capacity::<Rational64>("affine coefficient list", a.len())?;
         for value in a {
             a_rat.push(Rational64::from_integer(value));
@@ -660,17 +674,18 @@ pub fn affine_operator(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     params.validate()?;
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of bits must be positive"));
+        return Err(anyhow::anyhow!("Number of bits must be positive").into());
     }
     if bc.len() != params.m {
         return Err(anyhow::anyhow!(
             "Boundary conditions length {} doesn't match output dimensions {}",
             bc.len(),
             params.m
-        ));
+        )
+        .into());
     }
 
     // Site dimensions: M output variables, N input variables
@@ -729,7 +744,7 @@ pub fn affine_operator_interleaved(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let mut op = affine_operator(r, params, bc)?;
 
     let mut fused_output_indices =
@@ -806,17 +821,18 @@ pub fn affine_transform_matrix(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<CsMat<f64>> {
+) -> std::result::Result<CsMat<f64>, QuanticsTransformError> {
     params.validate()?;
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of bits must be positive"));
+        return Err(anyhow::anyhow!("Number of bits must be positive").into());
     }
     if bc.len() != params.m {
         return Err(anyhow::anyhow!(
             "Boundary conditions length {} doesn't match output dimensions {}",
             bc.len(),
             params.m
-        ));
+        )
+        .into());
     }
 
     let (a_int, b_int, scale) = params.to_integer_scaled()?;
@@ -967,17 +983,18 @@ pub fn affine_transform_tensors_unfused(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<Vec<GenericTensor3<Complex64>>> {
+) -> std::result::Result<Vec<GenericTensor3<Complex64>>, QuanticsTransformError> {
     params.validate()?;
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of bits must be positive"));
+        return Err(anyhow::anyhow!("Number of bits must be positive").into());
     }
     if bc.len() != params.m {
         return Err(anyhow::anyhow!(
             "Boundary conditions length {} doesn't match output dimensions {}",
             bc.len(),
             params.m
-        ));
+        )
+        .into());
     }
 
     let (a_int, b_int, scale) = params.to_integer_scaled()?;
@@ -1124,7 +1141,7 @@ impl UnfusedTensorInfo {
     /// let info = UnfusedTensorInfo::new(&params).unwrap();
     /// assert_eq!(info.site_dim(), 4);
     /// ```
-    pub fn new(params: &AffineParams) -> Result<Self> {
+    pub fn new(params: &AffineParams) -> std::result::Result<Self, QuanticsTransformError> {
         let num_physical_dims = params
             .m
             .checked_add(params.n)
@@ -1224,7 +1241,11 @@ impl UnfusedTensorInfo {
     /// # Errors
     /// Returns an error when the shape cannot be represented (an overflow failure).
     ///
-    pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Result<Vec<usize>> {
+    pub fn unfused_shape(
+        &self,
+        left_bond: usize,
+        right_bond: usize,
+    ) -> std::result::Result<Vec<usize>, QuanticsTransformError> {
         let rank = self
             .num_physical_dims
             .checked_add(2)
@@ -1249,12 +1270,16 @@ impl UnfusedTensorInfo {
     /// let info = UnfusedTensorInfo::new(&params).unwrap();
     /// assert_eq!(info.decode_fused_index(3).unwrap(), (vec![1], vec![1]));
     /// ```
-    pub fn decode_fused_index(&self, fused_idx: usize) -> Result<(Vec<usize>, Vec<usize>)> {
+    pub fn decode_fused_index(
+        &self,
+        fused_idx: usize,
+    ) -> std::result::Result<(Vec<usize>, Vec<usize>), QuanticsTransformError> {
         if fused_idx >= self.site_dim {
             return Err(anyhow::anyhow!(
                 "fused index {fused_idx} is outside site dimension {}",
                 self.site_dim
-            ));
+            )
+            .into());
         }
         let output_dim = checked_pow2(self.m, "output variable count")?;
         let y_combined = fused_idx & (output_dim - 1);
@@ -1290,19 +1315,24 @@ impl UnfusedTensorInfo {
     /// assert_eq!(info.encode_fused_index(&[1], &[1]).unwrap(), 3);
     /// assert!(info.encode_fused_index(&[2], &[0]).is_err());
     /// ```
-    pub fn encode_fused_index(&self, y_bits: &[usize], x_bits: &[usize]) -> Result<usize> {
+    pub fn encode_fused_index(
+        &self,
+        y_bits: &[usize],
+        x_bits: &[usize],
+    ) -> std::result::Result<usize, QuanticsTransformError> {
         if y_bits.len() != self.m || x_bits.len() != self.n {
             return Err(anyhow::anyhow!(
                 "fused index bit lengths must be {} output and {} input bits",
                 self.m,
                 self.n
-            ));
+            )
+            .into());
         }
 
         let mut y_combined = 0usize;
         for (i, &bit) in y_bits.iter().enumerate() {
             if bit > 1 {
-                return Err(anyhow::anyhow!("output bit {i} must be 0 or 1, got {bit}"));
+                return Err(anyhow::anyhow!("output bit {i} must be 0 or 1, got {bit}").into());
             }
             let shift = u32::try_from(i)
                 .map_err(|_| anyhow::anyhow!("output bit shift {i} exceeds u32"))?;
@@ -1314,7 +1344,7 @@ impl UnfusedTensorInfo {
         let mut x_combined = 0usize;
         for (j, &bit) in x_bits.iter().enumerate() {
             if bit > 1 {
-                return Err(anyhow::anyhow!("input bit {j} must be 0 or 1, got {bit}"));
+                return Err(anyhow::anyhow!("input bit {j} must be 0 or 1, got {bit}").into());
             }
             let shift =
                 u32::try_from(j).map_err(|_| anyhow::anyhow!("input bit shift {j} exceeds u32"))?;
@@ -1333,7 +1363,8 @@ impl UnfusedTensorInfo {
             return Err(anyhow::anyhow!(
                 "encoded fused index {encoded} is outside site dimension {}",
                 self.site_dim
-            ));
+            )
+            .into());
         }
         Ok(encoded)
     }

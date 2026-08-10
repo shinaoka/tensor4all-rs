@@ -2,6 +2,7 @@
 //!
 //! This transformation computes cumulative sums: y_i = Σ_{j < i} x_j
 
+use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
@@ -72,9 +73,9 @@ pub enum TriangleType {
 /// assert!(cumsum_operator(1).is_err());
 /// assert!(cumsum_operator(0).is_err());
 /// ```
-pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
+pub fn cumsum_operator(r: usize) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
     }
 
     let mpo = cumsum_mpo(r)?;
@@ -108,9 +109,12 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// // Requires at least 2 sites
 /// assert!(triangle_operator(1, TriangleType::Lower).is_err());
 /// ```
-pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOperator> {
+pub fn triangle_operator(
+    r: usize,
+    triangle: TriangleType,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
     }
 
     let mpo = triangle_mpo(r, triangle)?;
@@ -133,7 +137,9 @@ pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOpe
 #[allow(clippy::needless_range_loop)]
 fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!(
+            "Number of sites must be at least 2, got {r}"
+        ));
     }
 
     let single_tensor = upper_triangle_tensor();
@@ -207,7 +213,9 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
 #[allow(clippy::needless_range_loop)]
 fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex64>> {
     if r < 2 {
-        anyhow::bail!("Number of sites must be at least 2, got {r}");
+        return Err(anyhow::anyhow!(
+            "Number of sites must be at least 2, got {r}"
+        ));
     }
 
     // upper_triangle_tensor() has y>x transition → M[i,j]=1 when i>j = Lower triangle

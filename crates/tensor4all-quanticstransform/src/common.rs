@@ -1,5 +1,6 @@
 //! Common types and helper functions for quantics transformations.
 
+use crate::error::QuanticsTransformError;
 use std::collections::HashMap;
 use std::mem::size_of;
 
@@ -114,13 +115,13 @@ pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 pub fn tensortrain_to_linear_operator(
     tt: &TensorTrain<Complex64>,
     site_dims: &[usize],
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let n = tt.len();
     if n == 0 {
-        return Err(anyhow::anyhow!("Empty tensor train"));
+        return Err(anyhow::anyhow!("Empty tensor train").into());
     }
     if site_dims.len() != n {
-        return Err(anyhow::anyhow!("Dimension array must have length {n}"));
+        return Err(anyhow::anyhow!("Dimension array must have length {n}").into());
     }
     let bond_capacity = n
         .checked_add(1)
@@ -186,7 +187,8 @@ pub fn tensortrain_to_linear_operator(
                 expected_site_dim,
                 site_dims[i],
                 site_dims[i]
-            ));
+            )
+            .into());
         }
 
         // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
@@ -324,13 +326,13 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     tt: &TensorTrain<Complex64>,
     input_dims: &[usize],
     output_dims: &[usize],
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let n = tt.len();
     if n == 0 {
-        return Err(anyhow::anyhow!("Empty tensor train"));
+        return Err(anyhow::anyhow!("Empty tensor train").into());
     }
     if input_dims.len() != n || output_dims.len() != n {
-        return Err(anyhow::anyhow!("Dimension arrays must have length {}", n));
+        return Err(anyhow::anyhow!("Dimension arrays must have length {}", n).into());
     }
     let bond_capacity = n
         .checked_add(1)
@@ -402,7 +404,8 @@ pub fn tensortrain_to_linear_operator_asymmetric(
                 expected_site_dim,
                 out_dim,
                 in_dim
-            ));
+            )
+            .into());
         }
 
         // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
@@ -669,9 +672,11 @@ pub(crate) fn embed_single_var_mpo(
 /// Returns an error when the operator construction fails (an overflow or
 /// invalid-configuration failure, or a shape mismatch).
 ///
-pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
+pub fn identity_mpo(
+    r: usize,
+) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "identity MPO site list",
@@ -689,7 +694,9 @@ pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
         tensors.push(t);
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {}", e))
+    TensorTrain::new(tensors)
+        .map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {e}"))
+        .map_err(QuanticsTransformError::from)
 }
 
 /// Create a scalar MPO (constant times identity).
@@ -698,7 +705,10 @@ pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
 /// Returns an error when the operator construction fails (an overflow or
 /// invalid-configuration failure, or a shape mismatch).
 ///
-pub fn scalar_mpo(r: usize, value: Complex64) -> Result<TensorTrain<Complex64>> {
+pub fn scalar_mpo(
+    r: usize,
+    value: Complex64,
+) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
     let mut mpo = identity_mpo(r)?;
     mpo.scale(value);
     Ok(mpo)

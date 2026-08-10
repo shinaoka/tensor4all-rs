@@ -2,6 +2,7 @@
 //!
 //! This transformation multiplies the function by a phase factor.
 
+use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
@@ -53,12 +54,15 @@ use crate::common::{
 /// assert!(phase_rotation_operator(4, f64::NAN).is_err());
 /// assert!(phase_rotation_operator(4, f64::INFINITY).is_err());
 /// ```
-pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator> {
+pub fn phase_rotation_operator(
+    r: usize,
+    theta: f64,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     if !theta.is_finite() {
-        anyhow::bail!("theta must be finite, got {theta}");
+        return Err(anyhow::anyhow!("theta must be finite, got {theta}").into());
     }
 
     let mpo = phase_rotation_mpo(r, theta)?;
@@ -100,12 +104,12 @@ pub fn phase_rotation_operator_multivar(
     theta: f64,
     nvariables: usize,
     target_var: usize,
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
     if !theta.is_finite() {
-        anyhow::bail!("theta must be finite, got {theta}");
+        return Err(anyhow::anyhow!("theta must be finite, got {theta}").into());
     }
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;
@@ -130,7 +134,7 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
     if !theta.is_finite() {
-        anyhow::bail!("theta must be finite, got {theta}");
+        return Err(anyhow::anyhow!("theta must be finite, got {theta}"));
     }
 
     // Normalize theta to [0, 2π)

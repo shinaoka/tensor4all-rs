@@ -4,6 +4,7 @@
 //! on sampled values, `(M g)[x] = g[x - offset]` with the selected boundary
 //! condition.
 
+use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
@@ -43,9 +44,13 @@ use crate::common::{
 /// // The operator has one MPO tensor per bit
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
-pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<QuanticsOperator> {
+pub fn shift_operator(
+    r: usize,
+    offset: i64,
+    bc: BoundaryCondition,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
 
     let mpo = shift_mpo(r, offset, bc)?;
@@ -87,9 +92,9 @@ pub fn shift_operator_multivar(
     bc: BoundaryCondition,
     nvariables: usize,
     target_var: usize,
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;
@@ -121,7 +126,9 @@ pub(crate) fn shift_mpo(
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
     if r > 63 {
-        anyhow::bail!("Number of sites must be at most 63 to avoid integer overflow");
+        return Err(anyhow::anyhow!(
+            "Number of sites must be at most 63 to avoid integer overflow"
+        ));
     }
 
     if bc == BoundaryCondition::Open && offset < 0 {

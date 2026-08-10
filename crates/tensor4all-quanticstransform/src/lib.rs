@@ -67,6 +67,8 @@ mod fourier;
 mod phase_rotation;
 mod shift;
 
+mod error;
+
 pub use affine::{
     affine_operator, affine_operator_interleaved, affine_transform_matrix,
     affine_transform_tensors_unfused, AffineParams, LinearConstraintRow, UnfusedTensorInfo,
@@ -77,6 +79,7 @@ pub use common::{
 };
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
 pub use difference_kernel::{difference_kernel_mpo, difference_kernel_operator};
+pub use error::QuanticsTransformError;
 pub use flip::{flip_operator, flip_operator_multivar};
 pub use fourier::{quantics_fourier_operator, FTCore, FourierOptions};
 pub use phase_rotation::{phase_rotation_operator, phase_rotation_operator_multivar};

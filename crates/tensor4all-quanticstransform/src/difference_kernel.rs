@@ -1,6 +1,7 @@
 //! Difference-kernel MPO construction.
 
-use anyhow::{bail, Result};
+use crate::error::QuanticsTransformError;
+use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3Ops, TensorTrain};
@@ -28,20 +29,23 @@ use crate::common::{
 pub fn difference_kernel_mpo(
     f: &TensorTrain<Complex64>,
     boundary: BoundaryCondition,
-) -> Result<TensorTrain<Complex64>> {
+) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
     if f.len() == 0 {
-        bail!("difference kernel requires a non-empty QTT");
+        return Err(anyhow::anyhow!("difference kernel requires a non-empty QTT").into());
     }
     if boundary == BoundaryCondition::Open {
-        bail!("Open boundary is not supported for difference kernels");
+        return Err(
+            anyhow::anyhow!("Open boundary is not supported for difference kernels").into(),
+        );
     }
     for site in 0..f.len() {
         let tensor = f.site_tensor(site);
         if tensor.site_dim() != 2 {
-            bail!(
+            return Err(anyhow::anyhow!(
                 "difference kernel requires binary QTT cores; site {site} has site_dim={}",
                 tensor.site_dim()
-            );
+            )
+            .into());
         }
     }
 
@@ -98,6 +102,7 @@ pub fn difference_kernel_mpo(
 
     TensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create difference-kernel MPO: {e}"))
+        .map_err(QuanticsTransformError::from)
 }
 
 fn checked_difference_tensor_dims(
@@ -130,7 +135,7 @@ fn checked_difference_tensor_dims(
 pub fn difference_kernel_operator(
     f: &TensorTrain<Complex64>,
     boundary: BoundaryCondition,
-) -> Result<QuanticsOperator> {
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let mpo = difference_kernel_mpo(f, boundary)?;
     let mut site_dims =
         try_vec_with_capacity::<usize>("difference-kernel site dimensions", f.len())?;
