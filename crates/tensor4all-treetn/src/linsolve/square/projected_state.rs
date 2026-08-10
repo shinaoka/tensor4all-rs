@@ -32,8 +32,8 @@ use crate::treetn::TreeTN;
 /// For each edge (from, to) pointing towards the open region, we cache:
 /// ```text
 /// env[(from, to)] = contraction of:
-///   - bra tensor at `from` (conjugated RHS)
-///   - ket tensor at `from` (current solution)
+///   - bra tensor at `from` (conjugated reference state)
+///   - ket tensor at `from` (RHS)
 ///   - all child environments (edges pointing away from `to`)
 /// ```
 ///

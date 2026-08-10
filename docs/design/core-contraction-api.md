@@ -26,7 +26,7 @@ removal).
   (re-exported from `crates/tensor4all-core/src/lib.rs`).
 - Semantics tests: `crates/tensor4all-core/src/defaults/contract/tests/mod.rs`.
 - `outer_product` for disconnected inputs:
-  `crates/tensor4all-core/src/defaults/tensordynlen.rs`.
+  `crates/tensor4all-core/src/defaults/contract.rs`.
 
 ## Follow-up
 

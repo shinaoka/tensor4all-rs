@@ -19,10 +19,11 @@ coincide (`V_in = V_out`).
 - Operators with internal input/output indices are supported through explicit
   per-site `IndexMapping { true_index, internal_index }` maps; both input and
   output maps must be provided together.
-- External-index mismatch between `init` and `rhs` is validated before the
-  sweep (`validate_linsolve_inputs` in `square/mod.rs`); the local
-  index-structure mismatch diagnostics live in
-  `crates/tensor4all-treetn/src/linsolve/square/updater.rs`.
+- External-index handling: global topology and site-dimension compatibility is
+  validated up front (`validate_linsolve_inputs` in `square/mod.rs`); the exact
+  local external-index identity precheck (init vs RHS, `<ref|b>` conventions)
+  happens inside `SquareLinsolveUpdater` (see the index-structure mismatch
+  diagnostics in `crates/tensor4all-treetn/src/linsolve/square/updater.rs`).
 - One-site systems are rejected with an explicit error: the two-site sweep
   planner produces an empty plan on a one-node network, which would otherwise
   silently return the initial guess.
