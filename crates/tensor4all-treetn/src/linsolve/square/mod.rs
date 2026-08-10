@@ -516,7 +516,7 @@ where
 
     let rhs_norm = rhs.clone().norm()?;
     if rhs_norm <= 1.0e-15 {
-        return residual.norm();
+        return residual.norm().map_err(anyhow::Error::from);
     }
     Ok(residual.norm()? / rhs_norm)
 }

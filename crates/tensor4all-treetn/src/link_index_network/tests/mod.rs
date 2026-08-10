@@ -120,7 +120,7 @@ fn test_replace_index_edge_mismatch() {
     // Try to replace with wrong edge
     let result = network.replace_index(&old_idx, &new_idx, edge_wrong);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Edge mismatch"));
+    assert!(result.unwrap_err().to_string().contains("Edge mismatch"));
 
     // Old index should still be there (restored on error)
     assert!(network.contains(&old_idx));
@@ -138,5 +138,5 @@ fn test_replace_index_not_found() {
     // Try to replace an index that doesn't exist
     let result = network.replace_index(&old_idx, &new_idx, edge);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().to_string().contains("not found"));
 }

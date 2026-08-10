@@ -7,8 +7,8 @@
 //! This design separates the index structure from tensor data,
 //! enabling topology and site space comparison independent of tensor values.
 
+use crate::error::TreeTNOperationError;
 use crate::node_name_network::{CanonicalizeEdges, NodeNameNetwork};
-use anyhow::Result;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::Undirected;
 use std::collections::{HashMap, HashSet};
@@ -105,7 +105,7 @@ where
         &mut self,
         node_name: NodeName,
         site_space: impl Into<HashSet<I>>,
-    ) -> Result<NodeIndex> {
+    ) -> std::result::Result<NodeIndex, TreeTNOperationError> {
         let node_idx = self.topology.add_node(node_name.clone())?;
         let site_space_set = site_space.into();
         // Update reverse lookup for all indices.
@@ -127,7 +127,11 @@ where
     /// Returns an error when the node is not found (a missing-index failure) or
     /// /// the new name is a duplicate (a duplicate operation failure).
     ///
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
+    pub fn rename_node(
+        &mut self,
+        old_name: &NodeName,
+        new_name: NodeName,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         if old_name == &new_name {
             return Ok(());
         }
@@ -205,7 +209,11 @@ where
     /// Returns an error when the site index is already present (a duplicate-index
     /// /// failure) or the node is not found (a missing-index failure).
     ///
-    pub fn add_site_index(&mut self, node_name: &NodeName, index: I) -> Result<()> {
+    pub fn add_site_index(
+        &mut self,
+        node_name: &NodeName,
+        index: I,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
@@ -223,7 +231,11 @@ where
     /// Returns an error when the site index is not present (a missing-index
     /// /// failure).
     ///
-    pub fn remove_site_index(&mut self, node_name: &NodeName, index: &I) -> Result<bool> {
+    pub fn remove_site_index(
+        &mut self,
+        node_name: &NodeName,
+        index: &I,
+    ) -> std::result::Result<bool, TreeTNOperationError> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
@@ -249,7 +261,7 @@ where
         node_name: &NodeName,
         old_index: &I,
         new_index: I,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
@@ -259,7 +271,8 @@ where
                 "Index {:?} not found in node {:?}",
                 old_index.id(),
                 node_name
-            ));
+            ))
+            .map_err(TreeTNOperationError::from);
         }
         self.index_to_node.remove(old_index);
         site_space.insert(new_index.clone());
@@ -276,7 +289,11 @@ where
     /// Returns an error when the node is not found (a missing-index failure) or
     /// /// the site space is invalid (a shape mismatch).
     ///
-    pub fn set_site_space(&mut self, node_name: &NodeName, new_indices: HashSet<I>) -> Result<()> {
+    pub fn set_site_space(
+        &mut self,
+        node_name: &NodeName,
+        new_indices: HashSet<I>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
@@ -315,7 +332,11 @@ where
     /// Returns an error when an endpoint node is not found (a missing-index
     /// /// failure) or the edge already exists (a duplicate operation failure).
     ///
-    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
+    pub fn add_edge(
+        &mut self,
+        n1: &NodeName,
+        n2: &NodeName,
+    ) -> std::result::Result<EdgeIndex, TreeTNOperationError> {
         self.topology.add_edge(n1, n2)
     }
 
@@ -540,14 +561,18 @@ where
     /// Returns an error when the operator topology is incompatible (a shape or
     /// /// index mismatch failure).
     ///
-    pub fn apply_operator_topology(&self, operator: &Self) -> Result<Self> {
+    pub fn apply_operator_topology(
+        &self,
+        operator: &Self,
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         // Check topology match
         if !self.topology.same_topology(&operator.topology) {
             return Err(anyhow::anyhow!(
                 "Operator and state have different topologies. State nodes: {:?}, Operator nodes: {:?}",
                 self.node_names(),
                 operator.node_names()
-            ));
+            ))
+            .map_err(TreeTNOperationError::from);
         }
 
         // For now, assume the operator preserves the site index structure

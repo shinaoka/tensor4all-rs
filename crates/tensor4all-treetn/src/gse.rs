@@ -483,13 +483,13 @@ where
         if options.normalize_references {
             let norm = next.norm().map_err(|source| GseError::Algorithm {
                 context: "GSE failed to compute reference norm",
-                source,
+                source: anyhow::Error::new(source),
             })?;
             if norm > 0.0 {
                 next.scale(AnyScalar::new_real(norm.recip()))
                     .map_err(|source| GseError::Algorithm {
                         context: "GSE failed to normalize reference",
-                        source,
+                        source: anyhow::Error::new(source),
                     })?;
             }
         }

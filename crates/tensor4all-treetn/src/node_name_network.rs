@@ -7,8 +7,8 @@
 //! This is a foundation for `SiteIndexNetwork` and can be used independently
 //! when only the graph structure (without index information) is needed.
 
+use crate::error::TreeTNOperationError;
 use crate::named_graph::NamedGraph;
-use anyhow::Result;
 use petgraph::algo::astar;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::visit::{Bfs, DfsPostOrder};
@@ -158,7 +158,10 @@ where
     /// Returns an error when the node is a duplicate (a duplicate operation
     /// /// failure) or the network is invalid (an invalid-topology failure).
     ///
-    pub fn add_node(&mut self, node_name: NodeName) -> Result<NodeIndex> {
+    pub fn add_node(
+        &mut self,
+        node_name: NodeName,
+    ) -> std::result::Result<NodeIndex, TreeTNOperationError> {
         self.graph.add_node(node_name, ())
     }
 
@@ -175,7 +178,11 @@ where
     /// Returns an error when an endpoint node is not found (a missing-index
     /// /// failure) or the edge is a duplicate (a duplicate operation failure).
     ///
-    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
+    pub fn add_edge(
+        &mut self,
+        n1: &NodeName,
+        n2: &NodeName,
+    ) -> std::result::Result<EdgeIndex, TreeTNOperationError> {
         self.graph.add_edge(n1, n2, ())
     }
 
@@ -195,7 +202,11 @@ where
     /// Returns an error when the node is not found (a missing-index failure) or
     /// /// the new name is a duplicate (a duplicate operation failure).
     ///
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
+    pub fn rename_node(
+        &mut self,
+        old_name: &NodeName,
+        new_name: NodeName,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         self.graph.rename_node(old_name, new_name)
     }
 

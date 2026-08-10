@@ -415,3 +415,11 @@ impl From<anyhow::Error> for TreeTNOperationError {
         Self { source }
     }
 }
+
+impl From<tensor4all_core::TensorDynLenError> for TreeTNOperationError {
+    fn from(source: tensor4all_core::TensorDynLenError) -> Self {
+        Self {
+            source: anyhow::Error::new(source),
+        }
+    }
+}
