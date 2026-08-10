@@ -144,3 +144,27 @@
 - any_scalar.rs（13 fn、内部に AnyScalarTensorError 下地あり）
 - krylov.rs（9 fn、エラー enum 新設が必要）
 - 残り ~100 fn の tensordynlen inherent メソッド
+
+## Session 2026-08-12 後半（typed-error step 2 継続）
+
+### core index 置換 API 完了（レビュー済み・コミット済み）
+- `2c4720a` TensorDynLen::replaceind/replaceinds（inherent）→ Result<_, TensorDynLenError>（ShapeMismatch 構造化バリアント使用）、DynIndex::new_bond → TagSetError
+- 呼び出し側: factorize（anyhow::Error::new wrap）、treetn gse 多数サイト、simplett_bridge collect 修正、itensorlike tensortrain
+- tensor_basic.rs の 3 テストを構造化メッセージ（operation + "shape mismatch"）に更新
+- `bfc4236` reviewer 指摘の rustdoc 修正: replaceind(s) の全等価マッチ記述・new_bond の TagSetError 記述・ShapeMismatch バリアント説明拡張
+
+### core AnyScalar eager API 完了（レビュー済み・コミット済み）
+- `7a7dec4` AnyScalarError（source 保存 thiserror struct + From<anyhow::Error>）新設、8 公開 fn（primal/enable_grad/grad/clear_grad/backward/detach/try_conj/compose_complex）を型付け
+- fallback_result は anyhow のまま; conj() は `.map_err(|e| e.source)` で source を渡す
+- モジュール内テストは error.source 経由で検査
+- `06f958f` reviewer minor 2 件修正: lib.rs で AnyScalarError 再エクスポート + 実行可能 doc example 追加
+
+### 現状
+- ブランチ chore/issue-566-pr3-errors、origin/main より 47 コミット
+- セッション内レビュー: 4 スライス（bridge/contraction/index/any_scalar）全て reviewer-gpt で finding 解消済み
+- core 残り anyhow 公開 fn: 92 → ~80（tensordynlen inherent が大半）
+
+### 次のスライス候補
+- tensordynlen inherent メソッド群（sum/scale/add/axpby/inner_product/sub/neg/permute/select_indices/from_dense/from_diag/to_vec/scalar/zeros/fuse_indices/unfuse_index/stack_along_new_index/index_select/mask_index/from_native/as_native 等 ~80 fn）— 最大ブロック
+- block_tensor.rs / col_major_array.rs / krylov.rs
+- レイヤリング項目 c..i
