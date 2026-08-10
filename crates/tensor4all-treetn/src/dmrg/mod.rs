@@ -426,7 +426,7 @@ where
             .extract_subtree(region)
             .map_err(|source| DmrgError::Algorithm {
                 context: "DMRG failed to extract final Rayleigh region",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         let local = contract_region(&subtree, region).map_err(|source| DmrgError::Algorithm {
             context: "DMRG failed to contract final Rayleigh region",
@@ -681,7 +681,7 @@ where
         apply_local_update_sweep(&mut state, &plan, &mut updater).map_err(|source| {
             DmrgError::Algorithm {
                 context: "DMRG sweep failed",
-                source,
+                source: anyhow::Error::new(source),
             }
         })?;
         sweeps_completed = sweep + 1;

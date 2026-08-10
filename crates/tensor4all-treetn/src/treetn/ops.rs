@@ -563,7 +563,7 @@ where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
     {
-        TreeTNEvaluator::new(self, indices).map_err(TreeTNOperationError::from)
+        TreeTNEvaluator::new(self, indices)
     }
 
     /// Evaluate the TreeTN at multiple multi-indices (batch).
@@ -601,9 +601,7 @@ where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
     {
-        TreeTNEvaluator::new(self, indices)?
-            .evaluate_batch(values)
-            .map_err(TreeTNOperationError::from)
+        TreeTNEvaluator::new(self, indices)?.evaluate_batch(values)
     }
 
     /// Evaluate the TreeTN at one multi-index.

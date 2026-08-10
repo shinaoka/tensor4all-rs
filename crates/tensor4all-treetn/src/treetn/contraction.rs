@@ -1180,7 +1180,6 @@ where
                 fit_options
             };
             super::fit::contract_fit(tn_a, tn_b, center, fit_options)
-                .map_err(TreeTNOperationError::from)
         }
         ContractionMethod::Naive => {
             validate_naive_dense_reference_limit(tn_a, tn_b, &options)?;

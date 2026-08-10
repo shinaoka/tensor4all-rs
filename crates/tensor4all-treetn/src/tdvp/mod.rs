@@ -649,7 +649,7 @@ where
                 .extract_subtree(&step.nodes)
                 .map_err(|source| TdvpError::Algorithm {
                     context: "TDVP failed to extract one-site region",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         record_tdvp_profile(extract_started, |profile, elapsed| {
             profile.extract_region += elapsed;
@@ -929,7 +929,7 @@ where
                 .extract_subtree(&step.nodes)
                 .map_err(|source| TdvpError::Algorithm {
                     context: "TDVP failed to extract two-site region",
-                    source,
+                    source: anyhow::Error::new(source),
                 })?;
         record_tdvp_profile(extract_started, |profile, elapsed| {
             profile.extract_region += elapsed;
@@ -1023,7 +1023,7 @@ where
             .replace_subtree(&step.nodes, &subtree)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to replace two-site subtree",
-                source,
+                source: anyhow::Error::new(source),
             })?;
         record_tdvp_profile(replace_started, |profile, elapsed| {
             profile.replace_subtree += elapsed;

@@ -1,5 +1,6 @@
 //! Cached batch evaluation for tree tensor networks.
 
+use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -650,7 +651,7 @@ where
         tree: &'a TreeTN<TensorDynLen, V>,
         indices: &[DynIndex],
         options: CachedEvaluatorOptions<V>,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TreeTNOperationError> {
         let layout = build_layout(tree, indices)?;
         if let Some(center) = &options.center {
             ensure_node_exists(tree, center, "TreeTNCachedEvaluator::new: center")?;
@@ -737,7 +738,7 @@ where
     pub fn evaluate_batch(
         &mut self,
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Vec<AnyScalar>> {
+    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
         validate_values_shape(
             values,
             self.layout.n_indices,

@@ -26,6 +26,7 @@
 //! - T4AMPOContractions.jl: `contract_fit`, `leftenvironment!`, `rightenvironment!`
 //! - ITensorNetworks.jl: `contract` with fitting algorithm
 
+use crate::error::TreeTNOperationError;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
@@ -341,7 +342,7 @@ where
         tn_a: &TreeTN<T, V>,
         tn_b: &TreeTN<T, V>,
         tn_c: &TreeTN<T, V>,
-    ) -> Result<T>
+    ) -> std::result::Result<T, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -375,7 +376,7 @@ where
         let child_envs: Vec<T> = child_neighbors
             .iter()
             .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
 
         // Compute the environment for (from, to) using child environments
         let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs)?;
@@ -463,7 +464,10 @@ where
     /// Returns an error when the fitted structure is inconsistent (a graph
     /// /// consistency failure).
     ///
-    pub fn verify_structural_consistency(&self, tn_c: &TreeTN<T, V>) -> Result<()>
+    pub fn verify_structural_consistency(
+        &self,
+        tn_c: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError>
     where
         V: Clone + Hash + Eq + std::fmt::Debug,
     {
@@ -482,7 +486,8 @@ where
                     return Err(anyhow::anyhow!(
                         "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
                         from, to, child, from
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -1070,7 +1075,7 @@ pub fn contract_fit<T, V>(
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
-) -> Result<TreeTN<T, V>>
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1087,9 +1092,9 @@ where
 
     // Validate topologies match
     if !tn_a.same_topology(tn_b) {
-        return Err(anyhow::anyhow!(
-            "TreeTNs must have the same topology for fit contraction"
-        ));
+        return Err(
+            anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
+        );
     }
 
     // Initialize C using the SVD-based zipup contraction while preserving

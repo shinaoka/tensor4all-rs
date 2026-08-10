@@ -778,7 +778,7 @@ fn run_test_case(
 
                 println!("  Current x bond dimensions:");
                 print_bond_dims(&x, "  x bond dimensions (before error)");
-                return Err(e);
+                return Err(anyhow::Error::new(e));
             }
             Err(_) => {
                 println!("  Panic during sweep {sweep} (likely dimension mismatch)");
