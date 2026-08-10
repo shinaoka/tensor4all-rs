@@ -10,7 +10,7 @@ use std::hash::Hash;
 
 use anyhow::{bail, Result};
 
-use tensor4all_core::{AnyScalar, IndexLike, TensorIndex, TensorLike};
+use tensor4all_core::{sort_indices_deterministic, AnyScalar, IndexLike, TensorIndex, TensorLike};
 
 use super::TreeTN;
 
@@ -42,13 +42,7 @@ where
         <T::Index as IndexLike>::Id: Ord,
     {
         let mut indices: Vec<_> = site_space.iter().cloned().collect();
-        indices.sort_by(|left, right| {
-            left.dim()
-                .cmp(&right.dim())
-                .then_with(|| left.plev().cmp(&right.plev()))
-                .then_with(|| left.id().cmp(right.id()))
-                .then_with(|| format!("{left:?}").cmp(&format!("{right:?}")))
-        });
+        sort_indices_deterministic(&mut indices);
         indices
     }
 
@@ -56,7 +50,8 @@ where
     ///
     /// The topology must match, and each corresponding node must carry the same
     /// number of site indices with the same dimensions. Site indices are paired
-    /// node-by-node after sorting by `(dim, id)` for deterministic matching.
+    /// node-by-node after sorting by [`sort_indices_deterministic`]
+    /// (`dim` → `plev` → `id` → `Debug` tiebreak) for matching.
     ///
     /// # Arguments
     /// * `template` - Reference TreeTN whose site index IDs should be adopted

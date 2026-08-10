@@ -257,6 +257,63 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
         Self: Sized;
 }
 
+/// Sort indices by a deterministic comparator over `dim`, `plev`, `id`, then
+/// `Debug` representation.
+///
+/// The `plev` and `Debug` terms keep distinct indices that share the same ID —
+/// for example a same-ID pair differing by prime level or tags — in a pinned,
+/// insertion-order-independent relative order instead of leaving them to the
+/// stable sort's input order.
+///
+/// The comparator is a pure function of the index values, so the result never
+/// depends on insertion order as long as `Debug` is deterministic and
+/// distinguishes all identity-relevant fields. The concrete
+/// [`DynIndex`](crate::defaults::DynIndex) satisfies the determinism part: its
+/// derived `Debug` covers `id`, `dim`, `plev`, and `tags`, so two `DynIndex`
+/// values compare `Equal` only when every field matches. Note that `dim`
+/// participates in the sort even though `DynIndex`'s `Eq` deliberately ignores
+/// it (ITensors semantics: equality = id + plev + tags). Implementors whose
+/// `Debug` omits identity-relevant fields may still see `Equal` comparisons
+/// between distinct indices, in which case the stable sort preserves the input
+/// order for those ties.
+///
+/// # Arguments
+/// * `indices` - The slice of indices to reorder in place.
+///
+/// # Returns
+/// Nothing; `indices` is reordered in place.
+///
+/// # Panics
+/// Never panics; the comparator relies only on `IndexLike` accessors and
+/// `Debug` implementations.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{sort_indices_deterministic, DynIndex, IndexLike};
+///
+/// let s = DynIndex::new_dyn(2);
+/// let s_prime = s.prime(); // same ID, plev 1
+/// assert!(s.same_id(&s_prime));
+///
+/// // Insertion order (primed first) must not survive the sort.
+/// let mut indices = vec![s_prime.clone(), s.clone()];
+/// sort_indices_deterministic(&mut indices);
+/// assert_eq!(indices, vec![s, s_prime]);
+/// ```
+pub fn sort_indices_deterministic<I: IndexLike>(indices: &mut [I])
+where
+    I::Id: Ord,
+{
+    indices.sort_by(|left, right| {
+        left.dim()
+            .cmp(&right.dim())
+            .then_with(|| left.plev().cmp(&right.plev()))
+            .then_with(|| left.id().cmp(right.id()))
+            .then_with(|| format!("{left:?}").cmp(&format!("{right:?}")))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +470,47 @@ mod tests {
         let a = test_index(42, 3);
         assert!(a.has_id(&42));
         assert!(!a.has_id(&99));
+    }
+
+    #[test]
+    fn test_sort_indices_deterministic_pins_same_id_prime_pair() {
+        use crate::defaults::DynIndex;
+
+        let s = DynIndex::new_dyn(2);
+        let s_prime = s.prime();
+        assert!(s.same_id(&s_prime));
+        assert_ne!(s, s_prime);
+
+        // Primed index first (worst-case insertion order): the sort must pin
+        // unprimed before primed by full-index order (plev 0 < plev 1), not
+        // preserve insertion order.
+        let mut indices = vec![s_prime.clone(), s.clone()];
+        sort_indices_deterministic(&mut indices);
+        assert_eq!(indices, vec![s.clone(), s_prime.clone()]);
+
+        // Same canonical order regardless of input permutation.
+        let mut indices = vec![s.clone(), s_prime.clone()];
+        sort_indices_deterministic(&mut indices);
+        assert_eq!(indices, vec![s, s_prime]);
+    }
+
+    #[test]
+    fn test_sort_indices_deterministic_distinguishes_same_id_tag_pair() {
+        use crate::defaults::{DynId, DynIndex, TagSet};
+
+        let site = DynIndex::new_with_tags(DynId(42), 2, TagSet::from_tags(&["Site"]).unwrap());
+        let link = DynIndex::new_with_tags(DynId(42), 2, TagSet::from_tags(&["Link"]).unwrap());
+        assert!(site.same_id(&link));
+        assert_ne!(site, link);
+
+        // The Debug tiebreak must give one deterministic order, not leave the
+        // pair to insertion order.
+        let mut a = vec![link.clone(), site.clone()];
+        let mut b = vec![site.clone(), link.clone()];
+        sort_indices_deterministic(&mut a);
+        sort_indices_deterministic(&mut b);
+        assert_eq!(a, b);
+        assert!(a.contains(&site));
+        assert!(a.contains(&link));
     }
 }
