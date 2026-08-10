@@ -223,3 +223,19 @@
 - step 6: simplett（57）+ 残り全公開面
 - レイヤリング項目 c..i
 - PR 作成 → CI → merge → 完了監査
+
+## Session 2026-08-13 後半（treetn step 4 進行中）
+
+### コミット済みサブスライス（全ゲート green）
+- `cc1327f` + `3ebbe44`: ネットワーク系（named_graph/node_name_network/site_index_network/link_index_network）+ treetn/ops.rs 26 fn → TreeTNOperationError。reviewer minor（# Errors 陳腐化、`/// ///` マーカー）修正済み
+- `b582b95`: treetn/mod.rs コア 16 fn（from_tensors/add_tensor/connect/replace_tensor/validate_tree/set_canonical_region/swap_site_indices 等）。treetci に From<TreeTNOperationError>。reviewer clean（nit のみ）
+- `1f3e362`: contraction/decompose/canonicalize/truncate/transform 16 fn。capi test メッセージ更新
+
+### 教訓（treetn 編）
+- regex の `Result<X<Y>>` ネスト誤変換 → `Result<X<Y, Err>>` 破損が発生。修復: `TreeTN<T, V, TreeTNOperationError>` → `TreeTN<T, V>` を明示 replace
+- `.into()` を Result に付けてしまう誤変換（`Err(x).into()`）→ `Err(x.into())` 修正
+- private anyhow fn に typed 変換を適用してしまう → enclosing fn 判定（awk で fn 境界確認）
+- `.into()).context(...)` チェーンは E0283/E0308 → `TreeTNOperationError::from(anyhow!(...).context(...))` に統一
+
+### treetn 残り ~60 fn
+- addition (5) / cached_evaluator (2) / evaluator (2) / fit (3) / localupdate (4) / partial_contraction (2) / restructure (1) / swap (1) / tensor_like (1) / apply/compose/identity (3) / linear_operator (7) / linsolve (5) / projected_operator/local_linop/projected_state/updater (4) / simplett_bridge (7) / top-level mod.rs dmrg/tdvp/gse (7)
