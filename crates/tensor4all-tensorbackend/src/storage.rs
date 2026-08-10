@@ -1116,6 +1116,11 @@ impl Storage {
     /// assert_eq!(s.len(), 5);
     /// assert!((s.max_abs()).abs() < 1e-10);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` when the dimension is invalid (a shape
+    /// mismatch).
     pub fn new_dense<T: StorageScalar + Default>(size: usize) -> StorageResult<Self> {
         Self::from_dense_col_major(vec![T::default(); size], &[size])
             .map_err(Self::invalid_storage_error)
@@ -1532,6 +1537,11 @@ impl Storage {
 
     /// Borrows the compact `f64` payload when it is already contiguous in
     /// column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::ScalarKindMismatch` when the storage is not
+    /// f64-backed (a dtype mismatch).
     pub fn payload_f64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[f64]>> {
         match &self.0 {
             StorageRepr::F64(value) => Ok(value.payload_col_major_view_if_contiguous()),
@@ -1575,6 +1585,11 @@ impl Storage {
 
     /// Borrows the compact `Complex64` payload when it is already contiguous in
     /// column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::ScalarKindMismatch` when the storage is not
+    /// c64-backed (a dtype mismatch).
     pub fn payload_c64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[Complex64]>> {
         match &self.0 {
             StorageRepr::C64(value) => Ok(value.payload_col_major_view_if_contiguous()),
@@ -1935,6 +1950,11 @@ impl Storage {
     /// let t = d.permute_storage(&[2, 2], &[1, 0]).unwrap();
     /// assert!(t.is_diag());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` when the permutation is invalid (an
+    /// invalid-index failure).
     pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> StorageResult<Storage> {
         match &self.0 {
             StorageRepr::F64(v) => Ok(Storage::from_repr(StorageRepr::F64(
