@@ -76,3 +76,28 @@
   属性より上にあり、挿入では置換されない → チェッカー抽出セクションを直接置換
   するか、列 0 の旧セクションを削除する。
 - 残り 321 件 + 型付け（設計 step 2–6）+ レイヤリング項目 + ゲート切替。
+
+## 追記（2026-08-10 続行分 2 — バックログ 0 + ゲート切替）
+
+- **# Errors バックログ 545 → 0 達成**（crates/ 全公開面 + tutorial-code）。
+  最後まで残ったのは pre-existing 箇条書き/`Returns Err if`/`backend rejects`
+  セクションと `/// ///` 二重プレフィックス、`dimension`/`length`/
+  `out-of-bounds` 語彙 — 全て解消。
+- **PR 3-b 完了**: CI の `check-public-error-docs.py` を repository-wide
+  ブロッキングに切替（--changed-from モードと base-SHA 解決ステップを削除）。
+  clippy に `-D clippy::missing_errors_doc -D clippy::missing_panics_doc` を
+  追加し、workspace --all-targets が green（StorageResult 4 件、
+  doc_lazy_continuation 172 件、useless_conversion/Ok-? 8 件を修正）。
+- 検証: nextest 2693+10 skip / hdf5 49 / doctests 840 / clippy 両 lint /
+  public-error-docs-ok / crate-boundary-ok — 全 green。
+- ブランチ: origin/main から 33 コミット。
+
+### 残り（PR 3 完了まで）
+1. **設計 step 2–6（公開 fn の typed-error 移行）**: tensorbackend/core →
+   treetci/quanticstci → treetn → quanticstransform/HDF5 → 残り全公開面。
+   anyhow::Result の公開 fn を typed enum に（trait 層は完了済み）。
+2. **レイヤリング（c..i）**: tenferro 直接ルート除去（例外タプル撤去）、
+   FullPivLuScalar 移動、core→tcicore 逆転、capi ID-only 文書化/削除 +
+   union-find private 化、per-element 比較ループ置換、graph traversal
+   正当化/重複解消/Euler-tour 再スキャン、work-log 規律。
+3. 最終: 各スライスの reviewer-gpt → 全検証 → PR（#566）→ CI → merge。
