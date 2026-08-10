@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::Arc;
 use tensor4all_core::index::Index;
-use tensor4all_core::TensorStorageError;
+use tensor4all_core::{TensorDynLenError, TensorStorageError};
 use tensor4all_itensorlike::TensorTrainError;
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
@@ -189,10 +189,12 @@ fn project_preserves_autodiff_metadata_and_backward_values() {
 
 #[test]
 fn project_error_mapping_retains_typed_storage_source() {
-    let source = TensorStorageError::Materialization {
+    let storage_source = TensorStorageError::Materialization {
         source: Arc::new(std::io::Error::other("forced projection storage failure")),
     };
-    let error = SubDomainTT::tensor_operation_error(anyhow::Error::new(source));
+    let error = SubDomainTT::tensor_operation_error(TensorDynLenError::Storage {
+        source: storage_source,
+    });
 
     match error {
         PartitionedTTError::TensorStorage { source } => {

@@ -10,7 +10,7 @@ use num_complex::Complex64;
 use std::any::TypeId;
 use std::env;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tensor4all_core::{
     common_inds, contract_pair, contract_pair_with_operand_options, hascommoninds, DynIndex,
@@ -1524,13 +1524,7 @@ impl TensorTrain {
                 left_dim,
                 physical_dim: total_size / boundary_size,
                 right_dim,
-                data: tensor
-                    .to_vec::<T>()
-                    .map_err(|err| TensorTrainError::TensorDynLen {
-                        source: TensorDynLenError::Materialization {
-                            source: Arc::new(err),
-                        },
-                    })?,
+                data: tensor.to_vec::<T>().map_err(TensorTrainError::from)?,
             });
         }
 

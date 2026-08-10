@@ -425,7 +425,7 @@ impl From<tensor4all_tensorbackend::EagerContextError> for TensorDynLenError {
 impl From<tensor4all_tensorbackend::BridgeError> for TensorDynLenError {
     fn from(source: tensor4all_tensorbackend::BridgeError) -> Self {
         Self::Materialization {
-            source: Arc::from(source.source.into_boxed_dyn_error()),
+            source: Arc::new(source),
         }
     }
 }

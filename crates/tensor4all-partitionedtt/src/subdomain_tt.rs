@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorStorageError};
+use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorDynLenError};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
@@ -229,10 +229,12 @@ impl SubDomainTT {
         TensorTrain::new(new_tensors).map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
-    fn tensor_operation_error(error: impl Into<anyhow::Error>) -> PartitionedTTError {
-        match error.into().downcast::<TensorStorageError>() {
-            Ok(source) => PartitionedTTError::TensorStorage { source },
-            Err(source) => PartitionedTTError::TensorConstruction { source },
+    fn tensor_operation_error(error: TensorDynLenError) -> PartitionedTTError {
+        match error {
+            TensorDynLenError::Storage { source } => PartitionedTTError::TensorStorage { source },
+            other => PartitionedTTError::TensorConstruction {
+                source: anyhow::Error::new(other),
+            },
         }
     }
 
