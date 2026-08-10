@@ -742,6 +742,9 @@ pub(crate) fn build_binary_einsum_ids(
 }
 
 /// Build a dense native tensor from column-major data.
+/// # Errors
+///
+/// Returns an error when the data length does not match the logical dimension product (a shape mismatch) or the backend conversion fails.
 pub fn dense_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_dims: &[usize],
@@ -750,6 +753,9 @@ pub fn dense_native_tensor_from_col_major<T: TensorElement>(
 }
 
 /// Build a dense native tensor whose logical values are diagonal.
+/// # Errors
+///
+/// Returns an error when the diagonal payload is incompatible with the logical rank (a dimension mismatch) or the backend conversion fails.
 pub fn diag_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_rank: usize,
@@ -758,6 +764,9 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
 }
 
 /// Convert storage to a dense native tensor.
+/// # Errors
+///
+/// Returns an error when the storage cannot be converted to a native tensor (a scalar-kind mismatch or backend failure).
 pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<NativeTensor> {
     if storage.is_c64() {
         dense_native_tensor_from_col_major(
@@ -780,6 +789,9 @@ pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Re
 ///
 /// Contiguous payloads are borrowed without copying. Non-contiguous payloads
 /// are materialized into an owned native tensor.
+/// # Errors
+///
+/// Returns an error when the storage payload cannot be read into a native buffer (a scalar-kind mismatch or backend failure).
 pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTensorReadInput<'_>> {
     if storage.is_f64() {
         if let Some(view) = storage
@@ -821,6 +833,9 @@ pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTens
 }
 
 /// Materialize a native tensor into dense storage.
+/// # Errors
+///
+/// Returns an error when the native tensor cannot be converted to storage (a scalar-kind mismatch or backend failure).
 pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage> {
     match tensor.dtype() {
         DType::F32 => Storage::from_dense_col_major(
@@ -887,6 +902,9 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
 }
 
 /// Materialize dense f64 values from a native tensor.
+/// # Errors
+///
+/// Returns an error when the native tensor is not f64-compatible (a dtype mismatch) or the materialization fails.
 pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Result<Vec<f64>> {
     match tensor.dtype() {
         DType::F32 => Ok(tensor
@@ -919,6 +937,9 @@ pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Res
 }
 
 /// Materialize dense Complex64 values from a native tensor.
+/// # Errors
+///
+/// Returns an error when the native tensor is not c64-compatible (a dtype mismatch) or the materialization fails.
 pub fn native_tensor_primal_to_dense_c64_col_major(
     tensor: &NativeTensor,
 ) -> Result<Vec<Complex64>> {
@@ -937,6 +958,9 @@ pub fn native_tensor_primal_to_dense_c64_col_major(
 }
 
 /// Materialize dense column-major values from a native tensor.
+/// # Errors
+///
+/// Returns an error when the native tensor cannot be materialized as a dense column-major buffer (a dtype mismatch or backend failure).
 pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
     tensor: &NativeTensor,
 ) -> Result<Vec<T>> {
@@ -944,6 +968,9 @@ pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
 }
 
 /// Extract the diagonal payload from a real native tensor.
+/// # Errors
+///
+/// Returns an error when the native tensor is not f64-diagonal-compatible (a dtype or shape mismatch) or the materialization fails.
 pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
     match tensor.dtype() {
         DType::F32 => {
@@ -968,6 +995,9 @@ pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64
 }
 
 /// Extract the diagonal payload from a complex native tensor.
+/// # Errors
+///
+/// Returns an error when the native tensor is not c64-diagonal-compatible (a dtype or shape mismatch) or the materialization fails.
 pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
     match tensor.dtype() {
         DType::C32 => {
@@ -982,6 +1012,9 @@ pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Com
 }
 
 /// Reshape a native tensor without changing its column-major linearization.
+/// # Errors
+///
+/// Returns an error when the native tensor cannot be reshaped to the requested dimensions (a shape mismatch) or the backend fails.
 pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
@@ -991,6 +1024,9 @@ pub fn reshape_col_major_native_tensor(
 }
 
 /// Compute a QR decomposition on a native tensor.
+/// # Errors
+///
+/// Returns an error when the QR factorization fails (a backend or non-convergence failure).
 pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
     let outputs = with_default_backend(|backend| backend.qr(tensor))
         .map_err(|e| anyhow!("native QR failed: {e}"))?;
@@ -1001,6 +1037,9 @@ pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTe
 }
 
 /// Compute an SVD on a native tensor.
+/// # Errors
+///
+/// Returns an error when the SVD factorization fails (a backend or non-convergence failure).
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
@@ -1014,6 +1053,9 @@ pub fn svd_native_tensor(
 }
 
 /// Sum all elements of a native tensor, returning a dynamic scalar.
+/// # Errors
+///
+/// Returns an error when the native reduction fails (a backend or dtype mismatch failure).
 pub fn sum_native_tensor(tensor: &NativeTensor) -> Result<AnyScalar> {
     let reduced = if tensor.shape().is_empty() {
         tensor.clone()
@@ -1034,6 +1076,9 @@ pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
 }
 
 /// Multiply a native tensor by a dynamic scalar.
+/// # Errors
+///
+/// Returns an error when the native scaling fails (a backend or dtype mismatch failure).
 pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<NativeTensor> {
     let target = common_dtype(&[tensor.dtype(), scalar.as_native().dtype()]);
     let tensor = convert_tensor(tensor, target)?;
@@ -1111,6 +1156,9 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
 }
 
 /// Compute `a * lhs + b * rhs`.
+/// # Errors
+///
+/// Returns an error when the native axpby fails (a shape or dtype mismatch, or a backend failure).
 pub fn axpby_native_tensor(
     lhs: &NativeTensor,
     a: &AnyScalar,
@@ -1426,6 +1474,9 @@ pub fn einsum_native_tensors(
 /// Backends may consume borrowed host views directly or materialize/upload them
 /// inside their execution session. Mixed dtypes are promoted by materializing
 /// only the operands that require conversion.
+/// # Errors
+///
+/// Returns an error when the native einsum fails (a shape or dtype mismatch, or a backend failure).
 pub fn einsum_native_tensor_reads(
     operands: &[(&NativeTensorReadInput<'_>, &[usize])],
     output_ids: &[usize],
@@ -1481,12 +1532,18 @@ pub fn einsum_native_tensor_reads(
 }
 
 /// Permute axes of a native tensor.
+/// # Errors
+///
+/// Returns an error when the native permutation fails (a shape or index mismatch, or a backend failure).
 pub fn permute_native_tensor(tensor: &NativeTensor, perm: &[usize]) -> Result<NativeTensor> {
     with_default_backend(|backend| tenferro::tensor::transpose(tensor, perm, backend))
         .map_err(|e| anyhow!("native permute failed: {e}"))
 }
 
 /// Contract two native tensors along matching axes.
+/// # Errors
+///
+/// Returns an error when the native contraction fails (a shape or index mismatch, or a backend failure).
 pub fn contract_native_tensor(
     lhs: &NativeTensor,
     axes_a: &[usize],
@@ -1506,11 +1563,17 @@ pub fn contract_native_tensor(
 }
 
 /// Compute the outer product of two native tensors.
+/// # Errors
+///
+/// Returns an error when the native outer product fails (a shared-index or shape mismatch, or a backend failure).
 pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Result<NativeTensor> {
     contract_native_tensor(lhs, &[], rhs, &[])
 }
 
 /// Conjugate a native tensor.
+/// # Errors
+///
+/// Returns an error when the native conjugation fails (a dtype mismatch or backend failure).
 pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
     match tensor.dtype() {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => Ok(tensor.clone()),
@@ -1536,6 +1599,9 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
 }
 
 /// Permute storage by round-tripping through native tensors.
+/// # Errors
+///
+/// Returns an error when the native storage permutation fails (a shape or index mismatch, or a backend failure).
 pub fn permute_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -1547,6 +1613,9 @@ pub fn permute_storage_native(
 }
 
 /// Contract storages via native tensors.
+/// # Errors
+///
+/// Returns an error when the native storage contraction fails (a shape or index mismatch, or a backend failure).
 pub fn contract_storage_native(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -1563,6 +1632,9 @@ pub fn contract_storage_native(
 }
 
 /// Outer-product storages via native tensors.
+/// # Errors
+///
+/// Returns an error when the native storage outer product fails (a shared-index or shape mismatch, or a backend failure).
 pub fn outer_product_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
@@ -1577,6 +1649,9 @@ pub fn outer_product_storage_native(
 }
 
 /// Scale storage by a scalar via native tensors.
+/// # Errors
+///
+/// Returns an error when the native storage scaling fails (a dtype mismatch or backend failure).
 pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -1588,6 +1663,9 @@ pub fn scale_storage_native(
 }
 
 /// Compute `a * lhs + b * rhs` over storages via native tensors.
+/// # Errors
+///
+/// Returns an error when the native storage axpby fails (a shape or dtype mismatch, or a backend failure).
 pub fn axpby_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
