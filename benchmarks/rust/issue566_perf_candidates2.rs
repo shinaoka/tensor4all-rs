@@ -149,7 +149,7 @@ fn main() {
         (err_b - err).abs() <= 1.0e-12 * err.abs().max(1.0),
         "batched error {err_b} differs from sequential {err}"
     );
-    std::hint::black_box((pivot_b, err_b));
+    std::hint::black_box((pivot_b.clone(), err_b));
 
     // Then a separate timed run.
     let t0 = Instant::now();
