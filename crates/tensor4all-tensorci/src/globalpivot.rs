@@ -7,7 +7,7 @@
 //! optimization.
 
 use rand::Rng;
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tcicore::{MultiIndex, Scalar};
 
 /// Snapshot of the current TCI state, passed to [`GlobalPivotFinder`].
@@ -15,7 +15,7 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
     /// Local dimensions of each tensor index.
     pub local_dims: Vec<usize>,
     /// Current tensor train approximation.
-    pub current_tt: TensorTrain<T>,
+    pub current_tt: SimpleTensorTrain<T>,
     /// Maximum absolute function value encountered so far.
     pub max_sample_value: f64,
     /// Left index sets (I) for each site.
@@ -40,10 +40,10 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// ```
 /// use tensor4all_tensorci::{DefaultGlobalPivotFinder, GlobalPivotFinder,
 ///     GlobalPivotSearchInput};
-/// use tensor4all_simplett::TensorTrain;
+/// use tensor4all_simplett::SimpleTensorTrain;
 ///
 /// // Constant-zero TT on a 4×4 grid
-/// let tt = TensorTrain::<f64>::constant(&[4, 4], 0.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[4, 4], 0.0);
 ///
 /// let input = GlobalPivotSearchInput {
 ///     local_dims: vec![4, 4],
@@ -234,7 +234,7 @@ mod tests {
             tensor4all_simplett::tensor3_zeros(1, 4, 1),
             tensor4all_simplett::tensor3_zeros(1, 4, 1),
         ];
-        let tt = TensorTrain::new(tensors).unwrap();
+        let tt = SimpleTensorTrain::new(tensors).unwrap();
 
         let input = GlobalPivotSearchInput {
             local_dims: local_dims.clone(),
@@ -285,7 +285,7 @@ mod tests {
             tensor4all_simplett::tensor3_zeros(1, 3, 1),
             tensor4all_simplett::tensor3_zeros(1, 3, 1),
         ];
-        let tt = TensorTrain::new(tensors).unwrap();
+        let tt = SimpleTensorTrain::new(tensors).unwrap();
 
         let input = GlobalPivotSearchInput {
             local_dims: vec![3, 3],

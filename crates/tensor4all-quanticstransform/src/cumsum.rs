@@ -6,7 +6,7 @@ use crate::error::QuanticsTransformError;
 use anyhow::{Context, Result};
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, SimpleTensorTrain, Tensor3Ops};
 
 use crate::common::{tensortrain_to_linear_operator, try_vec_with_capacity, QuanticsOperator};
 
@@ -127,7 +127,7 @@ pub fn triangle_operator(
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
-/// Create the cumulative sum MPO as a TensorTrain.
+/// Create the cumulative sum MPO as a SimpleTensorTrain.
 ///
 /// The cumulative sum is implemented as an upper triangular matrix.
 /// The MPO tracks whether a comparison has been made:
@@ -139,7 +139,7 @@ pub fn triangle_operator(
 /// - t[0, 1, 1, 0] = 1 (y > x at this position)
 /// - t[1, 1, *, *] = 1 (comparison already made)
 #[allow(clippy::needless_range_loop)]
-fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
+fn cumsum_mpo(r: usize) -> Result<SimpleTensorTrain<Complex64>> {
     if r < 2 {
         return Err(anyhow::anyhow!(
             "Number of sites must be at least 2, got {r}"
@@ -208,16 +208,16 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
         }
     }
 
-    TensorTrain::new(tensors)
+    SimpleTensorTrain::new(tensors)
         .map_err(anyhow::Error::new)
         .context("Failed to create cumsum MPO")
 }
 
-/// Create a triangular matrix MPO as a TensorTrain.
+/// Create a triangular matrix MPO as a SimpleTensorTrain.
 ///
 /// This is a generalization of `cumsum_mpo` that supports both upper and lower triangles.
 #[allow(clippy::needless_range_loop)]
-fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex64>> {
+fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<SimpleTensorTrain<Complex64>> {
     if r < 2 {
         return Err(anyhow::anyhow!(
             "Number of sites must be at least 2, got {r}"
@@ -283,7 +283,8 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex6
         }
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create triangle MPO: {}", e))
+    SimpleTensorTrain::new(tensors)
+        .map_err(|e| anyhow::anyhow!("Failed to create triangle MPO: {}", e))
 }
 
 /// Create the single-site tensor for upper triangular matrix.

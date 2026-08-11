@@ -1,10 +1,10 @@
 use super::*;
-use crate::tensortrain::TensorTrain;
+use crate::tensortrain::SimpleTensorTrain;
 use crate::types::tensor3_zeros;
 
 #[test]
 fn test_ttcache_evaluate() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let mut cache = TTCache::new(&tt);
 
     // Evaluate at various indices
@@ -30,7 +30,7 @@ fn test_ttcache_caching() {
         }
     }
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     let mut cache = TTCache::new(&tt);
 
     // First evaluation
@@ -46,7 +46,7 @@ fn test_ttcache_caching() {
 
 #[test]
 fn test_ttcache_clear() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
 
     // Populate cache
@@ -61,7 +61,7 @@ fn test_ttcache_clear() {
 
 #[test]
 fn test_ttcache_evaluate_many() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let mut cache = TTCache::new(&tt);
 
     let indices = vec![vec![0, 0, 0], vec![0, 1, 0], vec![1, 2, 1], vec![0, 0, 1]];
@@ -100,7 +100,7 @@ fn test_ttcache_evaluate_many_matches_single() {
         }
     }
 
-    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
     let mut cache = TTCache::new(&tt);
 
     // Generate all indices
@@ -131,7 +131,7 @@ fn test_ttcache_evaluate_many_matches_single() {
 
 #[test]
 fn test_ttcache_evaluate_many_cache_efficiency() {
-    let tt = TensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
     let mut cache = TTCache::new(&tt);
 
     // Indices with shared prefixes/suffixes
@@ -159,7 +159,7 @@ fn test_ttcache_evaluate_many_cache_efficiency() {
 
 #[test]
 fn test_ttcache_evaluate_many_empty() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
 
     let results = cache.evaluate_many(&[], None).unwrap();
@@ -168,7 +168,7 @@ fn test_ttcache_evaluate_many_empty() {
 
 #[test]
 fn test_ttcache_evaluate_wrong_length() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
     // Too few indices
     assert!(cache.evaluate(&[0]).is_err());
@@ -178,7 +178,7 @@ fn test_ttcache_evaluate_wrong_length() {
 
 #[test]
 fn test_ttcache_partial_environment_wrong_length_errors() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
 
     assert!(cache.evaluate_left(&[0, 0, 0]).is_err());
@@ -187,7 +187,7 @@ fn test_ttcache_partial_environment_wrong_length_errors() {
 
 #[test]
 fn test_ttcache_evaluate_many_invalid_split() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
     let indices = vec![vec![0, 0]];
     // split=0 is invalid
@@ -198,7 +198,7 @@ fn test_ttcache_evaluate_many_invalid_split() {
 
 #[test]
 fn test_ttcache_evaluate_many_wrong_index_length_errors() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
 
     assert!(cache.evaluate_many(&[vec![0]], Some(1)).is_err());
@@ -207,7 +207,7 @@ fn test_ttcache_evaluate_many_wrong_index_length_errors() {
 
 #[test]
 fn test_ttcache_evaluate_many_with_explicit_split() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let mut cache = TTCache::new(&tt);
     let indices = vec![vec![0, 0, 0], vec![1, 2, 1]];
     let results = cache.evaluate_many(&indices, Some(1)).unwrap();
@@ -219,21 +219,21 @@ fn test_ttcache_evaluate_many_with_explicit_split() {
 
 #[test]
 fn test_with_site_dims_mismatch_length() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     // Wrong number of site_dims entries
     assert!(TTCache::with_site_dims(&tt, vec![vec![2]]).is_err());
 }
 
 #[test]
 fn test_with_site_dims_mismatch_product() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     // Product doesn't match site dim
     assert!(TTCache::with_site_dims(&tt, vec![vec![3], vec![3]]).is_err());
 }
 
 #[test]
 fn find_split_heuristic() {
-    let tt = TensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
     let cache = TTCache::new(&tt);
 
     // Indices where split=1 is optimal:

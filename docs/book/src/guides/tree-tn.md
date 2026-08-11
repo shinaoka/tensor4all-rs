@@ -197,10 +197,10 @@ variational (fit) contraction, which avoids the exponential cost of naive full c
 
 ## SimpleTT vs TreeTN
 
-`tensor4all-simplett` provides a simpler `TensorTrain` type optimized for linear chains.
+`tensor4all-simplett` provides a simpler `SimpleTensorTrain` type optimized for linear chains.
 Choose based on your needs:
 
-| Feature | `TensorTrain` (simplett) | `TreeTN` (treetn) |
+| Feature | `SimpleTensorTrain` (simplett) | `TreeTN` (treetn) |
 |---------|--------------------------|-------------------|
 | Topology | Linear chain only | Any tree |
 | Storage | `Vec<Tensor3>` (3-leg tensors) | Named graph of arbitrary-rank tensors |
@@ -208,7 +208,7 @@ Choose based on your needs:
 | Use case | MPS, simple 1D | Branching geometries, general TTN |
 
 **Rule of thumb**: If your tensor network is a linear chain and you want maximum performance,
-use `TensorTrain`. If you need branching structure, named nodes, or plan to compose multiple
+use `SimpleTensorTrain`. If you need branching structure, named nodes, or plan to compose multiple
 operators on a tree, use `TreeTN`. You can convert between them using
 `tensor_train_to_treetn` from the `simplett_bridge` module.
 

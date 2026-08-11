@@ -7,8 +7,8 @@ use crate::types::{tensor3_zeros, Tensor3};
 
 #[test]
 fn test_dot_constant() {
-    let tt1 = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-    let tt2 = TensorTrain::<f64>::constant(&[2, 3], 3.0);
+    let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+    let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 3.0);
 
     let result = tt1.dot(&tt2).unwrap();
 
@@ -33,7 +33,7 @@ fn test_dot_different_tensors() {
         }
     }
 
-    let tt_a = TensorTrain::new(vec![t0_a.clone(), t1_a.clone()]).unwrap();
+    let tt_a = SimpleTensorTrain::new(vec![t0_a.clone(), t1_a.clone()]).unwrap();
 
     let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 3, 1);
     for s in 0..3 {
@@ -45,7 +45,7 @@ fn test_dot_different_tensors() {
         t1_b.set3(0, s, 0, (s + 2) as f64 * 0.3);
     }
 
-    let tt_b = TensorTrain::new(vec![t0_b, t1_b]).unwrap();
+    let tt_b = SimpleTensorTrain::new(vec![t0_b, t1_b]).unwrap();
 
     let dot_result = tt_a.dot(&tt_b).unwrap();
 
@@ -69,8 +69,8 @@ fn test_dot_different_tensors() {
 
 #[test]
 fn test_dot_length_mismatch() {
-    let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    let tt2 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let err = tt1.dot(&tt2).unwrap_err();
     assert!(err.to_string().contains("different lengths"));
     assert!(err.to_string().contains("2 vs 3"));
@@ -78,8 +78,8 @@ fn test_dot_length_mismatch() {
 
 #[test]
 fn test_dot_site_dim_mismatch() {
-    let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    let tt2 = TensorTrain::<f64>::constant(&[2, 4], 1.0);
+    let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 4], 1.0);
     let err = tt1.dot(&tt2).unwrap_err();
     assert!(err
         .to_string()
@@ -103,8 +103,8 @@ fn test_dot_site_dim_mismatch_middle() {
         t1_b.set3(0, s, 0, 1.0);
     }
 
-    let tt_a = TensorTrain::new(vec![t0.clone(), t1_a]).unwrap();
-    let tt_b = TensorTrain::new(vec![t0, t1_b]).unwrap();
+    let tt_a = SimpleTensorTrain::new(vec![t0.clone(), t1_a]).unwrap();
+    let tt_b = SimpleTensorTrain::new(vec![t0, t1_b]).unwrap();
     let err = tt_a.dot(&tt_b).unwrap_err();
     assert!(err
         .to_string()
@@ -114,15 +114,15 @@ fn test_dot_site_dim_mismatch_middle() {
 
 #[test]
 fn test_dot_empty() {
-    let tt1 = TensorTrain::<f64>::from_tensors_unchecked(Vec::new());
-    let tt2 = TensorTrain::<f64>::from_tensors_unchecked(Vec::new());
+    let tt1 = SimpleTensorTrain::<f64>::from_tensors_unchecked(Vec::new());
+    let tt2 = SimpleTensorTrain::<f64>::from_tensors_unchecked(Vec::new());
     let result = tt1.dot(&tt2).unwrap();
     assert!((result - 0.0).abs() < 1e-15);
 }
 
 fn test_dot_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + EinsumScalar>() {
-    let tt1 = TensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
-    let tt2 = TensorTrain::<T>::constant(&[2, 3], T::from_f64(3.0));
+    let tt1 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
+    let tt2 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(3.0));
 
     let result = tt1.dot(&tt2).unwrap();
     // Each element: 2*3 = 6, sum over 2*3=6 elements = 36
@@ -144,8 +144,8 @@ fn test_dot_c64() {
 
 #[test]
 fn test_dot_convenience_function() {
-    let tt1 = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-    let tt2 = TensorTrain::<f64>::constant(&[2, 3], 3.0);
+    let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+    let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 3.0);
     let result = dot(&tt1, &tt2).unwrap();
     assert!((result - 36.0).abs() < 1e-10);
 }
@@ -169,8 +169,8 @@ fn test_contraction_helper_error_formats_context() {
 #[test]
 fn test_dot_three_sites() {
     // Test dot product with 3 sites to exercise the inner loop more fully
-    let tt1 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
-    let tt2 = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let result = tt1.dot(&tt2).unwrap();
     // Each element: 1*2 = 2, total elements = 2*3*2 = 12, sum = 24
     assert!((result - 24.0).abs() < 1e-10);

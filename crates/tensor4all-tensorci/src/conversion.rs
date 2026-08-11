@@ -2,7 +2,7 @@
 
 use crate::error::{Result, TCIError};
 use crate::TensorCI2;
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
 use tensor4all_tcicore::{
     matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex, RrLUOptions, Scalar,
 };
@@ -64,7 +64,7 @@ impl Default for TensorCI2FromTensorTrainOptions {
 }
 
 pub(crate) fn tensorci2_from_tensor_train<T>(
-    mut tt: TensorTrain<T>,
+    mut tt: SimpleTensorTrain<T>,
     options: TensorCI2FromTensorTrainOptions,
 ) -> Result<TensorCI2<T>>
 where
@@ -140,7 +140,7 @@ fn validate_options(options: &TensorCI2FromTensorTrainOptions) -> Result<()> {
 }
 
 fn sweep1site_get_indices<T>(
-    tt: &mut TensorTrain<T>,
+    tt: &mut SimpleTensorTrain<T>,
     forward: bool,
     spectator_indices: Option<&mut [Vec<MultiIndex>]>,
     options: &TensorCI2FromTensorTrainOptions,

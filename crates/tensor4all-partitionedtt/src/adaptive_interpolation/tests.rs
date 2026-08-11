@@ -259,13 +259,14 @@ fn projected_middle_sites_use_compact_structured_storage() {
     let sites = binary_sites(3);
     let active = vec![0, 2];
     let projector = Projector::from_pairs([(sites[1].clone(), 1)]);
-    let active_tt = tensor4all_simplett::TensorTrain::new(vec![
+    let active_tt = tensor4all_simplett::SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![5.0, 6.0, 7.0, 8.0], 2, 2, 1).unwrap(),
     ])
     .unwrap();
 
-    let tt = embed_active_tt(active_tt, &sites, &active, &projector).unwrap();
+    let (active_tree, _) = tensor_train_to_treetn(&active_tt).unwrap();
+    let tt = embed_active_tt::<f64>(active_tree, &sites, &active, &projector).unwrap();
     let middle = tt.tensor(1).unwrap();
 
     assert_eq!(

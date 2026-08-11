@@ -8,7 +8,7 @@ use crate::einsum_helper::{
     einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
 };
 use crate::error::{Result, TensorTrainError};
-use crate::tensortrain::TensorTrain;
+use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
 use tensor4all_tcicore::Scalar;
@@ -51,7 +51,7 @@ impl Default for ContractionOptions {
     }
 }
 
-impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
+impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
     /// Inner product (dot product) of two tensor trains.
     ///
     /// Computes `sum_i self[i] * other[i]` by contracting the site tensors
@@ -66,10 +66,10 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    /// let b = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     ///
     /// // dot = sum_ij a[i,j]*b[i,j] = 1*2 * 2*3 = 12
     /// let d = a.dot(&b).unwrap();
@@ -161,7 +161,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
     }
 }
 
-/// Free-function wrapper for [`TensorTrain::dot`].
+/// Free-function wrapper for [`SimpleTensorTrain::dot`].
 ///
 /// # Errors
 ///
@@ -171,17 +171,17 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, contraction::dot};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, contraction::dot};
 ///
-/// let a = TensorTrain::<f64>::constant(&[2, 3], 3.0);
-/// let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+/// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 3.0);
+/// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
 /// let d = dot(&a, &b).unwrap();
 /// // 3*4 * 2*3 = 72
 /// assert!((d - 72.0).abs() < 1e-10);
 /// ```
 pub fn dot<T: TTScalar + Scalar + Default + EinsumScalar>(
-    a: &TensorTrain<T>,
-    b: &TensorTrain<T>,
+    a: &SimpleTensorTrain<T>,
+    b: &SimpleTensorTrain<T>,
 ) -> Result<T> {
     a.dot(b)
 }

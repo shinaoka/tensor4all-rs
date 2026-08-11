@@ -8,7 +8,9 @@ use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{
+    types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
+};
 
 use crate::common::{
     checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
@@ -105,7 +107,7 @@ pub fn shift_operator_multivar(
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
-/// Create the shift MPO as a TensorTrain.
+/// Create the shift MPO as a SimpleTensorTrain.
 ///
 /// The shift operation computes x + offset using binary addition with carry propagation.
 /// Uses big-endian convention: site n contains bit 2^(R-1-n) (MSB at site 0).
@@ -121,7 +123,7 @@ pub(crate) fn shift_mpo(
     r: usize,
     offset: i64,
     bc: BoundaryCondition,
-) -> Result<TensorTrain<Complex64>> {
+) -> Result<SimpleTensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
@@ -166,7 +168,7 @@ pub(crate) fn shift_mpo(
     // Carry states: index 0 = carry 0, index 1 = carry 1
     // For addition, carry can be 0 or 1.
     //
-    // In big-endian with TensorTrain (left-to-right contraction):
+    // In big-endian with SimpleTensorTrain (left-to-right contraction):
     // - Carry flows right-to-left (LSB at R-1 to MSB at 0)
     // - t[left, s, right] where left = carry_out (going left), right = carry_in (from right)
 
@@ -258,7 +260,7 @@ pub(crate) fn shift_mpo(
         }
     }
 
-    let mut mpo = TensorTrain::new(tensors)
+    let mut mpo = SimpleTensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create shift MPO: {}", e))?;
 
     // Apply overall boundary condition factor for number of full cycles
@@ -288,7 +290,9 @@ pub(crate) fn shift_mpo(
     Ok(mpo)
 }
 
-fn transpose_binary_operator_mpo(mpo: &TensorTrain<Complex64>) -> Result<TensorTrain<Complex64>> {
+fn transpose_binary_operator_mpo(
+    mpo: &SimpleTensorTrain<Complex64>,
+) -> Result<SimpleTensorTrain<Complex64>> {
     let mut transposed = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "transposed shift MPO site list",
         mpo.len(),
@@ -311,7 +315,7 @@ fn transpose_binary_operator_mpo(mpo: &TensorTrain<Complex64>) -> Result<TensorT
         transposed.push(new_tensor);
     }
 
-    TensorTrain::new(transposed)
+    SimpleTensorTrain::new(transposed)
         .map_err(|e| anyhow::anyhow!("Failed to transpose binary shift MPO: {}", e))
 }
 

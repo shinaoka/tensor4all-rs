@@ -6,7 +6,7 @@
 //! [`floating_zone`] optimization.
 
 use rand::Rng;
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops};
 use tensor4all_tcicore::{MultiIndex, Scalar};
 
 /// Estimate the true interpolation error by searching for worst-case indices.
@@ -22,10 +22,10 @@ use tensor4all_tcicore::{MultiIndex, Scalar};
 ///
 /// ```
 /// use tensor4all_tensorci::estimate_true_error;
-/// use tensor4all_simplett::TensorTrain;
+/// use tensor4all_simplett::SimpleTensorTrain;
 ///
 /// // Build a constant TT (value = 1.0) on a 4×4 grid
-/// let tt = TensorTrain::<f64>::constant(&[4, 4], 1.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[4, 4], 1.0);
 ///
 /// // Exact function differs from the constant
 /// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
@@ -59,7 +59,7 @@ use tensor4all_tcicore::{MultiIndex, Scalar};
 /// `Vec<(MultiIndex, f64)>` sorted by descending error, with duplicate
 /// pivots removed.
 pub fn estimate_true_error<T, F>(
-    tt: &TensorTrain<T>,
+    tt: &SimpleTensorTrain<T>,
     f: &F,
     nsearch: usize,
     initial_points: Option<Vec<MultiIndex>>,
@@ -111,10 +111,10 @@ where
 ///
 /// ```
 /// use tensor4all_tensorci::floating_zone;
-/// use tensor4all_simplett::TensorTrain;
+/// use tensor4all_simplett::SimpleTensorTrain;
 ///
 /// // Constant TT (value = 0.0) on a 4×4 grid
-/// let tt = TensorTrain::<f64>::constant(&[4, 4], 0.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[4, 4], 0.0);
 ///
 /// // f(i,j) = i * j, so TT error = |i*j|
 /// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
@@ -142,7 +142,7 @@ where
 ///
 /// `(pivot, max_error)` -- the best multi-index found and its error.
 pub fn floating_zone<T, F>(
-    tt: &TensorTrain<T>,
+    tt: &SimpleTensorTrain<T>,
     f: &F,
     local_dims: &[usize],
     init_p: Option<&MultiIndex>,
@@ -214,7 +214,7 @@ mod tests {
             t0.set3(0, s, 0, 1.0);
             t1.set3(0, s, 0, 1.0);
         }
-        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+        let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
         // Verify TT evaluates to 1.0 everywhere
         assert!((tt.evaluate(&[0, 0]).unwrap() - 1.0).abs() < 1e-14);
@@ -244,7 +244,7 @@ mod tests {
         // Build a constant TT (all 0)
         let t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
         let t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
-        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+        let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
         let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
         let mut rng = rand::rng();

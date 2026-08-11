@@ -12,7 +12,7 @@ use std::f64::consts::PI;
 use tensor4all_simplett::mpo::{tensor4_from_data, Tensor4};
 use tensor4all_simplett::{
     compression::{CompressionMethod, CompressionOptions},
-    tensor3_from_data, Tensor3Ops, TensorTrain,
+    tensor3_from_data, SimpleTensorTrain, Tensor3Ops,
 };
 
 use crate::common::{
@@ -143,7 +143,7 @@ impl FourierOptions {
 /// ```
 #[derive(Clone)]
 pub struct FTCore {
-    forward_mpo: TensorTrain<Complex64>,
+    forward_mpo: SimpleTensorTrain<Complex64>,
     r: usize,
     options: FourierOptions,
 }
@@ -257,8 +257,11 @@ pub fn quantics_fourier_operator(
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
-/// Create the QFT MPO as a TensorTrain using Chen & Lindsey construction.
-fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrain<Complex64>> {
+/// Create the QFT MPO as a SimpleTensorTrain using Chen & Lindsey construction.
+fn quantics_fourier_mpo(
+    r: usize,
+    options: &FourierOptions,
+) -> Result<SimpleTensorTrain<Complex64>> {
     if r < 2 {
         return Err(anyhow::anyhow!(
             "Number of sites must be at least 2, got {r}"
@@ -334,7 +337,7 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         tensors.push(t);
     }
 
-    let mut tt = TensorTrain::new(tensors).map_err(|e| {
+    let mut tt = SimpleTensorTrain::new(tensors).map_err(|e| {
         QuanticsTransformError::from(anyhow::Error::new(e).context("Failed to create Fourier MPO"))
     })?;
 

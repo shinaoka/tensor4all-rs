@@ -9,7 +9,7 @@ use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivo
 use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
 use tensor4all_tcicore::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex,
     RrLUOptions, Scalar,
@@ -316,7 +316,7 @@ pub enum Sweep2Strategy {
 /// Holds the current index sets (I, J), site tensors, and error statistics
 /// produced by [`crossinterpolate2`]. After interpolation, call
 /// [`to_tensor_train`](Self::to_tensor_train) to extract the resulting
-/// [`TensorTrain`].
+/// [`SimpleTensorTrain`].
 ///
 /// # Key methods
 ///
@@ -444,10 +444,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+    /// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
     /// use tensor4all_tensorci::{TensorCI2, TensorCI2FromTensorTrainOptions};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 2.5);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.5);
     /// let tci = TensorCI2::from_tensor_train(
     ///     tt,
     ///     TensorCI2FromTensorTrainOptions::default(),
@@ -459,7 +459,7 @@ where
     /// assert_eq!(tci.link_dims(), vec![1]);
     /// ```
     pub fn from_tensor_train(
-        tt: TensorTrain<T>,
+        tt: SimpleTensorTrain<T>,
         options: crate::conversion::TensorCI2FromTensorTrainOptions,
     ) -> Result<Self>
     where
@@ -623,15 +623,15 @@ where
         &self.site_tensors[p]
     }
 
-    /// Convert to TensorTrain
+    /// Convert to SimpleTensorTrain
     /// # Errors
     ///
     /// Returns an error when the conversion fails (a shape or index mismatch, or
     /// /// a backend failure).
     ///
-    pub fn to_tensor_train(&self) -> Result<TensorTrain<T>> {
+    pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
         let tensors = self.site_tensors.clone();
-        TensorTrain::new(tensors).map_err(TCIError::TensorTrainError)
+        SimpleTensorTrain::new(tensors).map_err(TCIError::TensorTrainError)
     }
 
     /// Add global pivots to the TCI

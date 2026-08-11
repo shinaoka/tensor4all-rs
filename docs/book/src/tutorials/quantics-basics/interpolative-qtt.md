@@ -10,7 +10,7 @@ Runnable source: [`docs/tutorial-code/src/bin/interpolative_qtt.rs`](../../../..
 ## Key API Pieces
 
 Use `interpolate_single_scale` for a smooth one-dimensional function on one
-interval. The result is a binary `TensorTrain`, so the site index `[0, 0, ...]`
+interval. The result is a binary `SimpleTensorTrain`, so the site index `[0, 0, ...]`
 evaluates the left endpoint of the sampled interval.
 
 ```rust

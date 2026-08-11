@@ -39,7 +39,7 @@ layer used by language bindings.
 | Crate | Description |
 |-------|-------------|
 | **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, and contraction. |
-| **itensorlike** | ITensors.jl-inspired `TensorTrain` with orthogonality tracking and multiple canonical forms. Useful when compatibility with the ITensors.jl mental model is important. |
+| **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. Useful when compatibility with the ITensors.jl mental model is important. |
 | **simplett** | Lightweight tensor train for numerical computation. The go-to crate for creating, evaluating, and compressing tensor trains without extra overhead. |
 | **partitionedtt** | Partitioned tensor trains for subdomain decomposition. Builds on `simplett`. |
 | **treetci** | Tree TCI: cross interpolation on tree-structured tensor networks. |

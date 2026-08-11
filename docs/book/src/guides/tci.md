@@ -59,7 +59,7 @@ The most important parameters:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `tci` | `TensorCI2<T>` | Completed TCI object; call `.to_tensor_train()` to get a `TensorTrain`. |
+| `tci` | `TensorCI2<T>` | Completed TCI object; call `.to_tensor_train()` to get a `SimpleTensorTrain`. |
 | `ranks` | `Vec<usize>` | Bond dimensions after each sweep. |
 | `errors` | `Vec<f64>` | Error estimate after each sweep. |
 | `termination` | `TCI2Termination` | Whether the full criterion converged, the rank cap was reached, or iterations were exhausted. |

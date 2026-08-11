@@ -4,7 +4,7 @@ use crate::{AciError, AciOptions, Result};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_simplett::{
-    tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
+    tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, Tensor3, Tensor3Ops,
 };
 
 // Protective internal allocation guard for generated or supplied guesses; this
@@ -13,9 +13,9 @@ pub(crate) const MAX_INITIAL_GUESS_CORE_ENTRIES: usize = 10_000_000;
 pub(crate) const MAX_INITIAL_GUESS_TOTAL_ENTRIES: usize = 10_000_000;
 
 pub(crate) fn initial_guess<T: AciScalar>(
-    inputs: &[TensorTrain<T>],
+    inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
-) -> Result<TensorTrain<T>> {
+) -> Result<SimpleTensorTrain<T>> {
     let site_dims = validate_inputs(inputs)?;
     validate_options(options)?;
 
@@ -35,11 +35,11 @@ pub(crate) fn initial_guess<T: AciScalar>(
         cores.push(random_core(left_dim, site_dim, right_dim, &mut rng)?);
     }
 
-    Ok(TensorTrain::new(cores)?)
+    Ok(SimpleTensorTrain::new(cores)?)
 }
 
 fn validate_existing_initial_guess<T: AciScalar>(
-    guess: &TensorTrain<T>,
+    guess: &SimpleTensorTrain<T>,
     site_dims: &[usize],
     max_bond_dim: usize,
 ) -> Result<()> {
@@ -95,7 +95,7 @@ fn initial_guess_core_dims(site_dims: &[usize], link_dims: &[usize]) -> Vec<(usi
 }
 
 fn default_link_dims<T: AciScalar>(
-    inputs: &[TensorTrain<T>],
+    inputs: &[SimpleTensorTrain<T>],
     site_dims: &[usize],
     max_bond_dim: usize,
 ) -> Result<Vec<usize>> {
@@ -189,7 +189,7 @@ pub(crate) fn initial_guess_total_entry_count(
 }
 
 pub(crate) fn initial_guess_existing_entry_count<T: AciScalar>(
-    guess: &TensorTrain<T>,
+    guess: &SimpleTensorTrain<T>,
 ) -> Result<usize> {
     let mut total = 0usize;
     for core in guess.site_tensors() {

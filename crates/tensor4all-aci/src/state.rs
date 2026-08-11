@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use crate::scalar::AciScalar;
 use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result};
 use tensor4all_simplett::{
-    tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
+    tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, Tensor3, Tensor3Ops,
 };
 use tensor4all_tcicore::{
     matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
@@ -21,8 +21,8 @@ fn frame_batching_enabled() -> bool {
 }
 
 pub(crate) struct ElementwiseProblem<T: AciScalar> {
-    pub(crate) inputs: Vec<TensorTrain<T>>,
-    pub(crate) solution: TensorTrain<T>,
+    pub(crate) inputs: Vec<SimpleTensorTrain<T>>,
+    pub(crate) solution: SimpleTensorTrain<T>,
     input_core_matrices: Vec<Vec<InputCoreMatrices<T>>>,
     pub(crate) left_frames: Vec<Vec<Option<Matrix<T>>>>,
     pub(crate) right_frames: Vec<Vec<Option<Matrix<T>>>>,
@@ -55,7 +55,7 @@ impl<T: AciScalar> InputCoreMatrices<T> {
 }
 
 impl<T: AciScalar> ElementwiseProblem<T> {
-    pub(crate) fn new(inputs: Vec<TensorTrain<T>>, options: AciOptions<T>) -> Result<Self> {
+    pub(crate) fn new(inputs: Vec<SimpleTensorTrain<T>>, options: AciOptions<T>) -> Result<Self> {
         let solution = initial_guess(&inputs, &options)?;
         let n = solution.len();
         let n_inputs = inputs.len();
@@ -687,7 +687,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             self.update_right_frames(site, &col_indices)?;
         }
 
-        self.solution = TensorTrain::new(solution_cores)?;
+        self.solution = SimpleTensorTrain::new(solution_cores)?;
         Ok(())
     }
 

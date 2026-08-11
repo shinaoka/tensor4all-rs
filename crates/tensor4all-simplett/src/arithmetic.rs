@@ -1,15 +1,15 @@
 //! Arithmetic operations for tensor trains
 
 use crate::error::Result;
-use crate::tensortrain::TensorTrain;
+use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3Ops};
 
-impl<T: TTScalar> TensorTrain<T> {
+impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Add two tensor trains element-wise: `result[i] = self[i] + other[i]`.
     ///
     /// The result has bond dimension equal to the **sum** of the input bond
-    /// dimensions. Call [`compress`](crate::TensorTrain::compress) afterward
+    /// dimensions. Call [`compress`](crate::SimpleTensorTrain::compress) afterward
     /// to reduce the bond dimension.
     ///
     /// # Errors
@@ -20,10 +20,10 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    /// let b = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     /// let c = a.add(&b).unwrap();
     ///
     /// // Every entry = 1 + 2 = 3
@@ -136,7 +136,7 @@ impl<T: TTScalar> TensorTrain<T> {
             }
         }
 
-        Ok(TensorTrain::from_tensors_unchecked(tensors))
+        Ok(SimpleTensorTrain::from_tensors_unchecked(tensors))
     }
 
     /// Subtract element-wise: `result[i] = self[i] - other[i]`.
@@ -151,10 +151,10 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let a = TensorTrain::<f64>::constant(&[2, 3], 5.0);
-    /// let b = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 5.0);
+    /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     /// let c = a.sub(&b).unwrap();
     /// assert!((c.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
     /// ```
@@ -168,9 +168,9 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 7.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 7.0);
     /// let neg = tt.negate();
     /// assert!((neg.evaluate(&[0, 0]).unwrap() + 7.0).abs() < 1e-12);
     /// ```
@@ -179,7 +179,7 @@ impl<T: TTScalar> TensorTrain<T> {
     }
 }
 
-impl<T: TTScalar> std::ops::Add for TensorTrain<T> {
+impl<T: TTScalar> std::ops::Add for SimpleTensorTrain<T> {
     type Output = Result<Self>;
 
     /// # Errors
@@ -188,12 +188,12 @@ impl<T: TTScalar> std::ops::Add for TensorTrain<T> {
     /// /// a backend failure).
     ///
     fn add(self, other: Self) -> Self::Output {
-        TensorTrain::add(&self, &other)
+        SimpleTensorTrain::add(&self, &other)
     }
 }
 
-impl<T: TTScalar> std::ops::Add for &TensorTrain<T> {
-    type Output = Result<TensorTrain<T>>;
+impl<T: TTScalar> std::ops::Add for &SimpleTensorTrain<T> {
+    type Output = Result<SimpleTensorTrain<T>>;
 
     /// # Errors
     ///
@@ -201,11 +201,11 @@ impl<T: TTScalar> std::ops::Add for &TensorTrain<T> {
     /// /// a backend failure).
     ///
     fn add(self, other: Self) -> Self::Output {
-        TensorTrain::add(self, other)
+        SimpleTensorTrain::add(self, other)
     }
 }
 
-impl<T: TTScalar> std::ops::Sub for TensorTrain<T> {
+impl<T: TTScalar> std::ops::Sub for SimpleTensorTrain<T> {
     type Output = Result<Self>;
 
     /// # Errors
@@ -214,12 +214,12 @@ impl<T: TTScalar> std::ops::Sub for TensorTrain<T> {
     /// /// a backend failure).
     ///
     fn sub(self, other: Self) -> Self::Output {
-        TensorTrain::sub(&self, &other)
+        SimpleTensorTrain::sub(&self, &other)
     }
 }
 
-impl<T: TTScalar> std::ops::Sub for &TensorTrain<T> {
-    type Output = Result<TensorTrain<T>>;
+impl<T: TTScalar> std::ops::Sub for &SimpleTensorTrain<T> {
+    type Output = Result<SimpleTensorTrain<T>>;
 
     /// # Errors
     ///
@@ -227,11 +227,11 @@ impl<T: TTScalar> std::ops::Sub for &TensorTrain<T> {
     /// /// a backend failure).
     ///
     fn sub(self, other: Self) -> Self::Output {
-        TensorTrain::sub(self, other)
+        SimpleTensorTrain::sub(self, other)
     }
 }
 
-impl<T: TTScalar> std::ops::Neg for TensorTrain<T> {
+impl<T: TTScalar> std::ops::Neg for SimpleTensorTrain<T> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
@@ -239,15 +239,15 @@ impl<T: TTScalar> std::ops::Neg for TensorTrain<T> {
     }
 }
 
-impl<T: TTScalar> std::ops::Neg for &TensorTrain<T> {
-    type Output = TensorTrain<T>;
+impl<T: TTScalar> std::ops::Neg for &SimpleTensorTrain<T> {
+    type Output = SimpleTensorTrain<T>;
 
     fn neg(self) -> Self::Output {
         self.negate()
     }
 }
 
-impl<T: TTScalar> std::ops::Mul<T> for TensorTrain<T> {
+impl<T: TTScalar> std::ops::Mul<T> for SimpleTensorTrain<T> {
     type Output = Self;
 
     fn mul(self, scalar: T) -> Self::Output {
@@ -255,8 +255,8 @@ impl<T: TTScalar> std::ops::Mul<T> for TensorTrain<T> {
     }
 }
 
-impl<T: TTScalar> std::ops::Mul<T> for &TensorTrain<T> {
-    type Output = TensorTrain<T>;
+impl<T: TTScalar> std::ops::Mul<T> for &SimpleTensorTrain<T> {
+    type Output = SimpleTensorTrain<T>;
 
     fn mul(self, scalar: T) -> Self::Output {
         self.scale(scalar)

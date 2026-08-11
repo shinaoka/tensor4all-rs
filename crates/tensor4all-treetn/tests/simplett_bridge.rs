@@ -1,7 +1,7 @@
 use anyhow::Result;
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_treetn::{
     fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
     tensor_train_to_treetn, tensor_train_to_treetn_with_names,
@@ -9,23 +9,23 @@ use tensor4all_treetn::{
     weighted_remove_site_from_treetn_chain, TreeTN,
 };
 
-fn two_site_tensor_train_f64() -> TensorTrain<f64> {
-    TensorTrain::new(vec![
+fn two_site_tensor_train_f64() -> SimpleTensorTrain<f64> {
+    SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![1.0, 0.5, -1.0, 2.0], 2, 2, 1).unwrap(),
     ])
     .expect("valid two-site tensor train")
 }
 
-fn single_site_tensor_train_f64() -> TensorTrain<f64> {
-    TensorTrain::new(vec![
+fn single_site_tensor_train_f64() -> SimpleTensorTrain<f64> {
+    SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, -2.0, 3.5], 1, 3, 1).unwrap()
     ])
     .expect("valid single-site tensor train")
 }
 
-fn three_site_tensor_train_f64() -> TensorTrain<f64> {
-    TensorTrain::new(vec![
+fn three_site_tensor_train_f64() -> SimpleTensorTrain<f64> {
+    SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(
             vec![
@@ -42,8 +42,8 @@ fn three_site_tensor_train_f64() -> TensorTrain<f64> {
     .expect("valid three-site tensor train")
 }
 
-fn two_site_tensor_train_c64() -> TensorTrain<Complex64> {
-    TensorTrain::new(vec![
+fn two_site_tensor_train_c64() -> SimpleTensorTrain<Complex64> {
+    SimpleTensorTrain::new(vec![
         tensor3_from_data(
             vec![
                 Complex64::new(1.0, 0.0),
@@ -637,7 +637,8 @@ fn tensor_train_to_treetn_with_site_indices_rejects_dimension_mismatch() {
 
 #[test]
 fn tensor_train_to_treetn_empty_tensor_train_requires_empty_metadata() {
-    let empty_tt = TensorTrain::<f64>::new(vec![]).expect("empty tensor train should construct");
+    let empty_tt =
+        SimpleTensorTrain::<f64>::new(vec![]).expect("empty tensor train should construct");
 
     let (treetn, site_indices) =
         tensor_train_to_treetn_with_names(&empty_tt, Vec::<String>::new()).unwrap();

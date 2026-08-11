@@ -11,7 +11,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use tensor4all_quanticstci::QuanticsTensorCI2;
-use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops};
 
 /// One line in the exported CSV table.
 #[derive(Debug, Clone)]
@@ -69,7 +69,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn print_summary(
     qtci: &QuanticsTensorCI2<f64>,
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     ranks: &[usize],
     errors: &[f64],
     samples: &[SamplePoint],

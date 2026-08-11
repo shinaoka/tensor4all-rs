@@ -10,7 +10,7 @@ use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 use tensor4all_simplett::{
-    tensor3_from_data, types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
+    tensor3_from_data, types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
 use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
 
@@ -87,12 +87,12 @@ pub enum CarryDirection {
 /// ```
 pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 
-/// Convert a TensorTrain (MPO form) to a LinearOperator.
-/// The TensorTrain is assumed to be an MPO with site dimension 4 (2x2 for input/output).
+/// Convert a SimpleTensorTrain (MPO form) to a LinearOperator.
+/// The SimpleTensorTrain is assumed to be an MPO with site dimension 4 (2x2 for input/output).
 /// Each site tensor has shape (left_bond, site_dim=4, right_bond) where site_dim
 /// encodes (s_out, s_in) = (2, 2).
 /// # Arguments
-/// * `tt` - TensorTrain representing an MPO
+/// * `tt` - SimpleTensorTrain representing an MPO
 /// * `site_dims` - Site dimensions for input/output (typically all 2s)
 /// # Returns
 /// LinearOperator wrapping the MPO as a TreeTN.
@@ -103,17 +103,17 @@ pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator;
-/// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+/// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
 /// let mut tensor = tensor3_zeros(1, 4, 1);
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 3, 0, Complex64::new(1.0, 0.0));
-/// let mpo = TensorTrain::new(vec![tensor]).unwrap();
+/// let mpo = SimpleTensorTrain::new(vec![tensor]).unwrap();
 /// let operator = tensortrain_to_linear_operator(&mpo, &[2]).unwrap();
 /// assert_eq!(operator.mpo().node_count(), 1);
 /// assert!(tensortrain_to_linear_operator(&mpo, &[2, 2]).is_err());
 /// ```
 pub fn tensortrain_to_linear_operator(
-    tt: &TensorTrain<Complex64>,
+    tt: &SimpleTensorTrain<Complex64>,
     site_dims: &[usize],
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let n = tt.len();
@@ -297,11 +297,11 @@ pub fn tensortrain_to_linear_operator(
     Ok(LinearOperator::new(treetn, input_mapping, output_mapping))
 }
 
-/// Convert a TensorTrain (MPO form) to a LinearOperator with asymmetric dimensions.
+/// Convert a SimpleTensorTrain (MPO form) to a LinearOperator with asymmetric dimensions.
 /// This variant supports different input and output dimensions, useful for
 /// multi-variable transformations like affine transforms.
 /// # Arguments
-/// * `tt` - TensorTrain representing an MPO
+/// * `tt` - SimpleTensorTrain representing an MPO
 /// * `input_dims` - Input dimensions per site
 /// * `output_dims` - Output dimensions per site
 /// # Returns
@@ -313,17 +313,17 @@ pub fn tensortrain_to_linear_operator(
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator_asymmetric;
-/// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+/// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
 /// let mut tensor = tensor3_zeros(1, 6, 1);
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 5, 0, Complex64::new(1.0, 0.0));
-/// let mpo = TensorTrain::new(vec![tensor]).unwrap();
+/// let mpo = SimpleTensorTrain::new(vec![tensor]).unwrap();
 /// let operator = tensortrain_to_linear_operator_asymmetric(&mpo, &[2], &[3]).unwrap();
 /// assert_eq!(operator.mpo().node_count(), 1);
 /// assert!(tensortrain_to_linear_operator_asymmetric(&mpo, &[2], &[2]).is_err());
 /// ```
 pub fn tensortrain_to_linear_operator_asymmetric(
-    tt: &TensorTrain<Complex64>,
+    tt: &SimpleTensorTrain<Complex64>,
     input_dims: &[usize],
     output_dims: &[usize],
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
@@ -571,10 +571,10 @@ pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)>
 /// * `nvariables` - Total number of variables (must be >= 2)
 /// * `target_var` - Which variable to apply the operator to (0-indexed)
 pub(crate) fn embed_single_var_mpo(
-    mpo: &TensorTrain<Complex64>,
+    mpo: &SimpleTensorTrain<Complex64>,
     nvariables: usize,
     target_var: usize,
-) -> Result<TensorTrain<Complex64>> {
+) -> Result<SimpleTensorTrain<Complex64>> {
     if target_var >= nvariables {
         return Err(anyhow::anyhow!(
             "target_var {} must be less than nvariables {}",
@@ -649,7 +649,7 @@ pub(crate) fn embed_single_var_mpo(
         new_tensors.push(t);
     }
 
-    TensorTrain::new(new_tensors)
+    SimpleTensorTrain::new(new_tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e))
 }
 
@@ -674,7 +674,7 @@ pub(crate) fn embed_single_var_mpo(
 ///
 pub fn identity_mpo(
     r: usize,
-) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
+) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive").into());
     }
@@ -694,7 +694,7 @@ pub fn identity_mpo(
         tensors.push(t);
     }
 
-    TensorTrain::new(tensors)
+    SimpleTensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {e}"))
         .map_err(QuanticsTransformError::from)
 }
@@ -708,7 +708,7 @@ pub fn identity_mpo(
 pub fn scalar_mpo(
     r: usize,
     value: Complex64,
-) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
+) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
     let mut mpo = identity_mpo(r)?;
     mpo.scale_mut(value);
     Ok(mpo)

@@ -4,7 +4,9 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::ColMajorArrayRef;
-use tensor4all_simplett::{tensor3_zeros, MultiIndex, TTCache, Tensor3, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{
+    tensor3_zeros, MultiIndex, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
+};
 use tensor4all_treetn::{tensor_train_to_treetn, CachedEvaluatorOptions, TreeTNCachedEvaluator};
 
 fn generate_tci_like_indices(
@@ -39,7 +41,11 @@ fn generate_tci_like_indices(
     indices
 }
 
-fn create_tt_with_bond_dim(n_sites: usize, local_dim: usize, bond_dim: usize) -> TensorTrain<f64> {
+fn create_tt_with_bond_dim(
+    n_sites: usize,
+    local_dim: usize,
+    bond_dim: usize,
+) -> SimpleTensorTrain<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(42);
     let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(n_sites);
 
@@ -57,7 +63,7 @@ fn create_tt_with_bond_dim(n_sites: usize, local_dim: usize, bond_dim: usize) ->
         tensors.push(tensor);
     }
 
-    TensorTrain::new(tensors).unwrap()
+    SimpleTensorTrain::new(tensors).unwrap()
 }
 
 fn multi_indices_to_col_major(indices: &[MultiIndex], n_sites: usize) -> Vec<usize> {

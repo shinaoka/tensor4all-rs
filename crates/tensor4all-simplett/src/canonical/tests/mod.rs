@@ -4,7 +4,7 @@ use num_complex::Complex64;
 // Generic test functions for f64 and Complex64
 
 fn test_site_tensor_train_creation_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
 
     assert_eq!(stt.len(), 3);
@@ -12,7 +12,7 @@ fn test_site_tensor_train_creation_generic<T: TTScalar + Scalar + Default>() {
 }
 
 fn test_site_tensor_train_preserves_values_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(2.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(2.0));
     let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
 
     // Check that evaluation is preserved
@@ -25,7 +25,7 @@ fn test_site_tensor_train_preserves_values_generic<T: TTScalar + Scalar + Defaul
 }
 
 fn test_move_center_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 4, 2], T::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 4, 2], T::from_f64(1.0));
     let mut stt = SiteTensorTrain::from_tensor_train(&tt, 0).unwrap();
 
     assert_eq!(stt.center(), 0);
@@ -41,7 +41,7 @@ fn test_move_center_generic<T: TTScalar + Scalar + Default>() {
 }
 
 fn test_set_center_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 4, 2], T::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 4, 2], T::from_f64(1.0));
     let mut stt = SiteTensorTrain::from_tensor_train(&tt, 0).unwrap();
 
     stt.set_center(3).unwrap();
@@ -60,7 +60,7 @@ fn test_set_center_generic<T: TTScalar + Scalar + Default>() {
 }
 
 fn test_to_tensor_train_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(3.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(3.0));
     let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
     let tt_back = stt.to_tensor_train();
 
@@ -73,7 +73,7 @@ fn test_to_tensor_train_generic<T: TTScalar + Scalar + Default>() {
 }
 
 fn test_center_canonicalize_function_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let mut tensors: Vec<Tensor3<T>> = tt.site_tensors().to_vec();
 
     let original_sum = tt.sum();
@@ -81,7 +81,7 @@ fn test_center_canonicalize_function_generic<T: TTScalar + Scalar + Default>() {
     center_canonicalize(&mut tensors, 1).unwrap();
 
     // Reconstruct and verify sum
-    let tt_new = TensorTrain::from_tensors_unchecked(tensors);
+    let tt_new = SimpleTensorTrain::from_tensors_unchecked(tensors);
     let new_sum = tt_new.sum();
     assert!(
         (original_sum - new_sum).abs_sq().sqrt() < 1e-10,
@@ -103,7 +103,7 @@ fn test_evaluate_matches_original_generic<T: TTScalar + Scalar + Default>() {
         }
     }
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     let stt = SiteTensorTrain::from_tensor_train(&tt, 0).unwrap();
 
     // Check multiple evaluations
@@ -127,7 +127,7 @@ fn test_site_tensor_train_from_tensor_train_reports_qr_failure() {
     left.set3(0, 0, 0, f64::NAN);
     left.set3(0, 1, 0, 1.0);
     let right = tensor3_zeros(1, 2, 1);
-    let tt = TensorTrain::new(vec![left, right]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![left, right]).unwrap();
 
     let err = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap_err();
 

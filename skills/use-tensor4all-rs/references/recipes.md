@@ -13,15 +13,15 @@ backend features, `--release`, dev-deps). Each recipe below assumes that is done
 ## Build, evaluate, compress a TT (simplett)
 
 ```rust
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
 
-let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 assert!((tt.evaluate(&[0, 1, 2]).unwrap() - 1.0).abs() < 1e-12);
 assert!((tt.sum() - 24.0).abs() < 1e-12); // 2*3*4 entries
 
 // Adding two constants inflates bond dim; compression recovers rank 1.
-let big = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0)
-    .add(&TensorTrain::<f64>::constant(&[2, 3, 4], 2.0))?;
+let big = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0)
+    .add(&SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 2.0))?;
 assert_eq!(big.rank(), 2);
 let opts = CompressionOptions { tolerance: 1e-10, max_bond_dim: 20, ..Default::default() };
 let c = big.compressed(&opts)?;
@@ -228,7 +228,7 @@ let s1 = DynIndex::new_dyn(2);
 let b01 = DynIndex::new_bond(2)?;
 let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
 let t1 = TensorDynLen::from_dense(vec![b01, s1], vec![1.0_f64, 0.0, 0.0, 1.0])?;
-let mut tt = TensorTrain::new(vec![t0, t1])?;
+let mut tt = SimpleTensorTrain::new(vec![t0, t1])?;
 
 let norm_before = tt.norm();
 tt.orthogonalize(1)?;
@@ -307,8 +307,8 @@ from a rejected parent, and supply known-nonzero pivots for sparse functions
 use tensor4all_aci::{elementwise, AciOptions};
 use tensor4all_simplett::AbstractTensorTrain;
 
-let a = tensor4all_simplett::TensorTrain::<f64>::constant(&[2, 3], 2.0);
-let b = tensor4all_simplett::TensorTrain::<f64>::constant(&[2, 3], 4.0);
+let a = tensor4all_simplett::SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+let b = tensor4all_simplett::SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
 let result = elementwise(|xs: &[f64]| xs[0] * xs[1], &[a, b], &AciOptions::default())?;
 assert!((result.tensor_train.evaluate(&[1, 2])? - 8.0).abs() < 1e-10);
 # Ok::<(), Box<dyn std::error::Error>>(())

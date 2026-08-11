@@ -3,7 +3,7 @@
 //! This module provides [`quanticscrossinterpolate_batched`], which interpolates
 //! vector- or tensor-valued functions. Each output component is interpolated
 //! independently using scalar TCI, and the results are combined into a single
-//! [`TensorTrain`] with an additional component site.
+//! [`SimpleTensorTrain`] with an additional component site.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ use crate::error::{QuanticsTCIError, Result as QtciResult};
 use anyhow::{anyhow, Result};
 use quanticsgrids::DiscretizedGrid;
 use tensor4all_core::TensorElement;
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::FullPivLuScalar;
 
@@ -21,7 +21,7 @@ use crate::quantics_tci::quanticscrossinterpolate;
 
 /// Result of batched (vector/tensor-valued) Quantics TCI interpolation.
 ///
-/// Wraps a [`TensorTrain`] where the last site is a component index,
+/// Wraps a [`SimpleTensorTrain`] where the last site is a component index,
 /// plus the output shape and grid information.
 ///
 /// # Examples
@@ -51,7 +51,7 @@ use crate::quantics_tci::quanticscrossinterpolate;
 #[derive(Clone)]
 pub struct QuanticsTensorCI2Batched<V: TTScalar> {
     /// Combined tensor train with component index as the last site.
-    tt: TensorTrain<V>,
+    tt: SimpleTensorTrain<V>,
     /// Shape of the output (e.g., [3] for 3-vector, [2, 2] for 2x2 matrix).
     output_dims: Vec<usize>,
     /// Grid for coordinate conversion.
@@ -91,7 +91,7 @@ where
     /// let tt = result.tensor_train();
     /// assert_eq!(tt.len(), 3); // 2 grid sites + 1 component site
     /// ```
-    pub fn tensor_train(&self) -> &TensorTrain<V> {
+    pub fn tensor_train(&self) -> &SimpleTensorTrain<V> {
         &self.tt
     }
 
@@ -159,7 +159,7 @@ where
 /// Each output component is interpolated independently using scalar TCI via
 /// [`quanticscrossinterpolate`]. Function evaluations are cached so each grid
 /// point is evaluated at most once across all components. The per-component
-/// tensor trains are then combined into a single [`TensorTrain`] with an
+/// tensor trains are then combined into a single [`SimpleTensorTrain`] with an
 /// additional component site at the end.
 ///
 /// # Arguments
@@ -251,7 +251,7 @@ where
     let f_arc: Arc<BatchFn<V>> = Arc::from(f);
 
     // Run scalar TCI for each component independently.
-    let mut component_tts: Vec<TensorTrain<V>> = Vec::with_capacity(n_components);
+    let mut component_tts: Vec<SimpleTensorTrain<V>> = Vec::with_capacity(n_components);
     let mut all_ranks: Vec<Vec<usize>> = Vec::with_capacity(n_components);
     let mut all_errors: Vec<Vec<f64>> = Vec::with_capacity(n_components);
 
@@ -321,7 +321,7 @@ where
 /// Combine per-component tensor trains into a single TT with a component
 /// selector as the final site.
 ///
-/// The combination strategy ensures TensorTrain validity:
+/// The combination strategy ensures SimpleTensorTrain validity:
 /// - **First site** (`left_dim = 1` for all components): the component tensors
 ///
 ///   are concatenated along the right bond, giving shape `(1, site_dim, sum_right)`.
@@ -333,7 +333,7 @@ where
 /// A final selector site of shape `(total_right_bond, n_components, 1)` is
 /// appended so that fixing the component index selects the corresponding
 /// component's value.
-fn combine_component_tts<V>(component_tts: &[TensorTrain<V>]) -> Result<TensorTrain<V>>
+fn combine_component_tts<V>(component_tts: &[SimpleTensorTrain<V>]) -> Result<SimpleTensorTrain<V>>
 where
     V: TTScalar + Default + Clone,
 {
@@ -454,7 +454,8 @@ where
 
     combined_tensors.push(selector);
 
-    TensorTrain::new(combined_tensors).map_err(|e| anyhow!("Failed to build combined TT: {}", e))
+    SimpleTensorTrain::new(combined_tensors)
+        .map_err(|e| anyhow!("Failed to build combined TT: {}", e))
 }
 
 /// Create a zero-filled Tensor3 using TTScalar bounds (avoids importing tensor3_zeros

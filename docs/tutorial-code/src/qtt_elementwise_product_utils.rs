@@ -16,7 +16,7 @@ use std::path::Path;
 
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
 use tensor4all_quanticstci::QuanticsTensorCI2;
-use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops};
 use tensor4all_treetn::TreeTN;
 
 /// One row in the exported sample table.
@@ -71,11 +71,11 @@ pub fn global_index_to_quantics_sites(index_1based: usize, bits: usize) -> Vec<u
 /// `quanticscrossinterpolate_discrete(...)`.
 ///
 /// The `qtci` value is the object returned by the library interpolator, while
-/// `tt` is the extracted `TensorTrain` that exposes site/bond structure.
+/// `tt` is the extracted `SimpleTensorTrain` that exposes site/bond structure.
 pub fn print_qtt_summary(
     label: &str,
     qtci: &QuanticsTensorCI2<f64>,
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     ranks: &[usize],
     errors: &[f64],
     sample_print_count: usize,
@@ -243,8 +243,8 @@ where
 /// /// backend failure).
 ///
 pub fn collect_bond_profile(
-    cosh_tt: &TensorTrain<f64>,
-    factor_b_tt: &TensorTrain<f64>,
+    cosh_tt: &SimpleTensorTrain<f64>,
+    factor_b_tt: &SimpleTensorTrain<f64>,
     product_raw_tn: &TreeTN<TensorDynLen, usize>,
     product_compressed_tn: &TreeTN<TensorDynLen, usize>,
 ) -> Result<Vec<BondProfileRow>, Box<dyn Error>> {

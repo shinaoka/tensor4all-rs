@@ -11,10 +11,10 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_simplett::mpo::tt_contraction::{dot, TensorTrain};
+//! use tensor4all_simplett::mpo::tt_contraction::{dot, SimpleTensorTrain};
 //!
-//! let tt1 = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-//! let tt2 = TensorTrain::<f64>::constant(&[2, 3], 3.0);
+//! let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+//! let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 3.0);
 //!
 //! // Inner product
 //! let inner = dot(&tt1, &tt2).unwrap();
@@ -24,5 +24,5 @@
 // Re-export TT contraction types and functions from tensor4all-simplett
 pub use crate::contraction::{dot, ContractionOptions};
 
-// Also re-export TensorTrain for convenience
-pub use crate::TensorTrain;
+// Also re-export SimpleTensorTrain for convenience
+pub use crate::SimpleTensorTrain;

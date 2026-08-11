@@ -39,19 +39,19 @@ impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 ///
 /// # Implementors
 ///
-/// - [`TensorTrain`](crate::TensorTrain) -- primary container
+/// - [`SimpleTensorTrain`](crate::SimpleTensorTrain) -- primary container
 /// - [`SiteTensorTrain`](crate::SiteTensorTrain) -- center-canonical form
 /// - [`VidalTensorTrain`](crate::VidalTensorTrain) -- Vidal form (after
 ///
-///   conversion to `TensorTrain`)
+///   conversion to `SimpleTensorTrain`)
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
 ///
-/// // TensorTrain implements AbstractTensorTrain.
-/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+/// // SimpleTensorTrain implements AbstractTensorTrain.
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 ///
 /// // Query structure
 /// assert_eq!(tt.len(), 3);
@@ -132,10 +132,10 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
     /// // Constant TT: all values are 5.0
-    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 5.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 5.0);
     ///
     /// let val = tt.evaluate(&[1, 2]).unwrap();
     /// assert!((val - 5.0).abs() < 1e-12);
@@ -216,15 +216,15 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
     /// // Constant TT with value 2.0 over 3×4 grid: sum = 2.0 * 3 * 4 = 24.0
-    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
     /// let s = tt.sum();
     /// assert!((s - 24.0).abs() < 1e-10);
     ///
     /// // Zero TT sums to 0.0
-    /// let zero_tt = TensorTrain::<f64>::zeros(&[2, 3]);
+    /// let zero_tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
     /// assert!((zero_tt.sum() - 0.0).abs() < 1e-12);
     /// ```
     #[allow(clippy::needless_range_loop)]
@@ -279,10 +279,10 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
     /// // Constant TT: T[i,j] = 2.0 on a 3x4 grid
-    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
     /// // norm^2 = 2^2 * 3 * 4 = 48
     /// assert!((tt.norm2() - 48.0).abs() < 1e-10);
     /// ```
@@ -347,9 +347,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
     /// // norm = sqrt(48) ~ 6.928
     /// assert!((tt.norm() - 48.0_f64.sqrt()).abs() < 1e-10);
     /// ```
@@ -368,14 +368,14 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
     /// let log_n = tt.log_norm();
     /// assert!((log_n - tt.norm().ln()).abs() < 1e-10);
     ///
     /// // Zero TT returns negative infinity
-    /// let zero_tt = TensorTrain::<f64>::zeros(&[2, 3]);
+    /// let zero_tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
     /// assert_eq!(zero_tt.log_norm(), f64::NEG_INFINITY);
     /// ```
     fn log_norm(&self) -> f64 {

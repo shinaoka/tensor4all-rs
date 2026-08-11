@@ -15,7 +15,9 @@ use tensor4all_quanticstci::{
     quanticscrossinterpolate_discrete, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{difference_kernel_mpo, BoundaryCondition};
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{
+    types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
+};
 
 /// Configuration for the difference-kernel tutorial.
 #[derive(Debug, Clone, Copy)]
@@ -124,8 +126,8 @@ pub fn build_kernel_qtt(
 /// /// failure).
 ///
 pub fn real_qtt_to_complex(
-    tt: &TensorTrain<f64>,
-) -> Result<TensorTrain<Complex64>, Box<dyn Error>> {
+    tt: &SimpleTensorTrain<f64>,
+) -> Result<SimpleTensorTrain<Complex64>, Box<dyn Error>> {
     let mut tensors = Vec::with_capacity(tt.len());
     for site in 0..tt.len() {
         let core = tt.site_tensor(site);
@@ -145,7 +147,7 @@ pub fn real_qtt_to_complex(
         tensors.push(complex_core);
     }
 
-    Ok(TensorTrain::new(tensors)?)
+    Ok(SimpleTensorTrain::new(tensors)?)
 }
 
 /// Build `A[x, x'] = f((x - x') mod 2^R)` as a periodic difference-kernel MPO.
@@ -155,8 +157,8 @@ pub fn real_qtt_to_complex(
 /// /// mismatch or backend failure).
 ///
 pub fn build_periodic_difference_kernel_mpo(
-    kernel_tt: &TensorTrain<f64>,
-) -> Result<TensorTrain<Complex64>, Box<dyn Error>> {
+    kernel_tt: &SimpleTensorTrain<f64>,
+) -> Result<SimpleTensorTrain<Complex64>, Box<dyn Error>> {
     let complex_kernel = real_qtt_to_complex(kernel_tt)?;
     Ok(difference_kernel_mpo(
         &complex_kernel,
@@ -176,7 +178,7 @@ pub fn integer_to_quantics_sites(value: usize, bits: usize) -> Vec<usize> {
 /// /// mismatch or backend failure).
 ///
 pub fn evaluate_difference_kernel_mpo(
-    mpo: &TensorTrain<Complex64>,
+    mpo: &SimpleTensorTrain<Complex64>,
     x: usize,
     xprime: usize,
     bits: usize,
@@ -199,7 +201,7 @@ pub fn evaluate_difference_kernel_mpo(
 ///
 pub fn collect_samples(
     kernel: &QuanticsTensorCI2<f64>,
-    mpo: &TensorTrain<Complex64>,
+    mpo: &SimpleTensorTrain<Complex64>,
     config: &DifferenceKernelTutorialConfig,
 ) -> Result<Vec<DifferenceKernelSamplePoint>, Box<dyn Error>> {
     let n = point_count(config.bits);
@@ -322,7 +324,7 @@ pub fn write_bond_dims_csv(
 /// Print a compact summary to the terminal used by the binary.
 pub fn print_summary(
     kernel: &QuanticsTensorCI2<f64>,
-    mpo: &TensorTrain<Complex64>,
+    mpo: &SimpleTensorTrain<Complex64>,
     ranks: &[usize],
     errors: &[f64],
     samples: &[DifferenceKernelSamplePoint],

@@ -1,6 +1,6 @@
 use approx::assert_abs_diff_eq;
 use tensor4all_aci::{elementwise, elementwise_batched, AciOptions, ElementwiseBatch};
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -14,7 +14,7 @@ fn exact_options() -> AciOptions<f64> {
     }
 }
 
-fn assert_dense_close(actual: &TensorTrain<f64>, expected_shape: &[usize], expected: &[f64]) {
+fn assert_dense_close(actual: &SimpleTensorTrain<f64>, expected_shape: &[usize], expected: &[f64]) {
     let (actual_data, actual_shape) = actual.full_tensor();
     assert_eq!(actual_shape, expected_shape);
     assert_eq!(actual_data.len(), expected.len());
@@ -23,7 +23,11 @@ fn assert_dense_close(actual: &TensorTrain<f64>, expected_shape: &[usize], expec
     }
 }
 
-fn dense_oracle2<F>(left: &TensorTrain<f64>, right: &TensorTrain<f64>, mut op: F) -> Vec<f64>
+fn dense_oracle2<F>(
+    left: &SimpleTensorTrain<f64>,
+    right: &SimpleTensorTrain<f64>,
+    mut op: F,
+) -> Vec<f64>
 where
     F: FnMut(f64, f64) -> f64,
 {
@@ -47,7 +51,10 @@ fn col_major_index3(
     left + left_dim * (site + site_dim * right)
 }
 
-fn two_site_tt_from_col_major(data: &[f64], shape: [usize; 2]) -> TestResult<TensorTrain<f64>> {
+fn two_site_tt_from_col_major(
+    data: &[f64],
+    shape: [usize; 2],
+) -> TestResult<SimpleTensorTrain<f64>> {
     assert_eq!(data.len(), shape[0] * shape[1]);
     let left_site_dim = shape[0];
     let right_site_dim = shape[1];
@@ -67,13 +74,16 @@ fn two_site_tt_from_col_major(data: &[f64], shape: [usize; 2]) -> TestResult<Ten
         }
     }
 
-    Ok(TensorTrain::new(vec![
+    Ok(SimpleTensorTrain::new(vec![
         tensor3_from_data(left_core, 1, left_site_dim, bond_dim)?,
         tensor3_from_data(right_core, bond_dim, right_site_dim, 1)?,
     ])?)
 }
 
-fn three_site_tt_from_col_major(data: &[f64], shape: [usize; 3]) -> TestResult<TensorTrain<f64>> {
+fn three_site_tt_from_col_major(
+    data: &[f64],
+    shape: [usize; 3],
+) -> TestResult<SimpleTensorTrain<f64>> {
     assert_eq!(data.len(), shape.iter().product::<usize>());
     let first_site_dim = shape[0];
     let second_site_dim = shape[1];
@@ -109,7 +119,7 @@ fn three_site_tt_from_col_major(data: &[f64], shape: [usize; 3]) -> TestResult<T
         }
     }
 
-    let tensor_train = TensorTrain::new(vec![
+    let tensor_train = SimpleTensorTrain::new(vec![
         tensor3_from_data(first_core, 1, first_site_dim, first_bond_dim)?,
         tensor3_from_data(
             second_core,
@@ -125,8 +135,8 @@ fn three_site_tt_from_col_major(data: &[f64], shape: [usize; 3]) -> TestResult<T
 
 #[test]
 fn dense_oracle_matches_rank_one_constant_multiplication() -> TestResult {
-    let left = TensorTrain::<f64>::constant(&[2, 3, 2], 2.5);
-    let right = TensorTrain::<f64>::constant(&[2, 3, 2], -4.0);
+    let left = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.5);
+    let right = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], -4.0);
     let expected = dense_oracle2(&left, &right, |left_value, right_value| {
         left_value * right_value
     });

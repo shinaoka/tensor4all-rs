@@ -28,9 +28,9 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
 
 Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the selected operations support the dtype); no named indices needed. The go-to for numerics.
 
-- `TensorTrain::<f64>` / `::<Complex64>` — chain of 3-leg cores.
-  - `TensorTrain::constant(&[dims], val)`, `::zeros(&[dims])`.
-  - `TensorTrain::new(tensors: Vec<Tensor3>)`.
+- `SimpleTensorTrain::<f64>` / `::<Complex64>` — chain of 3-leg cores.
+  - `SimpleTensorTrain::constant(&[dims], val)`, `::zeros(&[dims])`.
+  - `SimpleTensorTrain::new(tensors: Vec<Tensor3>)`.
   - `trait AbstractTensorTrain`: `.evaluate(&[idx]) -> Result`, `.sum()`, `.norm()`, `.rank()`, `.len()`, `.site_dims()`, `.link_dims()`, `.site_tensor(i)`, `.add(&b)`, `.compressed(&CompressionOptions)`.
 - `CompressionOptions { tolerance, max_bond_dim, .. }` — `tolerance` is the relative truncation threshold. Default ~1e-12 near-lossless; 1e-8..1e-6 for science.
 - `SiteTensorTrain` (center-canonical), `VidalTensorTrain` (Vidal form with singular values).
@@ -41,7 +41,7 @@ Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the 
 
 Named `DynIndex` objects; orthogonality-center tracking; multiple canonical forms. Use when you need named indices or ITensors.jl compatibility.
 
-- `TensorTrain::new(vec![t0, t1, ...])` from `TensorDynLen` cores.
+- `SimpleTensorTrain::new(vec![t0, t1, ...])` from `TensorDynLen` cores.
 - `.orthogonalize(site)`, `.orthogonalize_with(site, CanonicalForm::...)` (LU / CI forms).
 - `.truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol)).with_max_rank(n))`.
 - `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, `.isortho()`, `.orthocenter()`, `.max_bond_dim()`.
@@ -61,7 +61,7 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
   - `max_bond_dim` cap to prevent runaway on expensive functions.
   - `seed: Some(42)` for reproducibility.
 - `opt_first_pivot::<T, F>(&f, &local_dims, &start, n_iters) -> MultiIndex` — local search for a large-`|f|` pivot.
-- `TensorCI2::to_tensor_train() -> Result<TensorTrain>`. Convergence: check `result.termination == TCI2Termination::Converged` (bond-error, global-pivot history, and rank stability all met). `MaxBondDimension` / `MaxIterations` are stops, **not** convergence — treat them as "not done".
+- `TensorCI2::to_tensor_train() -> Result<SimpleTensorTrain>`. Convergence: check `result.termination == TCI2Termination::Converged` (bond-error, global-pivot history, and rank stability all met). `MaxBondDimension` / `MaxIterations` are stops, **not** convergence — treat them as "not done".
 
 ## tensor4all-tcicore — caching + multi-index plumbing
 
@@ -134,13 +134,13 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 ## tensor4all-interpolativeqtt — interpolative QTT
 
-Ports InterpolativeQTT.jl; returns `TensorTrain<f64>`.
+Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 
 - `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
 
 ## tensor4all-partitionedtt — subdomain patches + adaptive TCI
 
-Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `TensorDynLen`, `MultiIndex`, `TensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than depending on `tensor4all-tcicore`.
+Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `TensorDynLen`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than depending on `tensor4all-tcicore`.
 
 - `Projector` — maps site `DynIndex` → fixed coordinate, defining a subdomain.
   - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])`.
@@ -151,7 +151,7 @@ Split a function's domain into non-overlapping projected patches, each its own T
 - `PartitionedTT` — collection of mutually disjoint `SubDomainTT`s (disjointness validated at construction).
   - `PartitionedTT::from_subdomains(vec)?`, `::from_subdomain(one)`, `::new()`.
   - `.len()`, `.is_empty()`, `.projectors()`, `.iter()`, `.values()`, `.values_mut()`, `.contains(&projector)`.
-  - `.to_tensor_train() -> Result<TensorTrain>` — recombine all patches into one TT (drops the partition structure).
+  - `.to_tensor_train() -> Result<SimpleTensorTrain>` — recombine all patches into one TT (drops the partition structure).
   - `.contract(&other, &ContractOptions)?` (also free `contract` / `proj_contract`).
 - Adaptive patching — bond-cap-driven splitting plus volume-proportional truncation:
   - `add_with_patching(subdomains: Vec<SubDomainTT>, &PatchingOptions) -> Result<PartitionedTT>` — split over-cap patches along `patch_order`, then truncate.
@@ -172,7 +172,7 @@ Split a function's domain into non-overlapping projected patches, each its own T
 ## tensor4all-hdf5 — ITensors.jl-compatible I/O
 
 - `save_itensor()` / `load_itensor()` — `TensorDynLen` as ITensors.jl `ITensor`.
-- `save_mps()` / `load_mps()` — `TensorTrain` as ITensorMPS.jl `MPS`.
+- `save_mps()` / `load_mps()` — `SimpleTensorTrain` as ITensorMPS.jl `MPS`.
 - Features: `link` (default, compile-time HDF5), `runtime-loading` (dlopen for FFI).
 
 ## tensor4all-capi — C FFI

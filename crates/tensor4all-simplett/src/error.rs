@@ -10,10 +10,10 @@ pub type Result<T> = std::result::Result<T, TensorTrainError>;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrainError, TensorTrain, AbstractTensorTrain};
+/// use tensor4all_simplett::{TensorTrainError, SimpleTensorTrain, AbstractTensorTrain};
 ///
 /// // Empty index set triggers IndexLengthMismatch
-/// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
 /// let err = tt.evaluate(&[0]).unwrap_err();
 /// assert!(matches!(err, TensorTrainError::IndexLengthMismatch { expected: 2, got: 1 }));
 ///

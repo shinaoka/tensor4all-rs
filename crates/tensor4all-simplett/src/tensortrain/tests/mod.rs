@@ -5,14 +5,14 @@ use tenferro_tensor::TensorScalar;
 // Generic test functions for f64 and Complex64
 
 fn test_tensortrain_zeros_generic<T: TTScalar>() {
-    let tt = TensorTrain::<T>::zeros(&[2, 3, 2]);
+    let tt = SimpleTensorTrain::<T>::zeros(&[2, 3, 2]);
     assert_eq!(tt.len(), 3);
     assert_eq!(tt.site_dims(), vec![2, 3, 2]);
     assert_eq!(tt.rank(), 1);
 }
 
 fn test_tensortrain_constant_generic<T: TTScalar>() {
-    let tt = TensorTrain::<T>::constant(&[2, 2], T::from_f64(5.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 2], T::from_f64(5.0));
     assert_eq!(tt.len(), 2);
 
     // Sum should be 5.0 * 2 * 2 = 20.0
@@ -21,7 +21,7 @@ fn test_tensortrain_constant_generic<T: TTScalar>() {
 }
 
 fn test_tensortrain_constant_single_site_generic<T: TTScalar>() {
-    let tt = TensorTrain::<T>::constant(&[3], T::from_f64(5.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[3], T::from_f64(5.0));
     assert_eq!(tt.len(), 1);
     assert_eq!(tt.site_dims(), vec![3]);
 
@@ -51,7 +51,7 @@ fn test_tensortrain_evaluate_generic<T: TTScalar>() {
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(0, 2, 0, T::from_f64(3.0));
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
     // tt([0, 0]) = 1 * 1 = 1
     let val00 = tt.evaluate(&[0, 0]).unwrap();
@@ -62,7 +62,7 @@ fn test_tensortrain_evaluate_generic<T: TTScalar>() {
 }
 
 fn test_tensortrain_scale_generic<T: TTScalar>() {
-    let mut tt = TensorTrain::<T>::constant(&[2, 2], T::from_f64(1.0));
+    let mut tt = SimpleTensorTrain::<T>::constant(&[2, 2], T::from_f64(1.0));
     tt.scale_mut(T::from_f64(3.0));
 
     // Sum should be 3.0 * 2 * 2 = 12.0
@@ -80,7 +80,7 @@ fn test_tensortrain_reverse_generic<T: TTScalar>() {
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(0, 2, 0, T::from_f64(3.0));
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     let tt_rev = tt.reverse();
 
     assert_eq!(tt_rev.len(), 2);
@@ -92,7 +92,7 @@ fn test_tensortrain_reverse_generic<T: TTScalar>() {
 }
 
 fn test_full_tensor_generic<T: TTScalar>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3], T::from_f64(5.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(5.0));
     let (data, shape) = tt.full_tensor();
 
     assert_eq!(shape, vec![2, 3]);
@@ -114,7 +114,7 @@ fn test_full_tensor_matches_evaluate_generic<T: TTScalar>() {
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(0, 2, 0, T::from_f64(3.0));
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     let (data, shape) = tt.full_tensor();
 
     assert_eq!(shape, vec![2, 3]);
@@ -131,7 +131,7 @@ fn test_full_tensor_matches_evaluate_generic<T: TTScalar>() {
 }
 
 fn test_log_norm_matches_norm_generic<T: TTScalar>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
 
     let norm = tt.norm();
     let log_norm = tt.log_norm();
@@ -158,7 +158,7 @@ fn test_log_norm_with_varied_values_generic<T: TTScalar>() {
     t1.set3(1, 0, 0, T::from_f64(0.5));
     t1.set3(1, 1, 0, T::from_f64(1.5));
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
     let norm = tt.norm();
     let log_norm = tt.log_norm();
@@ -172,7 +172,7 @@ fn test_log_norm_with_varied_values_generic<T: TTScalar>() {
 }
 
 fn test_log_norm_zero_tensor_generic<T: TTScalar>() {
-    let tt = TensorTrain::<T>::zeros(&[2, 3]);
+    let tt = SimpleTensorTrain::<T>::zeros(&[2, 3]);
     let log_norm = tt.log_norm();
 
     assert!(log_norm.is_infinite() && log_norm < 0.0);
@@ -298,7 +298,7 @@ fn test_partial_sum_all_dims_generic<
     T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
 >() {
     // f(i,j,k) = 1.0 for all indices → sum = 2*3*2 = 12
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let full_sum = tt.sum();
 
     let result = tt.partial_sum(&[0, 1, 2]).unwrap();
@@ -314,7 +314,7 @@ fn test_partial_sum_all_dims_generic<
 fn test_partial_sum_no_dims_generic<
     T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
 >() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let result = tt.partial_sum(&[]).unwrap();
     assert_eq!(result.len(), 3);
     // Should evaluate identically to original
@@ -349,7 +349,7 @@ fn test_partial_sum_single_dim_generic<
     for s in 0..2 {
         t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
-    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
 
     // Sum over dim 1 (j): sum_{j=0}^{3} (1+j) = 1+2+3+4 = 10
     // Result should be TT for g(i,k) = (1+i) * 10 * (1+k)
@@ -384,7 +384,7 @@ fn test_partial_sum_multiple_dims_generic<
     for s in 0..2 {
         t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
-    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
 
     // Sum over dims 0 and 2: sum_i (1+i) = 6, sum_k (1+k) = 3
     // Result: g(j) = 6 * (1+j) * 3 = 18 * (1+j)
@@ -454,7 +454,7 @@ fn test_tt_addition_generic<
     for s in 0..2 {
         t2_a.set3(0, s, 0, T::from_f64(1.0));
     }
-    let tt_a = TensorTrain::new(vec![t0_a, t1_a, t2_a]).unwrap();
+    let tt_a = SimpleTensorTrain::new(vec![t0_a, t1_a, t2_a]).unwrap();
 
     let mut t0_b = tensor3_zeros::<T>(1, 3, 1);
     let mut t1_b = tensor3_zeros::<T>(1, 3, 1);
@@ -468,7 +468,7 @@ fn test_tt_addition_generic<
     for s in 0..2 {
         t2_b.set3(0, s, 0, T::from_f64(1.0));
     }
-    let tt_b = TensorTrain::new(vec![t0_b, t1_b, t2_b]).unwrap();
+    let tt_b = SimpleTensorTrain::new(vec![t0_b, t1_b, t2_b]).unwrap();
 
     // tt_a + tt_b
     let tt_add = tt_a.add(&tt_b).unwrap();
@@ -538,7 +538,7 @@ where
 
     // Build a random-ish TT with known structure: sum of two rank-1 terms
     // f(i,j,k) = (1+i)*(1+j)*(1+k) + (2+i)*(3+j)*(4+k)
-    let build_tt = || -> TensorTrain<T> {
+    let build_tt = || -> SimpleTensorTrain<T> {
         let mut t0 = tensor3_zeros::<T>(1, 4, 2);
         let mut t1 = tensor3_zeros::<T>(2, 4, 2);
         let mut t2 = tensor3_zeros::<T>(2, 4, 1);
@@ -580,7 +580,7 @@ where
                 <T as tensor4all_tcicore::Scalar>::from_f64((4 + s) as f64),
             );
         }
-        TensorTrain::new(vec![t0, t1, t2]).unwrap()
+        SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap()
     };
 
     let tt_orig = build_tt();

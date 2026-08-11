@@ -18,7 +18,7 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 use sprs::CsMat;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::LinearizationOrder;
-use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops};
 
 use crate::common::{
     checked_allocation_len, checked_pow2, tensortrain_to_linear_operator_asymmetric,
@@ -576,11 +576,11 @@ fn checked_affine_site_dims(m: usize, n: usize) -> Result<(usize, usize, usize)>
 }
 
 fn remap_affine_site_indices(
-    mpo: &TensorTrain<Complex64>,
+    mpo: &SimpleTensorTrain<Complex64>,
     m: usize,
     n: usize,
     site_dim: usize,
-) -> Result<TensorTrain<Complex64>> {
+) -> Result<SimpleTensorTrain<Complex64>> {
     let input_dim = checked_pow2(n, "input variable count")?;
     let output_dim = checked_pow2(m, "output variable count")?;
 
@@ -623,7 +623,7 @@ fn remap_affine_site_indices(
         new_tensors.push(t);
     }
 
-    TensorTrain::new(new_tensors)
+    SimpleTensorTrain::new(new_tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create remapped MPO: {}", e))
 }
 
@@ -933,12 +933,12 @@ pub fn affine_transform_matrix(
     Ok(triplet.to_csr())
 }
 
-/// Create the affine transformation MPO as a TensorTrain.
+/// Create the affine transformation MPO as a SimpleTensorTrain.
 fn affine_transform_mpo(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<TensorTrain<Complex64>> {
+) -> Result<SimpleTensorTrain<Complex64>> {
     let (a_int, b_int, scale) = params.to_integer_scaled()?;
     let m = params.m;
     let n = params.n;
@@ -946,7 +946,7 @@ fn affine_transform_mpo(
     // Compute core tensors
     let tensors = affine_transform_tensors(r, &a_int, &b_int, &scale, m, n, bc)?;
 
-    TensorTrain::new(tensors)
+    SimpleTensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create affine transform MPO: {}", e))
 }
 

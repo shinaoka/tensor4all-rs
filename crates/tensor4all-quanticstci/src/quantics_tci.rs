@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
 use tensor4all_core::TensorDynLen;
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::to_treetn;
 use tensor4all_treetci::{
@@ -44,7 +44,7 @@ fn evaluate_grid_point<V>(
 
 /// TCI result wrapped with grid information.
 ///
-/// Combines a [`TensorTrain`] approximation with grid metadata so you
+/// Combines a [`SimpleTensorTrain`] approximation with grid metadata so you
 /// can [`evaluate`](Self::evaluate) at grid indices, compute
 /// [`sum`](Self::sum) and [`integral`](Self::integral), and access the
 /// underlying [`tensor_train`](Self::tensor_train) for further
@@ -82,7 +82,7 @@ fn evaluate_grid_point<V>(
 #[derive(Clone)]
 pub struct QuanticsTensorCI2<V: TTScalar> {
     /// Underlying tensor train
-    tt: TensorTrain<V>,
+    tt: SimpleTensorTrain<V>,
     /// TreeTCI2 state (pivot sets, graph, etc.)
     tci_state: TreeTCI2<V>,
     /// Grid for coordinate conversion (DiscretizedGrid)
@@ -97,9 +97,9 @@ impl<V> QuanticsTensorCI2<V>
 where
     V: TTScalar + Default + Clone,
 {
-    /// Create a new QuanticsTensorCI2 from a TensorTrain, TreeTCI2 state, and discretized grid.
+    /// Create a new QuanticsTensorCI2 from a SimpleTensorTrain, TreeTCI2 state, and discretized grid.
     pub fn from_discretized(
-        tt: TensorTrain<V>,
+        tt: SimpleTensorTrain<V>,
         tci_state: TreeTCI2<V>,
         grid: DiscretizedGrid,
         cache: HashMap<Vec<i64>, V>,
@@ -113,9 +113,9 @@ where
         }
     }
 
-    /// Create a new QuanticsTensorCI2 from a TensorTrain, TreeTCI2 state, and inherent discrete grid.
+    /// Create a new QuanticsTensorCI2 from a SimpleTensorTrain, TreeTCI2 state, and inherent discrete grid.
     pub fn from_inherent(
-        tt: TensorTrain<V>,
+        tt: SimpleTensorTrain<V>,
         tci_state: TreeTCI2<V>,
         grid: InherentDiscreteGrid,
         cache: HashMap<Vec<i64>, V>,
@@ -278,7 +278,7 @@ where
         }
     }
 
-    /// Get the underlying [`TensorTrain`].
+    /// Get the underlying [`SimpleTensorTrain`].
     ///
     /// Returns a clone of the tensor train. Use this to pass the result
     /// to other tensor-train operations (contraction, SVD compression, etc.).
@@ -299,7 +299,7 @@ where
     /// assert!(tt.rank() >= 1);
     /// assert!(tt.len() > 0);
     /// ```
-    pub fn tensor_train(&self) -> TensorTrain<V> {
+    pub fn tensor_train(&self) -> SimpleTensorTrain<V> {
         self.tt.clone()
     }
 
@@ -345,7 +345,7 @@ where
     }
 }
 
-/// Convert a linear-chain TreeTN to a SimpleTT TensorTrain.
+/// Convert a linear-chain TreeTN to a SimpleTT SimpleTensorTrain.
 ///
 /// The TreeTN must have been produced by treetci::crossinterpolate2 with a
 /// linear chain graph and center_site=0. Nodes are numbered 0..n-1.
@@ -364,7 +364,7 @@ fn treetn_to_tensor_train<V>(
     treetn: &tensor4all_treetn::TreeTN<TensorDynLen, usize>,
     n_sites: usize,
     local_dims: &[usize],
-) -> Result<TensorTrain<V>>
+) -> Result<SimpleTensorTrain<V>>
 where
     V: TTScalar + Default + Clone + tensor4all_core::TensorElement,
 {
@@ -448,7 +448,7 @@ where
         }
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow!("Failed to build TensorTrain: {}", e))
+    SimpleTensorTrain::new(tensors).map_err(|e| anyhow!("Failed to build SimpleTensorTrain: {}", e))
 }
 
 /// Interpolate a function with an explicit Grid.
@@ -608,7 +608,7 @@ where
     let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
-    // Convert TreeTN → TensorTrain<V>
+    // Convert TreeTN → SimpleTensorTrain<V>
     let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
 
     // Drop batch_eval (and its captured Rc clone) before extracting the cache
@@ -931,7 +931,7 @@ where
     let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
-    // Convert TreeTN → TensorTrain<V>
+    // Convert TreeTN → SimpleTensorTrain<V>
     let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
 
     // Drop batch_eval (and its captured Rc clone) before extracting the cache
