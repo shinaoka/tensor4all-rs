@@ -85,10 +85,10 @@ reproducible).
 | # | Candidate | Workload | Measurement | Share | Decision |
 |---|-----------|----------|-------------|-------|----------|
 | 1 | `TreeTN::evaluate` rebuilds evaluator per call | chain TT 32 sites/bond16, batch 200×20 and per-point 4000 | rebuild vs reused (3 runs): 1.9–3.0% (batch), −0.4–1.5% (per-point) | 0–3% | immaterial — no change |
-| 2 | capi cached-evaluator rebuild per FFI call | 64 sites, 32-pt batch, 2000 calls; default options vs persisted center (real capi pattern) | rebuild share (3 runs), default: 3.9–4.6%; with persisted center: −0.6–1.0% (noise around 0) | ≈0% with center | immaterial — evaluation dominates; no FFI handle change |
-| 3 | whole-TT evaluation in global pivot search | `floating_zone`, 64 sites, local dim 2/8/16 | `tt.evaluate` = 95–110% of `floating_zone` time (129–1025 calls) | evaluation itself dominates | batched alternative (per-site `TTCache::evaluate_many` in a real batched floating_zone) measured 0.31–0.47× (2–3× *slower*) at every batch width — resolved by evidence, no change |
-| 4 | SimpleTT per-site allocation / slice copy | chain TT 64 sites, 1000 points | **random points**: per-point evaluate 386–412 ms vs `TTCache::evaluate_many` 2.7–2.8 s (TTCache 0.1×, i.e. 10× *slower*); **repeated/duplicate points** (earlier degenerate 2-point workload): TTCache 25–107× faster | TTCache helps only duplicate-heavy workloads | resolved by evidence: for generic multi-point evaluation per-point `evaluate` wins; `TTCache` remains available for repeated point sets (TCI resampling); zero-init removal (push) measured 40% slower — reverted |
-| 5 | `contract_profile_enabled()` re-reads env twice per `contract` | `env::var` ×1e6 (77–84 ns/call); `contract(4×4)` = 52.8 µs/call | 2 × env::var = 169 ns = **0.32%** of a contract call | 0.32% | immaterial — no change |
+| 2 | capi cached-evaluator rebuild per FFI call | 64 sites, 32-pt batch, 2000 calls; default options vs persisted center (real capi pattern) | rebuild share (3 runs), default: 4.0–5.0%; with persisted center: −0.2–0.6% (noise around 0) | ≈0% with center | immaterial — evaluation dominates; no FFI handle change |
+| 3 | whole-TT evaluation in global pivot search | `floating_zone`, 64 sites, local dim 2/8/16 | `tt.evaluate` = 95–110% of `floating_zone` time (129–1025 calls) | evaluation itself dominates | batched floating_zone with production-equivalent semantics (same init/max/stopping; result asserted equal) measured **0.46–0.55×** (dim 2) and **0.31–0.33×** (dim 8) — 2–3× *slower*; resolved by evidence, no change |
+| 4 | SimpleTT per-site allocation / slice copy | chain TT 64 sites, 1000 random points | per-point evaluate 367–396 ms vs `TTCache::evaluate_many` 2.70–2.73 s (TTCache 0.1×, i.e. 10× *slower*, 3 runs); **repeated/duplicate points** (earlier degenerate 2-point workload): TTCache 25–107× faster | TTCache helps only duplicate-heavy workloads | resolved by evidence: for generic multi-point evaluation per-point `evaluate` wins; `TTCache` remains available for repeated point sets (TCI resampling); zero-init removal (push) measured 40% slower — reverted |
+| 5 | `contract_profile_enabled()` re-reads env twice per `contract` | `env::var` ×1e6 (74–85 ns/call); `contract(4×4)` = 52.8–56.9 µs/call (3 runs) | 2 × env::var = 148–171 ns = **0.26–0.32%** of a contract call | 0.26–0.32% | immaterial — no change |
 
 ## Final audit
 
@@ -98,9 +98,11 @@ reproducible).
   are resolved by recorded evidence as immaterial; candidate 4 is resolved by
   measured evidence that `TTCache` helps only duplicate-heavy workloads while
   per-point `evaluate` wins on generic random points (no speculative change).
-- Batching alternative for candidate 3 was measured and is *slower* (0.2×),
-  satisfying the "implement only changes with a material measured
-  contribution" gate with recorded evidence rather than speculative code.
+- Batching alternative for candidate 3 was implemented with
+  production-equivalent semantics, asserted equal, and measured 2–3× *slower*
+  (0.31–0.55×) — satisfying the "implement only changes with a material
+  measured contribution" gate with recorded evidence rather than speculative
+  code.
 - Validation: `cargo fmt --check`, clippy `-D warnings -D missing_errors_doc
   -D missing_panics_doc`, `cargo nextest run --release --workspace` (+hdf5),
   doctests, `./scripts/test-mdbook.sh`, `check-public-error-docs.py`,

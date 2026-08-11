@@ -80,22 +80,34 @@ fn main() {
     // Batching alternative: a batched floating_zone that evaluates each
     // site's candidates as one TTCache batch, then picks the best. Compare
     // against the original sequential floating_zone on the same target.
+    // Batched floating_zone with the SAME semantics as the production
+    // globalsearch::floating_zone: initial error from the starting point,
+    // monotonic max, same stopping rule. Only the scalar TT evaluation is
+    // replaced by per-site TTCache::evaluate_many batches.
     fn floating_zone_batched<F>(
         tt: &SimpleTensorTrain<f64>,
         f: &F,
         local_dims: &[usize],
+        init_p: Option<&Vec<usize>>,
         early_stop_tol: f64,
     ) -> (Vec<usize>, f64)
     where
         F: Fn(&Vec<usize>) -> f64,
     {
         let n = local_dims.len();
-        let mut pivot = vec![0usize; n];
+        let mut pivot = if let Some(p) = init_p {
+            p.clone()
+        } else {
+            vec![0; n]
+        };
         let mut cache = tensor4all_simplett::TTCache::new(tt);
-        let mut max_error = f64::MAX;
+        let f_val = f(&pivot);
+        let tt_val = cache.evaluate_many(&[pivot.clone()], None).unwrap()[0];
+        let mut max_error = (f_val - tt_val).abs();
+
         let max_sweeps = n * 10;
         for _ in 0..max_sweeps {
-            let mut any_improved = false;
+            let prev_max_error = max_error;
             for ipos in 0..n {
                 let mut best_local_error = 0.0f64;
                 let mut best_idx = pivot[ipos];
@@ -110,20 +122,16 @@ fn main() {
                 for (v, tt_val) in vals.iter().enumerate() {
                     let mut p = pivot.clone();
                     p[ipos] = v;
-                    let diff = f(&p) - *tt_val;
-                    let error = diff.abs();
+                    let error = (f(&p) - *tt_val).abs();
                     if error > best_local_error {
                         best_local_error = error;
                         best_idx = v;
                     }
                 }
-                if best_idx != pivot[ipos] {
-                    pivot[ipos] = best_idx;
-                    any_improved = true;
-                }
-                max_error = max_error.min(best_local_error);
+                pivot[ipos] = best_idx;
+                max_error = max_error.max(best_local_error);
             }
-            if !any_improved || max_error > early_stop_tol {
+            if max_error == prev_max_error || max_error > early_stop_tol {
                 break;
             }
         }
@@ -134,11 +142,18 @@ fn main() {
         (0..idx.len()).map(|i| (idx[i] as f64) * 0.1).sum::<f64>()
     };
     let t0 = Instant::now();
-    let (pivot_b, err_b) = floating_zone_batched(&tt, &f2, &vec![local_dim; n_sites], 1.0e-12);
+    let (pivot_b, err_b) =
+        floating_zone_batched(&tt, &f2, &vec![local_dim; n_sites], None, 1.0e-12);
     let t_batched = t0.elapsed();
+    // Semantic equivalence: batched and sequential must agree on the result.
+    assert_eq!(pivot_b, pivot, "batched pivot differs from sequential");
+    assert!(
+        (err_b - err).abs() <= 1.0e-12 * err.abs().max(1.0),
+        "batched error {err_b} differs from sequential {err}"
+    );
     std::hint::black_box((pivot_b, err_b));
     println!(
-        "candidate3 batched floating_zone (TTCache, {local_dim}-wide batches): {t_batched:?} — vs sequential {t_zone:?} ({:.2}x)",
+        "candidate3 batched floating_zone (TTCache, {local_dim}-wide batches): {t_batched:?} — vs sequential {t_zone:?} ({:.2}x), equivalent result asserted",
         t_zone.as_secs_f64() / t_batched.as_secs_f64()
     );
 
@@ -151,7 +166,7 @@ fn main() {
         .collect();
     let t0 = Instant::now();
     for _point in &batch {
-        tt.evaluate(_point).unwrap_or(0.0);
+        std::hint::black_box(tt.evaluate(_point).unwrap_or(0.0));
     }
     let t_per_point = t0.elapsed();
 
@@ -159,7 +174,7 @@ fn main() {
     let t0 = Instant::now();
     let results = cache.evaluate_many(&batch, None).unwrap();
     let t_cache = t0.elapsed();
-    let _sum: f64 = results.iter().sum();
+    std::hint::black_box(results.iter().sum::<f64>());
     println!(
         "candidate4 per-point evaluate x {n_points}: {t_per_point:?} | TTCache evaluate_many: {t_cache:?} — cache is {:.1}x faster",
         t_per_point.as_secs_f64() / t_cache.as_secs_f64()
@@ -184,7 +199,7 @@ fn main() {
             CachedEvaluatorOptions::<usize>::default(),
         )
         .unwrap();
-        cached.evaluate_batched(values).unwrap();
+        std::hint::black_box(cached.evaluate_batched(values).unwrap());
     }
     let t_rebuild = t0.elapsed();
 
@@ -206,7 +221,7 @@ fn main() {
             CachedEvaluatorOptions { center: Some(center), ..Default::default() },
         )
         .unwrap();
-        cached.evaluate_batched(values).unwrap();
+        std::hint::black_box(cached.evaluate_batched(values).unwrap());
     }
     let t_rebuild_with_center = t0.elapsed();
 
@@ -218,7 +233,7 @@ fn main() {
     .unwrap();
     let t0 = Instant::now();
     for _ in 0..n_calls {
-        cached.evaluate_batched(values).unwrap();
+        std::hint::black_box(cached.evaluate_batched(values).unwrap());
     }
     let t_reused = t0.elapsed();
     println!(
