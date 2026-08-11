@@ -92,7 +92,7 @@ fn test_evaluate_accepts_full_indices_for_same_id_prime_pair() {
 }
 
 #[test]
-fn evaluator_evaluate_batch_matches_evaluate() {
+fn evaluator_evaluate_batched_matches_evaluate() {
     let tn = make_three_node_chain();
     let (indices, _) = tn.all_site_indices().unwrap();
     let values = [0usize, 0, 0, 1, 1, 1, 0, 1, 0];
@@ -100,7 +100,7 @@ fn evaluator_evaluate_batch_matches_evaluate() {
     let values_ref = ColMajorArrayRef::new(&values, &shape).unwrap();
 
     let evaluator = TreeTNEvaluator::new(&tn, &indices).unwrap();
-    let direct = evaluator.evaluate_batch(values_ref).unwrap();
+    let direct = evaluator.evaluate_batched(values_ref).unwrap();
     let sugar = tn.evaluate(&indices, values_ref).unwrap();
 
     assert_eq!(direct.len(), 3);

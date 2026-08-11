@@ -597,7 +597,7 @@ where
 ///     &[s],
 ///     CachedEvaluatorOptions::<usize>::default(),
 /// )?;
-/// let result = evaluator.evaluate_batch(points)?;
+/// let result = evaluator.evaluate_batched(points)?;
 /// assert_eq!(result.len(), 2);
 /// assert_eq!(result[0].real(), 4.0);
 /// assert_eq!(result[1].real(), 6.0);
@@ -622,7 +622,7 @@ where
     /// Creates a cached evaluator for `tree` and the requested physical indices.
     ///
     /// If `options.center` is set, that node is used directly. Otherwise, the
-    /// first call to [`Self::evaluate_batch`] chooses a center with greedy search
+    /// first call to [`Self::evaluate_batched`] chooses a center with greedy search
     /// using that batch's repeated-subtree structure.
     ///
     /// # Errors
@@ -676,7 +676,7 @@ where
     /// Returns the selected center node, if one has been selected.
     ///
     /// A fixed center is available immediately after [`Self::new`]. An automatic
-    /// center is selected during the first [`Self::evaluate_batch`] call.
+    /// center is selected during the first [`Self::evaluate_batched`] call.
     ///
     /// # Examples
     ///
@@ -695,7 +695,7 @@ where
     /// assert_eq!(evaluator.center(), None);
     /// let values = [0usize];
     /// let shape = [1usize, 1usize];
-    /// let _ = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
+    /// let _ = evaluator.evaluate_batched(ColMajorArrayRef::new(&values, &shape).unwrap())?;
     /// assert_eq!(evaluator.center(), Some(&0));
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -729,20 +729,20 @@ where
     ///     &[s],
     ///     CachedEvaluatorOptions::<usize>::default(),
     /// )?;
-    /// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
+    /// let result = evaluator.evaluate_batched(ColMajorArrayRef::new(&values, &shape).unwrap())?;
     /// assert_eq!(result.len(), 2);
     /// assert_eq!(result[0].real(), 4.0);
     /// assert_eq!(result[1].real(), 6.0);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn evaluate_batch(
+    pub fn evaluate_batched(
         &mut self,
         values: ColMajorArrayRef<'_, usize>,
     ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
         validate_values_shape(
             values,
             self.layout.n_indices,
-            "TreeTNCachedEvaluator::evaluate_batch",
+            "TreeTNCachedEvaluator::evaluate_batched",
         )?;
         if values.shape()[1] == 0 {
             self.last_stats = CachedEvaluationStats::default();
@@ -803,13 +803,13 @@ where
         for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
             let assignment_batch = assignment_batches.get(&neighbor).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "TreeTNCachedEvaluator::evaluate_batch: missing assignments for neighbor {:?}",
+                    "TreeTNCachedEvaluator::evaluate_batched: missing assignments for neighbor {:?}",
                     neighbor
                 )
             })?;
             let environment = messages.remove(&neighbor).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "TreeTNCachedEvaluator::evaluate_batch: missing messages for neighbor {:?}",
+                    "TreeTNCachedEvaluator::evaluate_batched: missing messages for neighbor {:?}",
                     neighbor
                 )
             })?;
@@ -853,11 +853,11 @@ where
                             values,
                             entry.input_position,
                             point,
-                            "TreeTNCachedEvaluator::evaluate_batch",
+                            "TreeTNCachedEvaluator::evaluate_batched",
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                validate_entry_values(entries, &key, "TreeTNCachedEvaluator::evaluate_batch")?;
+                validate_entry_values(entries, &key, "TreeTNCachedEvaluator::evaluate_batched")?;
                 keys.push(local_interner.intern(key));
             }
             local_keys.insert(node.clone(), keys);
@@ -867,7 +867,7 @@ where
         for node in &plan.postorder {
             let local_keys = local_keys.get(node).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "TreeTNCachedEvaluator::evaluate_batch: missing local keys for {:?}",
+                    "TreeTNCachedEvaluator::evaluate_batched: missing local keys for {:?}",
                     node
                 )
             })?;
@@ -877,7 +877,7 @@ where
                 .map(|child| {
                     assignment_batches.get(child).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "TreeTNCachedEvaluator::evaluate_batch: missing child assignments for {:?}",
+                            "TreeTNCachedEvaluator::evaluate_batched: missing child assignments for {:?}",
                             child
                         )
                     })
@@ -901,7 +901,7 @@ where
     ) -> Result<StackedMessage> {
         let assignment_batch = assignment_batches.get(node).ok_or_else(|| {
             anyhow::anyhow!(
-                "TreeTNCachedEvaluator::evaluate_batch: missing assignments for {:?}",
+                "TreeTNCachedEvaluator::evaluate_batched: missing assignments for {:?}",
                 node
             )
         })?;
@@ -912,7 +912,7 @@ where
             let index_vals = self.index_vals_for_point(node, values, point)?;
             local_slices.push(slice_tensor(tensor, &index_vals).with_context(|| {
                 format!(
-                    "TreeTNCachedEvaluator::evaluate_batch: failed to slice message node {:?}",
+                    "TreeTNCachedEvaluator::evaluate_batched: failed to slice message node {:?}",
                     node
                 )
             })?);
@@ -920,7 +920,7 @@ where
         let local_message = stack_tensors_with_assignment_index(&assignment_index, &local_slices)
             .with_context(|| {
             format!(
-                "TreeTNCachedEvaluator::evaluate_batch: failed to stack message node {:?}",
+                "TreeTNCachedEvaluator::evaluate_batched: failed to stack message node {:?}",
                 node
             )
         })?;
@@ -938,7 +938,7 @@ where
         for child in children {
             let child_assignment_batch = assignment_batches.get(child).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "TreeTNCachedEvaluator::evaluate_batch: missing child assignments for {:?}",
+                    "TreeTNCachedEvaluator::evaluate_batched: missing child assignments for {:?}",
                     child
                 )
             })?;
@@ -957,7 +957,7 @@ where
                 .collect::<Result<Vec<_>>>()?;
             let child_message = messages.get(child).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "TreeTNCachedEvaluator::evaluate_batch: missing child message for {:?}",
+                    "TreeTNCachedEvaluator::evaluate_batched: missing child message for {:?}",
                     child
                 )
             })?;
@@ -973,7 +973,7 @@ where
         let options = ContractionOptions::new().with_retain_indices(&retain);
         let operand_refs = operands.iter().collect::<Vec<_>>();
         let tensor = contract_with_options(&operand_refs, options).context(
-            "TreeTNCachedEvaluator::evaluate_batch: failed to contract batched directed message",
+            "TreeTNCachedEvaluator::evaluate_batched: failed to contract batched directed message",
         )?;
         let tensor = ensure_assignment_axis_last(tensor, &assignment_index)?;
         Ok(StackedMessage {
@@ -1010,28 +1010,32 @@ where
                         values,
                         entry.input_position,
                         point,
-                        "TreeTNCachedEvaluator::evaluate_batch",
+                        "TreeTNCachedEvaluator::evaluate_batched",
                     )?;
                     Ok((entry.index.clone(), value))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            validate_index_vals(&center_index_vals, "TreeTNCachedEvaluator::evaluate_batch")?;
-            center_slices.push(
-                slice_tensor(center_tensor, &center_index_vals).context(
-                    "TreeTNCachedEvaluator::evaluate_batch: failed to slice center tensor",
-                )?,
-            );
+            validate_index_vals(
+                &center_index_vals,
+                "TreeTNCachedEvaluator::evaluate_batched",
+            )?;
+            center_slices.push(slice_tensor(center_tensor, &center_index_vals).context(
+                "TreeTNCachedEvaluator::evaluate_batched: failed to slice center tensor",
+            )?);
         }
 
         let mut operands = Vec::with_capacity(1 + component_batches.len());
         operands.push(
-            stack_tensors_with_assignment_index(&point_index, &center_slices)
-                .context("TreeTNCachedEvaluator::evaluate_batch: failed to stack center tensor")?,
+            stack_tensors_with_assignment_index(&point_index, &center_slices).context(
+                "TreeTNCachedEvaluator::evaluate_batched: failed to stack center tensor",
+            )?,
         );
 
         for batch in component_batches {
             let environment = environment_cache.get(&batch.neighbor).ok_or_else(|| {
-                anyhow::anyhow!("TreeTNCachedEvaluator::evaluate_batch: missing cached environment")
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batched: missing cached environment"
+                )
             })?;
             operands.push(
                 gather_stacked_tensor(
@@ -1041,7 +1045,7 @@ where
                     &batch.point_to_assignment,
                 )
                 .context(
-                    "TreeTNCachedEvaluator::evaluate_batch: failed to gather center environment",
+                    "TreeTNCachedEvaluator::evaluate_batched: failed to gather center environment",
                 )?,
             );
         }
@@ -1052,13 +1056,14 @@ where
             let retain = [point_index.clone()];
             let options = ContractionOptions::new().with_retain_indices(&retain);
             let operand_refs = operands.iter().collect::<Vec<_>>();
-            contract_with_options(&operand_refs, options)
-                .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center batch")?
+            contract_with_options(&operand_refs, options).context(
+                "TreeTNCachedEvaluator::evaluate_batched: failed to contract center batch",
+            )?
         };
         let result_tensor = ensure_assignment_axis_last(result_tensor, &point_index)?;
         anyhow::ensure!(
             result_tensor.indices() == std::slice::from_ref(&point_index),
-            "TreeTNCachedEvaluator::evaluate_batch: center contraction left non-scalar indices {:?}",
+            "TreeTNCachedEvaluator::evaluate_batched: center contraction left non-scalar indices {:?}",
             result_tensor.indices()
         );
 
@@ -1081,7 +1086,7 @@ where
                     values,
                     entry.input_position,
                     point,
-                    "TreeTNCachedEvaluator::evaluate_batch",
+                    "TreeTNCachedEvaluator::evaluate_batched",
                 )?;
                 Ok((entry.index.clone(), value))
             })
@@ -1591,7 +1596,7 @@ mod tests {
             ..CachedEvaluatorOptions::default()
         };
         let mut evaluator = TreeTNCachedEvaluator::new(&tree, &indices, options).unwrap();
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(evaluator.center(), Some(&0));
@@ -1682,7 +1687,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_eq!(evaluator.center(), Some(&0));
         assert_scalars_close(&actual, &expected);
@@ -1722,7 +1727,7 @@ mod tests {
         )
         .unwrap();
         let expected = tree.evaluate(&indices, points).unwrap();
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(evaluator.stats_for_test().subtree_environment_count, 4);
@@ -1750,7 +1755,7 @@ mod tests {
             },
         )
         .unwrap();
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(evaluator.stats_for_test().directed_message_count, 12);
@@ -1778,7 +1783,7 @@ mod tests {
             },
         )
         .unwrap();
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
         let stats = evaluator.stats_for_test();
 
         assert_scalars_close(&actual, &expected);
@@ -1794,7 +1799,7 @@ mod tests {
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
 
-        let err = evaluator.evaluate_batch(points).unwrap_err();
+        let err = evaluator.evaluate_batched(points).unwrap_err();
         assert!(err.to_string().contains("row count"));
     }
 
@@ -1807,7 +1812,7 @@ mod tests {
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
 
-        let err = evaluator.evaluate_batch(points).unwrap_err();
+        let err = evaluator.evaluate_batched(points).unwrap_err();
         assert!(err.to_string().contains("out of range"));
     }
 
@@ -1821,7 +1826,7 @@ mod tests {
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
 
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(actual[0].real(), actual[2].real());
@@ -1850,7 +1855,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
     }
@@ -1877,7 +1882,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual = evaluator.evaluate_batch(points).unwrap();
+        let actual = evaluator.evaluate_batched(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);

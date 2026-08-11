@@ -1388,7 +1388,7 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
         )
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let results = cached
-            .evaluate_batch(values)
+            .evaluate_batched(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let center = cached.center().copied();
         drop(cached);
@@ -1443,7 +1443,7 @@ pub extern "C" fn t4a_treetn_evaluate(
             TreeTNCachedEvaluator::new(tn.inner(), &indices, CachedEvaluatorOptions::default())
                 .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let results = evaluator
-            .evaluate_batch(values)
+            .evaluate_batched(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 
         write_evaluation_results(&results, scalar_kind, out_re, out_im)

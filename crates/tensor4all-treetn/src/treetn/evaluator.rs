@@ -47,7 +47,7 @@ where
 /// let evaluator = TreeTNEvaluator::new(&tree, &[s])?;
 /// let values = [0usize, 2usize];
 /// let shape = [1usize, 2usize];
-/// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
+/// let result = evaluator.evaluate_batched(ColMajorArrayRef::new(&values, &shape).unwrap())?;
 ///
 /// assert_eq!(result.len(), 2);
 /// assert!((result[0].real() - 10.0).abs() < 1.0e-12);
@@ -259,24 +259,24 @@ where
     /// let values = [1usize];
     /// let shape = [1usize, 1usize];
     ///
-    /// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
+    /// let result = evaluator.evaluate_batched(ColMajorArrayRef::new(&values, &shape).unwrap())?;
     /// assert!((result[0].real() - 9.0).abs() < 1.0e-12);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn evaluate_batch(
+    pub fn evaluate_batched(
         &self,
         values: ColMajorArrayRef<'_, usize>,
     ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
         if !(values.shape().len() == 2) {
             return Err(anyhow::anyhow!(
-                "TreeTNEvaluator::evaluate_batch: values must be 2D, got {}D",
+                "TreeTNEvaluator::evaluate_batched: values must be 2D, got {}D",
                 values.shape().len()
             )
             .into());
         };
         if !(values.shape()[0] == self.n_indices) {
             return Err(anyhow::anyhow!(
-                "TreeTNEvaluator::evaluate_batch: values.shape()[0] ({}) != indices.len() ({})",
+                "TreeTNEvaluator::evaluate_batched: values.shape()[0] ({}) != indices.len() ({})",
                 values.shape()[0],
                 self.n_indices
             )
@@ -314,17 +314,17 @@ where
                         values,
                         site.input_position,
                         point,
-                        "TreeTNEvaluator::evaluate_batch",
+                        "TreeTNEvaluator::evaluate_batched",
                     )?;
                     Ok((site.index.clone(), value))
                 })
                 .collect::<Result<_>>()?;
 
             let onehot = T::onehot(&index_vals)
-                .context("TreeTNEvaluator::evaluate_batch: failed to create one-hot tensor")?;
+                .context("TreeTNEvaluator::evaluate_batched: failed to create one-hot tensor")?;
 
             let result = T::contract(&[&entry.tensor, &onehot]).context(
-                "TreeTNEvaluator::evaluate_batch: failed to contract tensor with one-hot",
+                "TreeTNEvaluator::evaluate_batched: failed to contract tensor with one-hot",
             )?;
 
             contracted_tensors.push(result);
@@ -332,16 +332,16 @@ where
         }
 
         let temp_tn = TreeTN::<T, V>::from_tensors(contracted_tensors, contracted_names)
-            .context("TreeTNEvaluator::evaluate_batch: failed to build temporary TreeTN")?;
+            .context("TreeTNEvaluator::evaluate_batched: failed to build temporary TreeTN")?;
         let result_tensor = temp_tn
             .contract_to_tensor()
-            .context("TreeTNEvaluator::evaluate_batch: failed to contract to scalar")?;
+            .context("TreeTNEvaluator::evaluate_batched: failed to contract to scalar")?;
 
-        let scalar_one =
-            T::scalar_one().context("TreeTNEvaluator::evaluate_batch: failed to create scalar")?;
+        let scalar_one = T::scalar_one()
+            .context("TreeTNEvaluator::evaluate_batched: failed to create scalar")?;
         scalar_one
             .inner_product(&result_tensor)
-            .context("TreeTNEvaluator::evaluate_batch: failed to extract scalar value")
+            .context("TreeTNEvaluator::evaluate_batched: failed to extract scalar value")
     }
 }
 

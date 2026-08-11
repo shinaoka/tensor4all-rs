@@ -116,7 +116,7 @@ fn bench_chain_size_scaling(c: &mut Criterion) {
                         CachedEvaluatorOptions::<usize>::default(),
                     )
                     .unwrap();
-                    evaluator.evaluate_batch(points).unwrap()
+                    evaluator.evaluate_batched(points).unwrap()
                 })
             },
         );
@@ -182,7 +182,7 @@ fn bench_batch_size_scaling(c: &mut Criterion) {
                         CachedEvaluatorOptions::<usize>::default(),
                     )
                     .unwrap();
-                    evaluator.evaluate_batch(points).unwrap()
+                    evaluator.evaluate_batched(points).unwrap()
                 })
             },
         );
@@ -242,7 +242,7 @@ fn bench_bond_dim_scaling(c: &mut Criterion) {
                         CachedEvaluatorOptions::<usize>::default(),
                     )
                     .unwrap();
-                    evaluator.evaluate_batch(points).unwrap()
+                    evaluator.evaluate_batched(points).unwrap()
                 })
             },
         );

@@ -571,7 +571,7 @@ where
     /// This is a convenience method that constructs a temporary
     /// [`TreeTNEvaluator`]. For repeated calls with the same site-index order,
     /// create an evaluator once with [`Self::evaluator`] and call
-    /// [`TreeTNEvaluator::evaluate_batch`].
+    /// [`TreeTNEvaluator::evaluate_batched`].
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by full `Index` value (from
@@ -601,7 +601,7 @@ where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
     {
-        TreeTNEvaluator::new(self, indices)?.evaluate_batch(values)
+        TreeTNEvaluator::new(self, indices)?.evaluate_batched(values)
     }
 
     /// Evaluate the TreeTN at one multi-index.
