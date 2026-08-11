@@ -6209,30 +6209,6 @@ impl TensorDynLen {
         Ok((self.indices, data))
     }
 
-    /// Extract tensor data as a column-major `Vec<f64>`.
-    ///
-    /// Prefer the generic [`to_vec::<f64>()`](Self::to_vec) method.
-    /// This wrapper is kept for C API compatibility.
-    /// # Errors
-    /// Returns an error when the tensor is not f64-compatible (a dtype mismatch)
-    /// or materialization fails.
-    ///
-    pub fn as_slice_f64(&self) -> std::result::Result<Vec<f64>, TensorDynLenError> {
-        self.to_vec::<f64>()
-    }
-
-    /// Extract tensor data as a column-major `Vec<Complex64>`.
-    ///
-    /// Prefer the generic [`to_vec::<Complex64>()`](Self::to_vec) method.
-    /// This wrapper is kept for C API compatibility.
-    /// # Errors
-    /// Returns an error when the tensor is not c64-compatible (a dtype mismatch)
-    /// or materialization fails.
-    ///
-    pub fn as_slice_c64(&self) -> std::result::Result<Vec<Complex64>, TensorDynLenError> {
-        self.to_vec::<Complex64>()
-    }
-
     /// Check if the tensor has `f64` storage.
     ///
     /// # Example

@@ -2373,7 +2373,7 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
         create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
     let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
     let mut rhs = solution.clone();
-    rhs.scale(AnyScalar::new_real(7.0)).unwrap();
+    rhs = rhs.scale(AnyScalar::new_real(7.0)).unwrap();
 
     let residual = relative_linear_system_residual(
         &operator,
@@ -2523,8 +2523,7 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
 
     let phys_dim = 2;
     let (rhs, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
-    let mut init = rhs.clone();
-    init.scale(AnyScalar::new_real(1.0 + 1.0e-6)).unwrap();
+    let init = rhs.scale(AnyScalar::new_real(1.0 + 1.0e-6)).unwrap();
     let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[0.0, 0.0], phys_dim);
     let (input_mapping, output_mapping) =
         create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);

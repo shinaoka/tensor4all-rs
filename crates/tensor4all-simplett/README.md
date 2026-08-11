@@ -4,7 +4,7 @@ Simple, efficient Tensor Train (MPS) implementation for numerical computation.
 
 ## Key Types
 
-- `TensorTrain` — basic MPS with `f64` and `Complex64` support
+- `SimpleTensorTrain` — basic MPS with `f64` and `Complex64` support
 - `SiteTensorTrain` — center-canonical MPS with specified orthogonality center
 - `VidalTensorTrain` — Vidal canonical form with explicit singular values
 - `CompressionOptions` — controls tolerance and maximum bond dimension for compression
@@ -12,11 +12,11 @@ Simple, efficient Tensor Train (MPS) implementation for numerical computation.
 ## Example
 
 ```rust
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Create a constant tensor train (all entries = 1.0) over a 2x3x4 grid
-let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 
 // Evaluate at a specific multi-index
 let value = tt.evaluate(&[0, 1, 2])?;

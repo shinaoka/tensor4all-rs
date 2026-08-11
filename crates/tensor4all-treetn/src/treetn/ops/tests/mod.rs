@@ -39,7 +39,7 @@ fn test_scale_doubles_norm() {
     let mut tn = make_three_node_chain();
     let original_norm = tn.norm().unwrap();
 
-    tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    tn.scale_mut(AnyScalar::new_real(2.0)).unwrap();
     let scaled_norm = tn.norm().unwrap();
 
     assert!((scaled_norm - 2.0 * original_norm).abs() < 1.0e-10);

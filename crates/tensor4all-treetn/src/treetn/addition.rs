@@ -509,10 +509,8 @@ where
         A: Into<AnyScalar>,
         B: Into<AnyScalar>,
     {
-        let mut lhs = self.clone();
-        lhs.scale(a.into())?;
-        let mut rhs = other.clone();
-        rhs.scale(b.into())?;
+        let lhs = self.scale(a.into())?;
+        let rhs = other.scale(b.into())?;
         lhs.add(&rhs)
     }
 

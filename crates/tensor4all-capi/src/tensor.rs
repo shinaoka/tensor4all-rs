@@ -619,7 +619,7 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let data = match (*ptr).inner().as_slice_f64() {
+        let data = match (*ptr).inner().to_vec::<f64>() {
             Ok(data) => data,
             Err(e) => {
                 return crate::err_status(
@@ -671,7 +671,7 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let data = match (*ptr).inner().as_slice_c64() {
+        let data = match (*ptr).inner().to_vec::<Complex64>() {
             Ok(data) => data,
             Err(e) => {
                 return crate::err_status(

@@ -288,7 +288,7 @@ where
     /// let t = TensorDynLen::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
     /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
-    /// tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    /// tn.scale_mut(AnyScalar::new_real(2.0)).unwrap();
     ///
     /// let dense = tn.to_dense().unwrap();
     /// let expected = TensorDynLen::from_dense(
@@ -297,7 +297,10 @@ where
     /// ).unwrap();
     /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// ```
-    pub fn scale(&mut self, scalar: AnyScalar) -> std::result::Result<(), TreeTNOperationError> {
+    pub fn scale_mut(
+        &mut self,
+        scalar: AnyScalar,
+    ) -> std::result::Result<(), TreeTNOperationError> {
         let min_node = self
             .node_names()
             .into_iter()
@@ -324,6 +327,45 @@ where
         self.ortho_towards.clear();
 
         Ok(())
+    }
+
+    /// Return a scaled copy of this `TreeTN`.
+    ///
+    /// The represented tensor network is multiplied by `scalar`; the
+    /// canonical region and orthogonality directions of the copy are reset.
+    ///
+    /// # Arguments
+    /// * `scalar` - Scalar multiplier applied to the represented tensor network
+    ///
+    /// # Returns
+    /// `Ok(Self)` with every entry multiplied by `scalar`.
+    ///
+    /// # Errors
+    /// Returns an error when the scaling fails (a dtype mismatch or backend
+    /// failure).
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
+    /// let tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// let scaled = tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    ///
+    /// let dense = scaled.to_dense().unwrap();
+    /// let expected = TensorDynLen::from_dense(
+    ///     dense.external_indices(),
+    ///     vec![2.0_f64, -4.0],
+    /// ).unwrap();
+    /// assert!(dense.distance(&expected).unwrap() < 1e-12);
+    /// ```
+    pub fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, TreeTNOperationError> {
+        let mut result = self.clone();
+        result.scale_mut(scalar)?;
+        Ok(result)
     }
 
     /// Compute the inner product of two TreeTNs.

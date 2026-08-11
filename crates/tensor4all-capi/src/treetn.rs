@@ -1508,13 +1508,13 @@ pub extern "C" fn t4a_treetn_scale(
 ) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
-        let mut result = tn.inner().clone();
         let scalar = if im == 0.0 {
             AnyScalar::new_real(re)
         } else {
             AnyScalar::new_complex(re, im)
         };
-        result
+        let result = tn
+            .inner()
             .scale(scalar)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_treetn::new(result))

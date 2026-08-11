@@ -24,10 +24,10 @@ input values per interpolation point.
 
 ```rust
 use tensor4all_aci::{elementwise, AciOptions};
-use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 
-let a = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
 
 let result = elementwise(
     |xs: &[f64]| xs[0] * xs[1],
@@ -48,10 +48,10 @@ columns. Use `batch.get(input, point)` for checked access.
 
 ```rust
 use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
-use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 
-let a = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
 
 let result = elementwise_batched(
     |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
@@ -76,10 +76,10 @@ as `data[input + n_inputs * point]`.
 
 ```rust
 use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
-use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 
-let a = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
 
 let result = elementwise_batched(
     |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {

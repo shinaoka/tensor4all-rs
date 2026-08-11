@@ -948,7 +948,7 @@ fn test_partial_contract_mismatched_topology_scalar_result() {
 
     assert!(result.external_indices().is_empty());
     let dense = result.contract_to_tensor().unwrap();
-    assert_eq!(dense.as_slice_f64().unwrap(), vec![11.0]);
+    assert_eq!(dense.to_vec::<f64>().unwrap(), vec![11.0]);
 }
 
 #[test]
@@ -1419,7 +1419,7 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
     assert!(
         result_dense.isapprox(&expected, 1.0e-10, 0.0).unwrap(),
         "cross-topology partial_contract mismatch:\nresult={:?}\nexpected={:?}",
-        result_dense.as_slice_f64().unwrap(),
-        expected.as_slice_f64().unwrap()
+        result_dense.to_vec::<f64>().unwrap(),
+        expected.to_vec::<f64>().unwrap()
     );
 }

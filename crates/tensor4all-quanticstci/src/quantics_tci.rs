@@ -8,13 +8,13 @@ use crate::error::{QuanticsTCIError, Result as QtciResult};
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
-use tensor4all_core::TensorDynLen;
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, TTScalar};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::to_treetn;
 use tensor4all_treetci::{
     optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2, TreeTciGraph,
 };
+use tensor4all_treetn::treetn_to_tensor_train as bridge_treetn_to_tensor_train;
 
 use crate::options::QtciOptions;
 
@@ -345,112 +345,6 @@ where
     }
 }
 
-/// Convert a linear-chain TreeTN to a SimpleTT SimpleTensorTrain.
-///
-/// The TreeTN must have been produced by treetci::crossinterpolate2 with a
-/// linear chain graph and center_site=0. Nodes are numbered 0..n-1.
-///
-/// TreeTN tensors from `to_treetn` have index order:
-///   [site_dim, incoming_bond_dims..., outgoing_bond_dims...]
-/// where incoming = children, outgoing = parent in BFS from root=0.
-///
-/// For a linear chain rooted at 0:
-///   - Node 0 (root): [site, bond_01]
-///   - Node k (middle): [site, bond_{k,k+1}, bond_{k-1,k}]
-///   - Node n-1 (leaf): [site, bond_{n-2,n-1}]
-///
-/// For SimpleTT we need (left_bond, site_dim, right_bond).
-fn treetn_to_tensor_train<V>(
-    treetn: &tensor4all_treetn::TreeTN<TensorDynLen, usize>,
-    n_sites: usize,
-    local_dims: &[usize],
-) -> Result<SimpleTensorTrain<V>>
-where
-    V: TTScalar + Default + Clone + tensor4all_core::TensorElement,
-{
-    let mut tensors = Vec::with_capacity(n_sites);
-
-    for (site, &site_dim) in local_dims.iter().enumerate().take(n_sites) {
-        let node_idx = treetn
-            .node_index(&site)
-            .ok_or_else(|| anyhow!("node {} not found in TreeTN", site))?;
-        let tensor = treetn
-            .tensor(node_idx)
-            .ok_or_else(|| anyhow!("tensor not found at node {}", site))?;
-
-        let dims = tensor.dims();
-        let data: Vec<V> = tensor
-            .to_vec::<V>()
-            .map_err(|e| anyhow!("failed to extract tensor data at node {}: {}", site, e))?;
-
-        if n_sites == 1 {
-            // Single site: tensor has only site index, shape (site_dim,)
-            // Need: (1, site_dim, 1)
-            tensors.push(tensor3_from_data(data, 1, site_dim, 1)?);
-        } else if site == 0 {
-            // Root (leftmost): indices = [site, bond_01]
-            // Data is column-major with shape (site_dim, bond_dim)
-            // Need: (1, site_dim, bond_dim)
-            assert_eq!(dims.len(), 2, "root node should have 2 indices");
-            let bond_dim = dims[1];
-            // Column-major (site, bond): data[s + site_dim * b]
-            // Target (1, site, bond): data[0 + 1*(s + site_dim * b)] — same layout
-            tensors.push(tensor3_from_data(data, 1, site_dim, bond_dim)?);
-        } else if site == n_sites - 1 {
-            // Leaf (rightmost): indices = [site, bond_{n-2,n-1}]
-            // Data is column-major with shape (site_dim, left_bond)
-            // Need: (left_bond, site_dim, 1)
-            assert_eq!(dims.len(), 2, "leaf node should have 2 indices");
-            let left_bond = dims[1];
-            // Permute: (site, left) → (left, site)
-            let mut permuted = vec![V::default(); data.len()];
-            for l in 0..left_bond {
-                for s in 0..site_dim {
-                    permuted[l + left_bond * s] = data[s + site_dim * l];
-                }
-            }
-            tensors.push(tensor3_from_data(permuted, left_bond, site_dim, 1)?);
-        } else {
-            // Middle node: indices = [site, bond_{k,k+1}, bond_{k-1,k}]
-            // Data is column-major with shape (site_dim, right_bond, left_bond)
-            // Need: (left_bond, site_dim, right_bond)
-            assert_eq!(dims.len(), 3, "middle node should have 3 indices");
-            let right_bond = dims[1];
-            let left_bond = dims[2];
-            let total = data.len();
-            assert_eq!(
-                total,
-                site_dim * right_bond * left_bond,
-                "data size mismatch for middle node {}: expected {}*{}*{}={}, got {}",
-                site,
-                site_dim,
-                right_bond,
-                left_bond,
-                site_dim * right_bond * left_bond,
-                total
-            );
-            // Permute: (site, right, left) → (left, site, right)
-            // Source col-major: data[s + site_dim * (r + right_bond * l)]
-            // Target col-major: permuted[l + left_bond * (s + site_dim * r)]
-            let mut permuted = vec![V::default(); total];
-            for l in 0..left_bond {
-                for s in 0..site_dim {
-                    for r in 0..right_bond {
-                        let src = s + site_dim * (r + right_bond * l);
-                        let dst = l + left_bond * (s + site_dim * r);
-                        permuted[dst] = data[src];
-                    }
-                }
-            }
-            tensors.push(tensor3_from_data(
-                permuted, left_bond, site_dim, right_bond,
-            )?);
-        }
-    }
-
-    SimpleTensorTrain::new(tensors).map_err(|e| anyhow!("Failed to build SimpleTensorTrain: {}", e))
-}
-
 /// Interpolate a function with an explicit Grid.
 ///
 /// # Arguments
@@ -608,8 +502,11 @@ where
     let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
-    // Convert TreeTN → SimpleTensorTrain<V>
-    let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
+    // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
+    let tt: SimpleTensorTrain<V> =
+        bridge_treetn_to_tensor_train(treetn).map_err(|error| QuanticsTCIError::Operation {
+            source: anyhow::anyhow!("TreeTN to SimpleTensorTrain conversion failed: {error}"),
+        })?;
 
     // Drop batch_eval (and its captured Rc clone) before extracting the cache
     drop(batch_eval);
@@ -931,8 +828,11 @@ where
     let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
-    // Convert TreeTN → SimpleTensorTrain<V>
-    let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
+    // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
+    let tt: SimpleTensorTrain<V> =
+        bridge_treetn_to_tensor_train(treetn).map_err(|error| QuanticsTCIError::Operation {
+            source: anyhow::anyhow!("TreeTN to SimpleTensorTrain conversion failed: {error}"),
+        })?;
 
     // Drop batch_eval (and its captured Rc clone) before extracting the cache
     drop(batch_eval);
