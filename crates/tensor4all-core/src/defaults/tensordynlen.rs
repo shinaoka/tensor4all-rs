@@ -21,9 +21,9 @@ use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
-    native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
-    native_tensor_primal_to_diag_f64, scale_native_tensor, storage_payload_native_read_input,
-    storage_to_native_tensor, NativeTensorReadInput, TensorElement,
+    native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag, scale_native_tensor,
+    storage_payload_native_read_input, storage_to_native_tensor, NativeTensorReadInput,
+    TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -1750,11 +1750,11 @@ impl TensorDynLen {
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
                 DType::F64 | DType::I32 | DType::I64 | DType::Bool => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_f64(native)?,
+                    native_tensor_primal_to_diag::<f64>(native)?,
                     logical_rank,
                 ),
                 DType::C64 => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_c64(native)?,
+                    native_tensor_primal_to_diag::<Complex64>(native)?,
                     logical_rank,
                 ),
                 DType::F32 | DType::C32 => Err(anyhow::anyhow!(

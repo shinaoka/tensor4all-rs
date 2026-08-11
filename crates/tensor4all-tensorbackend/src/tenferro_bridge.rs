@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
-use tenferro::{DType, Tensor as NativeTensor, TensorRead, TensorView, TracedTensor};
+use tenferro::{DType, Tensor as NativeTensor, TensorRead, TensorScalar, TensorView, TracedTensor};
 use tenferro_einsum::{
     ContractionOptimizerOptions, ContractionTree, EinsumOptimize, EinsumSubscripts, Subscripts,
 };
@@ -964,126 +964,79 @@ pub fn native_tensor_primal_to_storage(
     }
 }
 
-/// Materialize dense f64 values from a native tensor.
-/// # Errors
-///
-/// Returns an error when the native tensor is not f64-compatible (a dtype mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_dense_f64_col_major(
-    tensor: &NativeTensor,
-) -> std::result::Result<Vec<f64>, BridgeError> {
-    match tensor.dtype() {
-        DType::F32 => Ok(tensor
-            .as_slice::<f32>()
-            .ok_or_else(|| anyhow!("failed to read f32 native tensor"))?
-            .iter()
-            .map(|&value| value as f64)
-            .collect()),
-        DType::F64 => <f64 as TensorElement>::dense_values_from_native_col_major(tensor)
-            .map_err(BridgeError::from),
-        DType::I32 => Ok(tensor
-            .as_slice::<i32>()
-            .ok_or_else(|| anyhow!("failed to read i32 native tensor"))?
-            .iter()
-            .map(|&value| value as f64)
-            .collect()),
-        DType::I64 => Ok(tensor
-            .as_slice::<i64>()
-            .ok_or_else(|| anyhow!("failed to read i64 native tensor"))?
-            .iter()
-            .map(|&value| value as f64)
-            .collect()),
-        DType::Bool => Ok(tensor
-            .as_slice::<bool>()
-            .ok_or_else(|| anyhow!("failed to read bool native tensor"))?
-            .iter()
-            .map(|&value| if value { 1.0 } else { 0.0 })
-            .collect()),
-        other => Err(anyhow!("expected real native tensor, got dtype {other:?}").into()),
-    }
-}
-
-/// Materialize dense Complex64 values from a native tensor.
-/// # Errors
-///
-/// Returns an error when the native tensor is not c64-compatible (a dtype mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_dense_c64_col_major(
-    tensor: &NativeTensor,
-) -> std::result::Result<Vec<Complex64>, BridgeError> {
-    match tensor.dtype() {
-        DType::C32 => Ok(tensor
-            .as_slice::<Complex32>()
-            .ok_or_else(|| anyhow!("failed to read c32 native tensor"))?
-            .iter()
-            .map(|&value| Complex64::new(value.re as f64, value.im as f64))
-            .collect()),
-        DType::C64 => <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)
-            .map_err(BridgeError::from),
-        other => Err(anyhow!("expected complex native tensor, got dtype {other:?}").into()),
-    }
-}
-
 /// Materialize dense column-major values from a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be materialized as a dense column-major buffer (a dtype mismatch or backend failure).
+/// Returns an error when the native tensor cannot be materialized as a dense
+/// column-major buffer (a dtype mismatch or backend failure).
 pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
     tensor: &NativeTensor,
-) -> Result<Vec<T>> {
-    T::dense_values_from_native_col_major(tensor)
+) -> std::result::Result<Vec<T>, BridgeError> {
+    let target = <T as TensorScalar>::dtype();
+    let tensor_is_real = matches!(
+        tensor.dtype(),
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool
+    );
+    let target_is_real = matches!(
+        target,
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool
+    );
+    if tensor_is_real != target_is_real {
+        return Err(anyhow!(
+            "expected {} native tensor, got dtype {:?}",
+            if target_is_real { "real" } else { "complex" },
+            tensor.dtype()
+        )
+        .into());
+    }
+    <T as TensorElement>::dense_values_from_native_col_major(tensor).map_err(BridgeError::from)
 }
 
-/// Extract the diagonal payload from a real native tensor.
+/// Materialize diagonal values from a native tensor, promoting to the
+/// matching real (`f64`) or complex (`Complex64`) dtype.
+///
+/// Real native tensors (`f32`, `f64`, `i32`, `i64`, `bool`) are promoted to
+/// `f64`; complex tensors (`c32`, `c64`) are promoted to `Complex64`. The
+/// scalar type `T` selects the promoted target.
 /// # Errors
 ///
-/// Returns an error when the native tensor is not f64-diagonal-compatible (a dtype or shape mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_diag_f64(
-    tensor: &NativeTensor,
-) -> std::result::Result<Vec<f64>, BridgeError> {
-    match tensor.dtype() {
-        DType::F32 => {
-            let promoted = convert_tensor(tensor, DType::F64)?;
-            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
-                .map_err(BridgeError::from)
-        }
-        DType::F64 => {
-            <f64 as TensorElement>::diag_values_from_native_temp(tensor).map_err(BridgeError::from)
-        }
-        DType::I32 => {
-            let promoted = convert_tensor(tensor, DType::F64)?;
-            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
-                .map_err(BridgeError::from)
-        }
-        DType::I64 => {
-            let promoted = convert_tensor(tensor, DType::F64)?;
-            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
-                .map_err(BridgeError::from)
-        }
-        DType::Bool => {
-            let promoted = convert_tensor(tensor, DType::F64)?;
-            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
-                .map_err(BridgeError::from)
-        }
-        other => Err(anyhow!("expected real native tensor, got dtype {other:?}").into()),
-    }
-}
-
-/// Extract the diagonal payload from a complex native tensor.
-/// # Errors
+/// Returns an error when the native tensor is not compatible with the scalar
+/// target (a dtype mismatch) or the materialization fails.
 ///
-/// Returns an error when the native tensor is not c64-diagonal-compatible (a dtype or shape mismatch) or the materialization fails.
-pub fn native_tensor_primal_to_diag_c64(
+/// # Examples
+/// ```
+/// use tenferro::Tensor as NativeTensor;
+/// use tensor4all_tensorbackend::native_tensor_primal_to_diag;
+/// let native = NativeTensor::from_vec_col_major(vec![3, 3], vec![1.0_f64, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]);
+/// let diag = native_tensor_primal_to_diag::<f64>(&native).unwrap();
+/// assert_eq!(diag, vec![1.0, 2.0, 3.0]);
+/// ```
+pub fn native_tensor_primal_to_diag<T: TensorElement>(
     tensor: &NativeTensor,
-) -> std::result::Result<Vec<Complex64>, BridgeError> {
-    match tensor.dtype() {
-        DType::C32 => {
-            let promoted = convert_tensor(tensor, DType::C64)?;
-            <Complex64 as TensorElement>::diag_values_from_native_temp(&promoted)
-                .map_err(BridgeError::from)
-        }
-        DType::C64 => <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)
-            .map_err(BridgeError::from),
-        other => Err(anyhow!("expected complex native tensor, got dtype {other:?}").into()),
+) -> std::result::Result<Vec<T>, BridgeError> {
+    let promote_to = <T as TensorScalar>::dtype();
+    let tensor_is_real = matches!(
+        tensor.dtype(),
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool
+    );
+    let target_is_real = matches!(
+        promote_to,
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool
+    );
+    if tensor_is_real != target_is_real {
+        return Err(anyhow!(
+            "expected {} native tensor, got dtype {:?}",
+            if target_is_real { "real" } else { "complex" },
+            tensor.dtype()
+        )
+        .into());
     }
+    let promoted = if tensor.dtype() == promote_to {
+        tensor.clone()
+    } else {
+        convert_tensor(tensor, promote_to)?
+    };
+    <T as TensorElement>::diag_values_from_native_temp(&promoted).map_err(BridgeError::from)
 }
 
 /// Reshape a native tensor without changing its column-major linearization.

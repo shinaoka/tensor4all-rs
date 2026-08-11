@@ -2,7 +2,7 @@ use super::*;
 use crate::index::DefaultIndex as Index;
 use crate::unfold_split;
 use num_complex::Complex64;
-use tensor4all_tensorbackend::native_tensor_primal_to_dense_f64_col_major;
+use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 
 #[test]
 fn compute_retained_rank_qr_from_dense_truncates_and_keeps_one() {
@@ -53,7 +53,7 @@ fn unfold_split_preserves_column_major_linearization_with_unit_dims() {
     let (matrix, _, m, n, _, _) = unfold_split(&tensor, &[i2, i3]).unwrap();
     assert_eq!((m, n), (4, 1));
     assert_eq!(
-        native_tensor_primal_to_dense_f64_col_major(&matrix).unwrap(),
+        native_tensor_primal_to_dense_col_major::<f64>(&matrix).unwrap(),
         vec![1.0, 2.0, 3.0, 4.0]
     );
 }
