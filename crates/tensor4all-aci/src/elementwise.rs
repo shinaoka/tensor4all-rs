@@ -308,7 +308,7 @@ pub(crate) fn convergence_criterion_like_julia(
 /// [`convergence_criterion_like_julia`], and the default `max_bond_dim` of
 /// [`usize::MAX`] is unreachable, so unconstrained runs are unaffected.
 ///
-/// This is the `all(lastranks .>= maxbonddim)` disjunct of the Julia
+/// This is the `all(lastranks .>= max_bond_dim)` disjunct of the Julia
 /// `convergencecriterion` that [`convergence_criterion_like_julia`] otherwise
 /// ports, over the same trailing window. `tensor4all-treetci` gained the
 /// equivalent exit in its own sweep loop in #575.

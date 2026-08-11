@@ -71,7 +71,7 @@ impl SubDomainTT {
 
     /// Collect all site indices from the tensor train.
     fn collect_all_indices(tt: &TensorTrain) -> Vec<DynIndex> {
-        tt.siteinds().into_iter().flatten().collect()
+        tt.site_indices().into_iter().flatten().collect()
     }
 
     /// Get all site indices (flattened).
@@ -120,12 +120,12 @@ impl SubDomainTT {
 
     /// Get the maximum bond dimension.
     pub fn max_bond_dim(&self) -> usize {
-        self.data.maxbonddim()
+        self.data.max_bond_dim()
     }
 
     /// Get the site indices (nested per site).
-    pub fn siteinds(&self) -> Vec<Vec<DynIndex>> {
-        self.data.siteinds()
+    pub fn site_indices(&self) -> Vec<Vec<DynIndex>> {
+        self.data.site_indices()
     }
 
     /// Check if an index is projected.
@@ -208,10 +208,10 @@ impl SubDomainTT {
 
     /// Project the tensor data by differentiably masking each selected index.
     fn project_tensor_data(&self, projector: &Projector) -> Result<TensorTrain> {
-        let siteinds = self.data.siteinds();
+        let site_indices = self.data.site_indices();
         let mut new_tensors = Vec::with_capacity(self.data.len());
 
-        for (site, site_indices) in siteinds.iter().enumerate() {
+        for (site, site_indices) in site_indices.iter().enumerate() {
             let tensor = self
                 .data
                 .tensor(site)

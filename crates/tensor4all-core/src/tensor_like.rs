@@ -1006,7 +1006,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
 /// `TensorLike` extends several capability traits. Through those traits it provides:
 /// - `external_indices()` - Get all external indices
 /// - `num_external_indices()` - Count external indices
-/// - `replaceind()` / `replaceinds()` - Replace indices
+/// - `replaceind()` / `replace_indices()` - Replace indices
 /// - vector-space operations such as `axpby`, `inner_product`, and `norm`
 /// - tensor-network operations such as contraction, construction, and factorization
 ///

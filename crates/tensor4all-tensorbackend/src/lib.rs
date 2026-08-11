@@ -45,7 +45,7 @@ pub use matrix::{
 };
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
 pub use storage::{
-    contract_storage, make_mut_storage, mindim, Storage, StorageError, StorageKind, StorageResult,
+    contract_storage, make_mut_storage, min_dim, Storage, StorageError, StorageKind, StorageResult,
     StorageScalar, StructuredStorage, SumFromStorage,
 };
 pub use tenferro_bridge::{

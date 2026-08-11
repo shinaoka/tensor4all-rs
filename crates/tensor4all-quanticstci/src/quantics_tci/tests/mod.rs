@@ -150,11 +150,11 @@ fn test_from_arrays_empty_dimension() {
 fn test_options_builder() {
     let opts = QtciOptions::default()
         .with_tolerance(1e-6)
-        .with_maxbonddim(50)
+        .with_max_bond_dim(50)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
-    assert_eq!(opts.maxbonddim, Some(50));
+    assert_eq!(opts.max_bond_dim, Some(50));
     assert_eq!(opts.unfoldingscheme, UnfoldingScheme::Fused);
 }
 

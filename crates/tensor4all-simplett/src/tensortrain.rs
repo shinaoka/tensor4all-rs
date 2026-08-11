@@ -257,11 +257,11 @@ impl<T: TTScalar> TensorTrain<T> {
     /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
     ///
     /// let mut tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    /// tt.scale(3.0);
+    /// tt.scale_mut(3.0);
     /// assert!((tt.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
     /// assert!((tt.sum() - 18.0).abs() < 1e-10);
     /// ```
-    pub fn scale(&mut self, factor: T) {
+    pub fn scale_mut(&mut self, factor: T) {
         if !self.tensors.is_empty() {
             let last = self.tensors.len() - 1;
             let tensor = &mut self.tensors[last];
@@ -286,15 +286,15 @@ impl<T: TTScalar> TensorTrain<T> {
     /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
     ///
     /// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    /// let tt2 = tt.scaled(4.0);
+    /// let tt2 = tt.scale(4.0);
     /// // Original is unchanged
     /// assert!((tt.evaluate(&[0, 0]).unwrap() - 1.0).abs() < 1e-12);
     /// // Scaled copy
     /// assert!((tt2.evaluate(&[0, 0]).unwrap() - 4.0).abs() < 1e-12);
     /// ```
-    pub fn scaled(&self, factor: T) -> Self {
+    pub fn scale(&self, factor: T) -> Self {
         let mut result = self.clone();
-        result.scale(factor);
+        result.scale_mut(factor);
         result
     }
 
@@ -361,13 +361,13 @@ impl<T: TTScalar> TensorTrain<T> {
     /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
     ///
     /// let tt = TensorTrain::<f64>::constant(&[2, 3], 7.0);
-    /// let (data, shape) = tt.fulltensor();
+    /// let (data, shape) = tt.full_tensor();
     /// assert_eq!(shape, vec![2, 3]);
     /// assert_eq!(data.len(), 6);
     /// // Every element should be 7.0
     /// assert!(data.iter().all(|&v| (v - 7.0).abs() < 1e-12));
     /// ```
-    pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>) {
+    pub fn full_tensor(&self) -> (Vec<T>, Vec<usize>) {
         if self.is_empty() {
             return (Vec::new(), Vec::new());
         }

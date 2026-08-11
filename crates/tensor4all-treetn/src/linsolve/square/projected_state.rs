@@ -97,7 +97,7 @@ where
             // the RHS-side link is contracted with the local RHS tensor, while
             // the reference-side link remains as the output local vector space.
             self.envs.clear();
-            reference_storage = Some(reference_state.sim_linkinds()?);
+            reference_storage = Some(reference_state.sim_link_indices()?);
             reference_storage
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("simulated reference storage was not initialized"))?

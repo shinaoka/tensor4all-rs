@@ -846,7 +846,7 @@ policy:
 - Site index dimensions must match the target. For the first implementation,
   keep the same v1 TDVP restriction: exactly one state site index per node.
 - Reference link IDs should not be assumed to be identical to target link IDs.
-  Existing TDVP support deliberately uses `sim_linkinds_mut()` for reference
+  Existing TDVP support deliberately uses `sim_link_indices_mut()` for reference
   states to avoid accidental bra/ket contractions.
 - For the local $q$ multi-index, the code should build an explicit
   reference-to-target map covering both the state site index at `c` and every

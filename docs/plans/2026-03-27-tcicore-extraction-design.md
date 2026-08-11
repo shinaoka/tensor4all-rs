@@ -26,7 +26,7 @@ crates/tensor4all-tcicore/
 │   ├── scalar.rs             # Scalar trait, scalar_tests! macro
 │   ├── matrix.rs             # Matrix<T>, mat_mul, zeros, from_vec2d, etc.
 │   ├── traits.rs             # AbstractMatrixCI trait
-│   ├── matrixlu.rs           # RrLU, rrlu, rrlu_inplace, RrLUOptions
+│   ├── matrixlu.rs           # RrLU, rrlu, rrlu_mut, RrLUOptions
 │   ├── matrixluci.rs         # MatrixLUCI
 │   ├── matrixaca.rs          # MatrixACA
 │   ├── cached_function/      # CachedFunction (wide key, thread-safe, batch eval)
@@ -110,7 +110,7 @@ pub use error::{MatrixCIError, Result};
 pub use scalar::Scalar;
 pub use matrix::{Matrix, from_vec2d};
 pub use traits::AbstractMatrixCI;
-pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
+pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
 pub use matrixluci::MatrixLUCI;
 pub use matrixaca::MatrixACA;
 

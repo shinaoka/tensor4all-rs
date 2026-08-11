@@ -207,11 +207,11 @@ fn test_replaceind_matches_same_id_prime_pair_site_index_exactly() {
 }
 
 #[test]
-fn test_replaceind_link_index_via_sim_linkinds() {
+fn test_replaceind_link_index_via_sim_link_indices() {
     let (tn, s0, bond, s1) = make_two_node_treetn();
 
-    // sim_linkinds replaces all link indices with fresh IDs
-    let tn2 = tn.sim_linkinds().unwrap();
+    // sim_link_indices replaces all link indices with fresh IDs
+    let tn2 = tn.sim_link_indices().unwrap();
 
     // Site indices should remain unchanged
     let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
@@ -251,14 +251,14 @@ fn test_replaceind_not_found() {
 }
 
 #[test]
-fn test_replaceinds_multiple() {
+fn test_replace_indices_multiple() {
     let (tn, s0, _bond, s1) = make_two_node_treetn();
 
     let s0_new = DynIndex::new_dyn(2);
     let s1_new = DynIndex::new_dyn(2);
 
     let tn2 = tn
-        .replaceinds(&[s0.clone(), s1.clone()], &[s0_new.clone(), s1_new.clone()])
+        .replace_indices(&[s0.clone(), s1.clone()], &[s0_new.clone(), s1_new.clone()])
         .unwrap();
 
     let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
@@ -269,13 +269,13 @@ fn test_replaceinds_multiple() {
 }
 
 #[test]
-fn test_replaceinds_length_mismatch() {
+fn test_replace_indices_length_mismatch() {
     let (tn, s0, _bond, _s1) = make_two_node_treetn();
 
     let s0_new = DynIndex::new_dyn(2);
     let s1_new = DynIndex::new_dyn(2);
 
-    let result = tn.replaceinds(std::slice::from_ref(&s0), &[s0_new.clone(), s1_new.clone()]);
+    let result = tn.replace_indices(std::slice::from_ref(&s0), &[s0_new.clone(), s1_new.clone()]);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Length mismatch"));
 }

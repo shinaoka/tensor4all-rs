@@ -710,7 +710,7 @@ pub fn scalar_mpo(
     value: Complex64,
 ) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
     let mut mpo = identity_mpo(r)?;
-    mpo.scale(value);
+    mpo.scale_mut(value);
     Ok(mpo)
 }
 

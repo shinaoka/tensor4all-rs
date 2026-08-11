@@ -4228,19 +4228,19 @@ impl TensorDynLen {
     ///
     /// // Replace both indices
     /// let replaced = tensor
-    ///     .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+    ///     .replace_indices(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
     ///     .unwrap();
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(
+    pub fn replace_indices(
         &self,
         old_indices: &[DynIndex],
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, TensorDynLenError> {
         if old_indices.len() != new_indices.len() {
             return Err(TensorDynLenError::ShapeMismatch {
-                operation: "replaceinds",
+                operation: "replace_indices",
                 expected: format!("{} indices", old_indices.len()),
                 actual: format!("{} indices", new_indices.len()),
             });
@@ -4250,7 +4250,7 @@ impl TensorDynLen {
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             if old.dim() != new.dim() {
                 return Err(TensorDynLenError::ShapeMismatch {
-                    operation: "replaceinds",
+                    operation: "replace_indices",
                     expected: format!("dimension {}", old.dim()),
                     actual: format!("dimension {}", new.dim()),
                 });
@@ -5361,13 +5361,13 @@ impl TensorIndex for TensorDynLen {
         TensorDynLen::replaceind(self, old_index, new_index)
     }
 
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old_indices: &[DynIndex],
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method.
-        TensorDynLen::replaceinds(self, old_indices, new_indices)
+        TensorDynLen::replace_indices(self, old_indices, new_indices)
     }
 }
 

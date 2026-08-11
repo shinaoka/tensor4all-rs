@@ -68,7 +68,7 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
     )
     .unwrap();
     let source_tt = source.to_tensor_train().unwrap();
-    let (expected_data, expected_shape) = source_tt.fulltensor();
+    let (expected_data, expected_shape) = source_tt.full_tensor();
     let converted = TensorCI2::from_tensor_train(
         source_tt,
         TensorCI2FromTensorTrainOptions {
@@ -78,7 +78,7 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
         },
     )
     .unwrap();
-    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().fulltensor();
+    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().full_tensor();
 
     assert_eq!(actual_shape, expected_shape);
     assert_eq!(converted.link_dims(), source.link_dims());
@@ -113,11 +113,11 @@ fn test_tensorci2_from_tensor_train_preserves_nontrivial_tensor() {
     )
     .unwrap();
     let source_tt = source.to_tensor_train().unwrap();
-    let (expected_data, expected_shape) = source_tt.fulltensor();
+    let (expected_data, expected_shape) = source_tt.full_tensor();
     let converted =
         TensorCI2::from_tensor_train(source_tt, TensorCI2FromTensorTrainOptions::default())
             .unwrap();
-    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().fulltensor();
+    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().full_tensor();
 
     assert_eq!(actual_shape, expected_shape);
     assert_eq!(converted.link_dims(), source.link_dims());

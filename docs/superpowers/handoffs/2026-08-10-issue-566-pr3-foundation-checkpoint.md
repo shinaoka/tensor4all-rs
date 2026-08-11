@@ -20,7 +20,7 @@
 
 ### PR 3 Slice 1 — trait 層の typed 化（commit 41e5c35 〜 5361e90）
 - `TensorIndex` に `type Error: std::error::Error + Send + Sync + From<anyhow::Error>` を追加。
-  replaceind / replaceinds / replaceinds_pairs を typed 化。
+  replaceind / replace_indices / replace_indices_pairs を typed 化。
 - `TensorVectorSpace` の axpby / scale / inner_product / sub / neg /
   validate / isapprox を `Self::Error` で typed 化（既存の norm_squared /
   norm / maxabs と統一）。
@@ -148,7 +148,7 @@
 ## Session 2026-08-12 後半（typed-error step 2 継続）
 
 ### core index 置換 API 完了（レビュー済み・コミット済み）
-- `2c4720a` TensorDynLen::replaceind/replaceinds（inherent）→ Result<_, TensorDynLenError>（ShapeMismatch 構造化バリアント使用）、DynIndex::new_bond → TagSetError
+- `2c4720a` TensorDynLen::replaceind/replace_indices（inherent）→ Result<_, TensorDynLenError>（ShapeMismatch 構造化バリアント使用）、DynIndex::new_bond → TagSetError
 - 呼び出し側: factorize（anyhow::Error::new wrap）、treetn gse 多数サイト、simplett_bridge collect 修正、itensorlike tensortrain
 - tensor_basic.rs の 3 テストを構造化メッセージ（operation + "shape mismatch"）に更新
 - `bfc4236` reviewer 指摘の rustdoc 修正: replaceind(s) の全等価マッチ記述・new_bond の TagSetError 記述・ShapeMismatch バリアント説明拡張

@@ -13,7 +13,7 @@ use tensor4all_treetci::TreeTciOptions;
 /// | Field | Default | Typical range | Purpose |
 /// |---|---|---|---|
 /// | `tolerance` | `1e-8` | `1e-6` .. `1e-12` | Relative convergence threshold |
-/// | `maxbonddim` | `None` (unlimited) | `50` .. `500` | Cap on bond dimension |
+/// | `max_bond_dim` | `None` (unlimited) | `50` .. `500` | Cap on bond dimension |
 /// | `maxiter` | `200` | `20` .. `500` | Maximum half-sweep iterations |
 /// | `nrandominitpivot` | `5` | `3` .. `20` | Random initial pivots added |
 /// | `unfoldingscheme` | `Interleaved` | — | How quantics bits are arranged |
@@ -30,7 +30,7 @@ use tensor4all_treetci::TreeTciOptions;
 /// // Default options
 /// let opts = QtciOptions::default();
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
-/// assert_eq!(opts.maxbonddim, None);
+/// assert_eq!(opts.max_bond_dim, None);
 /// assert_eq!(opts.maxiter, 200);
 /// assert_eq!(opts.nrandominitpivot, 5);
 /// assert_eq!(opts.verbosity, 0);
@@ -39,13 +39,13 @@ use tensor4all_treetci::TreeTciOptions;
 /// // Builder-style customization
 /// let custom = QtciOptions::default()
 ///     .with_tolerance(1e-10)
-///     .with_maxbonddim(50)
+///     .with_max_bond_dim(50)
 ///     .with_maxiter(100)
 ///     .with_nrandominitpivot(10)
 ///     .with_verbosity(1);
 ///
 /// assert!((custom.tolerance - 1e-10).abs() < 1e-18);
-/// assert_eq!(custom.maxbonddim, Some(50));
+/// assert_eq!(custom.max_bond_dim, Some(50));
 /// assert_eq!(custom.maxiter, 100);
 /// assert_eq!(custom.nrandominitpivot, 10);
 /// assert_eq!(custom.verbosity, 1);
@@ -71,7 +71,7 @@ pub struct QtciOptions {
     /// expensive to evaluate, to prevent runaway computation.
     ///
     /// Default: `None`.
-    pub maxbonddim: Option<usize>,
+    pub max_bond_dim: Option<usize>,
 
     /// Maximum number of half-sweep iterations.
     ///
@@ -140,7 +140,7 @@ impl Default for QtciOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-8,
-            maxbonddim: None,
+            max_bond_dim: None,
             maxiter: 200,
             nrandominitpivot: 5,
             unfoldingscheme: UnfoldingScheme::Interleaved,
@@ -173,11 +173,11 @@ impl QtciOptions {
     ///
     /// ```
     /// use tensor4all_quanticstci::QtciOptions;
-    /// let opts = QtciOptions::default().with_maxbonddim(64);
-    /// assert_eq!(opts.maxbonddim, Some(64));
+    /// let opts = QtciOptions::default().with_max_bond_dim(64);
+    /// assert_eq!(opts.max_bond_dim, Some(64));
     /// ```
-    pub fn with_maxbonddim(mut self, maxbonddim: usize) -> Self {
-        self.maxbonddim = Some(maxbonddim);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -273,7 +273,7 @@ impl QtciOptions {
     /// use tensor4all_quanticstci::QtciOptions;
     /// let opts = QtciOptions::default()
     ///     .with_tolerance(1e-10)
-    ///     .with_maxbonddim(64)
+    ///     .with_max_bond_dim(64)
     ///     .with_maxiter(100);
     /// let tree_opts = opts.to_treetci_options();
     /// assert!((tree_opts.tolerance - 1e-10).abs() < 1e-18);
@@ -284,7 +284,7 @@ impl QtciOptions {
         TreeTciOptions {
             tolerance: self.tolerance,
             max_iter: self.maxiter,
-            max_bond_dim: self.maxbonddim.unwrap_or(usize::MAX),
+            max_bond_dim: self.max_bond_dim.unwrap_or(usize::MAX),
             normalize_error: self.normalize_error,
         }
     }

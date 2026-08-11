@@ -282,7 +282,7 @@ pub(crate) fn shift_mpo(
                 }
             }
         };
-        mpo.scale(bc_factor);
+        mpo.scale_mut(bc_factor);
     }
 
     Ok(mpo)

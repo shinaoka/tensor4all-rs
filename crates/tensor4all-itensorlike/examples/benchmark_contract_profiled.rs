@@ -108,7 +108,10 @@ fn main() -> Result<()> {
     println!("Total: {:?}", t_create_a + t_create_b + total_duration);
     println!();
     println!("=== Results ===");
-    println!("Resulting MPO max bond dimension: {}", result.maxbonddim());
+    println!(
+        "Resulting MPO max bond dimension: {}",
+        result.max_bond_dim()
+    );
     println!("Resulting MPO bond dimensions: {:?}", result.bond_dims());
 
     Ok(())

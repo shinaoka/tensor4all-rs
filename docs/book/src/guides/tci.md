@@ -265,7 +265,7 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate::<f64, _>(
     None,
     QtciOptions::default()
         .with_tolerance(tol)
-        .with_maxbonddim(64)
+        .with_max_bond_dim(64)
         .with_nrandominitpivot(8),
 )?;
 
@@ -306,7 +306,7 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
     None,
     QtciOptions::default()
         .with_tolerance(1e-10)
-        .with_maxbonddim(64)
+        .with_max_bond_dim(64)
         .with_nrandominitpivot(8),
 )?;
 

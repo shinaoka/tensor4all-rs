@@ -5,7 +5,7 @@
 //! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
+use crate::matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
 use crate::matrixluci::factors::CrossFactors;
 use crate::matrixluci::source::LazyMatrixSource;
@@ -296,7 +296,7 @@ pub(crate) fn dense_matrix_luci_factors_from_matrix_owned<T>(
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
-    let lu = rrlu_inplace(&mut a, Some(options))?;
+    let lu = rrlu_mut(&mut a, Some(options))?;
     factors_from_rrlu(&lu)
 }
 

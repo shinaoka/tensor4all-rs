@@ -116,7 +116,7 @@ This pattern is used for:
 - `t4a_tensor_dims`
 - `t4a_tensor_indices`
 - `t4a_treetn_neighbors`
-- `t4a_treetn_siteinds`
+- `t4a_treetn_site_indices`
 - `t4a_last_error_message`
 
 When the caller provides an undersized buffer, return
@@ -143,7 +143,7 @@ This applies to both tensor constructors and copy-out functions:
 `t4a_treetn` is the general structural handle used by bindings:
 
 - construct from site tensors with `t4a_treetn_new`
-- inspect topology via `num_vertices`, `neighbors`, `siteinds`, `linkind`
+- inspect topology via `num_vertices`, `neighbors`, `site_indices`, `linkind`
 - mutate tensors in place with `t4a_treetn_set_tensor`
 - canonicalize or truncate with `t4a_treetn_orthogonalize` and
   `t4a_treetn_truncate`
@@ -151,7 +151,7 @@ This applies to both tensor constructors and copy-out functions:
   `t4a_treetn_evaluate`
 - materialize to a dense tensor with `t4a_treetn_to_dense`
 
-For operator-like nodes, `t4a_treetn_siteinds` returns external indices in the
+For operator-like nodes, `t4a_treetn_site_indices` returns external indices in the
 tensor's own external-index order. This is required so bindings can interpret
 materialized transform operators consistently.
 

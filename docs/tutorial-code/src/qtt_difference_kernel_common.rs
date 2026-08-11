@@ -22,7 +22,7 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 pub struct DifferenceKernelTutorialConfig {
     pub bits: usize,
     pub tolerance: f64,
-    pub maxbonddim: usize,
+    pub max_bond_dim: usize,
     pub maxiter: usize,
 }
 
@@ -31,7 +31,7 @@ pub const DEFAULT_DIFFERENCE_KERNEL_CONFIG: DifferenceKernelTutorialConfig =
     DifferenceKernelTutorialConfig {
         bits: 6,
         tolerance: 1e-12,
-        maxbonddim: 64,
+        max_bond_dim: 64,
         maxiter: 20,
     };
 
@@ -91,7 +91,7 @@ pub fn build_kernel_qtt(
     let sizes = [n];
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_maxiter(config.maxiter)
         .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)

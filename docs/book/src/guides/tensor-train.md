@@ -219,7 +219,7 @@ tt.truncate(
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(2),
 )?;
-assert!(tt.maxbonddim() <= 2);
+assert!(tt.max_bond_dim() <= 2);
 # Ok(())
 # }
 ```

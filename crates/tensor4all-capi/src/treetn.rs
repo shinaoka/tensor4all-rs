@@ -307,15 +307,15 @@ fn treetn_scalar_kind(tn: &InternalTreeTN) -> t4a_scalar_kind {
 }
 
 fn collect_target_assignment(
-    assignment_siteinds: *const *const t4a_index,
+    assignment_site_indices: *const *const t4a_index,
     assignment_target_vertices: *const libc::size_t,
     n_assignments: usize,
     what: &str,
 ) -> CapiResult<HashMap<InternalIndex, usize>> {
-    let siteinds = collect_indices(
-        assignment_siteinds,
+    let site_indices = collect_indices(
+        assignment_site_indices,
         n_assignments,
-        &format!("{what}.siteinds"),
+        &format!("{what}.site_indices"),
     )?;
     let target_vertices = collect_positions(
         assignment_target_vertices,
@@ -323,7 +323,7 @@ fn collect_target_assignment(
         &format!("{what}.target_vertices"),
     )?;
     let mut target_assignment = HashMap::with_capacity(n_assignments);
-    for (siteind, target_vertex) in siteinds.into_iter().zip(target_vertices) {
+    for (siteind, target_vertex) in site_indices.into_iter().zip(target_vertices) {
         if let Some(previous_target) = target_assignment.insert(siteind.clone(), target_vertex) {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
@@ -341,8 +341,8 @@ fn collect_target_assignment(
 fn build_target_network(
     target_vertices: *const libc::size_t,
     n_target_vertices: usize,
-    target_siteinds: *const *const t4a_index,
-    target_siteinds_len: *const libc::size_t,
+    target_site_indices: *const *const t4a_index,
+    target_site_indices_len: *const libc::size_t,
     target_edge_sources: *const libc::size_t,
     target_edge_targets: *const libc::size_t,
     n_target_edges: usize,
@@ -361,13 +361,16 @@ fn build_target_network(
         &format!("{what}.vertices"),
     )?;
     let siteind_lens = collect_positions(
-        target_siteinds_len,
+        target_site_indices_len,
         n_target_vertices,
         &format!("{what}.siteind_lens"),
     )?;
-    let total_siteinds: usize = siteind_lens.iter().sum();
-    let flat_siteinds =
-        collect_indices(target_siteinds, total_siteinds, &format!("{what}.siteinds"))?;
+    let total_site_indices: usize = siteind_lens.iter().sum();
+    let flat_site_indices = collect_indices(
+        target_site_indices,
+        total_site_indices,
+        &format!("{what}.site_indices"),
+    )?;
     let edges = collect_edge_endpoints(
         target_edge_sources,
         target_edge_targets,
@@ -376,7 +379,8 @@ fn build_target_network(
     )?;
 
     let mut network = SiteIndexNetwork::with_capacity(n_target_vertices, n_target_edges);
-    let mut seen_siteinds: HashMap<InternalIndex, usize> = HashMap::with_capacity(total_siteinds);
+    let mut seen_site_indices: HashMap<InternalIndex, usize> =
+        HashMap::with_capacity(total_site_indices);
     let mut offset = 0usize;
     for (slot, &vertex) in vertices.iter().enumerate() {
         let len = siteind_lens[slot];
@@ -387,8 +391,8 @@ fn build_target_network(
             ));
         }
         let mut site_space = HashSet::with_capacity(len);
-        for siteind in &flat_siteinds[offset..offset + len] {
-            if let Some(previous_vertex) = seen_siteinds.insert(siteind.clone(), vertex) {
+        for siteind in &flat_site_indices[offset..offset + len] {
+            if let Some(previous_vertex) = seen_site_indices.insert(siteind.clone(), vertex) {
                 return Err(capi_error(
                     T4A_INVALID_ARGUMENT,
                     format!(
@@ -1006,7 +1010,7 @@ pub extern "C" fn t4a_treetn_canonical_region(
 
 /// Get the site indices attached to a vertex.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_treetn_siteinds(
+pub extern "C" fn t4a_treetn_site_indices(
     treetn: *const t4a_treetn,
     vertex: libc::size_t,
     buf: *mut *mut t4a_index,
@@ -1052,7 +1056,7 @@ pub extern "C" fn t4a_treetn_siteinds(
             return Err(capi_error(
                 T4A_BUFFER_TOO_SMALL,
                 format!(
-                    "t4a_treetn_siteinds: buffer too small, need {}, got {}",
+                    "t4a_treetn_site_indices: buffer too small, need {}, got {}",
                     ordered_indices.len(),
                     buf_len
                 ),
@@ -1169,8 +1173,8 @@ pub extern "C" fn t4a_treetn_fuse_to(
     treetn: *const t4a_treetn,
     target_vertices: *const libc::size_t,
     n_target_vertices: libc::size_t,
-    target_siteinds: *const *const t4a_index,
-    target_siteinds_len: *const libc::size_t,
+    target_site_indices: *const *const t4a_index,
+    target_site_indices_len: *const libc::size_t,
     target_edge_sources: *const libc::size_t,
     target_edge_targets: *const libc::size_t,
     n_target_edges: libc::size_t,
@@ -1181,8 +1185,8 @@ pub extern "C" fn t4a_treetn_fuse_to(
         let target = build_target_network(
             target_vertices,
             n_target_vertices,
-            target_siteinds,
-            target_siteinds_len,
+            target_site_indices,
+            target_site_indices_len,
             target_edge_sources,
             target_edge_targets,
             n_target_edges,
@@ -1202,8 +1206,8 @@ pub extern "C" fn t4a_treetn_split_to(
     treetn: *const t4a_treetn,
     target_vertices: *const libc::size_t,
     n_target_vertices: libc::size_t,
-    target_siteinds: *const *const t4a_index,
-    target_siteinds_len: *const libc::size_t,
+    target_site_indices: *const *const t4a_index,
+    target_site_indices_len: *const libc::size_t,
     target_edge_sources: *const libc::size_t,
     target_edge_targets: *const libc::size_t,
     n_target_edges: libc::size_t,
@@ -1217,8 +1221,8 @@ pub extern "C" fn t4a_treetn_split_to(
         let target = build_target_network(
             target_vertices,
             n_target_vertices,
-            target_siteinds,
-            target_siteinds_len,
+            target_site_indices,
+            target_site_indices_len,
             target_edge_sources,
             target_edge_targets,
             n_target_edges,
@@ -1237,7 +1241,7 @@ pub extern "C" fn t4a_treetn_split_to(
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_swap_site_indices(
     treetn: *const t4a_treetn,
-    assignment_siteinds: *const *const t4a_index,
+    assignment_site_indices: *const *const t4a_index,
     assignment_target_vertices: *const libc::size_t,
     n_assignments: libc::size_t,
     maxdim: libc::size_t,
@@ -1247,7 +1251,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         let target_assignment = collect_target_assignment(
-            assignment_siteinds,
+            assignment_site_indices,
             assignment_target_vertices,
             n_assignments,
             "target_assignment",
@@ -1267,8 +1271,8 @@ pub extern "C" fn t4a_treetn_restructure_to(
     treetn: *const t4a_treetn,
     target_vertices: *const libc::size_t,
     n_target_vertices: libc::size_t,
-    target_siteinds: *const *const t4a_index,
-    target_siteinds_len: *const libc::size_t,
+    target_site_indices: *const *const t4a_index,
+    target_site_indices_len: *const libc::size_t,
     target_edge_sources: *const libc::size_t,
     target_edge_targets: *const libc::size_t,
     n_target_edges: libc::size_t,
@@ -1286,8 +1290,8 @@ pub extern "C" fn t4a_treetn_restructure_to(
         let target = build_target_network(
             target_vertices,
             n_target_vertices,
-            target_siteinds,
-            target_siteinds_len,
+            target_site_indices,
+            target_site_indices_len,
             target_edge_sources,
             target_edge_targets,
             n_target_edges,

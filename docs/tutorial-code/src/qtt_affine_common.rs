@@ -29,7 +29,7 @@ pub type SiteIndex = Index<DynId, TagSet>;
 pub struct AffineTutorialConfig {
     pub bits: usize,
     pub tolerance: f64,
-    pub maxbonddim: usize,
+    pub max_bond_dim: usize,
     pub maxiter: usize,
 }
 
@@ -37,7 +37,7 @@ pub struct AffineTutorialConfig {
 pub const DEFAULT_AFFINE_CONFIG: AffineTutorialConfig = AffineTutorialConfig {
     bits: 6,
     tolerance: 1e-12,
-    maxbonddim: 64,
+    max_bond_dim: 64,
     maxiter: 20,
 };
 
@@ -129,7 +129,7 @@ pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput
     let sizes = vec![n, n];
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_maxiter(config.maxiter)
         .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Fused)

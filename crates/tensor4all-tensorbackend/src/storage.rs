@@ -2483,13 +2483,13 @@ pub fn make_mut_storage(arc: &mut Arc<Storage>) -> &mut Storage {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::mindim;
+/// use tensor4all_tensorbackend::min_dim;
 ///
-/// assert_eq!(mindim(&[2, 3, 4]), 2);
-/// assert_eq!(mindim(&[5, 5, 5]), 5);
-/// assert_eq!(mindim(&[]), 1);
+/// assert_eq!(min_dim(&[2, 3, 4]), 2);
+/// assert_eq!(min_dim(&[5, 5, 5]), 5);
+/// assert_eq!(min_dim(&[]), 1);
 /// ```
-pub fn mindim(dims: &[usize]) -> usize {
+pub fn min_dim(dims: &[usize]) -> usize {
     dims.iter().copied().min().unwrap_or(1)
 }
 

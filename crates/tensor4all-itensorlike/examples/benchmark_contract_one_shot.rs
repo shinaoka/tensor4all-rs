@@ -74,7 +74,7 @@ fn run_zipup(length: usize, phys_dim: usize, bond_dim: usize, max_rank: usize) -
     println!(
         "zipup one-shot: {:?} (max bond dim: {})",
         elapsed,
-        result.maxbonddim()
+        result.max_bond_dim()
     );
     Ok(())
 }
@@ -128,7 +128,7 @@ fn run_fit(
     println!(
         "fit one-shot: {:?} (max bond dim: {})",
         elapsed,
-        result.maxbonddim()
+        result.max_bond_dim()
     );
     Ok(())
 }

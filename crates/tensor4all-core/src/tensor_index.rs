@@ -94,7 +94,7 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// (a missing-index failure), when `old_indices` and `new_indices` differ
     /// in length (a length mismatch), or when the replacement violates an
     /// index identity invariant (an invalid replacement).
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
@@ -102,7 +102,7 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
 
     /// Replace indices using pairs of (old, new).
     ///
-    /// This is a convenience method that wraps `replaceinds`.
+    /// This is a convenience method that wraps `replace_indices`.
     ///
     /// # Arguments
     ///
@@ -117,12 +117,12 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// Returns `Self::Error` when an `old` entry is not present (a
     /// missing-index failure) or when the replacement violates an index
     /// identity invariant (an invalid replacement); propagates failures from
-    /// [`Self::replaceinds`].
-    fn replaceinds_pairs(
+    /// [`Self::replace_indices`].
+    fn replace_indices_pairs(
         &self,
         pairs: &[(Self::Index, Self::Index)],
     ) -> std::result::Result<Self, Self::Error> {
         let (old, new): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
-        self.replaceinds(&old, &new)
+        self.replace_indices(&old, &new)
     }
 }

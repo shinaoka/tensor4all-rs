@@ -132,7 +132,7 @@ These settings control the interpolation process.
 Useful fields in this demo:
 
 - `tolerance`: stop once the approximation is accurate enough
-- `maxbonddim`: upper bound on the bond dimension
+- `max_bond_dim`: upper bound on the bond dimension
 - `nrandominitpivot`: number of random initial pivots
 - `unfoldingscheme`: how the quantics dimensions are arranged
 

@@ -103,7 +103,7 @@ fn main() -> Result<()> {
     )?;
     println!(
         "MPO A created. Max bond dim: {}",
-        mpo_a_original.maxbonddim()
+        mpo_a_original.max_bond_dim()
     );
     println!();
 
@@ -131,7 +131,7 @@ fn main() -> Result<()> {
     )?;
     println!(
         "MPO B created. Max bond dim: {}",
-        mpo_b_original.maxbonddim()
+        mpo_b_original.max_bond_dim()
     );
     println!();
 
@@ -163,7 +163,7 @@ fn main() -> Result<()> {
     println!(
         "Warmup completed in: {:?}. Result max bond dim: {}",
         duration_warmup,
-        result_warmup.maxbonddim()
+        result_warmup.max_bond_dim()
     );
     println!();
 
@@ -191,7 +191,7 @@ fn main() -> Result<()> {
             "  Run {}: {:?} (max bond dim: {})",
             run,
             duration,
-            result.maxbonddim()
+            result.max_bond_dim()
         );
     }
 
@@ -220,7 +220,7 @@ fn main() -> Result<()> {
     println!("Max time: {:?}", max_time);
     println!("Std dev: {:?}", std_time);
     if let Some(ref result) = result_final {
-        println!("Final result max bond dimension: {}", result.maxbonddim());
+        println!("Final result max bond dimension: {}", result.max_bond_dim());
         println!("Final result bond dimensions: {:?}", result.bond_dims());
     }
 

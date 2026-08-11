@@ -1085,18 +1085,18 @@ fn test_sim_internal_inds() {
 }
 
 // ============================================================================
-// sim_linkinds Tests
+// sim_link_indices Tests
 // ============================================================================
 
 #[test]
-fn test_sim_linkinds() {
+fn test_sim_link_indices() {
     let (tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
 
     let original_bond_id = *bond.id();
     let original_bond_size = bond.size();
 
     // Create a copy with simulated link indices (ITensorMPS-like)
-    let tn_sim = tn.sim_linkinds().unwrap();
+    let tn_sim = tn.sim_link_indices().unwrap();
 
     // Should remain structurally consistent
     tn_sim.verify_internal_consistency().unwrap();
@@ -1108,7 +1108,7 @@ fn test_sim_linkinds() {
     assert_ne!(
         *new_bond.id(),
         original_bond_id,
-        "Bond ID should be different after sim_linkinds"
+        "Bond ID should be different after sim_link_indices"
     );
 
     // Physical indices are unchanged
@@ -1135,13 +1135,13 @@ fn test_sim_linkinds() {
 }
 
 #[test]
-fn test_sim_linkinds_mut_in_place() {
+fn test_sim_link_indices_mut_in_place() {
     let (mut tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
 
     let original_bond_id = *bond.id();
     let original_bond_size = bond.size();
 
-    tn.sim_linkinds_mut().unwrap();
+    tn.sim_link_indices_mut().unwrap();
     tn.verify_internal_consistency().unwrap();
 
     let new_edge = tn.edges_for_node(node1)[0].0;

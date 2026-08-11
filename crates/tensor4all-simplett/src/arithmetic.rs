@@ -159,7 +159,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// assert!((c.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
     /// ```
     pub fn sub(&self, other: &Self) -> Result<Self> {
-        let neg_other = other.scaled(-T::one());
+        let neg_other = other.scale(-T::one());
         self.add(&neg_other)
     }
 
@@ -175,7 +175,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// assert!((neg.evaluate(&[0, 0]).unwrap() + 7.0).abs() < 1e-12);
     /// ```
     pub fn negate(&self) -> Self {
-        self.scaled(-T::one())
+        self.scale(-T::one())
     }
 }
 
@@ -251,7 +251,7 @@ impl<T: TTScalar> std::ops::Mul<T> for TensorTrain<T> {
     type Output = Self;
 
     fn mul(self, scalar: T) -> Self::Output {
-        self.scaled(scalar)
+        self.scale(scalar)
     }
 }
 
@@ -259,7 +259,7 @@ impl<T: TTScalar> std::ops::Mul<T> for &TensorTrain<T> {
     type Output = TensorTrain<T>;
 
     fn mul(self, scalar: T) -> Self::Output {
-        self.scaled(scalar)
+        self.scale(scalar)
     }
 }
 

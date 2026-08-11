@@ -11,16 +11,16 @@ use tensor4all_itensorlike::TensorTrain;
 
 fn summarize(name: &str, tt: &TensorTrain) {
     let tensors = tt.tensors();
-    let siteinds = tt.siteinds();
+    let site_indices = tt.site_indices();
     let tensor_dims: Vec<_> = tensors.iter().map(|tensor| tensor.dims()).collect();
     let tensor_index_counts: Vec<_> = tensors.iter().map(|tensor| tensor.indices().len()).collect();
-    let site_index_counts: Vec<_> = siteinds.iter().map(Vec::len).collect();
+    let site_index_counts: Vec<_> = site_indices.iter().map(Vec::len).collect();
 
     println!("{name}.length = {}", tt.len());
     println!("{name}.llim = {}", tt.llim());
     println!("{name}.rlim = {}", tt.rlim());
     println!("{name}.bond_dims = {:?}", tt.bond_dims());
-    println!("{name}.maxbonddim = {}", tt.maxbonddim());
+    println!("{name}.max_bond_dim = {}", tt.max_bond_dim());
     println!("{name}.tensor_dims = {:?}", tensor_dims);
     println!("{name}.tensor_index_counts = {:?}", tensor_index_counts);
     println!("{name}.site_index_counts = {:?}", site_index_counts);

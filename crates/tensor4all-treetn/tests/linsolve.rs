@@ -203,7 +203,7 @@ fn test_projected_state_creation() {
 
 #[test]
 fn test_projected_state_local_constant_term_vin_eq_vout() {
-    // Exercise the V_in = V_out path (uses sim_linkinds internally to avoid bra/ket collisions).
+    // Exercise the V_in = V_out path (uses sim_link_indices internally to avoid bra/ket collisions).
     let (mps, _sites, _bonds) = create_simple_mps_chain();
     let mut projected_state = ProjectedState::new(mps.clone());
 
@@ -2254,8 +2254,8 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     let (mpo, input_mapping, output_mapping) =
         create_n_site_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
 
-    // Create initial guess (sim_linkinds to get independent bond indices)
-    let init = rhs.sim_linkinds().unwrap();
+    // Create initial guess (sim_link_indices to get independent bond indices)
+    let init = rhs.sim_link_indices().unwrap();
 
     // Canonicalize init towards site0
     let mut x = init

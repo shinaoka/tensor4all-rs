@@ -87,7 +87,7 @@ fn compression_at_a_binding_rank_cap_attains_the_optimal_truncation() {
     let mpo_b = random_mpo(&[1, 3, 1], 2, 2, SEED ^ 0xFF, |x: f64| x);
 
     let exact = contract_naive(&mpo_a, &mpo_b, None).unwrap();
-    let (exact_dense, shape) = exact.fulltensor();
+    let (exact_dense, shape) = exact.full_tensor();
     assert_eq!(shape, vec![2, 2, 2, 2]);
 
     // Column-major reshape to (site 0 pair) x (site 1 pair): the matricization
@@ -111,7 +111,7 @@ fn compression_at_a_binding_rank_cap_attains_the_optimal_truncation() {
     let truncated = contract_naive(&mpo_a, &mpo_b, Some(options)).unwrap();
     assert_eq!(truncated.rank(), keep);
 
-    let (truncated_dense, _) = truncated.fulltensor();
+    let (truncated_dense, _) = truncated.full_tensor();
     let achieved_error = frobenius_distance(&exact_dense, &truncated_dense);
     assert!(
         achieved_error <= optimal_error * (1.0 + 1e-9),

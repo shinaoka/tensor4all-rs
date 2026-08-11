@@ -127,7 +127,7 @@ git commit -m "fix(tensorbackend): validate matrix shapes and indices"
 
 **Interfaces:**
 - Consumes: Matrix representation invariant from Task 1 and `MatrixCIError::InvalidArgument`.
-- Produces: private `validate_col_major_matrix_len(nrows, ncols, actual_len) -> Result<()>`; public `rrlu` and `rrlu_inplace` validate once before any unchecked helper.
+- Produces: private `validate_col_major_matrix_len(nrows, ncols, actual_len) -> Result<()>`; public `rrlu` and `rrlu_mut` validate once before any unchecked helper.
 
 - [ ] **Step 1: Add failing validation-helper tests**
 
@@ -182,7 +182,7 @@ fn validate_col_major_matrix_len(
 }
 ```
 
-Call it at the beginning of `rrlu_inplace`, before max-rank shortcuts and before taking unchecked paths. Keep nearby debug assertions inside leaf kernels as invariant documentation and add/retain `// SAFETY:` comments for unsafe blocks.
+Call it at the beginning of `rrlu_mut`, before max-rank shortcuts and before taking unchecked paths. Keep nearby debug assertions inside leaf kernels as invariant documentation and add/retain `// SAFETY:` comments for unsafe blocks.
 
 - [ ] **Step 4: Run GREEN and downstream factorization regressions**
 

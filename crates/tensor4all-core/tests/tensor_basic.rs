@@ -528,7 +528,7 @@ fn test_replaceind_no_match() {
 }
 
 #[test]
-fn test_replaceinds_basic() {
+fn test_replace_indices_basic() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -542,7 +542,7 @@ fn test_replaceinds_basic() {
 
     // Replace all indices
     let replaced = tensor
-        .replaceinds(
+        .replace_indices(
             &[i.clone(), j.clone(), k.clone()],
             &[new_i.clone(), new_j.clone(), new_k.clone()],
         )
@@ -557,7 +557,7 @@ fn test_replaceinds_basic() {
 }
 
 #[test]
-fn test_replaceinds_partial() {
+fn test_replace_indices_partial() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -570,7 +570,7 @@ fn test_replaceinds_partial() {
 
     // Replace only i
     let replaced = tensor
-        .replaceinds(std::slice::from_ref(&i), std::slice::from_ref(&new_i))
+        .replace_indices(std::slice::from_ref(&i), std::slice::from_ref(&new_i))
         .unwrap();
 
     // Check that i was replaced
@@ -581,7 +581,7 @@ fn test_replaceinds_partial() {
 }
 
 #[test]
-fn test_replaceinds_length_mismatch() {
+fn test_replace_indices_length_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let new_i = Index::new_dyn(2);
@@ -592,9 +592,9 @@ fn test_replaceinds_length_mismatch() {
     let tensor = make_tensor_f64(indices, data);
 
     let err = tensor
-        .replaceinds(std::slice::from_ref(&i), &[new_i, new_j])
+        .replace_indices(std::slice::from_ref(&i), &[new_i, new_j])
         .unwrap_err();
-    assert!(err.to_string().contains("replaceinds"));
+    assert!(err.to_string().contains("replace_indices"));
     assert!(err.to_string().contains("shape mismatch"));
 }
 
@@ -614,7 +614,7 @@ fn test_replaceind_dimension_mismatch() {
 }
 
 #[test]
-fn test_replaceinds_dimension_mismatch() {
+fn test_replace_indices_dimension_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let new_i = Index::new_dyn(2);
@@ -625,15 +625,15 @@ fn test_replaceinds_dimension_mismatch() {
     let tensor = make_tensor_f64(indices, data);
 
     let err = tensor
-        .replaceinds(&[i.clone(), j.clone()], &[new_i, wrong_size])
+        .replace_indices(&[i.clone(), j.clone()], &[new_i, wrong_size])
         .unwrap_err();
-    assert!(err.to_string().contains("replaceinds"));
+    assert!(err.to_string().contains("replace_indices"));
     assert!(err.to_string().contains("shape mismatch"));
 }
 
 #[test]
-fn test_replaceinds_does_not_reorder_data() {
-    // Test that replaceinds changes index IDs but does NOT reorder storage data.
+fn test_replace_indices_does_not_reorder_data() {
+    // Test that replace_indices changes index IDs but does NOT reorder storage data.
     // This is the key difference from permuteinds.
     //
     // Create a 2x3 tensor from column-major linearized data.
@@ -647,9 +647,9 @@ fn test_replaceinds_does_not_reorder_data() {
     let new_i = Index::new_dyn(2);
     let new_j = Index::new_dyn(3);
 
-    // Use replaceinds to change index IDs (but keep same order)
+    // Use replace_indices to change index IDs (but keep same order)
     let replaced = tensor
-        .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+        .replace_indices(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
         .unwrap();
 
     // Check indices were replaced
@@ -657,18 +657,18 @@ fn test_replaceinds_does_not_reorder_data() {
     assert_eq!(replaced.indices[1].id, new_j.id);
     assert_eq!(replaced.dims(), vec![2, 3]);
 
-    // CRITICAL: replaceinds does NOT reorder data
+    // CRITICAL: replace_indices does NOT reorder data
     // The storage data should remain unchanged
     assert_eq!(
         replaced.to_vec::<f64>().unwrap(),
         data,
-        "replaceinds should not reorder data"
+        "replace_indices should not reorder data"
     );
 }
 
 #[test]
-fn test_replaceinds_with_different_order_does_not_reorder_data() {
-    // Test that replaceinds with indices in different order still does NOT reorder data.
+fn test_replace_indices_with_different_order_does_not_reorder_data() {
+    // Test that replace_indices with indices in different order still does NOT reorder data.
     // This demonstrates the bug: if you need to reorder indices, use permuteinds instead.
     //
     // Create a 2x3 tensor from column-major linearized data.
@@ -682,13 +682,13 @@ fn test_replaceinds_with_different_order_does_not_reorder_data() {
     let new_i = Index::new_dyn(2);
     let new_j = Index::new_dyn(3);
 
-    // Use replaceinds with indices in different order
+    // Use replace_indices with indices in different order
     // This changes the index order in the result, but does NOT reorder the data
-    // NOTE: replaceinds requires matching dimensions, so we can't directly swap i and j
-    // This test demonstrates that replaceinds doesn't reorder data even when used correctly
+    // NOTE: replace_indices requires matching dimensions, so we can't directly swap i and j
+    // This test demonstrates that replace_indices doesn't reorder data even when used correctly
     // For actual index reordering, use permuteinds instead
     let replaced = tensor
-        .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+        .replace_indices(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
         .unwrap();
 
     // Check indices were replaced (order unchanged, just IDs changed)
@@ -697,12 +697,12 @@ fn test_replaceinds_with_different_order_does_not_reorder_data() {
     // Dimensions remain the same: [2, 3]
     assert_eq!(replaced.dims(), vec![2, 3]);
 
-    // CRITICAL: replaceinds does NOT reorder data
+    // CRITICAL: replace_indices does NOT reorder data
     // The storage data remains unchanged
     assert_eq!(
         replaced.to_vec::<f64>().unwrap(),
         data,
-        "replaceinds should not reorder data"
+        "replace_indices should not reorder data"
     );
 }
 
@@ -741,8 +741,8 @@ fn test_permuteinds_reorders_data() {
 }
 
 #[test]
-fn test_replaceinds_vs_permuteinds_comparison() {
-    // Direct comparison: replaceinds vs permuteinds when index order changes.
+fn test_replace_indices_vs_permuteinds_comparison() {
+    // Direct comparison: replace_indices vs permuteinds when index order changes.
     // This test demonstrates why permuteinds should be used when reordering indices.
     //
     // Create a 2x3 tensor from column-major linearized data.
@@ -756,13 +756,13 @@ fn test_replaceinds_vs_permuteinds_comparison() {
     let new_i = Index::new_dyn(2);
     let new_j = Index::new_dyn(3);
 
-    // Method 1: replaceinds (only changes IDs, not order)
+    // Method 1: replace_indices (only changes IDs, not order)
     // This changes index IDs but NOT data order
-    // Note: replaceinds requires matching dimensions, so we can't swap i and j directly
-    // This test demonstrates that replaceinds doesn't reorder data
+    // Note: replace_indices requires matching dimensions, so we can't swap i and j directly
+    // This test demonstrates that replace_indices doesn't reorder data
     // In practice, you should use permuteinds when you need to change index order
     let replaced = tensor
-        .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+        .replace_indices(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
         .unwrap();
     assert_eq!(replaced.dims(), vec![2, 3]);
     let replaced_data = replaced.to_vec::<f64>().unwrap();
@@ -778,7 +778,7 @@ fn test_replaceinds_vs_permuteinds_comparison() {
     // permuted: [1, 3, 5, 2, 4, 6] (reordered, shape [3, 2])
     assert_ne!(
         replaced_data, permuted_data,
-        "replaceinds and permuteinds should produce different data: replaceinds doesn't reorder, permuteinds does"
+        "replace_indices and permuteinds should produce different data: replace_indices doesn't reorder, permuteinds does"
     );
     assert_eq!(
         permuted_data,

@@ -35,9 +35,9 @@ where
 
     println!("sum = {:?}", tt.sum());
 
-    let (dense, shape) = tt.fulltensor();
-    println!("fulltensor shape = {:?}", shape);
-    println!("fulltensor data = {:?}", dense);
+    let (dense, shape) = tt.full_tensor();
+    println!("full_tensor shape = {:?}", shape);
+    println!("full_tensor data = {:?}", dense);
     println!();
 }
 

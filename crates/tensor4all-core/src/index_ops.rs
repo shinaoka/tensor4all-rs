@@ -100,7 +100,7 @@ pub fn check_unique_indices<I: IndexLike>(indices: &[I]) -> Result<(), ReplaceIn
 
 /// Replace indices in a collection based on full-index matching.
 ///
-/// This corresponds to ITensors.jl's `replaceinds` function. It replaces indices
+/// This corresponds to ITensors.jl's `replace_indices` function. It replaces indices
 /// in `indices` that equal any of the `(old, new)` pairs in `replacements`.
 /// The replacement index must have the same dimension as the original.
 ///
@@ -117,7 +117,7 @@ pub fn check_unique_indices<I: IndexLike>(indices: &[I]) -> Result<(), ReplaceIn
 /// # Example
 /// ```
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::index_ops::replaceinds;
+/// use tensor4all_core::index_ops::replace_indices;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -127,11 +127,11 @@ pub fn check_unique_indices<I: IndexLike>(indices: &[I]) -> Result<(), ReplaceIn
 /// let indices = vec![i.clone(), j.clone(), k.clone()];
 /// let replacements = vec![(j.clone(), new_j.clone())];
 ///
-/// let replaced = replaceinds(indices, &replacements).unwrap();
+/// let replaced = replace_indices(indices, &replacements).unwrap();
 /// assert_eq!(replaced.len(), 3);
 /// assert_eq!(replaced[1].id, new_j.id);
 /// ```
-pub fn replaceinds<I: IndexLike>(
+pub fn replace_indices<I: IndexLike>(
     indices: Vec<I>,
     replacements: &[(I, I)],
 ) -> Result<Vec<I>, ReplaceIndsError> {
@@ -168,7 +168,7 @@ pub fn replaceinds<I: IndexLike>(
 
 /// Replace indices in-place based on full-index matching.
 ///
-/// This is an in-place variant of `replaceinds` that modifies the input slice directly.
+/// This is an in-place variant of `replace_indices` that modifies the input slice directly.
 /// Useful for performance-critical code where you want to avoid allocations.
 ///
 /// # Arguments
@@ -184,7 +184,7 @@ pub fn replaceinds<I: IndexLike>(
 /// # Example
 /// ```
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::index_ops::replaceinds_in_place;
+/// use tensor4all_core::index_ops::replace_indices_mut;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -194,10 +194,10 @@ pub fn replaceinds<I: IndexLike>(
 /// let mut indices = vec![i.clone(), j.clone(), k.clone()];
 /// let replacements = vec![(j.clone(), new_j.clone())];
 ///
-/// replaceinds_in_place(&mut indices, &replacements).unwrap();
+/// replace_indices_mut(&mut indices, &replacements).unwrap();
 /// assert_eq!(indices[1].id, new_j.id);
 /// ```
-pub fn replaceinds_in_place<I: IndexLike>(
+pub fn replace_indices_mut<I: IndexLike>(
     indices: &mut [I],
     replacements: &[(I, I)],
 ) -> Result<(), ReplaceIndsError> {

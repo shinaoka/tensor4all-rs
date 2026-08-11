@@ -28,7 +28,7 @@ fn test_tensortrain_constant_single_site_generic<T: TTScalar>() {
     let sum = tt.sum();
     assert!((sum.abs_sq().sqrt() - 15.0).abs() < 1e-10);
 
-    let (data, shape) = tt.fulltensor();
+    let (data, shape) = tt.full_tensor();
     assert_eq!(shape, vec![3]);
     assert_eq!(data.len(), 3);
     for value in data {
@@ -63,7 +63,7 @@ fn test_tensortrain_evaluate_generic<T: TTScalar>() {
 
 fn test_tensortrain_scale_generic<T: TTScalar>() {
     let mut tt = TensorTrain::<T>::constant(&[2, 2], T::from_f64(1.0));
-    tt.scale(T::from_f64(3.0));
+    tt.scale_mut(T::from_f64(3.0));
 
     // Sum should be 3.0 * 2 * 2 = 12.0
     let sum = tt.sum();
@@ -91,9 +91,9 @@ fn test_tensortrain_reverse_generic<T: TTScalar>() {
     assert!(diff.abs_sq().sqrt() < 1e-10);
 }
 
-fn test_fulltensor_generic<T: TTScalar>() {
+fn test_full_tensor_generic<T: TTScalar>() {
     let tt = TensorTrain::<T>::constant(&[2, 3], T::from_f64(5.0));
-    let (data, shape) = tt.fulltensor();
+    let (data, shape) = tt.full_tensor();
 
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(data.len(), 6);
@@ -104,7 +104,7 @@ fn test_fulltensor_generic<T: TTScalar>() {
     }
 }
 
-fn test_fulltensor_matches_evaluate_generic<T: TTScalar>() {
+fn test_full_tensor_matches_evaluate_generic<T: TTScalar>() {
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1);
     t0.set3(0, 0, 0, T::from_f64(1.0));
     t0.set3(0, 1, 0, T::from_f64(2.0));
@@ -115,7 +115,7 @@ fn test_fulltensor_matches_evaluate_generic<T: TTScalar>() {
     t1.set3(0, 2, 0, T::from_f64(3.0));
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    let (data, shape) = tt.fulltensor();
+    let (data, shape) = tt.full_tensor();
 
     assert_eq!(shape, vec![2, 3]);
 
@@ -210,13 +210,13 @@ fn test_tensortrain_reverse_f64() {
 }
 
 #[test]
-fn test_fulltensor_f64() {
-    test_fulltensor_generic::<f64>();
+fn test_full_tensor_f64() {
+    test_full_tensor_generic::<f64>();
 }
 
 #[test]
-fn test_fulltensor_matches_evaluate_f64() {
-    test_fulltensor_matches_evaluate_generic::<f64>();
+fn test_full_tensor_matches_evaluate_f64() {
+    test_full_tensor_matches_evaluate_generic::<f64>();
 }
 
 #[test]
@@ -266,13 +266,13 @@ fn test_tensortrain_reverse_c64() {
 }
 
 #[test]
-fn test_fulltensor_c64() {
-    test_fulltensor_generic::<Complex64>();
+fn test_full_tensor_c64() {
+    test_full_tensor_generic::<Complex64>();
 }
 
 #[test]
-fn test_fulltensor_matches_evaluate_c64() {
-    test_fulltensor_matches_evaluate_generic::<Complex64>();
+fn test_full_tensor_matches_evaluate_c64() {
+    test_full_tensor_matches_evaluate_generic::<Complex64>();
 }
 
 #[test]
@@ -501,7 +501,7 @@ fn test_tt_addition_generic<
     }
 
     // scalar multiplication
-    let tt_scaled = tt_a.scaled(T::from_f64(2.5));
+    let tt_scaled = tt_a.scale(T::from_f64(2.5));
     for i in 0..3 {
         let expected = T::from_f64(2.5 * (1 + i) as f64);
         let actual = tt_scaled.evaluate(&[i, 0, 0]).unwrap();

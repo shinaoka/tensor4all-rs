@@ -160,7 +160,7 @@ src/
 | `mps.jl` | MPS構築 (`onemps`, `expqtt`) | 低 |
 | `transformer.jl` | `reverseaxis` (多変数flip), `flipop_to_negativedomain` | 中 |
 | `binaryop.jl` | 多変数 `affinetransform`, tag付き高レベルAPI | 高 |
-| `util.jl` | `unfuse_siteinds`, `makesitediagonal`, `rearrange_siteinds` 等 | 中 |
+| `util.jl` | `unfuse_site_indices`, `makesitediagonal`, `rearrange_site_indices` 等 | 中 |
 | `tag.jl` | タグベースのサイト検索 | 低 |
 | 全般 | Antisymmetric BC (`bc = -1`) | 中 |
 | 全般 | `rev_carrydirec` (carry方向切り替え) | 中 |

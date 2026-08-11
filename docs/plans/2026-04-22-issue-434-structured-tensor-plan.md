@@ -509,7 +509,7 @@ Use the helpers:
 - `self.axis_classes` -> `self.storage.axis_classes()`
 - clone-preserving constructors should clone `storage` and `eager_cache`
 
-For `replaceind` and `replaceinds`, return:
+For `replaceind` and `replace_indices`, return:
 
 ```rust
 Self {
@@ -647,7 +647,7 @@ Update these methods to use storage methods when AD tracking is not active:
 - `permute_indices`
 - `permute`
 - `replaceind`
-- `replaceinds`
+- `replace_indices`
 - `conj`
 - `scale`
 - `axpby`
@@ -655,7 +655,7 @@ Update these methods to use storage methods when AD tracking is not active:
 Rules:
 
 - If `self.tracks_grad()` or another operand/scalar tracks grad, use the existing eager/native path.
-- If operation is metadata-only (`replaceind`, `replaceinds`), clone storage/cache.
+- If operation is metadata-only (`replaceind`, `replace_indices`), clone storage/cache.
 - For `permute`, use `self.storage.permute_storage(&self.dims(), perm)`.
 - For `conj`, use `self.storage.conj()`.
 - For `scale`, use `self.storage.scale(&scalar.to_backend_scalar() equivalent)` only through existing `Storage::scale(&tensor4all_tensorbackend::AnyScalar)` conversion already available. If scalar conversion is awkward, use `scalar.to_backend_scalar()` only at the backend boundary and add a small private conversion helper.

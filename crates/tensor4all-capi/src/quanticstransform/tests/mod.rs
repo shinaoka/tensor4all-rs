@@ -113,13 +113,19 @@ fn c_operator_matrix(
     for site in 0..nsites {
         let mut len = 0usize;
         assert_eq!(
-            crate::treetn::t4a_treetn_siteinds(op, site, std::ptr::null_mut(), 0, &mut len),
+            crate::treetn::t4a_treetn_site_indices(op, site, std::ptr::null_mut(), 0, &mut len),
             T4A_SUCCESS
         );
         assert_eq!(len, 2);
         let mut pair = vec![std::ptr::null_mut(); len];
         assert_eq!(
-            crate::treetn::t4a_treetn_siteinds(op, site, pair.as_mut_ptr(), pair.len(), &mut len),
+            crate::treetn::t4a_treetn_site_indices(
+                op,
+                site,
+                pair.as_mut_ptr(),
+                pair.len(),
+                &mut len
+            ),
             T4A_SUCCESS
         );
 
@@ -259,7 +265,7 @@ fn test_fourier_materialization_matches_rust_reference() {
     );
     let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
     let mut options = FourierOptions::forward();
-    options.maxbonddim = 8;
+    options.max_bond_dim = 8;
     options.tolerance = 1e-12;
     let expected = rust_operator_matrix(
         &quantics_fourier_operator(2, options).unwrap(),

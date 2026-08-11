@@ -153,7 +153,7 @@ where
     }
 
     let mut initialized = ket_state.clone();
-    initialized.sim_linkinds_mut()?;
+    initialized.sim_link_indices_mut()?;
     *reference_state = initialized;
     Ok(())
 }

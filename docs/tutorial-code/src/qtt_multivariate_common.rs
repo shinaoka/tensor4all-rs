@@ -23,7 +23,7 @@ pub struct MultivariateTutorialConfig {
     pub upper_bound: f64,
     pub include_endpoint: bool,
     pub tolerance: f64,
-    pub maxbonddim: usize,
+    pub max_bond_dim: usize,
     pub maxiter: usize,
 }
 
@@ -34,7 +34,7 @@ pub const DEFAULT_MULTIVARIATE_CONFIG: MultivariateTutorialConfig = Multivariate
     upper_bound: 2.0,
     include_endpoint: false,
     tolerance: 1e-12,
-    maxbonddim: 64,
+    max_bond_dim: 64,
     maxiter: 20,
 };
 
@@ -79,7 +79,7 @@ where
 {
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_maxiter(config.maxiter)
         .with_nrandominitpivot(0)
         .with_verbosity(0);
@@ -437,7 +437,7 @@ mod tests {
     fn both_unfolding_schemes_build_accurate_small_qtts() -> Result<(), Box<dyn Error>> {
         let config = MultivariateTutorialConfig {
             bits: 4,
-            maxbonddim: 32,
+            max_bond_dim: 32,
             ..DEFAULT_MULTIVARIATE_CONFIG
         };
 
@@ -462,7 +462,7 @@ mod tests {
     fn multivariate_samples_cover_the_cartesian_grid() -> Result<(), Box<dyn Error>> {
         let config = MultivariateTutorialConfig {
             bits: 3,
-            maxbonddim: 32,
+            max_bond_dim: 32,
             ..DEFAULT_MULTIVARIATE_CONFIG
         };
         let interleaved_grid = build_multivariate_grid(&config, UnfoldingScheme::Interleaved)?;
@@ -489,7 +489,7 @@ mod tests {
     fn dense_qtt_batch_evaluation_matches_direct_evaluation() -> Result<(), Box<dyn Error>> {
         let config = MultivariateTutorialConfig {
             bits: 3,
-            maxbonddim: 32,
+            max_bond_dim: 32,
             ..DEFAULT_MULTIVARIATE_CONFIG
         };
         let grid = build_multivariate_grid(&config, UnfoldingScheme::Grouped)?;

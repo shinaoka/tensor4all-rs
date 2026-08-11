@@ -31,7 +31,7 @@ pub struct FourierTutorialConfig {
     pub x_upper_bound: f64,
     pub include_endpoint: bool,
     pub tolerance: f64,
-    pub maxbonddim: usize,
+    pub max_bond_dim: usize,
 }
 
 /// Default configuration used throughout the Fourier tutorial.
@@ -41,7 +41,7 @@ pub const DEFAULT_FOURIER_CONFIG: FourierTutorialConfig = FourierTutorialConfig 
     x_upper_bound: 10.0,
     include_endpoint: true,
     tolerance: 1e-12,
-    maxbonddim: 32,
+    max_bond_dim: 32,
 };
 
 /// QTT construction result returned by the Fourier helper.
@@ -113,7 +113,7 @@ pub fn build_gaussian_qtt(
 ) -> Result<FourierQttOutput, Box<dyn Error>> {
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
@@ -140,7 +140,7 @@ pub fn build_fourier_operator(
     config: &FourierTutorialConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
     let options = FourierOptions {
-        maxbonddim: config.maxbonddim,
+        max_bond_dim: config.max_bond_dim,
         tolerance: config.tolerance,
         ..FourierOptions::forward()
     };

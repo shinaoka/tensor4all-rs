@@ -137,7 +137,7 @@ where
             }
         }
 
-        self.replaceinds(&old_indices, &new_indices)
+        self.replace_indices(&old_indices, &new_indices)
     }
 
     /// Add two TreeTNs after reindexing the second operand's site space to match `self`.

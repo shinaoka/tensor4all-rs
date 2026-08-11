@@ -82,15 +82,15 @@ fn read_dense_f64_treetn(treetn: *const t4a_treetn) -> Vec<f64> {
     values
 }
 
-fn read_siteinds(tt: *const t4a_treetn, vertex: usize) -> Vec<*mut t4a_index> {
+fn read_site_indices(tt: *const t4a_treetn, vertex: usize) -> Vec<*mut t4a_index> {
     let mut len = 0usize;
     assert_eq!(
-        t4a_treetn_siteinds(tt, vertex, std::ptr::null_mut(), 0, &mut len),
+        t4a_treetn_site_indices(tt, vertex, std::ptr::null_mut(), 0, &mut len),
         T4A_SUCCESS
     );
     let mut indices = vec![std::ptr::null_mut(); len];
     assert_eq!(
-        t4a_treetn_siteinds(tt, vertex, indices.as_mut_ptr(), indices.len(), &mut len),
+        t4a_treetn_site_indices(tt, vertex, indices.as_mut_ptr(), indices.len(), &mut len),
         T4A_SUCCESS
     );
     indices
@@ -316,7 +316,7 @@ fn make_two_node_groups_of_two_treetn(
 
 struct FlatTargetNetwork {
     vertices: Vec<usize>,
-    siteinds: Vec<*const t4a_index>,
+    site_indices: Vec<*const t4a_index>,
     siteind_lens: Vec<usize>,
     edge_sources: Vec<usize>,
     edge_targets: Vec<usize>,
@@ -328,11 +328,11 @@ fn flat_target_network(
     edges: &[(usize, usize)],
 ) -> FlatTargetNetwork {
     assert_eq!(vertices.len(), site_groups.len());
-    let mut siteinds = Vec::new();
+    let mut site_indices = Vec::new();
     let mut siteind_lens = Vec::with_capacity(site_groups.len());
     for group in site_groups {
         siteind_lens.push(group.len());
-        siteinds.extend(group.iter().copied());
+        site_indices.extend(group.iter().copied());
     }
     let mut edge_sources = Vec::with_capacity(edges.len());
     let mut edge_targets = Vec::with_capacity(edges.len());
@@ -342,7 +342,7 @@ fn flat_target_network(
     }
     FlatTargetNetwork {
         vertices: vertices.to_vec(),
-        siteinds,
+        site_indices,
         siteind_lens,
         edge_sources,
         edge_targets,
@@ -350,19 +350,19 @@ fn flat_target_network(
 }
 
 struct FlatAssignment {
-    siteinds: Vec<*const t4a_index>,
+    site_indices: Vec<*const t4a_index>,
     target_vertices: Vec<usize>,
 }
 
 fn flat_assignment(assignments: &[(*const t4a_index, usize)]) -> FlatAssignment {
-    let mut siteinds = Vec::with_capacity(assignments.len());
+    let mut site_indices = Vec::with_capacity(assignments.len());
     let mut target_vertices = Vec::with_capacity(assignments.len());
     for &(index, target_vertex) in assignments {
-        siteinds.push(index);
+        site_indices.push(index);
         target_vertices.push(target_vertex);
     }
     FlatAssignment {
-        siteinds,
+        site_indices,
         target_vertices,
     }
 }
@@ -482,28 +482,28 @@ fn test_treetn_topology_queries() {
 
     let mut siteind_len = 0usize;
     assert_eq!(
-        t4a_treetn_siteinds(tt, 0, std::ptr::null_mut(), 0, &mut siteind_len),
+        t4a_treetn_site_indices(tt, 0, std::ptr::null_mut(), 0, &mut siteind_len),
         T4A_SUCCESS
     );
     assert_eq!(siteind_len, 1);
-    let mut siteinds = vec![std::ptr::null_mut(); siteind_len];
+    let mut site_indices = vec![std::ptr::null_mut(); siteind_len];
     assert_eq!(
-        t4a_treetn_siteinds(
+        t4a_treetn_site_indices(
             tt,
             0,
-            siteinds.as_mut_ptr(),
-            siteinds.len(),
+            site_indices.as_mut_ptr(),
+            site_indices.len(),
             &mut siteind_len
         ),
         T4A_SUCCESS
     );
     let mut site_dim = 0usize;
     assert_eq!(
-        crate::index::t4a_index_dim(siteinds[0], &mut site_dim),
+        crate::index::t4a_index_dim(site_indices[0], &mut site_dim),
         T4A_SUCCESS
     );
     assert_eq!(site_dim, 2);
-    t4a_index_release(siteinds[0]);
+    t4a_index_release(site_indices[0]);
 
     let mut link = std::ptr::null_mut();
     assert_eq!(t4a_treetn_linkind(tt, 0, 1, &mut link), T4A_SUCCESS);
@@ -578,9 +578,9 @@ fn test_treetn_query_helpers_reject_invalid_requests() {
     assert!(last_error().contains("vertex 2 does not exist"));
 
     let mut siteind_len = 0usize;
-    let mut siteinds: [*mut t4a_index; 0] = [];
+    let mut site_indices: [*mut t4a_index; 0] = [];
     assert_eq!(
-        t4a_treetn_siteinds(tt, 0, siteinds.as_mut_ptr(), 0, &mut siteind_len),
+        t4a_treetn_site_indices(tt, 0, site_indices.as_mut_ptr(), 0, &mut siteind_len),
         T4A_BUFFER_TOO_SMALL
     );
     assert_eq!(siteind_len, 1);
@@ -681,7 +681,7 @@ fn test_treetn_fuse_to_merges_two_vertices() {
             tt,
             target.vertices.as_ptr(),
             target.vertices.len(),
-            target.siteinds.as_ptr(),
+            target.site_indices.as_ptr(),
             target.siteind_lens.as_ptr(),
             target.edge_sources.as_ptr(),
             target.edge_targets.as_ptr(),
@@ -694,7 +694,7 @@ fn test_treetn_fuse_to_merges_two_vertices() {
     let dense_expected = read_dense_f64_treetn(tt);
     let dense_actual = read_dense_f64_treetn(fused);
     assert_vec_close(&dense_actual, &dense_expected, 1e-10);
-    assert_eq!(read_siteinds(fused, 7).len(), 2);
+    assert_eq!(read_site_indices(fused, 7).len(), 2);
 
     t4a_treetn_release(fused);
     cleanup(tt, tensors, indices);
@@ -717,7 +717,7 @@ fn test_treetn_split_to_splits_fused_vertex() {
             tt,
             fuse_target.vertices.as_ptr(),
             fuse_target.vertices.len(),
-            fuse_target.siteinds.as_ptr(),
+            fuse_target.site_indices.as_ptr(),
             fuse_target.siteind_lens.as_ptr(),
             fuse_target.edge_sources.as_ptr(),
             fuse_target.edge_targets.as_ptr(),
@@ -741,7 +741,7 @@ fn test_treetn_split_to_splits_fused_vertex() {
             fused,
             split_target.vertices.as_ptr(),
             split_target.vertices.len(),
-            split_target.siteinds.as_ptr(),
+            split_target.site_indices.as_ptr(),
             split_target.siteind_lens.as_ptr(),
             split_target.edge_sources.as_ptr(),
             split_target.edge_targets.as_ptr(),
@@ -757,8 +757,8 @@ fn test_treetn_split_to_splits_fused_vertex() {
     let dense_expected = read_dense_f64_treetn(tt);
     let dense_actual = read_dense_f64_treetn(split);
     assert_vec_close(&dense_actual, &dense_expected, 1e-10);
-    assert_eq!(read_siteinds(split, 3).len(), 1);
-    assert_eq!(read_siteinds(split, 8).len(), 1);
+    assert_eq!(read_site_indices(split, 3).len(), 1);
+    assert_eq!(read_site_indices(split, 8).len(), 1);
 
     t4a_treetn_release(split);
     t4a_treetn_release(fused);
@@ -777,9 +777,9 @@ fn test_treetn_swap_site_indices_returns_reordered_copy() {
     assert_eq!(
         t4a_treetn_swap_site_indices(
             tt,
-            assignment.siteinds.as_ptr(),
+            assignment.site_indices.as_ptr(),
             assignment.target_vertices.as_ptr(),
-            assignment.siteinds.len(),
+            assignment.site_indices.len(),
             0,
             0.0,
             &mut swapped,
@@ -794,8 +794,8 @@ fn test_treetn_swap_site_indices_returns_reordered_copy() {
     let dense_expected = evaluate_real_on_full_grid(tt, &eval_indices);
     let dense_actual = evaluate_real_on_full_grid(swapped, &eval_indices);
     assert_vec_close(&dense_actual, &dense_expected, 1e-10);
-    assert_eq!(read_siteinds(swapped, 0).len(), 1);
-    assert_eq!(read_siteinds(swapped, 1).len(), 1);
+    assert_eq!(read_site_indices(swapped, 0).len(), 1);
+    assert_eq!(read_site_indices(swapped, 1).len(), 1);
 
     t4a_treetn_release(swapped);
     cleanup(tt, tensors, indices);
@@ -813,9 +813,9 @@ fn test_treetn_swap_site_indices_rejects_duplicate_assignment() {
     assert_eq!(
         t4a_treetn_swap_site_indices(
             tt,
-            assignment.siteinds.as_ptr(),
+            assignment.site_indices.as_ptr(),
             assignment.target_vertices.as_ptr(),
-            assignment.siteinds.len(),
+            assignment.site_indices.len(),
             0,
             0.0,
             &mut swapped,
@@ -849,7 +849,7 @@ fn test_treetn_restructure_to_mixed_case() {
             tt,
             target.vertices.as_ptr(),
             target.vertices.len(),
-            target.siteinds.as_ptr(),
+            target.site_indices.as_ptr(),
             target.siteind_lens.as_ptr(),
             target.edge_sources.as_ptr(),
             target.edge_targets.as_ptr(),
@@ -875,9 +875,9 @@ fn test_treetn_restructure_to_mixed_case() {
     let dense_expected = evaluate_real_on_full_grid(tt, &eval_indices);
     let dense_actual = evaluate_real_on_full_grid(result, &eval_indices);
     assert_vec_close(&dense_actual, &dense_expected, 1e-10);
-    assert_eq!(read_siteinds(result, 10).len(), 1);
-    assert_eq!(read_siteinds(result, 20).len(), 2);
-    assert_eq!(read_siteinds(result, 30).len(), 1);
+    assert_eq!(read_site_indices(result, 10).len(), 1);
+    assert_eq!(read_site_indices(result, 20).len(), 2);
+    assert_eq!(read_site_indices(result, 30).len(), 1);
 
     t4a_treetn_release(result);
     cleanup(tt, tensors, indices);
@@ -904,7 +904,7 @@ fn test_treetn_fuse_to_rejects_duplicate_target_site_index() {
             tt,
             target.vertices.as_ptr(),
             target.vertices.len(),
-            target.siteinds.as_ptr(),
+            target.site_indices.as_ptr(),
             target.siteind_lens.as_ptr(),
             target.edge_sources.as_ptr(),
             target.edge_targets.as_ptr(),
@@ -1466,10 +1466,10 @@ fn test_treetn_partial_contract_elementwise_diagonal_pairs() {
     let (a, a_tensors, a_indices) = make_two_site_treetn();
     let (b, b_tensors, b_indices) = make_two_site_treetn();
 
-    let a_sites_0 = read_siteinds(a, 0);
-    let a_sites_1 = read_siteinds(a, 1);
-    let b_sites_0 = read_siteinds(b, 0);
-    let b_sites_1 = read_siteinds(b, 1);
+    let a_sites_0 = read_site_indices(a, 0);
+    let a_sites_1 = read_site_indices(a, 1);
+    let b_sites_0 = read_site_indices(b, 0);
+    let b_sites_1 = read_site_indices(b, 1);
 
     let diagonal_left = [
         a_sites_0[0] as *const t4a_index,
@@ -1667,15 +1667,15 @@ fn test_treetn_apply_operator_chain_identity_single_site() {
     );
     assert_eq!(read_dense_f64_treetn(result), vec![1.5, -2.0]);
 
-    let siteinds = read_siteinds(result, 0);
-    assert_eq!(siteinds.len(), 1);
+    let site_indices = read_site_indices(result, 0);
+    assert_eq!(site_indices.len(), 1);
     let mut dim = 0usize;
     assert_eq!(
-        crate::index::t4a_index_dim(siteinds[0], &mut dim),
+        crate::index::t4a_index_dim(site_indices[0], &mut dim),
         T4A_SUCCESS
     );
     assert_eq!(dim, 2);
-    t4a_index_release(siteinds[0]);
+    t4a_index_release(site_indices[0]);
 
     t4a_treetn_release(result);
     t4a_treetn_release(op_tt);
@@ -2061,8 +2061,8 @@ fn test_treetn_linsolve_two_site_identity_without_mapping_zero_sweeps() {
     let (rhs_tt, rhs_tensors, mut rhs_indices) = make_two_site_treetn();
     let expected = read_dense_f64_treetn(rhs_tt);
 
-    let rhs_site0 = read_siteinds(rhs_tt, 0).remove(0);
-    let rhs_site1 = read_siteinds(rhs_tt, 1).remove(0);
+    let rhs_site0 = read_site_indices(rhs_tt, 0).remove(0);
+    let rhs_site1 = read_site_indices(rhs_tt, 1).remove(0);
     let (op_tt, op_tensors, op_indices) =
         make_two_site_identity_operator_with_shared_inputs(rhs_site0, rhs_site1);
 
@@ -2110,8 +2110,8 @@ fn test_treetn_linsolve_two_site_identity_with_explicit_mapping() {
     let (rhs_tt, rhs_tensors, mut rhs_indices) = make_two_site_treetn();
     let expected = read_dense_f64_treetn(rhs_tt);
 
-    let rhs_site0 = read_siteinds(rhs_tt, 0).remove(0);
-    let rhs_site1 = read_siteinds(rhs_tt, 1).remove(0);
+    let rhs_site0 = read_site_indices(rhs_tt, 0).remove(0);
+    let rhs_site1 = read_site_indices(rhs_tt, 1).remove(0);
     let (op_tt, op_tensors, op_indices, internal_inputs, internal_outputs) =
         make_two_site_identity_operator_with_internal_indices();
 

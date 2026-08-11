@@ -386,7 +386,7 @@ pub fn save_mps(
 /// append_mps(path, "a", &a)?;
 /// append_mps(path, "b", &b)?;
 /// assert_eq!(load_mps(path, "a")?.len(), 1);
-/// assert_eq!(load_mps(path, "b")?.siteinds()[0][0].size(), 2);
+/// assert_eq!(load_mps(path, "b")?.site_indices()[0][0].size(), 2);
 /// # Ok(())
 /// # }
 /// ```

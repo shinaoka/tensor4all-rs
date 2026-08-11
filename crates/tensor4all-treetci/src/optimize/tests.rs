@@ -90,7 +90,7 @@ fn optimize_default_stops_early_once_converged() {
 }
 
 // Mirrors `TreeTCI.jl`'s `convergencecriterion` third disjunct
-// (`all(lastranks .>= maxbonddim)`, branch `local-fix-convergence`, commit
+// (`all(lastranks .>= max_bond_dim)`, branch `local-fix-convergence`, commit
 // 06563dd): once the rank has saturated at `max_bond_dim` for the trailing
 // window, further sweeps cannot lower the error, so the loop should stop
 // even though the error never crosses `tolerance`.

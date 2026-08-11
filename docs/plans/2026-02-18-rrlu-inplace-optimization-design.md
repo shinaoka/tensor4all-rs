@@ -1,11 +1,11 @@
-# Design: rrlu_inplace Performance Optimization
+# Design: rrlu_mut Performance Optimization
 
 **Date:** 2026-02-18
 **Issue:** [#229](https://github.com/tensor4all/tensor4all-rs/issues/229)
 
 ## Context
 
-The `rrlu_inplace` function in `matrixci` has significant performance issues:
+The `rrlu_mut` function in `matrixci` has significant performance issues:
 
 1. **Row/column swaps clone the entire matrix** — O(m*n) allocation per swap, 2 swaps per pivot
 2. **Vec allocation per pivot iteration** — `(k..nr).collect()` creates heap-allocated vectors each iteration
@@ -51,10 +51,10 @@ All callers (matrixlu.rs, matrixci.rs, matrixaca.rs) use contiguous ranges, so t
 
 ## Phase 2: Benchmarks
 
-Add criterion benchmarks comparing `rrlu_inplace` vs faer's full-pivoting LU at sizes 10, 50, 100, 500, 1000.
+Add criterion benchmarks comparing `rrlu_mut` vs faer's full-pivoting LU at sizes 10, 50, 100, 500, 1000.
 
 - **faer added as dev-dependency only** (not a library dependency)
-- Fair comparison: `rrlu_inplace` with `max_rank = min(m,n)` (full decomposition)
+- Fair comparison: `rrlu_mut` with `max_rank = min(m,n)` (full decomposition)
 - Fixed random seed for reproducibility
 
 ## Phase 3: Decide on Further Optimization

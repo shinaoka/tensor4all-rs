@@ -85,7 +85,7 @@ fn setup_test_mpos(length: usize, phys_dim: usize, bond_dim: usize) -> TestMPOs 
 
     let exact = mpo_a.contract(&mpo_b, &ContractOptions::zipup()).unwrap();
     let exact_norm = exact.norm().unwrap();
-    let exact_bd = exact.maxbonddim();
+    let exact_bd = exact.max_bond_dim();
 
     TestMPOs {
         mpo_a,
@@ -116,8 +116,8 @@ fn test_fit_zero_threshold_matches_no_policy_bond_dims() {
         )
         .unwrap();
 
-    let bd_no_rtol = result_no_rtol.maxbonddim();
-    let bd_rtol_zero = result_rtol_zero.maxbonddim();
+    let bd_no_rtol = result_no_rtol.max_bond_dim();
+    let bd_rtol_zero = result_rtol_zero.max_bond_dim();
     let err_no_rtol = relative_error(&result_no_rtol, &t.exact, t.exact_norm);
     let err_rtol_zero = relative_error(&result_rtol_zero, &t.exact, t.exact_norm);
 
@@ -146,7 +146,7 @@ fn test_fit_max_rank_caps_bonds() {
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12)),
         )
         .unwrap();
-    let result_bd = result.maxbonddim();
+    let result_bd = result.max_bond_dim();
 
     eprintln!("fit(max_rank={max_rank}, rtol=1e-12): bd={result_bd}");
 
@@ -173,7 +173,7 @@ fn test_fit_max_rank_overrides_rtol() {
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();
-    let result_bd = result.maxbonddim();
+    let result_bd = result.max_bond_dim();
 
     // Without max_rank, rtol=1e-12 produces large bonds
     let result_no_cap = t
@@ -184,7 +184,7 @@ fn test_fit_max_rank_overrides_rtol() {
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();
-    let no_cap_bd = result_no_cap.maxbonddim();
+    let no_cap_bd = result_no_cap.max_bond_dim();
 
     eprintln!("fit(max_rank={max_rank}, rtol={rtol}): bd={result_bd}");
     eprintln!("fit(rtol={rtol}):                      bd={no_cap_bd}");
@@ -225,8 +225,8 @@ fn test_fit_rtol_controls_bond_growth() {
         )
         .unwrap();
 
-    let bd_large = result_large.maxbonddim();
-    let bd_small = result_small.maxbonddim();
+    let bd_large = result_large.max_bond_dim();
+    let bd_small = result_small.max_bond_dim();
     let err_large = relative_error(&result_large, &t.exact, t.exact_norm);
     let err_small = relative_error(&result_small, &t.exact, t.exact_norm);
 
@@ -262,8 +262,8 @@ fn test_fit_no_params_not_worse_than_zipup() {
 
     let zipup_err = relative_error(&result_zipup, &t.exact, t.exact_norm);
     let fit_err = relative_error(&result_fit, &t.exact, t.exact_norm);
-    let zipup_bd = result_zipup.maxbonddim();
-    let fit_bd = result_fit.maxbonddim();
+    let zipup_bd = result_zipup.max_bond_dim();
+    let fit_bd = result_fit.max_bond_dim();
 
     eprintln!("zipup(default): bd={zipup_bd}, rel_err={zipup_err:.6e}");
     eprintln!("fit(default):   bd={fit_bd}, rel_err={fit_err:.6e}");
@@ -344,8 +344,8 @@ fn test_fit_cutoff_equivalent_to_rtol() {
         )
         .unwrap();
 
-    let bd_cutoff = result_cutoff.maxbonddim();
-    let bd_rtol = result_rtol.maxbonddim();
+    let bd_cutoff = result_cutoff.max_bond_dim();
+    let bd_rtol = result_rtol.max_bond_dim();
     let err_cutoff = relative_error(&result_cutoff, &t.exact, t.exact_norm);
     let err_rtol = relative_error(&result_rtol, &t.exact, t.exact_norm);
 
@@ -380,8 +380,8 @@ fn test_fit_more_sweeps_stable() {
         .contract(&t.mpo_b, &ContractOptions::fit().with_nsweeps(4))
         .unwrap();
 
-    let bd_1sw = result_1sw.maxbonddim();
-    let bd_4sw = result_4sw.maxbonddim();
+    let bd_1sw = result_1sw.max_bond_dim();
+    let bd_4sw = result_4sw.max_bond_dim();
     let err_1sw = relative_error(&result_1sw, &t.exact, t.exact_norm);
     let err_4sw = relative_error(&result_4sw, &t.exact, t.exact_norm);
 
@@ -432,8 +432,8 @@ fn test_fit_more_sweeps_with_rtol_improves() {
         )
         .unwrap();
 
-    let bd_1sw = result_1sw.maxbonddim();
-    let bd_4sw = result_4sw.maxbonddim();
+    let bd_1sw = result_1sw.max_bond_dim();
+    let bd_4sw = result_4sw.max_bond_dim();
     let err_1sw = relative_error(&result_1sw, &t.exact, t.exact_norm);
     let err_4sw = relative_error(&result_4sw, &t.exact, t.exact_norm);
 

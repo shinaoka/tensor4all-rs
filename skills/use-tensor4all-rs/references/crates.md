@@ -44,7 +44,7 @@ Named `DynIndex` objects; orthogonality-center tracking; multiple canonical form
 - `TensorTrain::new(vec![t0, t1, ...])` from `TensorDynLen` cores.
 - `.orthogonalize(site)`, `.orthogonalize_with(site, CanonicalForm::...)` (LU / CI forms).
 - `.truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol)).with_max_rank(n))`.
-- `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, `.isortho()`, `.orthocenter()`, `.maxbonddim()`.
+- `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, `.isortho()`, `.orthocenter()`, `.max_bond_dim()`.
 - `TruncateOptions`, `CanonicalForm`. `ContractOptions` / `LinsolveOptions` with `with_nsweeps(n)` (= `with_nhalfsweeps(2*n)`).
 - Build indices with `DynIndex::new_dyn(dim)` (site) and `DynIndex::new_bond(dim)?` (bond). `from_dense` data is column-major.
 
@@ -82,7 +82,7 @@ Quantics encoding (binary bits across sites) often yields far lower bond dims. P
   - `quanticscrossinterpolate_from_arrays` — explicit coordinate arrays.
   - `quanticscrossinterpolate_batched` — vector/tensor-valued `f`.
 - `DiscretizedGrid::builder(&[r_bits]).with_lower_bound(&[x0]).with_upper_bound(&[x1]).include_endpoint(bool).build()`.
-- `QtciOptions::default().with_tolerance(t).with_maxbonddim(m).with_nrandominitpivot(k).with_unfoldingscheme(UnfoldingScheme::Interleaved)`.
+- `QtciOptions::default().with_tolerance(t).with_max_bond_dim(m).with_nrandominitpivot(k).with_unfoldingscheme(UnfoldingScheme::Interleaved)`.
   - `nrandominitpivot` default 5; raise to 10–20 for multi-feature / high-dim.
 - `QuanticsTensorCI2`: `.evaluate(&[idx])`, `.sum()`, `.integral()` (left Riemann sum; O(h)), `.tci()`.
 - Interleaved multivariate encoding: site `n` encodes one bit per variable, local dim `2^num_vars`.

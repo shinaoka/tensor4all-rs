@@ -245,7 +245,7 @@ fn main() -> anyhow::Result<()> {
     let state = state_raw
         .clone()
         .canonicalize([center.clone()], CanonicalizationOptions::default())?;
-    let reference_state = state.sim_linkinds()?;
+    let reference_state = state.sim_link_indices()?;
     let plan = LocalUpdateSweepPlan::from_treetn(&state, &center, 2)
         .ok_or_else(|| anyhow::anyhow!("failed to build two-site sweep plan"))?;
     let step = plan
