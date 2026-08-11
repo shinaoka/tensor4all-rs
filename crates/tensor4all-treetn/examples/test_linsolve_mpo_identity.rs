@@ -430,7 +430,7 @@ fn main() -> anyhow::Result<()> {
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_max_rank(4)
+        .with_max_bond_dim(4)
         .with_gmres_tol(1e-8)
         .with_gmres_max_restarts(20)
         .with_gmres_restart_dim(30)
@@ -559,7 +559,7 @@ fn main() -> anyhow::Result<()> {
     let b_case3 = scale_treetn(&b_mpo, neg_one)?;
     let options_case3 = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_max_rank(4)
+        .with_max_bond_dim(4)
         .with_gmres_tol(1e-8)
         .with_gmres_max_restarts(20)
         .with_gmres_restart_dim(30)

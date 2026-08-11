@@ -23,8 +23,8 @@ pub struct ContractionOptions {
     /// bond's matrix. The threshold is invariant under a global rescaling of
     /// the operators being contracted.
     pub tolerance: f64,
-    /// Maximum bond dimension after contraction
-    pub max_bond_dim: usize,
+    /// Maximum bond dimension after contraction. `None` means no limit.
+    pub max_bond_dim: Option<usize>,
     /// Factorization method for compression
     pub factorize_method: super::factorize::FactorizeMethod,
 }
@@ -33,7 +33,7 @@ impl Default for ContractionOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-12,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             factorize_method: super::factorize::FactorizeMethod::SVD,
         }
     }

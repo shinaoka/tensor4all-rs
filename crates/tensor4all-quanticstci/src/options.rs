@@ -277,14 +277,14 @@ impl QtciOptions {
     ///     .with_maxiter(100);
     /// let tree_opts = opts.to_treetci_options();
     /// assert!((tree_opts.tolerance - 1e-10).abs() < 1e-18);
-    /// assert_eq!(tree_opts.max_bond_dim, 64);
+    /// assert_eq!(tree_opts.max_bond_dim, Some(64));
     /// assert_eq!(tree_opts.max_iter, 100);
     /// ```
     pub fn to_treetci_options(&self) -> TreeTciOptions {
         TreeTciOptions {
             tolerance: self.tolerance,
             max_iter: self.maxiter,
-            max_bond_dim: self.max_bond_dim.unwrap_or(usize::MAX),
+            max_bond_dim: self.max_bond_dim,
             normalize_error: self.normalize_error,
         }
     }

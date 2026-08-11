@@ -50,7 +50,7 @@ let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
 tt.orthogonalize(1)?;
 tt.truncate(&TruncateOptions::svd()
     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-    .with_max_rank(2))?;
+    .with_max_bond_dim(2))?;
 
 assert!(tt.isortho());
 assert_eq!(s1.dim(), 2);

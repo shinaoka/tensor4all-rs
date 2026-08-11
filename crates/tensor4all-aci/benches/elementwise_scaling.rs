@@ -154,18 +154,18 @@ fn sampled_max_abs_error(
         .fold(0.0, f64::max)
 }
 
-fn run_aci(
-    inputs: &[SimpleTensorTrain<f64>],
-    initial_guess: &SimpleTensorTrain<f64>,
-) -> AciResult<f64> {
-    let options = AciOptions {
+fn run_aci(inputs: &[SimpleTensorTrain<f64>], options: &AciOptions<f64>) -> AciResult<f64> {
+    elementwise_batched(multiply_batch, inputs, options)
+        .expect("ACI elementwise multiplication benchmark should converge")
+}
+
+fn aci_options(initial_guess: &SimpleTensorTrain<f64>) -> AciOptions<f64> {
+    AciOptions {
         max_iters: MAX_ITERS,
         tolerance: TOLERANCE,
         initial_guess: Some(initial_guess.clone()),
         ..AciOptions::default()
-    };
-    elementwise_batched(multiply_batch, inputs, &options)
-        .expect("ACI elementwise multiplication benchmark should converge")
+    }
 }
 
 fn assert_nontrivial_output_rank(chi: usize, output_max_chi: usize) {
@@ -184,7 +184,8 @@ fn bench_aci_elementwise_chi_scaling(c: &mut Criterion) {
     for chi in DEFAULT_CHI_VALUES {
         let inputs = deterministic_inputs(chi);
         let initial_guess = deterministic_initial_guess(chi);
-        let checked = run_aci(&inputs, &initial_guess);
+        let options = aci_options(&initial_guess);
+        let checked = run_aci(&inputs, &options);
         let sampled_error = sampled_max_abs_error(&inputs, &checked.tensor_train, chi);
         assert!(
             sampled_error < 1e-8,
@@ -202,9 +203,10 @@ fn bench_aci_elementwise_chi_scaling(c: &mut Criterion) {
              final_error={final_error:.6e},sampled_max_abs_error={sampled_error:.6e}"
         );
 
+        let options = aci_options(&initial_guess);
         group.bench_with_input(BenchmarkId::from_parameter(chi), &chi, |b, _| {
             b.iter(|| {
-                black_box(run_aci(black_box(&inputs), black_box(&initial_guess)));
+                black_box(run_aci(black_box(&inputs), black_box(&options)));
             });
         });
     }
@@ -225,7 +227,8 @@ fn bench_aci_elementwise_chi_scaling_long(c: &mut Criterion) {
     let chi = OPTIONAL_CHI;
     let inputs = deterministic_inputs(chi);
     let initial_guess = deterministic_initial_guess(chi);
-    let checked = run_aci(&inputs, &initial_guess);
+    let options = aci_options(&initial_guess);
+    let checked = run_aci(&inputs, &options);
     let sampled_error = sampled_max_abs_error(&inputs, &checked.tensor_train, chi);
     assert!(
         sampled_error < 1e-8,
@@ -245,7 +248,7 @@ fn bench_aci_elementwise_chi_scaling_long(c: &mut Criterion) {
 
     group.bench_with_input(BenchmarkId::from_parameter(chi), &chi, |b, _| {
         b.iter(|| {
-            black_box(run_aci(black_box(&inputs), black_box(&initial_guess)));
+            black_box(run_aci(black_box(&inputs), black_box(&options)));
         });
     });
     group.finish();

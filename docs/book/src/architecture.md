@@ -143,6 +143,15 @@ Rules:
 | Crate | Description |
 |-------|-------------|
 | **quanticstransform** | Quantics transformation operators: shift, flip, Fourier, affine, and more. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
+| **interpolativeqtt** | Interpolative QTT construction on a coarse grid (simplett stack). See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
+
+### Applications
+
+| Crate | Description |
+|-------|-------------|
+| **aci** | Alternating Cross Interpolation (ACI) for elementwise tensor-train operations. |
+
+### I/O & bindings
 
 ### I/O & bindings
 
@@ -164,6 +173,8 @@ Rules:
 | Subdomain decomposition via partitioned TT | `tensor4all-partitionedtt` |
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |
+| Interpolative QTT on a coarse grid | `tensor4all-interpolativeqtt` |
+| Elementwise TT ops via ACI | `tensor4all-aci` |
 
 ## Error remedies
 

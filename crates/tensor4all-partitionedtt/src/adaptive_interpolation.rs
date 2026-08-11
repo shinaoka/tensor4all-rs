@@ -363,7 +363,7 @@ fn validate_inputs(
             "TCI max_iter must be positive".to_string(),
         ));
     }
-    if options.tci_options.max_bond_dim == 0 {
+    if options.tci_options.max_bond_dim == Some(0) {
         return Err(PartitionedTTError::InvalidAdaptiveInterpolationInput(
             "TCI max_bond_dim must be positive".to_string(),
         ));

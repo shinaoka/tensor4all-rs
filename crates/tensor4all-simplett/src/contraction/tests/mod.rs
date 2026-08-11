@@ -154,7 +154,7 @@ fn test_dot_convenience_function() {
 fn test_contraction_options_default_values() {
     let opts = ContractionOptions::default();
     assert!((opts.tolerance - 1e-12).abs() < 1e-15);
-    assert_eq!(opts.max_bond_dim, usize::MAX);
+    assert_eq!(opts.max_bond_dim, None);
     assert!(matches!(opts.method, CompressionMethod::LU));
 }
 

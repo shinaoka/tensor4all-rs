@@ -402,14 +402,14 @@ fn convergence_criterion_matches_julia_algorithm() {
 fn rank_saturation_needs_a_full_dwell_at_the_cap() {
     // Below the cap, or at the cap for fewer than min_iters sweeps, the exit
     // must not fire.
-    assert!(!rank_is_saturated(&[4], 2, 4));
-    assert!(!rank_is_saturated(&[3, 4], 2, 4));
-    assert!(rank_is_saturated(&[3, 4, 4], 2, 4));
-    assert!(!rank_is_saturated(&[4, 4], 3, 4));
+    assert!(!rank_is_saturated(&[4], 2, Some(4)));
+    assert!(!rank_is_saturated(&[3, 4], 2, Some(4)));
+    assert!(rank_is_saturated(&[3, 4, 4], 2, Some(4)));
+    assert!(!rank_is_saturated(&[4, 4], 3, Some(4)));
     // The default cap is unreachable, so unconstrained runs never exit here.
-    assert!(!rank_is_saturated(&[4, 4], 2, usize::MAX));
+    assert!(!rank_is_saturated(&[4, 4], 2, None));
     // min_iters == 0 disables the exit, as it disables the tolerance criterion.
-    assert!(!rank_is_saturated(&[4, 4], 0, 4));
+    assert!(!rank_is_saturated(&[4, 4], 0, Some(4)));
 }
 
 #[test]
@@ -426,7 +426,7 @@ fn capped_elementwise_run_stops_once_rank_saturates() {
     let options = AciOptions::<f64> {
         max_iters: 20,
         min_iters: 2,
-        max_bond_dim: 4,
+        max_bond_dim: Some(4),
         tolerance: 1e-10,
         ..Default::default()
     };
@@ -449,7 +449,7 @@ fn capped_elementwise_run_stops_once_rank_saturates() {
     assert!(result.ranks.len() < options.max_iters);
     assert_eq!(
         &result.ranks[(result.ranks.len() - options.min_iters)..],
-        &[options.max_bond_dim; 2],
+        &[options.max_bond_dim.unwrap(); 2],
         "the exit must fire only after a full dwell at the cap, ranks {:?}",
         result.ranks
     );
@@ -458,7 +458,7 @@ fn capped_elementwise_run_stops_once_rank_saturates() {
         .tensor_train
         .link_dims()
         .iter()
-        .all(|&dim| dim <= options.max_bond_dim));
+        .all(|&dim| options.max_bond_dim.is_none_or(|cap| dim <= cap)));
 }
 
 #[test]
@@ -466,7 +466,7 @@ fn default_options_are_conservative() {
     let options = AciOptions::<f64>::default();
     assert_eq!(options.max_iters, 20);
     assert_eq!(options.min_iters, 2);
-    assert_eq!(options.max_bond_dim, usize::MAX);
+    assert_eq!(options.max_bond_dim, None);
     assert!((options.tolerance - 1e-12).abs() < 1e-15);
     assert!(!options.scale_tolerance);
     assert!(options.initial_guess.is_none());
@@ -1243,7 +1243,7 @@ fn validate_options_rejects_zero_max_iters() {
 #[test]
 fn validate_options_rejects_zero_max_bond_dim() {
     let options = AciOptions::<f64> {
-        max_bond_dim: 0,
+        max_bond_dim: Some(0),
         ..AciOptions::default()
     };
     let err = validate_options(&options).unwrap_err();
@@ -1326,7 +1326,7 @@ fn initial_guess_link_dims_are_empty_for_one_site_input() {
 fn initial_guess_link_dims_are_limited_by_max_bond_dim() {
     let input = tensor_train_with_link_dims(&[8, 8, 8], &[8, 8]);
     let options = AciOptions::<f64> {
-        max_bond_dim: 3,
+        max_bond_dim: Some(3),
         ..AciOptions::default()
     };
     let guess = initial_guess(&[input], &options).unwrap();
@@ -1353,7 +1353,7 @@ fn initial_guess_is_deterministic_for_same_seed() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let options = AciOptions::<f64> {
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         rng_seed: 1234,
         ..AciOptions::default()
     };
@@ -1439,7 +1439,7 @@ fn explicit_initial_guess_rejects_rank_above_max_bond_dim() {
     ])
     .unwrap();
     let options = AciOptions {
-        max_bond_dim: 1,
+        max_bond_dim: Some(1),
         initial_guess: Some(explicit),
         ..AciOptions::default()
     };
@@ -1478,7 +1478,7 @@ fn complex_initial_guess_is_deterministic() {
     let a = SimpleTensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(1.0, 0.0));
     let b = SimpleTensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(2.0, 0.0));
     let options = AciOptions::<Complex64> {
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         rng_seed: 4321,
         ..AciOptions::default()
     };
@@ -1707,7 +1707,7 @@ where
         let factors = matrix_luci_factors_from_matrix_owned(
             local_matrix,
             Some(RrLUOptions {
-                max_rank: options.max_bond_dim,
+                max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
                 rel_tol: if options.scale_tolerance {
                     options.tolerance
                 } else {

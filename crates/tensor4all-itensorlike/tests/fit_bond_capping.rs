@@ -1,8 +1,8 @@
 //! Tests for fit bond dimension capping behavior.
 //!
 //! Verifies the bond capping rules during fit sweeps:
-//! - max_rank specified: bonds capped at max_rank
-//! - rtol > 0 specified (no max_rank): bonds free to grow (rtol controls truncation)
+//! - max_bond_dim specified: bonds capped at max_bond_dim
+//! - rtol > 0 specified (no max_bond_dim): bonds free to grow (rtol controls truncation)
 //! - neither specified (or rtol=0): bonds capped at zipup initialization size
 //! - rtol=0 explicit and rtol unspecified should behave identically
 
@@ -131,37 +131,37 @@ fn test_fit_zero_threshold_matches_no_policy_bond_dims() {
     );
 }
 
-/// fit() with max_rank should cap bond dimensions at the given value.
+/// fit() with max_bond_dim should cap bond dimensions at the given value.
 #[test]
-fn test_fit_max_rank_caps_bonds() {
+fn test_fit_max_bond_dim_caps_bonds() {
     let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
-    let max_rank = 5;
+    let max_bond_dim = 5;
 
     let result = t
         .mpo_a
         .contract(
             &t.mpo_b,
             &ContractOptions::fit()
-                .with_max_rank(max_rank)
+                .with_max_bond_dim(max_bond_dim)
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12)),
         )
         .unwrap();
     let result_bd = result.max_bond_dim();
 
-    eprintln!("fit(max_rank={max_rank}, rtol=1e-12): bd={result_bd}");
+    eprintln!("fit(max_bond_dim={max_bond_dim}, rtol=1e-12): bd={result_bd}");
 
     assert!(
-        result_bd <= max_rank,
-        "fit(max_rank={max_rank}) should cap bonds: got {result_bd}"
+        result_bd <= max_bond_dim,
+        "fit(max_bond_dim={max_bond_dim}) should cap bonds: got {result_bd}"
     );
 }
 
-/// fit() with max_rank should take precedence over rtol for bond capping,
+/// fit() with max_bond_dim should take precedence over rtol for bond capping,
 /// even when rtol would allow larger bonds.
 #[test]
-fn test_fit_max_rank_overrides_rtol() {
+fn test_fit_max_bond_dim_overrides_rtol() {
     let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
-    let max_rank = 5;
+    let max_bond_dim = 5;
     let rtol = 1e-12; // very small → would allow large bonds
 
     let result = t
@@ -169,13 +169,13 @@ fn test_fit_max_rank_overrides_rtol() {
         .contract(
             &t.mpo_b,
             &ContractOptions::fit()
-                .with_max_rank(max_rank)
+                .with_max_bond_dim(max_bond_dim)
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();
     let result_bd = result.max_bond_dim();
 
-    // Without max_rank, rtol=1e-12 produces large bonds
+    // Without max_bond_dim, rtol=1e-12 produces large bonds
     let result_no_cap = t
         .mpo_a
         .contract(
@@ -186,20 +186,20 @@ fn test_fit_max_rank_overrides_rtol() {
         .unwrap();
     let no_cap_bd = result_no_cap.max_bond_dim();
 
-    eprintln!("fit(max_rank={max_rank}, rtol={rtol}): bd={result_bd}");
+    eprintln!("fit(max_bond_dim={max_bond_dim}, rtol={rtol}): bd={result_bd}");
     eprintln!("fit(rtol={rtol}):                      bd={no_cap_bd}");
 
     assert!(
-        result_bd <= max_rank,
-        "max_rank should cap bonds even with small rtol: got {result_bd}"
+        result_bd <= max_bond_dim,
+        "max_bond_dim should cap bonds even with small rtol: got {result_bd}"
     );
     assert!(
-        no_cap_bd > max_rank,
-        "Test setup: fit without max_rank should have larger bonds: got {no_cap_bd}"
+        no_cap_bd > max_bond_dim,
+        "Test setup: fit without max_bond_dim should have larger bonds: got {no_cap_bd}"
     );
 }
 
-/// fit() with positive rtol (no max_rank) should allow bond growth beyond
+/// fit() with positive rtol (no max_bond_dim) should allow bond growth beyond
 /// the zipup initialization. Smaller rtol → larger bonds.
 #[test]
 fn test_fit_rtol_controls_bond_growth() {

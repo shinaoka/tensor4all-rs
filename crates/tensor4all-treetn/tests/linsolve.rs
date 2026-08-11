@@ -569,7 +569,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         .with_gmres_tol(1e-10)
         .with_gmres_restart_dim(10)
         .with_gmres_max_restarts(30)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
     let nsweeps = options.nfullsweeps;
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -882,7 +882,7 @@ fn test_linsolve_3site_identity() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(2)
         .with_gmres_tol(1e-8)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1340,7 +1340,7 @@ fn test_linsolve_with_index_mappings_identity() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_gmres_tol(1e-10)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1391,7 +1391,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
         .with_gmres_tol(1e-10)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1547,7 +1547,7 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_gmres_tol(1e-10)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1604,7 +1604,7 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_gmres_tol(1e-10)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1738,7 +1738,7 @@ fn test_linsolve_pauli_x() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(20)
         .with_gmres_tol(1e-12)
-        .with_max_rank(8);
+        .with_max_bond_dim(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1907,7 +1907,7 @@ fn test_linsolve_general_matrix() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(30)
         .with_gmres_tol(1e-12)
-        .with_max_rank(8);
+        .with_max_bond_dim(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -1995,7 +1995,7 @@ fn test_linsolve_general_matrix_nonsymmetric() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(30)
         .with_gmres_tol(1e-12)
-        .with_max_rank(8);
+        .with_max_bond_dim(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -2266,7 +2266,7 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_gmres_tol(1e-10)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -2324,7 +2324,7 @@ fn test_square_linsolve_with_mappings_identity() {
         .with_gmres_tol(1e-10)
         .with_gmres_restart_dim(10)
         .with_gmres_max_restarts(30)
-        .with_max_rank(4)
+        .with_max_bond_dim(4)
         .with_convergence_tol(1e-8);
 
     // This previously failed with index mismatch when mappings were not supported
@@ -2415,7 +2415,7 @@ fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
         .with_gmres_tol(1e-10)
         .with_gmres_restart_dim(10)
         .with_gmres_max_restarts(30)
-        .with_max_rank(8);
+        .with_max_bond_dim(8);
     let result = square_linsolve(
         &mpo,
         &rhs,
@@ -2534,7 +2534,7 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
         .with_gmres_tol(1e-12)
         .with_gmres_restart_dim(10)
         .with_gmres_max_restarts(30)
-        .with_max_rank(4)
+        .with_max_bond_dim(4)
         .with_convergence_tol(1e-8);
     let result = square_linsolve(
         &mpo,

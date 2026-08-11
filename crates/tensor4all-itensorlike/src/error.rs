@@ -9,7 +9,13 @@ pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
 use tensor4all_core::TensorDynLenError;
 
-/// Errors that can occur in TensorTrain operations.
+/// Errors that can occur in `TensorTrain` operations.
+///
+/// Note: `tensor4all-simplett` also defines a public type named
+/// [`TensorTrainError`](tensor4all_simplett::TensorTrainError) with different
+/// variants (its positional `SimpleTensorTrain`). When both crates are in
+/// scope, qualify the path (e.g. `tensor4all_itensorlike::TensorTrainError`
+/// vs `tensor4all_simplett::TensorTrainError`).
 #[derive(Debug, Error)]
 pub enum TensorTrainError {
     /// Tensor train is empty (has no tensors).

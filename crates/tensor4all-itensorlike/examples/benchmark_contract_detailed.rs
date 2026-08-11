@@ -41,13 +41,13 @@ fn main() -> Result<()> {
     let length = 10;
     let phys_dim = 2;
     let bond_dim = 50;
-    let max_rank = 50;
+    let max_bond_dim = 50;
     let n_runs = 5;
 
     println!("=== Detailed MPO Contraction Benchmark (Rust) ===");
     println!("Length: {} sites", length);
     println!("Bond dimension: {}", bond_dim);
-    println!("Max rank: {}", max_rank);
+    println!("Max rank: {}", max_bond_dim);
     println!();
 
     // Create fixed MPOs
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
     // Enable profiling
     std::env::set_var("T4A_PROFILE_CONTRACTION", "1");
 
-    let options = ContractOptions::zipup().with_max_rank(max_rank);
+    let options = ContractOptions::zipup().with_max_bond_dim(max_bond_dim);
 
     println!("Running {} iterations...", n_runs);
     let mut times = Vec::new();

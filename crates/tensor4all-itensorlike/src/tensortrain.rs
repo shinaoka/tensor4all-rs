@@ -1169,7 +1169,7 @@ impl TensorTrain {
     /// assert_eq!(tt.max_bond_dim(), 4);
     ///
     /// // Truncate bond dimension to at most 2
-    /// let opts = TruncateOptions::svd().with_max_rank(2);
+    /// let opts = TruncateOptions::svd().with_max_bond_dim(2);
     /// tt.truncate(&opts).unwrap();
     /// assert!(tt.max_bond_dim() <= 2);
     /// ```
@@ -1178,15 +1178,15 @@ impl TensorTrain {
             return Ok(());
         }
 
-        validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
+        validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
 
         // Convert TruncateOptions to TruncationOptions
         let mut treetn_options = TruncationOptions::new();
         if let Some(policy) = options.svd_policy() {
             treetn_options = treetn_options.with_svd_policy(policy);
         }
-        if let Some(max_rank) = options.max_rank() {
-            treetn_options = treetn_options.with_max_rank(max_rank);
+        if let Some(max_bond_dim) = options.max_bond_dim() {
+            treetn_options = treetn_options.with_max_bond_dim(max_bond_dim);
         }
 
         // Truncate towards the last site (rightmost) as the canonical center

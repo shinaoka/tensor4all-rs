@@ -39,7 +39,7 @@ fn test_contraction_method_default() {
 fn test_contraction_options_default() {
     let opts = ContractionOptions::default();
     assert_eq!(opts.method, ContractionMethod::Zipup);
-    assert!(opts.max_rank.is_none());
+    assert!(opts.max_bond_dim.is_none());
     assert!(opts.svd_policy.is_none());
     assert!(opts.qr_rtol.is_none());
     assert_eq!(opts.nfullsweeps, 1);
@@ -72,7 +72,7 @@ fn test_contraction_options_builders() {
         .with_squared_values()
         .with_discarded_tail_sum();
     let opts = ContractionOptions::zipup()
-        .with_max_rank(10)
+        .with_max_bond_dim(10)
         .with_svd_policy(policy)
         .with_nfullsweeps(3)
         .with_convergence_tol(1e-6)
@@ -80,7 +80,7 @@ fn test_contraction_options_builders() {
         .with_dense_reference_limit(128)
         .with_mismatched_topology_dense_limit(64);
 
-    assert_eq!(opts.max_rank, Some(10));
+    assert_eq!(opts.max_bond_dim, Some(10));
     assert_eq!(opts.svd_policy, Some(policy));
     assert_eq!(opts.qr_rtol, None);
     assert_eq!(opts.nfullsweeps, 3);

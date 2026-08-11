@@ -25,21 +25,21 @@
 ///     .with_max_bond_dim(64);
 ///
 /// assert!((opts.tolerance - 1e-10).abs() < 1e-15);
-/// assert_eq!(opts.max_bond_dim, 64);
+/// assert_eq!(opts.max_bond_dim, Some(64));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InterpolativeQttOptions {
     /// Relative SVD truncation threshold.
     pub tolerance: f64,
     /// Maximum allowed TT bond dimension.
-    pub max_bond_dim: usize,
+    pub max_bond_dim: Option<usize>,
 }
 
 impl Default for InterpolativeQttOptions {
     fn default() -> Self {
         Self {
             tolerance: 1.0e-12,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
         }
     }
 }
@@ -75,10 +75,10 @@ impl InterpolativeQttOptions {
     /// use tensor4all_interpolativeqtt::InterpolativeQttOptions;
     ///
     /// let opts = InterpolativeQttOptions::default().with_max_bond_dim(8);
-    /// assert_eq!(opts.max_bond_dim, 8);
+    /// assert_eq!(opts.max_bond_dim, Some(8));
     /// ```
     pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
-        self.max_bond_dim = max_bond_dim;
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 }
@@ -92,7 +92,7 @@ mod tests {
         let opts = InterpolativeQttOptions::default();
 
         assert_eq!(opts.tolerance, 1.0e-12);
-        assert_eq!(opts.max_bond_dim, usize::MAX);
+        assert_eq!(opts.max_bond_dim, None);
     }
 
     #[test]
@@ -100,11 +100,11 @@ mod tests {
         let opts = InterpolativeQttOptions::default().with_tolerance(1.0e-8);
 
         assert_eq!(opts.tolerance, 1.0e-8);
-        assert_eq!(opts.max_bond_dim, usize::MAX);
+        assert_eq!(opts.max_bond_dim, None);
 
         let capped = opts.with_max_bond_dim(12);
 
         assert_eq!(capped.tolerance, 1.0e-8);
-        assert_eq!(capped.max_bond_dim, 12);
+        assert_eq!(capped.max_bond_dim, Some(12));
     }
 }

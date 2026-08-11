@@ -829,7 +829,7 @@ fn main() -> anyhow::Result<()> {
     // Set up linsolve options for a0=0, a1=1
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
-        .with_max_rank(50)
+        .with_max_bond_dim(50)
         .with_gmres_tol(1e-10)
         .with_gmres_max_restarts(30)
         .with_gmres_restart_dim(30)

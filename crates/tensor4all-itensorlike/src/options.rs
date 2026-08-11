@@ -10,7 +10,7 @@ use crate::error::{Result, TensorTrainError};
 pub use tensor4all_treetn::CanonicalForm;
 
 pub(crate) fn validate_svd_truncation_options(
-    max_rank: Option<usize>,
+    max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
 ) -> Result<()> {
     if let Some(policy) = svd_policy {
@@ -24,10 +24,10 @@ pub(crate) fn validate_svd_truncation_options(
         }
     }
 
-    if let Some(max_rank) = max_rank {
-        if max_rank == 0 {
+    if let Some(max_bond_dim) = max_bond_dim {
+        if max_bond_dim == 0 {
             return Err(TensorTrainError::OperationError {
-                message: "max_rank/maxdim must be >= 1".to_string(),
+                message: "max_bond_dim/maxdim must be >= 1".to_string(),
             });
         }
     }
@@ -48,16 +48,16 @@ pub(crate) fn validate_svd_truncation_options(
 ///
 /// let opts = TruncateOptions::svd()
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
-///     .with_max_rank(20)
+///     .with_max_bond_dim(20)
 ///     .with_site_range(0..4);
 ///
 /// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
-/// assert_eq!(opts.max_rank(), Some(20));
+/// assert_eq!(opts.max_bond_dim(), Some(20));
 /// assert_eq!(opts.site_range(), Some(0..4));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct TruncateOptions {
-    max_rank: Option<usize>,
+    max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
     site_range: Option<Range<usize>>,
 }
@@ -75,8 +75,8 @@ impl TruncateOptions {
     }
 
     /// Set the maximum retained bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -96,8 +96,8 @@ impl TruncateOptions {
 
     /// Get the maximum retained bond dimension.
     #[inline]
-    pub fn max_rank(&self) -> Option<usize> {
-        self.max_rank
+    pub fn max_bond_dim(&self) -> Option<usize> {
+        self.max_bond_dim
     }
 
     /// Get the site range for truncation.
@@ -131,17 +131,17 @@ pub enum ContractMethod {
 ///
 /// let opts = ContractOptions::fit()
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-8))
-///     .with_max_rank(50)
+///     .with_max_bond_dim(50)
 ///     .with_nsweeps(3);
 ///
-/// assert_eq!(opts.max_rank(), Some(50));
+/// assert_eq!(opts.max_bond_dim(), Some(50));
 /// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-8)));
 /// assert_eq!(opts.nhalfsweeps(), 6);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ContractOptions {
     method: ContractMethod,
-    max_rank: Option<usize>,
+    max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
     nhalfsweeps: usize,
     dense_reference_limit: Option<usize>,
@@ -151,7 +151,7 @@ impl Default for ContractOptions {
     fn default() -> Self {
         Self {
             method: ContractMethod::default(),
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             nhalfsweeps: 2,
             dense_reference_limit: None,
@@ -203,8 +203,8 @@ impl ContractOptions {
     }
 
     /// Set the maximum retained bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -261,8 +261,8 @@ impl ContractOptions {
 
     /// Get the maximum retained bond dimension.
     #[inline]
-    pub fn max_rank(&self) -> Option<usize> {
-        self.max_rank
+    pub fn max_bond_dim(&self) -> Option<usize> {
+        self.max_bond_dim
     }
 
     /// Get the SVD truncation policy override.
@@ -310,18 +310,18 @@ impl ContractOptions {
 ///
 /// let opts = LinsolveOptions::new(5)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
-///     .with_max_rank(64)
+///     .with_max_bond_dim(64)
 ///     .with_gmres_tol(1e-8)
 ///     .with_coefficients(1.0, -1.0);
 ///
-/// assert_eq!(opts.max_rank(), Some(64));
+/// assert_eq!(opts.max_bond_dim(), Some(64));
 /// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
 /// assert_eq!(opts.nhalfsweeps(), 10);
 /// ```
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
     nhalfsweeps: usize,
-    max_rank: Option<usize>,
+    max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
     gmres_tol: f64,
     gmres_max_restarts: usize,
@@ -336,7 +336,7 @@ impl Default for LinsolveOptions {
     fn default() -> Self {
         Self {
             nhalfsweeps: 10,
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             gmres_tol: 1e-10,
             gmres_max_restarts: 100,
@@ -365,8 +365,8 @@ impl LinsolveOptions {
     }
 
     /// Set the maximum retained bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -428,8 +428,8 @@ impl LinsolveOptions {
 
     /// Get the maximum retained bond dimension.
     #[inline]
-    pub fn max_rank(&self) -> Option<usize> {
-        self.max_rank
+    pub fn max_bond_dim(&self) -> Option<usize> {
+        self.max_bond_dim
     }
 
     /// Get the SVD truncation policy override.

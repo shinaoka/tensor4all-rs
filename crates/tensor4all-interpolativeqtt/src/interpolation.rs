@@ -663,7 +663,7 @@ fn validate_options(options: &InterpolativeQttOptions) -> Result<()> {
             "compression tolerance must be finite and non-negative",
         ));
     }
-    if options.max_bond_dim == 0 {
+    if options.max_bond_dim == Some(0) {
         return Err(invalid_argument("max_bond_dim must be at least 1"));
     }
     Ok(())
@@ -765,7 +765,7 @@ fn compress_train(
     options: &InterpolativeQttOptions,
 ) -> Result<SimpleTensorTrain<f64>> {
     let tt = SimpleTensorTrain::new(cores)?;
-    if options.tolerance == 0.0 && options.max_bond_dim == usize::MAX {
+    if options.tolerance == 0.0 && options.max_bond_dim.is_none() {
         return Ok(tt);
     }
 

@@ -543,7 +543,7 @@ fn options_builder_all_fields() {
     // Verify conversion to TreeTciOptions preserves key fields
     let tree_opts = opts.to_treetci_options();
     assert!((tree_opts.tolerance - 1e-6).abs() < 1e-15);
-    assert_eq!(tree_opts.max_bond_dim, 50);
+    assert_eq!(tree_opts.max_bond_dim, Some(50));
     assert_eq!(tree_opts.max_iter, 100);
 }
 

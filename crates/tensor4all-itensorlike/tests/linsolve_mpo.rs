@@ -68,7 +68,7 @@ fn test_linsolve_identity_mpo_distinct_output_indices() {
     let options = LinsolveOptions::new(3)
         .with_gmres_tol(1e-10)
         .with_gmres_restart_dim(10)
-        .with_max_rank(4);
+        .with_max_bond_dim(4);
 
     let result = operator.linsolve(&rhs, init, &options).unwrap();
 
@@ -126,7 +126,7 @@ fn test_linsolve_identity_mpo_accepts_complex_coefficients() {
     let options = LinsolveOptions::new(3)
         .with_gmres_tol(1e-10)
         .with_gmres_restart_dim(10)
-        .with_max_rank(4)
+        .with_max_bond_dim(4)
         .with_coefficients(0.0, Complex64::new(0.0, 1.0));
 
     let result = operator.linsolve(&rhs, init, &options).unwrap();

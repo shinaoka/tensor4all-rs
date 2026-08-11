@@ -514,8 +514,8 @@ where
 
         let topology = build_subtree_topology(&solved_local, &step.nodes, full_treetn)?;
         let mut factorize_options = FactorizeOptions::svd();
-        if let Some(max_rank) = self.options.max_bond_dim {
-            factorize_options = factorize_options.with_max_rank(max_rank);
+        if let Some(max_bond_dim) = self.options.max_bond_dim {
+            factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
         }
         if let Some(policy) = self.options.svd_policy {
             factorize_options = factorize_options.with_svd_policy(policy);

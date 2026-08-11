@@ -16,7 +16,21 @@ def main():
     file_thresholds = config.get("files", {})
 
     if parser.coverage:
-        with open(parser.coverage) as f:
+        cov_path = Path(parser.coverage)
+        if not cov_path.is_file():
+            # Control 3 (build-artifact hygiene): an explicit local coverage
+            # attestation is required when the hosted-CI-owned measurement is
+            # being re-checked locally. Fail loudly instead of silently
+            # passing when the attestation file is absent.
+            print(
+                f"error: coverage attestation file '{parser.coverage}' not found. "
+                "Run `cargo llvm-cov --release --workspace --exclude "
+                "tensor4all-hdf5 --json --output-path coverage.json` first, or "
+                "pipe a coverage.json to stdin.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        with open(cov_path) as f:
             cov_data = json.load(f)
     else:
         cov_data = json.load(sys.stdin)

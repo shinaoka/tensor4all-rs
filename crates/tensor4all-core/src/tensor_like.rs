@@ -189,7 +189,7 @@ pub enum Canonical {
 ///
 /// - Algorithm: SVD
 /// - Canonical: Left (left factor is orthogonal)
-/// - max_rank: `None` (no rank limit)
+/// - max_bond_dim: `None` (no rank limit)
 /// - svd_policy: `None` (uses the SVD global default policy)
 /// - qr_rtol: `None` (uses the QR global default tolerance)
 ///
@@ -197,7 +197,7 @@ pub enum Canonical {
 ///
 /// - `svd_policy` is only valid for `FactorizeAlg::SVD`.
 /// - `qr_rtol` is only valid for `FactorizeAlg::QR`.
-/// - `max_rank` is independent of the algorithm-specific tolerance settings.
+/// - `max_bond_dim` is independent of the algorithm-specific tolerance settings.
 ///
 /// # Examples
 ///
@@ -219,7 +219,7 @@ pub enum Canonical {
 /// assert_eq!(result.rank, 1);
 ///
 /// // QR with max-rank truncation
-/// let opts = FactorizeOptions::qr().with_qr_rtol(1e-8).with_max_rank(2);
+/// let opts = FactorizeOptions::qr().with_qr_rtol(1e-8).with_max_bond_dim(2);
 /// let result = factorize(&tensor, &[i.clone()], &opts).unwrap();
 /// assert!(result.rank <= 2);
 /// ```
@@ -231,7 +231,7 @@ pub struct FactorizeOptions {
     pub canonical: Canonical,
     /// Maximum rank for truncation.
     /// If `None`, no rank limit is applied.
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// SVD truncation policy.
     /// If `None`, uses the SVD global default.
     pub svd_policy: Option<SvdTruncationPolicy>,
@@ -245,7 +245,7 @@ impl Default for FactorizeOptions {
         Self {
             alg: FactorizeAlg::SVD,
             canonical: Canonical::Left,
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
         }
@@ -373,11 +373,11 @@ impl FactorizeOptions {
     /// ```
     /// use tensor4all_core::FactorizeOptions;
     ///
-    /// let opts = FactorizeOptions::svd().with_max_rank(10);
-    /// assert_eq!(opts.max_rank, Some(10));
+    /// let opts = FactorizeOptions::svd().with_max_bond_dim(10);
+    /// assert_eq!(opts.max_bond_dim, Some(10));
     /// ```
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 

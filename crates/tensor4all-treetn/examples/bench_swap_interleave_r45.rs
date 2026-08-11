@@ -86,25 +86,25 @@ fn main() {
     for r in [5, 10, 15, 20, 25, 30] {
         run_timing(r, 5, &SwapOptions::default(), "");
     }
-    eprintln!("=== timing: bond_dim=5, max_rank=5 ===");
+    eprintln!("=== timing: bond_dim=5, max_bond_dim=5 ===");
     for r in [5, 10, 15, 20, 25, 30, 45] {
         run_timing(
             r,
             5,
             &SwapOptions {
-                max_rank: Some(5),
+                max_bond_dim: Some(5),
                 rtol: None,
             },
             "",
         );
     }
-    eprintln!("=== timing: bond_dim=5, max_rank=10 ===");
+    eprintln!("=== timing: bond_dim=5, max_bond_dim=10 ===");
     for r in [5, 10, 15, 20, 25, 30, 45] {
         run_timing(
             r,
             5,
             &SwapOptions {
-                max_rank: Some(10),
+                max_bond_dim: Some(10),
                 rtol: None,
             },
             "",
@@ -118,19 +118,19 @@ fn main() {
             r,
             5,
             &SwapOptions {
-                max_rank: Some(5),
+                max_bond_dim: Some(5),
                 rtol: None,
             },
-            "bond_dim=5 max_rank= 5",
+            "bond_dim=5 max_bond_dim= 5",
         );
         run_accuracy(
             r,
             5,
             &SwapOptions {
-                max_rank: Some(10),
+                max_bond_dim: Some(10),
                 rtol: None,
             },
-            "bond_dim=5 max_rank=10",
+            "bond_dim=5 max_bond_dim=10",
         );
     }
 }

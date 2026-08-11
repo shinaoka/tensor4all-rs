@@ -31,7 +31,7 @@ fn test_scalar_generic<T: Scalar>() {
 
 fn options() -> crate::matrixlu::RrLUOptions {
     crate::matrixlu::RrLUOptions {
-        max_rank: 2,
+        max_bond_dim: 2,
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,

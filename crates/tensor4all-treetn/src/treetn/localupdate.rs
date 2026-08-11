@@ -490,7 +490,7 @@ use tensor4all_core::{Canonical, FactorizeOptions, SvdTruncationPolicy};
 #[derive(Debug, Clone)]
 pub struct TruncateUpdater {
     /// Maximum bond dimension after truncation.
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// Explicit SVD truncation policy.
     pub svd_policy: Option<SvdTruncationPolicy>,
 }
@@ -499,11 +499,11 @@ impl TruncateUpdater {
     /// Create a new truncation updater.
     ///
     /// # Arguments
-    /// * `max_rank` - Maximum bond dimension (None for no limit)
+    /// * `max_bond_dim` - Maximum bond dimension (None for no limit)
     /// * `svd_policy` - SVD truncation policy override (None uses the global default)
-    pub fn new(max_rank: Option<usize>, svd_policy: Option<SvdTruncationPolicy>) -> Self {
+    pub fn new(max_bond_dim: Option<usize>, svd_policy: Option<SvdTruncationPolicy>) -> Self {
         Self {
-            max_rank,
+            max_bond_dim,
             svd_policy,
         }
     }
@@ -576,8 +576,8 @@ where
         // Set up factorization options
         let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left); // Left canonical: A is isometry, B has the norm
 
-        if let Some(max_rank) = self.max_rank {
-            options = options.with_max_rank(max_rank);
+        if let Some(max_bond_dim) = self.max_bond_dim {
+            options = options.with_max_bond_dim(max_bond_dim);
         }
         if let Some(policy) = self.svd_policy {
             options = options.with_svd_policy(policy);

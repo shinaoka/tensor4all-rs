@@ -96,13 +96,13 @@ use crate::treetn::TreeTN;
 /// [`ApplyOptions::naive`] uses a dedicated local exact apply path: it contracts
 /// each state tensor with the corresponding operator tensor and fuses each
 /// state/operator link pair into one product link. It does not materialize the
-/// full state or operator tensor. Truncation fields such as `max_rank`,
+/// full state or operator tensor. Truncation fields such as `max_bond_dim`,
 /// `svd_policy`, and `qr_rtol` are ignored by the naive path.
 ///
 /// # Defaults
 ///
 /// - `method`: [`ContractionMethod::Zipup`] (single-sweep, no iteration)
-/// - `max_rank`: `None` (no rank limit)
+/// - `max_bond_dim`: `None` (no rank limit)
 /// - `svd_policy`: `None` (uses the SVD global default policy)
 /// - `qr_rtol`: `None` (uses the QR global default tolerance)
 /// - `nfullsweeps`: `1` (only used by Fit method)
@@ -116,29 +116,29 @@ use crate::treetn::TreeTN;
 ///
 /// // Default: Zipup with no truncation
 /// let opts = ApplyOptions::default();
-/// assert_eq!(opts.max_rank, None);
+/// assert_eq!(opts.max_bond_dim, None);
 ///
 /// // Zipup with rank and tolerance limits
 /// let opts = ApplyOptions::zipup()
-///     .with_max_rank(50)
+///     .with_max_bond_dim(50)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-8));
-/// assert_eq!(opts.max_rank, Some(50));
+/// assert_eq!(opts.max_bond_dim, Some(50));
 /// assert_eq!(opts.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
 ///
 /// // Fit method with sweep control
-/// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_rank(20);
+/// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_bond_dim(20);
 /// assert_eq!(opts.nfullsweeps, 3);
 ///
 /// // Local exact naive apply: no truncation and no full dense tensor.
 /// let opts = ApplyOptions::naive();
-/// assert_eq!(opts.max_rank, None);
+/// assert_eq!(opts.max_bond_dim, None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
     /// Contraction method to use.
     pub method: ContractionMethod,
     /// Maximum bond dimension for truncation.
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// Explicit SVD truncation policy.
     pub svd_policy: Option<SvdTruncationPolicy>,
     /// QR-specific relative tolerance.
@@ -155,7 +155,7 @@ impl Default for ApplyOptions {
     fn default() -> Self {
         Self {
             method: ContractionMethod::Zipup,
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
             nfullsweeps: 1,
@@ -193,8 +193,8 @@ impl ApplyOptions {
     }
 
     /// Set maximum bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -296,7 +296,7 @@ impl ApplyOptions {
 ///     &operator,
 ///     &state,
 ///     ApplyOptions::zipup()
-///         .with_max_rank(4)
+///         .with_max_bond_dim(4)
 ///         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10)),
 /// )?;
 /// assert_eq!(truncated.node_count(), 1);
@@ -350,7 +350,7 @@ where
 
     let contraction_options = ContractionOptions {
         method: options.method,
-        max_rank: options.max_rank,
+        max_bond_dim: options.max_bond_dim,
         svd_policy: options.svd_policy,
         qr_rtol: options.qr_rtol,
         nfullsweeps: options.nfullsweeps,

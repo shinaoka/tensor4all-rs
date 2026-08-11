@@ -210,7 +210,7 @@ impl<T: Scalar> RrLU<T> {
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
-    /// let lu = rrlu(&m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
+    /// let lu = rrlu(&m, Some(RrLUOptions { max_bond_dim: 1, ..Default::default() })).unwrap();
     /// let rows = lu.row_indices();
     /// assert_eq!(rows.len(), 1);
     /// assert!(rows[0] < 2);
@@ -228,7 +228,7 @@ impl<T: Scalar> RrLU<T> {
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
-    /// let lu = rrlu(&m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
+    /// let lu = rrlu(&m, Some(RrLUOptions { max_bond_dim: 1, ..Default::default() })).unwrap();
     /// let cols = lu.col_indices();
     /// assert_eq!(cols.len(), 1);
     /// assert!(cols[0] < 2);
@@ -681,13 +681,13 @@ fn extract_lu_from_factorized<T: Scalar>(
 /// assert!(opts.left_orthogonal);
 ///
 /// // Limit rank to 5
-/// let opts = RrLUOptions { max_rank: 5, ..Default::default() };
-/// assert_eq!(opts.max_rank, 5);
+/// let opts = RrLUOptions { max_bond_dim: 5, ..Default::default() };
+/// assert_eq!(opts.max_bond_dim, 5);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RrLUOptions {
     /// Maximum rank
-    pub max_rank: usize,
+    pub max_bond_dim: usize,
     /// Relative tolerance
     pub rel_tol: f64,
     /// Absolute tolerance
@@ -699,7 +699,7 @@ pub struct RrLUOptions {
 impl Default for RrLUOptions {
     fn default() -> Self {
         Self {
-            max_rank: usize::MAX,
+            max_bond_dim: usize::MAX,
             rel_tol: 1e-14,
             abs_tol: 0.0,
             left_orthogonal: true,
@@ -729,7 +729,7 @@ impl Default for RrLUOptions {
 ///     vec![1.0_f64, 2.0],
 ///     vec![3.0, 4.0],
 /// ]);
-/// let lu = rrlu_mut(&mut m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
+/// let lu = rrlu_mut(&mut m, Some(RrLUOptions { max_bond_dim: 1, ..Default::default() })).unwrap();
 /// assert_eq!(lu.npivots(), 1);
 /// ```
 pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
@@ -741,10 +741,10 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
     debug_assert_eq!(data.len(), nr * nc);
 
     let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
-    let max_rank = opts.max_rank.min(nr).min(nc);
+    let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
     let mut max_error = 0.0f64;
 
-    while lu.n_pivot < max_rank {
+    while lu.n_pivot < max_bond_dim {
         let k = lu.n_pivot;
 
         if k >= nr || k >= nc {

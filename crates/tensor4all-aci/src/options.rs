@@ -21,7 +21,7 @@ use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 /// let options = AciOptions::<f64>::default();
 /// assert_eq!(options.max_iters, 20);
 /// assert_eq!(options.min_iters, 2);
-/// assert_eq!(options.max_bond_dim, usize::MAX);
+/// assert_eq!(options.max_bond_dim, None);
 /// assert!((options.tolerance - 1e-12).abs() < 1e-15);
 /// assert!(!options.scale_tolerance);
 /// assert!(options.initial_guess.is_none());
@@ -49,7 +49,7 @@ pub struct AciOptions<T: TTScalar> {
     /// The default is [`usize::MAX`], meaning no explicit cap. Lower values
     /// reduce memory and runtime but may prevent the approximation from
     /// reaching the requested [`tolerance`](Self::tolerance).
-    pub max_bond_dim: usize,
+    pub max_bond_dim: Option<usize>,
 
     /// Requested stopping tolerance for the ACI residual estimate.
     ///
@@ -89,7 +89,7 @@ impl<T: TTScalar> Default for AciOptions<T> {
         Self {
             max_iters: 20,
             min_iters: 2,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             tolerance: 1e-12,
             scale_tolerance: false,
             initial_guess: None,

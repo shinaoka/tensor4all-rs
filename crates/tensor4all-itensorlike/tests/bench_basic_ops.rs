@@ -119,7 +119,7 @@ fn bench_truncate() {
         let mut mps = make_random_mps(n, 2, 16, 123);
         let opts = TruncateOptions::svd()
             .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-            .with_max_rank(8);
+            .with_max_bond_dim(8);
         time_it(&format!("truncate({n} sites, bd=16→8)"), || {
             mps.truncate(&opts).unwrap();
         });
@@ -134,7 +134,7 @@ fn bench_contract_zipup() {
         let (a, b) = make_random_mpo_pair(n, 2, 8);
         let opts = ContractOptions::zipup()
             .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-            .with_max_rank(16);
+            .with_max_bond_dim(16);
         time_it(&format!("zipup({n} sites, bd=8)"), || {
             let _ = a.contract(&b, &opts).unwrap();
         });
@@ -149,7 +149,7 @@ fn bench_contract_fit() {
         let (a, b) = make_random_mpo_pair(n, 2, 8);
         let opts = ContractOptions::fit()
             .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-            .with_max_rank(16);
+            .with_max_bond_dim(16);
         time_it(&format!("fit({n} sites, bd=8)"), || {
             let _ = a.contract(&b, &opts).unwrap();
         });

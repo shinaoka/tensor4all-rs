@@ -100,7 +100,7 @@ fn rank_cap_forces_disjoint_exact_child_patches() {
     let options = AdaptiveInterpolateOptions {
         tci_options: TCI2Options {
             tolerance: 1.0e-14,
-            max_bond_dim: 1,
+            max_bond_dim: Some(1),
             max_iter: 4,
             ncheck_history: 1,
             nsearch: 0,
@@ -332,7 +332,7 @@ fn rejects_invalid_scalar_options_and_site_lists() {
             ..TCI2Options::default()
         },
         TCI2Options {
-            max_bond_dim: 0,
+            max_bond_dim: Some(0),
             ..TCI2Options::default()
         },
         TCI2Options {

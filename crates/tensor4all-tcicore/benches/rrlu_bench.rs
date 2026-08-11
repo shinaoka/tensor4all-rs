@@ -37,7 +37,7 @@ fn bench_rrlu(c: &mut Criterion) {
                 || random_matrix(n, n, 42),
                 |mut m| {
                     let opts = RrLUOptions {
-                        max_rank: n,
+                        max_bond_dim: n,
                         rel_tol: 0.0,
                         abs_tol: 0.0,
                         ..Default::default()

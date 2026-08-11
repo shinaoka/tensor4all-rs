@@ -104,7 +104,7 @@ fn test_factorize_reconstruction_all_algorithms() {
             let options = FactorizeOptions {
                 alg,
                 canonical,
-                max_rank: None,
+                max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: None,
             };
@@ -127,7 +127,7 @@ fn test_factorize_shared_bond_index_all_algorithms() {
         let options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
         };
@@ -208,7 +208,7 @@ fn test_factorize_lu_ci_no_singular_values() {
             let options = FactorizeOptions {
                 alg,
                 canonical,
-                max_rank: None,
+                max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: None,
             };
@@ -228,7 +228,7 @@ fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
         let options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
         };
@@ -247,7 +247,7 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
         let options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
         };
@@ -262,17 +262,17 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
 // ============================================================================
 
 #[test]
-fn test_factorize_with_max_rank() {
+fn test_factorize_with_max_bond_dim() {
     let tensor = create_test_matrix();
     let left_inds = vec![tensor.indices[0].clone()];
 
-    // LU should respect max_rank
-    let options = FactorizeOptions::lu().with_max_rank(1);
+    // LU should respect max_bond_dim
+    let options = FactorizeOptions::lu().with_max_bond_dim(1);
     let result = factorize(&tensor, &left_inds, &options).unwrap();
     assert_eq!(result.rank, 1);
 
     // SVD API works (actual truncation behavior may vary)
-    let options = FactorizeOptions::svd().with_max_rank(1);
+    let options = FactorizeOptions::svd().with_max_bond_dim(1);
     let result = factorize(&tensor, &left_inds, &options).unwrap();
     assert!(result.rank >= 1);
 }

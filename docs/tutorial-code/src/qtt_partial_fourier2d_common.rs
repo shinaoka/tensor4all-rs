@@ -222,7 +222,7 @@ pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
     let options = FourierOptions {
-        max_bond_dim: config.max_bond_dim,
+        max_bond_dim: Some(config.max_bond_dim),
         tolerance: config.tolerance,
         ..FourierOptions::forward()
     };

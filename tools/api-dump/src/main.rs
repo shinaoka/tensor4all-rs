@@ -211,11 +211,21 @@ fn parse_file(path: &Path) -> Result<Vec<FuncInfo>, Box<dyn std::error::Error>> 
     Ok(funcs)
 }
 
+/// A public item is one a downstream user can call: `pub` visibility only.
+/// `pub(crate)`/`pub(super)`/`pub(self)` (Restricted) and private (Inherited)
+/// items are not part of the public API surface and are excluded from the
+/// dump.
+fn is_public(vis: &Visibility) -> bool {
+    matches!(vis, Visibility::Public(_))
+}
+
 fn extract_items(items: &[Item], funcs: &mut Vec<FuncInfo>) {
     for item in items {
         match item {
             Item::Fn(item_fn) => {
-                funcs.push(extract_fn_info(item_fn));
+                if is_public(&item_fn.vis) {
+                    funcs.push(extract_fn_info(item_fn));
+                }
             }
             Item::Impl(item_impl) => {
                 extract_impl_items(item_impl, funcs);
@@ -247,6 +257,9 @@ fn extract_impl_items(item_impl: &ItemImpl, funcs: &mut Vec<FuncInfo>) {
 
     for impl_item in &item_impl.items {
         if let ImplItem::Fn(method) = impl_item {
+            if !is_public(&method.vis) {
+                continue;
+            }
             funcs.push(FuncInfo {
                 visibility: vis_to_string(&method.vis),
                 signature: sig_to_string(&method.sig),
@@ -264,6 +277,11 @@ fn extract_trait_items(item_trait: &ItemTrait, funcs: &mut Vec<FuncInfo>) {
 
     for trait_item in &item_trait.items {
         if let TraitItem::Fn(method) = trait_item {
+            // A trait method is public when its trait is public; non-public
+            // traits are excluded from the dump.
+            if !is_public(&item_trait.vis) {
+                continue;
+            }
             let has_default = method.default.is_some();
             funcs.push(FuncInfo {
                 visibility: vis_to_string(&item_trait.vis),

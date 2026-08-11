@@ -120,11 +120,11 @@ fn helper_factorize_options_and_union_topology_paths_are_exercised() {
     let policy = SvdTruncationPolicy::new(1.0e-8);
     let options = ContractionOptions::default()
         .with_factorize_alg(FactorizeAlg::SVD)
-        .with_max_rank(3)
+        .with_max_bond_dim(3)
         .with_svd_policy(policy);
     let factorize_options = factorize_options_from_contraction_options(&options).unwrap();
     assert_eq!(factorize_options.alg, FactorizeAlg::SVD);
-    assert_eq!(factorize_options.max_rank, Some(3));
+    assert_eq!(factorize_options.max_bond_dim, Some(3));
     assert_eq!(factorize_options.svd_policy, Some(policy));
 
     let qr_options = factorize_options_from_contraction_options(

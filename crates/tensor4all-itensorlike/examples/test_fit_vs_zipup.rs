@@ -844,7 +844,7 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     // Apply truncation
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
-        .with_max_rank(20);
+        .with_max_bond_dim(20);
     r0.truncate(&truncate_opts)?;
 
     println!("\n=== After truncation ===");
@@ -1231,7 +1231,7 @@ fn test_gmres_with_both(
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
-        .with_max_rank(20);
+        .with_max_bond_dim(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -1459,7 +1459,7 @@ fn apply_with_zipup(
 ) -> anyhow::Result<TensorTrain> {
     let options = ContractOptions::zipup()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(50);
+        .with_max_bond_dim(50);
 
     let result = op
         .contract(mpo, &options)
@@ -1478,7 +1478,7 @@ fn apply_with_fit(
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(50);
+        .with_max_bond_dim(50);
 
     let result = op
         .contract(mpo, &options)
@@ -1498,11 +1498,11 @@ fn debug_contract_result(
 
     let options_zipup = ContractOptions::zipup()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(50);
+        .with_max_bond_dim(50);
     let options_fit = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(50);
+        .with_max_bond_dim(50);
 
     let raw_zipup = op
         .contract(mpo, &options_zipup)
@@ -1634,7 +1634,7 @@ fn debug_contract_result(
 
     let trunc_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
-        .with_max_rank(20);
+        .with_max_bond_dim(20);
     result_zipup_trunc.truncate(&trunc_opts)?;
     result_fit_trunc.truncate(&trunc_opts)?;
 

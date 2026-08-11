@@ -475,7 +475,7 @@ fn apply_operator_for_block(
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let result = op
         .contract(mpo, &options)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -499,7 +499,7 @@ fn apply_cross_block_operator(
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let result = op
         .contract(mpo, &options)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -524,7 +524,7 @@ fn apply_cross_block_operator_full(
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let result = op
         .contract(mpo, &options)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -622,7 +622,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -719,7 +719,7 @@ fn test_block_diagonal_diagonal_operator() -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -860,7 +860,7 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -949,7 +949,7 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
     // Truncation with aggressive settings
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-        .with_max_rank(10);
+        .with_max_bond_dim(10);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -967,12 +967,12 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
 
     println!("\nRunning Restart GMRES...");
     println!(
-        "Truncation: rtol={:.0e}, max_rank={}",
+        "Truncation: rtol={:.0e}, max_bond_dim={}",
         truncate_opts
             .svd_policy()
             .map(|policy| policy.threshold)
             .unwrap_or(0.0),
-        truncate_opts.max_rank().unwrap_or(0)
+        truncate_opts.max_bond_dim().unwrap_or(0)
     );
 
     let result = restart_gmres_with_truncation(&apply_a, &b, None, &options, &truncate_fn)?;
@@ -1113,7 +1113,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -1271,7 +1271,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -1395,7 +1395,7 @@ fn scaling_2x2_offdiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -1535,7 +1535,7 @@ fn scaling_3x3_antidiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };

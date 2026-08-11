@@ -841,7 +841,7 @@ fn gse_rejects_invalid_options_and_missing_center() {
     ));
 
     let invalid_rank_options = GseOptions {
-        reference_max_rank: Some(0),
+        reference_max_bond_dim: Some(0),
         ..Default::default()
     };
     let rank_err = global_subspace_expand_with_references(
@@ -854,7 +854,7 @@ fn gse_rejects_invalid_options_and_missing_center() {
     assert!(matches!(
         rank_err,
         GseError::InvalidOption {
-            option: "reference_max_rank",
+            option: "reference_max_bond_dim",
             ..
         }
     ));

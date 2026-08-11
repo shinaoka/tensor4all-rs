@@ -86,13 +86,13 @@ fn main() -> Result<()> {
     println!();
 
     // Contract with profiling
-    let max_rank = 20;
-    let options = ContractOptions::zipup().with_max_rank(max_rank);
+    let max_bond_dim = 20;
+    let options = ContractOptions::zipup().with_max_bond_dim(max_bond_dim);
 
     println!("Contracting MPOs using zip-up method...");
     println!(
-        "Options: method=Zipup, max_rank={}, rtol={:?}",
-        max_rank,
+        "Options: method=Zipup, max_bond_dim={}, rtol={:?}",
+        max_bond_dim,
         options.svd_policy().map(|policy| policy.threshold)
     );
     println!();

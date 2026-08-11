@@ -29,7 +29,7 @@ fn bench_chain_tci(c: &mut Criterion) {
         let full_options = TCI2Options {
             tolerance: 1e-8,
             max_iter: 8,
-            max_bond_dim: 16,
+            max_bond_dim: Some(16),
             pivot_search: PivotSearchStrategy::Full,
             ..Default::default()
         };

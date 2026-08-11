@@ -38,7 +38,7 @@ let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     vec![vec![0, 0, 0]],
     TCI2Options {
         tolerance: 1e-12,
-        max_bond_dim: 64,
+        max_bond_dim: Some(64),
         ..Default::default()
     },
 )?;
@@ -81,7 +81,7 @@ The quality of the compression is visible in the bond dimensions and the paramet
 # };
 # let tensor4all_tensorci::TCI2OptimizationResult { tci, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 #     f, None, local_dims.clone(), vec![vec![0, 0, 0]],
-#     TCI2Options { tolerance: 1e-12, max_bond_dim: 64, ..Default::default() },
+#     TCI2Options { tolerance: 1e-12, max_bond_dim: Some(64), ..Default::default() },
 # )?;
 # let tt = tci.to_tensor_train()?;
 let bond_dims = tt.link_dims();

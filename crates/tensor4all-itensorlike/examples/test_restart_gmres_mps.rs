@@ -143,7 +143,7 @@ fn test_restart_gmres(n: usize, operator: &str) -> anyhow::Result<(bool, usize, 
     // Truncation options
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -261,7 +261,7 @@ fn test_restart_gmres_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     // AGGRESSIVE truncation to make the problem harder
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-        .with_max_rank(5);
+        .with_max_bond_dim(5);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -272,12 +272,12 @@ fn test_restart_gmres_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     let initial_residual = 1.0;
     println!("Initial residual (x0=0): {:.6e}", initial_residual);
     println!(
-        "Truncation: rtol={:.0e}, max_rank={}",
+        "Truncation: rtol={:.0e}, max_bond_dim={}",
         truncate_opts
             .svd_policy()
             .map(|policy| policy.threshold)
             .unwrap_or(0.0),
-        truncate_opts.max_rank().unwrap_or(0)
+        truncate_opts.max_bond_dim().unwrap_or(0)
     );
 
     // Restart GMRES options - small inner iterations to force multiple outer iterations
@@ -345,7 +345,7 @@ fn test_restart_gmres_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, usiz
     // Aggressive truncation
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-        .with_max_rank(5);
+        .with_max_bond_dim(5);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -354,12 +354,12 @@ fn test_restart_gmres_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, usiz
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> { apply_mpo(&mpo, x, &indices) };
 
     println!(
-        "Truncation: rtol={:.0e}, max_rank={}",
+        "Truncation: rtol={:.0e}, max_bond_dim={}",
         truncate_opts
             .svd_policy()
             .map(|policy| policy.threshold)
             .unwrap_or(0.0),
-        truncate_opts.max_rank().unwrap_or(0)
+        truncate_opts.max_bond_dim().unwrap_or(0)
     );
 
     // Restart GMRES options - small inner iterations to force multiple outer iterations
@@ -543,7 +543,7 @@ fn apply_mpo(
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let result = mpo
         .contract(mps, &options)
         .map_err(|e| anyhow::anyhow!("{}", e))?;

@@ -297,8 +297,8 @@ impl PartitionedTT {
                     if let Some(policy) = options.svd_policy() {
                         truncate_opts = truncate_opts.with_svd_policy(policy);
                     }
-                    if let Some(max_rank) = options.max_rank() {
-                        truncate_opts = truncate_opts.with_max_rank(max_rank);
+                    if let Some(max_bond_dim) = options.max_bond_dim() {
+                        truncate_opts = truncate_opts.with_max_bond_dim(max_bond_dim);
                     }
                     summed_tt
                         .truncate(&truncate_opts)

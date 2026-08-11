@@ -19,7 +19,7 @@ fn test_builder_pattern() {
         .with_squared_values()
         .with_discarded_tail_sum();
     let opts = LinsolveOptions::new(5)
-        .with_max_rank(100)
+        .with_max_bond_dim(100)
         .with_svd_policy(policy)
         .with_gmres_tol(1e-8)
         .with_gmres_absolute_tolerance()
@@ -28,7 +28,7 @@ fn test_builder_pattern() {
         .with_residual_check(false);
 
     assert_eq!(opts.nfullsweeps, 5);
-    assert_eq!(opts.truncation.max_rank(), Some(100));
+    assert_eq!(opts.truncation.max_bond_dim(), Some(100));
     assert_eq!(opts.truncation.svd_policy(), Some(policy));
     assert_eq!(opts.gmres_tol, 1e-8);
     assert_eq!(opts.gmres_tolerance_mode, GmresToleranceMode::Absolute);

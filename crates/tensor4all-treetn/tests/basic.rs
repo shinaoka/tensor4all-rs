@@ -833,11 +833,11 @@ fn test_truncate_simple() {
     // Original bond dimension is 10
     assert_eq!(tn.bond_index(edge).unwrap().size(), 10);
 
-    // Truncate with max_rank = 3
+    // Truncate with max_bond_dim = 3
     let truncated = tn
         .truncate(
             std::iter::once(n2),
-            TruncationOptions::default().with_max_rank(3),
+            TruncationOptions::default().with_max_bond_dim(3),
         )
         .unwrap();
 
@@ -867,10 +867,10 @@ fn test_truncate_mut_simple() {
     // Original bond dimension
     assert_eq!(tn.bond_index(edge).unwrap().size(), 8);
 
-    // Truncate in-place with max_rank = 4
+    // Truncate in-place with max_bond_dim = 4
     tn.truncate_mut(
         std::iter::once(n2),
-        TruncationOptions::default().with_max_rank(4),
+        TruncationOptions::default().with_max_bond_dim(4),
     )
     .unwrap();
 
@@ -887,11 +887,11 @@ fn test_truncate_three_node_chain() {
     assert_eq!(tn.bond_index(e12).unwrap().size(), 3);
     assert_eq!(tn.bond_index(e23).unwrap().size(), 4);
 
-    // Truncate towards center (n1) with max_rank = 2
+    // Truncate towards center (n1) with max_bond_dim = 2
     let truncated = tn
         .truncate(
             std::iter::once(n1),
-            TruncationOptions::default().with_max_rank(2),
+            TruncationOptions::default().with_max_bond_dim(2),
         )
         .unwrap();
 
@@ -997,11 +997,11 @@ fn test_truncate_y_shape() {
     assert_eq!(tn.bond_index(e_bc).unwrap().size(), 6);
     assert_eq!(tn.bond_index(e_bd).unwrap().size(), 6);
 
-    // Truncate towards center (n_b) with max_rank = 3
+    // Truncate towards center (n_b) with max_bond_dim = 3
     let truncated = tn
         .truncate(
             std::iter::once(n_b),
-            TruncationOptions::default().with_max_rank(3),
+            TruncationOptions::default().with_max_bond_dim(3),
         )
         .unwrap();
 
@@ -1942,11 +1942,11 @@ fn test_fit_contraction_options() {
         .with_squared_values()
         .with_discarded_tail_sum();
     let options = FitContractionOptions::new(5)
-        .with_max_rank(10)
+        .with_max_bond_dim(10)
         .with_svd_policy(policy);
 
     assert_eq!(options.nfullsweeps, 5);
-    assert_eq!(options.max_rank, Some(10));
+    assert_eq!(options.max_bond_dim, Some(10));
     assert_eq!(options.svd_policy, Some(policy));
     assert_eq!(options.qr_rtol, None);
 }

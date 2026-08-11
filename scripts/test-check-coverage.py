@@ -85,6 +85,18 @@ class CoverageCheckTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("crates/unknown.rs: 74.9% < 75%", result.stdout)
 
+    def test_missing_attestation_file_fails_explicitly(self) -> None:
+        # Control 3: an explicit --coverage path that does not exist must fail
+        # loudly (explicit local attestation gate), not silently pass.
+        result = subprocess.run(
+            [PYTHON, str(SCRIPT), "definitely-missing-coverage.json"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("coverage attestation file", result.stderr)
+
     def test_comment_rationale_keys_are_ignored_for_enforcement(self) -> None:
         # Top-level _comment_* keys document rationale but never change numbers.
         thresholds = {

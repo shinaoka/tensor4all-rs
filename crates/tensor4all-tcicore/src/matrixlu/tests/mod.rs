@@ -183,9 +183,9 @@ fn test_rrlu_4x4_reconstruct() {
     }
 }
 
-/// Julia: "Truncated rank-revealing LU" (max_rank stopping)
+/// Julia: "Truncated rank-revealing LU" (max_bond_dim stopping)
 #[test]
-fn test_rrlu_max_rank() {
+fn test_rrlu_max_bond_dim() {
     let m = from_vec2d(vec![
         vec![0.684025, 0.784249, 0.826742, 0.054321, 0.0234695, 0.467096],
         vec![0.73928, 0.295516, 0.877126, 0.111711, 0.103509, 0.653785],
@@ -198,7 +198,7 @@ fn test_rrlu_max_rank() {
     ]);
 
     let opts = RrLUOptions {
-        max_rank: 4,
+        max_bond_dim: 4,
         ..Default::default()
     };
     let lu = rrlu(&m, Some(opts)).unwrap();
@@ -291,9 +291,9 @@ fn test_rrlu_pivot_errors_truncated() {
         vec![0.0676373, 0.450878, 0.672335, 0.77726, 0.540691],
     ]);
 
-    // max_rank=2
+    // max_bond_dim=2
     let opts = RrLUOptions {
-        max_rank: 2,
+        max_bond_dim: 2,
         ..Default::default()
     };
     let lu = rrlu(&m, Some(opts)).unwrap();

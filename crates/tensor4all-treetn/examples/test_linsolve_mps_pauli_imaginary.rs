@@ -406,7 +406,7 @@ fn main() -> anyhow::Result<()> {
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
-        .with_max_rank(bond_dim)
+        .with_max_bond_dim(bond_dim)
         .with_gmres_tol(1e-10)
         .with_gmres_max_restarts(30)
         .with_gmres_restart_dim(30)

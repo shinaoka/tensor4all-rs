@@ -27,6 +27,13 @@ pub type Result<T> = std::result::Result<T, TensorTrainError>;
 /// };
 /// assert!(err.to_string().contains("test error"));
 /// ```
+/// Error type for `SimpleTensorTrain` operations.
+///
+/// Note: `tensor4all-itensorlike` also defines a public type named
+/// [`TensorTrainError`](tensor4all_itensorlike::TensorTrainError) with
+/// different variants (its tree-based `TensorTrain`). When both crates are
+/// in scope, qualify the path (e.g. `tensor4all_simplett::TensorTrainError`
+/// vs `tensor4all_itensorlike::TensorTrainError`).
 #[derive(Error, Debug)]
 pub enum TensorTrainError {
     /// Dimension mismatch between tensors

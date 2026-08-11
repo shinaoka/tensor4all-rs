@@ -52,7 +52,7 @@ pub fn linsolve(
         });
     }
 
-    validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
+    validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
 
     if !options.gmres_tol().is_finite() || options.gmres_tol() <= 0.0 {
         return Err(TensorTrainError::OperationError {
@@ -100,8 +100,8 @@ pub fn linsolve(
         treetn_options
     };
 
-    let treetn_options = if let Some(max_rank) = options.max_rank() {
-        treetn_options.with_max_rank(max_rank)
+    let treetn_options = if let Some(max_bond_dim) = options.max_bond_dim() {
+        treetn_options.with_max_bond_dim(max_bond_dim)
     } else {
         treetn_options
     };

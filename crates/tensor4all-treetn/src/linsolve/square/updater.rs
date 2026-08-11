@@ -562,8 +562,8 @@ where
 
         // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn
         let mut factorize_options = FactorizeOptions::svd();
-        if let Some(max_rank) = self.options.truncation.max_rank() {
-            factorize_options = factorize_options.with_max_rank(max_rank);
+        if let Some(max_bond_dim) = self.options.truncation.max_bond_dim() {
+            factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
         }
         if let Some(policy) = self.options.truncation.svd_policy() {
             factorize_options = factorize_options.with_svd_policy(policy);

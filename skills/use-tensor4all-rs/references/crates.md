@@ -21,8 +21,8 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
   - `.to_vec::<f32>()` / `.to_vec::<f64>()` / `.to_vec::<Complex32>()` / `.to_vec::<Complex64>()`, `.sum()`, `.dims()`.
 - `contract(&[&a, &b, ...])` — sum over all shared indices; inputs must be connected (else error). `outer_product(&a, &b)` for disconnected products.
 - `factorize(&t, &[left_indices], &opts) -> FactorizeResult { left, right, rank, singular_values }`.
-  - `FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol))` / `.with_max_rank(n)`.
-  - `FactorizeOptions::qr().with_qr_rtol(tol)` / `.with_max_rank(n)`.
+  - `FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol))` / `.with_max_bond_dim(n)`.
+  - `FactorizeOptions::qr().with_qr_rtol(tol)` / `.with_max_bond_dim(n)`.
 
 ## tensor4all-simplett — lightweight TT/MPS
 
@@ -43,7 +43,7 @@ Named `DynIndex` objects; orthogonality-center tracking; multiple canonical form
 
 - `SimpleTensorTrain::new(vec![t0, t1, ...])` from `TensorDynLen` cores.
 - `.orthogonalize(site)`, `.orthogonalize_with(site, CanonicalForm::...)` (LU / CI forms).
-- `.truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol)).with_max_rank(n))`.
+- `.truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol)).with_max_bond_dim(n))`.
 - `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, `.isortho()`, `.orthocenter()`, `.max_bond_dim()`.
 - `TruncateOptions`, `CanonicalForm`. `ContractOptions` / `LinsolveOptions` with `with_nsweeps(n)` (= `with_nhalfsweeps(2*n)`).
 - Build indices with `DynIndex::new_dyn(dim)` (site) and `DynIndex::new_bond(dim)?` (bond). `from_dense` data is column-major.
@@ -105,11 +105,11 @@ Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special 
 
 - `TreeTN::<TensorDynLen, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
 - `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `.replaceind(&old, &new)`.
-- `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_rank(n).with_rtol(t))`.
+- `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_bond_dim(n).with_rtol(t))`.
 - `apply_linear_operator(&op, &state, ApplyOptions)`:
   - `ApplyOptions::naive()` — local exact, no truncation; bond dims grow as products. Small/debug only.
-  - `ApplyOptions::zipup().with_max_rank(n).with_svd_policy(policy)` — default; single sweep, controllable.
-  - `ApplyOptions::fit().with_max_rank(n).with_nfullsweeps(k)` — iterative; best compression.
+  - `ApplyOptions::zipup().with_max_bond_dim(n).with_svd_policy(policy)` — default; single sweep, controllable.
+  - `ApplyOptions::fit().with_max_bond_dim(n).with_nfullsweeps(k)` — iterative; best compression.
 - Sweep convention: `ApplyOptions::fit().with_nfullsweeps(k)` uses `nfullsweeps` (full = forward+back); `nfullsweeps = nhalfsweeps / 2`. The DMRG/TDVP option structs instead name the same full-sweep count `nsweeps` (no `full` prefix) — there is no `with_nfullsweeps` on `DmrgOptions`/`TdvpOptions`.
 - `tensor_train_to_treetn(&mps) -> (TreeTN, Vec<site_index>)` bridge from simplett.
 - Optimization sweeps (ground state + time evolution). All take a `LinearOperator` (or a bare MPO `TreeTN` via the `*_with_treetn_operator` wrappers), an initial `TreeTN` state, and a `center: &V` root node; the state is canonicalized at `center` first. v1: one input and one output site mapping per node. Build the mapping with `LinearOperator::from_mpo_and_state(mpo, &state)` when site indices are unambiguous, else hand-build `IndexMapping { true_index, internal_index }` input/output maps.

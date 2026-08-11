@@ -22,8 +22,8 @@ pub struct FitOptions {
     /// bond's matrix. The threshold is invariant under a global rescaling of
     /// the operators being contracted.
     pub tolerance: f64,
-    /// Maximum bond dimension
-    pub max_bond_dim: usize,
+    /// Maximum bond dimension. `None` means no limit.
+    pub max_bond_dim: Option<usize>,
     /// Maximum number of sweeps
     pub max_sweeps: usize,
     /// Convergence tolerance (stop if change < this)
@@ -36,7 +36,7 @@ impl Default for FitOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-12,
-            max_bond_dim: 100,
+            max_bond_dim: Some(100),
             max_sweeps: 10,
             convergence_tol: 1e-10,
             factorize_method: FactorizeMethod::SVD,

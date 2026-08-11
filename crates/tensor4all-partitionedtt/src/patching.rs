@@ -56,7 +56,7 @@ pub enum PatchSplitStrategy {
 ///
 /// let options = PatchingOptions::default();
 /// assert_eq!(options.rtol, 1e-12);
-/// assert_eq!(options.max_bond_dim, 100);
+/// assert_eq!(options.max_bond_dim, Some(100));
 /// assert!(options.patch_order.is_empty());
 /// assert_eq!(options.split_strategy, tensor4all_partitionedtt::PatchSplitStrategy::ExactParameterGain);
 /// ```
@@ -73,7 +73,7 @@ pub struct PatchingOptions {
     ///
     /// Values above this cap trigger splitting when `patch_order` contains an
     /// unprojected index for the patch. The value must be at least 1.
-    pub max_bond_dim: usize,
+    pub max_bond_dim: Option<usize>,
 
     /// Static fallback order for patch splitting.
     ///
@@ -94,7 +94,7 @@ impl Default for PatchingOptions {
     fn default() -> Self {
         Self {
             rtol: 1e-12,
-            max_bond_dim: 100,
+            max_bond_dim: Some(100),
             patch_order: Vec::new(),
             split_strategy: PatchSplitStrategy::default(),
         }
@@ -133,7 +133,7 @@ impl Default for PatchingOptions {
 /// let tt = TensorTrain::new(vec![t0, t1])?;
 /// let options = PatchingOptions {
 ///     rtol: 1e-12,
-///     max_bond_dim: 1,
+///     max_bond_dim: Some(1),
 ///     patch_order: vec![s0],
 ///     split_strategy: tensor4all_partitionedtt::PatchSplitStrategy::Sequential,
 /// };
@@ -157,9 +157,11 @@ pub fn add_with_patching(
     loop {
         working = assign_volume_budgets(working, options.rtol)?;
         working = budget_truncate_for_split_decision(working)?;
-        let over_budget = working
-            .iter()
-            .any(|subdomain| subdomain.max_bond_dim() > options.max_bond_dim);
+        let over_budget = working.iter().any(|subdomain| {
+            options
+                .max_bond_dim
+                .is_some_and(|cap| subdomain.max_bond_dim() > cap)
+        });
         if !over_budget {
             let partitioned = PartitionedTT::from_subdomains(working)?;
             return truncate_adaptive(&partitioned, options.rtol, options.max_bond_dim);
@@ -168,7 +170,10 @@ pub fn add_with_patching(
         let mut next = Vec::new();
         let mut split_any = false;
         for subdomain in working {
-            if subdomain.max_bond_dim() > options.max_bond_dim {
+            if options
+                .max_bond_dim
+                .is_some_and(|cap| subdomain.max_bond_dim() > cap)
+            {
                 if let Some(children) = split_subdomain_by_patch_order(&subdomain, options)? {
                     split_any = true;
                     next.extend(children);
@@ -256,7 +261,7 @@ pub fn add_with_patching(
 /// )?));
 /// let patching = PatchingOptions {
 ///     rtol: 0.0,
-///     max_bond_dim: 1,
+///     max_bond_dim: Some(1),
 ///     patch_order: vec![s0],
 ///     split_strategy: PatchSplitStrategy::Sequential,
 /// };
@@ -334,7 +339,7 @@ pub fn contract_adaptive(
 /// let low = SubDomainTT::new(rank_one_tt(&s0, &s1, 0.01)?, low_proj.clone());
 /// let partitioned = PartitionedTT::from_subdomains(vec![high, low])?;
 ///
-/// let truncated = truncate_adaptive(&partitioned, 0.01, 4)?;
+/// let truncated = truncate_adaptive(&partitioned, 0.01, Some(4))?;
 ///
 /// assert_eq!(truncated.len(), 1);
 /// assert!(truncated.contains(&high_proj));
@@ -345,7 +350,7 @@ pub fn contract_adaptive(
 pub fn truncate_adaptive(
     partitioned: &PartitionedTT,
     rtol: f64,
-    max_bond_dim: usize,
+    max_bond_dim: Option<usize>,
 ) -> Result<PartitionedTT> {
     validate_truncation_options(rtol, max_bond_dim)?;
 
@@ -460,13 +465,13 @@ fn budget_truncate_for_split_decision(subdomains: Vec<SubDomainTT>) -> Result<Ve
     Ok(retained)
 }
 
-fn validate_truncation_options(rtol: f64, max_bond_dim: usize) -> Result<()> {
+fn validate_truncation_options(rtol: f64, max_bond_dim: Option<usize>) -> Result<()> {
     if !rtol.is_finite() || rtol < 0.0 {
         return Err(PartitionedTTError::InvalidOptions(
             "rtol must be finite and non-negative".to_string(),
         ));
     }
-    if max_bond_dim == 0 {
+    if max_bond_dim == Some(0) {
         return Err(PartitionedTTError::InvalidOptions(
             "max_bond_dim must be at least 1".to_string(),
         ));
@@ -519,19 +524,19 @@ fn subdomain_volume(subdomain: &SubDomainTT) -> Result<usize> {
 fn truncate_subdomain_with_budget(
     subdomain: &mut SubDomainTT,
     budget_squared: f64,
-    max_bond_dim: usize,
+    max_bond_dim: Option<usize>,
 ) -> Result<f64> {
-    truncate_subdomain_with_optional_max_rank(subdomain, budget_squared, Some(max_bond_dim))
+    truncate_subdomain_with_optional_max_bond_dim(subdomain, budget_squared, max_bond_dim)
 }
 
 fn truncate_subdomain_with_budget_only(
     subdomain: &mut SubDomainTT,
     budget_squared: f64,
 ) -> Result<f64> {
-    truncate_subdomain_with_optional_max_rank(subdomain, budget_squared, None)
+    truncate_subdomain_with_optional_max_bond_dim(subdomain, budget_squared, None)
 }
 
-fn truncate_subdomain_with_optional_max_rank(
+fn truncate_subdomain_with_optional_max_bond_dim(
     subdomain: &mut SubDomainTT,
     budget_squared: f64,
     max_bond_dim: Option<usize>,
@@ -543,7 +548,7 @@ fn truncate_subdomain_with_optional_max_rank(
         .with_discarded_tail_sum();
     let mut options = TruncateOptions::svd().with_svd_policy(policy);
     if let Some(max_bond_dim) = max_bond_dim {
-        options = options.with_max_rank(max_bond_dim);
+        options = options.with_max_bond_dim(max_bond_dim);
     }
     subdomain.truncate(&options)?;
     let after = subdomain.norm_squared()?;

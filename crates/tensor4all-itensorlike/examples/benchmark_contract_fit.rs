@@ -5,7 +5,7 @@
 //! - Physical dimension: 2 per site (input and output)
 //! - Bond dimension: 20
 //!
-//! Then contracts them using fit (variational) method with max_rank=20.
+//! Then contracts them using fit (variational) method with max_bond_dim=20.
 
 use rand::rng;
 use std::time::Instant;
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     let length = 10;
     let phys_dim = 2;
     let bond_dim = 60;
-    let max_rank = 60;
+    let max_bond_dim = 60;
     let n_half_sweeps = 10; // Number of half-sweeps for fit algorithm (must be multiple of 2)
     let n_runs = 10; // Number of runs for averaging
 
@@ -72,7 +72,7 @@ fn main() -> Result<()> {
     println!("Length: {} sites", length);
     println!("Physical dimension: {}", phys_dim);
     println!("Bond dimension: {}", bond_dim);
-    println!("Max rank: {}", max_rank);
+    println!("Max rank: {}", max_bond_dim);
     println!(
         "Number of half-sweeps: {} ({} full sweeps)",
         n_half_sweeps,
@@ -142,15 +142,15 @@ fn main() -> Result<()> {
     );
     println!();
 
-    // Contract options: fit with max_rank=20 and n_half_sweeps=10
+    // Contract options: fit with max_bond_dim=20 and n_half_sweeps=10
     let options = ContractOptions::fit()
-        .with_max_rank(max_rank)
+        .with_max_bond_dim(max_bond_dim)
         .with_nhalfsweeps(n_half_sweeps);
 
     println!("Contracting MPOs using fit (variational) method...");
     println!(
-        "Options: method=Fit, max_rank={}, nhalfsweeps={}, rtol={:?}",
-        max_rank,
+        "Options: method=Fit, max_bond_dim={}, nhalfsweeps={}, rtol={:?}",
+        max_bond_dim,
         n_half_sweeps,
         options.svd_policy().map(|policy| policy.threshold)
     );

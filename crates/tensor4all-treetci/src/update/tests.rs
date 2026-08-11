@@ -7,7 +7,7 @@ use tensor4all_tcicore::RrLUOptions;
 
 fn no_truncation_options() -> RrLUOptions {
     RrLUOptions {
-        max_rank: usize::MAX,
+        max_bond_dim: usize::MAX,
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,

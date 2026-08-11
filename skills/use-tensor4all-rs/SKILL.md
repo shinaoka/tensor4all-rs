@@ -93,6 +93,15 @@ These apply across crates and fail silently when ignored. Check them against eve
 
 **Index identity is full-index equality, not `id()`.** Two indices with the same id but different prime level, tags, or direction are distinct. Key maps and sets by the full `Index` value. Select concrete legs/sites by passing the full `Index`, never an id. `AdaptiveInterpolateOptions::patch_order` and `PatchingOptions::patch_order` are validated as exact full-`Index` permutations of the site indices — matching by id alone is rejected.
 
+## 4.5 Common pitfalls
+
+- **`TensorTrain` / `MPS` / `MPO` share one representation.** In `tensor4all-itensorlike`, `TensorTrain` (tree-based), `MPS`, and `MPO` are the same underlying type; MPS-like (1 site index per node) vs MPO-like (2 site indices per node) is a runtime property (`is_mps_like`/`is_mpo_like`), not a type. `tensor4all-simplett`'s positional chain type is a *different* type named `SimpleTensorTrain`. Do not mix the two `TensorTrainError` types (`tensor4all_simplett::TensorTrainError` vs `tensor4all_itensorlike::TensorTrainError`) — they have different variants; qualify the path.
+- **MPO-MPO contraction has two layers.** `tensor4all-simplett` (positional `SimpleTensorTrain`, `ContractionOptions`) and `tensor4all-treetn` (TreeTN, `apply_linear_operator`) both contract MPOs, but they are different API layers with different topology models. The TreeTN route is the canonical/general path used by the higher-level APIs; use it unless you specifically want the lightweight positional path.
+- **Contraction method changes cost and reliability.** MPO contraction supports different methods (naive / zip-up / fit, selected via `ContractionOptions::method` / `ApplyOptions`). The default is a deliberate tradeoff; benchmark the method for your sizes. `naive` means local exact tensor-network contraction (not full dense materialization) unless the docs explicitly say dense/reference.
+- **ACI tolerance scaling.** The option is named `scale_tolerance` (not `rescale_tolerance`). Enable it when the target function's scale varies across the domain: it makes the convergence tolerance scale-relative. It is not an accuracy certificate — hold out samples and check per-sweep diagnostics, and be aware of the early-convergence caveat tracked in tensor4all-rs issue #572.
+- **0- vs 1-indexing.** Sites are 0-indexed in Rust (unlike ITensors.jl's 1-indexing). Exception: `tensor4all-quanticstci` grid indices are 1-indexed for QuanticsTCI.jl compatibility.
+- **Bond cap / tolerance vocabulary.** The bond-dimension cap is `max_bond_dim: Option<usize>` (`None` = unlimited) everywhere — ITensors.jl `maxdim` maps to `max_bond_dim: Some(d)`, and `cutoff` maps to `rtol` with `rtol = sqrt(cutoff)`. See `docs/book/src/conventions.md`.
+
 ## 5. If you are inside the tensor4all-rs repo itself
 
 This skill is for *using* the library. If the working tree is the tensor4all-rs checkout (you see `AGENTS.md` and `REPOSITORY_RULES.md`), the repo's own rules take over — this skill does not override them:

@@ -123,7 +123,7 @@ fn swap_with_transport_must_not_truncate() {
         (
             "rtol: Some(0.0)",
             SwapOptions {
-                max_rank: None,
+                max_bond_dim: None,
                 rtol: Some(0.0),
             },
         ),

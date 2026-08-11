@@ -10,7 +10,7 @@ fn scalar_tensor4(value: f64) -> Tensor4<f64> {
 fn test_fit_options_default_values() {
     let options = FitOptions::default();
     assert_eq!(options.tolerance, 1e-12);
-    assert_eq!(options.max_bond_dim, 100);
+    assert_eq!(options.max_bond_dim, Some(100));
     assert_eq!(options.max_sweeps, 10);
     assert_eq!(options.convergence_tol, 1e-10);
     assert_eq!(options.factorize_method, FactorizeMethod::SVD);

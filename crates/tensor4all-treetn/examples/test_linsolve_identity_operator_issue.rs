@@ -447,7 +447,7 @@ fn run_test_case(
     a0: f64,
     a1: f64,
     use_simple_exact: bool,
-    max_rank: usize,
+    max_bond_dim: usize,
     init_mode: &str, // "random" or "rhs"
 ) -> anyhow::Result<(f64, f64, f64, f64)> {
     let phys_dim = 2usize;
@@ -549,7 +549,7 @@ fn run_test_case(
     };
 
     // Use the bond dimension from b for initial guess to avoid dimension mismatch
-    // Note: RHS bond dimension is fixed, but x's bond dimension can grow during linsolve (up to max_rank)
+    // Note: RHS bond dimension is fixed, but x's bond dimension can grow during linsolve (up to max_bond_dim)
     let init_bond_dim = if !rhs_bond_dims.is_empty() {
         rhs_bond_dims[0] // Use first bond dimension (they should all be the same)
     } else {
@@ -567,7 +567,9 @@ fn run_test_case(
             1 << n_sites
         );
         println!("Using init bond_dim={init_bond_dim} to match b (RHS) bond dimensions");
-        println!("Note: x's bond dimension can grow during linsolve (up to max_rank={max_rank})");
+        println!(
+            "Note: x's bond dimension can grow during linsolve (up to max_bond_dim={max_bond_dim})"
+        );
         println!();
         println!("Creating initial guess...");
         println!("  Using init_mode={init_mode}");
@@ -596,19 +598,19 @@ fn run_test_case(
     let mut x = init.canonicalize(["site0".to_string()], CanonicalizationOptions::default())?;
 
     // Setup linsolve options and updater
-    // max_rank is passed as parameter to allow bond dimension growth during sweeps
+    // max_bond_dim is passed as parameter to allow bond dimension growth during sweeps
     // Adjust GMRES parameters for better convergence
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
         .with_gmres_tol(1e-8) // Slightly relaxed from 1e-10
         .with_gmres_max_restarts(200) // Increased from default 100
         .with_gmres_restart_dim(50) // Increased from default 30
-        .with_max_rank(max_rank)
+        .with_max_bond_dim(max_bond_dim)
         .with_coefficients(a0, a1)
         .with_convergence_tol(1e-6); // Early termination if residual < 1e-6
 
     if verbose {
-        println!("Linsolve options: max_rank={max_rank}, nfullsweeps=10, gmres_tol=1e-8, gmres_max_restarts=200, gmres_restart_dim=50, convergence_tol=1e-6");
+        println!("Linsolve options: max_bond_dim={max_bond_dim}, nfullsweeps=10, gmres_tol=1e-8, gmres_max_restarts=200, gmres_restart_dim=50, convergence_tol=1e-6");
     }
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -808,8 +810,8 @@ fn run_test_case(
 }
 
 fn main() -> anyhow::Result<()> {
-    // max_rank for linsolve (allows bond dimension to grow during sweeps)
-    let max_rank = 30usize;
+    // max_bond_dim for linsolve (allows bond dimension to grow during sweeps)
+    let max_bond_dim = 30usize;
 
     // Test N=6 and N=7 to compare convergence behavior
     let test_n_values = vec![6, 7];
@@ -821,7 +823,7 @@ fn main() -> anyhow::Result<()> {
     println!("  - Exact solution: x_exact = |000...0⟩ + |111...1⟩ (bond_dim=2)");
     println!("  - RHS: b = x_exact");
     println!("  - Initial guess: random or rhs (bond_dim matching RHS)");
-    println!("  - max_rank for linsolve: {max_rank}");
+    println!("  - max_bond_dim for linsolve: {max_bond_dim}");
     println!();
     println!("Metrics explanation:");
     println!("  - Residual: ||(a0*I + a1*A) x - b|| / ||b|| (how well the equation is satisfied)");
@@ -847,7 +849,7 @@ fn main() -> anyhow::Result<()> {
             for &init_mode in &init_modes {
                 println!("--- Test case: {case_desc}, init={init_mode} ---");
 
-                let result = run_test_case(n_sites, *a0, *a1, true, max_rank, init_mode);
+                let result = run_test_case(n_sites, *a0, *a1, true, max_bond_dim, init_mode);
 
                 match result {
                     Ok((initial_residual, initial_error, final_residual, final_error)) => {

@@ -43,7 +43,7 @@ pub struct GseOptions {
     ///
     /// When this is `None`, generated references use `maxlinkdim(state) + 1`,
     /// matching the low-rank probe policy used by chain GSE implementations.
-    pub reference_max_rank: Option<usize>,
+    pub reference_max_bond_dim: Option<usize>,
     /// Optional SVD policy for generated reference states.
     pub reference_svd_policy: Option<SvdTruncationPolicy>,
     /// Density eigenvalue cutoff for retaining missing reference directions.
@@ -61,7 +61,7 @@ impl Default for GseOptions {
         Self {
             krylov_dim: 0,
             reference_apply: ApplyOptions::zipup(),
-            reference_max_rank: None,
+            reference_max_bond_dim: None,
             reference_svd_policy: None,
             density_weight_cutoff: 1.0e-12,
             hermitian_tol: 1.0e-12,
@@ -91,8 +91,8 @@ impl GseOptions {
     }
 
     /// Set the reference-state maximum rank used during operator application.
-    pub fn with_reference_max_rank(mut self, reference_max_rank: usize) -> Self {
-        self.reference_max_rank = Some(reference_max_rank);
+    pub fn with_reference_max_bond_dim(mut self, reference_max_bond_dim: usize) -> Self {
+        self.reference_max_bond_dim = Some(reference_max_bond_dim);
         self
     }
 
@@ -436,10 +436,10 @@ fn validate_options(options: &GseOptions) -> Result<(), GseError> {
             reason: "must be finite and non-negative".to_string(),
         });
     }
-    if let Some(max_rank) = options.reference_max_rank {
-        if max_rank == 0 {
+    if let Some(max_bond_dim) = options.reference_max_bond_dim {
+        if max_bond_dim == 0 {
             return Err(GseError::InvalidOption {
-                option: "reference_max_rank",
+                option: "reference_max_bond_dim",
                 reason: "must be greater than zero when set".to_string(),
             });
         }
@@ -458,14 +458,14 @@ where
 {
     let mut references = Vec::with_capacity(options.krylov_dim);
     let mut current = init.clone();
-    let generated_reference_max_rank = options
-        .reference_max_rank
+    let generated_reference_max_bond_dim = options
+        .reference_max_bond_dim
         .unwrap_or_else(|| max_link_dim(init).saturating_add(1));
     for _ in 0..options.krylov_dim {
         let mut apply_options = options
             .reference_apply
             .clone()
-            .with_max_rank(generated_reference_max_rank);
+            .with_max_bond_dim(generated_reference_max_bond_dim);
         if let Some(policy) = options.reference_svd_policy {
             apply_options = apply_options.with_svd_policy(policy);
         }
@@ -1496,12 +1496,12 @@ mod tests {
     fn gse_option_builders_set_reference_knobs() {
         let policy = SvdTruncationPolicy::new(1.0e-8);
         let options = GseOptions::default()
-            .with_reference_max_rank(7)
+            .with_reference_max_bond_dim(7)
             .with_reference_svd_policy(policy)
             .with_normalize_references(false)
             .with_expand_before_first_sweep(false);
 
-        assert_eq!(options.reference_max_rank, Some(7));
+        assert_eq!(options.reference_max_bond_dim, Some(7));
         assert_eq!(options.reference_svd_policy, Some(policy));
         assert!(!options.normalize_references);
         assert!(!options.expand_before_first_sweep);

@@ -172,7 +172,7 @@ fn patching_options(
 ) -> PatchingOptions {
     PatchingOptions {
         rtol: options.rtol,
-        max_bond_dim: options.max_bond_dim,
+        max_bond_dim: Some(options.max_bond_dim),
         patch_order: patch_order.to_vec(),
         split_strategy,
     }

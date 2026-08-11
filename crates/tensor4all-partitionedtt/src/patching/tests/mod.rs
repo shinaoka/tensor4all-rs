@@ -120,7 +120,7 @@ fn test_add_with_patching_splits_unprojected_patch_when_bond_hits_cap() {
 
     let options = PatchingOptions {
         rtol: 1e-12,
-        max_bond_dim: 1,
+        max_bond_dim: Some(1),
         patch_order: vec![site_inds[0].clone()],
         split_strategy: PatchSplitStrategy::Sequential,
     };
@@ -133,7 +133,9 @@ fn test_add_with_patching_splits_unprojected_patch_when_bond_hits_cap() {
     assert!(result.contains(&proj0));
     assert!(result.contains(&proj1));
     for subdomain in result.values() {
-        assert!(subdomain.max_bond_dim() <= options.max_bond_dim);
+        assert!(options
+            .max_bond_dim
+            .is_none_or(|cap| subdomain.max_bond_dim() <= cap));
         assert!(subdomain.budget_squared().is_some());
     }
 }
@@ -146,7 +148,7 @@ fn test_add_with_patching_truncates_before_deciding_to_split() {
 
     let options = PatchingOptions {
         rtol: 0.0,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         patch_order: vec![site_inds[0].clone()],
         split_strategy: PatchSplitStrategy::Sequential,
     };
@@ -169,7 +171,7 @@ fn test_truncate_adaptive_drops_patch_below_volume_budget() {
     let low = SubDomainTT::new(make_scaled_rank_one_tt(&site_inds, 0.01), low_proj.clone());
     let partitioned = PartitionedTT::from_subdomains(vec![high, low]).unwrap();
 
-    let result = truncate_adaptive(&partitioned, 0.01, 4).unwrap();
+    let result = truncate_adaptive(&partitioned, 0.01, Some(4)).unwrap();
 
     assert_eq!(result.len(), 1);
     assert!(result.contains(&high_proj));
@@ -189,7 +191,7 @@ fn test_truncate_adaptive_assigns_volume_proportional_budgets() {
     );
     let partitioned = PartitionedTT::from_subdomains(vec![wide, narrow]).unwrap();
 
-    let result = truncate_adaptive(&partitioned, 1e-12, 4).unwrap();
+    let result = truncate_adaptive(&partitioned, 1e-12, Some(4)).unwrap();
     let wide_budget = result
         .get(&wide_proj)
         .and_then(SubDomainTT::budget_squared)
@@ -206,10 +208,10 @@ fn test_truncate_adaptive_assigns_volume_proportional_budgets() {
 fn test_truncate_adaptive_rejects_invalid_options() {
     let empty = PartitionedTT::new();
 
-    let bad_rtol = truncate_adaptive(&empty, f64::NAN, 1).unwrap_err();
+    let bad_rtol = truncate_adaptive(&empty, f64::NAN, Some(1)).unwrap_err();
     assert!(matches!(bad_rtol, PartitionedTTError::InvalidOptions(_)));
 
-    let bad_rank = truncate_adaptive(&empty, 1e-12, 0).unwrap_err();
+    let bad_rank = truncate_adaptive(&empty, 1e-12, Some(0)).unwrap_err();
     assert!(matches!(bad_rank, PartitionedTTError::InvalidOptions(_)));
 }
 
@@ -230,7 +232,7 @@ fn test_contract_adaptive_retruncates_output_with_corrected_norm() {
     )));
     let patching = PatchingOptions {
         rtol: 0.0,
-        max_bond_dim: 1,
+        max_bond_dim: Some(1),
         patch_order: vec![s0],
         split_strategy: PatchSplitStrategy::Sequential,
     };
@@ -238,9 +240,9 @@ fn test_contract_adaptive_retruncates_output_with_corrected_norm() {
     let result = contract_adaptive(&left, &right, &ContractOptions::default(), &patching).unwrap();
 
     assert_eq!(result.len(), 1);
-    assert!(result
-        .values()
-        .all(|subdomain| subdomain.max_bond_dim() <= patching.max_bond_dim));
+    assert!(result.values().all(|subdomain| patching
+        .max_bond_dim
+        .is_none_or(|cap| subdomain.max_bond_dim() <= cap)));
 }
 
 #[test]
@@ -250,7 +252,7 @@ fn test_exact_parameter_gain_strategy_can_override_sequential_order() {
 
     let sequential = PatchingOptions {
         rtol: 1e-12,
-        max_bond_dim: 1,
+        max_bond_dim: Some(1),
         patch_order: vec![site_inds[0].clone(), site_inds[1].clone()],
         split_strategy: PatchSplitStrategy::Sequential,
     };

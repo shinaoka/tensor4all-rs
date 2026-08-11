@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
     anyhow::ensure!(n_sites >= 2, "This benchmark currently requires N>=2");
 
     let phys_dim = 2usize;
-    let max_rank = bond_dim;
+    let max_bond_dim = bond_dim;
 
     let seed = 1234_u64;
 
@@ -200,7 +200,7 @@ fn main() -> anyhow::Result<()> {
     println!("phys_dim = {phys_dim}");
     println!("bond_dim = {bond_dim}");
     println!("n_sweeps = {n_sweeps}");
-    println!("max_rank = {max_rank}");
+    println!("max_bond_dim = {max_bond_dim}");
     println!("cutoff = {cutoff}");
     println!("rtol = sqrt(cutoff) = {rtol:.6}");
     println!("GMRES: tol={gmres_tol}, maxiter={gmres_max_restarts}, gmres_restart_dim={gmres_restart_dim}");
@@ -218,7 +218,7 @@ fn main() -> anyhow::Result<()> {
         create_n_site_index_mappings(&site_indices, &s_in_tmp, &s_out_tmp);
 
     let apply_opts = ApplyOptions::zipup()
-        .with_max_rank(max_rank)
+        .with_max_bond_dim(max_bond_dim)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol));
     let linop_for_rhs =
         LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
@@ -230,7 +230,7 @@ fn main() -> anyhow::Result<()> {
     // algorithms more closely.
     let truncation = TruncationOptions::default()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
-        .with_max_rank(max_rank);
+        .with_max_bond_dim(max_bond_dim);
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)

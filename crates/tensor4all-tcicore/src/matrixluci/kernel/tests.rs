@@ -17,6 +17,6 @@ fn pivot_kernel_options_no_truncation_uses_canonical_values() {
     let opts = PivotKernelOptions::no_truncation();
     assert_eq!(opts.rel_tol, 0.0);
     assert_eq!(opts.abs_tol, 0.0);
-    assert_eq!(opts.max_rank, usize::MAX);
+    assert_eq!(opts.max_bond_dim, usize::MAX);
     assert!(opts.left_orthogonal);
 }

@@ -314,7 +314,7 @@ fn build_svd_options(policy: *const t4a_svd_truncation_policy, maxdim: usize) ->
         options = options.with_policy(SvdTruncationPolicy::from(policy));
     }
     if maxdim > 0 {
-        options = options.with_max_rank(maxdim);
+        options = options.with_max_bond_dim(maxdim);
     }
     options
 }

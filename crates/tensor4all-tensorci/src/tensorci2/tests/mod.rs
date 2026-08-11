@@ -13,7 +13,7 @@ fn test_sweep1site_preserves_accuracy() {
     let options = TCI2Options {
         tolerance: 1e-12,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         ..Default::default()
     };
 
@@ -64,7 +64,7 @@ fn test_make_canonical() {
     let options = TCI2Options {
         tolerance: 1e-12,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         ..Default::default()
     };
 
@@ -111,7 +111,7 @@ fn test_fill_site_tensors() {
     let options = TCI2Options {
         tolerance: 1e-12,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         ..Default::default()
     };
 
@@ -189,7 +189,7 @@ fn test_crossinterpolate2_reports_convergence_and_rank_cap_separately() {
         None,
         vec![2, 2],
         vec![vec![0, 0]],
-        options(usize::MAX),
+        options(None),
     )
     .unwrap();
     assert_eq!(converged.termination, TCI2Termination::Converged);
@@ -199,7 +199,7 @@ fn test_crossinterpolate2_reports_convergence_and_rank_cap_separately() {
         None,
         vec![2, 2],
         vec![vec![0, 0]],
-        options(1),
+        options(Some(1)),
     )
     .unwrap();
     assert_eq!(capped.termination, TCI2Termination::MaxBondDimension);
@@ -366,7 +366,7 @@ fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
     let first_pivot = vec![vec![0, 0]];
     let options = TCI2Options {
         max_iter: 1,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         pivot_search: PivotSearchStrategy::Rook,
         ..Default::default()
     };
@@ -398,7 +398,7 @@ fn test_crossinterpolate2_rook_search_rejects_bad_batch_length() {
     let first_pivot = vec![vec![0, 0]];
     let options = TCI2Options {
         max_iter: 1,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         pivot_search: PivotSearchStrategy::Rook,
         ..Default::default()
     };
@@ -415,7 +415,7 @@ fn test_crossinterpolate2_full_search_rejects_bad_batch_length() {
     let first_pivot = vec![vec![0, 0]];
     let options = TCI2Options {
         max_iter: 1,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         pivot_search: PivotSearchStrategy::Full,
         ..Default::default()
     };
@@ -582,7 +582,7 @@ fn test_crossinterpolate2_sin_quantics() {
     let first_pivot = vec![vec![0, 1, 0, 0, 0, 0]];
     let options = TCI2Options {
         tolerance: 1e-10,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         max_iter: 20,
         ..Default::default()
     };
@@ -612,7 +612,7 @@ fn test_crossinterpolate2_rank2_full_grid_reconstruction() {
     let options = TCI2Options {
         tolerance: 1e-12,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         ..Default::default()
     };
 
@@ -790,7 +790,7 @@ fn test_crossinterpolate2_lorentz_f64() {
     let options = TCI2Options {
         tolerance: 1e-8,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         ..Default::default()
     };
 
@@ -853,7 +853,7 @@ fn test_crossinterpolate2_lorentz_c64() {
     let options = TCI2Options {
         tolerance: 1e-8,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         ..Default::default()
     };
 
@@ -959,7 +959,7 @@ fn test_global_search_oscillatory() {
     let options = TCI2Options {
         tolerance: 1e-4,
         max_iter: 20,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         normalize_error: false,
         ..Default::default()
     };
@@ -1068,7 +1068,7 @@ fn test_custom_global_pivot_finder() {
     let options = TCI2Options {
         tolerance: 1e-4,
         max_iter: 10,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         normalize_error: false,
         ..Default::default()
     };
