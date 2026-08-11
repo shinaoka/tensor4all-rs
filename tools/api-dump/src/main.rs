@@ -223,10 +223,19 @@ fn is_public(vis: &Visibility) -> bool {
 /// (e.g. `#[cfg(test)] pub(crate)` helper types and their syntactically
 /// `pub` methods) are not part of the public API surface and are excluded.
 fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    use proc_macro2::TokenTree;
     attrs.iter().any(|attr| {
         attr.path().is_ident("cfg")
             && match &attr.meta {
-                syn::Meta::List(list) => list.tokens.to_string().replace(' ', "").contains("test"),
+                syn::Meta::List(list) => {
+                    // Exactly `cfg(test)`: a single top-level `test` ident.
+                    // `cfg(not(test))` must NOT match.
+                    let mut it = list.tokens.clone().into_iter();
+                    matches!(
+                        (it.next(), it.next()),
+                        (Some(TokenTree::Ident(ident)), None) if ident == "test"
+                    )
+                }
                 _ => false,
             }
     })
@@ -276,7 +285,7 @@ fn extract_impl_items(item_impl: &ItemImpl, funcs: &mut Vec<FuncInfo>) {
 
     for impl_item in &item_impl.items {
         if let ImplItem::Fn(method) = impl_item {
-            if !is_public(&method.vis) {
+            if !is_public(&method.vis) || has_cfg_test(&method.attrs) {
                 continue;
             }
             funcs.push(FuncInfo {
@@ -300,8 +309,8 @@ fn extract_trait_items(item_trait: &ItemTrait, funcs: &mut Vec<FuncInfo>) {
     for trait_item in &item_trait.items {
         if let TraitItem::Fn(method) = trait_item {
             // A trait method is public when its trait is public; non-public
-            // traits are excluded from the dump.
-            if !is_public(&item_trait.vis) {
+            // traits and test-only methods are excluded from the dump.
+            if !is_public(&item_trait.vis) || has_cfg_test(&method.attrs) {
                 continue;
             }
             let has_default = method.default.is_some();

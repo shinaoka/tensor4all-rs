@@ -9,6 +9,7 @@ name = "api-dump"
 path = "src/main.rs"
 
 [dependencies]
+proc-macro2 = "1"
 syn = { version = "2", features = ["full", "parsing"] }
 quote = "1"
 walkdir = "2"
