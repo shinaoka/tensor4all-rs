@@ -43,6 +43,15 @@ fn random_points(n_sites: usize, local_dim: usize, n_points: usize, seed: u64) -
 }
 
 fn main() {
+    // Hardware/backend configuration (recorded for reproducibility).
+    if let Ok(model) = std::fs::read_to_string("/proc/cpuinfo") {
+        for line in model.lines().take(1) {
+            println!("hw: {line}");
+        }
+    }
+    println!("hw: logical CPUs: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    println!("hw: T4A_PROFILE_CONTRACT set: {}", std::env::var("T4A_PROFILE_CONTRACT").is_ok());
+
     let n_sites = 32usize;
     let local_dim = 2usize;
     let bond_dim = 16usize;
@@ -62,14 +71,14 @@ fn main() {
     // --- Candidate 1: TreeTN::evaluate rebuilds the evaluator per call ---
     let t0 = Instant::now();
     for _ in 0..n_reps {
-        tree.evaluate(&site_indices, values_ref).unwrap();
+        std::hint::black_box(tree.evaluate(&site_indices, values_ref).unwrap());
     }
     let t_evaluate = t0.elapsed();
 
     let evaluator = tensor4all_treetn::TreeTNEvaluator::new(&tree, &site_indices).unwrap();
     let t0 = Instant::now();
     for _ in 0..n_reps {
-        evaluator.evaluate_batched(values_ref).unwrap();
+        std::hint::black_box(evaluator.evaluate_batched(values_ref).unwrap());
     }
     let t_evaluator_reused = t0.elapsed();
 

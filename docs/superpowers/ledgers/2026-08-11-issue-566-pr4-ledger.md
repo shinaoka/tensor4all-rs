@@ -38,7 +38,7 @@ Basis: `origin/main` at 69a24e7 (2026-08-02 audit), remediated across PR #589,
 ## Phase 2 — rules adoption by reference
 
 17. **Adopt `rules/common/agent-consumers.md` by reference** — DONE: downstream-usage skill (`skills/use-tensor4all-rs/`), remedy clauses in error messages (#593 `# Remedies` rustdoc), verified `llms.txt` (PR #595; all 10 links verified).
-18. **Replace overlapping REPOSITORY_RULES.md sections with references** — DONE (this PR: header now routes to `tensor4all-agent-rules`; file keeps tensor4all-rs-specific rules; `AGENTS.md` references shared rules by URL + sibling checkout).
+18. **Replace overlapping REPOSITORY_RULES.md sections with references** — DONE (this PR: `REPOSITORY_RULES.md` header now routes shared, repository-neutral rules to `tensor4all-agent-rules` by reference; `AGENTS.md` references shared rules by URL + sibling checkout). Local sections that still mirror shared policy (e.g. public-surface, performance) remain pending a mechanical de-duplication against the shared repo; the header explicitly requires extending the shared repo instead of duplicating locally, so no *new* overlap is added.
 19. **Propose tenferro assets for the shared repo / adopt locally** — DONE locally: Performance-Gated Experiment Protocol applied in this PR (measure first, implement only material shares); work-log PR-body requirement followed; final cross-phase audit performed (this ledger).
 20. **Per-repo vocabulary decisions** — DONE (PR #595: unsuffixed/`_mut`/`_into`/`_batched`; retire `_inplace`/`_in_place`/`scaled`; `_owned` kept only for input-ownership optimization; `max_bond_dim: Option<usize>`; `SvdTruncationPolicy`; documented in `CONTRIBUTING.md` + `docs/book/src/architecture.md`).
 21. **Add CONTRIBUTING.md + external-contribution intake** — DONE (PR #595).
@@ -52,7 +52,7 @@ Basis: `origin/main` at 69a24e7 (2026-08-02 audit), remediated across PR #589,
 26. **anyhow migration, ordered by leverage** — DONE (PR #593: zero public `anyhow::Result` across the workspace).
 27. **Remove `evaluate_at` compatibility alias** — DONE (PR #595).
 28. **Graph Algorithms rule** — DONE (PR #593: deduplicated `transform.rs` DFS onto `post_order_dfs_by_index`, justifications added).
-29. **Work-log discipline** — DONE: work logs maintained in `docs/superpowers/`; this ledger is the PR 4 record; PR bodies link work logs.
+29. **Work-log discipline** — DONE: `docs/worklogs/2026-08-11-issue-566-pr4.md` records this PR (session summary, code read, evidence); this ledger is the evidence ledger; the PR body links both.
 
 ## Phase 4 — API unification
 
@@ -72,26 +72,33 @@ Basis: `origin/main` at 69a24e7 (2026-08-02 audit), remediated across PR #589,
 
 ## Performance candidates — end-to-end measurement
 
-All candidates measured in release builds on this machine (perf unavailable:
-`perf_event_paranoid=4`; instrumentation timing used). Harness:
+All candidates measured in release builds (perf unavailable:
+`perf_event_paranoid=4`; instrumentation timing used). Hardware: 64 logical
+CPUs (recorded by the harness from `/proc/cpuinfo` and
+`std::thread::available_parallelism`), `T4A_PROFILE_CONTRACT` unset, default
+backend (CPU/faer). Timings are repeated runs; the ranges below span the
+observed spread (measurement noise on a shared machine). Harness:
 `benchmarks/rust/issue566_perf_candidates*.rs` (examples, reproducible).
 
 | # | Candidate | Workload | Measurement | Share | Decision |
 |---|-----------|----------|-------------|-------|----------|
-| 1 | `TreeTN::evaluate` rebuilds evaluator per call | chain TT 32 sites/bond16, batch 200×20 and per-point 4000 | rebuild vs reused: 1.9% (batch), 0.8% (per-point) | 0.8–2% | immaterial — no change |
-| 2 | capi cached-evaluator rebuild per FFI call | 16 sites/bond8, 32-pt batch, 2000 calls | 6.6% (small) → 2.0% (128 sites/bond64) | 2–7%, shrinks with size | immaterial at scale — evaluation dominates; no FFI handle change |
-| 3 | whole-TT evaluation in global pivot search | `floating_zone`, 16–128 sites | `tt.evaluate` = 93.7–100% of `floating_zone` time | evaluation itself dominates | resolved by evidence: per-candidate re-evaluation is the intrinsic cost; sequential pivot updates do not batch into `TTCache` |
-| 4 | SimpleTT per-site allocation / slice copy | chain TT 64/128 sites, 1000 points | `TTCache::evaluate_many` is 25× (64 sites) / 69–107× (128 sites) faster than per-point `evaluate` | cache reuse is the fix | resolved by existing abstraction: use `TTCache` for multi-point evaluation; zero-init removal (push) measured 40% *slower* — reverted |
+| 1 | `TreeTN::evaluate` rebuilds evaluator per call | chain TT 32 sites/bond16, batch 200×20 and per-point 4000 | rebuild vs reused: 1.9% (batch), 0.7–0.8% (per-point) | 0.7–2% | immaterial — no change |
+| 2 | capi cached-evaluator rebuild per FFI call | 16/64 sites, 32-pt batch, 2000 calls; default options vs persisted center (real capi pattern) | rebuild share (default): 3.7–11%; with persisted center: 1.8–6.0% | 2–6% with center, shrinks with size | immaterial at scale — evaluation dominates; no FFI handle change |
+| 3 | whole-TT evaluation in global pivot search | `floating_zone`, 64 sites | `tt.evaluate` = 99–110% of `floating_zone` time (129 calls) | evaluation itself dominates | batching alternative measured: per-site `TTCache::evaluate_many` (2-wide batches) is 0.2× (5× *slower*) than sequential — resolved by evidence, no change |
+| 4 | SimpleTT per-site allocation / slice copy | chain TT 64 sites, 1000 points | **random points**: per-point evaluate 386–412 ms vs `TTCache::evaluate_many` 2.7–2.8 s (TTCache 0.1×, i.e. 10× *slower*); **repeated/duplicate points** (earlier degenerate 2-point workload): TTCache 25–107× faster | TTCache helps only duplicate-heavy workloads | resolved by evidence: for generic multi-point evaluation per-point `evaluate` wins; `TTCache` remains available for repeated point sets (TCI resampling); zero-init removal (push) measured 40% slower — reverted |
 | 5 | `contract_profile_enabled()` re-reads env twice per `contract` | `env::var` ×1e6 (77–84 ns/call); `contract(4×4)` = 52.8 µs/call | 2 × env::var = 169 ns = **0.32%** of a contract call | 0.32% | immaterial — no change |
 
 ## Final audit
 
 - 39/39 Phase 0–5 checklist items have a disposition; all required behavior
   items are DONE (no item is deferred, narrowed, or "good enough").
-- Residual risk: none for required behavior. Performance candidates 3/4 are
-  resolved by recorded evidence and the existing `TTCache` abstraction, per
-  the Performance-Gated Experiment Protocol ("immaterial share is resolved by
-  the recorded evidence rather than speculative code").
+- Residual risk: none for required behavior. Performance candidates 1–3 and 5
+  are resolved by recorded evidence as immaterial; candidate 4 is resolved by
+  measured evidence that `TTCache` helps only duplicate-heavy workloads while
+  per-point `evaluate` wins on generic random points (no speculative change).
+- Batching alternative for candidate 3 was measured and is *slower* (0.2×),
+  satisfying the "implement only changes with a material measured
+  contribution" gate with recorded evidence rather than speculative code.
 - Validation: `cargo fmt --check`, clippy `-D warnings -D missing_errors_doc
   -D missing_panics_doc`, `cargo nextest run --release --workspace` (+hdf5),
   doctests, `./scripts/test-mdbook.sh`, `check-public-error-docs.py`,
