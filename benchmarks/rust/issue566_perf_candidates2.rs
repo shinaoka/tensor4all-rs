@@ -141,19 +141,25 @@ fn main() {
     let f2 = |idx: &Vec<usize>| -> f64 {
         (0..idx.len()).map(|i| (idx[i] as f64) * 0.1).sum::<f64>()
     };
-    let t0 = Instant::now();
+    // Semantic equivalence first, untimed: batched and sequential must agree.
     let (pivot_b, err_b) =
         floating_zone_batched(&tt, &f2, &vec![local_dim; n_sites], None, 1.0e-12);
-    let t_batched = t0.elapsed();
-    // Semantic equivalence: batched and sequential must agree on the result.
     assert_eq!(pivot_b, pivot, "batched pivot differs from sequential");
     assert!(
         (err_b - err).abs() <= 1.0e-12 * err.abs().max(1.0),
         "batched error {err_b} differs from sequential {err}"
     );
     std::hint::black_box((pivot_b, err_b));
+
+    // Then a separate timed run.
+    let t0 = Instant::now();
+    let (pivot_b2, err_b2) =
+        floating_zone_batched(&tt, &f2, &vec![local_dim; n_sites], None, 1.0e-12);
+    let t_batched = t0.elapsed();
+    assert_eq!(pivot_b2, pivot_b);
+    assert_eq!(err_b2, err_b);
     println!(
-        "candidate3 batched floating_zone (TTCache, {local_dim}-wide batches): {t_batched:?} — vs sequential {t_zone:?} ({:.2}x), equivalent result asserted",
+        "candidate3 batched floating_zone (TTCache, {local_dim}-wide batches): {t_batched:?} — vs sequential {t_zone:?} ({:.2}x), equivalence asserted before timing",
         t_zone.as_secs_f64() / t_batched.as_secs_f64()
     );
 
