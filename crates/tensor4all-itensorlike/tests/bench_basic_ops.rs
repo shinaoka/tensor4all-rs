@@ -102,9 +102,9 @@ fn bench_inner() {
     for &n in &[20, 45, 90] {
         let a = make_random_mps(n, 2, 16, 123);
         let b = make_random_mps(n, 2, 16, 456);
-        let a_sites: Vec<DynIndex> = a.siteinds().into_iter().flatten().collect();
-        let b_sites: Vec<DynIndex> = b.siteinds().into_iter().flatten().collect();
-        let b = b.replaceinds(&b_sites, &a_sites).unwrap();
+        let a_sites: Vec<DynIndex> = a.site_indices().into_iter().flatten().collect();
+        let b_sites: Vec<DynIndex> = b.site_indices().into_iter().flatten().collect();
+        let b = b.replace_indices(&b_sites, &a_sites).unwrap();
         time_it(&format!("inner({n} sites, bd=16)"), || {
             let _ = a.inner(&b).unwrap();
         });

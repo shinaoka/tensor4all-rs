@@ -99,7 +99,7 @@ Keep public high-level MatrixCI types:
 
 - `MatrixLUCI`
 - `MatrixACA`
-- `RrLU`, `RrLUOptions`, `rrlu`, `rrlu_inplace`
+- `RrLU`, `RrLUOptions`, `rrlu`, `rrlu_mut`
 - `Matrix`, `from_vec2d`
 - `AbstractMatrixCI`
 - `MatrixLuciScalar` if generic callers still need a scalar capability bound

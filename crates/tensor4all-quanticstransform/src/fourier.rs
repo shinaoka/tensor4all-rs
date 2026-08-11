@@ -12,7 +12,7 @@ use std::f64::consts::PI;
 use tensor4all_simplett::mpo::{tensor4_from_data, Tensor4};
 use tensor4all_simplett::{
     compression::{CompressionMethod, CompressionOptions},
-    tensor3_from_data, Tensor3Ops, TensorTrain,
+    tensor3_from_data, SimpleTensorTrain, Tensor3Ops,
 };
 
 use crate::common::{
@@ -76,18 +76,18 @@ fn zero_tensor3(
 /// assert_eq!(inv.sign, 1.0);
 /// // Custom options
 /// let opts = FourierOptions {
-///     maxbonddim: 20,
+///     max_bond_dim: 20,
 ///     tolerance: 1e-12,
 ///     ..FourierOptions::forward()
 /// };
-/// assert_eq!(opts.maxbonddim, 20);
+/// assert_eq!(opts.max_bond_dim, 20);
 /// ```
 #[derive(Clone, Debug)]
 pub struct FourierOptions {
     /// Sign in the exponent: -1.0 (forward) or 1.0 (inverse)
     pub sign: f64,
     /// Maximum bond dimension after compression
-    pub maxbonddim: usize,
+    pub max_bond_dim: usize,
     /// Tolerance for compression
     pub tolerance: f64,
     /// Number of Chebyshev basis functions (K+1 points); must be positive.
@@ -100,7 +100,7 @@ impl Default for FourierOptions {
     fn default() -> Self {
         Self {
             sign: -1.0,
-            maxbonddim: 12,
+            max_bond_dim: 12,
             tolerance: 1e-14,
             k: 25,
             normalize: true,
@@ -143,7 +143,7 @@ impl FourierOptions {
 /// ```
 #[derive(Clone)]
 pub struct FTCore {
-    forward_mpo: TensorTrain<Complex64>,
+    forward_mpo: SimpleTensorTrain<Complex64>,
     r: usize,
     options: FourierOptions,
 }
@@ -257,8 +257,11 @@ pub fn quantics_fourier_operator(
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
 
-/// Create the QFT MPO as a TensorTrain using Chen & Lindsey construction.
-fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrain<Complex64>> {
+/// Create the QFT MPO as a SimpleTensorTrain using Chen & Lindsey construction.
+fn quantics_fourier_mpo(
+    r: usize,
+    options: &FourierOptions,
+) -> Result<SimpleTensorTrain<Complex64>> {
     if r < 2 {
         return Err(anyhow::anyhow!(
             "Number of sites must be at least 2, got {r}"
@@ -334,7 +337,7 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
         tensors.push(t);
     }
 
-    let mut tt = TensorTrain::new(tensors).map_err(|e| {
+    let mut tt = SimpleTensorTrain::new(tensors).map_err(|e| {
         QuanticsTransformError::from(anyhow::Error::new(e).context("Failed to create Fourier MPO"))
     })?;
 
@@ -342,7 +345,7 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
     let compress_options = CompressionOptions {
         method: CompressionMethod::LU,
         tolerance: options.tolerance,
-        max_bond_dim: options.maxbonddim,
+        max_bond_dim: options.max_bond_dim,
         normalize_error: true,
     };
     tt.compress(&compress_options).map_err(|err| {

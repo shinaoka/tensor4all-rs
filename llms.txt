@@ -1,0 +1,26 @@
+# tensor4all-rs
+
+> Tensor networks, tensor cross interpolation, quantics transforms, and tree tensor networks for scientific computing.
+
+tensor4all-rs is a Rust workspace for tensor network methods: dynamic-rank tensors
+(`tensor4all-core`), tree tensor networks (`tensor4all-treetn`), tensor cross
+interpolation (`tensor4all-tensorci`, `tensor4all-quanticstci`), quantics
+transforms (`tensor4all-quanticstransform`), and a C FFI layer
+(`tensor4all-capi`) used by language bindings.
+
+## Key documentation
+
+- [Architecture & crate guide](docs/book/src/architecture.md): two-stack layout (network stack vs simplett stack), the sanctioned `treetn::simplett_bridge` crossing, and the `TensorTrain` naming resolution.
+- [Getting started](docs/book/src/getting-started.md): first steps.
+- [Tensor train guide](docs/book/src/guides/tensor-train.md): `SimpleTensorTrain` (simplett) and ITensor-like `TensorTrain` (itensorlike).
+- [Tree tensor network guide](docs/book/src/guides/tree-tn.md): `TreeTN`.
+- [Quantics TCI guide](docs/book/src/guides/quantics.md) and [TCI guide](docs/book/src/guides/tci.md).
+- [Julia bindings](docs/book/src/julia-bindings.md).
+- [C API design](docs/CAPI_DESIGN.md).
+- [Repository rules](AGENTS.md) and [contributing](CONTRIBUTING.md).
+
+## Repository
+
+- GitHub: https://github.com/tensor4all/tensor4all-rs
+- License: MIT (see `LICENSE-MIT`)
+- Language: Rust (edition 2021), workspace at the repository root.

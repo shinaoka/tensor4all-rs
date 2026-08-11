@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_vidal_creation() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
 
     assert_eq!(vidal.len(), 3);
@@ -11,7 +11,7 @@ fn test_vidal_creation() {
 
 #[test]
 fn test_vidal_to_tensor_train_preserves_sum() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
     let tt_back = vidal.to_tensor_train();
 
@@ -28,7 +28,7 @@ fn test_vidal_to_tensor_train_preserves_sum() {
 
 #[test]
 fn test_inverse_creation() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let inverse = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 
     assert_eq!(inverse.len(), 3);
@@ -37,7 +37,7 @@ fn test_inverse_creation() {
 
 #[test]
 fn test_inverse_to_tensor_train_preserves_sum() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let inverse = InverseTensorTrain::from_tensor_train(&tt).unwrap();
     let tt_back = inverse.to_tensor_train();
 
@@ -54,7 +54,7 @@ fn test_inverse_to_tensor_train_preserves_sum() {
 
 #[test]
 fn test_vidal_singular_values_positive() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 3.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 3.0);
     let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
 
     // Check that singular values are positive
@@ -65,7 +65,7 @@ fn test_vidal_singular_values_positive() {
     }
 }
 
-fn two_site_matrix_tt() -> TensorTrain<f64> {
+fn two_site_matrix_tt() -> SimpleTensorTrain<f64> {
     let mut left = tensor3_zeros(1, 2, 2);
     left.set3(0, 0, 0, 1.0);
     left.set3(0, 1, 1, 1.0);
@@ -76,7 +76,7 @@ fn two_site_matrix_tt() -> TensorTrain<f64> {
     right.set3(0, 1, 0, 1.0);
     right.set3(1, 1, 0, 2.0);
 
-    TensorTrain::new(vec![left, right]).unwrap()
+    SimpleTensorTrain::new(vec![left, right]).unwrap()
 }
 
 fn assert_diag_close(actual: &[f64], expected: &[f64]) {
@@ -107,7 +107,7 @@ fn test_inverse_reports_true_two_site_inverse_singular_values() {
 
 #[test]
 fn test_vidal_empty() {
-    let tt = TensorTrain::<f64>::from_tensors_unchecked(Vec::new());
+    let tt = SimpleTensorTrain::<f64>::from_tensors_unchecked(Vec::new());
     let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
     assert_eq!(vidal.len(), 0);
     assert!(vidal.all_singular_values().is_empty());
@@ -133,7 +133,7 @@ fn test_vidal_new_empty() {
 
 #[test]
 fn test_vidal_partition_exceeds_length() {
-    let tt = TensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
     let err = VidalTensorTrain::from_tensor_train_with_partition(&tt, 0..5);
     assert!(err.is_err());
 }
@@ -144,7 +144,7 @@ fn test_vidal_from_tensor_train_reports_qr_failure() {
     left.set3(0, 0, 0, f64::NAN);
     left.set3(0, 1, 0, 1.0);
     let right = tensor3_zeros(1, 2, 1);
-    let tt = TensorTrain::new(vec![left, right]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![left, right]).unwrap();
 
     let err = VidalTensorTrain::from_tensor_train(&tt).unwrap_err();
 
@@ -175,7 +175,7 @@ fn test_vidal_round_trip_evaluations() {
     t2.set3(1, 0, 0, 3.0);
     t2.set3(1, 1, 0, 4.0);
 
-    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
     let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
     let tt_back = vidal.to_tensor_train();
 
@@ -200,7 +200,7 @@ fn test_vidal_round_trip_evaluations() {
 
 #[test]
 fn test_vidal_accessors() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let mut vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
     assert_eq!(
         vidal.singular_values(0).len(),
@@ -215,7 +215,7 @@ fn test_vidal_accessors() {
 
 #[test]
 fn test_inverse_empty() {
-    let tt = TensorTrain::<f64>::from_tensors_unchecked(Vec::new());
+    let tt = SimpleTensorTrain::<f64>::from_tensors_unchecked(Vec::new());
     let inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
     assert_eq!(inv.len(), 0);
     assert!(inv.all_inverse_singular_values().is_empty());
@@ -248,7 +248,7 @@ fn test_inverse_round_trip_evaluations() {
     t2.set3(1, 0, 0, 3.0);
     t2.set3(1, 1, 0, 4.0);
 
-    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
     let inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
     let tt_back = inv.to_tensor_train();
 
@@ -273,7 +273,7 @@ fn test_inverse_round_trip_evaluations() {
 
 #[test]
 fn test_inverse_set_two_site_tensors() {
-    let tt = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 
     let t0: Tensor3<f64> = tensor3_zeros(1, 2, 3);
@@ -287,7 +287,7 @@ fn test_inverse_set_two_site_tensors() {
 
 #[test]
 fn test_inverse_set_two_site_tensors_out_of_bounds() {
-    let tt = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 
     let t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);
@@ -300,7 +300,7 @@ fn test_inverse_set_two_site_tensors_out_of_bounds() {
 
 #[test]
 fn test_inverse_accessors() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let mut inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 
     assert_eq!(

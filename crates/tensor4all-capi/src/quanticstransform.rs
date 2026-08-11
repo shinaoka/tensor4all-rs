@@ -769,7 +769,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
     forward: i32,
-    maxbonddim: usize,
+    max_bond_dim: usize,
     tolerance: f64,
     out: *mut *mut t4a_treetn,
 ) -> t4a_status_code {
@@ -782,8 +782,8 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
         } else {
             FourierOptions::inverse()
         };
-        if maxbonddim > 0 {
-            options.maxbonddim = maxbonddim;
+        if max_bond_dim > 0 {
+            options.max_bond_dim = max_bond_dim;
         }
         if tolerance > 0.0 {
             options.tolerance = tolerance;

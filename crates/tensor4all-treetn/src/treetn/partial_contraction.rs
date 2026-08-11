@@ -902,7 +902,7 @@ where
     };
 
     if !restore_from.is_empty() {
-        result = result.replaceinds(&restore_from, &restore_to).context(
+        result = result.replace_indices(&restore_from, &restore_to).context(
             "partial_contract: failed to restore surviving left-hand indices after diagonal pairing",
         )?;
     }

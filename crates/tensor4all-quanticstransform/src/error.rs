@@ -15,6 +15,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum QuanticsTransformError {
     /// Invalid transform configuration or grid parameters.
+    /// # Remedy
+    /// Validate the transform parameters (axis range, boundary conditions,
+    /// grid size) against the operator contract before constructing it.
     #[error("invalid quantics transform configuration: {message}")]
     InvalidConfiguration {
         /// Description of the invalid configuration.

@@ -107,7 +107,7 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 /// ).unwrap();
 /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 /// assert_eq!(tt.len(), 2);
-/// assert_eq!(tt.maxbonddim(), 3);
+/// assert_eq!(tt.max_bond_dim(), 3);
 /// assert!(!tt.is_empty());
 /// ```
 #[derive(Debug, Clone)]
@@ -320,7 +320,7 @@ impl TensorTrain {
     /// let tt = TensorTrain::from_treetn(tree)?;
     /// assert_eq!(tt.len(), 2);
     /// assert_eq!(
-    ///     tt.siteinds()
+    ///     tt.site_indices()
     ///         .into_iter()
     ///         .map(|indices| indices.into_iter().map(|idx| idx.size()).collect::<Vec<_>>())
     ///         .collect::<Vec<_>>(),
@@ -665,7 +665,7 @@ impl TensorTrain {
     /// Get all link indices.
     ///
     /// Returns a vector of length `len() - 1` containing the link indices.
-    pub fn linkinds(&self) -> Vec<DynIndex> {
+    pub fn link_indices(&self) -> Vec<DynIndex> {
         (0..self.len().saturating_sub(1))
             .filter_map(|i| self.linkind(i))
             .collect()
@@ -686,13 +686,13 @@ impl TensorTrain {
     /// Returns an error when the link-index relabeling fails (an invalid-index
     /// /// failure).
     ///
-    pub fn sim_linkinds(&self) -> Result<Self> {
+    pub fn sim_link_indices(&self) -> Result<Self> {
         if self.len() <= 1 {
             return Ok(self.clone());
         }
 
         // Build replacement pairs: (old_link, new_link) for each link index
-        let old_links = self.linkinds();
+        let old_links = self.link_indices();
         let new_links: Vec<_> = old_links.iter().map(|idx| idx.sim()).collect();
         let replacements: Vec<_> = old_links
             .iter()
@@ -886,7 +886,7 @@ impl TensorTrain {
     ///
     /// For each site, returns a vector of indices that are not shared with
     /// adjacent tensors (i.e., the "physical" or "site" indices).
-    pub fn siteinds(&self) -> Vec<Vec<DynIndex>> {
+    pub fn site_indices(&self) -> Vec<Vec<DynIndex>> {
         if self.is_empty() {
             return Vec::new();
         }
@@ -930,11 +930,11 @@ impl TensorTrain {
     ///
     /// Returns a vector of length `len() - 1`.
     pub fn bond_dims(&self) -> Vec<usize> {
-        self.linkinds().iter().map(|idx| idx.size()).collect()
+        self.link_indices().iter().map(|idx| idx.size()).collect()
     }
 
     /// Get the maximum bond dimension.
-    pub fn maxbonddim(&self) -> usize {
+    pub fn max_bond_dim(&self) -> usize {
         self.bond_dims().into_iter().max().unwrap_or(1)
     }
 
@@ -1166,12 +1166,12 @@ impl TensorTrain {
     /// ).unwrap();
     ///
     /// let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
-    /// assert_eq!(tt.maxbonddim(), 4);
+    /// assert_eq!(tt.max_bond_dim(), 4);
     ///
     /// // Truncate bond dimension to at most 2
     /// let opts = TruncateOptions::svd().with_max_rank(2);
     /// tt.truncate(&opts).unwrap();
-    /// assert!(tt.maxbonddim() <= 2);
+    /// assert!(tt.max_bond_dim() <= 2);
     /// ```
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         if self.len() <= 1 {
@@ -1457,7 +1457,7 @@ impl TensorTrain {
             return Ok(None);
         }
         if self
-            .siteinds()
+            .site_indices()
             .iter()
             .any(|site_indices| site_indices.len() != 1)
         {
@@ -1758,7 +1758,7 @@ impl TensorTrain {
     ///
     /// let dense = sum.to_dense().unwrap();
     /// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![4.0, 6.0]);
-    /// assert_eq!(dense.indices()[0], lhs.siteinds()[0][0]);
+    /// assert_eq!(dense.indices()[0], lhs.site_indices()[0][0]);
     /// ```
     pub fn add_reindexed_like_self(&self, other: &Self) -> Result<Self> {
         if self.is_empty() && other.is_empty() {
@@ -1923,14 +1923,14 @@ impl TensorIndex for TensorTrain {
         Self::from_inner(treetn, None)
     }
 
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old: &[Self::Index],
         new: &[Self::Index],
     ) -> std::result::Result<Self, Self::Error> {
         let treetn = self
             .treetn
-            .replaceinds(old, new)
+            .replace_indices(old, new)
             .map_err(anyhow::Error::new)?;
         Self::from_inner(treetn, None)
     }

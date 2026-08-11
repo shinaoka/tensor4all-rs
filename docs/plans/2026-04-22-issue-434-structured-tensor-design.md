@@ -256,7 +256,7 @@ These operations can be implemented directly on compact payloads:
 - `permute(...)`
 - `permute_indices(...)`
 - `replaceind(...)`
-- `replaceinds(...)`
+- `replace_indices(...)`
 - `conj()`
 - `scale(...)`
 - same-layout `add(...)`, `try_sub(...)`, and `axpby(...)`

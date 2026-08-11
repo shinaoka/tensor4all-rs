@@ -86,7 +86,7 @@ pub struct RrLU<T: Scalar> {
 impl<T: Scalar> RrLU<T> {
     /// Create an empty rrLU for a matrix of given size.
     ///
-    /// Used internally. Most users should call [`rrlu`] or [`rrlu_inplace`]
+    /// Used internally. Most users should call [`rrlu`] or [`rrlu_mut`]
     /// instead.
     ///
     /// # Examples
@@ -722,17 +722,17 @@ impl Default for RrLUOptions {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{matrixlu::rrlu_inplace, RrLUOptions};
+/// use tensor4all_tcicore::{matrixlu::rrlu_mut, RrLUOptions};
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let mut m = from_vec2d(vec![
 ///     vec![1.0_f64, 2.0],
 ///     vec![3.0, 4.0],
 /// ]);
-/// let lu = rrlu_inplace(&mut m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
+/// let lu = rrlu_mut(&mut m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
 /// assert_eq!(lu.npivots(), 1);
 /// ```
-pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
+pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
     let opts = options.unwrap_or_default();
     let nr = a.nrows();
     let nc = a.ncols();
@@ -820,7 +820,7 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 
 /// Perform rank-revealing LU decomposition (non-destructive).
 ///
-/// Clones the input matrix and calls [`rrlu_inplace`].
+/// Clones the input matrix and calls [`rrlu_mut`].
 ///
 /// # Errors
 ///
@@ -846,7 +846,7 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 /// ```
 pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
     let mut a_copy = a.clone();
-    rrlu_inplace(&mut a_copy, options)
+    rrlu_mut(&mut a_copy, options)
 }
 
 /// Convert L matrix to solve L * X = B given pivot matrix P

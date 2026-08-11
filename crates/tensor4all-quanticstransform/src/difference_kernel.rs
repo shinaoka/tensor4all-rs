@@ -4,7 +4,7 @@ use crate::error::QuanticsTransformError;
 use anyhow::{Context, Result};
 use num_complex::Complex64;
 use num_traits::Zero;
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops};
 
 use crate::affine::{affine_transform_tensors_unfused, AffineParams};
 use crate::common::{
@@ -27,9 +27,9 @@ use crate::common::{
 /// /// invalid-configuration failure, or a shape mismatch).
 ///
 pub fn difference_kernel_mpo(
-    f: &TensorTrain<Complex64>,
+    f: &SimpleTensorTrain<Complex64>,
     boundary: BoundaryCondition,
-) -> std::result::Result<TensorTrain<Complex64>, QuanticsTransformError> {
+) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
     if f.len() == 0 {
         return Err(anyhow::anyhow!("difference kernel requires a non-empty QTT").into());
     }
@@ -100,7 +100,7 @@ pub fn difference_kernel_mpo(
         tensors.push(out);
     }
 
-    TensorTrain::new(tensors)
+    SimpleTensorTrain::new(tensors)
         .map_err(anyhow::Error::new)
         .context("Failed to create difference-kernel MPO")
         .map_err(QuanticsTransformError::from)
@@ -134,7 +134,7 @@ fn checked_difference_tensor_dims(
 /// /// invalid-configuration failure, or a shape mismatch).
 ///
 pub fn difference_kernel_operator(
-    f: &TensorTrain<Complex64>,
+    f: &SimpleTensorTrain<Complex64>,
     boundary: BoundaryCondition,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let mpo = difference_kernel_mpo(f, boundary)?;

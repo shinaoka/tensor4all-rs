@@ -19,7 +19,7 @@ on a 2x2 matrix is rejected per axis before linearization.
 
 ### Task 2 — RRLU invariants
 
-`validate_col_major_matrix_len` runs once at `rrlu_inplace` entry, before
+`validate_col_major_matrix_len` runs once at `rrlu_mut` entry, before
 max-rank shortcuts and before any unchecked kernel. `rrlu` reaches the same
 validated path. Leaf unsafe blocks retain local invariant assertions as
 documentation.

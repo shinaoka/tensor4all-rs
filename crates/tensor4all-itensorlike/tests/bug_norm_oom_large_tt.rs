@@ -159,7 +159,7 @@ fn test_norm_25_site_tt_matches_local_reference() {
 fn test_norm_90_site_tt_uses_scalable_structured_path() {
     let tt = make_tt(90);
     assert_eq!(tt.len(), 90);
-    assert_eq!(tt.maxbonddim(), 2);
+    assert_eq!(tt.max_bond_dim(), 2);
 
     let n = tt.norm().unwrap();
     assert!(n > 0.0, "norm should be positive, got {n}");

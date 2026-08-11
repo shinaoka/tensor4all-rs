@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // QTCI options control accuracy, rank cap, initialization, and sweep count.
     let source_options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_maxiter(config.maxiter)
         .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Fused)

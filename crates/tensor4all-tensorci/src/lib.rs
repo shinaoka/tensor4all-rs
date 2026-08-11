@@ -4,7 +4,7 @@
 //! This crate provides tensor cross interpolation algorithms for efficiently
 //! approximating high-dimensional tensors as tensor trains. Given a function
 //! `f(i_1, ..., i_N)` defined on a discrete multi-index grid, TCI finds a
-//! low-rank [`TensorTrain`](tensor4all_simplett::TensorTrain) approximation by
+//! low-rank [`SimpleTensorTrain`](tensor4all_simplett::SimpleTensorTrain) approximation by
 //! evaluating only a small subset of the total entries.
 //!
 //! # Algorithms
@@ -54,7 +54,7 @@
 //!
 //! - [`tensor4all_tcicore`] -- low-level matrix CI primitives and
 //!   [`CachedFunction`](tensor4all_tcicore::CachedFunction)
-//! - [`tensor4all_simplett`] -- the [`TensorTrain`](tensor4all_simplett::TensorTrain)
+//! - [`tensor4all_simplett`] -- the [`SimpleTensorTrain`](tensor4all_simplett::SimpleTensorTrain)
 //!   data structure produced by TCI
 //! - `tensor4all-quanticstci` -- higher-level quantics TCI on discrete
 //!   or continuous grids (wraps this crate)

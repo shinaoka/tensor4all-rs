@@ -1,7 +1,7 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::{
-    common_ind_positions, common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds,
-    replaceinds_in_place, union_inds, unique_inds, ReplaceIndsError,
+    common_ind_positions, common_inds, hascommoninds, hasind, hasinds, noncommon_inds,
+    replace_indices, replace_indices_mut, union_inds, unique_inds, ReplaceIndsError,
 };
 use tensor4all_core::{DynId, IndexLike, TagSet};
 
@@ -21,7 +21,7 @@ fn test_sim_preserves_symm_and_tags() {
 }
 
 #[test]
-fn test_replaceinds_success() {
+fn test_replace_indices_success() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -30,7 +30,7 @@ fn test_replaceinds_success() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let replacements = vec![(j.clone(), new_j.clone())];
 
-    let replaced = replaceinds(indices, &replacements).unwrap();
+    let replaced = replace_indices(indices, &replacements).unwrap();
     assert_eq!(replaced.len(), 3);
     assert_eq!(replaced[0].id, i.id); // i unchanged
     assert_eq!(replaced[1].id, new_j.id); // j replaced
@@ -38,7 +38,7 @@ fn test_replaceinds_success() {
 }
 
 #[test]
-fn test_replaceinds_space_mismatch() {
+fn test_replace_indices_space_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let wrong_size = Index::new_dyn(5); // Different size
@@ -46,7 +46,7 @@ fn test_replaceinds_space_mismatch() {
     let indices = vec![i.clone(), j.clone()];
     let replacements = vec![(j.clone(), wrong_size.clone())];
 
-    let result = replaceinds(indices, &replacements);
+    let result = replace_indices(indices, &replacements);
     assert!(result.is_err());
     match result.unwrap_err() {
         ReplaceIndsError::SpaceMismatch { from_dim, to_dim } => {
@@ -60,7 +60,7 @@ fn test_replaceinds_space_mismatch() {
 }
 
 #[test]
-fn test_replaceinds_in_place_success() {
+fn test_replace_indices_mut_success() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -69,14 +69,14 @@ fn test_replaceinds_in_place_success() {
     let mut indices = vec![i.clone(), j.clone(), k.clone()];
     let replacements = vec![(j.clone(), new_j.clone())];
 
-    replaceinds_in_place(&mut indices, &replacements).unwrap();
+    replace_indices_mut(&mut indices, &replacements).unwrap();
     assert_eq!(indices[0].id, i.id);
     assert_eq!(indices[1].id, new_j.id);
     assert_eq!(indices[2].id, k.id);
 }
 
 #[test]
-fn test_replaceinds_in_place_space_mismatch() {
+fn test_replace_indices_mut_space_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let wrong_size = Index::new_dyn(5);
@@ -84,7 +84,7 @@ fn test_replaceinds_in_place_space_mismatch() {
     let mut indices = vec![i.clone(), j.clone()];
     let replacements = vec![(j.clone(), wrong_size.clone())];
 
-    let result = replaceinds_in_place(&mut indices, &replacements);
+    let result = replace_indices_mut(&mut indices, &replacements);
     assert!(result.is_err());
 }
 
@@ -217,7 +217,7 @@ fn test_index_ops_distinguish_same_id_prime_pair() {
         vec![i.clone()]
     );
 
-    let replaced = replaceinds(indices, &[(i_prime.clone(), replacement.clone())]).unwrap();
+    let replaced = replace_indices(indices, &[(i_prime.clone(), replacement.clone())]).unwrap();
     assert_eq!(replaced, vec![i, replacement]);
 }
 
@@ -234,7 +234,7 @@ fn test_common_ind_positions_distinguish_same_id_tag_pair() {
 }
 
 #[test]
-fn test_replaceinds_multiple_replacements() {
+fn test_replace_indices_multiple_replacements() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -244,7 +244,7 @@ fn test_replaceinds_multiple_replacements() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let replacements = vec![(i.clone(), new_i.clone()), (k.clone(), new_k.clone())];
 
-    let replaced = replaceinds(indices, &replacements).unwrap();
+    let replaced = replace_indices(indices, &replacements).unwrap();
     assert_eq!(replaced.len(), 3);
     assert_eq!(replaced[0].id, new_i.id);
     assert_eq!(replaced[1].id, j.id); // unchanged
@@ -252,7 +252,7 @@ fn test_replaceinds_multiple_replacements() {
 }
 
 #[test]
-fn test_replaceinds_no_match() {
+fn test_replace_indices_no_match() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -261,7 +261,7 @@ fn test_replaceinds_no_match() {
     let indices = vec![i.clone(), j.clone()];
     let replacements = vec![(k.clone(), other.clone())]; // k not in indices, but valid replacement
 
-    let replaced = replaceinds(indices, &replacements).unwrap();
+    let replaced = replace_indices(indices, &replacements).unwrap();
     // No replacements should occur since k is not in indices
     assert_eq!(replaced.len(), 2);
     assert_eq!(replaced[0].id, i.id);

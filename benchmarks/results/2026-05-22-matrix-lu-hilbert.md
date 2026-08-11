@@ -4,7 +4,7 @@ Date: 2026-05-22
 
 ## Scope
 
-This benchmark isolates rank-revealing LU (`rrlu_inplace` and non-destructive
+This benchmark isolates rank-revealing LU (`rrlu_mut` and non-destructive
 `rrlu`) on deterministic Hilbert matrices. It does not call BLAS, so the Rust
 standalone runner uses the default feature set; system OpenBLAS is irrelevant
 for this particular microbenchmark.

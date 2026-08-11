@@ -134,10 +134,13 @@ typedef enum t4a_storage_kind {
  *
  * Related types:
  * - [`t4a_singular_value_measure`] selects whether the threshold is applied to
+ *
  *   singular values or squared singular values.
  * - [`t4a_truncation_rule`] selects whether the threshold is checked per value
+ *
  *   or against the discarded suffix sum.
  * - [`t4a_svd_truncation_policy`] combines all three knobs with the numeric
+ *
  *   threshold.
  *
  * # Examples
@@ -172,8 +175,10 @@ typedef enum t4a_threshold_scale {
  *
  * Related types:
  * - [`t4a_threshold_scale`] selects whether the threshold is relative or
+ *
  *   absolute.
  * - [`t4a_truncation_rule`] selects whether truncation is per value or based
+ *
  *   on the discarded tail sum.
  * - [`t4a_svd_truncation_policy`] stores the full C-facing SVD policy.
  *
@@ -209,10 +214,13 @@ typedef enum t4a_singular_value_measure {
  *
  * Related types:
  * - [`t4a_threshold_scale`] sets whether the threshold is relative or
+ *
  *   absolute.
  * - [`t4a_singular_value_measure`] sets whether values or squared values are
+ *
  *   measured.
  * - [`t4a_svd_truncation_policy`] combines the rule with the other SVD
+ *
  *   truncation knobs.
  *
  * # Examples
@@ -304,6 +312,8 @@ typedef enum t4a_canonical_form {
   T4A_CANONICAL_FORM_CI = 2,
 } t4a_canonical_form;
 
+typedef struct Option_TensorStorageError Option_TensorStorageError;
+
 /**
  * Opaque index type for the C API.
  */
@@ -330,6 +340,7 @@ typedef struct t4a_treetn {
  */
 typedef struct t4a_tensor {
   const void *_private;
+  struct Option_TensorStorageError test_storage_error;
 } t4a_tensor;
 
 /**
@@ -343,8 +354,10 @@ typedef struct t4a_tensor {
  * Related types:
  * - [`t4a_threshold_scale`] controls relative vs absolute thresholding.
  * - [`t4a_singular_value_measure`] controls value vs squared-value
+ *
  *   measurement.
  * - [`t4a_truncation_rule`] controls per-value vs discarded-tail-sum
+ *
  *   truncation.
  *
  * # Examples
@@ -426,6 +439,20 @@ enum t4a_status_code t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_h
 
 /**
  * Get the explicit identity of an index.
+ *
+ * **Serialization semantics:** the returned ID identifies the index for
+ * round-tripping through a serialized representation. It is not a stable
+ * user-facing label; callers should rely on tags and prime levels for
+ * application-level identity.
+ *
+ * # Safety
+ *
+ * `ptr` must point to a valid `t4a_index` created by this library.
+ * `out_id` must be a valid, non-null pointer to a `u64`.
+ *
+ * # Errors
+ *
+ * Returns a null-pointer error when `ptr` or `out_id` is null.
  */
 enum t4a_status_code t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
 
@@ -443,7 +470,25 @@ enum t4a_status_code t4a_index_new(size_t dim,
                                    struct t4a_index **out);
 
 /**
- * Create a new index with explicit identity, tags, and prime level.
+ * Create a new index with an explicit identity, tags, and prime level.
+ *
+ * **Serialization semantics:** index IDs are internal identities used to
+ * distinguish indices with identical tags and prime levels. Constructing an
+ * index with an explicit ID is intended for round-tripping indices through a
+ * serialized representation (file, stream, or foreign buffer) where the
+ * original ID must be preserved. Callers must not fabricate IDs for
+ * application logic; two indices with the same ID, tags, and prime level are
+ * treated as the same index by contraction and index-matching operations.
+ *
+ * # Safety
+ *
+ * `tags_csv` must be a valid NUL-terminated UTF-8 string. `out` must be a
+ * valid, non-null pointer to a `t4a_index*` location.
+ *
+ * # Errors
+ *
+ * Returns [`T4A_INVALID_ARGUMENT`] when `dim` is zero, `plev` is negative, or
+ * the tag string is malformed.
  */
 enum t4a_status_code t4a_index_new_with_id(size_t dim,
                                            uint64_t id,
@@ -491,6 +536,7 @@ enum t4a_status_code t4a_index_tags(const struct t4a_index *ptr,
  *
  * # Arguments
  * * `buf` - Output buffer for the error message (UTF-8, null-terminated).
+ *
  *   Pass null to query required length only.
  * * `buf_len` - Size of the buffer in bytes.
  * * `out_len` - Output: required buffer length including null terminator.
@@ -559,7 +605,7 @@ enum t4a_status_code t4a_qtransform_flip_materialize(const struct t4a_qtt_layout
 enum t4a_status_code t4a_qtransform_fourier_materialize(const struct t4a_qtt_layout *layout,
                                                         size_t target_var,
                                                         int32_t forward,
-                                                        size_t maxbonddim,
+                                                        size_t max_bond_dim,
                                                         double tolerance,
                                                         struct t4a_treetn **out);
 
@@ -842,14 +888,18 @@ enum t4a_status_code t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
  * # Arguments
  * * `tensor` - Input tensor handle to factorize.
  * * `left_inds` - Pointers to the indices that should appear on the left side
+ *
  *   of the factorization.
  * * `n_left` - Number of entries in `left_inds`.
  * * `rtol` - Relative truncation tolerance for QR row-norm truncation. Pass
+ *
  *   `0.0` to disable truncation and keep the exact QR rank. Pass any other
  *   finite, non-negative value to request truncation for this call.
  * * `out_q` - Output slot that receives a newly allocated `Q` tensor handle on
+ *
  *   success.
  * * `out_r` - Output slot that receives a newly allocated `R` tensor handle on
+ *
  *   success.
  *
  * # Returns
@@ -860,11 +910,14 @@ enum t4a_status_code t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
  * # Errors
  * Returns:
  * - `T4A_NULL_POINTER` if `tensor`, any required index pointer, `out_q`, or
+ *
  *   `out_r` is null.
  * - `T4A_INVALID_ARGUMENT` if the index split is invalid, QR factorization
+ *
  *   fails, or `rtol` is negative or non-finite (for example `NaN` or
  *   `+/-inf`).
  * - `T4A_INTERNAL_ERROR` if the Rust implementation panics while processing
+ *
  *   the request.
  */
 enum t4a_status_code t4a_tensor_qr(const struct t4a_tensor *tensor,
@@ -1046,8 +1099,8 @@ void t4a_treetn_evaluator_release(struct t4a_treetn_evaluator *obj);
 enum t4a_status_code t4a_treetn_fuse_to(const struct t4a_treetn *treetn,
                                         const size_t *target_vertices,
                                         size_t n_target_vertices,
-                                        const struct t4a_index *const *target_siteinds,
-                                        const size_t *target_siteinds_len,
+                                        const struct t4a_index *const *target_site_indices,
+                                        const size_t *target_site_indices_len,
                                         const size_t *target_edge_sources,
                                         const size_t *target_edge_targets,
                                         size_t n_target_edges,
@@ -1143,6 +1196,7 @@ enum t4a_status_code t4a_treetn_num_vertices(const struct t4a_treetn *treetn, si
  * When `force == 0`, this uses smart canonicalization:
  * - If the network is already canonical at `vertex` with `form`, the call is a no-op.
  * - If the network is already canonicalized with a different form, the call returns
+ *
  *   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
  */
 enum t4a_status_code t4a_treetn_orthogonalize(struct t4a_treetn *treetn,
@@ -1198,8 +1252,8 @@ void t4a_treetn_release(struct t4a_treetn *obj);
 enum t4a_status_code t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
                                                const size_t *target_vertices,
                                                size_t n_target_vertices,
-                                               const struct t4a_index *const *target_siteinds,
-                                               const size_t *target_siteinds_len,
+                                               const struct t4a_index *const *target_site_indices,
+                                               const size_t *target_site_indices_len,
                                                const size_t *target_edge_sources,
                                                const size_t *target_edge_targets,
                                                size_t n_target_edges,
@@ -1230,11 +1284,11 @@ enum t4a_status_code t4a_treetn_set_tensor(struct t4a_treetn *treetn,
 /**
  * Get the site indices attached to a vertex.
  */
-enum t4a_status_code t4a_treetn_siteinds(const struct t4a_treetn *treetn,
-                                         size_t vertex,
-                                         struct t4a_index **buf,
-                                         size_t buf_len,
-                                         size_t *out_len);
+enum t4a_status_code t4a_treetn_site_indices(const struct t4a_treetn *treetn,
+                                             size_t vertex,
+                                             struct t4a_index **buf,
+                                             size_t buf_len,
+                                             size_t *out_len);
 
 /**
  * Split current nodes to match the requested target topology.
@@ -1242,8 +1296,8 @@ enum t4a_status_code t4a_treetn_siteinds(const struct t4a_treetn *treetn,
 enum t4a_status_code t4a_treetn_split_to(const struct t4a_treetn *treetn,
                                          const size_t *target_vertices,
                                          size_t n_target_vertices,
-                                         const struct t4a_index *const *target_siteinds,
-                                         const size_t *target_siteinds_len,
+                                         const struct t4a_index *const *target_site_indices,
+                                         const size_t *target_site_indices_len,
                                          const size_t *target_edge_sources,
                                          const size_t *target_edge_targets,
                                          size_t n_target_edges,
@@ -1256,7 +1310,7 @@ enum t4a_status_code t4a_treetn_split_to(const struct t4a_treetn *treetn,
  * Reassign site indices to target vertices using scheduled swap transport.
  */
 enum t4a_status_code t4a_treetn_swap_site_indices(const struct t4a_treetn *treetn,
-                                                  const struct t4a_index *const *assignment_siteinds,
+                                                  const struct t4a_index *const *assignment_site_indices,
                                                   const size_t *assignment_target_vertices,
                                                   size_t n_assignments,
                                                   size_t maxdim,

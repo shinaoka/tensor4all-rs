@@ -6,12 +6,10 @@ use crate::defaults::tensordynlen::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
 use crate::TensorDynLen;
-use num_complex::ComplexFloat;
+use num_complex::{Complex64, ComplexFloat};
 use tenferro::DType;
 use tenferro_linalg::eager_tensor::qr as eager_qr;
-use tensor4all_tensorbackend::{
-    native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
-};
+use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 use thiserror::Error;
 
 /// Error type for QR operations in tensor4all-linalg.
@@ -273,12 +271,12 @@ pub fn qr_with<T>(
 
         match r_inner.data().dtype() {
             DType::F64 => {
-                let values = native_tensor_primal_to_dense_f64_col_major(r_inner.data())
+                let values = native_tensor_primal_to_dense_col_major::<f64>(r_inner.data())
                     .map_err(|e| QrError::ComputationError(e.source))?;
                 compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
             }
             DType::C64 => {
-                let values = native_tensor_primal_to_dense_c64_col_major(r_inner.data())
+                let values = native_tensor_primal_to_dense_col_major::<Complex64>(r_inner.data())
                     .map_err(|e| QrError::ComputationError(e.source))?;
                 compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
             }

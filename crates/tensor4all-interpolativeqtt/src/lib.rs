@@ -3,7 +3,7 @@
 //!
 //! This crate ports the tested construction surface of
 //! `InterpolativeQTT.jl` to Rust. Constructors return
-//! [`TensorTrain`] values from `tensor4all-simplett`, so callers can use the
+//! [`SimpleTensorTrain`] values from `tensor4all-simplett`, so callers can use the
 //! same evaluation, compression, and norm APIs as the other tensor4all crates.
 //!
 //! # Examples
@@ -44,7 +44,7 @@ pub use interpolation::{
     interpolate_single_scale_sparse_nd, invert_qtt,
 };
 pub use options::InterpolativeQttOptions;
-pub use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+pub use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 
 #[cfg(test)]
 mod tests;

@@ -385,7 +385,7 @@ impl<T: TTScalar> MPO<T> {
     }
 
     /// Multiply the MPO by a scalar
-    pub fn scale(&mut self, factor: T) {
+    pub fn scale_mut(&mut self, factor: T) {
         if !self.tensors.is_empty() {
             let last = self.tensors.len() - 1;
             let tensor = &mut self.tensors[last];
@@ -403,9 +403,9 @@ impl<T: TTScalar> MPO<T> {
     }
 
     /// Create a scaled copy of the MPO
-    pub fn scaled(&self, factor: T) -> Self {
+    pub fn scale(&self, factor: T) -> Self {
         let mut result = self.clone();
-        result.scale(factor);
+        result.scale_mut(factor);
         result
     }
 
@@ -415,7 +415,7 @@ impl<T: TTScalar> MPO<T> {
     /// along with the shape (alternating site_dim_1, site_dim_2 dimensions).
     ///
     /// Warning: This can be very large for high-dimensional operators!
-    pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>)
+    pub fn full_tensor(&self) -> (Vec<T>, Vec<usize>)
     where
         T: EinsumScalar,
     {

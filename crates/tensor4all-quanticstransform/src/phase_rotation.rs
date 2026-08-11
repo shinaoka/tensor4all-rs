@@ -7,7 +7,7 @@ use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
 use std::f64::consts::PI;
-use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, SimpleTensorTrain, Tensor3Ops};
 
 use crate::common::{
     checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
@@ -125,7 +125,7 @@ pub fn phase_rotation_operator_multivar(
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
-/// Create the phase rotation MPO as a TensorTrain.
+/// Create the phase rotation MPO as a SimpleTensorTrain.
 ///
 /// Each site tensor is diagonal with entries:
 /// - For x_n = 0: 1
@@ -133,7 +133,7 @@ pub fn phase_rotation_operator_multivar(
 ///
 /// Uses big-endian convention: site n corresponds to bit 2^(R-1-n) (MSB at site 0).
 /// This matches Julia Quantics.jl's convention.
-fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
+fn phase_rotation_mpo(r: usize, theta: f64) -> Result<SimpleTensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
@@ -170,7 +170,7 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
         tensors.push(t);
     }
 
-    TensorTrain::new(tensors)
+    SimpleTensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create phase rotation MPO: {}", e))
 }
 

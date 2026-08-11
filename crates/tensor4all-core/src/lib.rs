@@ -54,7 +54,8 @@ pub use index_like::{sort_indices_deterministic, ConjState, IndexLike};
 pub mod index_ops;
 pub use index_ops::{
     check_unique_indices, common_ind_positions, common_inds, hascommoninds, hasind, hasinds,
-    noncommon_inds, replaceinds, replaceinds_in_place, union_inds, unique_inds, ReplaceIndsError,
+    noncommon_inds, replace_indices, replace_indices_mut, union_inds, unique_inds,
+    ReplaceIndsError,
 };
 pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};

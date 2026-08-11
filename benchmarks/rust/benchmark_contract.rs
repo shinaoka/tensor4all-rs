@@ -104,7 +104,7 @@ fn main() -> Result<()> {
         &output_indices_shared,
         &link_indices_a,
     )?;
-    println!("MPO A created. Max bond dim: {}", mpo_a_original.maxbonddim());
+    println!("MPO A created. Max bond dim: {}", mpo_a_original.max_bond_dim());
     println!();
 
     // Create indices for MPO B: B[s'_i, s''_i]
@@ -131,7 +131,7 @@ fn main() -> Result<()> {
         &output_indices_b,
         &link_indices_b,
     )?;
-    println!("MPO B created. Max bond dim: {}", mpo_b_original.maxbonddim());
+    println!("MPO B created. Max bond dim: {}", mpo_b_original.max_bond_dim());
     println!();
 
     // Contract options: zip-up with max_rank=50
@@ -158,7 +158,7 @@ fn main() -> Result<()> {
     let result_warmup = mpo_a_warmup.contract(&mpo_b_warmup, &options)?;
     let duration_warmup = start_warmup.elapsed();
     println!("Warmup completed in: {:?}. Result max bond dim: {}", 
-             duration_warmup, result_warmup.maxbonddim());
+             duration_warmup, result_warmup.max_bond_dim());
     println!();
 
     // Multiple runs for averaging
@@ -182,7 +182,7 @@ fn main() -> Result<()> {
         times.push(duration);
         result_final = Some(result.clone());
         println!("  Run {}: {:?} (max bond dim: {})", 
-                 run, duration, result.maxbonddim());
+                 run, duration, result.max_bond_dim());
     }
 
     // Calculate statistics
@@ -208,7 +208,7 @@ fn main() -> Result<()> {
     println!("Max time: {:?}", max_time);
     println!("Std dev: {:?}", std_time);
     if let Some(ref result) = result_final {
-        println!("Final result max bond dimension: {}", result.maxbonddim());
+        println!("Final result max bond dimension: {}", result.max_bond_dim());
         println!("Final result bond dimensions: {:?}", result.bond_dims());
     }
 

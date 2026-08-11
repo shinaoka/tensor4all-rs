@@ -1432,7 +1432,7 @@ where
     }
 
     /// Replace multiple external indices.
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
@@ -1449,7 +1449,7 @@ where
         for old in old_indices {
             if !seen.insert(old.clone()) {
                 return Err(anyhow::anyhow!(
-                    "Duplicate old index {:?} in LinearOperator::replaceinds",
+                    "Duplicate old index {:?} in LinearOperator::replace_indices",
                     old.id()
                 )
                 .into());

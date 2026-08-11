@@ -3,7 +3,7 @@ use anyhow::Result;
 
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorElement};
 use tensor4all_simplett::{
-    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain,
+    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
 
 use crate::TreeTN;
@@ -22,10 +22,10 @@ use crate::TreeTN;
 ///
 /// ```
 /// use tensor4all_core::{IndexLike, TensorIndex, TensorLike};
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 /// use tensor4all_treetn::tensor_train_to_treetn;
 ///
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1).unwrap(),
 /// ]).unwrap();
 ///
@@ -38,7 +38,7 @@ use crate::TreeTN;
 /// assert_eq!(dense.dims(), vec![2]);
 /// ```
 pub fn tensor_train_to_treetn<T>(
-    tt: &TensorTrain<T>,
+    tt: &SimpleTensorTrain<T>,
 ) -> std::result::Result<(TreeTN<TensorDynLen, usize>, Vec<DynIndex>), TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
@@ -59,10 +59,10 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 /// use tensor4all_treetn::tensor_train_to_treetn_with_names;
 ///
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1).unwrap(),
 /// ]).unwrap();
 ///
@@ -73,7 +73,7 @@ where
 /// assert_eq!(site_indices.len(), 1);
 /// ```
 pub fn tensor_train_to_treetn_with_names<T, V>(
-    tt: &TensorTrain<T>,
+    tt: &SimpleTensorTrain<T>,
     node_names: Vec<V>,
 ) -> std::result::Result<(TreeTN<TensorDynLen, V>, Vec<DynIndex>), TreeTNOperationError>
 where
@@ -99,10 +99,10 @@ where
 ///
 /// ```
 /// use tensor4all_core::DynIndex;
-/// use tensor4all_simplett::{tensor3_from_data, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain};
 /// use tensor4all_treetn::tensor_train_to_treetn_with_names_and_site_indices;
 ///
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1).unwrap(),
 /// ]).unwrap();
 /// let site = DynIndex::new_dyn(2);
@@ -116,7 +116,7 @@ where
 /// assert_eq!(treetn.node_names(), vec!["site0".to_string()]);
 /// ```
 pub fn tensor_train_to_treetn_with_names_and_site_indices<T, V>(
-    tt: &TensorTrain<T>,
+    tt: &SimpleTensorTrain<T>,
     node_names: Vec<V>,
     site_indices: Vec<DynIndex>,
 ) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
@@ -141,8 +141,8 @@ where
 ///   index and zero, one, or two adjacent bond indices.
 ///
 /// # Returns
-/// A simple [`TensorTrain`] with one core per TreeTN node. Site and bond index
-/// identities are used only to validate and order local axes; `TensorTrain`
+/// A simple [`SimpleTensorTrain`] with one core per TreeTN node. Site and bond index
+/// identities are used only to validate and order local axes; `SimpleTensorTrain`
 /// cores do not retain index metadata.
 ///
 /// # Errors
@@ -154,10 +154,10 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 /// use tensor4all_treetn::{tensor_train_to_treetn, treetn_to_tensor_train};
 ///
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
 ///     tensor3_from_data(vec![0.5, 1.5, -1.0, 2.0], 2, 2, 1).unwrap(),
 /// ]).unwrap();
@@ -167,17 +167,17 @@ where
 ///
 /// assert_eq!(roundtrip.site_dims(), tt.site_dims());
 /// assert_eq!(roundtrip.link_dims(), tt.link_dims());
-/// assert_eq!(roundtrip.fulltensor(), tt.fulltensor());
+/// assert_eq!(roundtrip.full_tensor(), tt.full_tensor());
 /// ```
 pub fn treetn_to_tensor_train<T>(
     mut treetn: TreeTN<TensorDynLen, usize>,
-) -> std::result::Result<TensorTrain<T>, TreeTNOperationError>
+) -> std::result::Result<SimpleTensorTrain<T>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
 {
     let nsites = treetn.node_count();
     if nsites == 0 {
-        return TensorTrain::new(Vec::new())
+        return SimpleTensorTrain::new(Vec::new())
             .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)));
     }
 
@@ -273,7 +273,7 @@ where
         tensors.push(treetn_site_to_tensor3::<T>(tensor, metadata, site)?);
     }
 
-    TensorTrain::new(tensors).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
+    SimpleTensorTrain::new(tensors).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
 }
 
 /// Insert a one-hot site into a linear-chain `TreeTN<TensorDynLen, usize>`.
@@ -314,13 +314,13 @@ where
 ///
 /// ```
 /// use tensor4all_core::DynIndex;
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 /// use tensor4all_treetn::{
 ///     insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, treetn_to_tensor_train,
 /// };
 ///
 /// # fn main() -> anyhow::Result<()> {
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1)?,
 /// ])?;
 /// let (tree, _) = tensor_train_to_treetn(&tt)?;
@@ -383,8 +383,8 @@ where
 
     let mut site_indices = old_site_indices;
     site_indices.insert(position, site_index);
-    let tt =
-        TensorTrain::new(tensors).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
+    let tt = SimpleTensorTrain::new(tensors)
+        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
 }
 
@@ -417,13 +417,13 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 /// use tensor4all_treetn::{
 ///     fix_and_remove_site_from_treetn_chain, tensor_train_to_treetn, treetn_to_tensor_train,
 /// };
 ///
 /// # fn main() -> anyhow::Result<()> {
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1)?,
 ///     tensor3_from_data(vec![10.0_f64, 20.0], 1, 2, 1)?,
 /// ])?;
@@ -503,13 +503,13 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 /// use tensor4all_treetn::{
 ///     tensor_train_to_treetn, treetn_to_tensor_train, weighted_remove_site_from_treetn_chain,
 /// };
 ///
 /// # fn main() -> anyhow::Result<()> {
-/// let tt = TensorTrain::new(vec![
+/// let tt = SimpleTensorTrain::new(vec![
 ///     tensor3_from_data(vec![1.0_f64, 3.0], 1, 2, 1)?,
 ///     tensor3_from_data(vec![2.0_f64, 4.0], 1, 2, 1)?,
 /// ])?;
@@ -616,7 +616,7 @@ where
 }
 
 fn remove_site_with_reduced_matrix<T>(
-    tt: TensorTrain<T>,
+    tt: SimpleTensorTrain<T>,
     mut site_indices: Vec<DynIndex>,
     position: usize,
     reduced_site: &[T],
@@ -648,7 +648,7 @@ where
     }
 
     site_indices.remove(position);
-    let tt = TensorTrain::new(tensors)?;
+    let tt = SimpleTensorTrain::new(tensors)?;
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
         .map_err(anyhow::Error::from)
 }
@@ -707,7 +707,7 @@ struct ChainSiteMetadata {
 }
 
 fn tensor_train_to_treetn_impl<T, V>(
-    tt: &TensorTrain<T>,
+    tt: &SimpleTensorTrain<T>,
     node_names: Vec<V>,
     site_indices: Option<Vec<DynIndex>>,
 ) -> Result<(TreeTN<TensorDynLen, V>, Vec<DynIndex>)>

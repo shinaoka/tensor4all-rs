@@ -1,4 +1,4 @@
-//! TensorTrain implementation
+//! SimpleTensorTrain implementation
 
 use crate::error::{Result, TensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
@@ -20,9 +20,9 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 ///
 /// # Construction
 ///
-/// - [`TensorTrain::constant`] -- all entries equal to a given value
-/// - [`TensorTrain::zeros`] -- all entries zero
-/// - [`TensorTrain::new`] -- from explicit rank-3 core tensors
+/// - [`SimpleTensorTrain::constant`] -- all entries equal to a given value
+/// - [`SimpleTensorTrain::zeros`] -- all entries zero
+/// - [`SimpleTensorTrain::new`] -- from explicit rank-3 core tensors
 ///
 /// # Related types
 ///
@@ -34,10 +34,10 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
 ///
 /// // Create a constant tensor train: T[i,j,k] = 3.0 for all i,j,k
-/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 3.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 3.0);
 ///
 /// assert_eq!(tt.len(), 3);
 /// assert_eq!(tt.site_dims(), vec![2, 3, 4]);
@@ -52,13 +52,13 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 /// assert!((s - 72.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
-pub struct TensorTrain<T: TTScalar> {
+pub struct SimpleTensorTrain<T: TTScalar> {
     /// The tensors that make up the tensor train
     /// Each tensor has shape (left_bond, site_dim, right_bond)
     tensors: Vec<Tensor3<T>>,
 }
 
-impl<T: TTScalar> TensorTrain<T> {
+impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Create a new tensor train from a list of rank-3 core tensors.
     ///
     /// Each tensor must have shape `(left_bond, site_dim, right_bond)` where
@@ -75,7 +75,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
     ///
     /// // Build a 2-site TT with bond dimension 1 and site dimensions [2, 3]
     /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
@@ -87,7 +87,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// t1.set3(0, 1, 0, 20.0);
     /// t1.set3(0, 2, 0, 30.0);
     ///
-    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    /// let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     /// assert_eq!(tt.len(), 2);
     ///
     /// // T[0, 2] = 1.0 * 30.0 = 30.0
@@ -134,9 +134,9 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::zeros(&[2, 3]);
+    /// let tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
     /// assert!((tt.evaluate(&[1, 2]).unwrap()).abs() < 1e-14);
     /// assert!((tt.sum()).abs() < 1e-14);
     /// ```
@@ -152,9 +152,9 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 5.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 5.0);
     ///
     /// // Every entry is 5.0
     /// assert!((tt.evaluate(&[0, 0, 0]).unwrap() - 5.0).abs() < 1e-12);
@@ -231,9 +231,9 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+    /// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
     /// let link_dims = tt.link_dims();
     /// let cores = tt.into_site_tensors();
     ///
@@ -254,14 +254,14 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let mut tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    /// tt.scale(3.0);
+    /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// tt.scale_mut(3.0);
     /// assert!((tt.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
     /// assert!((tt.sum() - 18.0).abs() < 1e-10);
     /// ```
-    pub fn scale(&mut self, factor: T) {
+    pub fn scale_mut(&mut self, factor: T) {
         if !self.tensors.is_empty() {
             let last = self.tensors.len() - 1;
             let tensor = &mut self.tensors[last];
@@ -283,18 +283,18 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    /// let tt2 = tt.scaled(4.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let tt2 = tt.scale(4.0);
     /// // Original is unchanged
     /// assert!((tt.evaluate(&[0, 0]).unwrap() - 1.0).abs() < 1e-12);
     /// // Scaled copy
     /// assert!((tt2.evaluate(&[0, 0]).unwrap() - 4.0).abs() < 1e-12);
     /// ```
-    pub fn scaled(&self, factor: T) -> Self {
+    pub fn scale(&self, factor: T) -> Self {
         let mut result = self.clone();
-        result.scale(factor);
+        result.scale_mut(factor);
         result
     }
 
@@ -306,7 +306,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
     ///
     /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
     /// t0.set3(0, 0, 0, 1.0);
@@ -315,7 +315,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// t1.set3(0, 0, 0, 10.0);
     /// t1.set3(0, 1, 0, 20.0);
     /// t1.set3(0, 2, 0, 30.0);
-    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    /// let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// let rev = tt.reverse();
     /// assert_eq!(rev.site_dims(), vec![3, 2]);
@@ -345,7 +345,7 @@ impl<T: TTScalar> TensorTrain<T> {
     }
 }
 
-impl<T: TTScalar> TensorTrain<T> {
+impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Materialize the tensor train as a full dense tensor.
     ///
     /// Returns `(data, shape)` where `data` is a flat vector in **column-major**
@@ -358,16 +358,16 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 7.0);
-    /// let (data, shape) = tt.fulltensor();
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 7.0);
+    /// let (data, shape) = tt.full_tensor();
     /// assert_eq!(shape, vec![2, 3]);
     /// assert_eq!(data.len(), 6);
     /// // Every element should be 7.0
     /// assert!(data.iter().all(|&v| (v - 7.0).abs() < 1e-12));
     /// ```
-    pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>) {
+    pub fn full_tensor(&self) -> (Vec<T>, Vec<usize>) {
         if self.is_empty() {
             return (Vec::new(), Vec::new());
         }
@@ -413,7 +413,7 @@ impl<T: TTScalar> TensorTrain<T> {
     }
 }
 
-impl<T: TTScalar> TensorTrain<T> {
+impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Sum (trace out) selected site dimensions, returning a lower-order TT.
     ///
     /// `dims` is a slice of 0-indexed site positions to sum over. The
@@ -428,10 +428,10 @@ impl<T: TTScalar> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
     /// // 3-site constant TT: T[i,j,k] = 1.0, dims = [2, 3, 4]
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
     ///
     /// // Sum over the middle site (index 1): result has dims [2, 4]
     /// let summed = tt.partial_sum(&[1]).unwrap();
@@ -441,7 +441,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// let val = summed.evaluate(&[0, 0]).unwrap();
     /// assert!((val - 3.0).abs() < 1e-12);
     /// ```
-    pub fn partial_sum(&self, dims: &[usize]) -> Result<TensorTrain<T>> {
+    pub fn partial_sum(&self, dims: &[usize]) -> Result<SimpleTensorTrain<T>> {
         use tensor4all_tensorbackend::{mat_mul, Matrix};
 
         let n = self.len();
@@ -535,7 +535,7 @@ impl<T: TTScalar> TensorTrain<T> {
             let scalar = tprod[[0, 0]];
             let mut t = tensor3_zeros(1, 1, 1);
             t.set3(0, 0, 0, scalar);
-            return TensorTrain::new(vec![t]);
+            return SimpleTensorTrain::new(vec![t]);
         }
 
         // Contract final Tprod into last result tensor
@@ -572,11 +572,11 @@ impl<T: TTScalar> TensorTrain<T> {
         }
         *result_tensors.last_mut().ok_or(TensorTrainError::Empty)? = new_last;
 
-        TensorTrain::new(result_tensors)
+        SimpleTensorTrain::new(result_tensors)
     }
 }
 
-impl<T: TTScalar> AbstractTensorTrain<T> for TensorTrain<T> {
+impl<T: TTScalar> AbstractTensorTrain<T> for SimpleTensorTrain<T> {
     fn len(&self) -> usize {
         self.tensors.len()
     }

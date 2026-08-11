@@ -88,24 +88,6 @@ fn create_three_node_named() -> (
     (tn, s0, s1, s2)
 }
 
-fn build_col_major_data(
-    ordered_indices: &[DynIndex],
-    point_values: &std::collections::HashMap<DynIndex, Vec<usize>>,
-) -> Vec<usize> {
-    let n_points = point_values.values().next().map(Vec::len).unwrap_or(0);
-    let mut data = vec![0; ordered_indices.len() * n_points];
-
-    for (row, index) in ordered_indices.iter().enumerate() {
-        let per_index_values = point_values.get(index).unwrap();
-        assert_eq!(per_index_values.len(), n_points);
-        for (col, value) in per_index_values.iter().enumerate() {
-            data[row + ordered_indices.len() * col] = *value;
-        }
-    }
-
-    data
-}
-
 // ============================================================================
 // Tests for norm and norm_squared
 // ============================================================================
@@ -327,7 +309,7 @@ fn test_all_site_indices_three_nodes_returns_indices() {
 // ============================================================================
 
 #[test]
-fn test_evaluate_single_node() {
+fn test_evaluate_single_node_with_dense() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
     let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
@@ -357,7 +339,7 @@ fn test_evaluate_single_node() {
 }
 
 #[test]
-fn test_evaluate_two_nodes() {
+fn test_evaluate_two_nodes_sugar() {
     let (tn, s0, _, s1) = create_two_node_named();
 
     // Get the dense representation for reference
@@ -443,7 +425,7 @@ fn test_evaluate_two_nodes_complex() {
 }
 
 #[test]
-fn test_evaluate_three_nodes() {
+fn test_evaluate_three_nodes_sugar() {
     let (tn, s0, s1, s2) = create_three_node_named();
 
     // Get dense for reference
@@ -480,36 +462,6 @@ fn test_evaluate_three_nodes() {
             vals[0].real(),
             expected
         );
-    }
-}
-
-#[test]
-fn test_evaluate_at_matches_evaluate() {
-    let (tn, s0, s1, s2) = create_three_node_named();
-
-    let (indices, _node_names) = tn.all_site_indices().unwrap();
-
-    let point_values = std::collections::HashMap::from([
-        (s0.clone(), vec![0usize, 1, 1]),
-        (s1.clone(), vec![0usize, 1, 0]),
-        (s2.clone(), vec![1usize, 0, 1]),
-    ]);
-
-    let shape = [indices.len(), 3];
-
-    let evaluate_data = build_col_major_data(&indices, &point_values);
-    let evaluate_values = ColMajorArrayRef::new(&evaluate_data, &shape).unwrap();
-    let evaluate_result = tn.evaluate(&indices, evaluate_values).unwrap();
-
-    let evaluate_at_data = build_col_major_data(&indices, &point_values);
-    let evaluate_at_values = ColMajorArrayRef::new(&evaluate_at_data, &shape).unwrap();
-    let evaluate_at_result = tn.evaluate_at(&indices, evaluate_at_values).unwrap();
-
-    assert_eq!(evaluate_at_result.len(), evaluate_result.len());
-    for (evaluate_at_value, evaluate_value) in evaluate_at_result.iter().zip(evaluate_result.iter())
-    {
-        assert!((evaluate_at_value.real() - evaluate_value.real()).abs() < 1e-12);
-        assert!((evaluate_at_value.imag() - evaluate_value.imag()).abs() < 1e-12);
     }
 }
 
@@ -636,11 +588,11 @@ fn test_all_site_indices_has_matching_vertices() {
 }
 
 // ============================================================================
-// Tests for evaluate_at
+// Tests for evaluate
 // ============================================================================
 
 #[test]
-fn test_evaluate_at_single_node() {
+fn test_evaluate_single_node_sugar() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
     let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
@@ -651,26 +603,26 @@ fn test_evaluate_at_single_node() {
     let data = [0usize];
     let shape = [indices.len(), 1];
     let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-    let vals = tn.evaluate_at(&indices, values).unwrap();
+    let vals = tn.evaluate(&indices, values).unwrap();
     assert!(
         (vals[0].real() - 10.0).abs() < 1e-10,
-        "evaluate_at at [0] = {}, expected 10.0",
+        "evaluate at [0] = {}, expected 10.0",
         vals[0].real()
     );
 
     // Evaluate at index 2
     let data = [2usize];
     let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-    let vals = tn.evaluate_at(&indices, values).unwrap();
+    let vals = tn.evaluate(&indices, values).unwrap();
     assert!(
         (vals[0].real() - 30.0).abs() < 1e-10,
-        "evaluate_at at [2] = {}, expected 30.0",
+        "evaluate at [2] = {}, expected 30.0",
         vals[0].real()
     );
 }
 
 #[test]
-fn test_evaluate_at_two_nodes() {
+fn test_evaluate_two_nodes() {
     let (tn, s0, _, s1) = create_two_node_named();
 
     // Get the dense representation for reference
@@ -693,14 +645,14 @@ fn test_evaluate_at_two_nodes() {
             data[pos1] = j;
             let shape = [indices.len(), 1];
             let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-            let vals = tn.evaluate_at(&indices, values).unwrap();
+            let vals = tn.evaluate(&indices, values).unwrap();
 
             let flat_idx = i + dim0 * j;
             let expected = dense_data[flat_idx];
 
             assert!(
                 (vals[0].real() - expected).abs() < 1e-10,
-                "evaluate_at at [{}, {}] = {}, expected {}",
+                "evaluate at [{}, {}] = {}, expected {}",
                 i,
                 j,
                 vals[0].real(),
@@ -711,41 +663,7 @@ fn test_evaluate_at_two_nodes() {
 }
 
 #[test]
-fn test_evaluate_at_consistent_with_evaluate() {
-    let (tn, s0, _, s1) = create_two_node_named();
-
-    let (indices, _vertices) = tn.all_site_indices().unwrap();
-
-    let dim0 = s0.dim();
-    let dim1 = s1.dim();
-    let pos0 = indices.iter().position(|i| *i.id() == *s0.id()).unwrap();
-    let pos1 = indices.iter().position(|i| *i.id() == *s1.id()).unwrap();
-
-    for i in 0..dim0 {
-        for j in 0..dim1 {
-            let mut data = vec![0usize; indices.len()];
-            data[pos0] = i;
-            data[pos1] = j;
-            let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-
-            let vals_at = tn.evaluate_at(&indices, values).unwrap();
-            let vals = tn.evaluate(&indices, values).unwrap();
-
-            assert!(
-                (vals_at[0].real() - vals[0].real()).abs() < 1e-15,
-                "evaluate_at and evaluate differ at [{}, {}]: {} vs {}",
-                i,
-                j,
-                vals_at[0].real(),
-                vals[0].real()
-            );
-        }
-    }
-}
-
-#[test]
-fn test_evaluate_at_three_nodes() {
+fn test_evaluate_three_nodes() {
     let (tn, s0, s1, s2) = create_three_node_named();
 
     let dense = tn.to_dense().unwrap();
@@ -766,14 +684,14 @@ fn test_evaluate_at_three_nodes() {
         data[pos2] = k;
         let shape = [indices.len(), 1];
         let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-        let vals = tn.evaluate_at(&indices, values).unwrap();
+        let vals = tn.evaluate(&indices, values).unwrap();
 
         let flat_idx = i + dim0 * (j + dim1 * k);
         let expected = dense_data[flat_idx];
 
         assert!(
             (vals[0].real() - expected).abs() < 1e-8,
-            "evaluate_at at [{}, {}, {}] = {}, expected {}",
+            "evaluate at [{}, {}, {}] = {}, expected {}",
             i,
             j,
             k,

@@ -358,7 +358,7 @@ fn test_treetn_replaceind_dimension_mismatch() {
 }
 
 #[test]
-fn test_treetn_replaceinds_multiple() {
+fn test_treetn_replace_indices_multiple() {
     // Test replacing multiple indices at once
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
@@ -373,8 +373,8 @@ fn test_treetn_replaceinds_multiple() {
     let j_new = DynIndex::new_dyn(3);
 
     let tn_replaced = tn
-        .replaceinds(&[i.clone(), j.clone()], &[i_new.clone(), j_new.clone()])
-        .expect("replaceinds should succeed");
+        .replace_indices(&[i.clone(), j.clone()], &[i_new.clone(), j_new.clone()])
+        .expect("replace_indices should succeed");
 
     let ext_indices = tn_replaced.external_indices();
     let ext_ids: Vec<_> = ext_indices.iter().map(|idx| idx.id()).collect();

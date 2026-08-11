@@ -785,7 +785,10 @@ fn test_append_mps_keeps_multiple_named_objects() {
     append_mps(&path, "first", &first).unwrap();
     append_mps(&path, "second", &second).unwrap();
 
-    assert_eq!(load_mps(&path, "first").unwrap().siteinds()[0][0].size(), 2);
+    assert_eq!(
+        load_mps(&path, "first").unwrap().site_indices()[0][0].size(),
+        2
+    );
     assert_eq!(
         load_mps(&path, "second").unwrap().tensors()[0]
             .to_vec::<f64>()

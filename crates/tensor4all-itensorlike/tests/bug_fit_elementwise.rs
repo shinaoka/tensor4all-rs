@@ -190,12 +190,12 @@ fn elementwise_mul(
         let s_result = s.sim();
 
         let pos1 = m1_prep
-            .siteinds()
+            .site_indices()
             .iter()
             .position(|inds| inds.iter().any(|idx| idx.id() == s.id()))
             .unwrap();
         let pos2 = m2_prep
-            .siteinds()
+            .site_indices()
             .iter()
             .position(|inds| inds.iter().any(|idx| idx.id() == s.id()))
             .unwrap();
@@ -212,8 +212,8 @@ fn elementwise_mul(
     let mut result = m1_prep.contract(&m2_prep, options).unwrap();
 
     for (original, s_result) in &maps {
-        let siteinds = result.siteinds();
-        let pos = siteinds
+        let site_indices = result.site_indices();
+        let pos = site_indices
             .iter()
             .position(|inds| inds.iter().any(|idx| idx.id() == original.id()))
             .unwrap();

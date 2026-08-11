@@ -3,7 +3,7 @@
 //! This module provides both a free function [`contract`] and an impl method
 //! [`TensorTrain::contract`] for contracting two tensor trains.
 
-use tensor4all_treetn::treetn::contraction::{
+use tensor4all_treetn::contraction::{
     contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions,
 };
 use tensor4all_treetn::CanonicalForm;

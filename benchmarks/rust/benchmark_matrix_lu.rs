@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use tensor4all_tcicore::{rrlu, rrlu_inplace, RrLUOptions};
+use tensor4all_tcicore::{rrlu, rrlu_mut, RrLUOptions};
 use tensor4all_tensorbackend::Matrix;
 
 #[derive(Clone, Copy, Default)]
@@ -66,7 +66,7 @@ fn timed_hilbert_matrix_lu_once(size: usize, left_orthogonal: bool) -> MatrixLuT
 
     let mut matrix_for_inplace = matrix.clone();
     let start = Instant::now();
-    let lu_inplace = rrlu_inplace(&mut matrix_for_inplace, Some(options.clone())).unwrap();
+    let lu_inplace = rrlu_mut(&mut matrix_for_inplace, Some(options.clone())).unwrap();
     let inplace = start.elapsed();
 
     let start = Instant::now();

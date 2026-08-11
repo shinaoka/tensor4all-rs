@@ -81,8 +81,8 @@ fn main() -> Result<()> {
         &link_indices_b,
     )?;
 
-    println!("MPO A: max bond dim = {}", mpo_a_original.maxbonddim());
-    println!("MPO B: max bond dim = {}", mpo_b_original.maxbonddim());
+    println!("MPO A: max bond dim = {}", mpo_a_original.max_bond_dim());
+    println!("MPO B: max bond dim = {}", mpo_b_original.max_bond_dim());
     println!("Expected number of edges to process: {}", length - 1);
     println!();
 
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
         println!(
             "Total: {:?} (max bond dim: {})",
             total_time,
-            result.maxbonddim()
+            result.max_bond_dim()
         );
     }
 

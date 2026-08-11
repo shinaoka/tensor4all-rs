@@ -66,9 +66,9 @@ fn dense_maxabs_preserves_typed_tensor_error_source() {
 }
 
 #[test]
-fn sim_linkinds_reports_success_without_panic_wrapper() {
+fn sim_link_indices_reports_success_without_panic_wrapper() {
     let tt = TensorTrain::new(vec![site_tensor(2, vec![1.0, 2.0])]).unwrap();
-    let simmed = tt.sim_linkinds().unwrap();
+    let simmed = tt.sim_link_indices().unwrap();
 
     assert_eq!(simmed.len(), 1);
     assert_eq!(

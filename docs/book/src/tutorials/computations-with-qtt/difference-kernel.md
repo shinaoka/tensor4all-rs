@@ -22,13 +22,13 @@ returns an MPO with one fused local index per bit. The local value is encoded as
 # fn main() -> anyhow::Result<()> {
 # use num_complex::Complex64;
 # use tensor4all_quanticstransform::{difference_kernel_mpo, BoundaryCondition};
-# use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+# use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 let bits = 6;
 let site_dims = vec![2; bits];
 
 // A real-valued QTT can be converted to Complex64 before calling the transform.
 // This compact example uses a constant kernel QTT.
-let f = TensorTrain::constant(&site_dims, Complex64::new(1.0, 0.0));
+let f = SimpleTensorTrain::constant(&site_dims, Complex64::new(1.0, 0.0));
 
 let mpo = difference_kernel_mpo(&f, BoundaryCondition::Periodic)?;
 assert_eq!(mpo.len(), bits);

@@ -550,7 +550,7 @@ fn test_into_blocks() {
 }
 
 // ========================================================================
-// TensorIndex: replaceind / replaceinds
+// TensorIndex: replaceind / replace_indices
 // ========================================================================
 
 #[test]
@@ -575,7 +575,7 @@ fn test_replaceind() {
 }
 
 #[test]
-fn test_replaceinds() {
+fn test_replace_indices() {
     let idx1 = DynIndex::new_dyn(2);
     let idx2 = DynIndex::new_dyn(3);
     let new_idx1 = DynIndex::new_dyn(2);
@@ -586,7 +586,7 @@ fn test_replaceinds() {
     let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let replaced = block
-        .replaceinds(
+        .replace_indices(
             &[idx1.clone(), idx2.clone()],
             &[new_idx1.clone(), new_idx2.clone()],
         )

@@ -17,12 +17,12 @@ use num_complex::Complex64;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 use tensor4all_simplett::{
-    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
+    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
 use tensor4all_tcicore::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
 use tensor4all_tensorbackend::Matrix;
 
-fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> TensorTrain<f64> {
+fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> SimpleTensorTrain<f64> {
     assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
     let cores = site_dims
         .iter()
@@ -33,7 +33,7 @@ fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> Tens
             tensor3_zeros(left_dim, site_dim, right_dim)
         })
         .collect();
-    TensorTrain::new(cores).unwrap()
+    SimpleTensorTrain::new(cores).unwrap()
 }
 
 /// Builds a tensor train with the requested link dimensions and deterministic,
@@ -45,7 +45,7 @@ fn tensor_train_with_values(
     site_dims: &[usize],
     link_dims: &[usize],
     seed: u64,
-) -> TensorTrain<f64> {
+) -> SimpleTensorTrain<f64> {
     assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
     let mut state = seed | 1;
     let mut next = move || {
@@ -67,11 +67,11 @@ fn tensor_train_with_values(
             tensor3_from_data(data, left_dim, site_dim, right_dim).unwrap()
         })
         .collect();
-    TensorTrain::new(cores).unwrap()
+    SimpleTensorTrain::new(cores).unwrap()
 }
 
 fn local_test_problem() -> ElementwiseProblem<f64> {
-    let input_a = TensorTrain::new(vec![
+    let input_a = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 10.0, 20.0], 1, 2, 2).unwrap(),
         tensor3_from_data(
             vec![
@@ -94,7 +94,7 @@ fn local_test_problem() -> ElementwiseProblem<f64> {
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 2, 2, 1).unwrap(),
     ])
     .unwrap();
-    let input_b = TensorTrain::new(vec![
+    let input_b = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![2.0, 3.0, 20.0, 30.0], 1, 2, 2).unwrap(),
         tensor3_from_data(
             vec![
@@ -188,8 +188,8 @@ fn assert_solution_is_zero_on_binary_three_site_grid(problem: &ElementwiseProble
 
 #[test]
 fn elementwise_multiplies_constant_tensor_trains() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 3, 2], 4.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 4.0);
 
     let result = elementwise(
         |values| values[0] * values[1],
@@ -210,8 +210,8 @@ fn elementwise_multiplies_constant_tensor_trains() {
 
 #[test]
 fn scalar_and_batched_paths_match() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2], 5.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 5.0);
     let inputs = [input_a, input_b];
     let options = AciOptions::default();
 
@@ -240,8 +240,8 @@ fn scalar_and_batched_paths_match() {
 
 #[test]
 fn elementwise_batched_propagates_operator_error() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2], 4.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 4.0);
     let options = AciOptions {
         max_iters: 1,
         min_iters: 1,
@@ -265,8 +265,8 @@ fn elementwise_batched_propagates_operator_error() {
 
 #[test]
 fn elementwise_single_site_scalar_evaluates_operator() {
-    let input_a = TensorTrain::<f64>::constant(&[3], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[3], 4.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[3], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[3], 4.0);
 
     let result = elementwise(
         |values| values[0] * values[1] + 1.0,
@@ -286,11 +286,11 @@ fn elementwise_single_site_scalar_evaluates_operator() {
 
 #[test]
 fn elementwise_batched_single_site_uses_column_major_batch_layout() {
-    let input_a = TensorTrain::new(vec![
+    let input_a = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0], 1, 3, 1).unwrap()
     ])
     .unwrap();
-    let input_b = TensorTrain::new(vec![
+    let input_b = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![10.0, 20.0, 30.0], 1, 3, 1).unwrap()
     ])
     .unwrap();
@@ -322,8 +322,8 @@ fn elementwise_batched_single_site_uses_column_major_batch_layout() {
 
 #[test]
 fn elementwise_batched_single_site_propagates_operator_error() {
-    let input_a = TensorTrain::<f64>::constant(&[3], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[3], 4.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[3], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[3], 4.0);
 
     let err = elementwise_batched(
         |_batch, _output| {
@@ -554,8 +554,8 @@ fn elementwise_batch_rejects_out_of_range_point_index() {
 
 #[test]
 fn elementwise_problem_initializes_boundary_frames() {
-    let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
     let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
     assert_eq!(problem.len(), 3);
     assert_eq!(problem.n_inputs(), 2);
@@ -566,8 +566,8 @@ fn elementwise_problem_initializes_boundary_frames() {
 
 #[test]
 fn elementwise_problem_initializes_all_rank_one_right_frames() {
-    let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
     let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
 
     for input in 0..problem.n_inputs() {
@@ -584,7 +584,7 @@ fn elementwise_problem_initializes_all_rank_one_right_frames() {
 
 #[test]
 fn elementwise_problem_handles_one_site_input() {
-    let input = TensorTrain::<f64>::constant(&[2], 3.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2], 3.0);
     let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
     assert_eq!(problem.len(), 1);
     assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
@@ -594,8 +594,8 @@ fn elementwise_problem_handles_one_site_input() {
 
 #[test]
 fn elementwise_problem_preserves_initial_guess_values() {
-    let input = TensorTrain::<f64>::constant(&[2, 2], 1.0);
-    let tt = TensorTrain::new(vec![
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let tt = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![5.0, 6.0, 7.0, 8.0], 2, 2, 1).unwrap(),
     ])
@@ -617,7 +617,7 @@ fn elementwise_problem_preserves_initial_guess_values() {
 
 #[test]
 fn elementwise_problem_updates_left_frame_for_selected_rows() {
-    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
 
     problem.update_left_frame(0, 0, &[0, 1]).unwrap();
@@ -627,7 +627,7 @@ fn elementwise_problem_updates_left_frame_for_selected_rows() {
 
 #[test]
 fn elementwise_problem_updates_left_frame_values() {
-    let input = TensorTrain::new(vec![
+    let input = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 10.0, 20.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![3.0, 4.0, 5.0, 6.0], 2, 2, 1).unwrap(),
     ])
@@ -649,8 +649,8 @@ fn elementwise_problem_updates_left_frame_values() {
 
 #[test]
 fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
-    let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
     let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
 
     problem.update_left_frames(0, &[0, 1]).unwrap();
@@ -661,7 +661,7 @@ fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
 
 #[test]
 fn elementwise_problem_updates_right_frame_for_selected_columns() {
-    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
 
     problem.update_right_frame(0, 2, &[0, 1]).unwrap();
@@ -671,7 +671,7 @@ fn elementwise_problem_updates_right_frame_for_selected_columns() {
 
 #[test]
 fn elementwise_problem_updates_right_frame_values() {
-    let input = TensorTrain::new(vec![
+    let input = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 10.0, 20.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![3.0, 30.0, 4.0, 40.0], 2, 2, 1).unwrap(),
     ])
@@ -693,7 +693,7 @@ fn elementwise_problem_updates_right_frame_values() {
 
 #[test]
 fn elementwise_problem_rejects_invalid_frame_selection_indices() {
-    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
 
     let left_err = problem.update_left_frame(0, 0, &[2]).unwrap_err();
@@ -707,8 +707,8 @@ fn elementwise_problem_rejects_invalid_frame_selection_indices() {
 
 #[test]
 fn elementwise_problem_one_bond_local_update_matches_dense_product_left_orthogonal() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
     let mut operator = multiply_batch;
@@ -728,8 +728,8 @@ fn elementwise_problem_one_bond_local_update_matches_dense_product_left_orthogon
 
 #[test]
 fn elementwise_problem_one_bond_local_update_matches_dense_product_right_orthogonal() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
     for input in 0..problem.n_inputs() {
@@ -752,8 +752,8 @@ fn elementwise_problem_one_bond_local_update_matches_dense_product_right_orthogo
 
 #[test]
 fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
     let mut operator = |_batch: ElementwiseBatch<'_, f64>, _output: &mut [f64]| {
@@ -772,8 +772,8 @@ fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel
 
 #[test]
 fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensional() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
     let mut operator = zero_batch;
@@ -795,8 +795,8 @@ fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensiona
 
 #[test]
 fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimensional() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
     problem.update_left_frames(0, &[0]).unwrap();
@@ -1148,7 +1148,7 @@ fn local_input_value_rejects_out_of_range_indices() {
 
 #[test]
 fn local_input_value_rejects_missing_frames() {
-    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
 
     let err = problem.local_input_value(0, 1, 0, 0).unwrap_err();
@@ -1165,7 +1165,7 @@ fn validate_inputs_rejects_empty_inputs() {
 
 #[test]
 fn validate_inputs_rejects_zero_site_tensor_train() {
-    let input = TensorTrain::<f64>::new(vec![]).unwrap();
+    let input = SimpleTensorTrain::<f64>::new(vec![]).unwrap();
     let err = validate_inputs(&[input]).unwrap_err();
     assert!(matches!(err, AciError::InvalidOptions { .. }));
     assert!(err.to_string().contains("at least one site"));
@@ -1215,16 +1215,16 @@ fn validate_inputs_rejects_zero_internal_bond_dim_in_later_input() {
 
 #[test]
 fn validate_inputs_rejects_length_mismatch() {
-    let a = TensorTrain::<f64>::constant(&[2, 2], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let err = validate_inputs(&[a, b]).unwrap_err();
     assert!(err.to_string().contains("length mismatch"));
 }
 
 #[test]
 fn validate_inputs_rejects_site_dim_mismatch() {
-    let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 4], 1.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 4], 1.0);
     let err = validate_inputs(&[a, b]).unwrap_err();
     assert!(err.to_string().contains("site shape mismatch"));
 }
@@ -1309,15 +1309,15 @@ fn validate_options_rejects_infinite_tolerance() {
 
 #[test]
 fn default_initial_guess_matches_input_site_dims() {
-    let a = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
     let guess = initial_guess(&[a, b], &AciOptions::default()).unwrap();
     assert_eq!(guess.site_dims(), vec![2, 3, 4]);
 }
 
 #[test]
 fn initial_guess_link_dims_are_empty_for_one_site_input() {
-    let input = TensorTrain::<f64>::constant(&[5], 1.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[5], 1.0);
     let guess = initial_guess(&[input], &AciOptions::default()).unwrap();
     assert_eq!(guess.link_dims(), Vec::<usize>::new());
 }
@@ -1350,8 +1350,8 @@ fn initial_guess_link_dims_are_limited_by_minimum_input_link_dim() {
 
 #[test]
 fn initial_guess_is_deterministic_for_same_seed() {
-    let a = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
-    let b = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let options = AciOptions::<f64> {
         max_bond_dim: 2,
         rng_seed: 1234,
@@ -1371,8 +1371,8 @@ fn initial_guess_is_deterministic_for_same_seed() {
 
 #[test]
 fn initial_guess_accepts_compatible_explicit_guess() {
-    let input = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-    let explicit = TensorTrain::<f64>::constant(&[2, 3], 7.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+    let explicit = SimpleTensorTrain::<f64>::constant(&[2, 3], 7.0);
     let options = AciOptions {
         initial_guess: Some(explicit),
         ..AciOptions::default()
@@ -1389,8 +1389,8 @@ fn initial_guess_accepts_compatible_explicit_guess() {
 
 #[test]
 fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
-    let input_a = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let input_b = TensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let zero_guess = tensor_train_with_link_dims(&[2, 2, 2], &[1, 1]);
     let options = AciOptions {
         initial_guess: Some(zero_guess),
@@ -1417,8 +1417,8 @@ fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
 
 #[test]
 fn initial_guess_rejects_incompatible_explicit_guess_site_dims() {
-    let input = TensorTrain::<f64>::constant(&[2, 3], 2.0);
-    let explicit = TensorTrain::<f64>::constant(&[2, 4], 7.0);
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+    let explicit = SimpleTensorTrain::<f64>::constant(&[2, 4], 7.0);
     let options = AciOptions {
         initial_guess: Some(explicit),
         ..AciOptions::default()
@@ -1432,8 +1432,8 @@ fn initial_guess_rejects_incompatible_explicit_guess_site_dims() {
 
 #[test]
 fn explicit_initial_guess_rejects_rank_above_max_bond_dim() {
-    let input = TensorTrain::<f64>::constant(&[2, 2], 1.0);
-    let explicit = TensorTrain::new(vec![
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let explicit = SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0; 4], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![1.0; 4], 2, 2, 1).unwrap(),
     ])
@@ -1454,8 +1454,8 @@ fn explicit_initial_guess_rejects_rank_above_max_bond_dim() {
 
 #[test]
 fn explicit_initial_guess_rejects_zero_bond_dimension() {
-    let input = TensorTrain::<f64>::constant(&[2, 2], 1.0);
-    let explicit = TensorTrain::new(vec![
+    let input = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let explicit = SimpleTensorTrain::new(vec![
         tensor3_from_data(Vec::<f64>::new(), 1, 2, 0).unwrap(),
         tensor3_from_data(Vec::<f64>::new(), 0, 2, 1).unwrap(),
     ])
@@ -1475,8 +1475,8 @@ fn explicit_initial_guess_rejects_zero_bond_dimension() {
 
 #[test]
 fn complex_initial_guess_is_deterministic() {
-    let a = TensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(1.0, 0.0));
-    let b = TensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(2.0, 0.0));
+    let a = SimpleTensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(1.0, 0.0));
+    let b = SimpleTensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(2.0, 0.0));
     let options = AciOptions::<Complex64> {
         max_bond_dim: 2,
         rng_seed: 4321,
@@ -1605,7 +1605,7 @@ fn step_timing_deterministic_tt(
     input_index: usize,
     n_sites: usize,
     chi: usize,
-) -> TensorTrain<f64> {
+) -> SimpleTensorTrain<f64> {
     let links = step_timing_link_dims(n_sites, STEP_TIMING_LOCAL_DIM, chi);
     let cores = (0..n_sites)
         .map(|site| {
@@ -1632,10 +1632,10 @@ fn step_timing_deterministic_tt(
         })
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    TensorTrain::new(cores).unwrap()
+    SimpleTensorTrain::new(cores).unwrap()
 }
 
-fn step_timing_inputs(n_sites: usize, chi: usize) -> Vec<TensorTrain<f64>> {
+fn step_timing_inputs(n_sites: usize, chi: usize) -> Vec<SimpleTensorTrain<f64>> {
     (0..STEP_TIMING_N_INPUTS)
         .map(|input| step_timing_deterministic_tt(input, n_sites, chi))
         .collect()

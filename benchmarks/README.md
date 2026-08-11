@@ -329,7 +329,7 @@ pivot selection and factor construction on deterministic Hilbert matrices, with
 both left- and right-orthogonal variants. Keep these benchmarks out of normal
 test runs by using the ignored Rust test and the standalone Julia script.
 
-The MatrixLU standalone Hilbert benchmarks isolate `rrlu_inplace` and `rrlu`
+The MatrixLU standalone Hilbert benchmarks isolate `rrlu_mut` and `rrlu`
 without MatrixLUCI factor wrappers. The Rust source of truth is
 `benchmarks/rust/benchmark_matrix_lu.rs`, included by
 `tensor4all-tcicore/examples/benchmark_matrix_lu.rs`; the Julia counterpart is

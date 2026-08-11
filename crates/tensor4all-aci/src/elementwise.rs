@@ -3,7 +3,7 @@
 use crate::scalar::AciScalar;
 use crate::validation::{validate_inputs, validate_options};
 use crate::{AciOptions, AciResult, ElementwiseBatch, ElementwiseProblem, Result};
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 
 /// Runs batched elementwise ACI over tensor-train inputs.
 ///
@@ -65,10 +65,10 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 ///
 /// ```
 /// use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
-/// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 ///
-/// let a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-/// let b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+/// let a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+/// let b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
 /// let result = elementwise_batched(
 ///     |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
 ///         for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
@@ -87,7 +87,7 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 /// ```
 pub fn elementwise_batched<T, F>(
     mut op: F,
-    inputs: &[TensorTrain<T>],
+    inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
@@ -148,7 +148,10 @@ where
     })
 }
 
-fn elementwise_batched_one_site<T, F>(mut op: F, inputs: &[TensorTrain<T>]) -> Result<AciResult<T>>
+fn elementwise_batched_one_site<T, F>(
+    mut op: F,
+    inputs: &[SimpleTensorTrain<T>],
+) -> Result<AciResult<T>>
 where
     T: AciScalar,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
@@ -168,7 +171,7 @@ where
 
     let core = tensor3_from_data(output, 1, n_points, 1)?;
     Ok(AciResult {
-        tensor_train: TensorTrain::new(vec![core])?,
+        tensor_train: SimpleTensorTrain::new(vec![core])?,
         ranks: Vec::new(),
         errors: Vec::new(),
     })
@@ -213,10 +216,10 @@ where
 ///
 /// ```
 /// use tensor4all_aci::{elementwise, AciOptions};
-/// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 ///
-/// let a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-/// let b = TensorTrain::<f64>::constant(&[2, 2], 5.0);
+/// let a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+/// let b = SimpleTensorTrain::<f64>::constant(&[2, 2], 5.0);
 /// let result = elementwise(
 ///     |values| values[0] + values[1],
 ///     &[a, b],
@@ -230,7 +233,7 @@ where
 /// ```
 pub fn elementwise<T, F>(
     mut op: F,
-    inputs: &[TensorTrain<T>],
+    inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
@@ -308,7 +311,7 @@ pub(crate) fn convergence_criterion_like_julia(
 /// [`convergence_criterion_like_julia`], and the default `max_bond_dim` of
 /// [`usize::MAX`] is unreachable, so unconstrained runs are unaffected.
 ///
-/// This is the `all(lastranks .>= maxbonddim)` disjunct of the Julia
+/// This is the `all(lastranks .>= max_bond_dim)` disjunct of the Julia
 /// `convergencecriterion` that [`convergence_criterion_like_julia`] otherwise
 /// ports, over the same trailing window. `tensor4all-treetci` gained the
 /// equivalent exit in its own sweep loop in #575.

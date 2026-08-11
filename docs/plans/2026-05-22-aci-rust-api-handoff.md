@@ -244,7 +244,7 @@ system-BLAS example build.
 
 ## TODO: Similar Clean Optimizations
 
-- Split MatrixLUCI timing into `rrlu_inplace`, LU extraction, triangular solve,
+- Split MatrixLUCI timing into `rrlu_mut`, LU extraction, triangular solve,
   permutation, and public factor packaging. The current `matrix_luci_ms` bucket
   is now close to Julia, but the sub-buckets will show whether more work belongs
   in tcicore or tenferro.

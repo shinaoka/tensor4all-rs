@@ -1,6 +1,6 @@
 //! Result types returned by Alternating Cross Interpolation.
 
-use tensor4all_simplett::{TTScalar, TensorTrain};
+use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 
 /// Output of an Alternating Cross Interpolation run.
 ///
@@ -10,15 +10,15 @@ use tensor4all_simplett::{TTScalar, TensorTrain};
 /// [`errors`](Self::errors) to diagnose sweep-by-sweep convergence behavior.
 ///
 /// Related types: [`AciOptions`](crate::AciOptions) configures the run that
-/// produces this value; [`TensorTrain`] stores the approximating tensor.
+/// produces this value; [`SimpleTensorTrain`] stores the approximating tensor.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_aci::AciResult;
-/// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+/// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 ///
-/// let tensor_train = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+/// let tensor_train = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
 /// let result = AciResult {
 ///     tensor_train,
 ///     ranks: vec![1, 2],
@@ -33,7 +33,7 @@ use tensor4all_simplett::{TTScalar, TensorTrain};
 #[derive(Debug, Clone)]
 pub struct AciResult<T: TTScalar> {
     /// Tensor-train approximation produced by ACI.
-    pub tensor_train: TensorTrain<T>,
+    pub tensor_train: SimpleTensorTrain<T>,
 
     /// Maximum bond dimension after each completed sweep.
     ///

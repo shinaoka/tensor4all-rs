@@ -1,6 +1,6 @@
 //! Configuration for Alternating Cross Interpolation.
 
-use tensor4all_simplett::{TTScalar, TensorTrain};
+use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 
 /// Options controlling an Alternating Cross Interpolation run.
 ///
@@ -74,7 +74,7 @@ pub struct AciOptions<T: TTScalar> {
     /// The default is `None`, so ACI chooses its own starting state. Provide a
     /// guess when a nearby solution is available; it must have site dimensions
     /// compatible with the ACI problem.
-    pub initial_guess: Option<TensorTrain<T>>,
+    pub initial_guess: Option<SimpleTensorTrain<T>>,
 
     /// Seed for randomized choices made by ACI.
     ///

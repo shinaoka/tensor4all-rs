@@ -587,7 +587,7 @@ fn test_crossinterpolate2_sin_quantics() {
         ..Default::default()
     };
 
-    // This previously panicked with "NaN in L matrix" inside rrlu_inplace
+    // This previously panicked with "NaN in L matrix" inside rrlu_mut
     let result = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,

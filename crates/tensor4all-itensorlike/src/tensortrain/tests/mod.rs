@@ -92,13 +92,13 @@ fn add_reindexed_like_self_aligns_site_indices_before_addition() {
 
     let sum = lhs.add_reindexed_like_self(&rhs).unwrap();
     assert_eq!(sum.len(), 2);
-    assert_eq!(sum.siteinds(), vec![vec![i0.clone()], vec![i1.clone()]]);
+    assert_eq!(sum.site_indices(), vec![vec![i0.clone()], vec![i1.clone()]]);
 
     let dense = sum.to_dense().unwrap();
     let rhs_dense = rhs
         .to_dense()
         .unwrap()
-        .replaceinds(&[j0, j1], &[i0, i1])
+        .replace_indices(&[j0, j1], &[i0, i1])
         .unwrap();
     let expected = lhs
         .to_dense()
@@ -145,14 +145,14 @@ fn test_two_site_tt() {
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     assert_eq!(tt.len(), 2);
     assert_eq!(tt.bond_dims(), vec![3]);
-    assert_eq!(tt.maxbonddim(), 3);
+    assert_eq!(tt.max_bond_dim(), 3);
 
     // Check link index
     let link = tt.linkind(0).unwrap();
     assert_eq!(link.size(), 3);
 
     // Check site indices (nested vec)
-    let site_inds = tt.siteinds();
+    let site_inds = tt.site_indices();
     assert_eq!(site_inds.len(), 2);
     assert_eq!(site_inds[0].len(), 1);
     assert_eq!(site_inds[1].len(), 1);
@@ -174,7 +174,7 @@ fn test_multi_site_indices() {
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     // Check site indices (nested vec)
-    let site_inds = tt.siteinds();
+    let site_inds = tt.site_indices();
     assert_eq!(site_inds.len(), 2);
     assert_eq!(site_inds[0].len(), 2); // site 0 has 2 indices
     assert_eq!(site_inds[1].len(), 1); // site 1 has 1 index
@@ -389,14 +389,14 @@ fn test_truncate_with_max_rank() {
     let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
 
     let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
-    assert_eq!(tt.maxbonddim(), 8);
+    assert_eq!(tt.max_bond_dim(), 8);
 
     // Truncate to max rank 4
     let options = TruncateOptions::svd().with_max_rank(4);
     tt.truncate(&options).unwrap();
 
     // Check that bond dimensions are reduced
-    assert!(tt.maxbonddim() <= 4);
+    assert!(tt.max_bond_dim() <= 4);
     assert_eq!(tt.canonical_form(), Some(CanonicalForm::Unitary));
 }
 
@@ -1142,13 +1142,13 @@ fn test_linkind_out_of_bounds() {
 }
 
 #[test]
-fn test_sim_linkinds_single_site() {
-    // Single site TT: sim_linkinds should return a clone
+fn test_sim_link_indices_single_site() {
+    // Single site TT: sim_link_indices should return a clone
     let s0 = idx(0, 4);
     let t0 = make_tensor(vec![s0.clone()]);
     let tt = TensorTrain::new(vec![t0]).unwrap();
 
-    let simmed = tt.sim_linkinds().unwrap();
+    let simmed = tt.sim_link_indices().unwrap();
     assert_eq!(simmed.len(), 1);
     // Should have same data
     let orig_data = tt.tensor(0).unwrap().to_vec::<f64>().unwrap();
@@ -1157,7 +1157,7 @@ fn test_sim_linkinds_single_site() {
 }
 
 #[test]
-fn test_sim_linkinds_two_sites() {
+fn test_sim_link_indices_two_sites() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1166,7 +1166,7 @@ fn test_sim_linkinds_two_sites() {
     let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    let simmed = tt.sim_linkinds().unwrap();
+    let simmed = tt.sim_link_indices().unwrap();
 
     assert_eq!(simmed.len(), 2);
     assert_eq!(simmed.bond_dims(), vec![3]);
@@ -1178,16 +1178,16 @@ fn test_sim_linkinds_two_sites() {
     assert_eq!(orig_link.size(), sim_link.size());
 
     // Site indices should be preserved
-    let orig_sites = tt.siteinds();
-    let sim_sites = simmed.siteinds();
+    let orig_sites = tt.site_indices();
+    let sim_sites = simmed.site_indices();
     assert_eq!(orig_sites[0][0].id(), sim_sites[0][0].id());
     assert_eq!(orig_sites[1][0].id(), sim_sites[1][0].id());
 }
 
 #[test]
-fn test_siteinds_empty() {
+fn test_site_indices_empty() {
     let tt = TensorTrain::new(vec![]).unwrap();
-    let site_inds = tt.siteinds();
+    let site_inds = tt.site_indices();
     assert!(site_inds.is_empty());
 }
 
@@ -1263,7 +1263,7 @@ fn test_orthogonalize_out_of_bounds_errors() {
 }
 
 #[test]
-fn test_sim_linkinds_three_sites() {
+fn test_sim_link_indices_three_sites() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1275,7 +1275,7 @@ fn test_sim_linkinds_three_sites() {
     let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
 
     let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
-    let simmed = tt.sim_linkinds().unwrap();
+    let simmed = tt.sim_link_indices().unwrap();
 
     assert_eq!(simmed.len(), 3);
     assert_eq!(simmed.bond_dims().len(), 2);
@@ -1328,7 +1328,7 @@ fn test_haslink() {
 }
 
 #[test]
-fn test_linkinds() {
+fn test_link_indices() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1341,7 +1341,7 @@ fn test_linkinds() {
 
     let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
 
-    let links = tt.linkinds();
+    let links = tt.link_indices();
     assert_eq!(links.len(), 2);
     assert_eq!(links[0].size(), 3);
     assert_eq!(links[1].size(), 4);
@@ -1363,12 +1363,12 @@ fn test_bond_dim() {
 }
 
 #[test]
-fn test_maxbonddim_single_site() {
+fn test_max_bond_dim_single_site() {
     let s0 = idx(0, 4);
     let t0 = make_tensor(vec![s0]);
     let tt = TensorTrain::new(vec![t0]).unwrap();
-    // Single site has no bonds, maxbonddim returns 1
-    assert_eq!(tt.maxbonddim(), 1);
+    // Single site has no bonds, max_bond_dim returns 1
+    assert_eq!(tt.max_bond_dim(), 1);
 }
 
 #[test]
@@ -1593,18 +1593,18 @@ fn new_empty_tt_has_no_ortho_lims() {
 }
 
 #[test]
-fn tensor_index_replaceinds_updates_site_indices() {
+fn tensor_index_replace_indices_updates_site_indices() {
     let tt = make_two_site_tt();
-    let old = tt.siteinds()[0][0].clone();
+    let old = tt.site_indices()[0][0].clone();
     let new = idx(50, old.size());
-    let replaced = TensorIndex::replaceinds(&tt, &[old], &[new]).unwrap();
-    let got = replaced.siteinds()[0][0].clone();
+    let replaced = TensorIndex::replace_indices(&tt, &[old], &[new]).unwrap();
+    let got = replaced.site_indices()[0][0].clone();
     assert_eq!(got.id().value(), 50);
     assert_eq!(got.size(), 2);
 }
 
 #[test]
-fn siteinds_empty_tt_returns_empty() {
+fn site_indices_empty_tt_returns_empty() {
     let tt = TensorTrain::new(vec![]).unwrap();
-    assert!(tt.siteinds().is_empty());
+    assert!(tt.site_indices().is_empty());
 }

@@ -142,7 +142,7 @@ fn test_add_with_patching_splits_unprojected_patch_when_bond_hits_cap() {
 fn test_add_with_patching_truncates_before_deciding_to_split() {
     let (site_inds, link_ind) = make_shared_indices();
     let tt = make_overcomplete_rank_one_tt(&site_inds, &link_ind);
-    assert_eq!(tt.maxbonddim(), 3);
+    assert_eq!(tt.max_bond_dim(), 3);
 
     let options = PatchingOptions {
         rtol: 0.0,

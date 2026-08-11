@@ -1,7 +1,8 @@
 //! Interpolation constructors and analysis routines.
 
 use tensor4all_simplett::{
-    AbstractTensorTrain, CompressionMethod, CompressionOptions, Tensor3, Tensor3Ops, TensorTrain,
+    AbstractTensorTrain, CompressionMethod, CompressionOptions, SimpleTensorTrain, Tensor3,
+    Tensor3Ops,
 };
 use tensor4all_tensorbackend::{mat_mul, Matrix};
 
@@ -17,7 +18,7 @@ use crate::options::InterpolativeQttOptions;
 /// `f` is sampled through a Chebyshev-Lobatto local basis on `[a, b)`.
 /// `num_bits` is the number of quantics sites, and `polynomial_degree`
 /// controls the local interpolation order. The result is a binary
-/// `TensorTrain<f64>` whose site indices are zero-based quantics digits.
+/// `SimpleTensorTrain<f64>` whose site indices are zero-based quantics digits.
 /// # Errors
 /// Returns an error when the grid or ranks are invalid (an invalid-configuration
 /// failure) or interpolation fails to converge (a non-convergence failure).
@@ -44,7 +45,7 @@ pub fn interpolate_single_scale<F>(
     num_bits: usize,
     polynomial_degree: usize,
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(f64) -> f64,
 {
@@ -88,7 +89,7 @@ pub fn interpolate_single_scale_nd<F>(
     num_bits: usize,
     polynomial_degree: usize,
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -145,7 +146,7 @@ pub fn interpolate_multi_scale<F>(
     polynomial_degree: usize,
     cusp_locations: &[f64],
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(f64) -> f64,
 {
@@ -191,7 +192,7 @@ pub fn interpolate_multi_scale_nd<F>(
     polynomial_degree: usize,
     cusp_locations: &[Vec<f64>],
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -248,7 +249,7 @@ pub fn interpolate_adaptive<F>(
     adaptive_tolerance: f64,
     singularities: &[f64],
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(f64) -> f64,
 {
@@ -305,7 +306,7 @@ pub fn interpolate_adaptive_nd<F>(
     adaptive_tolerance: f64,
     singularities: &[Vec<f64>],
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -376,7 +377,7 @@ pub fn interpolate_single_scale_sparse<F>(
     polynomial_degree: usize,
     window_radius: usize,
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(f64) -> f64,
 {
@@ -421,7 +422,7 @@ pub fn interpolate_single_scale_sparse_nd<F>(
     polynomial_degree: usize,
     window_radius: usize,
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -472,7 +473,7 @@ where
 /// assert_eq!(values[3].ncols(), basis.len());
 /// ```
 pub fn invert_qtt(
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     basis: &LagrangePolynomials,
     q: usize,
 ) -> Result<Vec<Matrix<f64>>> {
@@ -762,8 +763,8 @@ fn right_core_1d(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
 fn compress_train(
     cores: Vec<Tensor3<f64>>,
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>> {
-    let tt = TensorTrain::new(cores)?;
+) -> Result<SimpleTensorTrain<f64>> {
+    let tt = SimpleTensorTrain::new(cores)?;
     if options.tolerance == 0.0 && options.max_bond_dim == usize::MAX {
         return Ok(tt);
     }
@@ -816,7 +817,7 @@ fn build_refined_qtt<F, S>(
     basis: &LagrangePolynomials,
     options: &InterpolativeQttOptions,
     is_safe: S,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(&[f64]) -> f64,
     S: Fn(&NInterval, usize) -> bool,
@@ -903,7 +904,7 @@ fn build_adaptive_qtt<F>(
     basis: &LagrangePolynomials,
     dangerous_at_level: &[Vec<NInterval>],
     options: &InterpolativeQttOptions,
-) -> Result<TensorTrain<f64>>
+) -> Result<SimpleTensorTrain<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -1044,7 +1045,7 @@ fn matrix_from_fn(
     Ok(Matrix::from_col_major_vec(nrows, ncols, data))
 }
 
-fn invert_stage1(tt: &TensorTrain<f64>, basis: &LagrangePolynomials) -> Result<Matrix<f64>> {
+fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Result<Matrix<f64>> {
     let cores = tt.site_tensors();
     let num_sites = cores.len();
     let k_out = num_sites - 1;

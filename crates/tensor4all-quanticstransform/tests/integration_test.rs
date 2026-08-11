@@ -1,7 +1,7 @@
 //! Integration tests for quanticstransform operators.
 //!
 //! These tests verify numerical correctness by:
-//! 1. Creating a state as TensorTrain (MPS)
+//! 1. Creating a state as SimpleTensorTrain (MPS)
 //! 2. Converting to TreeTN
 //! 3. Applying the operator using apply_linear_operator
 //! 4. Contracting the result and comparing with expected values
@@ -16,7 +16,9 @@ use num_traits::{One, Zero};
 
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{IndexLike, TensorDynLen, TensorIndex};
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{
+    types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
+};
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
@@ -30,111 +32,13 @@ use tensor4all_quanticstransform::{
 type DynIndex = Index<DynId, TagSet>;
 
 // ============================================================================
-// Helper functions for TensorTrain <-> TreeTN conversion
+// Helper: SimpleTensorTrain -> TreeTN via the sanctioned bridge
 // ============================================================================
 
-/// Convert a TensorTrain (MPS state) to a TreeTN.
-///
-/// The MPS is converted to a chain-like TreeTN where each site tensor
-/// has indices (left_bond, site, right_bond) mapped to TensorDynLen format.
-///
-/// # Returns
-/// A tuple of (TreeTN, site_indices) where site_indices are the external indices
-/// that can be used for operator application.
 fn tensortrain_to_treetn(
-    tt: &TensorTrain<Complex64>,
+    tt: &SimpleTensorTrain<Complex64>,
 ) -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
-    let n = tt.len();
-    assert!(n > 0, "TensorTrain must have at least one site");
-
-    // Create site indices
-    let site_indices: Vec<DynIndex> = (0..n)
-        .map(|i| {
-            let dim = tt.site_tensor(i).site_dim();
-            Index::new_dyn(dim)
-        })
-        .collect();
-
-    // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            tt.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    // Build tensors for TreeTN
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let node_names: Vec<usize> = (0..n).collect();
-
-    for i in 0..n {
-        let tensor = tt.site_tensor(i);
-        let left_dim = tensor.left_dim();
-        let site_dim = tensor.site_dim();
-        let right_dim = tensor.right_dim();
-
-        // Tensor indices: (left_bond, site, right_bond)
-        // For boundary tensors, we omit the dimension-1 bond
-        let mut indices: Vec<DynIndex> = Vec::with_capacity(3);
-        let mut dims_vec: Vec<usize> = Vec::with_capacity(3);
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-            dims_vec.push(left_dim);
-        }
-        indices.push(site_indices[i].clone());
-        dims_vec.push(site_dim);
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-            dims_vec.push(right_dim);
-        }
-
-        // Copy data from Tensor3 to flat vector
-        let total_size: usize = dims_vec.iter().product();
-        let mut data: Vec<Complex64> = vec![Complex64::zero(); total_size];
-
-        if i == 0 && n == 1 {
-            // Single tensor case: just site index
-            for s in 0..site_dim {
-                data[s] = *tensor.get3(0, s, 0);
-            }
-        } else if i == 0 {
-            // First tensor: (site, right_bond)
-            for s in 0..site_dim {
-                for r in 0..right_dim {
-                    let idx = s + site_dim * r;
-                    data[idx] = *tensor.get3(0, s, r);
-                }
-            }
-        } else if i == n - 1 {
-            // Last tensor: (left_bond, site)
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    let idx = l + left_dim * s;
-                    data[idx] = *tensor.get3(l, s, 0);
-                }
-            }
-        } else {
-            // Middle tensor: (left_bond, site, right_bond)
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    for r in 0..right_dim {
-                        let idx = l + left_dim * (s + site_dim * r);
-                        data[idx] = *tensor.get3(l, s, r);
-                    }
-                }
-            }
-        }
-
-        let tensor_dyn = TensorDynLen::from_dense(indices, data).unwrap();
-        tensors.push(tensor_dyn);
-    }
-
-    let treetn = TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN");
-    (treetn, site_indices)
+    tensor4all_treetn::tensor_train_to_treetn(tt).expect("MPS to TreeTN conversion failed")
 }
 
 /// Create a product state MPS representing a specific integer value x.
@@ -144,7 +48,7 @@ fn tensortrain_to_treetn(
 ///
 /// This matches Julia Quantics.jl's convention where site 0 (Julia site 1)
 /// contains the most significant bit.
-fn create_product_state_mps(x: usize, r: usize) -> TensorTrain<Complex64> {
+fn create_product_state_mps(x: usize, r: usize) -> SimpleTensorTrain<Complex64> {
     let mut tensors = Vec::with_capacity(r);
 
     for n in 0..r {
@@ -156,10 +60,10 @@ fn create_product_state_mps(x: usize, r: usize) -> TensorTrain<Complex64> {
         tensors.push(t);
     }
 
-    TensorTrain::new(tensors).expect("Failed to create product state MPS")
+    SimpleTensorTrain::new(tensors).expect("Failed to create product state MPS")
 }
 
-fn create_two_bit_value_qtt(values: [f64; 4]) -> TensorTrain<Complex64> {
+fn create_two_bit_value_qtt(values: [f64; 4]) -> SimpleTensorTrain<Complex64> {
     let mut first = tensor3_zeros(1, 2, 2);
     first.set3(0, 0, 0, Complex64::one());
     first.set3(0, 1, 1, Complex64::one());
@@ -172,7 +76,7 @@ fn create_two_bit_value_qtt(values: [f64; 4]) -> TensorTrain<Complex64> {
         }
     }
 
-    TensorTrain::new(vec![first, second]).expect("failed to build two-bit value QTT")
+    SimpleTensorTrain::new(vec![first, second]).expect("failed to build two-bit value QTT")
 }
 
 /// Contract a TreeTN with site indices to get a flat vector representation.
@@ -242,11 +146,11 @@ fn contract_treetn_to_vector(
     result
 }
 
-/// Evaluate a TensorTrain at all indices (brute force).
+/// Evaluate a SimpleTensorTrain at all indices (brute force).
 ///
 /// Returns a vector of length 2^R representing f[x] for x = 0, 1, ..., 2^R - 1.
 /// Uses big-endian convention: site i has bit 2^(R-1-i).
-fn evaluate_mps_all(mps: &TensorTrain<Complex64>) -> Vec<Complex64> {
+fn evaluate_mps_all(mps: &SimpleTensorTrain<Complex64>) -> Vec<Complex64> {
     let r = mps.len();
     let n = 1 << r;
 

@@ -76,8 +76,8 @@ fn test_contract_zipup_untruncated_matches_naive() {
     let zipped = contract_zipup(&mpo_a, &mpo_b, &options).unwrap();
     let exact = contract_naive(&mpo_a, &mpo_b, None).unwrap();
 
-    let (zipped_dense, zipped_shape) = zipped.fulltensor();
-    let (exact_dense, exact_shape) = exact.fulltensor();
+    let (zipped_dense, zipped_shape) = zipped.full_tensor();
+    let (exact_dense, exact_shape) = exact.full_tensor();
     assert_eq!(zipped_shape, exact_shape);
     assert_eq!(zipped_shape, vec![2, 2, 2, 2, 2, 2]);
 

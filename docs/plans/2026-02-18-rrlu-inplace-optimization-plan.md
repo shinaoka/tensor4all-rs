@@ -1,8 +1,8 @@
-# rrlu_inplace Performance Optimization Implementation Plan
+# rrlu_mut Performance Optimization Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Eliminate allocation-heavy performance bugs in `rrlu_inplace` and add criterion benchmarks comparing against faer.
+**Goal:** Eliminate allocation-heavy performance bugs in `rrlu_mut` and add criterion benchmarks comparing against faer.
 
 **Architecture:** Make `swap_rows`/`swap_cols` truly in-place (zero allocation), change `submatrix_argmax` to accept `Range<usize>` instead of `&[usize]`, and add a benchmark suite comparing our implementation against faer's full-pivoting LU.
 
@@ -291,7 +291,7 @@ Create `crates/matrixci/benches/rrlu_bench.rs`:
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use faer::prelude::*;
 use matrixci::util::{from_vec2d, Matrix};
-use matrixci::{rrlu_inplace, RrLUOptions};
+use matrixci::{rrlu_mut, RrLUOptions};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -315,7 +315,7 @@ fn bench_rrlu(c: &mut Criterion) {
     let mut group = c.benchmark_group("rrlu_full_rank");
 
     for &size in &[10, 50, 100, 500, 1000] {
-        group.bench_with_input(BenchmarkId::new("rrlu_inplace", size), &size, |b, &n| {
+        group.bench_with_input(BenchmarkId::new("rrlu_mut", size), &size, |b, &n| {
             b.iter_batched(
                 || random_matrix(n, n, 42),
                 |mut m| {
@@ -325,7 +325,7 @@ fn bench_rrlu(c: &mut Criterion) {
                         abs_tol: 0.0,
                         ..Default::default()
                     };
-                    rrlu_inplace(&mut m, Some(opts)).unwrap();
+                    rrlu_mut(&mut m, Some(opts)).unwrap();
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -360,7 +360,7 @@ Expected: Benchmarks run successfully, output shows timing for each size.
 git add crates/matrixci/Cargo.toml crates/matrixci/benches/rrlu_bench.rs
 git commit -m "bench(matrixci): add criterion benchmarks for rrlu vs faer
 
-Compares rrlu_inplace against faer's full-pivoting LU at
+Compares rrlu_mut against faer's full-pivoting LU at
 matrix sizes 10, 50, 100, 500, 1000.
 
 Part of #229"
@@ -389,7 +389,7 @@ Expected: All tests pass.
 **Step 4: Run benchmarks and record results**
 
 Run: `cargo bench -p matrixci --bench rrlu_bench -- --sample-size 10`
-Expected: Results printed showing relative performance of rrlu_inplace vs faer.
+Expected: Results printed showing relative performance of rrlu_mut vs faer.
 
 **Step 5: Commit any formatting fixes if needed**
 

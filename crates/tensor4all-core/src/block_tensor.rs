@@ -416,7 +416,7 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
         })
     }
 
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],
@@ -425,7 +425,7 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
             .blocks
             .iter()
             .map(|b| {
-                b.replaceinds(old_indices, new_indices)
+                b.replace_indices(old_indices, new_indices)
                     .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))
             })
             .collect();

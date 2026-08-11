@@ -6,7 +6,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_simplett::cache::TTCache;
-use tensor4all_simplett::tensortrain::TensorTrain;
+use tensor4all_simplett::tensortrain::SimpleTensorTrain;
 use tensor4all_simplett::types::{tensor3_zeros, MultiIndex, Tensor3, Tensor3Ops};
 
 /// Generate TCI-like indices with a specific split position
@@ -44,7 +44,11 @@ fn generate_tci_like_indices(
 }
 
 /// Create a TT with specified bond dimension
-fn create_tt_with_bond_dim(n_sites: usize, local_dim: usize, bond_dim: usize) -> TensorTrain<f64> {
+fn create_tt_with_bond_dim(
+    n_sites: usize,
+    local_dim: usize,
+    bond_dim: usize,
+) -> SimpleTensorTrain<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(42);
     let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(n_sites);
 
@@ -63,7 +67,7 @@ fn create_tt_with_bond_dim(n_sites: usize, local_dim: usize, bond_dim: usize) ->
         tensors.push(t);
     }
 
-    TensorTrain::new(tensors).unwrap()
+    SimpleTensorTrain::new(tensors).unwrap()
 }
 
 /// Benchmark split position robustness
@@ -134,7 +138,7 @@ fn bench_overhead(c: &mut Criterion) {
     const N_SITES: usize = 100;
     const LOCAL_DIM: usize = 2;
 
-    let tt = TensorTrain::<f64>::constant(&vec![LOCAL_DIM; N_SITES], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&vec![LOCAL_DIM; N_SITES], 1.0);
 
     let mut group = c.benchmark_group("overhead");
     group.sample_size(20);

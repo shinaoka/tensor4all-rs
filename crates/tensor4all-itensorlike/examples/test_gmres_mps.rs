@@ -401,7 +401,7 @@ fn apply_mpo(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace MPO output indices with site indices
-    let result = result.replaceinds(&indices.mpo_outputs, &indices.sites)?;
+    let result = result.replace_indices(&indices.mpo_outputs, &indices.sites)?;
 
     Ok(result)
 }

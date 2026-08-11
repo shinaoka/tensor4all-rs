@@ -6,7 +6,7 @@ use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, SimpleTensorTrain, Tensor3Ops};
 
 use crate::common::{
     checked_multivar_dims, embed_single_var_mpo, tensortrain_to_linear_operator,
@@ -109,7 +109,7 @@ pub fn flip_operator_multivar(
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
-/// Create the flip MPO as a TensorTrain.
+/// Create the flip MPO as a SimpleTensorTrain.
 ///
 /// The flip operation computes 2^R - x using two's complement-like arithmetic.
 ///
@@ -126,7 +126,7 @@ pub fn flip_operator_multivar(
 /// - Site 0 (MSB): has carry input from site 1, applies boundary condition
 /// - Site R-1 (LSB): initial carry = 0, has carry output to site R-2
 #[allow(clippy::needless_range_loop)]
-fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
+fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex64>> {
     let single_tensor = single_tensor_flip();
     let mut tensors =
         try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>("flip MPO site list", r)?;
@@ -134,7 +134,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
     // Create link indices with dimension 2 (for carry states)
     // Carry states: index 0 = carry -1, index 1 = carry 0
     //
-    // In big-endian convention with TensorTrain (left-to-right contraction):
+    // In big-endian convention with SimpleTensorTrain (left-to-right contraction):
     // - Site 0 (MSB): applies BC, has cout going right (to site 1)
     // - Site R-1 (LSB): initial carry cin=1 (carry=0), receives cin from left
     //
@@ -205,7 +205,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
         }
     }
 
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create flip MPO: {}", e))
+    SimpleTensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create flip MPO: {}", e))
 }
 
 /// Create the single-site tensor for flip operation.
@@ -226,7 +226,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
 /// - The ITensor is created as ITensor(t, (link_l, link_r, s', s))
 /// - This means a -> s' (output index) and b -> s (input index)
 ///
-/// In TensorTrain MPO format, the combined site index is s = s' * 2 + s
+/// In SimpleTensorTrain MPO format, the combined site index is s = s' * 2 + s
 /// where s' is the output bit and s is the input bit.
 #[allow(clippy::needless_range_loop)]
 fn single_tensor_flip() -> [[[[Complex64; 2]; 2]; 2]; 2] {

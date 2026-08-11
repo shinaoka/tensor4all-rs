@@ -402,6 +402,13 @@ mod tests {
 ///
 /// Wraps the source diagnostic from the underlying tensor operation, so
 /// callers propagating into `anyhow::Result` keep the full source chain.
+///
+/// # Remedies
+/// - Index binding/selection failures: verify the index set against the
+///   network's site indices and tags before binding or applying operators.
+/// - Shape/dtype failures: check site tensor dims against the network
+///   topology.
+/// - Backend failures: the wrapped source chain identifies the failing stage.
 #[derive(Debug, thiserror::Error)]
 #[error("TreeTN operation failed: {source}")]
 pub struct TreeTNOperationError {

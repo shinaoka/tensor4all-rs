@@ -761,7 +761,7 @@ fn apply_operator_to_mpo(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace operator output indices with input indices
-    let result = result.replaceinds(&indices.operator_outputs, &indices.inputs)?;
+    let result = result.replace_indices(&indices.operator_outputs, &indices.inputs)?;
 
     Ok(result)
 }

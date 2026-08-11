@@ -269,8 +269,8 @@ fn test_batched_tci_caching_reduces_evaluations() {
 fn test_combine_component_tts_basic() {
     // Test the combine function directly with known simple TTs.
     // Create two rank-1 TTs: constant 2.0 and constant 3.0 on a 2-site, dim-2 grid.
-    let tt1 = TensorTrain::<f64>::constant(&[2, 2], 2.0);
-    let tt2 = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
 
     let combined = combine_component_tts(&[tt1, tt2]).unwrap();
 

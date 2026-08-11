@@ -50,8 +50,8 @@ fn config_from_env() -> Result<MultivariateTutorialConfig, Box<dyn Error>> {
     }
 
     // Higher resolutions or harder functions may need a larger rank cap.
-    if let Some(maxbonddim) = parse_env_usize(MAXBONDDIM_ENV)? {
-        config.maxbonddim = maxbonddim;
+    if let Some(max_bond_dim) = parse_env_usize(MAXBONDDIM_ENV)? {
+        config.max_bond_dim = max_bond_dim;
     }
 
     // Tensor4all-rs currently runs the requested number of QTCI sweeps.
@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // QTCI options control accuracy, rank cap, initialization, and sweep count.
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_maxiter(config.maxiter)
         .with_nrandominitpivot(0)
         .with_verbosity(0);

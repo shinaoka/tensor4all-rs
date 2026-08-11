@@ -2,7 +2,7 @@
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
 use crate::error::{Result, TensorTrainError};
-use crate::tensortrain::TensorTrain;
+use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tenferro_tensor::TensorScalar;
@@ -45,7 +45,7 @@ pub enum CompressionMethod {
 /// Configuration for tensor train compression.
 ///
 /// Controls the accuracy-vs-cost trade-off when reducing bond dimensions
-/// via [`TensorTrain::compress`] or [`TensorTrain::compressed`].
+/// via [`SimpleTensorTrain::compress`] or [`SimpleTensorTrain::compressed`].
 ///
 /// # Fields
 ///
@@ -296,7 +296,7 @@ where
     Ok((left, right, rank))
 }
 
-impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
+impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// Compress the tensor train **in place**, reducing bond dimensions.
     ///
     /// The algorithm performs two sweeps:
@@ -314,11 +314,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, CompressionOptions};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, CompressionOptions};
     ///
     /// // Add two constant TTs to get bond dim 2, then compress back to 1
-    /// let a = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
-    /// let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
+    /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
     /// let mut sum = a.add(&b).unwrap(); // bond dim = 2
     /// assert_eq!(sum.rank(), 2);
     ///
@@ -466,10 +466,10 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, CompressionOptions};
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, CompressionOptions};
     ///
     /// // A tensor train with redundant bond dimension can be compressed
-    /// let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     ///
     /// let opts = CompressionOptions::default();
     /// let compressed = tt.compressed(&opts).unwrap();

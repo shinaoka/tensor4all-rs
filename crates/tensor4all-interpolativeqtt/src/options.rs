@@ -3,7 +3,7 @@
 /// Options controlling SVD compression of constructed tensor trains.
 ///
 /// `InterpolativeQttOptions` mirrors the Julia keyword arguments
-/// `tolerance` and `maxbonddim`. When in doubt, use the default: it keeps
+/// `tolerance` and `max_bond_dim`. When in doubt, use the default: it keeps
 /// near machine precision while allowing the bond dimension to grow as needed.
 ///
 /// # Fields

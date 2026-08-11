@@ -1,11 +1,11 @@
 use crate::{crossinterpolate2, TCI2Options, TensorCI2, TensorCI2FromTensorTrainOptions};
 use num_complex::Complex64;
-use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_tcicore::MultiIndex;
 
 #[test]
 fn test_tensorci2_from_tensor_train_preserves_values() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.5);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.5);
     let tci = TensorCI2::from_tensor_train(tt, TensorCI2FromTensorTrainOptions::default()).unwrap();
     let roundtrip = tci.to_tensor_train().unwrap();
 
@@ -14,7 +14,7 @@ fn test_tensorci2_from_tensor_train_preserves_values() {
 
 #[test]
 fn test_tensorci2_from_tensor_train_respects_max_bond_dim() {
-    let tt = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let options = TensorCI2FromTensorTrainOptions {
         max_bond_dim: 1,
         ..TensorCI2FromTensorTrainOptions::default()
@@ -27,7 +27,7 @@ fn test_tensorci2_from_tensor_train_respects_max_bond_dim() {
 #[test]
 fn test_tensorci2_from_tensor_train_complex_constant() {
     let value = Complex64::new(1.25, -0.5);
-    let tt = TensorTrain::<Complex64>::constant(&[2, 2], value);
+    let tt = SimpleTensorTrain::<Complex64>::constant(&[2, 2], value);
     let tci = TensorCI2::from_tensor_train(tt, TensorCI2FromTensorTrainOptions::default()).unwrap();
     let roundtrip = tci.to_tensor_train().unwrap();
     let actual = roundtrip.evaluate(&[1, 1]).unwrap();
@@ -68,7 +68,7 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
     )
     .unwrap();
     let source_tt = source.to_tensor_train().unwrap();
-    let (expected_data, expected_shape) = source_tt.fulltensor();
+    let (expected_data, expected_shape) = source_tt.full_tensor();
     let converted = TensorCI2::from_tensor_train(
         source_tt,
         TensorCI2FromTensorTrainOptions {
@@ -78,7 +78,7 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
         },
     )
     .unwrap();
-    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().fulltensor();
+    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().full_tensor();
 
     assert_eq!(actual_shape, expected_shape);
     assert_eq!(converted.link_dims(), source.link_dims());
@@ -113,11 +113,11 @@ fn test_tensorci2_from_tensor_train_preserves_nontrivial_tensor() {
     )
     .unwrap();
     let source_tt = source.to_tensor_train().unwrap();
-    let (expected_data, expected_shape) = source_tt.fulltensor();
+    let (expected_data, expected_shape) = source_tt.full_tensor();
     let converted =
         TensorCI2::from_tensor_train(source_tt, TensorCI2FromTensorTrainOptions::default())
             .unwrap();
-    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().fulltensor();
+    let (actual_data, actual_shape) = converted.to_tensor_train().unwrap().full_tensor();
 
     assert_eq!(actual_shape, expected_shape);
     assert_eq!(converted.link_dims(), source.link_dims());

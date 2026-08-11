@@ -11,7 +11,7 @@ use std::path::Path;
 
 use tensor4all_interpolativeqtt::{
     interpolate_multi_scale, interpolate_multi_scale_nd, interpolate_single_scale,
-    AbstractTensorTrain, InterpolativeQttOptions, TensorTrain,
+    AbstractTensorTrain, InterpolativeQttOptions, SimpleTensorTrain,
 };
 use tensor4all_quanticstci::{DiscretizedGrid, UnfoldingScheme};
 
@@ -106,7 +106,7 @@ pub fn interpolation_options(config: &InterpolativeQttTutorialConfig) -> Interpo
 ///
 pub fn build_single_scale_smooth_qtt(
     config: &InterpolativeQttTutorialConfig,
-) -> Result<TensorTrain<f64>, Box<dyn Error>> {
+) -> Result<SimpleTensorTrain<f64>, Box<dyn Error>> {
     let options = interpolation_options(config);
     Ok(interpolate_single_scale(
         smooth_target,
@@ -126,7 +126,7 @@ pub fn build_single_scale_smooth_qtt(
 ///
 pub fn build_multi_scale_inverse_square_1d_qtt(
     config: &InterpolativeQttTutorialConfig,
-) -> Result<TensorTrain<f64>, Box<dyn Error>> {
+) -> Result<SimpleTensorTrain<f64>, Box<dyn Error>> {
     let options = interpolation_options(config);
     let epsilon = config.epsilon;
     Ok(interpolate_multi_scale(
@@ -148,7 +148,7 @@ pub fn build_multi_scale_inverse_square_1d_qtt(
 ///
 pub fn build_multi_scale_inverse_square_2d_qtt(
     config: &InterpolativeQttTutorialConfig,
-) -> Result<TensorTrain<f64>, Box<dyn Error>> {
+) -> Result<SimpleTensorTrain<f64>, Box<dyn Error>> {
     let options = interpolation_options(config);
     let epsilon = config.epsilon;
     let lower = [config.lower_bound, config.lower_bound];
@@ -204,7 +204,7 @@ fn quantics_to_tt_indices(quantics: &[i64]) -> Result<Vec<usize>, Box<dyn Error>
 ///
 pub fn collect_1d_samples<F>(
     case_name: &'static str,
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     bits: usize,
     lower: f64,
     upper: f64,
@@ -245,7 +245,7 @@ where
 /// /// backend failure).
 ///
 pub fn collect_2d_samples<F>(
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     bits: usize,
     lower: &[f64],
     upper: &[f64],
@@ -415,9 +415,9 @@ pub fn write_bond_dims_csv(
 /// Print a compact terminal summary for local tutorial runs.
 pub fn print_summary(
     config: &InterpolativeQttTutorialConfig,
-    smooth: &TensorTrain<f64>,
-    multi_1d: &TensorTrain<f64>,
-    multi_2d: &TensorTrain<f64>,
+    smooth: &SimpleTensorTrain<f64>,
+    multi_1d: &SimpleTensorTrain<f64>,
+    multi_2d: &SimpleTensorTrain<f64>,
     smooth_max_error: f64,
     multi_1d_max_error: f64,
     multi_2d_max_error: f64,

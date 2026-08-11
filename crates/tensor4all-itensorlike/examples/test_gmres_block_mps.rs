@@ -370,7 +370,7 @@ fn create_i_pauli_x_cross_block_mpo(
 
 /// Create an identity MPO that maps from block src_idx to block dst_idx.
 /// Input indices: sites[src_idx], Output indices: mpo_outputs[dst_idx]
-/// (after replaceinds, output becomes sites[dst_idx])
+/// (after replace_indices, output becomes sites[dst_idx])
 fn create_cross_block_identity_mpo(
     indices: &BlockSharedIndices,
     src_idx: usize,
@@ -437,7 +437,8 @@ fn apply_mpo_for_block(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace MPO output indices with site indices
-    let result = result.replaceinds(&indices.mpo_outputs[block_idx], &indices.sites[block_idx])?;
+    let result =
+        result.replace_indices(&indices.mpo_outputs[block_idx], &indices.sites[block_idx])?;
 
     Ok(result)
 }
@@ -458,7 +459,7 @@ fn apply_cross_block_mpo(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace MPO output indices with destination site indices
-    let result = result.replaceinds(&indices.mpo_outputs[dst_idx], &indices.sites[dst_idx])?;
+    let result = result.replace_indices(&indices.mpo_outputs[dst_idx], &indices.sites[dst_idx])?;
 
     Ok(result)
 }

@@ -1,5 +1,5 @@
 use crate::{AciError, Result};
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops};
 
 pub(crate) fn validate_options<T: TTScalar>(options: &crate::AciOptions<T>) -> Result<()> {
     if options.max_iters == 0 {
@@ -38,7 +38,7 @@ pub(crate) fn validate_options<T: TTScalar>(options: &crate::AciOptions<T>) -> R
     Ok(())
 }
 
-pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<Vec<usize>> {
+pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[SimpleTensorTrain<T>]) -> Result<Vec<usize>> {
     let Some(first) = inputs.first() else {
         return Err(AciError::EmptyInputs);
     };
@@ -92,7 +92,7 @@ fn validate_positive_site_dims(site_dims: &[usize]) -> Result<()> {
 }
 
 fn validate_positive_core_dims<T: TTScalar>(
-    input: &TensorTrain<T>,
+    input: &SimpleTensorTrain<T>,
     input_index: usize,
 ) -> Result<()> {
     for site in 0..input.len() {

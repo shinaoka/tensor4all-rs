@@ -55,14 +55,14 @@ frequency components -- a well-known property of the DFT.
 use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_core::TensorIndex;
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, tensor_train_to_treetn};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 
 let r = 3;
 let n = 1usize << r; // 8
 
-// Create the |0> product state as a TensorTrain
+// Create the |0> product state as a SimpleTensorTrain
 // |0> = |0> x |0> x ... x |0>  (all bits zero)
 let mut tensors = Vec::new();
 for _ in 0..r {
@@ -70,7 +70,7 @@ for _ in 0..r {
     t.set3(0, 0, 0, Complex64::one()); // bit = 0
     tensors.push(t);
 }
-let mps = TensorTrain::new(tensors).unwrap();
+let mps = SimpleTensorTrain::new(tensors).unwrap();
 
 // Convert MPS to TreeTN
 let (treetn, site_indices) = tensor_train_to_treetn(&mps).unwrap();
@@ -156,7 +156,7 @@ use tensor4all_quanticstci::{
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetci::materialize::to_treetn;
-use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
 use tensor4all_treetn::Operator;
 
 let r = 3;

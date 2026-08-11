@@ -1,5 +1,5 @@
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::index_ops::{check_unique_indices, replaceinds, ReplaceIndsError};
+use tensor4all_core::index_ops::{check_unique_indices, replace_indices, ReplaceIndsError};
 
 #[test]
 fn test_check_unique_indices_success() {
@@ -38,7 +38,7 @@ fn test_check_unique_indices_allows_same_id_prime_pair() {
 }
 
 #[test]
-fn test_replaceinds_duplicate_input() {
+fn test_replace_indices_duplicate_input() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let _k = Index::new_dyn(4);
@@ -47,7 +47,7 @@ fn test_replaceinds_duplicate_input() {
     // Input has duplicates
     let indices = vec![i.clone(), j.clone(), j.clone()];
     let replacements = vec![(j.clone(), new_j.clone())];
-    let result = replaceinds(indices, &replacements);
+    let result = replace_indices(indices, &replacements);
     assert!(result.is_err());
     if let Err(ReplaceIndsError::DuplicateIndices { .. }) = result {
         // Expected
@@ -57,7 +57,7 @@ fn test_replaceinds_duplicate_input() {
 }
 
 #[test]
-fn test_replaceinds_duplicate_result() {
+fn test_replace_indices_duplicate_result() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(3);
@@ -68,7 +68,7 @@ fn test_replaceinds_duplicate_result() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     // Replace both i and k with new_idx, creating duplicates in the result
     let replacements = vec![(i.clone(), new_idx.clone()), (k.clone(), new_idx.clone())];
-    let result = replaceinds(indices, &replacements);
+    let result = replace_indices(indices, &replacements);
     assert!(result.is_err(), "Expected error but got: {:?}", result);
     if let Err(ReplaceIndsError::DuplicateIndices { .. }) = result {
         // Expected

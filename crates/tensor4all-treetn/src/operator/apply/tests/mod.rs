@@ -948,8 +948,8 @@ fn naive_apply_long_identity_chain_keeps_local_bonds_bounded() {
     }
     let shape = [length, sample_points.len()];
     let value_ref = ColMajorArrayRef::new(&values, &shape).unwrap();
-    let state_values = state.evaluate_at(&site_indices, value_ref).unwrap();
-    let result_values = result.evaluate_at(&site_indices, value_ref).unwrap();
+    let state_values = state.evaluate(&site_indices, value_ref).unwrap();
+    let result_values = result.evaluate(&site_indices, value_ref).unwrap();
 
     for (state_value, result_value) in state_values.iter().zip(result_values.iter()) {
         assert!((state_value.real() - result_value.real()).abs() < 1e-10);
@@ -1589,7 +1589,7 @@ fn test_compose_operator_along_state_paths_no_path_between_operator_nodes() {
 }
 
 #[test]
-fn test_linear_operator_replaceinds() {
+fn test_linear_operator_replace_indices() {
     let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
     let s0_in = make_index(2);
     let s0_out = make_index(2);
@@ -1626,11 +1626,11 @@ fn test_linear_operator_replaceinds() {
 
     let lin_op = LinearOperator::new(mpo, input_mapping, output_mapping);
 
-    // Test replaceinds
+    // Test replace_indices
     let new_idx1 = make_index(2);
     let new_idx2 = make_index(2);
     let replaced = lin_op
-        .replaceinds(
+        .replace_indices(
             std::slice::from_ref(&true_s0),
             std::slice::from_ref(&new_idx1),
         )
@@ -1653,15 +1653,16 @@ fn test_linear_operator_replaceinds() {
     // Replacing the same old index twice is ambiguous now that replaceind
     // updates all matching input/output mappings.
     let new_idx3 = make_index(2);
-    let duplicate = lin_op.replaceinds(&[true_s0.clone(), true_s0.clone()], &[new_idx2, new_idx3]);
+    let duplicate =
+        lin_op.replace_indices(&[true_s0.clone(), true_s0.clone()], &[new_idx2, new_idx3]);
     assert!(duplicate.is_err());
     assert!(duplicate
         .unwrap_err()
         .to_string()
         .contains("Duplicate old index"));
 
-    // Test replaceinds error case (length mismatch)
-    let result = lin_op.replaceinds(
+    // Test replace_indices error case (length mismatch)
+    let result = lin_op.replace_indices(
         std::slice::from_ref(&true_s0),
         &[new_idx1.clone(), new_idx1],
     );

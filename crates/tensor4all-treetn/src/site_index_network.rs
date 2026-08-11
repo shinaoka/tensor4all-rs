@@ -16,9 +16,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use tensor4all_core::IndexLike;
 
-// Re-export CanonicalizeEdges for convenience
-pub use crate::node_name_network::CanonicalizeEdges as CanonicalizeEdgesType;
-
 /// Site Index Network (inspired by ITensorNetworks.jl's IndsNetwork)
 ///
 /// Represents the index structure of a tensor network:
@@ -644,16 +641,6 @@ where
 // ============================================================================
 // Type alias for backwards compatibility
 // ============================================================================
-
-use tensor4all_core::index::{DynId, Index};
-use tensor4all_core::DefaultTagSet;
-
-/// Type alias for the default SiteIndexNetwork using DynId indices.
-///
-/// This preserves backwards compatibility with existing code that uses
-/// `SiteIndexNetwork<NodeName, Id, Symm, Tags>`.
-pub type DefaultSiteIndexNetwork<NodeName> =
-    SiteIndexNetwork<NodeName, Index<DynId, DefaultTagSet>>;
 
 #[cfg(test)]
 mod tests;

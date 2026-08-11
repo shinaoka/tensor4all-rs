@@ -137,7 +137,7 @@ where
             }
         }
 
-        self.replaceinds(&old_indices, &new_indices)
+        self.replace_indices(&old_indices, &new_indices)
     }
 
     /// Add two TreeTNs after reindexing the second operand's site space to match `self`.
@@ -509,10 +509,8 @@ where
         A: Into<AnyScalar>,
         B: Into<AnyScalar>,
     {
-        let mut lhs = self.clone();
-        lhs.scale(a.into())?;
-        let mut rhs = other.clone();
-        rhs.scale(b.into())?;
+        let lhs = self.scale(a.into())?;
+        let rhs = other.scale(b.into())?;
         lhs.add(&rhs)
     }
 

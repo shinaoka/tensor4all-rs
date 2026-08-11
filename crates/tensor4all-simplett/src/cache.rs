@@ -215,9 +215,9 @@ impl UniqueCounter {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, TTCache};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, TTCache};
 ///
-/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 5.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 5.0);
 /// let mut cache = TTCache::new(&tt);
 ///
 /// // Single evaluation (caches intermediate contractions)

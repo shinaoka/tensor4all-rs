@@ -6,7 +6,7 @@
 //!
 //! TreeTN implements TensorIndex because index operations are well-defined:
 //! - `external_indices()`: Returns all site (physical) indices
-//! - `replaceind()` / `replaceinds()`: Replace indices in tensors and metadata
+//! - `replaceind()` / `replace_indices()`: Replace indices in tensors and metadata
 //!
 //! ## TensorLike (NOT Implemented)
 //!
@@ -171,7 +171,7 @@ where
     }
 
     /// Replace multiple indices in this TreeTN.
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old_indices: &[Self::Index],
         new_indices: &[Self::Index],

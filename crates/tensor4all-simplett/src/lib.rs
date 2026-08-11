@@ -15,7 +15,7 @@
 //!
 //! | Type | Purpose |
 //! |------|---------|
-//! | [`TensorTrain`] | Primary tensor train container |
+//! | [`SimpleTensorTrain`] | Primary tensor train container |
 //! | [`AbstractTensorTrain`] | Common interface (evaluate, sum, norm) |
 //! | [`CompressionOptions`] | Controls compression accuracy/cost trade-off |
 //! | [`TTCache`] | Caches partial contractions for repeated evaluation |
@@ -26,10 +26,10 @@
 //! # Typical workflow
 //!
 //! ```
-//! use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, CompressionOptions};
+//! use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, CompressionOptions};
 //!
 //! // 1. Create a tensor train (e.g. constant function)
-//! let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+//! let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
 //! assert_eq!(tt.len(), 3);
 //!
 //! // 2. Evaluate at a specific multi-index
@@ -64,9 +64,9 @@ pub mod vidal;
 pub use cache::TTCache;
 pub use canonical::{center_canonicalize, SiteTensorTrain};
 pub use compression::{CompressionMethod, CompressionOptions};
-pub use contraction::{dot, ContractionOptions};
+pub use contraction::{inner_product, ContractionOptions};
 pub use error::{Result, TensorTrainError};
-pub use tensortrain::TensorTrain;
+pub use tensortrain::SimpleTensorTrain;
 pub use traits::{AbstractTensorTrain, TTScalar};
 pub use types::{tensor3_from_data, tensor3_zeros, LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 pub use vidal::{DiagMatrix, InverseTensorTrain, VidalTensorTrain};

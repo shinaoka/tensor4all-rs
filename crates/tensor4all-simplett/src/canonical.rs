@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use crate::error::{Result, TensorTrainError};
-use crate::tensortrain::TensorTrain;
+use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tensor4all_tcicore::Scalar;
@@ -83,10 +83,10 @@ fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) 
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, SiteTensorTrain};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, SiteTensorTrain};
 ///
 /// // Build a constant tensor train and convert to center-canonical form.
-/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 /// let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
 ///
 /// // The center is at site 1.
@@ -142,13 +142,13 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         Ok(result)
     }
 
-    /// Create from TensorTrain with specified center
+    /// Create from SimpleTensorTrain with specified center
     /// # Errors
     ///
     /// Returns an error when the tensor train is structurally invalid (an
     /// /// invalid-state or shape mismatch failure).
     ///
-    pub fn from_tensor_train(tt: &TensorTrain<T>, center: usize) -> Result<Self> {
+    pub fn from_tensor_train(tt: &SimpleTensorTrain<T>, center: usize) -> Result<Self> {
         let tensors = tt.site_tensors().to_vec();
         Self::new(tensors, center)
     }
@@ -352,9 +352,9 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         Ok(())
     }
 
-    /// Convert to a regular TensorTrain
-    pub fn to_tensor_train(&self) -> TensorTrain<T> {
-        TensorTrain::from_tensors_unchecked(self.tensors.clone())
+    /// Convert to a regular SimpleTensorTrain
+    pub fn to_tensor_train(&self) -> SimpleTensorTrain<T> {
+        SimpleTensorTrain::from_tensors_unchecked(self.tensors.clone())
     }
 
     /// Set the tensor at a specific site
@@ -415,18 +415,18 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for SiteTensorTrain<
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, tensor3_zeros, Tensor3Ops};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, tensor3_zeros, Tensor3Ops};
 /// use tensor4all_simplett::canonical::center_canonicalize;
 ///
 /// // Start with a simple 3-site constant TT.
-/// let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
 /// let mut tensors: Vec<_> = tt.site_tensors().to_vec();
 ///
 /// // Canonicalize around site 1.
 /// center_canonicalize(&mut tensors, 1).unwrap();
 ///
 /// // Rebuild TT from the canonicalized tensors; values are preserved.
-/// let tt2 = TensorTrain::new(tensors).unwrap();
+/// let tt2 = SimpleTensorTrain::new(tensors).unwrap();
 /// let val = tt2.evaluate(&[0, 1, 0]).unwrap();
 /// assert!((val - 1.0).abs() < 1e-12);
 /// ```

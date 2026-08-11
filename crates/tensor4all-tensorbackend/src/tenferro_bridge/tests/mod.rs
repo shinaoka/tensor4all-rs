@@ -99,7 +99,7 @@ fn storage_native_roundtrip_structured_c64_densifies_at_public_bridge() {
 fn dense_native_tensor_column_major_roundtrip_preserves_linearization() {
     let native =
         dense_native_tensor_from_col_major(&[1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
-    let values = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    let values = native_tensor_primal_to_dense_col_major::<f64>(&native).unwrap();
     assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
 
@@ -107,7 +107,7 @@ fn dense_native_tensor_column_major_roundtrip_preserves_linearization() {
 fn dense_native_tensor_from_col_major_c64_roundtrip() {
     let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)];
     let native = dense_native_tensor_from_col_major(&data, &[2]).unwrap();
-    let values = native_tensor_primal_to_dense_c64_col_major(&native).unwrap();
+    let values = native_tensor_primal_to_dense_col_major::<Complex64>(&native).unwrap();
     assert_eq!(values, data);
 }
 
@@ -115,8 +115,8 @@ fn dense_native_tensor_from_col_major_c64_roundtrip() {
 fn diag_native_tensor_from_col_major_f64_roundtrip() {
     let data = vec![1.0_f64, 2.0, 3.0];
     let native = diag_native_tensor_from_col_major(&data, 2).unwrap();
-    let diag_values = native_tensor_primal_to_diag_f64(&native).unwrap();
-    let dense = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    let diag_values = native_tensor_primal_to_diag::<f64>(&native).unwrap();
+    let dense = native_tensor_primal_to_dense_col_major::<f64>(&native).unwrap();
 
     assert_eq!(diag_values, data);
     assert_eq!(
@@ -132,10 +132,14 @@ fn diag_native_tensor_from_col_major_f64_roundtrip() {
 #[test]
 fn dense_native_tensor_from_col_major_f32_roundtrip() {
     let native = dense_native_tensor_from_col_major(&[1.25_f32, -2.5_f32], &[2]).unwrap();
-    let values = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    // Strict materialization preserves the scalar kind: an f32 native tensor
+    // must not be readable as f64.
+    assert!(native_tensor_primal_to_dense_col_major::<f64>(&native).is_err());
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f32>(&native).unwrap(),
+        vec![1.25_f32, -2.5_f32]
+    );
     let snapshot = native_tensor_primal_to_storage(&native).unwrap();
-
-    assert_eq!(values, vec![1.25, -2.5]);
     assert_storage_eq(
         &snapshot,
         &Storage::from_dense_col_major(vec![1.25, -2.5], &[2]).unwrap(),
@@ -146,23 +150,17 @@ fn dense_native_tensor_from_col_major_f32_roundtrip() {
 fn diag_native_tensor_from_col_major_c32_promotes_to_c64_values() {
     let data = vec![Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)];
     let native = diag_native_tensor_from_col_major(&data, 2).unwrap();
-    let diag_values = native_tensor_primal_to_diag_c64(&native).unwrap();
-    let dense_values = native_tensor_primal_to_dense_c64_col_major(&native).unwrap();
+    let diag_values = native_tensor_primal_to_diag::<Complex64>(&native).unwrap();
+    // Strict dense materialization rejects the c32 source; only the
+    // promoting diag extractor converts c32 -> c64.
+    assert!(native_tensor_primal_to_dense_col_major::<Complex64>(&native).is_err());
     let snapshot = native_tensor_primal_to_storage(&native).unwrap();
 
     assert_eq!(
         diag_values,
         vec![Complex64::new(1.0, -0.5), Complex64::new(-2.0, 0.25)]
     );
-    assert_eq!(
-        dense_values,
-        vec![
-            Complex64::new(1.0, -0.5),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(-2.0, 0.25),
-        ]
-    );
+
     assert_storage_eq(
         &snapshot,
         &Storage::from_dense_col_major(
@@ -263,7 +261,7 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
         &[0, 1, 2, 3],
     )
     .unwrap();
-    let values = native_tensor_primal_to_dense_f64_col_major(&out).unwrap();
+    let values = native_tensor_primal_to_dense_col_major::<f64>(&out).unwrap();
 
     let mut expected = vec![0.0; 24];
     for b_idx in 0..2 {
@@ -298,7 +296,7 @@ fn einsum_native_tensors_populates_process_global_path_cache() {
 
     assert_eq!(out.shape(), &[5]);
     assert_eq!(
-        native_tensor_primal_to_dense_f64_col_major(&out).unwrap(),
+        native_tensor_primal_to_dense_col_major::<f64>(&out).unwrap(),
         vec![144.0; 5]
     );
     assert!(default_graph_runtime_has_einsum_extension_cache_entries());
@@ -320,8 +318,8 @@ fn einsum_native_tensors_mixed_dtype_records_borrowed_conversion_profile() {
     assert_eq!(owned.shape(), &[2, 3]);
     assert_eq!(owned.dtype(), DType::F64);
     assert_eq!(
-        native_tensor_primal_to_dense_f64_col_major(&owned).unwrap(),
-        native_tensor_primal_to_dense_f64_col_major(&borrowed).unwrap()
+        native_tensor_primal_to_dense_col_major::<f64>(&owned).unwrap(),
+        native_tensor_primal_to_dense_col_major::<f64>(&borrowed).unwrap()
     );
     assert_eq!(
         recorded_native_einsum_call_count(NativeEinsumPath::BorrowedWithConversions),
@@ -503,10 +501,10 @@ fn reshape_col_major_native_tensor_handles_permuted_input() {
     )
     .unwrap();
     let permuted = permute_native_tensor(&native, &[0, 2, 1, 3]).unwrap();
-    let permuted_values = native_tensor_primal_to_dense_f64_col_major(&permuted).unwrap();
+    let permuted_values = native_tensor_primal_to_dense_col_major::<f64>(&permuted).unwrap();
 
     let reshaped = reshape_col_major_native_tensor(&permuted, &[4, 6]).unwrap();
-    let reshaped_values = native_tensor_primal_to_dense_f64_col_major(&reshaped).unwrap();
+    let reshaped_values = native_tensor_primal_to_dense_col_major::<f64>(&reshaped).unwrap();
 
     assert_eq!(reshaped_values, permuted_values);
 }
@@ -520,7 +518,7 @@ fn scale_native_tensor_promotes_real_scalar_for_complex_tensor() {
     .unwrap();
     let scalar = crate::AnyScalar::new_real(2.0);
     let scaled = scale_native_tensor(&native, &scalar).unwrap();
-    let values = native_tensor_primal_to_dense_c64_col_major(&scaled).unwrap();
+    let values = native_tensor_primal_to_dense_col_major::<Complex64>(&scaled).unwrap();
 
     assert_eq!(
         values,
@@ -534,8 +532,8 @@ fn scale_and_axpby_native_tensor_cover_f32_paths() {
     let rhs = dense_native_tensor_from_col_major(&[0.5_f32, 4.0_f32], &[2]).unwrap();
 
     let scaled = scale_native_tensor(&lhs, &crate::AnyScalar::from_value(0.5_f32)).unwrap();
-    let scaled_values = native_tensor_primal_to_dense_f64_col_major(&scaled).unwrap();
-    assert_eq!(scaled_values, vec![0.5, -1.0]);
+    let scaled_values = native_tensor_primal_to_dense_col_major::<f32>(&scaled).unwrap();
+    assert_eq!(scaled_values, vec![0.5_f32, -1.0_f32]);
 
     let combined = axpby_native_tensor(
         &lhs,
@@ -544,8 +542,8 @@ fn scale_and_axpby_native_tensor_cover_f32_paths() {
         &crate::AnyScalar::from_value(-1.0_f32),
     )
     .unwrap();
-    let combined_values = native_tensor_primal_to_dense_f64_col_major(&combined).unwrap();
-    assert_eq!(combined_values, vec![1.5, -8.0]);
+    let combined_values = native_tensor_primal_to_dense_col_major::<f32>(&combined).unwrap();
+    assert_eq!(combined_values, vec![1.5_f32, -8.0_f32]);
 }
 
 #[test]
@@ -563,7 +561,7 @@ fn axpby_native_tensor_promotes_real_scalars_for_complex_tensors() {
     let a = crate::AnyScalar::new_real(2.0);
     let b = crate::AnyScalar::new_real(-1.0);
     let combined = axpby_native_tensor(&lhs, &a, &rhs, &b).unwrap();
-    let values = native_tensor_primal_to_dense_c64_col_major(&combined).unwrap();
+    let values = native_tensor_primal_to_dense_col_major::<Complex64>(&combined).unwrap();
 
     assert_eq!(
         values,
@@ -628,19 +626,19 @@ fn dense_and_diag_extractors_reject_wrong_dtypes() {
     let real = dense_native_tensor_from_col_major(&[1.0_f64, 2.0], &[2]).unwrap();
     let complex = dense_native_tensor_from_col_major(&[Complex64::new(1.0, -1.0)], &[1]).unwrap();
 
-    assert!(native_tensor_primal_to_dense_f64_col_major(&complex)
+    assert!(native_tensor_primal_to_dense_col_major::<f64>(&complex)
         .unwrap_err()
         .to_string()
         .contains("expected real native tensor"));
-    assert!(native_tensor_primal_to_dense_c64_col_major(&real)
+    assert!(native_tensor_primal_to_dense_col_major::<Complex64>(&real)
         .unwrap_err()
         .to_string()
         .contains("expected complex native tensor"));
-    assert!(native_tensor_primal_to_diag_f64(&complex)
+    assert!(native_tensor_primal_to_diag::<f64>(&complex)
         .unwrap_err()
         .to_string()
         .contains("expected real native tensor"));
-    assert!(native_tensor_primal_to_diag_c64(&real)
+    assert!(native_tensor_primal_to_diag::<Complex64>(&real)
         .unwrap_err()
         .to_string()
         .contains("expected complex native tensor"));

@@ -21,9 +21,9 @@ use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
-    native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
-    native_tensor_primal_to_diag_f64, scale_native_tensor, storage_payload_native_read_input,
-    storage_to_native_tensor, NativeTensorReadInput, TensorElement,
+    native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag, scale_native_tensor,
+    storage_payload_native_read_input, storage_to_native_tensor, NativeTensorReadInput,
+    TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -309,6 +309,17 @@ pub enum TensorStorageError {
 /// storage, shape, scalar, subtraction, and invalid-value failures without
 /// depending on the internal `anyhow` plumbing. Wrapped backend diagnostics
 /// retain their complete [`std::error::Error::source`] chain.
+///
+/// # Remedies
+/// - Storage failures: check the operation against the storage kind
+///   (structured vs dense) and dtype before calling; the eager payload may
+///   remain authoritative for unsupported dtypes.
+/// - Shape/index failures: validate indices and dimensions at the call site
+///   (`dims`, `indices`, external index sets) before the operation.
+/// - NaN/invalid-value failures: inspect the payload for non-finite entries
+///   before numerical comparisons.
+/// - Backend failures: the wrapped source chain identifies the backend stage;
+///   re-run with the backend diagnostic visible (see `source`).
 /// # Examples
 /// ```
 /// use tensor4all_core::TensorDynLenError;
@@ -1750,11 +1761,11 @@ impl TensorDynLen {
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
                 DType::F64 | DType::I32 | DType::I64 | DType::Bool => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_f64(native)?,
+                    native_tensor_primal_to_diag::<f64>(native)?,
                     logical_rank,
                 ),
                 DType::C64 => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_c64(native)?,
+                    native_tensor_primal_to_diag::<Complex64>(native)?,
                     logical_rank,
                 ),
                 DType::F32 | DType::C32 => Err(anyhow::anyhow!(
@@ -4228,19 +4239,19 @@ impl TensorDynLen {
     ///
     /// // Replace both indices
     /// let replaced = tensor
-    ///     .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+    ///     .replace_indices(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
     ///     .unwrap();
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(
+    pub fn replace_indices(
         &self,
         old_indices: &[DynIndex],
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, TensorDynLenError> {
         if old_indices.len() != new_indices.len() {
             return Err(TensorDynLenError::ShapeMismatch {
-                operation: "replaceinds",
+                operation: "replace_indices",
                 expected: format!("{} indices", old_indices.len()),
                 actual: format!("{} indices", new_indices.len()),
             });
@@ -4250,7 +4261,7 @@ impl TensorDynLen {
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             if old.dim() != new.dim() {
                 return Err(TensorDynLenError::ShapeMismatch {
-                    operation: "replaceinds",
+                    operation: "replace_indices",
                     expected: format!("dimension {}", old.dim()),
                     actual: format!("dimension {}", new.dim()),
                 });
@@ -5361,13 +5372,13 @@ impl TensorIndex for TensorDynLen {
         TensorDynLen::replaceind(self, old_index, new_index)
     }
 
-    fn replaceinds(
+    fn replace_indices(
         &self,
         old_indices: &[DynIndex],
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method.
-        TensorDynLen::replaceinds(self, old_indices, new_indices)
+        TensorDynLen::replace_indices(self, old_indices, new_indices)
     }
 }
 
@@ -6196,30 +6207,6 @@ impl TensorDynLen {
         };
         let data = self.to_vec::<T>()?;
         Ok((self.indices, data))
-    }
-
-    /// Extract tensor data as a column-major `Vec<f64>`.
-    ///
-    /// Prefer the generic [`to_vec::<f64>()`](Self::to_vec) method.
-    /// This wrapper is kept for C API compatibility.
-    /// # Errors
-    /// Returns an error when the tensor is not f64-compatible (a dtype mismatch)
-    /// or materialization fails.
-    ///
-    pub fn as_slice_f64(&self) -> std::result::Result<Vec<f64>, TensorDynLenError> {
-        self.to_vec::<f64>()
-    }
-
-    /// Extract tensor data as a column-major `Vec<Complex64>`.
-    ///
-    /// Prefer the generic [`to_vec::<Complex64>()`](Self::to_vec) method.
-    /// This wrapper is kept for C API compatibility.
-    /// # Errors
-    /// Returns an error when the tensor is not c64-compatible (a dtype mismatch)
-    /// or materialization fails.
-    ///
-    pub fn as_slice_c64(&self) -> std::result::Result<Vec<Complex64>, TensorDynLenError> {
-        self.to_vec::<Complex64>()
     }
 
     /// Check if the tensor has `f64` storage.

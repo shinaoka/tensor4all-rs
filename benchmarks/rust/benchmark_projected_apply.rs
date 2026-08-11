@@ -193,7 +193,7 @@ fn main() -> anyhow::Result<()> {
         &mut used_ids,
         &mut rng,
     )?;
-    let reference_state = state.sim_linkinds()?;
+    let reference_state = state.sim_link_indices()?;
     let (operator, input_mapping, output_mapping) = create_operator_chain(
         n_sites,
         phys_dim,

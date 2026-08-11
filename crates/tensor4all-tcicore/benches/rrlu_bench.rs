@@ -4,7 +4,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::Tensor;
-use tensor4all_tcicore::{rrlu_inplace, RrLUOptions};
+use tensor4all_tcicore::{rrlu_mut, RrLUOptions};
 use tensor4all_tensorbackend::{from_vec2d, with_default_backend, Matrix};
 
 /// Generate a random f64 backend matrix.
@@ -32,7 +32,7 @@ fn bench_rrlu(c: &mut Criterion) {
     let mut group = c.benchmark_group("rrlu_full_rank");
 
     for &size in &[10, 50, 100, 500, 1000] {
-        group.bench_with_input(BenchmarkId::new("rrlu_inplace", size), &size, |b, &n| {
+        group.bench_with_input(BenchmarkId::new("rrlu_mut", size), &size, |b, &n| {
             b.iter_batched(
                 || random_matrix(n, n, 42),
                 |mut m| {
@@ -42,7 +42,7 @@ fn bench_rrlu(c: &mut Criterion) {
                         abs_tol: 0.0,
                         ..Default::default()
                     };
-                    rrlu_inplace(&mut m, Some(opts)).unwrap();
+                    rrlu_mut(&mut m, Some(opts)).unwrap();
                 },
                 criterion::BatchSize::SmallInput,
             );

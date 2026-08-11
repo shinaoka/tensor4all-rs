@@ -19,24 +19,24 @@
 //! - **Linear solvers**: Solve linear systems involving tree tensor network operators.
 
 #![warn(missing_docs)]
-pub mod algorithm;
+mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
-pub mod dmrg;
-pub mod error;
-pub mod gse;
-pub mod link_index_network;
-pub mod linsolve;
+mod dmrg;
+mod error;
+mod gse;
+mod link_index_network;
+mod linsolve;
 mod local_update_support;
-pub mod named_graph;
-pub mod node_name_network;
-pub mod operator;
-pub mod options;
-pub mod random;
+mod named_graph;
+mod node_name_network;
+mod operator;
+mod options;
+mod random;
 mod simplett_bridge;
-pub mod site_index_network;
-pub mod tdvp;
-pub mod treetn;
+mod site_index_network;
+mod tdvp;
+mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};

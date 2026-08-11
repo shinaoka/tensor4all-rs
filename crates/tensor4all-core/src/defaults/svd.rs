@@ -15,13 +15,12 @@ use crate::truncation::{
     TruncationRule,
 };
 use crate::TensorDynLen;
+use num_complex::Complex64;
 use std::sync::Mutex;
 use tenferro::DType;
 use tenferro_ad::EagerTensor;
 use tenferro_linalg::eager_tensor::svd as eager_svd;
-use tensor4all_tensorbackend::{
-    native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
-};
+use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 use thiserror::Error;
 
 /// Error type for SVD operations in tensor4all-linalg.
@@ -208,9 +207,9 @@ fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
 
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
     match tensor.dtype() {
-        DType::F64 => native_tensor_primal_to_dense_f64_col_major(tensor)
+        DType::F64 => native_tensor_primal_to_dense_col_major::<f64>(tensor)
             .map_err(|e| SvdError::ComputationError(e.source)),
-        DType::C64 => native_tensor_primal_to_dense_c64_col_major(tensor)
+        DType::C64 => native_tensor_primal_to_dense_col_major::<Complex64>(tensor)
             .map(|values| values.into_iter().map(|value| value.re).collect())
             .map_err(|e| SvdError::ComputationError(e.source)),
         other => Err(SvdError::ComputationError(anyhow::anyhow!(

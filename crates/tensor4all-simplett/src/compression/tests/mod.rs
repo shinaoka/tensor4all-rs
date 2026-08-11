@@ -9,7 +9,7 @@ where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
 
     let mut tt_compressed = tt.clone();
@@ -53,7 +53,7 @@ where
     t2.set3(1, 0, 0, <T as Scalar>::from_f64(0.5));
     t2.set3(1, 1, 0, <T as Scalar>::from_f64(1.0));
 
-    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
     let original_sum = tt.sum();
 
     let mut tt_compressed = tt.clone();
@@ -85,7 +85,7 @@ where
         }
     }
 
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     let original_norm = tt.norm();
 
     let options = CompressionOptions {
@@ -139,7 +139,7 @@ where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
+    let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
 
     let mut tt_compressed = tt.clone();
@@ -171,7 +171,7 @@ where
             t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
         }
     }
-    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     let original_norm = tt.norm();
 
     let options = CompressionOptions {

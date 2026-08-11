@@ -1,6 +1,6 @@
 ---
 name: use-tensor4all-rs
-description: Use the tensor4all-rs Rust tensor-network library (TCI, quantics tensor trains, tree tensor networks, DMRG/TDVP/GSE time evolution, adaptive patch interpolation). Use when working with `tensor4all-*` crates (core/simplett/tensorci/quanticstci/treetn/partitionedtt/...), their `TensorDynLen`/`TensorTrain`/`TreeTN`/`QuanticsTensorCI2`/`PartitionedTT` APIs, or the `dmrg`/`tdvp`/`gse_tdvp`/`adaptiveinterpolate` entry points. Also when porting ITensors.jl, QuanticsTCI.jl, or TCI patterns to Rust, or debugging column-major, `rtol`, or 0-vs-1 indexing mismatches in tensor4all-rs code.
+description: Use the tensor4all-rs Rust tensor-network library (TCI, quantics tensor trains, tree tensor networks, DMRG/TDVP/GSE time evolution, adaptive patch interpolation). Use when working with `tensor4all-*` crates (core/simplett/tensorci/quanticstci/treetn/partitionedtt/...), their `TensorDynLen`/`SimpleTensorTrain`/`TreeTN`/`QuanticsTensorCI2`/`PartitionedTT` APIs, or the `dmrg`/`tdvp`/`gse_tdvp`/`adaptiveinterpolate` entry points. Also when porting ITensors.jl, QuanticsTCI.jl, or TCI patterns to Rust, or debugging column-major, `rtol`, or 0-vs-1 indexing mismatches in tensor4all-rs code.
 license: MIT
 ---
 
@@ -36,7 +36,7 @@ Done when `cargo build --release` succeeds and a constant TT evaluates:
 
 ```rust
 use tensor4all_simplett::AbstractTensorTrain;
-let tt = tensor4all_simplett::TensorTrain::<f64>::constant(&[2, 2], 1.0);
+let tt = tensor4all_simplett::SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
 assert!((tt.evaluate(&[0, 0])? - 1.0).abs() < 1e-12);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

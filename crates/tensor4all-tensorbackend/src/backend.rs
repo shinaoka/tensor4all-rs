@@ -214,6 +214,13 @@ pub trait MatrixSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
 ///
 /// Wraps the underlying tenferro or shape diagnostic, preserving its source
 /// chain.
+///
+/// # Remedies
+/// - Shape/dtype mismatch: verify matrix dims and scalar dtypes against the
+///   operation contract before calling.
+/// - Singular or invalid input: check matrix conditioning and finite values
+///   before solve/factorization operations.
+/// - Backend failure: the wrapped source chain identifies the failing stage.
 #[derive(Debug, thiserror::Error)]
 #[error("backend linear algebra failed: {source}")]
 pub struct BackendLinalgError {

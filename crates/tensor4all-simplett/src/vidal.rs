@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
 use crate::error::{Result, TensorTrainError};
-use crate::tensortrain::TensorTrain;
+use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use num_complex::ComplexFloat;
@@ -174,10 +174,10 @@ pub type DiagMatrix = Vec<f64>;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, VidalTensorTrain};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, VidalTensorTrain};
 ///
 /// // Build a simple tensor train and convert to Vidal form.
-/// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
 /// let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
 ///
 /// assert_eq!(vidal.len(), 2);
@@ -201,13 +201,13 @@ pub struct VidalTensorTrain<T: TTScalar> {
 }
 
 impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
-    /// Create a VidalTensorTrain from a regular TensorTrain
+    /// Create a VidalTensorTrain from a regular SimpleTensorTrain
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
-    pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
+    pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
         T: ComplexFloat + BackendLinalgScalar + Copy + 'static,
         <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
@@ -222,7 +222,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// /// index mismatch, or a backend failure).
     ///
     pub fn from_tensor_train_with_partition(
-        tt: &TensorTrain<T>,
+        tt: &SimpleTensorTrain<T>,
         partition: Range<usize>,
     ) -> Result<Self>
     where
@@ -447,11 +447,11 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
         &mut self.singular_values[i]
     }
 
-    /// Convert to a regular TensorTrain
-    pub fn to_tensor_train(&self) -> TensorTrain<T> {
+    /// Convert to a regular SimpleTensorTrain
+    pub fn to_tensor_train(&self) -> SimpleTensorTrain<T> {
         let n = self.len();
         if n == 0 {
-            return TensorTrain::from_tensors_unchecked(Vec::new());
+            return SimpleTensorTrain::from_tensors_unchecked(Vec::new());
         }
 
         let mut tensors = Vec::with_capacity(n);
@@ -483,7 +483,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
         // Last tensor is unchanged
         tensors.push(self.tensors[n - 1].clone());
 
-        TensorTrain::from_tensors_unchecked(tensors)
+        SimpleTensorTrain::from_tensors_unchecked(tensors)
     }
 }
 
@@ -510,10 +510,10 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for VidalTensorTrain
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, InverseTensorTrain};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, InverseTensorTrain};
 ///
 /// // Build a simple tensor train and convert to inverse form.
-/// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+/// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
 /// let inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 ///
 /// assert_eq!(inv.len(), 2);
@@ -657,13 +657,13 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
         })
     }
 
-    /// Create an InverseTensorTrain from a regular TensorTrain
+    /// Create an InverseTensorTrain from a regular SimpleTensorTrain
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
-    pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
+    pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
         T: ComplexFloat + BackendLinalgScalar + Copy + 'static,
         <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
@@ -721,11 +721,11 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
         Ok(())
     }
 
-    /// Convert to a regular TensorTrain
-    pub fn to_tensor_train(&self) -> TensorTrain<T> {
+    /// Convert to a regular SimpleTensorTrain
+    pub fn to_tensor_train(&self) -> SimpleTensorTrain<T> {
         let n = self.len();
         if n == 0 {
-            return TensorTrain::from_tensors_unchecked(Vec::new());
+            return SimpleTensorTrain::from_tensors_unchecked(Vec::new());
         }
 
         let mut tensors = Vec::with_capacity(n);
@@ -757,7 +757,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
         // Last tensor is unchanged
         tensors.push(self.tensors[n - 1].clone());
 
-        TensorTrain::from_tensors_unchecked(tensors)
+        SimpleTensorTrain::from_tensors_unchecked(tensors)
     }
 }
 

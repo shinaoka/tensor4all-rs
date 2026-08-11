@@ -1,6 +1,6 @@
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain, Tensor3Ops};
 
-fn print_tt_info<T>(label: &str, tt: &TensorTrain<T>)
+fn print_tt_info<T>(label: &str, tt: &SimpleTensorTrain<T>)
 where
     T: tensor4all_simplett::TTScalar + std::fmt::Debug,
 {
@@ -35,14 +35,14 @@ where
 
     println!("sum = {:?}", tt.sum());
 
-    let (dense, shape) = tt.fulltensor();
-    println!("fulltensor shape = {:?}", shape);
-    println!("fulltensor data = {:?}", dense);
+    let (dense, shape) = tt.full_tensor();
+    println!("full_tensor shape = {:?}", shape);
+    println!("full_tensor data = {:?}", dense);
     println!();
 }
 
 fn main() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
     let tt_value = tt.evaluate(&[0, 1, 2]).unwrap();
     assert!((tt_value - 1.0).abs() < 1e-12);
     let tt_total = tt.sum();

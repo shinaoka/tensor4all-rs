@@ -39,7 +39,7 @@ fn test_scale_doubles_norm() {
     let mut tn = make_three_node_chain();
     let original_norm = tn.norm().unwrap();
 
-    tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    tn.scale_mut(AnyScalar::new_real(2.0)).unwrap();
     let scaled_norm = tn.norm().unwrap();
 
     assert!((scaled_norm - 2.0 * original_norm).abs() < 1.0e-10);
@@ -92,7 +92,7 @@ fn test_evaluate_accepts_full_indices_for_same_id_prime_pair() {
 }
 
 #[test]
-fn evaluator_evaluate_batch_matches_evaluate_at_sugar() {
+fn evaluator_evaluate_batched_matches_evaluate() {
     let tn = make_three_node_chain();
     let (indices, _) = tn.all_site_indices().unwrap();
     let values = [0usize, 0, 0, 1, 1, 1, 0, 1, 0];
@@ -100,8 +100,8 @@ fn evaluator_evaluate_batch_matches_evaluate_at_sugar() {
     let values_ref = ColMajorArrayRef::new(&values, &shape).unwrap();
 
     let evaluator = TreeTNEvaluator::new(&tn, &indices).unwrap();
-    let direct = evaluator.evaluate_batch(values_ref).unwrap();
-    let sugar = tn.evaluate_at(&indices, values_ref).unwrap();
+    let direct = evaluator.evaluate_batched(values_ref).unwrap();
+    let sugar = tn.evaluate(&indices, values_ref).unwrap();
 
     assert_eq!(direct.len(), 3);
     assert_eq!(sugar.len(), 3);
@@ -120,7 +120,7 @@ fn evaluate_point_matches_single_column_batch() {
 
     let point = tn.evaluate_point(&indices, &values).unwrap();
     let batch = tn
-        .evaluate_at(&indices, ColMajorArrayRef::new(&values, &shape).unwrap())
+        .evaluate(&indices, ColMajorArrayRef::new(&values, &shape).unwrap())
         .unwrap();
 
     assert_eq!(batch.len(), 1);

@@ -80,7 +80,7 @@ where
 {
     let options = QtciOptions::default()
         .with_tolerance(TOLERANCE)
-        .with_maxbonddim(MAX_BOND_DIM)
+        .with_max_bond_dim(MAX_BOND_DIM)
         .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);

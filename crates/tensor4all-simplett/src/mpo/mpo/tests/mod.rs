@@ -40,7 +40,7 @@ fn test_mpo_empty_and_single_site_constructors() {
     assert!(empty.is_empty());
     assert_eq!(empty.link_dims(), Vec::<usize>::new());
     assert_eq!(empty.rank(), 1);
-    assert_eq!(empty.fulltensor(), (Vec::new(), Vec::new()));
+    assert_eq!(empty.full_tensor(), (Vec::new(), Vec::new()));
     assert_eq!(empty.sum().unwrap(), 0.0);
     assert!(empty
         .evaluate(&[])
@@ -52,7 +52,7 @@ fn test_mpo_empty_and_single_site_constructors() {
     assert_eq!(single.site_dim(0), (2, 3));
     assert_eq!(single.link_dims(), Vec::<usize>::new());
     assert_eq!(single.evaluate(&[1, 2]).unwrap(), 4.0);
-    assert_eq!(single.scaled(0.5).evaluate(&[1, 2]).unwrap(), 2.0);
+    assert_eq!(single.scale(0.5).evaluate(&[1, 2]).unwrap(), 2.0);
 
     let identity_empty = MPO::<f64>::identity(&[]).unwrap();
     assert!(identity_empty.is_empty());
@@ -113,9 +113,9 @@ fn test_mpo_evaluate_reports_invalid_indices() {
 }
 
 #[test]
-fn test_mpo_fulltensor_zero_dimension_returns_shape() {
+fn test_mpo_full_tensor_zero_dimension_returns_shape() {
     let mpo = MPO::<f64>::zeros(&[(0, 2)]);
-    let (data, shape) = mpo.fulltensor();
+    let (data, shape) = mpo.full_tensor();
     assert!(data.is_empty());
     assert_eq!(shape, vec![0, 2]);
 }
@@ -123,7 +123,7 @@ fn test_mpo_fulltensor_zero_dimension_returns_shape() {
 #[test]
 fn test_mpo_scale() {
     let mut mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    mpo.scale(3.0);
+    mpo.scale_mut(3.0);
 
     // Sum should be 3.0 * (2*2) * (2*2) = 3.0 * 16 = 48.0
     let sum = mpo.sum().unwrap();
@@ -146,9 +146,9 @@ fn test_mpo_link_dims() {
 }
 
 #[test]
-fn test_mpo_fulltensor() {
+fn test_mpo_full_tensor() {
     let mpo = MPO::<f64>::constant(&[(2, 2)], 5.0);
-    let (data, shape) = mpo.fulltensor();
+    let (data, shape) = mpo.full_tensor();
 
     assert_eq!(shape, vec![2, 2]);
     assert_eq!(data.len(), 4);
@@ -160,7 +160,7 @@ fn test_mpo_fulltensor() {
 }
 
 #[test]
-fn test_mpo_fulltensor_matches_evaluate() {
+fn test_mpo_full_tensor_matches_evaluate() {
     let mut tensor: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1);
     tensor.set4(0, 0, 0, 0, 1.0);
     tensor.set4(0, 1, 0, 0, 2.0);
@@ -170,7 +170,7 @@ fn test_mpo_fulltensor_matches_evaluate() {
     tensor.set4(0, 1, 2, 0, 6.0);
 
     let mpo = MPO::new(vec![tensor]).unwrap();
-    let (data, shape) = mpo.fulltensor();
+    let (data, shape) = mpo.full_tensor();
 
     assert_eq!(shape, vec![2, 3]);
     for i in 0..2 {

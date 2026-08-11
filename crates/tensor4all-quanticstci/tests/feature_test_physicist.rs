@@ -523,7 +523,7 @@ fn from_arrays_error_cases() {
 fn options_builder_all_fields() {
     let opts = QtciOptions::default()
         .with_tolerance(1e-6)
-        .with_maxbonddim(50)
+        .with_max_bond_dim(50)
         .with_maxiter(100)
         .with_nrandominitpivot(10)
         .with_unfoldingscheme(UnfoldingScheme::Fused)
@@ -532,7 +532,7 @@ fn options_builder_all_fields() {
         .with_nsearch(200);
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
-    assert_eq!(opts.maxbonddim, Some(50));
+    assert_eq!(opts.max_bond_dim, Some(50));
     assert_eq!(opts.maxiter, 100);
     assert_eq!(opts.nrandominitpivot, 10);
     assert_eq!(opts.unfoldingscheme, UnfoldingScheme::Fused);
@@ -547,9 +547,9 @@ fn options_builder_all_fields() {
     assert_eq!(tree_opts.max_iter, 100);
 }
 
-/// Verify that maxbonddim actually limits the rank.
+/// Verify that max_bond_dim actually limits the rank.
 #[test]
-fn options_maxbonddim_limits_rank() {
+fn options_max_bond_dim_limits_rank() {
     // Use a function that would normally require higher rank
     let n: usize = 64;
     let f = |idx: &[i64]| ((idx[0] as f64) * 0.1).sin() * ((idx[1] as f64) * 0.2).cos();
@@ -557,16 +557,16 @@ fn options_maxbonddim_limits_rank() {
 
     let opts = QtciOptions::default()
         .with_tolerance(1e-14) // Very tight tolerance to force high rank
-        .with_maxbonddim(3) // But cap bond dim at 3
+        .with_max_bond_dim(3) // But cap bond dim at 3
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(&sizes, f, None, opts)
-        .expect("maxbonddim test should work");
+        .expect("max_bond_dim test should work");
 
     // The rank should respect the maximum bond dimension
     assert!(
         qtci.rank() <= 3,
-        "rank {} should be <= maxbonddim 3",
+        "rank {} should be <= max_bond_dim 3",
         qtci.rank()
     );
 }

@@ -55,7 +55,7 @@ impl TensorIndex for PlainVector {
         Ok(self.clone())
     }
 
-    fn replaceinds(
+    fn replace_indices(
         &self,
         _old_indices: &[Self::Index],
         _new_indices: &[Self::Index],

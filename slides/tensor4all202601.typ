@@ -466,10 +466,10 @@
 #slide("Rust: TensorTrain")[
   #code-block[
     ```rust
-    use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 
     // Create a constant tensor train with local dimensions [2, 3, 4]
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 
     // Evaluate at a specific multi-index
     let value = tt.evaluate(&[0, 1, 2])?;

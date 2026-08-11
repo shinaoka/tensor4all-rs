@@ -35,7 +35,7 @@ pub struct PartialFourier2dConfig {
     pub include_endpoint: bool,
     pub t_frequency: usize,
     pub tolerance: f64,
-    pub maxbonddim: usize,
+    pub max_bond_dim: usize,
     pub maxiter: usize,
 }
 
@@ -48,7 +48,7 @@ pub const DEFAULT_PARTIAL_FOURIER2D_CONFIG: PartialFourier2dConfig = PartialFour
     include_endpoint: true,
     t_frequency: 3,
     tolerance: 1e-12,
-    maxbonddim: 64,
+    max_bond_dim: 64,
     maxiter: 20,
 };
 
@@ -180,7 +180,7 @@ pub fn build_source_qtt(
 ) -> Result<PartialFourier2dQttOutput, Box<dyn Error>> {
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
-        .with_maxbonddim(config.maxbonddim)
+        .with_max_bond_dim(config.max_bond_dim)
         .with_maxiter(config.maxiter)
         .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
@@ -222,7 +222,7 @@ pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
     let options = FourierOptions {
-        maxbonddim: config.maxbonddim,
+        max_bond_dim: config.max_bond_dim,
         tolerance: config.tolerance,
         ..FourierOptions::forward()
     };

@@ -203,7 +203,7 @@ fn test_projected_state_creation() {
 
 #[test]
 fn test_projected_state_local_constant_term_vin_eq_vout() {
-    // Exercise the V_in = V_out path (uses sim_linkinds internally to avoid bra/ket collisions).
+    // Exercise the V_in = V_out path (uses sim_link_indices internally to avoid bra/ket collisions).
     let (mps, _sites, _bonds) = create_simple_mps_chain();
     let mut projected_state = ProjectedState::new(mps.clone());
 
@@ -2254,8 +2254,8 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     let (mpo, input_mapping, output_mapping) =
         create_n_site_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
 
-    // Create initial guess (sim_linkinds to get independent bond indices)
-    let init = rhs.sim_linkinds().unwrap();
+    // Create initial guess (sim_link_indices to get independent bond indices)
+    let init = rhs.sim_link_indices().unwrap();
 
     // Canonicalize init towards site0
     let mut x = init
@@ -2373,7 +2373,7 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
         create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
     let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
     let mut rhs = solution.clone();
-    rhs.scale(AnyScalar::new_real(7.0)).unwrap();
+    rhs.scale_mut(AnyScalar::new_real(7.0)).unwrap();
 
     let residual = relative_linear_system_residual(
         &operator,
@@ -2523,8 +2523,7 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
 
     let phys_dim = 2;
     let (rhs, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
-    let mut init = rhs.clone();
-    init.scale(AnyScalar::new_real(1.0 + 1.0e-6)).unwrap();
+    let init = rhs.scale(AnyScalar::new_real(1.0 + 1.0e-6)).unwrap();
     let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[0.0, 0.0], phys_dim);
     let (input_mapping, output_mapping) =
         create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);

@@ -378,7 +378,7 @@ where
     }
 
     let mut solution = rhs.clone();
-    solution.scale(AnyScalar::new_real(1.0) / options.a0.clone())?;
+    solution.scale_mut(AnyScalar::new_real(1.0) / options.a0.clone())?;
     let residual = if options.check_residual || options.convergence_tol.is_some() {
         let residual_operator =
             linear_operator_for_residual(operator, init, input_mapping, output_mapping)?;
@@ -507,16 +507,16 @@ where
     let a0 = a0.into();
     let a1 = a1.into();
     let mut lhs = solution.clone();
-    lhs.scale(a0)?;
+    lhs.scale_mut(a0)?;
 
     if !a1.is_zero() {
         let mut ax = apply_linear_operator(operator, solution, apply_options)?;
-        ax.scale(a1)?;
+        ax.scale_mut(a1)?;
         lhs = lhs.add_reindexed_like_self(&ax)?;
     }
 
     let mut negative_rhs = rhs.clone();
-    negative_rhs.scale(AnyScalar::new_real(-1.0))?;
+    negative_rhs.scale_mut(AnyScalar::new_real(-1.0))?;
     let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
     let rhs_norm = rhs.clone().norm()?;

@@ -26,16 +26,16 @@ manage named indices.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
 
 // Constant TT: all entries equal to 1.0, physical dimensions [2, 3, 4]
-let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 assert_eq!(tt.len(), 3);
 assert_eq!(tt.site_dims(), vec![2, 3, 4]);
 assert_eq!(tt.link_dims(), vec![1, 1]); // bond dim = 1 for a constant
 
 // Zero TT: all entries are zero
-let zero_tt = TensorTrain::<f64>::zeros(&[2, 3, 4]);
+let zero_tt = SimpleTensorTrain::<f64>::zeros(&[2, 3, 4]);
 assert!((zero_tt.sum()).abs() < 1e-14);
 # Ok(())
 # }
@@ -45,8 +45,8 @@ assert!((zero_tt.sum()).abs() < 1e-14);
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
-# let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+# use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+# let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 // Evaluate the tensor at a specific multi-index
 let value = tt.evaluate(&[0, 1, 2])?;
 assert!((value - 1.0).abs() < 1e-12);
@@ -65,10 +65,10 @@ assert!((total - 24.0).abs() < 1e-10);
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+# use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
 // Build a TT with artificially inflated bond dimension by adding two constants
-let a = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
-let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
+let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
 let big = a.add(&b)?; // bond dim = 2, but rank-1 would suffice
 assert_eq!(big.rank(), 2);
 
@@ -102,11 +102,11 @@ verify.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
 
 // Step 1: Create two constant TTs
-let a = TensorTrain::<f64>::constant(&[4, 4, 4], 1.0);
-let b = TensorTrain::<f64>::constant(&[4, 4, 4], 2.0);
+let a = SimpleTensorTrain::<f64>::constant(&[4, 4, 4], 1.0);
+let b = SimpleTensorTrain::<f64>::constant(&[4, 4, 4], 2.0);
 
 // Step 2: Add them (bond dim doubles)
 let sum = a.add(&b)?;
@@ -219,7 +219,7 @@ tt.truncate(
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(2),
 )?;
-assert!(tt.maxbonddim() <= 2);
+assert!(tt.max_bond_dim() <= 2);
 # Ok(())
 # }
 ```

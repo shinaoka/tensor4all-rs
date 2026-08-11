@@ -49,7 +49,7 @@ fn for_each_grid_index(ndims: usize, points_per_dim: usize, mut f: impl FnMut(&[
 }
 
 fn assert_tt_matches_grid_1d(
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     grid: &DiscretizedGrid,
     f: impl Fn(f64) -> f64,
     tol: f64,
@@ -70,7 +70,7 @@ fn assert_tt_matches_grid_1d(
 }
 
 fn assert_tt_matches_grid_nd(
-    tt: &TensorTrain<f64>,
+    tt: &SimpleTensorTrain<f64>,
     grid: &DiscretizedGrid,
     f: impl Fn(&[f64]) -> f64,
     tol: f64,

@@ -827,7 +827,7 @@ fn main() -> Result<()> {
             &mps_params,
             &conj_times,
             "ok",
-            conj_tt.maxbonddim(),
+            conj_tt.max_bond_dim(),
         );
 
         let (conj_elements, conj_sites_times) = run_for_seconds(
@@ -856,7 +856,7 @@ fn main() -> Result<()> {
             &mps_params,
             &directsum_times,
             &format_scalar(sum_norm),
-            sum.maxbonddim(),
+            sum.max_bond_dim(),
         );
 
         if opts.skip_zipup {
@@ -895,7 +895,7 @@ fn main() -> Result<()> {
             &zipup_params,
             &zipup_times,
             &format_scalar(zipup_norm),
-            zipup_result.maxbonddim(),
+            zipup_result.max_bond_dim(),
         );
     }
 

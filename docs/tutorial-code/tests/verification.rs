@@ -192,7 +192,7 @@ fn qtt_difference_kernel_demo_builds_periodic_mpo_and_exports_csv() -> Result<()
     let config = qtt_difference_kernel_common::DifferenceKernelTutorialConfig {
         bits: 3,
         tolerance: 1e-12,
-        maxbonddim: 32,
+        max_bond_dim: 32,
         maxiter: 20,
     };
 

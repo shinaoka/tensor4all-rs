@@ -80,14 +80,14 @@ fn test_fit_bond_growth_with_rtol() {
 
     eprintln!(
         "A max bond: {}, B max bond: {}",
-        mpo_a.maxbonddim(),
-        mpo_b.maxbonddim()
+        mpo_a.max_bond_dim(),
+        mpo_b.max_bond_dim()
     );
 
     // Reference: zipup without truncation (exact)
     let result_exact = mpo_a.contract(&mpo_b, &ContractOptions::zipup()).unwrap();
     let exact_norm = result_exact.norm().unwrap();
-    let exact_bd = result_exact.maxbonddim();
+    let exact_bd = result_exact.max_bond_dim();
     eprintln!("exact max bond: {exact_bd}, ||exact|| = {exact_norm:.6e}");
 
     // Use a large rtol that forces significant truncation in zipup
@@ -101,7 +101,7 @@ fn test_fit_bond_growth_with_rtol() {
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();
-    let zipup_bd = result_zipup.maxbonddim();
+    let zipup_bd = result_zipup.max_bond_dim();
     let zipup_err = result_zipup
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
@@ -127,7 +127,7 @@ fn test_fit_bond_growth_with_rtol() {
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();
-    let fit_bd = result_fit.maxbonddim();
+    let fit_bd = result_fit.max_bond_dim();
     let fit_err = result_fit
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
@@ -145,7 +145,7 @@ fn test_fit_bond_growth_with_rtol() {
                 .with_nsweeps(4),
         )
         .unwrap();
-    let fit4_bd = result_fit4.maxbonddim();
+    let fit4_bd = result_fit4.max_bond_dim();
     let fit4_err = result_fit4
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()
@@ -162,7 +162,7 @@ fn test_fit_bond_growth_with_rtol() {
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12)),
         )
         .unwrap();
-    let fit_small_rtol_bd = result_fit_small_rtol.maxbonddim();
+    let fit_small_rtol_bd = result_fit_small_rtol.max_bond_dim();
     let fit_small_rtol_err = result_fit_small_rtol
         .axpby(1.0.into(), &result_exact, (-1.0).into())
         .unwrap()

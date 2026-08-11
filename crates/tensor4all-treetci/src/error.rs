@@ -7,6 +7,13 @@ pub type Result<T> = std::result::Result<T, TreeTciError>;
 
 /// Error returned by tree tensor cross interpolation construction and
 /// traversal operations.
+///
+/// # Remedies
+/// - Tree-shape or topology failures: validate the tree structure (leaf
+///   counts, ranks) before construction.
+/// - Tolerance/termination failures: relax `rtol`/`max_bond_dim` or increase
+///   the number of sweeps when convergence is not reached.
+/// - Backend failures: the wrapped source chain identifies the failing stage.
 #[derive(Debug, Error)]
 pub enum TreeTciError {
     /// The tree graph is invalid (disconnected, missing vertices, or

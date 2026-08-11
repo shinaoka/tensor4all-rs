@@ -1465,7 +1465,7 @@ fn apply_with_zipup(
         .contract(mpo, &options)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let result = result.replaceinds(&indices.operator_outputs, &indices.inputs)?;
+    let result = result.replace_indices(&indices.operator_outputs, &indices.inputs)?;
     Ok(result)
 }
 
@@ -1484,17 +1484,17 @@ fn apply_with_fit(
         .contract(mpo, &options)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let result = result.replaceinds(&indices.operator_outputs, &indices.inputs)?;
+    let result = result.replace_indices(&indices.operator_outputs, &indices.inputs)?;
     Ok(result)
 }
 
-/// Debug: Check contract result before and after replaceinds
+/// Debug: Check contract result before and after replace_indices
 fn debug_contract_result(
     op: &TensorTrain,
     mpo: &TensorTrain,
     indices: &SharedIndices,
 ) -> anyhow::Result<()> {
-    println!("\n=== DEBUG: Contract result before replaceinds ===");
+    println!("\n=== DEBUG: Contract result before replace_indices ===");
 
     let options_zipup = ContractOptions::zipup()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
@@ -1589,17 +1589,17 @@ fn debug_contract_result(
     // Check link indices (common between adjacent tensors)
     println!("\n=== Link indices check (common between adjacent) ===");
     println!(
-        "zipup linkinds: {:?}",
+        "zipup link_indices: {:?}",
         raw_zipup
-            .linkinds()
+            .link_indices()
             .iter()
             .map(|i| i.id())
             .collect::<Vec<_>>()
     );
     println!(
-        "fit linkinds:   {:?}",
+        "fit link_indices:   {:?}",
         raw_fit
-            .linkinds()
+            .link_indices()
             .iter()
             .map(|i| i.id())
             .collect::<Vec<_>>()

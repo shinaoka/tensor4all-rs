@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Enable `apply_linear_operator` to handle non-contiguous operator node sets by computing the Steiner tree and inserting identity tensors at intermediate nodes, generalizing Julia's `matchsiteinds` to tree tensor networks.
+**Goal:** Enable `apply_linear_operator` to handle non-contiguous operator node sets by computing the Steiner tree and inserting identity tensors at intermediate nodes, generalizing Julia's `matchsite_indices` to tree tensor networks.
 
 **Architecture:** Add a `steiner_tree` method to `SiteIndexNetwork`, then modify `extend_operator_to_full_space` to first expand the operator's effective node set to its Steiner tree (filling intermediate nodes with identity), before composing with identity on the remaining gap nodes. This removes the connected-subtree requirement from partial apply.
 

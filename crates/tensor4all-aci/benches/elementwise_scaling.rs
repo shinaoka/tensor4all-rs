@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tensor4all_aci::{elementwise_batched, AciOptions, AciResult, ElementwiseBatch};
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 
 const N_SITES: usize = 12;
 const LOCAL_DIM: usize = 2;
@@ -66,7 +66,7 @@ fn deterministic_tt(
     n_sites: usize,
     local_dim: usize,
     chi: usize,
-) -> TensorTrain<f64> {
+) -> SimpleTensorTrain<f64> {
     let links = link_dims(n_sites, local_dim, chi);
     let cores = (0..n_sites)
         .map(|site| {
@@ -93,16 +93,16 @@ fn deterministic_tt(
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("deterministic benchmark cores should have valid dimensions");
-    TensorTrain::new(cores).expect("deterministic benchmark tensor train should be valid")
+    SimpleTensorTrain::new(cores).expect("deterministic benchmark tensor train should be valid")
 }
 
-fn deterministic_inputs(chi: usize) -> Vec<TensorTrain<f64>> {
+fn deterministic_inputs(chi: usize) -> Vec<SimpleTensorTrain<f64>> {
     (0..N_INPUTS)
         .map(|input_index| deterministic_tt(input_index, N_SITES, LOCAL_DIM, chi))
         .collect()
 }
 
-fn deterministic_initial_guess(chi: usize) -> TensorTrain<f64> {
+fn deterministic_initial_guess(chi: usize) -> SimpleTensorTrain<f64> {
     deterministic_tt(N_INPUTS, N_SITES, LOCAL_DIM, chi)
 }
 
@@ -135,8 +135,8 @@ fn sample_index(sample: usize, chi: usize) -> Vec<usize> {
 }
 
 fn sampled_max_abs_error(
-    inputs: &[TensorTrain<f64>],
-    output: &TensorTrain<f64>,
+    inputs: &[SimpleTensorTrain<f64>],
+    output: &SimpleTensorTrain<f64>,
     chi: usize,
 ) -> f64 {
     (0..SAMPLE_POINTS)
@@ -154,7 +154,10 @@ fn sampled_max_abs_error(
         .fold(0.0, f64::max)
 }
 
-fn run_aci(inputs: &[TensorTrain<f64>], initial_guess: &TensorTrain<f64>) -> AciResult<f64> {
+fn run_aci(
+    inputs: &[SimpleTensorTrain<f64>],
+    initial_guess: &SimpleTensorTrain<f64>,
+) -> AciResult<f64> {
     let options = AciOptions {
         max_iters: MAX_ITERS,
         tolerance: TOLERANCE,

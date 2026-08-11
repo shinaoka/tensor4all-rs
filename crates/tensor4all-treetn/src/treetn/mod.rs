@@ -933,7 +933,7 @@ where
 
     /// Return a copy with all link/bond indices replaced by fresh IDs.
     ///
-    /// This is analogous to ITensorMPS.jl's `sim(linkinds, M)` / `sim!(linkinds, M)`,
+    /// This is analogous to ITensorMPS.jl's `sim(link_indices, M)` / `sim!(link_indices, M)`,
     /// and is mainly useful to avoid accidental index-ID collisions when combining
     /// multiple networks.
     ///
@@ -944,23 +944,23 @@ where
     /// Returns an error when the link-index relabeling fails (an invalid-index
     /// failure).
     ///
-    pub fn sim_linkinds(&self) -> std::result::Result<Self, TreeTNOperationError>
+    pub fn sim_link_indices(&self) -> std::result::Result<Self, TreeTNOperationError>
     where
         T::Index: IndexLike,
     {
         let mut result = self.clone();
-        result.sim_linkinds_mut()?;
+        result.sim_link_indices_mut()?;
         Ok(result)
     }
 
     /// Replace all link/bond indices with fresh IDs in-place.
     ///
-    /// See [`Self::sim_linkinds`] for details.
+    /// See [`Self::sim_link_indices`] for details.
     /// # Errors
     /// Returns an error when the link-index relabeling fails (an invalid-index
     /// failure).
     ///
-    pub fn sim_linkinds_mut(&mut self) -> std::result::Result<(), TreeTNOperationError>
+    pub fn sim_link_indices_mut(&mut self) -> std::result::Result<(), TreeTNOperationError>
     where
         T::Index: IndexLike,
     {

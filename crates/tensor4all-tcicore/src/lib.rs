@@ -83,6 +83,6 @@ pub use matrix_luci::{
     matrix_luci_factors_from_matrix_owned, MatrixLUCI, MatrixLuciFactors,
 };
 pub use matrixaca::MatrixACA;
-pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
+pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
 pub use scalar::Scalar;
 pub use traits::AbstractMatrixCI;

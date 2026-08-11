@@ -1,7 +1,9 @@
 //! TensorCI1 - legacy one-site Tensor Cross Interpolation algorithm.
 
 use crate::error::{Result, TCIError};
-use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{
+    tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
+};
 use tensor4all_tcicore::{
     AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
 };
@@ -121,10 +123,10 @@ impl Default for TCI1Options {
 ///
 /// Use this state when interoperating with workflows that expect the TCI1
 /// representation. For repeated evaluation, convert it to
-/// [`TensorTrain`] with [`to_tensor_train`](Self::to_tensor_train).
+/// [`SimpleTensorTrain`] with [`to_tensor_train`](Self::to_tensor_train).
 ///
 /// Related types: [`TensorCI2`](crate::TensorCI2) is the primary two-site TCI
-/// state; [`TensorTrain`] is the reusable tensor train representation produced
+/// state; [`SimpleTensorTrain`] is the reusable tensor train representation produced
 /// by both algorithms.
 ///
 /// # Examples
@@ -408,7 +410,7 @@ where
     ///
     /// # Returns
     ///
-    /// A [`TensorTrain`] with the current TCI1 site tensors.
+    /// A [`SimpleTensorTrain`] with the current TCI1 site tensors.
     ///
     /// # Errors
     ///
@@ -433,7 +435,7 @@ where
     ///
     /// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
     /// ```
-    pub fn to_tensor_train(&self) -> Result<TensorTrain<T>> {
+    pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
         if !self.is_site_tensors_available() {
             return Err(TCIError::InvalidOperation {
                 message: "TensorCI1 has no site tensors; run crossinterpolate1 first".to_string(),
@@ -444,7 +446,7 @@ where
         for site in 0..self.len() {
             tensors.push(self.normalized_site_tensor(site)?);
         }
-        TensorTrain::new(tensors).map_err(Into::into)
+        SimpleTensorTrain::new(tensors).map_err(Into::into)
     }
 
     /// Evaluate the TCI1 approximation at one multi-index.

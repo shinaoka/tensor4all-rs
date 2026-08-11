@@ -13,7 +13,7 @@ use crate::error::{invalid_argument, Result};
 /// # Related Types
 /// `LagrangePolynomials` provides the local basis. The generated core tensors
 /// are stored as `tensor4all-simplett` rank-3 tensors and assembled into a
-/// `TensorTrain`.
+/// `SimpleTensorTrain`.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::get_chebyshev_grid;

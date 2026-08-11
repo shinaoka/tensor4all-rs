@@ -481,7 +481,7 @@ fn apply_operator_for_block(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Replace operator output indices with input indices
-    let result = result.replaceinds(
+    let result = result.replace_indices(
         &indices.operator_outputs[block_idx],
         &indices.inputs[block_idx],
     )?;
@@ -506,7 +506,7 @@ fn apply_cross_block_operator(
 
     // Replace operator output indices with destination input indices
     let result =
-        result.replaceinds(&indices.operator_outputs[dst_idx], &indices.inputs[dst_idx])?;
+        result.replace_indices(&indices.operator_outputs[dst_idx], &indices.inputs[dst_idx])?;
 
     Ok(result)
 }
@@ -531,10 +531,10 @@ fn apply_cross_block_operator_full(
 
     // Replace operator output indices with destination input indices
     let result =
-        result.replaceinds(&indices.operator_outputs[dst_idx], &indices.inputs[dst_idx])?;
+        result.replace_indices(&indices.operator_outputs[dst_idx], &indices.inputs[dst_idx])?;
 
     // Replace source output indices with destination output indices
-    let result = result.replaceinds(&indices.outputs[src_idx], &indices.outputs[dst_idx])?;
+    let result = result.replace_indices(&indices.outputs[src_idx], &indices.outputs[dst_idx])?;
 
     Ok(result)
 }

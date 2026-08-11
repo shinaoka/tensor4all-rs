@@ -11,12 +11,13 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar};
+use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
 use tensor4all_tcicore::{MatrixLuciScalar, MultiIndex, Scalar};
 use tensor4all_tensorbackend::StorageScalar;
 use tensor4all_tensorci::{
     crossinterpolate2, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
 };
+use tensor4all_treetn::{tensor_train_to_treetn, TreeTN};
 
 use crate::{PartitionedTT, PartitionedTTError, Projector, Result, SubDomainTT};
 
@@ -196,9 +197,16 @@ where
                 .collect();
             let core = tensor3_from_data(data, 1, dim, 1)
                 .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
-            let exact = tensor4all_simplett::TensorTrain::new(vec![core])
+            let exact = SimpleTensorTrain::new(vec![core])
                 .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
-            let tt = embed_active_tt(exact, &site_indices, &active_positions, &patch.projector)?;
+            let (exact_tree, _) = tensor_train_to_treetn(&exact)
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
+            let tt = embed_active_tt::<T>(
+                exact_tree,
+                &site_indices,
+                &active_positions,
+                &patch.projector,
+            )?;
             accepted.push(SubDomainTT::new(tt, patch.projector));
             continue;
         }
@@ -280,8 +288,10 @@ where
 
         if patch_is_accepted(termination, final_error, options.tci_options.tolerance) {
             let simple_tt = tci.to_tensor_train()?;
-            let tt = embed_active_tt(
-                simple_tt,
+            let (active_tree, _) = tensor_train_to_treetn(&simple_tt)
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
+            let tt = embed_active_tt::<T>(
+                active_tree,
                 &site_indices,
                 &active_positions,
                 &patch.projector,
@@ -551,7 +561,7 @@ where
 }
 
 fn embed_active_tt<T>(
-    active_tt: tensor4all_simplett::TensorTrain<T>,
+    active_tree: TreeTN<TensorDynLen, usize>,
     site_indices: &[DynIndex],
     active_positions: &[usize],
     projector: &Projector,
@@ -560,8 +570,28 @@ where
     T: Scalar + TTScalar + TensorElement + StorageScalar + Default + Copy,
 {
     let active_count = active_positions.len();
-    let link_dims = active_tt.link_dims();
-    let cores = active_tt.into_site_tensors();
+    let link_dims = active_tree.link_dims();
+    let node_names = active_tree.node_names();
+    let mut core_data: Vec<Vec<T>> = Vec::with_capacity(node_names.len());
+    for name in &node_names {
+        let node = active_tree.node_index(name).ok_or_else(|| {
+            PartitionedTTError::tensor_train_operation(format!(
+                "missing node {:?} in active tree",
+                name
+            ))
+        })?;
+        let tensor = active_tree.tensor(node).ok_or_else(|| {
+            PartitionedTTError::tensor_train_operation(format!(
+                "missing tensor for node {:?} in active tree",
+                name
+            ))
+        })?;
+        core_data.push(
+            tensor
+                .to_vec::<T>()
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?,
+        );
+    }
     let mut edge_dims = Vec::with_capacity(site_indices.len().saturating_sub(1));
     for edge in 0..site_indices.len().saturating_sub(1) {
         let active_left = active_positions
@@ -585,7 +615,7 @@ where
         let left = position.checked_sub(1).map(|edge| &edge_indices[edge]);
         let right = edge_indices.get(position);
         if active_positions.get(next_active) == Some(&position) {
-            let core = &cores[next_active];
+            let core = &core_data[next_active];
             let mut indices = Vec::with_capacity(3);
             if let Some(index) = left {
                 indices.push(index.clone());
@@ -595,7 +625,7 @@ where
                 indices.push(index.clone());
             }
             tensors.push(
-                TensorDynLen::from_dense(indices, core.to_col_major_vec()).map_err(|error| {
+                TensorDynLen::from_dense(indices, core.clone()).map_err(|error| {
                     PartitionedTTError::tensor_train_operation(error.to_string())
                 })?,
             );
