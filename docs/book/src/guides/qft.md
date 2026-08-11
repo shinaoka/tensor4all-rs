@@ -156,7 +156,7 @@ use tensor4all_quanticstci::{
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetci::materialize::to_treetn;
-use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
 use tensor4all_treetn::Operator;
 
 let r = 3;

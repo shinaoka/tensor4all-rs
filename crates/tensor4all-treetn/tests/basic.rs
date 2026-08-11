@@ -10,7 +10,7 @@
 
 use petgraph::graph::NodeIndex;
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
-use tensor4all_treetn::algorithm::CanonicalForm;
+use tensor4all_treetn::CanonicalForm;
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 // ============================================================================

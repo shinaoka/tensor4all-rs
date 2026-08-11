@@ -2,7 +2,7 @@ use super::*;
 use tensor4all_core::{
     FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule,
 };
-use tensor4all_treetn::treetn::contraction::ContractionMethod;
+use tensor4all_treetn::contraction::ContractionMethod;
 use tensor4all_treetn::CanonicalForm;
 
 #[test]

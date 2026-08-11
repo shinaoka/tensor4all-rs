@@ -7,7 +7,7 @@ use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 use crate::error::{Result, TensorTrainError};
 
 // Re-export CanonicalForm from treetn for convenience.
-pub use tensor4all_treetn::algorithm::CanonicalForm;
+pub use tensor4all_treetn::CanonicalForm;
 
 pub(crate) fn validate_svd_truncation_options(
     max_rank: Option<usize>,

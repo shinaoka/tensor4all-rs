@@ -14,7 +14,7 @@ use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
-use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
+use tensor4all_treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
     apply_linear_operator, partial_contract, square_linsolve, ApplyOptions, CachedEvaluatorOptions,
     CanonicalForm, CanonicalizationOptions, IndexMapping, LinearOperator, LinsolveOptions,

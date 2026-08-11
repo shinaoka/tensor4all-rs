@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_treetn::algorithm::{ContractionAlgorithm, CanonicalForm};
+//! use tensor4all_treetn::{ContractionAlgorithm, CanonicalForm};
 //!
 //! // Select contraction algorithm
 //! let alg = ContractionAlgorithm::ZipUp;

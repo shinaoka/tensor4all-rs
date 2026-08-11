@@ -9,8 +9,8 @@ use anyhow::Result;
 use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetci::materialize::to_treetn;
-use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
 use tensor4all_treetn::Operator;
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
 
 /// Test that 1D QFT applied to x-variable in a 2D interleaved QTT works.
 ///
