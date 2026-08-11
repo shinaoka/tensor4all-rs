@@ -215,7 +215,7 @@ fn test_op_c64() { test_op_generic::<Complex64>(); }
 
 ## C API & Language Bindings
 
-See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo), `python/tensor4all/`.
+See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo). The C API is the binding boundary; see `docs/CAPI_DESIGN.md`.
 
 Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs). Conversion: `rtol = √cutoff`.
 

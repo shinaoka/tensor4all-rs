@@ -144,7 +144,7 @@ fn dense_kernel_matches_legacy_pivot_errors_for_full_rank() {
 }
 
 #[test]
-fn dense_kernel_matches_legacy_pivot_errors_for_max_rank_stop() {
+fn dense_kernel_matches_legacy_pivot_errors_for_max_bond_dim_stop() {
     let rows = vec![
         vec![0.433088, 0.956638, 0.0907974, 0.0447859, 0.0196053],
         vec![0.855517, 0.782503, 0.291197, 0.540828, 0.358579],
@@ -153,11 +153,11 @@ fn dense_kernel_matches_legacy_pivot_errors_for_max_rank_stop() {
         vec![0.0676373, 0.450878, 0.672335, 0.77726, 0.540691],
     ];
     let luci_options = PivotKernelOptions {
-        max_rank: 2,
+        max_bond_dim: 2,
         ..PivotKernelOptions::default()
     };
     let legacy_options = RrLUOptions {
-        max_rank: 2,
+        max_bond_dim: 2,
         ..RrLUOptions::default()
     };
     assert_pivot_parity(rows, luci_options, legacy_options);

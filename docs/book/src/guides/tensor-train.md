@@ -74,7 +74,7 @@ assert_eq!(big.rank(), 2);
 
 let options = CompressionOptions {
     tolerance: 1e-10,
-    max_bond_dim: 20,
+    max_bond_dim: Some(20),
     ..Default::default()
 };
 let compressed = big.compressed(&options)?;
@@ -217,7 +217,7 @@ After orthogonalization you can truncate bond dimensions by SVD:
 tt.truncate(
     &TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(2),
+        .with_max_bond_dim(2),
 )?;
 assert!(tt.max_bond_dim() <= 2);
 # Ok(())

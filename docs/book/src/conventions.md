@@ -32,6 +32,23 @@ rtol = sqrt(cutoff)
 
 **Example**: ITensors.jl `cutoff=1e-10` corresponds to `rtol=1e-5` in tensor4all-rs.
 
+## Bond-Dimension Cap
+
+tensor4all-rs uses one spelling and one type for the bond-dimension cap across
+all crates: **`max_bond_dim: Option<usize>`** (`None` = unlimited). No
+`usize::MAX` sentinel is used.
+
+| Library | Parameter | tensor4all-rs |
+|---------|-----------|---------------|
+| tensor4all-rs | `max_bond_dim: Option<usize>` | — |
+| ITensors.jl | `maxdim` | `max_bond_dim: Some(d)` |
+| QuanticsTCI.jl / TCI | `maxbonddim` | `max_bond_dim: Some(d)` |
+| (historical) | `max_rank` | `max_bond_dim: Option<usize>` |
+
+`maxdim` is the closest ITensors.jl cousin of `max_bond_dim` (bond dimension
+is the unambiguous tensor-network term; "rank" is overloaded in TCI
+context).
+
 ## ITensors.jl Type Correspondence
 
 | ITensors.jl | tensor4all-rs |

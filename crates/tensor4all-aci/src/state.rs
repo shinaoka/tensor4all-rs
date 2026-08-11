@@ -560,7 +560,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let factors_result = matrix_luci_factors_from_matrix_owned(
                 local_matrix,
                 Some(RrLUOptions {
-                    max_rank: options.max_bond_dim,
+                    max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
                     rel_tol: if options.scale_tolerance {
                         options.tolerance
                     } else {
@@ -641,7 +641,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                     left_orthogonal: false,
                     rel_tol: 0.0,
                     abs_tol: 0.0,
-                    max_rank: usize::MAX,
+                    max_bond_dim: usize::MAX,
                 }),
             )?;
 

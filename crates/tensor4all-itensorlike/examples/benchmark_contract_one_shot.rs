@@ -33,7 +33,7 @@ fn create_random_mpo(
     Ok(TensorTrain::new(tensors)?)
 }
 
-fn run_zipup(length: usize, phys_dim: usize, bond_dim: usize, max_rank: usize) -> Result<()> {
+fn run_zipup(length: usize, phys_dim: usize, bond_dim: usize, max_bond_dim: usize) -> Result<()> {
     let input_indices_a: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
     let output_indices_shared: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
     let output_indices_b: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -61,7 +61,7 @@ fn run_zipup(length: usize, phys_dim: usize, bond_dim: usize, max_rank: usize) -
         &link_indices_b,
     )?;
 
-    let options = ContractOptions::zipup().with_max_rank(max_rank);
+    let options = ContractOptions::zipup().with_max_bond_dim(max_bond_dim);
 
     let start = Instant::now();
     let mut mpo_a = mpo_a;
@@ -83,7 +83,7 @@ fn run_fit(
     length: usize,
     phys_dim: usize,
     bond_dim: usize,
-    max_rank: usize,
+    max_bond_dim: usize,
     n_half_sweeps: usize,
 ) -> Result<()> {
     let input_indices_a: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -114,7 +114,7 @@ fn run_fit(
     )?;
 
     let options = ContractOptions::fit()
-        .with_max_rank(max_rank)
+        .with_max_bond_dim(max_bond_dim)
         .with_nhalfsweeps(n_half_sweeps);
 
     let start = Instant::now();
@@ -137,15 +137,15 @@ fn main() -> Result<()> {
     let length = 10;
     let phys_dim = 2;
     let bond_dim = 80;
-    let max_rank = 80;
+    let max_bond_dim = 80;
     let n_half_sweeps = 10;
 
     println!(
-        "one-shot benchmark: length={}, phys_dim={}, bond_dim={}, max_rank={}, n_half_sweeps={}",
-        length, phys_dim, bond_dim, max_rank, n_half_sweeps
+        "one-shot benchmark: length={}, phys_dim={}, bond_dim={}, max_bond_dim={}, n_half_sweeps={}",
+        length, phys_dim, bond_dim, max_bond_dim, n_half_sweeps
     );
 
-    run_zipup(length, phys_dim, bond_dim, max_rank)?;
-    run_fit(length, phys_dim, bond_dim, max_rank, n_half_sweeps)?;
+    run_zipup(length, phys_dim, bond_dim, max_bond_dim)?;
+    run_fit(length, phys_dim, bond_dim, max_bond_dim, n_half_sweeps)?;
     Ok(())
 }

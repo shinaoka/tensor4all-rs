@@ -52,7 +52,7 @@ fn test_contract_naive_with_compression() {
 
     let options = ContractionOptions {
         tolerance: 1e-10,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         factorize_method: FactorizeMethod::SVD,
     };
 
@@ -105,7 +105,7 @@ fn compression_at_a_binding_rank_cap_attains_the_optimal_truncation() {
 
     let options = ContractionOptions {
         tolerance: 0.0,
-        max_bond_dim: keep,
+        max_bond_dim: Some(keep),
         factorize_method: FactorizeMethod::SVD,
     };
     let truncated = contract_naive(&mpo_a, &mpo_b, Some(options)).unwrap();

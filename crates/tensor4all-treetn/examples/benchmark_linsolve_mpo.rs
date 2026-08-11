@@ -256,7 +256,7 @@ fn main() -> anyhow::Result<()> {
     let bond_dim: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
 
     let phys_dim = 2usize;
-    let max_rank = bond_dim;
+    let max_bond_dim = bond_dim;
 
     let seed = 1234_u64;
 
@@ -281,7 +281,7 @@ fn main() -> anyhow::Result<()> {
     println!("N = {n_sites}");
     println!("phys_dim = {phys_dim}");
     println!("bond_dim = {bond_dim}");
-    println!("max_rank = {max_rank}");
+    println!("max_bond_dim = {max_bond_dim}");
     println!("n_sweeps = {n_sweeps}");
     println!("cutoff = {cutoff}");
     println!("rtol = sqrt(cutoff) = {rtol:.6}");
@@ -325,7 +325,7 @@ fn main() -> anyhow::Result<()> {
 
     // Compute b = A * x_true
     let apply_opts = ApplyOptions::zipup()
-        .with_max_rank(max_rank)
+        .with_max_bond_dim(max_bond_dim)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol));
     let linop_for_rhs = LinearOperator::new(
         operator_a.clone(),
@@ -338,7 +338,7 @@ fn main() -> anyhow::Result<()> {
 
     let truncation = TruncationOptions::default()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
-        .with_max_rank(max_rank);
+        .with_max_bond_dim(max_bond_dim);
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)

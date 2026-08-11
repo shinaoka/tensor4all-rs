@@ -127,7 +127,7 @@ where
 /// # Arguments
 /// * `tensor` - The dense tensor to decompose
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
-/// * `options` - Factorization options (algorithm, max_rank, rtol, etc.)
+/// * `options` - Factorization options (algorithm, max_bond_dim, rtol, etc.)
 ///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.

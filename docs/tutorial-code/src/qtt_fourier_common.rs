@@ -140,7 +140,7 @@ pub fn build_fourier_operator(
     config: &FourierTutorialConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
     let options = FourierOptions {
-        max_bond_dim: config.max_bond_dim,
+        max_bond_dim: Some(config.max_bond_dim),
         tolerance: config.tolerance,
         ..FourierOptions::forward()
     };

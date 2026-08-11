@@ -313,7 +313,7 @@ where
 {
     let source = LazyMatrixSource::new(nrows, ncols, fill_block);
     let kernel_options = PivotKernelOptions {
-        max_rank: options.max_rank,
+        max_bond_dim: options.max_bond_dim,
         rel_tol: options.rel_tol,
         abs_tol: options.abs_tol,
         left_orthogonal: options.left_orthogonal,

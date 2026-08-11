@@ -41,7 +41,7 @@ pub(crate) fn initial_guess<T: AciScalar>(
 fn validate_existing_initial_guess<T: AciScalar>(
     guess: &SimpleTensorTrain<T>,
     site_dims: &[usize],
-    max_bond_dim: usize,
+    max_bond_dim: Option<usize>,
 ) -> Result<()> {
     let guess_site_dims = guess.site_dims();
     if guess_site_dims != site_dims {
@@ -68,11 +68,11 @@ fn validate_existing_initial_guess<T: AciScalar>(
     }
 
     for (bond, link_dim) in guess.link_dims().into_iter().enumerate() {
-        if link_dim > max_bond_dim {
+        if max_bond_dim.is_some_and(|cap| link_dim > cap) {
             return Err(AciError::InvalidInitialGuess {
                 message: format!(
                     "initial guess bond dimension at bond {bond} exceeds max_bond_dim: \
-                     got {link_dim}, max {max_bond_dim}"
+                     got {link_dim}, max {max_bond_dim:?}"
                 ),
             });
         }
@@ -97,7 +97,7 @@ fn initial_guess_core_dims(site_dims: &[usize], link_dims: &[usize]) -> Vec<(usi
 fn default_link_dims<T: AciScalar>(
     inputs: &[SimpleTensorTrain<T>],
     site_dims: &[usize],
-    max_bond_dim: usize,
+    max_bond_dim: Option<usize>,
 ) -> Result<Vec<usize>> {
     if site_dims.len() <= 1 {
         return Ok(Vec::new());
@@ -124,10 +124,11 @@ fn default_link_dims<T: AciScalar>(
             .map(|input| input.link_dim(bond))
             .min()
             .unwrap_or(usize::MAX);
-        let link_dim = left_products[bond]
-            .min(right_products[bond])
+        let link_dim = max_bond_dim
+            .map_or(left_products[bond].min(right_products[bond]), |cap| {
+                left_products[bond].min(right_products[bond]).min(cap)
+            })
             .min(min_input_link_dim)
-            .min(max_bond_dim)
             .max(1);
         link_dims.push(link_dim);
     }

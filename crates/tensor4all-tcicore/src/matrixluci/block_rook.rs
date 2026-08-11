@@ -133,14 +133,14 @@ fn factorize_lazy<T: Scalar, S: CandidateMatrixSource<T>>(
         });
     }
 
-    let max_rank = options.max_rank.min(full_rank);
-    let mut selected_rows = Vec::with_capacity(max_rank);
-    let mut selected_cols = Vec::with_capacity(max_rank);
-    let mut accepted = Vec::with_capacity(max_rank + 1);
+    let max_bond_dim = options.max_bond_dim.min(full_rank);
+    let mut selected_rows = Vec::with_capacity(max_bond_dim);
+    let mut selected_cols = Vec::with_capacity(max_bond_dim);
+    let mut accepted = Vec::with_capacity(max_bond_dim + 1);
     let mut max_error = 0.0f64;
     let mut last_error = f64::NAN;
 
-    while selected_rows.len() < max_rank {
+    while selected_rows.len() < max_bond_dim {
         let remaining_rows = remaining_indices(nrows, &selected_rows);
         let remaining_cols = remaining_indices(ncols, &selected_cols);
         if remaining_rows.is_empty() || remaining_cols.is_empty() {
@@ -178,7 +178,7 @@ fn factorize_lazy<T: Scalar, S: CandidateMatrixSource<T>>(
     let rank = selected_rows.len();
     if rank >= full_rank {
         last_error = 0.0;
-    } else if rank == max_rank && rank > 0 {
+    } else if rank == max_bond_dim && rank > 0 {
         last_error = accepted[rank - 1];
     }
     accepted.push(last_error);

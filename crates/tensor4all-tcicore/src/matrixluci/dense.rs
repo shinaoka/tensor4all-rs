@@ -21,7 +21,7 @@ pub struct DenseLuKernel;
 
 impl DenseLuKernel {
     fn is_no_truncation(options: &PivotKernelOptions, full_rank: usize) -> bool {
-        options.max_rank >= full_rank && options.rel_tol == 0.0 && options.abs_tol == 0.0
+        options.max_bond_dim >= full_rank && options.rel_tol == 0.0 && options.abs_tol == 0.0
     }
 
     fn compute_pivot_errors(
@@ -52,13 +52,13 @@ impl DenseLuKernel {
             return pivot_errors;
         }
 
-        let max_rank = options.max_rank.min(full_rank);
+        let max_bond_dim = options.max_bond_dim.min(full_rank);
         let mut accepted = Vec::new();
         let mut max_error = 0.0f64;
         let mut last_error = f64::NAN;
         let mut rank = 0usize;
 
-        while rank < max_rank {
+        while rank < max_bond_dim {
             let pivot_abs = diag_abs.get(rank).copied().unwrap_or(0.0);
             last_error = pivot_abs;
 
@@ -81,8 +81,8 @@ impl DenseLuKernel {
 
         if rank >= full_rank {
             last_error = 0.0;
-        } else if rank == max_rank && rank > 0 {
-            // Preserve the legacy tcicore-compatible semantics for max_rank stopping.
+        } else if rank == max_bond_dim && rank > 0 {
+            // Preserve the legacy tcicore-compatible semantics for max_bond_dim stopping.
             last_error = accepted[rank - 1];
         }
 
@@ -97,7 +97,7 @@ impl DenseLuKernel {
         options: &PivotKernelOptions,
     ) -> Result<PivotSelectionCore> {
         let lu_options = RrLUOptions {
-            max_rank: options.max_rank,
+            max_bond_dim: options.max_bond_dim,
             rel_tol: options.rel_tol,
             abs_tol: options.abs_tol,
             left_orthogonal: options.left_orthogonal,

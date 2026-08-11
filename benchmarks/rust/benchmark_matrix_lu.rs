@@ -58,7 +58,7 @@ fn timing_median(mut values: Vec<f64>) -> f64 {
 fn timed_hilbert_matrix_lu_once(size: usize, left_orthogonal: bool) -> MatrixLuTiming {
     let matrix = hilbert_matrix(size);
     let options = RrLUOptions {
-        max_rank: usize::MAX,
+        max_bond_dim: usize::MAX,
         rel_tol: 0.0,
         abs_tol: 1.0e-10,
         left_orthogonal,

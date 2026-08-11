@@ -8,7 +8,7 @@ fn exact_options() -> AciOptions<f64> {
     AciOptions {
         max_iters: 8,
         min_iters: 2,
-        max_bond_dim: 8,
+        max_bond_dim: Some(8),
         tolerance: 1e-12,
         ..AciOptions::default()
     }

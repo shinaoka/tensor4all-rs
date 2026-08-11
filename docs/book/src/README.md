@@ -34,7 +34,7 @@ examples live in this guide and the guide examples are exercised in CI.
 - **Tensor Cross Interpolation (TCI)**: approximates high-dimensional tensors from a small number of evaluations using cross-approximation; TCI2 is the primary algorithm and TCI1 is available for legacy parity
 - **Quantics Tensor Train (QTT)**: represents smooth functions on exponentially fine grids; includes transformation operators (affine, shift, sum)
 - **Tree Tensor Networks**: arbitrary-topology TTN, not limited to chains (MPS/MPO); supports standard MPS/MPO as special cases with runtime topology checks
-- **C API** (`tensor4all-capi`): stable FFI surface for language bindings, currently used by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)
+- **C API** (`tensor4all-capi`): FFI surface for language bindings, currently used by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl). This repository is early development with no backward-compatibility guarantee; the C ABI should not be treated as stable.
 
 ---
 

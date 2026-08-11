@@ -618,10 +618,10 @@ fn test_apply_options_builder() {
         .with_squared_values()
         .with_discarded_tail_sum();
     let opts = ApplyOptions::zipup()
-        .with_max_rank(50)
+        .with_max_bond_dim(50)
         .with_svd_policy(policy);
     assert_eq!(opts.method, ContractionMethod::Zipup);
-    assert_eq!(opts.max_rank, Some(50));
+    assert_eq!(opts.max_bond_dim, Some(50));
     assert_eq!(opts.svd_policy, Some(policy));
     assert_eq!(opts.qr_rtol, None);
 

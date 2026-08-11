@@ -608,7 +608,7 @@ where
     /// Environment cache
     pub envs: FitEnvironment<T, V>,
     /// Maximum bond dimension
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// Legacy relative tolerance retained for same-crate tests and call chains.
     pub(crate) rtol: Option<f64>,
     /// Explicit SVD truncation policy
@@ -630,7 +630,7 @@ where
     /// # Arguments
     /// * `tn_a` - First input TreeTN
     /// * `tn_b` - Second input TreeTN
-    /// * `max_rank` - Maximum bond dimension for truncation
+    /// * `max_bond_dim` - Maximum bond dimension for truncation
     /// * `svd_policy` - Explicit SVD truncation policy
     /// * `qr_rtol` - QR-specific relative tolerance
     ///
@@ -640,14 +640,14 @@ where
     pub fn new(
         tn_a: TreeTN<T, V>,
         tn_b: TreeTN<T, V>,
-        max_rank: Option<usize>,
+        max_bond_dim: Option<usize>,
         rtol: Option<f64>,
     ) -> Self {
         Self {
             tn_a,
             tn_b,
             envs: FitEnvironment::new(),
-            max_rank,
+            max_bond_dim,
             rtol,
             svd_policy: rtol.map(SvdTruncationPolicy::new),
             qr_rtol: None,
@@ -828,13 +828,13 @@ where
             .map_err(|e| anyhow::anyhow!("invalid fit factorization options: {e}"))?;
 
         // Determine bond dimension cap for this factorization step.
-        // - If max_rank is explicitly specified, use it.
-        // - If an algorithm-specific tolerance is specified (but max_rank is not),
+        // - If max_bond_dim is explicitly specified, use it.
+        // - If an algorithm-specific tolerance is specified (but max_bond_dim is not),
         //   allow bonds to grow freely and let the factorization policy decide.
         // - Otherwise, cap at the existing bond dimension to preserve the zipup
         //   initialization size.
-        let bond_cap = if self.max_rank.is_some() {
-            self.max_rank
+        let bond_cap = if self.max_bond_dim.is_some() {
+            self.max_bond_dim
         } else if self.svd_policy.is_some() || self.qr_rtol.is_some() {
             None
         } else {
@@ -844,7 +844,7 @@ where
                 .map(|b| b.dim())
         };
         if let Some(cap) = bond_cap {
-            options = options.with_max_rank(cap);
+            options = options.with_max_bond_dim(cap);
         }
 
         // Factorize using TensorFactorizationLike::factorize
@@ -967,7 +967,7 @@ pub struct FitContractionOptions {
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
     pub nfullsweeps: usize,
     /// Maximum bond dimension.
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// Legacy relative tolerance retained for same-crate tests and call chains.
     pub(crate) rtol: Option<f64>,
     /// Explicit SVD truncation policy.
@@ -986,7 +986,7 @@ impl Default for FitContractionOptions {
     fn default() -> Self {
         Self {
             nfullsweeps: 1,
-            max_rank: None,
+            max_bond_dim: None,
             rtol: None,
             svd_policy: None,
             qr_rtol: None,
@@ -1006,8 +1006,8 @@ impl FitContractionOptions {
     }
 
     /// Set maximum bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -1100,7 +1100,7 @@ where
         center,
         CanonicalForm::Unitary,
         options.svd_policy,
-        options.max_rank,
+        options.max_bond_dim,
     )?;
     if let Some(zipup_started) = zipup_started {
         with_fit_profile(|profile| {
@@ -1118,7 +1118,7 @@ where
     }
 
     // Create FitUpdater (environments are computed lazily)
-    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_rank, None)
+    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_bond_dim, None)
         .with_svd_policy(options.svd_policy)
         .with_qr_rtol(options.qr_rtol)
         .with_factorize_alg(options.factorize_alg);

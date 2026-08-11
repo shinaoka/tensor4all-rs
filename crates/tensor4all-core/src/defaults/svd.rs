@@ -57,7 +57,7 @@ pub enum SvdError {
 #[derive(Debug, Clone, Copy)]
 pub struct SvdOptions {
     /// Maximum retained rank after policy-based truncation.
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// Per-call SVD truncation policy.
     /// If `None`, the global default policy is used.
     pub policy: Option<SvdTruncationPolicy>,
@@ -75,7 +75,7 @@ impl SvdOptions {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            max_rank: None,
+            max_bond_dim: None,
             policy: None,
             truncate: true,
         }
@@ -83,8 +83,8 @@ impl SvdOptions {
 
     /// Set the maximum retained rank.
     #[must_use]
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -97,7 +97,7 @@ impl SvdOptions {
 
     pub(crate) fn full_rank() -> Self {
         Self {
-            max_rank: None,
+            max_bond_dim: None,
             policy: None,
             truncate: false,
         }
@@ -246,8 +246,8 @@ fn svd_truncated_inner(
         validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
 
         let mut retained = compute_retained_rank(&s_full, &policy);
-        if let Some(max_rank) = options.max_rank {
-            retained = retained.min(max_rank);
+        if let Some(max_bond_dim) = options.max_bond_dim {
+            retained = retained.min(max_bond_dim);
         }
         retained.max(1)
     } else {
@@ -347,8 +347,8 @@ pub fn svd<T>(
 /// let (u, s, _v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
 /// assert_eq!(s.dims()[0], 1);  // rank-1
 ///
-/// // Truncate with max_rank => capped
-/// let opts = SvdOptions::new().with_max_rank(2);
+/// // Truncate with max_bond_dim => capped
+/// let opts = SvdOptions::new().with_max_bond_dim(2);
 /// let (_u, s, _v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
 /// assert!(s.dims()[0] <= 2);
 /// ```

@@ -582,8 +582,8 @@ fn test_partitioned_tt_contract_with_duplicate_projectors() {
 }
 
 #[test]
-fn test_partitioned_tt_contract_with_rtol_and_max_rank() {
-    // Exercise the contract() branches that pass rtol and max_rank to TruncateOptions
+fn test_partitioned_tt_contract_with_rtol_and_max_bond_dim() {
+    // Exercise the contract() branches that pass rtol and max_bond_dim to TruncateOptions
     let s0 = make_index(2);
     let l01 = make_index(3);
     let s1 = make_index(2);
@@ -605,7 +605,7 @@ fn test_partitioned_tt_contract_with_rtol_and_max_rank() {
 
     let options = ContractOptions::default()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12))
-        .with_max_rank(10);
+        .with_max_bond_dim(10);
     let result = partitioned1.contract(&partitioned2, &options).unwrap();
 
     assert!(!result.is_empty());

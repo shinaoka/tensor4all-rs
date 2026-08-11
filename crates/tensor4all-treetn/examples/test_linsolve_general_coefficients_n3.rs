@@ -506,7 +506,7 @@ fn run_test_case(
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
         .with_gmres_tol(1e-10)
-        .with_max_rank(50)
+        .with_max_bond_dim(50)
         .with_coefficients(a0, a1);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(

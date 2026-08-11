@@ -354,7 +354,7 @@ fn main() -> anyhow::Result<()> {
     let n = 10usize;
     let phys_dim = 2usize;
     let bond_dim = 20usize;
-    let max_rank = 20usize;
+    let max_bond_dim = 20usize;
     let n_sweeps = 5usize;
     let cutoff = 1e-8_f64;
     let rtol = cutoff.sqrt();
@@ -368,7 +368,7 @@ fn main() -> anyhow::Result<()> {
     println!("N = {n}");
     println!("phys_dim = {phys_dim}");
     println!("bond_dim = {bond_dim}");
-    println!("max_rank = {max_rank}");
+    println!("max_bond_dim = {max_bond_dim}");
     println!("n_sweeps = {n_sweeps}");
     println!("cutoff = {cutoff}");
     println!("rtol = sqrt(cutoff) = {rtol}");
@@ -378,7 +378,7 @@ fn main() -> anyhow::Result<()> {
 
     let truncation = TruncationOptions::default()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
-        .with_max_rank(max_rank);
+        .with_max_bond_dim(max_bond_dim);
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)

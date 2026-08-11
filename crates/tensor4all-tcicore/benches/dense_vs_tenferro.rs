@@ -21,7 +21,7 @@ fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
 fn bench_dense_vs_tenferro(c: &mut Criterion) {
     let mut group = c.benchmark_group("dense_no_truncation_vs_tenferro");
     let options = RrLUOptions {
-        max_rank: usize::MAX,
+        max_bond_dim: usize::MAX,
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,

@@ -49,7 +49,9 @@ fn test_fourier_mpo_structure() {
     // Bond dimensions should be compressed from K+1
     // After compression, they should be <= max_bond_dim
     for i in 0..3 {
-        assert!(mpo.site_tensor(i).right_dim() <= options.max_bond_dim);
+        assert!(options
+            .max_bond_dim
+            .is_none_or(|cap| mpo.site_tensor(i).right_dim() <= cap));
     }
 }
 

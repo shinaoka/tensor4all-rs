@@ -23,10 +23,10 @@ fn test_validate_svd_truncation_options_rejects_non_finite_threshold() {
 }
 
 #[test]
-fn test_validate_svd_truncation_options_rejects_zero_max_rank() {
+fn test_validate_svd_truncation_options_rejects_zero_max_bond_dim() {
     let err =
         validate_svd_truncation_options(Some(0), Some(SvdTruncationPolicy::new(1e-8))).unwrap_err();
-    assert!(err.to_string().contains("max_rank/maxdim"));
+    assert!(err.to_string().contains("max_bond_dim/maxdim"));
 }
 
 #[test]
@@ -36,11 +36,11 @@ fn test_truncate_options_builder() {
         .with_discarded_tail_sum();
     let opts = TruncateOptions::svd()
         .with_svd_policy(policy)
-        .with_max_rank(50)
+        .with_max_bond_dim(50)
         .with_site_range(0..5);
 
     assert_eq!(opts.svd_policy(), Some(policy));
-    assert_eq!(opts.max_rank(), Some(50));
+    assert_eq!(opts.max_bond_dim(), Some(50));
     assert_eq!(opts.site_range(), Some(0..5));
 }
 
@@ -48,7 +48,7 @@ fn test_truncate_options_builder() {
 fn test_truncate_options_default() {
     let opts = TruncateOptions::default();
     assert_eq!(opts.svd_policy(), None);
-    assert_eq!(opts.max_rank(), None);
+    assert_eq!(opts.max_bond_dim(), None);
     assert_eq!(opts.site_range(), None);
 }
 
@@ -56,13 +56,13 @@ fn test_truncate_options_default() {
 fn test_contract_options_builder() {
     let policy = SvdTruncationPolicy::new(1e-12);
     let opts = ContractOptions::zipup()
-        .with_max_rank(100)
+        .with_max_bond_dim(100)
         .with_svd_policy(policy)
         .with_nhalfsweeps(6)
         .with_dense_reference_limit(256);
 
     assert_eq!(opts.method(), ContractMethod::Zipup);
-    assert_eq!(opts.max_rank(), Some(100));
+    assert_eq!(opts.max_bond_dim(), Some(100));
     assert_eq!(opts.svd_policy(), Some(policy));
     assert_eq!(opts.nhalfsweeps(), 6);
     assert_eq!(opts.dense_reference_limit(), Some(256));
@@ -81,7 +81,7 @@ fn test_contract_options_default() {
     assert_eq!(opts.method(), ContractMethod::Zipup);
     assert_eq!(opts.nhalfsweeps(), 2);
     assert_eq!(opts.svd_policy(), None);
-    assert_eq!(opts.max_rank(), None);
+    assert_eq!(opts.max_bond_dim(), None);
     assert_eq!(opts.dense_reference_limit(), None);
 }
 
@@ -117,7 +117,7 @@ fn test_linsolve_options_default() {
     assert_eq!(opts.convergence_tol(), None);
     assert!(opts.check_residual());
     assert_eq!(opts.svd_policy(), None);
-    assert_eq!(opts.max_rank(), None);
+    assert_eq!(opts.max_bond_dim(), None);
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn test_linsolve_options_builder() {
     let opts = LinsolveOptions::default()
         .with_nsweeps(10)
         .with_svd_policy(policy)
-        .with_max_rank(100)
+        .with_max_bond_dim(100)
         .with_gmres_tol(1e-8)
         .with_gmres_max_restarts(200)
         .with_gmres_restart_dim(50)
@@ -144,7 +144,7 @@ fn test_linsolve_options_builder() {
 
     assert_eq!(opts.nhalfsweeps(), 20);
     assert_eq!(opts.svd_policy(), Some(policy));
-    assert_eq!(opts.max_rank(), Some(100));
+    assert_eq!(opts.max_bond_dim(), Some(100));
     assert_eq!(opts.gmres_tol(), 1e-8);
     assert_eq!(opts.gmres_max_restarts(), 200);
     assert_eq!(opts.gmres_restart_dim(), 50);

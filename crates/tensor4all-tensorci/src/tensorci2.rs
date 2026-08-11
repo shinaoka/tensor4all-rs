@@ -53,18 +53,18 @@ use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 /// let opts = TCI2Options::default();
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_iter, 20);
-/// assert_eq!(opts.max_bond_dim, usize::MAX);
+/// assert_eq!(opts.max_bond_dim, None);
 /// assert_eq!(opts.verbosity, 0);
 ///
 /// // Custom options via struct update syntax
 /// let custom = TCI2Options {
 ///     tolerance: 1e-12,
-///     max_bond_dim: 100,
+///     max_bond_dim: Some(100),
 ///     seed: Some(42),
 ///     ..TCI2Options::default()
 /// };
 /// assert!((custom.tolerance - 1e-12).abs() < 1e-20);
-/// assert_eq!(custom.max_bond_dim, 100);
+/// assert_eq!(custom.max_bond_dim, Some(100));
 /// assert_eq!(custom.seed, Some(42));
 /// ```
 #[derive(Debug, Clone)]
@@ -82,12 +82,12 @@ pub struct TCI2Options {
     /// followed by a global pivot search. Increase if the function is
     /// difficult to converge.
     pub max_iter: usize,
-    /// Hard upper bound on bond dimension (default: `usize::MAX`, i.e. no limit).
+    /// Hard upper bound on bond dimension (default: `None`, i.e. no limit).
     ///
     /// The algorithm stops early once the rank reaches this value. For
     /// expensive functions, setting this to `50`--`500` avoids runaway
     /// computation.
-    pub max_bond_dim: usize,
+    pub max_bond_dim: Option<usize>,
     /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
     ///
     /// `Full` materializes the entire candidate matrix and finds the best
@@ -139,7 +139,7 @@ impl Default for TCI2Options {
         Self {
             tolerance: 1e-8,
             max_iter: 20,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             pivot_search: PivotSearchStrategy::Full,
             normalize_error: true,
             verbosity: 0,
@@ -907,7 +907,7 @@ where
 
         // LU-based cross interpolation
         let lu_options = RrLUOptions {
-            max_rank: config.max_bond_dim,
+            max_bond_dim: config.max_bond_dim,
             rel_tol: config.rel_tol,
             abs_tol: config.abs_tol,
             left_orthogonal: forward,
@@ -1651,7 +1651,7 @@ where
             &errors,
             &nglobal_pivots_history,
             options.tolerance,
-            options.max_bond_dim,
+            options.max_bond_dim.unwrap_or(usize::MAX),
             options.ncheck_history,
         ) {
             termination = reason;
@@ -1668,7 +1668,14 @@ where
         1.0
     };
     let abs_tol = options.tolerance * error_normalization;
-    tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
+    tci.sweep1site(
+        &f,
+        true,
+        1e-14,
+        abs_tol,
+        options.max_bond_dim.unwrap_or(usize::MAX),
+        true,
+    )?;
 
     Ok(TCI2OptimizationResult {
         tci,
@@ -1751,7 +1758,7 @@ where
         matrix_luci_factors_from_matrix(
             &pi,
             Some(RrLUOptions {
-                max_rank: context.options.max_bond_dim,
+                max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
                 rel_tol: context.options.tolerance,
                 abs_tol: 0.0,
                 left_orthogonal: context.left_orthogonal,
@@ -1772,7 +1779,7 @@ where
                 evaluator.fill_block(rows, cols, out);
             },
             RrLUOptions {
-                max_rank: context.options.max_bond_dim,
+                max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
                 rel_tol: context.options.tolerance,
                 abs_tol: 0.0,
                 left_orthogonal: context.left_orthogonal,

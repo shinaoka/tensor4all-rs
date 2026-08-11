@@ -878,7 +878,7 @@ fn main() -> Result<()> {
 
         let zipup_options = ContractOptions::zipup()
             .with_svd_policy(SvdTruncationPolicy::new(0.0))
-            .with_max_rank(chi);
+            .with_max_bond_dim(chi);
         let zipup_params = format!(
             "L_{}_chi_{}_d_{}_maxdim_{}",
             opts.zipup_length, chi, opts.phys_dim, chi

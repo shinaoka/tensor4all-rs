@@ -197,7 +197,7 @@ let bond_dim = result.rank;
 println!("bond dimension after SVD: {bond_dim}");
 
 // Limit bond dimension explicitly.
-let opts_capped = FactorizeOptions::svd().with_max_rank(2);
+let opts_capped = FactorizeOptions::svd().with_max_bond_dim(2);
 let result_capped = factorize(&t, &[i], &opts_capped).unwrap();
 assert!(result_capped.rank <= 2);
 ```
@@ -227,6 +227,6 @@ let result = factorize(&t, &[i], &opts).unwrap();
 
 Both `FactorizeOptions::svd()` and `FactorizeOptions::qr()` return builder
 structs. Use `.with_svd_policy(policy)` for SVD and `.with_qr_rtol(tol)` for
-QR-specific rank control. `with_max_rank(n)` remains available as an
+QR-specific rank control. `with_max_bond_dim(n)` remains available as an
 algorithm-independent hard cap. For SVD, `result.singular_values` holds the
 retained singular values.

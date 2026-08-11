@@ -207,7 +207,7 @@ where
 ///     .with_gmres_tol(1.0e-10)
 ///     .with_gmres_restart_dim(10)
 ///     .with_gmres_max_restarts(30)
-///     .with_max_rank(4)
+///     .with_max_bond_dim(4)
 ///     .with_convergence_tol(1.0e-8);
 /// let result = square_linsolve(
 ///     &operator,

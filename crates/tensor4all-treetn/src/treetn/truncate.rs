@@ -33,7 +33,7 @@ where
     ///
     /// This is the recommended unified API for truncation. It accepts:
     /// - Center nodes specified by their node names (V)
-    /// - [`TruncationOptions`] to control the SVD policy and max_rank
+    /// - [`TruncationOptions`] to control the SVD policy and max_bond_dim
     ///
     /// # Algorithm
     /// 1. Canonicalize the network towards the center (required for truncation)
@@ -73,7 +73,7 @@ where
     /// // Truncate with max rank 2 towards node "A"
     /// let tn = tn.truncate(
     ///     ["A".to_string()],
-    ///     TruncationOptions::default().with_max_rank(2),
+    ///     TruncationOptions::default().with_max_bond_dim(2),
     /// ).unwrap();
     ///
     /// // Bond dimension is now at most 2
@@ -91,7 +91,7 @@ where
         self.truncate_impl(
             canonical_region,
             options.svd_policy(),
-            options.truncation.max_rank,
+            options.truncation.max_bond_dim,
             "truncate",
         )?;
         Ok(self)
@@ -117,7 +117,7 @@ where
         self.truncate_impl(
             canonical_region,
             options.svd_policy(),
-            options.truncation.max_rank,
+            options.truncation.max_bond_dim,
             "truncate_mut",
         )
         .map_err(TreeTNOperationError::from)
@@ -130,7 +130,7 @@ where
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
         svd_policy: Option<SvdTruncationPolicy>,
-        max_rank: Option<usize>,
+        max_bond_dim: Option<usize>,
         context_name: &str,
     ) -> Result<()>
     where
@@ -182,7 +182,7 @@ where
         }
 
         // Step 3: Apply truncation sweep
-        let mut updater = TruncateUpdater::new(max_rank, svd_policy);
+        let mut updater = TruncateUpdater::new(max_bond_dim, svd_policy);
         apply_local_update_sweep(self, &plan, &mut updater)
             .context(format!("{}: truncation sweep failed", context_name))?;
 

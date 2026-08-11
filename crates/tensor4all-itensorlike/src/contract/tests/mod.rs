@@ -90,13 +90,13 @@ fn test_contract_free_fn_invalid_rtol() {
 }
 
 #[test]
-fn test_contract_free_fn_invalid_max_rank_zero() {
+fn test_contract_free_fn_invalid_max_bond_dim_zero() {
     let s0 = idx(1006, 2);
     let t0 = make_tensor(vec![s0.clone()]);
     let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
-    let options = ContractOptions::zipup().with_max_rank(0);
+    let options = ContractOptions::zipup().with_max_bond_dim(0);
     let err = contract(&tt1, &tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
@@ -133,7 +133,7 @@ fn test_contract_zipup_two_sites() {
     let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
-    let options = ContractOptions::zipup().with_max_rank(10);
+    let options = ContractOptions::zipup().with_max_bond_dim(10);
     let result = contract(&tt1, &tt2, &options).unwrap();
     // Result should contract over shared site indices
     assert_eq!(result.len(), 1);
@@ -267,7 +267,9 @@ fn test_contract_fit_two_sites() {
     let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
-    let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
+    let options = ContractOptions::fit()
+        .with_max_bond_dim(10)
+        .with_nhalfsweeps(4);
     let result = contract(&tt1, &tt2, &options).unwrap();
     assert_matches_naive(&tt1, &tt2, &result);
 }
@@ -287,7 +289,9 @@ fn test_contract_fit_accepts_non_chain_ordered_site_tensors() {
     let t2_1 = make_tensor(vec![s1.clone(), l01_b.clone()]);
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
-    let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
+    let options = ContractOptions::fit()
+        .with_max_bond_dim(10)
+        .with_nhalfsweeps(4);
     let result = contract(&tt1, &tt2, &options).unwrap();
     assert_matches_naive(&tt1, &tt2, &result);
 }
@@ -300,7 +304,9 @@ fn test_contract_fit_odd_nhalfsweeps() {
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
     // Odd nhalfsweeps should fail for Fit method
-    let options = ContractOptions::fit().with_nhalfsweeps(3).with_max_rank(10);
+    let options = ContractOptions::fit()
+        .with_nhalfsweeps(3)
+        .with_max_bond_dim(10);
     let err = contract(&tt1, &tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
@@ -313,7 +319,9 @@ fn test_contract_fit_nhalfsweeps_zero_ok() {
     let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
-    let options = ContractOptions::fit().with_nhalfsweeps(0).with_max_rank(10);
+    let options = ContractOptions::fit()
+        .with_nhalfsweeps(0)
+        .with_max_bond_dim(10);
     let result = contract(&tt1, &tt2, &options).unwrap();
     assert_eq!(result.len(), 1);
     assert_matches_naive(&tt1, &tt2, &result);
@@ -357,7 +365,7 @@ fn test_contract_method_uses_tt_contract() {
 fn test_contract_zipup_with_truncation() {
     // 3-site TTs with shared site indices, bond dim 2
     // Contraction without truncation would produce bond dim up to 4.
-    // Truncate to max_rank=1 and verify:
+    // Truncate to max_bond_dim=1 and verify:
     //   (a) bond dims are actually truncated
     //   (b) result is approximately correct (not exact due to truncation)
     let s0 = idx(2000, 2);
@@ -382,13 +390,13 @@ fn test_contract_zipup_with_truncation() {
     ])
     .unwrap();
 
-    // Contract with truncation: max_rank=1
-    let options = ContractOptions::zipup().with_max_rank(1);
+    // Contract with truncation: max_bond_dim=1
+    let options = ContractOptions::zipup().with_max_bond_dim(1);
     let result = contract(&tt1, &tt2, &options).unwrap();
 
     // Verify truncation actually happened: all bond dims should be <= 1
     for bd in result.bond_dims() {
-        assert!(bd <= 1, "Bond dim {} exceeds max_rank=1", bd);
+        assert!(bd <= 1, "Bond dim {} exceeds max_bond_dim=1", bd);
     }
 
     // Compare with naive (exact) result — should be approximate, not exact

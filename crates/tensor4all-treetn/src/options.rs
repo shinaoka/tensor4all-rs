@@ -12,7 +12,7 @@ use tensor4all_core::SvdTruncationPolicy;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct FactorizationToleranceOptions {
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     pub svd_policy: Option<SvdTruncationPolicy>,
     pub qr_rtol: Option<f64>,
 }
@@ -91,10 +91,10 @@ impl CanonicalizationOptions {
 /// use tensor4all_treetn::TruncationOptions;
 ///
 /// let options = TruncationOptions::default()
-///     .with_max_rank(50)
+///     .with_max_bond_dim(50)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10));
 ///
-/// assert_eq!(options.max_rank(), Some(50));
+/// assert_eq!(options.max_bond_dim(), Some(50));
 /// assert_eq!(options.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
 /// ```
 #[derive(Debug, Clone, Copy)]
@@ -120,8 +120,8 @@ impl TruncationOptions {
     }
 
     /// Create options with a maximum rank.
-    pub fn with_max_rank(mut self, rank: usize) -> Self {
-        self.truncation.max_rank = Some(rank);
+    pub fn with_max_bond_dim(mut self, rank: usize) -> Self {
+        self.truncation.max_bond_dim = Some(rank);
         self
     }
 
@@ -136,9 +136,9 @@ impl TruncationOptions {
         self.truncation.svd_policy
     }
 
-    /// Get max_rank.
-    pub fn max_rank(&self) -> Option<usize> {
-        self.truncation.max_rank
+    /// Get max_bond_dim.
+    pub fn max_bond_dim(&self) -> Option<usize> {
+        self.truncation.max_bond_dim
     }
 }
 
@@ -151,13 +151,13 @@ impl TruncationOptions {
 /// use tensor4all_treetn::{CanonicalForm, SplitOptions};
 ///
 /// let options = SplitOptions::default()
-///     .with_max_rank(50)
+///     .with_max_bond_dim(50)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
 ///     .with_qr_rtol(1e-12)
 ///     .with_final_sweep(true);
 ///
 /// assert!(matches!(options.form, CanonicalForm::Unitary));
-/// assert_eq!(options.max_rank(), Some(50));
+/// assert_eq!(options.max_bond_dim(), Some(50));
 /// assert_eq!(options.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
 /// assert_eq!(options.qr_rtol(), Some(1e-12));
 /// assert!(options.final_sweep);
@@ -189,8 +189,8 @@ impl SplitOptions {
     }
 
     /// Create options with a maximum rank.
-    pub fn with_max_rank(mut self, rank: usize) -> Self {
-        self.truncation.max_rank = Some(rank);
+    pub fn with_max_bond_dim(mut self, rank: usize) -> Self {
+        self.truncation.max_bond_dim = Some(rank);
         self
     }
 
@@ -228,9 +228,9 @@ impl SplitOptions {
         self.truncation.qr_rtol
     }
 
-    /// Get max_rank.
-    pub fn max_rank(&self) -> Option<usize> {
-        self.truncation.max_rank
+    /// Get max_bond_dim.
+    pub fn max_bond_dim(&self) -> Option<usize> {
+        self.truncation.max_bond_dim
     }
 }
 
@@ -261,18 +261,18 @@ impl SplitOptions {
 /// use tensor4all_core::SvdTruncationPolicy;
 ///
 /// let options = RestructureOptions::new()
-///     .with_split(SplitOptions::new().with_max_rank(32))
+///     .with_split(SplitOptions::new().with_max_bond_dim(32))
 ///     .with_swap(SwapOptions {
-///         max_rank: Some(16),
+///         max_bond_dim: Some(16),
 ///         rtol: Some(1e-10),
 ///     })
 ///     .with_final_truncation(
 ///         TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(1e-12)),
 ///     );
 ///
-/// assert_eq!(options.split.max_rank(), Some(32));
+/// assert_eq!(options.split.max_bond_dim(), Some(32));
 /// assert!(!options.split.final_sweep);
-/// assert_eq!(options.swap.max_rank, Some(16));
+/// assert_eq!(options.swap.max_bond_dim, Some(16));
 /// assert_eq!(options.swap.rtol, Some(1e-10));
 /// assert_eq!(
 ///     options
@@ -287,7 +287,7 @@ pub struct RestructureOptions {
     /// Options for the split/refinement phase.
     ///
     /// These settings matter when a current node must be factored into multiple
-    /// fragments before any fragment movement can happen. Higher `max_rank`,
+    /// fragments before any fragment movement can happen. Higher `max_bond_dim`,
     /// stricter `svd_policy`, and smaller `qr_rtol` preserve more fidelity but
     /// can increase intermediate bond dimensions. `final_sweep` should usually
     /// remain `false` here unless a split-only workflow is being optimized in
@@ -296,7 +296,7 @@ pub struct RestructureOptions {
     /// Options for the site-transport / swap phase.
     ///
     /// This phase only moves already planned fragments across existing edges.
-    /// Leaving both fields unset keeps swaps exact. Setting `max_rank` or
+    /// Leaving both fields unset keeps swaps exact. Setting `max_bond_dim` or
     /// `rtol` can control intermediate rank growth, but may introduce
     /// approximation earlier than the optional final truncation sweep.
     pub swap: SwapOptions,
@@ -322,7 +322,7 @@ impl RestructureOptions {
     /// let options = RestructureOptions::new();
     ///
     /// assert!(!options.split.final_sweep);
-    /// assert_eq!(options.swap.max_rank, None);
+    /// assert_eq!(options.swap.max_bond_dim, None);
     /// assert_eq!(options.swap.rtol, None);
     /// assert!(options.final_truncation.is_none());
     /// ```
@@ -344,9 +344,9 @@ impl RestructureOptions {
     /// use tensor4all_treetn::{RestructureOptions, SplitOptions};
     ///
     /// let options = RestructureOptions::new()
-    ///     .with_split(SplitOptions::new().with_max_rank(24).with_final_sweep(true));
+    ///     .with_split(SplitOptions::new().with_max_bond_dim(24).with_final_sweep(true));
     ///
-    /// assert_eq!(options.split.max_rank(), Some(24));
+    /// assert_eq!(options.split.max_bond_dim(), Some(24));
     /// assert!(options.split.final_sweep);
     /// ```
     pub fn with_split(mut self, split: SplitOptions) -> Self {
@@ -368,11 +368,11 @@ impl RestructureOptions {
     /// use tensor4all_treetn::{RestructureOptions, SwapOptions};
     ///
     /// let options = RestructureOptions::new().with_swap(SwapOptions {
-    ///     max_rank: Some(12),
+    ///     max_bond_dim: Some(12),
     ///     rtol: Some(1e-8),
     /// });
     ///
-    /// assert_eq!(options.swap.max_rank, Some(12));
+    /// assert_eq!(options.swap.max_bond_dim, Some(12));
     /// assert_eq!(options.swap.rtol, Some(1e-8));
     /// ```
     pub fn with_swap(mut self, swap: SwapOptions) -> Self {
@@ -399,7 +399,7 @@ impl RestructureOptions {
     /// let options = RestructureOptions::new()
     ///     .with_final_truncation(
     ///         TruncationOptions::new()
-    ///             .with_max_rank(10)
+    ///             .with_max_bond_dim(10)
     ///             .with_svd_policy(SvdTruncationPolicy::new(1e-10)),
     ///     );
     ///
@@ -407,7 +407,7 @@ impl RestructureOptions {
     ///     options
     ///         .final_truncation
     ///         .as_ref()
-    ///         .and_then(TruncationOptions::max_rank),
+    ///         .and_then(TruncationOptions::max_bond_dim),
     ///     Some(10)
     /// );
     /// ```

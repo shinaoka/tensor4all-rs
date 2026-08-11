@@ -112,7 +112,7 @@ pub enum TruncationRule {
 ///
 /// Use this type when you need to describe how singular values are measured,
 /// scaled, and turned into a retained rank. [`SvdOptions`](crate::SvdOptions)
-/// carries this policy plus an independent `max_rank` cap.
+/// carries this policy plus an independent `max_bond_dim` cap.
 ///
 /// # Examples
 ///

@@ -76,18 +76,18 @@ fn zero_tensor3(
 /// assert_eq!(inv.sign, 1.0);
 /// // Custom options
 /// let opts = FourierOptions {
-///     max_bond_dim: 20,
+///     max_bond_dim: Some(20),
 ///     tolerance: 1e-12,
 ///     ..FourierOptions::forward()
 /// };
-/// assert_eq!(opts.max_bond_dim, 20);
+/// assert_eq!(opts.max_bond_dim, Some(20));
 /// ```
 #[derive(Clone, Debug)]
 pub struct FourierOptions {
     /// Sign in the exponent: -1.0 (forward) or 1.0 (inverse)
     pub sign: f64,
     /// Maximum bond dimension after compression
-    pub max_bond_dim: usize,
+    pub max_bond_dim: Option<usize>,
     /// Tolerance for compression
     pub tolerance: f64,
     /// Number of Chebyshev basis functions (K+1 points); must be positive.
@@ -100,7 +100,7 @@ impl Default for FourierOptions {
     fn default() -> Self {
         Self {
             sign: -1.0,
-            max_bond_dim: 12,
+            max_bond_dim: Some(12),
             tolerance: 1e-14,
             k: 25,
             normalize: true,

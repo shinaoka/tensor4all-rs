@@ -155,17 +155,17 @@ use tensor4all_treetn::ApplyOptions;
 // Use for small exact/debug cases; output bond dimensions can grow as
 // state/operator bond products.
 let opts = ApplyOptions::naive();
-assert_eq!(opts.max_rank, None);
+assert_eq!(opts.max_bond_dim, None);
 
 // ZipUp (default): single-pass, controllable truncation.
 let opts = ApplyOptions::zipup()
-    .with_max_rank(64)
+    .with_max_bond_dim(64)
     .with_svd_policy(SvdTruncationPolicy::new(1e-10));
-assert_eq!(opts.max_rank, Some(64));
+assert_eq!(opts.max_bond_dim, Some(64));
 
 // Fit: iterative sweeps for best compression.
 let opts = ApplyOptions::fit()
-    .with_max_rank(32)
+    .with_max_bond_dim(32)
     .with_nfullsweeps(3);
 assert_eq!(opts.nfullsweeps, 3);
 ```

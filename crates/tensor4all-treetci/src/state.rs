@@ -29,12 +29,12 @@ use tensor4all_core::ColMajorArray;
 /// ]).unwrap();
 ///
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 3, 2], graph).unwrap();
-/// assert_eq!(state.max_rank(), 0);
+/// assert_eq!(state.max_bond_dim(), 0);
 /// assert!((state.max_bond_error() - 0.0).abs() < f64::EPSILON);
 ///
 /// // Seed with a global pivot
 /// state.add_global_pivots(&[vec![0, 0, 0]]).unwrap();
-/// assert!(state.max_rank() >= 1);
+/// assert!(state.max_bond_dim() >= 1);
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeTCI2<T> {
@@ -174,7 +174,7 @@ impl<T> TreeTCI2<T> {
     }
 
     /// Maximum current bond dimension across stored subtree pivot sets.
-    pub fn max_rank(&self) -> usize {
+    pub fn max_bond_dim(&self) -> usize {
         self.ijset
             .values()
             .filter_map(|arr| arr.ncols())

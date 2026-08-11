@@ -36,7 +36,7 @@ fn test_to_treetci_options() {
 
     let tree_opts = opts.to_treetci_options();
     assert!((tree_opts.tolerance - 1e-6).abs() < 1e-15);
-    assert_eq!(tree_opts.max_bond_dim, 100);
+    assert_eq!(tree_opts.max_bond_dim, Some(100));
     assert_eq!(tree_opts.max_iter, 200);
     assert!(tree_opts.normalize_error);
 }

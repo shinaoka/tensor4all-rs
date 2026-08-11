@@ -233,8 +233,8 @@ fn factorize_svd(
     if let Some(policy) = options.svd_policy {
         svd_options = svd_options.with_policy(policy);
     }
-    if let Some(max_rank) = options.max_rank {
-        svd_options = svd_options.with_max_rank(max_rank);
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        svd_options = svd_options.with_max_bond_dim(max_bond_dim);
     }
 
     factorize_svd_with_options(t, left_inds, options.canonical, &svd_options)
@@ -381,7 +381,7 @@ where
         t,
         left_inds,
         options.canonical,
-        options.max_rank.unwrap_or(usize::MAX),
+        options.max_bond_dim.unwrap_or(usize::MAX),
         1e-14,
     )
 }
@@ -408,7 +408,7 @@ fn factorize_lu_with_options<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     canonical: Canonical,
-    max_rank: usize,
+    max_bond_dim: usize,
     rel_tol: f64,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
@@ -431,7 +431,7 @@ where
     // Set up LU options
     let left_orthogonal = canonical == Canonical::Left;
     let lu_options = RrLUOptions {
-        max_rank,
+        max_bond_dim,
         rel_tol,
         abs_tol: 0.0,
         left_orthogonal,
@@ -492,7 +492,7 @@ where
         t,
         left_inds,
         options.canonical,
-        options.max_rank.unwrap_or(usize::MAX),
+        options.max_bond_dim.unwrap_or(usize::MAX),
         1e-14,
     )
 }
@@ -529,7 +529,7 @@ fn factorize_ci_with_options<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     canonical: Canonical,
-    max_rank: usize,
+    max_bond_dim: usize,
     rel_tol: f64,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
@@ -553,7 +553,7 @@ where
     // Set up LU options for CI
     let left_orthogonal = canonical == Canonical::Left;
     let lu_options = RrLUOptions {
-        max_rank,
+        max_bond_dim,
         rel_tol,
         abs_tol: 0.0,
         left_orthogonal,

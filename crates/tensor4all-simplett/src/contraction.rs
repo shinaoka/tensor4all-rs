@@ -29,14 +29,14 @@ fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> Tenso
 ///
 /// let opts = ContractionOptions::default();
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-15);
-/// assert_eq!(opts.max_bond_dim, usize::MAX);
+/// assert_eq!(opts.max_bond_dim, None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ContractionOptions {
     /// Relative truncation tolerance during contraction.
     pub tolerance: f64,
-    /// Hard upper bound on bond dimension.
-    pub max_bond_dim: usize,
+    /// Hard upper bound on bond dimension. `None` (default) means no limit.
+    pub max_bond_dim: Option<usize>,
     /// Decomposition method for intermediate compression.
     pub method: CompressionMethod,
 }
@@ -45,7 +45,7 @@ impl Default for ContractionOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-12,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             method: CompressionMethod::LU,
         }
     }

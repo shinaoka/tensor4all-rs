@@ -1,11 +1,11 @@
-//! Bug: fit() does not allow bond dimension growth during sweeps when max_rank
+//! Bug: fit() does not allow bond dimension growth during sweeps when max_bond_dim
 //! is not specified and rtol truncates the initial zipup guess.
 //!
 //! Scenario:
-//!   1. User calls fit() with rtol but without max_rank
+//!   1. User calls fit() with rtol but without max_bond_dim
 //!   2. The zipup initialization uses this rtol, truncating to small bonds
 //!   3. During fit sweeps, bond dimensions are capped at the zipup value
-//!      (because max_rank is None, the code falls back to existing bond dim)
+//!      (because max_bond_dim is None, the code falls back to existing bond dim)
 //!   4. Fit cannot grow bonds beyond the zipup initialization → accuracy loss
 //!
 //! In Julia's ITensorMPS.jl, maxdim defaults to typemax(Int), so bonds grow
@@ -43,13 +43,13 @@ fn create_random_mpo(
 
 /// Demonstrates the bond capping bug with rtol-based truncation.
 ///
-/// When fit() is called with rtol (no max_rank):
+/// When fit() is called with rtol (no max_bond_dim):
 /// - Zipup initialization truncates bonds using rtol
-/// - Fit sweeps cap bonds at zipup's bond dims (because max_rank=None → fallback to existing)
+/// - Fit sweeps cap bonds at zipup's bond dims (because max_bond_dim=None → fallback to existing)
 /// - This prevents fit from improving accuracy by growing bonds
 ///
 /// Expected (Julia-like behavior): fit should be able to grow bonds during sweeps
-/// when max_rank is not specified, using only rtol for truncation control.
+/// when max_bond_dim is not specified, using only rtol for truncation control.
 #[test]
 fn test_fit_bond_growth_with_rtol() {
     let length = 4;
@@ -114,9 +114,9 @@ fn test_fit_bond_growth_with_rtol() {
         "Test setup: zipup should truncate (got {zipup_bd} >= exact {exact_bd})"
     );
 
-    // Fit with same rtol, NO max_rank:
+    // Fit with same rtol, NO max_bond_dim:
     // Bug: zipup init uses rtol → truncates to small bonds.
-    //       Fit sweeps cap at existing bonds (because max_rank=None).
+    //       Fit sweeps cap at existing bonds (because max_bond_dim=None).
     //       Bonds cannot grow → accuracy limited by zipup.
     // Expected: fit should be free to grow bonds during sweeps and achieve
     //           better accuracy than zipup alone (limited only by rtol).
@@ -154,7 +154,7 @@ fn test_fit_bond_growth_with_rtol() {
         / exact_norm;
     eprintln!("fit(rtol={rtol},4sw) max bond: {fit4_bd}, rel_err = {fit4_err:.6e}");
 
-    // Control: fit with small rtol (no truncation), no max_rank
+    // Control: fit with small rtol (no truncation), no max_bond_dim
     let result_fit_small_rtol = mpo_a
         .contract(
             &mpo_b,

@@ -46,7 +46,7 @@ fn materialize_expensive(n: usize) -> Vec<f64> {
 
 fn bench_lazy_block_rook(c: &mut Criterion) {
     let options = RrLUOptions {
-        max_rank: 8,
+        max_bond_dim: 8,
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,

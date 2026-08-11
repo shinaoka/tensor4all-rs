@@ -63,14 +63,14 @@ fn main() -> Result<()> {
     let length = 10;
     let phys_dim = 2;
     let bond_dim = 50;
-    let max_rank = 50;
+    let max_bond_dim = 50;
     let n_runs = 10; // Number of runs for averaging
 
     println!("=== Random MPO Contraction Benchmark (Rust/tensor4all-rs) ===");
     println!("Length: {} sites", length);
     println!("Physical dimension: {}", phys_dim);
     println!("Bond dimension: {}", bond_dim);
-    println!("Max rank: {}", max_rank);
+    println!("Max rank: {}", max_bond_dim);
     println!(
         "Number of runs: {} (excluding first compilation run)",
         n_runs
@@ -135,13 +135,13 @@ fn main() -> Result<()> {
     );
     println!();
 
-    // Contract options: zip-up with max_rank=50
-    let options = ContractOptions::zipup().with_max_rank(max_rank);
+    // Contract options: zip-up with max_bond_dim=50
+    let options = ContractOptions::zipup().with_max_bond_dim(max_bond_dim);
 
     println!("Contracting MPOs using zip-up method...");
     println!(
-        "Options: method=Zipup, max_rank={}, rtol={:?}",
-        max_rank,
+        "Options: method=Zipup, max_bond_dim={}, rtol={:?}",
+        max_bond_dim,
         options.svd_policy().map(|policy| policy.threshold)
     );
     println!("Note: Each run copies MPOs and includes orthogonalization time");

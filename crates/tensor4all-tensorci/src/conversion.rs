@@ -26,12 +26,12 @@ use tensor4all_tensorbackend::{mat_mul_owned, BlasMul, Matrix};
 ///
 /// let options = TensorCI2FromTensorTrainOptions {
 ///     tolerance: 1e-14,
-///     max_bond_dim: 8,
+///     max_bond_dim: Some(8),
 ///     max_iter: 4,
 /// };
 ///
 /// assert!((options.tolerance - 1e-14).abs() < 1e-20);
-/// assert_eq!(options.max_bond_dim, 8);
+/// assert_eq!(options.max_bond_dim, Some(8));
 /// assert_eq!(options.max_iter, 4);
 /// ```
 #[derive(Debug, Clone)]
@@ -43,9 +43,9 @@ pub struct TensorCI2FromTensorTrainOptions {
     pub tolerance: f64,
     /// Maximum bond dimension retained during index extraction.
     ///
-    /// The default is `usize::MAX`, meaning no explicit cap. Set this to the
+    /// The default is `None`, meaning no explicit cap. Set this to the
     /// largest acceptable converted TCI rank for expensive downstream use.
-    pub max_bond_dim: usize,
+    pub max_bond_dim: Option<usize>,
     /// Maximum number of alternating one-site index extraction sweeps.
     ///
     /// The default is `3`, matching the legacy Julia conversion constructor.
@@ -57,7 +57,7 @@ impl Default for TensorCI2FromTensorTrainOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-12,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             max_iter: 3,
         }
     }
@@ -126,7 +126,7 @@ fn validate_options(options: &TensorCI2FromTensorTrainOptions) -> Result<()> {
             message: "TensorCI2 conversion tolerance must be finite and nonnegative".to_string(),
         });
     }
-    if options.max_bond_dim == 0 {
+    if options.max_bond_dim == Some(0) {
         return Err(TCIError::InvalidOperation {
             message: "TensorCI2 conversion max_bond_dim must be nonzero".to_string(),
         });
@@ -215,7 +215,7 @@ where
     let next_shape = tensor_shape(next);
     let current_matrix = group_indices(current, forward, false);
     let lu_options = RrLUOptions {
-        max_rank: options.max_bond_dim,
+        max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
         rel_tol: options.tolerance,
         abs_tol: 0.0,
         left_orthogonal: forward,

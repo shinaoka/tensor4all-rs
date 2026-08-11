@@ -211,11 +211,43 @@ fn parse_file(path: &Path) -> Result<Vec<FuncInfo>, Box<dyn std::error::Error>> 
     Ok(funcs)
 }
 
+/// A public item is one a downstream user can call: `pub` visibility only.
+/// `pub(crate)`/`pub(super)`/`pub(self)` (Restricted) and private (Inherited)
+/// items are not part of the public API surface and are excluded from the
+/// dump.
+fn is_public(vis: &Visibility) -> bool {
+    matches!(vis, Visibility::Public(_))
+}
+
+/// True when the item carries a `#[cfg(test)]` attribute. Test-only items
+/// (e.g. `#[cfg(test)] pub(crate)` helper types and their syntactically
+/// `pub` methods) are not part of the public API surface and are excluded.
+fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    use proc_macro2::TokenTree;
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && match &attr.meta {
+                syn::Meta::List(list) => {
+                    // Exactly `cfg(test)`: a single top-level `test` ident.
+                    // `cfg(not(test))` must NOT match.
+                    let mut it = list.tokens.clone().into_iter();
+                    matches!(
+                        (it.next(), it.next()),
+                        (Some(TokenTree::Ident(ident)), None) if ident == "test"
+                    )
+                }
+                _ => false,
+            }
+    })
+}
+
 fn extract_items(items: &[Item], funcs: &mut Vec<FuncInfo>) {
     for item in items {
         match item {
             Item::Fn(item_fn) => {
-                funcs.push(extract_fn_info(item_fn));
+                if is_public(&item_fn.vis) && !has_cfg_test(&item_fn.attrs) {
+                    funcs.push(extract_fn_info(item_fn));
+                }
             }
             Item::Impl(item_impl) => {
                 extract_impl_items(item_impl, funcs);
@@ -224,6 +256,9 @@ fn extract_items(items: &[Item], funcs: &mut Vec<FuncInfo>) {
                 extract_trait_items(item_trait, funcs);
             }
             Item::Mod(item_mod) => {
+                if has_cfg_test(&item_mod.attrs) {
+                    continue;
+                }
                 if let Some((_, items)) = &item_mod.content {
                     extract_items(items, funcs);
                 }
@@ -243,10 +278,16 @@ fn extract_fn_info(item_fn: &ItemFn) -> FuncInfo {
 }
 
 fn extract_impl_items(item_impl: &ItemImpl, funcs: &mut Vec<FuncInfo>) {
+    if has_cfg_test(&item_impl.attrs) {
+        return;
+    }
     let impl_for = type_to_string(&item_impl.self_ty);
 
     for impl_item in &item_impl.items {
         if let ImplItem::Fn(method) = impl_item {
+            if !is_public(&method.vis) || has_cfg_test(&method.attrs) {
+                continue;
+            }
             funcs.push(FuncInfo {
                 visibility: vis_to_string(&method.vis),
                 signature: sig_to_string(&method.sig),
@@ -260,10 +301,18 @@ fn extract_impl_items(item_impl: &ItemImpl, funcs: &mut Vec<FuncInfo>) {
 }
 
 fn extract_trait_items(item_trait: &ItemTrait, funcs: &mut Vec<FuncInfo>) {
+    if has_cfg_test(&item_trait.attrs) {
+        return;
+    }
     let trait_name = item_trait.ident.to_string();
 
     for trait_item in &item_trait.items {
         if let TraitItem::Fn(method) = trait_item {
+            // A trait method is public when its trait is public; non-public
+            // traits and test-only methods are excluded from the dump.
+            if !is_public(&item_trait.vis) || has_cfg_test(&method.attrs) {
+                continue;
+            }
             let has_default = method.default.is_some();
             funcs.push(FuncInfo {
                 visibility: vis_to_string(&item_trait.vis),

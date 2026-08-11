@@ -21,7 +21,7 @@ use tensor4all_tensorbackend::{mat_mul, svd_backend, BackendLinalgScalar, Matrix
 /// Compute QR decomposition
 fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>)> {
     let options = RrLUOptions {
-        max_rank: matrix.ncols().min(matrix.nrows()),
+        max_bond_dim: matrix.ncols().min(matrix.nrows()),
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,

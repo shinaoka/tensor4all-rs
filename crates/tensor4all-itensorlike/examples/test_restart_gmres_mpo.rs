@@ -144,7 +144,7 @@ fn test_restart_gmres_mpo(n: usize, operator: &str) -> anyhow::Result<(bool, usi
     // Truncation options
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -214,19 +214,19 @@ fn test_restart_gmres_mpo_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     // AGGRESSIVE truncation to make the problem harder
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-        .with_max_rank(5);
+        .with_max_bond_dim(5);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
     };
 
     println!(
-        "Truncation: rtol={:.0e}, max_rank={}",
+        "Truncation: rtol={:.0e}, max_bond_dim={}",
         truncate_opts
             .svd_policy()
             .map(|policy| policy.threshold)
             .unwrap_or(0.0),
-        truncate_opts.max_rank().unwrap_or(0)
+        truncate_opts.max_bond_dim().unwrap_or(0)
     );
 
     // Define apply_a closure
@@ -299,19 +299,19 @@ fn test_restart_gmres_mpo_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, 
     // Aggressive truncation
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
-        .with_max_rank(5);
+        .with_max_bond_dim(5);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
     };
 
     println!(
-        "Truncation: rtol={:.0e}, max_rank={}",
+        "Truncation: rtol={:.0e}, max_bond_dim={}",
         truncate_opts
             .svd_policy()
             .map(|policy| policy.threshold)
             .unwrap_or(0.0),
-        truncate_opts.max_rank().unwrap_or(0)
+        truncate_opts.max_bond_dim().unwrap_or(0)
     );
 
     // Define apply_a closure
@@ -513,7 +513,7 @@ fn apply_operator_to_mpo(
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(30);
+        .with_max_bond_dim(30);
 
     let result = op
         .contract(mpo, &options)

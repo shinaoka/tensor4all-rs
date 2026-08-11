@@ -782,9 +782,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
         } else {
             FourierOptions::inverse()
         };
-        if max_bond_dim > 0 {
-            options.max_bond_dim = max_bond_dim;
-        }
+        options.max_bond_dim = (max_bond_dim > 0).then_some(max_bond_dim);
         if tolerance > 0.0 {
             options.tolerance = tolerance;
         }

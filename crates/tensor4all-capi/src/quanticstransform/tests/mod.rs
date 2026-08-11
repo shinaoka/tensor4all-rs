@@ -265,7 +265,7 @@ fn test_fourier_materialization_matches_rust_reference() {
     );
     let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
     let mut options = FourierOptions::forward();
-    options.max_bond_dim = 8;
+    options.max_bond_dim = Some(8);
     options.tolerance = 1e-12;
     let expected = rust_operator_matrix(
         &quantics_fourier_operator(2, options).unwrap(),

@@ -376,7 +376,7 @@ fn test_orthogonalize_with_ci() {
 }
 
 #[test]
-fn test_truncate_with_max_rank() {
+fn test_truncate_with_max_bond_dim() {
     // Create a 3-site tensor train with large bond dimension
     let s0 = idx(0, 4);
     let l01 = idx(1, 8);
@@ -392,7 +392,7 @@ fn test_truncate_with_max_rank() {
     assert_eq!(tt.max_bond_dim(), 8);
 
     // Truncate to max rank 4
-    let options = TruncateOptions::svd().with_max_rank(4);
+    let options = TruncateOptions::svd().with_max_bond_dim(4);
     tt.truncate(&options).unwrap();
 
     // Check that bond dimensions are reduced
@@ -419,7 +419,9 @@ fn test_contract_with_fit_method() {
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
     // Test contract with Fit method
-    let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4); // 4 half-sweeps = 2 full sweeps
+    let options = ContractOptions::fit()
+        .with_max_bond_dim(10)
+        .with_nhalfsweeps(4); // 4 half-sweeps = 2 full sweeps
     let result = tt1.contract_pair(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
@@ -485,7 +487,9 @@ fn test_contract_nhalfsweeps_conversion() {
 
     // Test that nhalfsweeps is correctly converted to nfullsweeps
     // nhalfsweeps=6 should become nfullsweeps=3
-    let options = ContractOptions::fit().with_nhalfsweeps(6).with_max_rank(10);
+    let options = ContractOptions::fit()
+        .with_nhalfsweeps(6)
+        .with_max_bond_dim(10);
     let result = tt1.contract_pair(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
@@ -518,7 +522,9 @@ fn test_contract_fit_odd_nhalfsweeps_errors() {
     let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
-    let options = ContractOptions::fit().with_nhalfsweeps(1).with_max_rank(10);
+    let options = ContractOptions::fit()
+        .with_nhalfsweeps(1)
+        .with_max_bond_dim(10);
     let err = tt1.contract_pair(&tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
@@ -1306,7 +1312,7 @@ fn test_truncate_single_site_noop() {
     let t0 = make_tensor(vec![s0]);
     let mut tt = TensorTrain::new(vec![t0]).unwrap();
 
-    let options = TruncateOptions::svd().with_max_rank(2);
+    let options = TruncateOptions::svd().with_max_bond_dim(2);
     tt.truncate(&options).unwrap();
     assert_eq!(tt.len(), 1);
 }

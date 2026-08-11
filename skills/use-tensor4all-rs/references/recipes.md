@@ -146,7 +146,7 @@ assert_eq!(qft.mpo().node_count(), r);
 
 // Apply to a TreeTN state. zipUp is the default; naive grows bonds, fit compresses.
 let opts = ApplyOptions::zipup()
-    .with_max_rank(64)
+    .with_max_bond_dim(64)
     .with_svd_policy(SvdTruncationPolicy::new(1e-10));
 // let result = apply_linear_operator(&qft, &state, opts)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -174,7 +174,7 @@ assert_eq!(ttn.edge_count(), 1);
 let norm_before = ttn.norm()?;
 let mut ttn = ttn.canonicalize([0], Default::default())?; // root 0 holds the norm
 assert!(ttn.is_canonicalized());
-let mut ttn = ttn.truncate([0], TruncationOptions::default().with_max_rank(2))?;
+let mut ttn = ttn.truncate([0], TruncationOptions::default().with_max_bond_dim(2))?;
 assert_eq!(ttn.node_count(), 2);
 assert!((ttn.norm()? - norm_before).abs() / norm_before < 1e-10); // canonicalization preserves the value
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -235,7 +235,7 @@ tt.orthogonalize(1)?;
 assert!(tt.isortho());
 tt.truncate(&TruncateOptions::svd()
     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-    .with_max_rank(2))?;
+    .with_max_bond_dim(2))?;
 let inner = tt.inner(&tt)?;                  // <tt|tt> = norm^2
 assert!((inner.real() - norm_before * norm_before).abs() < 1e-10);
 # Ok::<(), Box<dyn std::error::Error>>(())

@@ -85,8 +85,8 @@ impl LinsolveOptions {
     }
 
     /// Set maximum bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.truncation = self.truncation.with_max_rank(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.truncation = self.truncation.with_max_bond_dim(max_bond_dim);
         self
     }
 

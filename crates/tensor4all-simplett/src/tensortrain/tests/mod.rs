@@ -591,7 +591,7 @@ where
         .compress(&CompressionOptions {
             method: CompressionMethod::SVD,
             tolerance: 1e-10,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             normalize_error: true,
         })
         .unwrap();

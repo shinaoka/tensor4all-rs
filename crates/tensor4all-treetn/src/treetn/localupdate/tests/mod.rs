@@ -456,7 +456,7 @@ fn test_truncate_updater_basic() {
     let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
     assert_eq!(plan.len(), 4); // 2 edges × 2 directions
 
-    // Create truncate updater with max_rank=2
+    // Create truncate updater with max_bond_dim=2
     let mut updater = TruncateUpdater::new(Some(2), None);
 
     // Apply sweep
@@ -466,7 +466,7 @@ fn test_truncate_updater_basic() {
     tn.verify_internal_consistency().unwrap();
 
     // Check that bond dimensions are reduced
-    // After truncation with max_rank=2, all bonds should have dim <= 2
+    // After truncation with max_bond_dim=2, all bonds should have dim <= 2
     for node_name in tn.node_names() {
         let node_idx = tn.node_index(&node_name).unwrap();
         let tensor = tn.tensor(node_idx).unwrap();
@@ -494,7 +494,7 @@ fn test_apply_local_update_sweep_preserves_structure() {
     // Create sweep plan with nsite=2 from B
     let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
 
-    // Apply with no truncation (max_rank=None)
+    // Apply with no truncation (max_bond_dim=None)
     let mut updater = TruncateUpdater::new(None, None);
     apply_local_update_sweep(&mut tn, &plan, &mut updater).unwrap();
 

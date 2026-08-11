@@ -13,7 +13,7 @@ pub(crate) struct PivotKernelOptions {
     /// Absolute tolerance.
     pub abs_tol: f64,
     /// Maximum rank.
-    pub max_rank: usize,
+    pub max_bond_dim: usize,
     /// Whether the left factor is unit-diagonal.
     #[allow(dead_code)]
     pub left_orthogonal: bool,
@@ -39,7 +39,7 @@ impl PivotKernelOptions {
         Self {
             rel_tol: 0.0,
             abs_tol: 0.0,
-            max_rank: usize::MAX,
+            max_bond_dim: usize::MAX,
             left_orthogonal: true,
         }
     }
@@ -50,7 +50,7 @@ impl Default for PivotKernelOptions {
         Self {
             rel_tol: 1e-14,
             abs_tol: 0.0,
-            max_rank: usize::MAX,
+            max_bond_dim: usize::MAX,
             left_orthogonal: true,
         }
     }

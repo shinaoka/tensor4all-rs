@@ -75,7 +75,7 @@ fn run_identity_gmres(b: &TensorTrain, max_outer_iters: usize) -> Result<(bool, 
 
     let truncate_opts = TruncateOptions::svd()
         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
-        .with_max_rank(100);
+        .with_max_bond_dim(100);
     let truncate_fn = |x: &mut TensorTrain| -> Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())

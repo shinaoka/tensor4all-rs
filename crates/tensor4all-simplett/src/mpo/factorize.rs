@@ -41,7 +41,7 @@ pub struct FactorizeOptions {
     /// Smaller values preserve more accuracy but produce larger ranks.
     pub tolerance: f64,
     /// Maximum rank (bond dimension) after factorization
-    pub max_rank: usize,
+    pub max_bond_dim: Option<usize>,
     /// Whether to return the left factor as left-orthogonal
     pub left_orthogonal: bool,
     /// Number of random projections for RSVD (parameter q)
@@ -55,7 +55,7 @@ impl Default for FactorizeOptions {
         Self {
             method: FactorizeMethod::SVD,
             tolerance: 1e-12,
-            max_rank: usize::MAX,
+            max_bond_dim: None,
             left_orthogonal: true,
             rsvd_q: 2,
             rsvd_p: 10,
@@ -196,7 +196,7 @@ fn factorize_svd<T: SVDScalar>(
     let vt = typed_tensor_to_matrix2(&svd_result.vt, "svd.vt")?;
     let singular_values = typed_col_major_values(&svd_result.s, "svd.s")?;
 
-    // Determine rank based on tolerance and max_rank
+    // Determine rank based on tolerance and max_bond_dim
     let min_dim = m.min(n);
     let mut rank = 0;
     let mut total_weight: f64 = 0.0;
@@ -227,7 +227,7 @@ fn factorize_svd<T: SVDScalar>(
     if s_max > 0.0 {
         let cutoff = options.tolerance * s_max;
         for &singular_value in singular_values.iter().take(min_dim) {
-            if rank >= options.max_rank {
+            if options.max_bond_dim.is_some_and(|cap| rank >= cap) {
                 break;
             }
             let sv = T::linalg_real_to_f64(singular_value);
@@ -340,7 +340,7 @@ where
     }
 
     let lu_options = RrLUOptions {
-        max_rank: options.max_rank,
+        max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
         rel_tol: options.tolerance,
         abs_tol: 0.0,
         left_orthogonal: options.left_orthogonal,

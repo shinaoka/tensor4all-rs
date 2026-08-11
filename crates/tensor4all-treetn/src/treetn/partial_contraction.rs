@@ -242,8 +242,8 @@ fn factorize_options_from_contraction_options(
     if let Some(rtol) = options.qr_rtol {
         factorize_options = factorize_options.with_qr_rtol(rtol);
     }
-    if let Some(max_rank) = options.max_rank {
-        factorize_options = factorize_options.with_max_rank(max_rank);
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
     }
     factorize_options.validate().map_err(|err| {
         anyhow!("partial_contract: invalid contraction factorization options: {err}")

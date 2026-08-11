@@ -9,7 +9,7 @@ fn test_contract_zipup_identity() {
 
     let options = ContractionOptions {
         tolerance: 1e-12,
-        max_bond_dim: 10,
+        max_bond_dim: Some(10),
         factorize_method: FactorizeMethod::SVD,
     };
 
@@ -46,7 +46,7 @@ fn test_contract_zipup_compresses() {
 
     let options = ContractionOptions {
         tolerance: 1e-12,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         factorize_method: FactorizeMethod::SVD,
     };
 
@@ -69,7 +69,7 @@ fn test_contract_zipup_untruncated_matches_naive() {
 
     let options = ContractionOptions {
         tolerance: 0.0,
-        max_bond_dim: usize::MAX,
+        max_bond_dim: None,
         factorize_method: FactorizeMethod::SVD,
     };
 

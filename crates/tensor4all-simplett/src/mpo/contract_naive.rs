@@ -116,7 +116,7 @@ where
     let factorize_opts = FactorizeOptions {
         method: options.factorize_method,
         tolerance: options.tolerance,
-        max_rank: options.max_bond_dim,
+        max_bond_dim: options.max_bond_dim,
         left_orthogonal: true,
         ..Default::default()
     };

@@ -174,7 +174,7 @@ where
 ///
 /// # Returns
 ///
-/// Tuple of ([`QuanticsTensorCI2Batched`], max_ranks_across_components, max_errors_across_components)
+/// Tuple of ([`QuanticsTensorCI2Batched`], max_bond_dims_across_components, max_errors_across_components)
 ///
 /// # Errors
 ///
@@ -294,10 +294,10 @@ where
 
     // Compute aggregate ranks and errors (element-wise max across components).
     let max_len = all_ranks.iter().map(|r| r.len()).max().unwrap_or(0);
-    let mut max_ranks = vec![0usize; max_len];
+    let mut max_bond_dims = vec![0usize; max_len];
     for ranks in &all_ranks {
         for (i, &r) in ranks.iter().enumerate() {
-            max_ranks[i] = max_ranks[i].max(r);
+            max_bond_dims[i] = max_bond_dims[i].max(r);
         }
     }
 
@@ -315,7 +315,7 @@ where
         grid: grid.clone(),
     };
 
-    Ok((result, max_ranks, max_errors))
+    Ok((result, max_bond_dims, max_errors))
 }
 
 /// Combine per-component tensor trains into a single TT with a component

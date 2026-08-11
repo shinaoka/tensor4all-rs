@@ -110,11 +110,11 @@ let ttn = ttn.canonicalize([0], CanonicalizationOptions::default()).unwrap();
 assert!(ttn.is_canonicalized());
 
 // Truncate bond dimensions after canonicalization
-let ttn = ttn.truncate([0], TruncationOptions::default().with_max_rank(2)).unwrap();
+let ttn = ttn.truncate([0], TruncationOptions::default().with_max_bond_dim(2)).unwrap();
 assert_eq!(ttn.node_count(), 2);
 ```
 
-`TruncationOptions` supports both a maximum rank (`with_max_rank`) and a relative tolerance
+`TruncationOptions` supports both a maximum rank (`with_max_bond_dim`) and a relative tolerance
 (`with_rtol`). Truncation discards small singular values on each bond, reducing memory and
 contraction cost at the expense of a controlled approximation error.
 

@@ -17,7 +17,7 @@ use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 /// |--------------------|---------------|-----------------------------------------------------|
 /// | `tolerance`        | `1e-8`        | Relative stopping tolerance on normalized bond error |
 /// | `max_iter`         | `20`          | Maximum number of edge-order iterations              |
-/// | `max_bond_dim`     | `usize::MAX`  | Maximum bond dimension (no cap by default)           |
+/// | `max_bond_dim`     | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `normalize_error`  | `true`        | Normalize error by maximum sample magnitude          |
 ///
 /// # Examples
@@ -29,19 +29,19 @@ use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 /// let opts = TreeTciOptions::default();
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_iter, 20);
-/// assert_eq!(opts.max_bond_dim, usize::MAX);
+/// assert_eq!(opts.max_bond_dim, None);
 /// assert!(opts.normalize_error);
 ///
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
 ///     tolerance: 1e-12,
 ///     max_iter: 50,
-///     max_bond_dim: 100,
+///     max_bond_dim: Some(100),
 ///     normalize_error: true,
 /// };
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(opts.max_iter, 50);
-/// assert_eq!(opts.max_bond_dim, 100);
+/// assert_eq!(opts.max_bond_dim, Some(100));
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeTciOptions {
@@ -62,8 +62,8 @@ pub struct TreeTciOptions {
     /// Maximum bond dimension retained by the tcicore LUCI pivot substrate.
     ///
     /// Caps the number of pivots per edge bipartition. Use this to limit
-    /// memory and computation for large problems. Default: `usize::MAX` (no cap).
-    pub max_bond_dim: usize,
+    /// memory and computation for large problems. Default: `None` (no cap).
+    pub max_bond_dim: Option<usize>,
 
     /// Whether to normalize the bond error by the maximum observed sample magnitude.
     ///
@@ -78,7 +78,7 @@ impl Default for TreeTciOptions {
         Self {
             tolerance: 1e-8,
             max_iter: 20,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             normalize_error: true,
         }
     }
@@ -205,7 +205,7 @@ where
     if !(options.max_iter > 0) {
         return Err(anyhow::anyhow!("TreeTCI optimization requires max_iter > 0").into());
     };
-    if !(options.max_bond_dim > 0) {
+    if options.max_bond_dim == Some(0) {
         return Err(anyhow::anyhow!("TreeTCI optimization requires max_bond_dim > 0").into());
     };
 
@@ -232,7 +232,7 @@ where
             let kernel_options = RrLUOptions {
                 rel_tol: 1e-14,
                 abs_tol: options.tolerance * error_scale,
-                max_rank: options.max_bond_dim,
+                max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
                 left_orthogonal: true,
             };
 
@@ -244,7 +244,7 @@ where
             }
         }
 
-        ranks.push(state.max_rank());
+        ranks.push(state.max_bond_dim());
         let normalized_error = if options.normalize_error && state.max_sample_value > 0.0 {
             state.max_bond_error() / state.max_sample_value
         } else {
@@ -271,7 +271,9 @@ where
             let errors_converged = last_errors.iter().all(|&e| e < options.tolerance);
             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
                 == last_ranks.last().copied().unwrap_or(0);
-            let bond_dim_saturated = last_ranks.iter().all(|&r| r >= options.max_bond_dim);
+            let bond_dim_saturated = options
+                .max_bond_dim
+                .is_some_and(|cap| last_ranks.iter().all(|&r| r >= cap));
             if (errors_converged && rank_stable) || bond_dim_saturated {
                 break;
             }

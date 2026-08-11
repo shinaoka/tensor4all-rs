@@ -16,7 +16,7 @@ fn test_tensorci2_from_tensor_train_preserves_values() {
 fn test_tensorci2_from_tensor_train_respects_max_bond_dim() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let options = TensorCI2FromTensorTrainOptions {
-        max_bond_dim: 1,
+        max_bond_dim: Some(1),
         ..TensorCI2FromTensorTrainOptions::default()
     };
     let tci = TensorCI2::from_tensor_train(tt, options).unwrap();
@@ -62,7 +62,7 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
         TCI2Options {
             tolerance: 1e-12,
             max_iter: 20,
-            max_bond_dim: 5,
+            max_bond_dim: Some(5),
             ..TCI2Options::default()
         },
     )
@@ -73,7 +73,7 @@ fn test_tensorci2_from_tensor_train_matches_complex_lorentz_full_grid() {
         source_tt,
         TensorCI2FromTensorTrainOptions {
             tolerance: 1e-12,
-            max_bond_dim: 5,
+            max_bond_dim: Some(5),
             ..TensorCI2FromTensorTrainOptions::default()
         },
     )

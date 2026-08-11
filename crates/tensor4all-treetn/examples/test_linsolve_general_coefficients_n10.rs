@@ -391,11 +391,11 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
     let mut x = init.canonicalize(["site0".to_string()], CanonicalizationOptions::default())?;
 
     // Setup linsolve options and updater
-    // For N=10, we need higher max_rank to handle the larger system
+    // For N=10, we need higher max_bond_dim to handle the larger system
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
         .with_gmres_tol(1e-10)
-        .with_max_rank(100)
+        .with_max_bond_dim(100)
         .with_coefficients(a0, a1);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(

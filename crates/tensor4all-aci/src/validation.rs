@@ -14,7 +14,7 @@ pub(crate) fn validate_options<T: TTScalar>(options: &crate::AciOptions<T>) -> R
         });
     }
 
-    if options.max_bond_dim == 0 {
+    if options.max_bond_dim == Some(0) {
         return Err(AciError::InvalidOptions {
             message: "max_bond_dim must be at least 1".to_string(),
         });

@@ -244,7 +244,7 @@ fn case_ok_identity_single_1site_step() -> anyhow::Result<()> {
     // Keep coefficients simple (avoid the a0*x + ... path inside the linop).
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_max_rank(state_bond_dim)
+        .with_max_bond_dim(state_bond_dim)
         .with_gmres_tol(1e-6)
         .with_gmres_max_restarts(20)
         .with_gmres_restart_dim(30)
@@ -288,7 +288,7 @@ fn case_fail_identity_2site_sweep() -> anyhow::Result<()> {
     // Benchmark-like coefficients (this is where we reproduce the known failure)
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_max_rank(state_bond_dim)
+        .with_max_bond_dim(state_bond_dim)
         .with_gmres_tol(1e-6)
         .with_gmres_max_restarts(20)
         .with_gmres_restart_dim(30)

@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // dimensions stay manageable for inspection and plotting.
     let compression_options = TruncationOptions::default()
         .with_svd_policy(SvdTruncationPolicy::new(1e-12))
-        .with_max_rank(64);
+        .with_max_bond_dim(64);
     let product_compressed_tn = product_raw_tn
         .clone()
         .truncate([center], compression_options)?;

@@ -264,7 +264,7 @@ where
     /// * `other` - The other TreeTN to contract with (must have same topology)
     /// * `center` - The center node name towards which to contract
     /// * `svd_policy` - Optional SVD truncation policy
-    /// * `max_rank` - Optional maximum bond dimension
+    /// * `max_bond_dim` - Optional maximum bond dimension
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
@@ -278,14 +278,20 @@ where
         other: &Self,
         center: &V,
         svd_policy: Option<SvdTruncationPolicy>,
-        max_rank: Option<usize>,
+        max_bond_dim: Option<usize>,
     ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
-        self.contract_zipup_with(other, center, CanonicalForm::Unitary, svd_policy, max_rank)
+        self.contract_zipup_with(
+            other,
+            center,
+            CanonicalForm::Unitary,
+            svd_policy,
+            max_bond_dim,
+        )
     }
 
     /// Contract two TreeTNs with the same topology using zip-up and a specified canonical form.
@@ -301,7 +307,7 @@ where
     /// * `center` - The center node name towards which to contract
     /// * `form` - Canonical form (Unitary/LU/CI)
     /// * `svd_policy` - Optional SVD truncation policy
-    /// * `max_rank` - Optional maximum bond dimension
+    /// * `max_bond_dim` - Optional maximum bond dimension
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
@@ -316,7 +322,7 @@ where
         center: &V,
         form: CanonicalForm,
         svd_policy: Option<SvdTruncationPolicy>,
-        max_rank: Option<usize>,
+        max_bond_dim: Option<usize>,
     ) -> std::result::Result<Self, TreeTNOperationError>
     where
         V: Ord,
@@ -328,7 +334,7 @@ where
             center,
             form,
             svd_policy,
-            max_rank,
+            max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
         )
         .map_err(TreeTNOperationError::from)
@@ -340,7 +346,7 @@ where
         center: &V,
         form: CanonicalForm,
         svd_policy: Option<SvdTruncationPolicy>,
-        max_rank: Option<usize>,
+        max_bond_dim: Option<usize>,
     ) -> Result<Self>
     where
         V: Ord,
@@ -352,7 +358,7 @@ where
             center,
             form,
             svd_policy,
-            max_rank,
+            max_bond_dim,
             ZipupTopologyMode::PreserveInputTopology,
         )
     }
@@ -363,7 +369,7 @@ where
         center: &V,
         form: CanonicalForm,
         svd_policy: Option<SvdTruncationPolicy>,
-        max_rank: Option<usize>,
+        max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
     ) -> Result<Self>
     where
@@ -450,8 +456,8 @@ where
         }
         .with_canonical(Canonical::Left);
 
-        if let Some(max_rank) = max_rank {
-            factorize_options = factorize_options.with_max_rank(max_rank);
+        if let Some(max_bond_dim) = max_bond_dim {
+            factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
         }
         if let Some(policy) = svd_policy {
             factorize_options = factorize_options.with_svd_policy(policy);
@@ -909,7 +915,7 @@ pub struct ContractionOptions {
     /// Contraction method to use.
     pub method: ContractionMethod,
     /// Maximum bond dimension (optional).
-    pub max_rank: Option<usize>,
+    pub max_bond_dim: Option<usize>,
     /// Explicit SVD truncation policy (optional).
     pub svd_policy: Option<SvdTruncationPolicy>,
     /// QR-specific relative tolerance (optional).
@@ -943,7 +949,7 @@ impl Default for ContractionOptions {
     fn default() -> Self {
         Self {
             method: ContractionMethod::default(),
-            max_rank: None,
+            max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
             nfullsweeps: 1,
@@ -975,8 +981,8 @@ impl ContractionOptions {
     }
 
     /// Set maximum bond dimension.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+    pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.max_bond_dim = Some(max_bond_dim);
         self
     }
 
@@ -1154,13 +1160,13 @@ where
 {
     match options.method {
         ContractionMethod::Zipup => {
-            tn_a.contract_zipup(tn_b, center, options.svd_policy, options.max_rank)
+            tn_a.contract_zipup(tn_b, center, options.svd_policy, options.max_bond_dim)
         }
         ContractionMethod::Fit => {
             let fit_options = FitContractionOptions::new(options.nfullsweeps)
                 .with_factorize_alg(options.factorize_alg);
-            let fit_options = if let Some(max_rank) = options.max_rank {
-                fit_options.with_max_rank(max_rank)
+            let fit_options = if let Some(max_bond_dim) = options.max_bond_dim {
+                fit_options.with_max_bond_dim(max_bond_dim)
             } else {
                 fit_options
             };
@@ -1187,7 +1193,7 @@ where
                 tn_a,
                 tn_b,
                 center,
-                options.max_rank,
+                options.max_bond_dim,
                 options.svd_policy,
                 options.qr_rtol,
             )
@@ -1213,7 +1219,7 @@ pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
-    _max_rank: Option<usize>,
+    _max_bond_dim: Option<usize>,
     _svd_policy: Option<SvdTruncationPolicy>,
     _qr_rtol: Option<f64>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>

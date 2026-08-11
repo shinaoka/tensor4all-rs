@@ -427,7 +427,7 @@ fn build_split_options(
         .with_form(CanonicalForm::Unitary)
         .with_final_sweep(final_sweep != 0);
     if maxdim > 0 {
-        options = options.with_max_rank(maxdim);
+        options = options.with_max_bond_dim(maxdim);
     }
     if let Some(policy) = resolve_svd_policy(policy) {
         options = options.with_svd_policy(policy);
@@ -437,7 +437,7 @@ fn build_split_options(
 
 fn build_swap_options(maxdim: usize, rtol: f64) -> SwapOptions {
     SwapOptions {
-        max_rank: (maxdim > 0).then_some(maxdim),
+        max_bond_dim: (maxdim > 0).then_some(maxdim),
         rtol: (rtol > 0.0).then_some(rtol),
     }
 }
@@ -453,7 +453,7 @@ fn build_final_truncation(
 
     let mut options = TruncationOptions::new();
     if maxdim > 0 {
-        options = options.with_max_rank(maxdim);
+        options = options.with_max_bond_dim(maxdim);
     }
     if let Some(policy) = policy {
         options = options.with_svd_policy(policy);
@@ -1153,7 +1153,7 @@ pub extern "C" fn t4a_treetn_truncate(
             options = options.with_svd_policy(policy);
         }
         if maxdim > 0 {
-            options = options.with_max_rank(maxdim);
+            options = options.with_max_bond_dim(maxdim);
         }
 
         let center =
@@ -1544,10 +1544,10 @@ pub extern "C" fn t4a_treetn_add(
             options = options.with_svd_policy(policy);
         }
         if maxdim > 0 {
-            options = options.with_max_rank(maxdim);
+            options = options.with_max_bond_dim(maxdim);
         }
 
-        if options.svd_policy().is_some() || options.max_rank().is_some() {
+        if options.svd_policy().is_some() || options.max_bond_dim().is_some() {
             let center = result.node_names().into_iter().min().ok_or_else(|| {
                 capi_error(T4A_INVALID_ARGUMENT, "cannot truncate an empty TreeTN")
             })?;
@@ -1648,7 +1648,7 @@ pub extern "C" fn t4a_treetn_contract(
             }
         }
         if maxdim > 0 {
-            options = options.with_max_rank(maxdim);
+            options = options.with_max_bond_dim(maxdim);
         }
         if let Some(tol) = resolve_convergence_tol(convergence_tol) {
             options = options.with_convergence_tol(tol);
@@ -1770,7 +1770,7 @@ pub extern "C" fn t4a_treetn_partial_contract(
             }
         }
         if maxdim > 0 {
-            options = options.with_max_rank(maxdim);
+            options = options.with_max_bond_dim(maxdim);
         }
         if let Some(tol) = resolve_convergence_tol(convergence_tol) {
             options = options.with_convergence_tol(tol);
@@ -1876,7 +1876,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
             state.inner(),
             ApplyOptions {
                 method: method.into(),
-                max_rank: (maxdim > 0).then_some(maxdim),
+                max_bond_dim: (maxdim > 0).then_some(maxdim),
                 svd_policy: resolve_svd_policy(policy),
                 qr_rtol: None,
                 nfullsweeps: fit_nfullsweeps,
@@ -2005,7 +2005,7 @@ pub extern "C" fn t4a_treetn_linsolve(
             options = options.with_svd_policy(policy);
         }
         if maxdim > 0 {
-            options = options.with_max_rank(maxdim);
+            options = options.with_max_bond_dim(maxdim);
         }
         if let Some(tol) = resolve_convergence_tol(convergence_tol) {
             options = options.with_convergence_tol(tol);

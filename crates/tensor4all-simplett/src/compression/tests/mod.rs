@@ -89,7 +89,7 @@ where
     let original_norm = tt.norm();
 
     let options = CompressionOptions {
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         tolerance: 1e-12,
         ..Default::default()
     };
@@ -176,7 +176,7 @@ where
 
     let options = CompressionOptions {
         method: CompressionMethod::SVD,
-        max_bond_dim: 2,
+        max_bond_dim: Some(2),
         tolerance: 1e-12,
         ..Default::default()
     };

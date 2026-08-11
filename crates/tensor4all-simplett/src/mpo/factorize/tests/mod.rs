@@ -12,7 +12,7 @@ fn test_factorize_svd() {
     let options = FactorizeOptions {
         method: FactorizeMethod::SVD,
         tolerance: 1e-12,
-        max_rank: 10,
+        max_bond_dim: Some(10),
         left_orthogonal: true,
         ..Default::default()
     };
@@ -55,7 +55,7 @@ fn test_factorize_lu() {
     let options = FactorizeOptions {
         method: FactorizeMethod::LU,
         tolerance: 1e-12,
-        max_rank: 10,
+        max_bond_dim: Some(10),
         left_orthogonal: true,
         ..Default::default()
     };
@@ -79,7 +79,7 @@ fn test_factorize_with_truncation() {
     let options = FactorizeOptions {
         method: FactorizeMethod::SVD,
         tolerance: 1e-10,
-        max_rank: 2,
+        max_bond_dim: Some(2),
         left_orthogonal: true,
         ..Default::default()
     };
@@ -122,7 +122,7 @@ fn test_factorize_svd_truncation_is_scale_invariant() {
     let options = FactorizeOptions {
         method: FactorizeMethod::SVD,
         tolerance: 1e-7,
-        max_rank: 10,
+        max_bond_dim: Some(10),
         left_orthogonal: true,
         ..Default::default()
     };
@@ -181,7 +181,7 @@ fn test_factorize_svd_complex64() {
     let options = FactorizeOptions {
         method: FactorizeMethod::SVD,
         tolerance: 1e-12,
-        max_rank: 10,
+        max_bond_dim: Some(10),
         left_orthogonal: true,
         ..Default::default()
     };

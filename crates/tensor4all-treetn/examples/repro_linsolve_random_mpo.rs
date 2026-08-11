@@ -380,7 +380,7 @@ fn run_linsolve_test(
     a0: f64,
     a1: f64,
     n_sweeps: usize,
-    max_rank: usize,
+    max_bond_dim: usize,
 ) -> anyhow::Result<()> {
     println!("--- {test_name} ---");
 
@@ -389,7 +389,7 @@ fn run_linsolve_test(
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)
-        .with_max_rank(max_rank)
+        .with_max_bond_dim(max_bond_dim)
         .with_gmres_tol(1e-8)
         .with_gmres_max_restarts(50)
         .with_gmres_restart_dim(30)

@@ -78,7 +78,7 @@ fn create_function_2d_tt(
     tensors.push(remaining);
     let mut tt = TensorTrain::new(tensors).unwrap();
     if max_bond > 0 {
-        let trunc = TruncateOptions::svd().with_max_rank(max_bond);
+        let trunc = TruncateOptions::svd().with_max_bond_dim(max_bond);
         tt.truncate(&trunc).unwrap();
     }
     tt

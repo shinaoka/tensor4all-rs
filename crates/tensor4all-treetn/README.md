@@ -34,7 +34,7 @@ assert_eq!(ttn.edge_count(), 2);
 
 // Canonicalize and truncate
 let ttn = ttn.canonicalize([0], CanonicalizationOptions::default())?;
-let mut ttn = ttn.truncate([0], TruncationOptions::default().with_max_rank(2))?;
+let mut ttn = ttn.truncate([0], TruncationOptions::default().with_max_bond_dim(2))?;
 
 // Compute norm
 let norm = ttn.norm()?;

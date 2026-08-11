@@ -20,7 +20,7 @@ use crate::tensortrain::TensorTrain;
 /// # Arguments
 /// * `a` - The first tensor train
 /// * `b` - The second tensor train
-/// * `options` - Contraction options (method, max_rank, rtol, nhalfsweeps)
+/// * `options` - Contraction options (method, max_bond_dim, rtol, nhalfsweeps)
 ///
 /// # Returns
 /// A new tensor train resulting from the contraction.
@@ -51,7 +51,7 @@ pub fn contract(
         });
     }
 
-    validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
+    validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
 
     if matches!(options.method(), ContractMethod::Fit) && !options.nhalfsweeps().is_multiple_of(2) {
         return Err(TensorTrainError::OperationError {
@@ -73,8 +73,8 @@ pub fn contract(
     let nfullsweeps = options.nhalfsweeps() / 2;
     let treetn_options = TreeTNContractionOptions::new(treetn_method).with_nfullsweeps(nfullsweeps);
 
-    let treetn_options = if let Some(max_rank) = options.max_rank() {
-        treetn_options.with_max_rank(max_rank)
+    let treetn_options = if let Some(max_bond_dim) = options.max_bond_dim() {
+        treetn_options.with_max_bond_dim(max_bond_dim)
     } else {
         treetn_options
     };
@@ -100,7 +100,7 @@ pub fn contract(
                 &center,
                 CanonicalForm::Unitary,
                 options.svd_policy(),
-                options.max_rank(),
+                options.max_bond_dim(),
             )
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Zip-up contraction failed: {}", e),
@@ -124,7 +124,7 @@ impl TensorTrain {
     ///
     /// # Arguments
     /// * `other` - The other tensor train to contract with
-    /// * `options` - Contraction options (method, max_rank, rtol, nhalfsweeps)
+    /// * `options` - Contraction options (method, max_bond_dim, rtol, nhalfsweeps)
     ///
     /// # Returns
     /// A new tensor train resulting from the contraction.

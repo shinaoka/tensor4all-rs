@@ -28,7 +28,7 @@ fn optimize_default_converges_on_two_site_identity() {
         &TreeTciOptions {
             tolerance: 1e-12,
             max_iter: 4,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             normalize_error: true,
         },
     )
@@ -41,7 +41,7 @@ fn optimize_default_converges_on_two_site_identity() {
         tci.max_sample_value,
         1e-12,
     );
-    assert_eq!(tci.max_rank(), 2);
+    assert_eq!(tci.max_bond_dim(), 2);
 }
 
 // Previously named `optimize_default_runs_all_iterations_like_upstream_tree_tci`
@@ -75,7 +75,7 @@ fn optimize_default_stops_early_once_converged() {
         &TreeTciOptions {
             tolerance: 1e-12,
             max_iter: 4,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             normalize_error: true,
         },
     )
@@ -115,7 +115,7 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
         &TreeTciOptions {
             tolerance: 1e-12,
             max_iter: 10,
-            max_bond_dim: 1,
+            max_bond_dim: Some(1),
             normalize_error: true,
         },
     )

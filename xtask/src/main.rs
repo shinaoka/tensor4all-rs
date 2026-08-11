@@ -86,8 +86,8 @@ fn cmd_ci() -> Result<()> {
     println!("📎 Running cargo clippy...");
     run_cargo(root, &["clippy", "--workspace", "--", "-D", "warnings"])?;
 
-    println!("🧪 Running cargo test...");
-    run_cargo(root, &["test", "--workspace"])?;
+    println!("🧪 Running release-mode cargo test...");
+    run_cargo(root, &["test", "--release", "--workspace"])?;
 
     println!("📚 Checking documentation...");
     run_cargo(root, &["doc", "--workspace", "--no-deps"])?;

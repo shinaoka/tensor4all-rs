@@ -53,7 +53,7 @@ pub enum CompressionMethod {
 /// |-------|---------|---------|
 /// | `method` | `LU` | Decomposition algorithm (see [`CompressionMethod`]) |
 /// | `tolerance` | `1e-12` | Relative truncation threshold per bond |
-/// | `max_bond_dim` | `usize::MAX` | Hard upper bound on any bond dimension |
+/// | `max_bond_dim` | `None` | Hard upper bound on any bond dimension |
 /// | `normalize_error` | `true` | Whether error is measured relative to the norm |
 ///
 /// # Choosing `tolerance`
@@ -73,13 +73,13 @@ pub enum CompressionMethod {
 /// let opts = CompressionOptions::default();
 /// assert_eq!(opts.method, CompressionMethod::LU);
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-15);
-/// assert_eq!(opts.max_bond_dim, usize::MAX);
+/// assert_eq!(opts.max_bond_dim, None);
 ///
 /// // Custom: SVD with moderate tolerance and bond dim cap
 /// let opts = CompressionOptions {
 ///     method: CompressionMethod::SVD,
 ///     tolerance: 1e-6,
-///     max_bond_dim: 50,
+///     max_bond_dim: Some(50),
 ///     ..Default::default()
 /// };
 /// assert_eq!(opts.method, CompressionMethod::SVD);
@@ -97,8 +97,8 @@ pub struct CompressionOptions {
     /// Hard upper bound on any bond dimension.
     ///
     /// Even if the tolerance would allow a larger rank, the bond dimension
-    /// is capped at this value. Set to `usize::MAX` (default) for no limit.
-    pub max_bond_dim: usize,
+    /// is capped at this value. `None` (default) means no limit.
+    pub max_bond_dim: Option<usize>,
     /// Whether to normalize the truncation error by the tensor norm.
     pub normalize_error: bool,
 }
@@ -108,7 +108,7 @@ impl Default for CompressionOptions {
         Self {
             method: CompressionMethod::LU,
             tolerance: 1e-12,
-            max_bond_dim: usize::MAX,
+            max_bond_dim: None,
             normalize_error: true,
         }
     }
@@ -157,7 +157,7 @@ fn factorize<T>(
     matrix: &Matrix<T>,
     method: CompressionMethod,
     tolerance: f64,
-    max_bond_dim: usize,
+    max_bond_dim: Option<usize>,
     left_orthogonal: bool,
 ) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
 where
@@ -174,7 +174,7 @@ where
     let abstol = 0.0;
 
     let options = RrLUOptions {
-        max_rank: max_bond_dim,
+        max_bond_dim: max_bond_dim.unwrap_or(usize::MAX),
         rel_tol: reltol,
         abs_tol: abstol,
         left_orthogonal,
@@ -203,7 +203,7 @@ where
 fn factorize_svd<T>(
     matrix: &Matrix<T>,
     tolerance: f64,
-    max_bond_dim: usize,
+    max_bond_dim: Option<usize>,
     left_orthogonal: bool,
 ) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
 where
@@ -251,7 +251,7 @@ where
 
     let mut rank = 0;
     for &singular_value in s_data.iter().take(min_dim) {
-        if rank >= max_bond_dim {
+        if max_bond_dim.is_some_and(|cap| rank >= cap) {
             break;
         }
         if singular_value < tolerance * s_max {
@@ -352,9 +352,9 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let (left_factor, right_factor, new_bond_dim) = factorize(
                 &mat,
                 options.method,
-                0.0,        // No truncation in left sweep
-                usize::MAX, // No max bond dim in left sweep
-                true,       // left orthogonal
+                0.0,  // No truncation in left sweep
+                None, // No max bond dim in left sweep
+                true, // left orthogonal
             )?;
 
             // Update current tensor

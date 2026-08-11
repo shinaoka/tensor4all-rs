@@ -309,20 +309,26 @@ pub(crate) fn convergence_criterion_like_julia(
 ///
 /// `min_iters == 0` disables the exit, matching
 /// [`convergence_criterion_like_julia`], and the default `max_bond_dim` of
-/// [`usize::MAX`] is unreachable, so unconstrained runs are unaffected.
+/// `None` is unreachable, so unconstrained runs are unaffected.
 ///
 /// This is the `all(lastranks .>= max_bond_dim)` disjunct of the Julia
 /// `convergencecriterion` that [`convergence_criterion_like_julia`] otherwise
 /// ports, over the same trailing window. `tensor4all-treetci` gained the
 /// equivalent exit in its own sweep loop in #575.
-pub(crate) fn rank_is_saturated(ranks: &[usize], min_iters: usize, max_bond_dim: usize) -> bool {
+pub(crate) fn rank_is_saturated(
+    ranks: &[usize],
+    min_iters: usize,
+    max_bond_dim: Option<usize>,
+) -> bool {
     if min_iters == 0 || ranks.len() < min_iters {
         return false;
     }
 
-    ranks[(ranks.len() - min_iters)..]
-        .iter()
-        .all(|&rank| rank >= max_bond_dim)
+    max_bond_dim.is_some_and(|cap| {
+        ranks[(ranks.len() - min_iters)..]
+            .iter()
+            .all(|&rank| rank >= cap)
+    })
 }
 
 pub(crate) fn error_metric(

@@ -1689,8 +1689,8 @@ where
             .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(
                 options.rtol.unwrap_or(0.0),
             ));
-        if let Some(mr) = options.max_rank {
-            swap_factorize_options = swap_factorize_options.with_max_rank(mr);
+        if let Some(mr) = options.max_bond_dim {
+            swap_factorize_options = swap_factorize_options.with_max_bond_dim(mr);
         }
 
         for step in &schedule.steps {

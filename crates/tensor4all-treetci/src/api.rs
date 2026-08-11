@@ -54,7 +54,7 @@ pub type TreeTciRunResult = (
 /// let options = TreeTciOptions {
 ///     tolerance: 1e-10,
 ///     max_iter: 10,
-///     max_bond_dim: 10,
+///     max_bond_dim: Some(10),
 ///     normalize_error: true,
 /// };
 ///

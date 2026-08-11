@@ -897,7 +897,7 @@ where
             let factorize_options = FactorizeOptions {
                 alg: FactorizeAlg::QR,
                 canonical: Canonical::Left,
-                max_rank: None,
+                max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: Some(0.0),
             };
@@ -971,7 +971,7 @@ where
             let factorize_options = FactorizeOptions {
                 alg: FactorizeAlg::QR,
                 canonical: Canonical::Left,
-                max_rank: None,
+                max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: Some(0.0),
             };

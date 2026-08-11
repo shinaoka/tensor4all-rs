@@ -361,7 +361,7 @@ fn main() -> anyhow::Result<()> {
         .with_gmres_tol(gmres_tol)
         .with_gmres_max_restarts(gmres_max_restarts)
         .with_gmres_restart_dim(gmres_restart_dim)
-        .with_max_rank(state_bond_dim)
+        .with_max_bond_dim(state_bond_dim)
         .with_svd_policy(SvdTruncationPolicy::new(0.0))
         .with_residual_check(false);
 
