@@ -914,8 +914,12 @@ where
         };
         let factors = matrix_luci_factors_from_matrix(&pi, Some(lu_options))?;
 
-        let row_indices = &factors.row_indices;
-        let col_indices = &factors.col_indices;
+        // The LU can select zero pivots when the submatrix is numerically
+        // zero (e.g. the function underflows in a subdomain). Keep at least
+        // one index so the I/J sets never empty out and the tensor train
+        // stays valid (rank-1 zero core).
+        let row_indices = non_empty_or_first(&factors.row_indices);
+        let col_indices = non_empty_or_first(&factors.col_indices);
 
         // Update I/J sets
         if forward {
@@ -1005,6 +1009,22 @@ where
             let j_set_b = self.j_set[b].clone();
 
             if i_kron.is_empty() || j_set_b.is_empty() {
+                // The pivot sets at this site are empty (a numerically zero
+                // subdomain, or a hand-built state). Emit a zero core with a
+                // unit bond instead of skipping: a skipped site leaves a
+                // stale or zero-sized tensor behind and `to_tensor_train`
+                // fails with an opaque shape error.
+                let left_dim = if b == 0 {
+                    1
+                } else {
+                    self.i_set[b].len().max(1)
+                };
+                let right_dim = if b == n - 1 {
+                    1
+                } else {
+                    self.i_set[b + 1].len().max(1)
+                };
+                self.site_tensors[b] = tensor3_zeros(left_dim, self.local_dims[b], right_dim);
                 continue;
             }
 
@@ -1050,6 +1070,18 @@ where
                     }
                 }
 
+                let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
+                let site_dim = self.local_dims[b];
+                let right_dim = np; // = |I_{b+1}|
+
+                // A numerically zero pivot matrix (the function underflows in
+                // this subdomain) cannot be solved; emit a zero core with the
+                // same bond shape instead of failing the solve.
+                if (0..np).all(|i| (0..nj).all(|j| Scalar::abs_val(p_mat[[i, j]]) < f64::EPSILON)) {
+                    self.site_tensors[b] = tensor3_zeros(left_dim, site_dim, right_dim);
+                    continue;
+                }
+
                 // Solve P^T * X_t = Pi1^T through the configured tensor backend.
                 let p_t = transpose(&p_mat);
                 let pi1_t = transpose(&pi1);
@@ -1058,9 +1090,6 @@ where
                 })?;
 
                 // X = X_t^T → shape (ni, np) = (|I_b|*d_b, |I_{b+1}|)
-                let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
-                let site_dim = self.local_dims[b];
-                let right_dim = np; // = |I_{b+1}|
                 let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
                 for l in 0..left_dim {
                     for s in 0..site_dim {
@@ -1686,6 +1715,22 @@ where
 }
 
 /// Update pivots at bond b using LU-based cross interpolation
+/// Map LU-selected pivot indices to I/J sets, substituting the first index
+/// when the LU selected no pivots.
+///
+/// A zero-pivot result means the sampled submatrix is numerically zero (for
+/// example the function underflows in a subdomain). Writing empty I/J sets
+/// there makes `fill_site_tensors` skip the site and leaves an invalid
+/// tensor train; keeping one pivot yields a valid rank-1 zero core. Callers
+/// guarantee the combined index lists are non-empty.
+fn non_empty_or_first(indices: &[usize]) -> Vec<usize> {
+    if indices.is_empty() {
+        vec![0]
+    } else {
+        indices.to_vec()
+    }
+}
+
 fn update_pivots<T, F, B>(
     tci: &mut TensorCI2<T>,
     b: usize,
@@ -1792,9 +1837,10 @@ where
         factors_result?
     };
 
-    // Update I and J sets
-    let row_indices = &factors.row_indices;
-    let col_indices = &factors.col_indices;
+    // Update I and J sets. See `non_empty_or_first`: a numerically zero
+    // submatrix must not empty the sets.
+    let row_indices = non_empty_or_first(&factors.row_indices);
+    let col_indices = non_empty_or_first(&factors.col_indices);
 
     tci.i_set[b + 1] = row_indices.iter().map(|&i| i_combined[i].clone()).collect();
     tci.j_set[b] = col_indices.iter().map(|&j| j_combined[j].clone()).collect();

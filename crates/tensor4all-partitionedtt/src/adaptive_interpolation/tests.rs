@@ -426,3 +426,62 @@ fn rejects_invalid_patch_order_and_pivots() {
         ));
     }
 }
+
+#[test]
+fn numerically_zero_child_patch_is_accepted_not_crash_issue598() {
+    // Regression test for issue #598: a 2D fused-quantics Gaussian mixture
+    // whose child patches decay below floating-point resolution used to make
+    // TCI2 empty its pivot sets and fail with "Dimension mismatch: tensor at
+    // site 5 has incompatible dimensions". The zero (sub)domain must be
+    // accepted as a rank-one patch instead.
+    const WEIGHTS: [f64; 3] = [1.3, 0.9, 0.9];
+    const ALPHAS: [f64; 3] = [2.8, 5.4, 0.7];
+    const CENTERS: [(f64, f64); 3] = [(0.4, 0.1), (3.8, -0.8), (-5.5, -2.1)];
+    const BOX_L: f64 = 12.0;
+    const R: usize = 10;
+
+    let eval_mixture = |index: &MultiIndex| -> f64 {
+        let mut ix = 0u64;
+        let mut iy = 0u64;
+        for (n, &fused) in index.iter().enumerate() {
+            let shift = R - 1 - n;
+            ix |= ((fused & 1) as u64) << shift;
+            iy |= (((fused >> 1) & 1) as u64) << shift;
+        }
+        let step = 2.0 * BOX_L / (1u64 << R) as f64;
+        let (x, y) = (-BOX_L + ix as f64 * step, -BOX_L + iy as f64 * step);
+        (0..3)
+            .map(|i| {
+                let (cx, cy) = CENTERS[i];
+                WEIGHTS[i] * (-ALPHAS[i] * ((x - cx).powi(2) + (y - cy).powi(2))).exp()
+            })
+            .sum()
+    };
+
+    let sites: Vec<DynIndex> = (0..R).map(|_| DynIndex::new_dyn(4)).collect();
+    let options = AdaptiveInterpolateOptions {
+        tci_options: TCI2Options {
+            tolerance: 1e-8,
+            max_bond_dim: Some(64),
+            max_iter: 20,
+            normalize_error: false,
+            seed: Some(1),
+            ..TCI2Options::default()
+        },
+        ..AdaptiveInterpolateOptions::default()
+    };
+    let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        eval_mixture,
+        None,
+        sites,
+        Vec::new(),
+        options,
+    )
+    .expect("adaptiveinterpolate must accept every patch, including near-zero ones");
+
+    // The patches must cover the full domain with a valid global tensor train.
+    let tt = result
+        .to_tensor_train()
+        .expect("valid combined tensor train");
+    let _ = tt.bond_dims();
+}
