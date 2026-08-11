@@ -32,111 +32,13 @@ use tensor4all_quanticstransform::{
 type DynIndex = Index<DynId, TagSet>;
 
 // ============================================================================
-// Helper functions for SimpleTensorTrain <-> TreeTN conversion
+// Helper: SimpleTensorTrain -> TreeTN via the sanctioned bridge
 // ============================================================================
 
-/// Convert a SimpleTensorTrain (MPS state) to a TreeTN.
-///
-/// The MPS is converted to a chain-like TreeTN where each site tensor
-/// has indices (left_bond, site, right_bond) mapped to TensorDynLen format.
-///
-/// # Returns
-/// A tuple of (TreeTN, site_indices) where site_indices are the external indices
-/// that can be used for operator application.
 fn tensortrain_to_treetn(
     tt: &SimpleTensorTrain<Complex64>,
 ) -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
-    let n = tt.len();
-    assert!(n > 0, "SimpleTensorTrain must have at least one site");
-
-    // Create site indices
-    let site_indices: Vec<DynIndex> = (0..n)
-        .map(|i| {
-            let dim = tt.site_tensor(i).site_dim();
-            Index::new_dyn(dim)
-        })
-        .collect();
-
-    // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            tt.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    // Build tensors for TreeTN
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let node_names: Vec<usize> = (0..n).collect();
-
-    for i in 0..n {
-        let tensor = tt.site_tensor(i);
-        let left_dim = tensor.left_dim();
-        let site_dim = tensor.site_dim();
-        let right_dim = tensor.right_dim();
-
-        // Tensor indices: (left_bond, site, right_bond)
-        // For boundary tensors, we omit the dimension-1 bond
-        let mut indices: Vec<DynIndex> = Vec::with_capacity(3);
-        let mut dims_vec: Vec<usize> = Vec::with_capacity(3);
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-            dims_vec.push(left_dim);
-        }
-        indices.push(site_indices[i].clone());
-        dims_vec.push(site_dim);
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-            dims_vec.push(right_dim);
-        }
-
-        // Copy data from Tensor3 to flat vector
-        let total_size: usize = dims_vec.iter().product();
-        let mut data: Vec<Complex64> = vec![Complex64::zero(); total_size];
-
-        if i == 0 && n == 1 {
-            // Single tensor case: just site index
-            for s in 0..site_dim {
-                data[s] = *tensor.get3(0, s, 0);
-            }
-        } else if i == 0 {
-            // First tensor: (site, right_bond)
-            for s in 0..site_dim {
-                for r in 0..right_dim {
-                    let idx = s + site_dim * r;
-                    data[idx] = *tensor.get3(0, s, r);
-                }
-            }
-        } else if i == n - 1 {
-            // Last tensor: (left_bond, site)
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    let idx = l + left_dim * s;
-                    data[idx] = *tensor.get3(l, s, 0);
-                }
-            }
-        } else {
-            // Middle tensor: (left_bond, site, right_bond)
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    for r in 0..right_dim {
-                        let idx = l + left_dim * (s + site_dim * r);
-                        data[idx] = *tensor.get3(l, s, r);
-                    }
-                }
-            }
-        }
-
-        let tensor_dyn = TensorDynLen::from_dense(indices, data).unwrap();
-        tensors.push(tensor_dyn);
-    }
-
-    let treetn = TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN");
-    (treetn, site_indices)
+    tensor4all_treetn::tensor_train_to_treetn(tt).expect("MPS to TreeTN conversion failed")
 }
 
 /// Create a product state MPS representing a specific integer value x.

@@ -710,40 +710,6 @@ fn test_evaluate_two_nodes() {
 }
 
 #[test]
-fn test_evaluate_consistent_with_evaluate() {
-    let (tn, s0, _, s1) = create_two_node_named();
-
-    let (indices, _vertices) = tn.all_site_indices().unwrap();
-
-    let dim0 = s0.dim();
-    let dim1 = s1.dim();
-    let pos0 = indices.iter().position(|i| *i.id() == *s0.id()).unwrap();
-    let pos1 = indices.iter().position(|i| *i.id() == *s1.id()).unwrap();
-
-    for i in 0..dim0 {
-        for j in 0..dim1 {
-            let mut data = vec![0usize; indices.len()];
-            data[pos0] = i;
-            data[pos1] = j;
-            let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-
-            let vals_at = tn.evaluate(&indices, values).unwrap();
-            let vals = tn.evaluate(&indices, values).unwrap();
-
-            assert!(
-                (vals_at[0].real() - vals[0].real()).abs() < 1e-15,
-                "evaluate and evaluate differ at [{}, {}]: {} vs {}",
-                i,
-                j,
-                vals_at[0].real(),
-                vals[0].real()
-            );
-        }
-    }
-}
-
-#[test]
 fn test_evaluate_three_nodes() {
     let (tn, s0, s1, s2) = create_three_node_named();
 
