@@ -484,35 +484,6 @@ fn test_evaluate_three_nodes_sugar() {
 }
 
 #[test]
-fn test_evaluate_matches_batch_evaluate() {
-    let (tn, s0, s1, s2) = create_three_node_named();
-
-    let (indices, _node_names) = tn.all_site_indices().unwrap();
-
-    let point_values = std::collections::HashMap::from([
-        (s0.clone(), vec![0usize, 1, 1]),
-        (s1.clone(), vec![0usize, 1, 0]),
-        (s2.clone(), vec![1usize, 0, 1]),
-    ]);
-
-    let shape = [indices.len(), 3];
-
-    let evaluate_data = build_col_major_data(&indices, &point_values);
-    let evaluate_values = ColMajorArrayRef::new(&evaluate_data, &shape).unwrap();
-    let evaluate_result = tn.evaluate(&indices, evaluate_values).unwrap();
-
-    let evaluate_data_2 = build_col_major_data(&indices, &point_values);
-    let evaluate_values_2 = ColMajorArrayRef::new(&evaluate_data_2, &shape).unwrap();
-    let evaluate_result_2 = tn.evaluate(&indices, evaluate_values_2).unwrap();
-
-    assert_eq!(evaluate_result_2.len(), evaluate_result.len());
-    for (evaluate_value_2, evaluate_value) in evaluate_result_2.iter().zip(evaluate_result.iter()) {
-        assert!((evaluate_value_2.real() - evaluate_value.real()).abs() < 1e-12);
-        assert!((evaluate_value_2.imag() - evaluate_value.imag()).abs() < 1e-12);
-    }
-}
-
-#[test]
 fn test_evaluate_empty() {
     let tn = TreeTN::<TensorDynLen, usize>::new();
     let data: [usize; 0] = [];

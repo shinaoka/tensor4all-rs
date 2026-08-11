@@ -2373,7 +2373,7 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
         create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
     let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
     let mut rhs = solution.clone();
-    rhs = rhs.scale(AnyScalar::new_real(7.0)).unwrap();
+    rhs.scale_mut(AnyScalar::new_real(7.0)).unwrap();
 
     let residual = relative_linear_system_residual(
         &operator,
