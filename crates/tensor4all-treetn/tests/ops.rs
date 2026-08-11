@@ -88,24 +88,6 @@ fn create_three_node_named() -> (
     (tn, s0, s1, s2)
 }
 
-fn build_col_major_data(
-    ordered_indices: &[DynIndex],
-    point_values: &std::collections::HashMap<DynIndex, Vec<usize>>,
-) -> Vec<usize> {
-    let n_points = point_values.values().next().map(Vec::len).unwrap_or(0);
-    let mut data = vec![0; ordered_indices.len() * n_points];
-
-    for (row, index) in ordered_indices.iter().enumerate() {
-        let per_index_values = point_values.get(index).unwrap();
-        assert_eq!(per_index_values.len(), n_points);
-        for (col, value) in per_index_values.iter().enumerate() {
-            data[row + ordered_indices.len() * col] = *value;
-        }
-    }
-
-    data
-}
-
 // ============================================================================
 // Tests for norm and norm_squared
 // ============================================================================
