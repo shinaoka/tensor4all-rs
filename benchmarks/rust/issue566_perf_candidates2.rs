@@ -97,6 +97,7 @@ fn main() {
         }
     }
     let t_batched = t0.elapsed();
+    std::hint::black_box(acc3);
     println!(
         "candidate3 per-site TTCache batch ({n_sweeps} sweeps, {local_dim}-wide batches): {t_batched:?} — vs sequential tt.evaluate replay {t_tt_eval:?} ({:.1}x)",
         t_tt_eval.as_secs_f64() / t_batched.as_secs_f64()
