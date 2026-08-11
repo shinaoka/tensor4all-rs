@@ -17,7 +17,7 @@ use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 /// |--------------------|---------------|-----------------------------------------------------|
 /// | `tolerance`        | `1e-8`        | Relative stopping tolerance on normalized bond error |
 /// | `max_iter`         | `20`          | Maximum number of edge-order iterations              |
-/// | `max_bond_dim`     | `usize::MAX`  | Maximum bond dimension (no cap by default)           |
+/// | `max_bond_dim`     | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `normalize_error`  | `true`        | Normalize error by maximum sample magnitude          |
 ///
 /// # Examples
@@ -62,7 +62,7 @@ pub struct TreeTciOptions {
     /// Maximum bond dimension retained by the tcicore LUCI pivot substrate.
     ///
     /// Caps the number of pivots per edge bipartition. Use this to limit
-    /// memory and computation for large problems. Default: `usize::MAX` (no cap).
+    /// memory and computation for large problems. Default: `None` (no cap).
     pub max_bond_dim: Option<usize>,
 
     /// Whether to normalize the bond error by the maximum observed sample magnitude.

@@ -43,7 +43,7 @@ pub struct TensorCI2FromTensorTrainOptions {
     pub tolerance: f64,
     /// Maximum bond dimension retained during index extraction.
     ///
-    /// The default is `usize::MAX`, meaning no explicit cap. Set this to the
+    /// The default is `None`, meaning no explicit cap. Set this to the
     /// largest acceptable converted TCI rank for expensive downstream use.
     pub max_bond_dim: Option<usize>,
     /// Maximum number of alternating one-site index extraction sweeps.

@@ -53,7 +53,7 @@ pub enum CompressionMethod {
 /// |-------|---------|---------|
 /// | `method` | `LU` | Decomposition algorithm (see [`CompressionMethod`]) |
 /// | `tolerance` | `1e-12` | Relative truncation threshold per bond |
-/// | `max_bond_dim` | `usize::MAX` | Hard upper bound on any bond dimension |
+/// | `max_bond_dim` | `None` | Hard upper bound on any bond dimension |
 /// | `normalize_error` | `true` | Whether error is measured relative to the norm |
 ///
 /// # Choosing `tolerance`

@@ -30,9 +30,10 @@ pub type Result<T> = std::result::Result<T, TensorTrainError>;
 /// Error type for `SimpleTensorTrain` operations.
 ///
 /// Note: `tensor4all-itensorlike` also defines a public type named
-/// [`TensorTrainError`](tensor4all_itensorlike::TensorTrainError) with
-/// different variants (its tree-based `TensorTrain`). When both crates are
-/// in scope, qualify the path (e.g. `tensor4all_simplett::TensorTrainError`
+/// `TensorTrainError` (see its
+/// [rustdoc](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_itensorlike/error/enum.TensorTrainError.html))
+/// with different variants (its tree-based `TensorTrain`). When both crates
+/// are in scope, qualify the path (e.g. `tensor4all_simplett::TensorTrainError`
 /// vs `tensor4all_itensorlike::TensorTrainError`).
 #[derive(Error, Debug)]
 pub enum TensorTrainError {

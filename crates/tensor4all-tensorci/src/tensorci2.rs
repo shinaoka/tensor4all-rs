@@ -82,7 +82,7 @@ pub struct TCI2Options {
     /// followed by a global pivot search. Increase if the function is
     /// difficult to converge.
     pub max_iter: usize,
-    /// Hard upper bound on bond dimension (default: `usize::MAX`, i.e. no limit).
+    /// Hard upper bound on bond dimension (default: `None`, i.e. no limit).
     ///
     /// The algorithm stops early once the rank reaches this value. For
     /// expensive functions, setting this to `50`--`500` avoids runaway

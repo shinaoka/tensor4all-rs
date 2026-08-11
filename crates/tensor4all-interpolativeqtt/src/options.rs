@@ -11,7 +11,7 @@
 /// - `tolerance`: relative SVD truncation threshold. Smaller values preserve
 ///
 ///   more accuracy and usually produce larger bonds.
-/// - `max_bond_dim`: hard upper bound on every TT bond. Use `usize::MAX` for
+/// - `max_bond_dim`: hard upper bound on every TT bond. Use `None` for
 ///
 ///   no explicit cap.
 ///
@@ -66,7 +66,7 @@ impl InterpolativeQttOptions {
 
     /// Return a copy with a different maximum bond dimension.
     ///
-    /// Use `usize::MAX` for no explicit cap. Smaller caps force more
+    /// Use `None` for no explicit cap. Smaller caps force more
     /// aggressive compression and may increase approximation error.
     ///
     /// # Examples

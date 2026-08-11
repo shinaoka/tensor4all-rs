@@ -219,11 +219,24 @@ fn is_public(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
 }
 
+/// True when the item carries a `#[cfg(test)]` attribute. Test-only items
+/// (e.g. `#[cfg(test)] pub(crate)` helper types and their syntactically
+/// `pub` methods) are not part of the public API surface and are excluded.
+fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && match &attr.meta {
+                syn::Meta::List(list) => list.tokens.to_string().replace(' ', "").contains("test"),
+                _ => false,
+            }
+    })
+}
+
 fn extract_items(items: &[Item], funcs: &mut Vec<FuncInfo>) {
     for item in items {
         match item {
             Item::Fn(item_fn) => {
-                if is_public(&item_fn.vis) {
+                if is_public(&item_fn.vis) && !has_cfg_test(&item_fn.attrs) {
                     funcs.push(extract_fn_info(item_fn));
                 }
             }
@@ -234,6 +247,9 @@ fn extract_items(items: &[Item], funcs: &mut Vec<FuncInfo>) {
                 extract_trait_items(item_trait, funcs);
             }
             Item::Mod(item_mod) => {
+                if has_cfg_test(&item_mod.attrs) {
+                    continue;
+                }
                 if let Some((_, items)) = &item_mod.content {
                     extract_items(items, funcs);
                 }
@@ -253,6 +269,9 @@ fn extract_fn_info(item_fn: &ItemFn) -> FuncInfo {
 }
 
 fn extract_impl_items(item_impl: &ItemImpl, funcs: &mut Vec<FuncInfo>) {
+    if has_cfg_test(&item_impl.attrs) {
+        return;
+    }
     let impl_for = type_to_string(&item_impl.self_ty);
 
     for impl_item in &item_impl.items {
@@ -273,6 +292,9 @@ fn extract_impl_items(item_impl: &ItemImpl, funcs: &mut Vec<FuncInfo>) {
 }
 
 fn extract_trait_items(item_trait: &ItemTrait, funcs: &mut Vec<FuncInfo>) {
+    if has_cfg_test(&item_trait.attrs) {
+        return;
+    }
     let trait_name = item_trait.ident.to_string();
 
     for trait_item in &item_trait.items {

@@ -46,7 +46,7 @@ pub struct AciOptions<T: TTScalar> {
 
     /// Maximum allowed tensor-train bond dimension.
     ///
-    /// The default is [`usize::MAX`], meaning no explicit cap. Lower values
+    /// The default is `None`, meaning no explicit cap. Lower values
     /// reduce memory and runtime but may prevent the approximation from
     /// reaching the requested [`tolerance`](Self::tolerance).
     pub max_bond_dim: Option<usize>,
