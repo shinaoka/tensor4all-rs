@@ -541,7 +541,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened or the group already exists.
+/// Returns an error when the operation fails (a shape or index mismatch, or
+/// a backend failure).
 pub fn append_treetn<V>(
     filepath: &str,
     name: &str,
