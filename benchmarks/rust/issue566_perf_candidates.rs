@@ -50,6 +50,7 @@ fn main() {
         }
     }
     println!("hw: logical CPUs: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    println!("hw: backend: default CPU/faer (no T4A_TT_BACKEND override)");
     println!("hw: T4A_PROFILE_CONTRACT set: {}", std::env::var("T4A_PROFILE_CONTRACT").is_ok());
 
     let n_sites = 32usize;
@@ -100,14 +101,14 @@ fn main() {
     let t0 = Instant::now();
     for i in 0..n_single_reps {
         let values_ref = ColMajorArrayRef::new(&single_values[i * n_sites..(i + 1) * n_sites], &single_shape).unwrap();
-        tree.evaluate(&site_indices, values_ref).unwrap();
+        std::hint::black_box(tree.evaluate(&site_indices, values_ref).unwrap());
     }
     let t_per_point_evaluate = t0.elapsed();
 
     let t0 = Instant::now();
     for i in 0..n_single_reps {
         let values_ref = ColMajorArrayRef::new(&single_values[i * n_sites..(i + 1) * n_sites], &single_shape).unwrap();
-        evaluator.evaluate_batched(values_ref).unwrap();
+        std::hint::black_box(evaluator.evaluate_batched(values_ref).unwrap());
     }
     let t_per_point_reused = t0.elapsed();
     println!(
@@ -131,7 +132,7 @@ fn main() {
     // --- Candidate 5: contract_profile_enabled env lookup cost ---
     let t0 = Instant::now();
     for _ in 0..1_000_000 {
-        let _ = std::env::var("T4A_PROFILE_CONTRACT").is_ok();
+        std::hint::black_box(std::env::var("T4A_PROFILE_CONTRACT").is_ok());
     }
     let t_env = t0.elapsed();
     println!(
@@ -155,7 +156,7 @@ fn main() {
     .unwrap();
     let t0 = Instant::now();
     for _ in 0..100_000 {
-        tensor4all_core::contract(&[&a, &b]).unwrap();
+        std::hint::black_box(tensor4all_core::contract(&[&a, &b]).unwrap());
     }
     let t_contract = t0.elapsed();
     // contract() calls contract_profile_enabled() twice per call; each env::var

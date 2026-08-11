@@ -35,10 +35,11 @@ fn main() {
         }
     }
     println!("hw: logical CPUs: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    println!("hw: backend: default CPU/faer (no T4A_TT_BACKEND override)");
     println!("hw: T4A_PROFILE_CONTRACT set: {}", std::env::var("T4A_PROFILE_CONTRACT").is_ok());
 
     let n_sites = std::env::var("N_SITES").map(|v| v.parse().unwrap()).unwrap_or(16usize);
-    let local_dim = 2usize;
+    let local_dim = std::env::var("LOCAL_DIM").map(|v| v.parse().unwrap()).unwrap_or(2usize);
     let bond_dim = std::env::var("BOND_DIM").map(|v| v.parse().unwrap()).unwrap_or(8usize);
 
     let tt = random_chain_tt(n_sites, local_dim, bond_dim, 21);
@@ -76,31 +77,69 @@ fn main() {
         100.0 * t_tt_eval.as_secs_f64() / t_zone.as_secs_f64()
     );
 
-    // Batching alternative: floating_zone evaluates, per site, all local
-    // values of one pivot position. Measure the cost of evaluating the same
-    // candidate set as one TTCache batch (one batch per site, per sweep).
-    let mut cache3 = tensor4all_simplett::TTCache::new(&tt);
-    let n_sweeps = n_sites * 10;
-    let t0 = Instant::now();
-    let mut acc3 = 0.0f64;
-    for _ in 0..n_sweeps {
-        for ipos in 0..n_sites {
-            let batch: Vec<Vec<usize>> = (0..local_dim)
-                .map(|v| {
-                    let mut p = vec![0usize; n_sites];
+    // Batching alternative: a batched floating_zone that evaluates each
+    // site's candidates as one TTCache batch, then picks the best. Compare
+    // against the original sequential floating_zone on the same target.
+    fn floating_zone_batched<F>(
+        tt: &SimpleTensorTrain<f64>,
+        f: &F,
+        local_dims: &[usize],
+        early_stop_tol: f64,
+    ) -> (Vec<usize>, f64)
+    where
+        F: Fn(&Vec<usize>) -> f64,
+    {
+        let n = local_dims.len();
+        let mut pivot = vec![0usize; n];
+        let mut cache = tensor4all_simplett::TTCache::new(tt);
+        let mut max_error = f64::MAX;
+        let max_sweeps = n * 10;
+        for _ in 0..max_sweeps {
+            let mut any_improved = false;
+            for ipos in 0..n {
+                let mut best_local_error = 0.0f64;
+                let mut best_idx = pivot[ipos];
+                let batch: Vec<Vec<usize>> = (0..local_dims[ipos])
+                    .map(|v| {
+                        let mut p = pivot.clone();
+                        p[ipos] = v;
+                        p
+                    })
+                    .collect();
+                let vals = cache.evaluate_many(&batch, None).unwrap();
+                for (v, tt_val) in vals.iter().enumerate() {
+                    let mut p = pivot.clone();
                     p[ipos] = v;
-                    p
-                })
-                .collect();
-            let vals = cache3.evaluate_many(&batch, None).unwrap();
-            acc3 += vals.iter().sum::<f64>();
+                    let diff = f(&p) - *tt_val;
+                    let error = diff.abs();
+                    if error > best_local_error {
+                        best_local_error = error;
+                        best_idx = v;
+                    }
+                }
+                if best_idx != pivot[ipos] {
+                    pivot[ipos] = best_idx;
+                    any_improved = true;
+                }
+                max_error = max_error.min(best_local_error);
+            }
+            if !any_improved || max_error > early_stop_tol {
+                break;
+            }
         }
+        (pivot, max_error)
     }
+
+    let f2 = |idx: &Vec<usize>| -> f64 {
+        (0..idx.len()).map(|i| (idx[i] as f64) * 0.1).sum::<f64>()
+    };
+    let t0 = Instant::now();
+    let (pivot_b, err_b) = floating_zone_batched(&tt, &f2, &vec![local_dim; n_sites], 1.0e-12);
     let t_batched = t0.elapsed();
-    std::hint::black_box(acc3);
+    std::hint::black_box((pivot_b, err_b));
     println!(
-        "candidate3 per-site TTCache batch ({n_sweeps} sweeps, {local_dim}-wide batches): {t_batched:?} — vs sequential tt.evaluate replay {t_tt_eval:?} ({:.1}x)",
-        t_tt_eval.as_secs_f64() / t_batched.as_secs_f64()
+        "candidate3 batched floating_zone (TTCache, {local_dim}-wide batches): {t_batched:?} — vs sequential {t_zone:?} ({:.2}x)",
+        t_zone.as_secs_f64() / t_batched.as_secs_f64()
     );
 
     // --- Candidate 3b / 4b: TTCache batch evaluation vs per-point evaluate ---
