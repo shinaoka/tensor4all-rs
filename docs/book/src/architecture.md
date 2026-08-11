@@ -63,6 +63,26 @@ bridges (hand-rolled conversion logic inside another crate) are rejected.
 - A feature that must serve both stacks is implemented in the target stack
   and exposed through `treetn::simplett_bridge`; it is not duplicated in both.
 
+## Vocabulary conventions
+
+Beyond the naming-policy suffixes (`_mut`, `_into`, `_batched`), the following
+operation names are unified across crates:
+
+- **Inner product**: `inner_product` everywhere. (`dot` was retired in
+  `tensor4all-simplett`.)
+- **Densification**: `full_tensor` materializes a tensor train/MPO into a flat
+  column-major buffer plus shape; `to_dense` materializes a single tensor into
+  a dense `TensorDynLen`. The distinction is intentional (whole-TT vs
+  one-tensor).
+- **Canonicalization**: `treetn` uses `canonicalize` / `canonicalize_mut`;
+  `itensorlike` uses `orthogonalize` (ITensors.jl-compatible vocabulary) for
+  the same center-site normalization. Each stack keeps its standard term; do
+  not introduce a third synonym.
+- **Options**: bond caps use `max_bond_dim: Option<usize>`; truncation
+  tolerances use `SvdTruncationPolicy` (`rtol`/`cutoff`); sweep counts use
+  `nfullsweeps`/`nsweeps` (TreeTN) or `nhalfsweeps` (itensorlike) as documented
+  in the skills guide.
+
 ## `TensorTrain` naming resolution
 
 Two different types are named `TensorTrain`-family, which is the historical

@@ -1,7 +1,7 @@
 //! Contraction operations for tensor trains
 //!
 //! This module provides various ways to combine tensor trains:
-//! - `dot`: Inner product (returns scalar)
+//! - `inner_product`: Inner product (returns scalar)
 
 use crate::compression::CompressionMethod;
 use crate::einsum_helper::{
@@ -52,7 +52,7 @@ impl Default for ContractionOptions {
 }
 
 impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
-    /// Inner product (dot product) of two tensor trains.
+    /// Inner product (inner_product product) of two tensor trains.
     ///
     /// Computes `sum_i self[i] * other[i]` by contracting the site tensors
     /// from left to right. Both tensor trains must have the same length and
@@ -71,15 +71,15 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
     /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     ///
-    /// // dot = sum_ij a[i,j]*b[i,j] = 1*2 * 2*3 = 12
-    /// let d = a.dot(&b).unwrap();
+    /// // inner_product = sum_ij a[i,j]*b[i,j] = 1*2 * 2*3 = 12
+    /// let d = a.inner_product(&b).unwrap();
     /// assert!((d - 12.0).abs() < 1e-10);
     /// ```
-    pub fn dot(&self, other: &Self) -> Result<T> {
+    pub fn inner_product(&self, other: &Self) -> Result<T> {
         if self.len() != other.len() {
             return Err(TensorTrainError::InvalidOperation {
                 message: format!(
-                    "Cannot compute dot product of tensor trains with different lengths: {} vs {}",
+                    "Cannot compute inner_product product of tensor trains with different lengths: {} vs {}",
                     self.len(),
                     other.len()
                 ),
@@ -112,7 +112,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
             b0.right_dim(),
             tensor_to_col_major_vec(
                 &einsum_tensors("asr,ast->rt", &[a0.as_inner(), b0.as_inner()]).map_err(|err| {
-                    contraction_helper_error("Failed to contract first dot site", err)
+                    contraction_helper_error("Failed to contract first inner_product site", err)
                 })?,
             ),
         );
@@ -138,7 +138,10 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                 &[result.nrows(), result.ncols()],
             )
             .map_err(|err| {
-                contraction_helper_error("Failed to prepare intermediate dot environment", err)
+                contraction_helper_error(
+                    "Failed to prepare intermediate inner_product environment",
+                    err,
+                )
             })?;
 
             result = Matrix::from_col_major_vec(
@@ -148,7 +151,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                     &einsum_tensors("ij,isk,jsl->kl", &[&result_tf, a.as_inner(), b.as_inner()])
                         .map_err(|err| {
                             contraction_helper_error(
-                                &format!("Failed to contract dot site {i}"),
+                                &format!("Failed to contract inner_product site {i}"),
                                 err,
                             )
                         })?,
@@ -161,7 +164,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
     }
 }
 
-/// Free-function wrapper for [`SimpleTensorTrain::dot`].
+/// Free-function wrapper for [`SimpleTensorTrain::inner_product`].
 ///
 /// # Errors
 ///
@@ -171,19 +174,19 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, contraction::dot};
+/// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, contraction::inner_product};
 ///
 /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 3.0);
 /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
-/// let d = dot(&a, &b).unwrap();
+/// let d = inner_product(&a, &b).unwrap();
 /// // 3*4 * 2*3 = 72
 /// assert!((d - 72.0).abs() < 1e-10);
 /// ```
-pub fn dot<T: TTScalar + Scalar + Default + EinsumScalar>(
+pub fn inner_product<T: TTScalar + Scalar + Default + EinsumScalar>(
     a: &SimpleTensorTrain<T>,
     b: &SimpleTensorTrain<T>,
 ) -> Result<T> {
-    a.dot(b)
+    a.inner_product(b)
 }
 
 #[cfg(test)]

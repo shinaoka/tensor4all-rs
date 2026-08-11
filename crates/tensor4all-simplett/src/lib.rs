@@ -64,7 +64,7 @@ pub mod vidal;
 pub use cache::TTCache;
 pub use canonical::{center_canonicalize, SiteTensorTrain};
 pub use compression::{CompressionMethod, CompressionOptions};
-pub use contraction::{dot, ContractionOptions};
+pub use contraction::{inner_product, ContractionOptions};
 pub use error::{Result, TensorTrainError};
 pub use tensortrain::SimpleTensorTrain;
 pub use traits::{AbstractTensorTrain, TTScalar};

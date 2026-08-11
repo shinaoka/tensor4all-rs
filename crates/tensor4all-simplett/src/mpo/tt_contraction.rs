@@ -6,23 +6,23 @@
 //!
 //! # Available operations
 //!
-//! - [`dot`]: Inner product (returns scalar)
+//! - [`inner_product`]: Inner product (returns scalar)
 //!
 //! # Example
 //!
 //! ```
-//! use tensor4all_simplett::mpo::tt_contraction::{dot, SimpleTensorTrain};
+//! use tensor4all_simplett::mpo::tt_contraction::{inner_product, SimpleTensorTrain};
 //!
 //! let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
 //! let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 3.0);
 //!
 //! // Inner product
-//! let inner = dot(&tt1, &tt2).unwrap();
+//! let inner = inner_product(&tt1, &tt2).unwrap();
 //! assert_eq!(inner, 36.0);
 //! ```
 
 // Re-export TT contraction types and functions from tensor4all-simplett
-pub use crate::contraction::{dot, ContractionOptions};
+pub use crate::contraction::{inner_product, ContractionOptions};
 
 // Also re-export SimpleTensorTrain for convenience
 pub use crate::SimpleTensorTrain;
