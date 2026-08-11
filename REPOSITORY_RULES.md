@@ -1,5 +1,14 @@
 # Repository Rules
 
+> Shared, repository-neutral development rules live in the
+> [`tensor4all-agent-rules`](https://github.com/tensor4all/tensor4all-agent-rules)
+> repository (`rules/common/*`, `rules/rust/*`, `rules/julia/*`), referenced
+> from `AGENTS.md` (online URL plus sibling checkout
+> `../tensor4all-agent-rules/rules/`). This file keeps only rules that are
+> specific to tensor4all-rs: the sections below are the local residue, and
+> overlapping content must not be duplicated here — extend the shared repo
+> instead.
+
 ## Public Surface Drift
 
 - `README.md`, rustdoc, mdBook guide snippets, examples, and
