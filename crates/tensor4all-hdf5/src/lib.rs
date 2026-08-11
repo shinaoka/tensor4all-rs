@@ -84,6 +84,11 @@ mod schema;
 /// let err = Hdf5Error::from(anyhow::anyhow!("file open failed"));
 /// assert!(err.to_string().contains("file open failed"));
 /// ```
+/// # Remedies
+/// - File open/read failures: check the file path exists and is a valid HDF5
+///   file, and that the requested dataset name is present.
+/// - Shape/dtype mismatches: confirm the stored tensor metadata matches the
+///   requested element type and dimensions.
 #[derive(Debug, thiserror::Error)]
 #[error("HDF5 tensor operation failed: {source}")]
 pub struct Hdf5Error {

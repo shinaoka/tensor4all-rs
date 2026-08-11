@@ -13,7 +13,7 @@ sibling checkout:
 
 Load only the common, Rust, performance, numerical, docs, or benchmark rule
 files relevant to the task. If neither online access nor the sibling checkout
-is available, continue from this repository's local rules and state the shared
+is available, continue from the rules embedded in this file and state the shared
 rules were unavailable when creating a PR.
 
 Then read `README.md` and `REPOSITORY_RULES.md` before starting work.

@@ -21,6 +21,13 @@ use crate::any_scalar::promote_scalar_native;
 ///
 /// Wraps the underlying tensor-element or backend diagnostic, preserving its
 /// source chain.
+///
+/// # Remedies
+/// - Dtype mismatch: extract with the element type matching the native tensor
+///   dtype, or promote explicitly before the call.
+/// - Shape mismatch: validate the native tensor shape against the payload
+///   contract.
+/// - Backend failure: the wrapped source chain identifies the failing stage.
 #[derive(Debug, thiserror::Error)]
 #[error("native tensor bridge operation failed: {source}")]
 pub struct BridgeError {

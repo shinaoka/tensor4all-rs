@@ -6,6 +6,13 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, QuanticsTCIError>;
 
 /// Error returned by quantics TCI construction, evaluation, and grid operations.
+///
+/// # Remedies
+/// - Grid/quantics-format failures: validate grid parameters (bounds, number
+///   of bits, physical dimension) before construction.
+/// - Tolerance/termination failures: relax `tolerance`/`max_bond_dim` or
+///   increase sweep limits when convergence is not reached.
+/// - Backend failures: the wrapped source chain identifies the failing stage.
 #[derive(Debug, Error)]
 pub enum QuanticsTCIError {
     /// Invalid quantics grid or interpolation configuration.

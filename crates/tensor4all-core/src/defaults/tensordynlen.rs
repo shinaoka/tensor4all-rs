@@ -309,6 +309,17 @@ pub enum TensorStorageError {
 /// storage, shape, scalar, subtraction, and invalid-value failures without
 /// depending on the internal `anyhow` plumbing. Wrapped backend diagnostics
 /// retain their complete [`std::error::Error::source`] chain.
+///
+/// # Remedies
+/// - Storage failures: check the operation against the storage kind
+///   (structured vs dense) and dtype before calling; the eager payload may
+///   remain authoritative for unsupported dtypes.
+/// - Shape/index failures: validate indices and dimensions at the call site
+///   (`dims`, `indices`, external index sets) before the operation.
+/// - NaN/invalid-value failures: inspect the payload for non-finite entries
+///   before numerical comparisons.
+/// - Backend failures: the wrapped source chain identifies the backend stage;
+///   re-run with the backend diagnostic visible (see `source`).
 /// # Examples
 /// ```
 /// use tensor4all_core::TensorDynLenError;
