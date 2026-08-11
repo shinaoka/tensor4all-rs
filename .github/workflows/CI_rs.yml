@@ -153,6 +153,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # book-tests depends on tensor4all-hdf5, so --exclude tensor4all-hdf5
+      # still builds the HDF5 stack; the dev package is required for that.
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
