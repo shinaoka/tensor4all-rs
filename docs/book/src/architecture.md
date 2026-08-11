@@ -51,6 +51,14 @@ bridges (hand-rolled conversion logic inside another crate) are rejected.
 `tensor4all-partitionedtt` consumes simplett output (TCI2 results) only via
 `tensor_train_to_treetn`.
 
+One deliberate exception exists: `tensor4all-quanticstransform` builds
+TreeTN-based `LinearOperator`s from simplett **MPO** data (two site indices
+per node) via `tensortrain_to_linear_operator`. That is operator construction,
+not a general stack conversion: the bridge stays MPS-shaped (one site index
+per node), and the transform layer keeps the MPO-specific index bookkeeping.
+No *new* ad hoc conversions may be added; MPO conversion belongs in the
+transform layer, and MPS conversion belongs in the bridge.
+
 ### Which stack does a new feature crate target?
 
 - **Application-level features** (operators, evolution, DMRG, TDVP, algorithm
@@ -134,7 +142,7 @@ Rules:
 
 | Crate | Description |
 |-------|-------------|
-| **quanticstransform** | Quantics transformation operators: shift, flip, Fourier, affine, and more (simplett stack). |
+| **quanticstransform** | Quantics transformation operators: shift, flip, Fourier, affine, and more. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
 
 ### I/O & bindings
 

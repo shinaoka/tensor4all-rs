@@ -357,7 +357,7 @@ fn test_evaluate_single_node_with_dense() {
 }
 
 #[test]
-fn test_evaluate_at_sugar_two_nodes() {
+fn test_evaluate_two_nodes_sugar() {
     let (tn, s0, _, s1) = create_two_node_named();
 
     // Get the dense representation for reference
@@ -443,7 +443,7 @@ fn test_evaluate_two_nodes_complex() {
 }
 
 #[test]
-fn test_evaluate_at_sugar_three_nodes() {
+fn test_evaluate_three_nodes_sugar() {
     let (tn, s0, s1, s2) = create_three_node_named();
 
     // Get dense for reference
@@ -639,7 +639,7 @@ fn test_all_site_indices_has_matching_vertices() {
 // ============================================================================
 
 #[test]
-fn test_evaluate_at_sugar_single_node() {
+fn test_evaluate_single_node_sugar() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
     let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();

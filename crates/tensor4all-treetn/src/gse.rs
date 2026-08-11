@@ -486,7 +486,7 @@ where
                 source: anyhow::Error::new(source),
             })?;
             if norm > 0.0 {
-                next.scale(AnyScalar::new_real(norm.recip()))
+                next.scale_mut(AnyScalar::new_real(norm.recip()))
                     .map_err(|source| GseError::Algorithm {
                         context: "GSE failed to normalize reference",
                         source: anyhow::Error::new(source),

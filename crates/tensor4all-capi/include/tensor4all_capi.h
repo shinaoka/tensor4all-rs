@@ -559,7 +559,7 @@ enum t4a_status_code t4a_qtransform_flip_materialize(const struct t4a_qtt_layout
 enum t4a_status_code t4a_qtransform_fourier_materialize(const struct t4a_qtt_layout *layout,
                                                         size_t target_var,
                                                         int32_t forward,
-                                                        size_t maxbonddim,
+                                                        size_t max_bond_dim,
                                                         double tolerance,
                                                         struct t4a_treetn **out);
 

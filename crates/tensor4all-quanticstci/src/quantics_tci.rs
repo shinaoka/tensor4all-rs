@@ -505,7 +505,8 @@ where
     // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
     let tt: SimpleTensorTrain<V> =
         bridge_treetn_to_tensor_train(treetn).map_err(|error| QuanticsTCIError::Operation {
-            source: anyhow::anyhow!("TreeTN to SimpleTensorTrain conversion failed: {error}"),
+            source: anyhow::Error::new(error)
+                .context("TreeTN to SimpleTensorTrain conversion failed"),
         })?;
 
     // Drop batch_eval (and its captured Rc clone) before extracting the cache
@@ -831,7 +832,8 @@ where
     // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
     let tt: SimpleTensorTrain<V> =
         bridge_treetn_to_tensor_train(treetn).map_err(|error| QuanticsTCIError::Operation {
-            source: anyhow::anyhow!("TreeTN to SimpleTensorTrain conversion failed: {error}"),
+            source: anyhow::Error::new(error)
+                .context("TreeTN to SimpleTensorTrain conversion failed"),
         })?;
 
     // Drop batch_eval (and its captured Rc clone) before extracting the cache
