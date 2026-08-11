@@ -67,6 +67,18 @@ pub use compression::{CompressionMethod, CompressionOptions};
 pub use contraction::{inner_product, ContractionOptions};
 pub use error::{Result, TensorTrainError};
 pub use tensortrain::SimpleTensorTrain;
+
+// Re-export the tenferro tensor type used by the public `from_tenferro` /
+// `try_from_tenferro` constructors so downstream users can name it through
+// this crate instead of hand-pinning a tenferro git revision.
+///
+/// # Examples
+/// ```
+/// use tensor4all_simplett::TypedTensor;
+/// let typed: TypedTensor<f64> = TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+/// assert_eq!(typed.as_slice(), &[1.0, 2.0]);
+/// ```
+pub use tenferro_tensor::TypedTensor;
 pub use traits::{AbstractTensorTrain, TTScalar};
 pub use types::{tensor3_from_data, tensor3_zeros, LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 pub use vidal::{DiagMatrix, InverseTensorTrain, VidalTensorTrain};

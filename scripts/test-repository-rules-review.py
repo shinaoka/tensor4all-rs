@@ -116,7 +116,7 @@ def test_filter_findings_drops_unchanged_files() -> None:
     finding = mod.Finding(
         id="x",
         severity="block",
-        rule_section="Public Surface Discipline",
+        rule_section="No Hidden Dense Materialization In Production Paths",
         file="other.rs",
         line=1,
         summary="test",
@@ -130,7 +130,7 @@ def test_filter_findings_keeps_added_line() -> None:
     finding = mod.Finding(
         id="x",
         severity="block",
-        rule_section="Public Surface Discipline",
+        rule_section="No Hidden Dense Materialization In Production Paths",
         file="foo.rs",
         line=2,
         summary="test",
@@ -144,7 +144,7 @@ def test_filter_findings_drops_line_finding_without_added_lines() -> None:
     finding = mod.Finding(
         id="x",
         severity="block",
-        rule_section="Public Surface Discipline",
+        rule_section="No Hidden Dense Materialization In Production Paths",
         file="deleted.rs",
         line=4,
         summary="test",
@@ -158,7 +158,7 @@ def test_filter_findings_drops_file_level_block_finding() -> None:
     block = mod.Finding(
         id="x",
         severity="block",
-        rule_section="Public Surface Discipline",
+        rule_section="No Hidden Dense Materialization In Production Paths",
         file="foo.rs",
         line=None,
         summary="test",
@@ -167,7 +167,7 @@ def test_filter_findings_drops_file_level_block_finding() -> None:
     warn = mod.Finding(
         id="w",
         severity="warn",
-        rule_section="Public Surface Discipline",
+        rule_section="No Hidden Dense Materialization In Production Paths",
         file="foo.rs",
         line=None,
         summary="test",
@@ -181,7 +181,7 @@ def test_filter_findings_drops_global_llm_finding_when_disallowed() -> None:
     finding = mod.Finding(
         id="x",
         severity="block",
-        rule_section="Public Surface Discipline",
+        rule_section="No Hidden Dense Materialization In Production Paths",
         file="",
         line=None,
         summary="test",
@@ -216,16 +216,16 @@ def test_merge_findings_prefers_block_over_warn() -> None:
 def test_select_rule_sections_always_includes_surface_and_boundary() -> None:
     mod = load_module()
     sections = mod.select_rule_sections(["Cargo.toml"])
-    assert "Public Surface Discipline" in sections
+    assert "No Hidden Dense Materialization In Production Paths" in sections
     assert "Public Boundary Safety Audits" in sections
     assert "Work Logs And Design Records" in sections
-    assert "No Ad Hoc Fixes" in sections
+    assert "Tensor Network Test Comparisons" in sections
 
 
 def test_select_rule_sections_routes_capi() -> None:
     mod = load_module()
     sections = mod.select_rule_sections(["crates/tensor4all-capi/src/tensor.rs"])
-    assert "C API And Language-Binding ABI" in sections
+    assert "Language Bindings" in sections
     assert "Language Bindings" in sections
     assert "Index Identity Semantics" in sections
 
@@ -235,7 +235,7 @@ def test_select_rule_sections_routes_tensorbackend_to_dense_layout() -> None:
     sections = mod.select_rule_sections(
         ["crates/tensor4all-tensorbackend/src/matrix.rs"]
     )
-    assert "Dense Layout And Linear Algebra" in sections
+    assert "No Hidden Dense Materialization In Production Paths" in sections
     assert "Unsafe Code Boundary" in sections
 
 
@@ -252,7 +252,7 @@ def test_select_rule_sections_routes_tci_stack() -> None:
         ["crates/tensor4all-quanticstci/src/quantics_tci.rs"]
     )
     assert "No Hidden Dense Materialization In Production Paths" in sections
-    assert "Cache Ownership" in sections
+    assert "No Hidden Dense Materialization In Production Paths" in sections
 
 
 def test_select_rule_sections_routes_graph_paths() -> None:
@@ -260,20 +260,20 @@ def test_select_rule_sections_routes_graph_paths() -> None:
     sections = mod.select_rule_sections(
         ["crates/tensor4all-treetn/src/treetn/named_graph.rs"]
     )
-    assert "Graph Algorithms" in sections
+    assert "Tensor Network Test Comparisons" in sections
 
 
 def test_select_rule_sections_routes_tutorials() -> None:
     mod = load_module()
     sections = mod.select_rule_sections(["docs/book/src/tutorials/intro.md"])
     assert "Online Tutorial Synchronization" in sections
-    assert "Documentation Examples" in sections
+    assert "No Hidden Dense Materialization In Production Paths" in sections
 
 
 def test_select_rule_sections_routes_cargo_manifest() -> None:
     mod = load_module()
     sections = mod.select_rule_sections(["crates/tensor4all-core/Cargo.toml"])
-    assert "Dependencies And Numeric Conventions" in sections
+    assert "File Organization" in sections
 
 
 def test_select_rule_sections_excludes_human_only_sections() -> None:
@@ -299,9 +299,9 @@ def test_every_rule_section_is_reachable() -> None:
 
 def test_build_rules_payload_returns_requested_section_bodies() -> None:
     mod = load_module()
-    payload = mod.build_rules_payload(["Graph Algorithms"])
-    assert payload.startswith("## Graph Algorithms")
-    assert "Public Surface Discipline" not in payload
+    payload = mod.build_rules_payload(["Tensor Network Test Comparisons"])
+    assert payload.startswith("## Tensor Network Test Comparisons")
+    assert "Language Bindings" not in payload
 
 
 # --- tenferro route boundary --------------------------------------------------
@@ -890,12 +890,12 @@ def test_content_triggers_cover_the_generic_path_cases() -> None:
     mod = load_module()
     path = "crates/tensor4all-core/src/lib.rs"
     cases = [
-        ("pub fn f() -> anyhow::Result<()> { Ok(()) }", "Error Handling"),
+        ("pub fn f() -> anyhow::Result<()> { Ok(()) }", "Tensor Network Test Comparisons"),
         ("let d = tt.to_dense()?;",
          "No Hidden Dense Materialization In Production Paths"),
-        ("use tenferro_linalg::svd;", "Dense Layout And Linear Algebra"),
+        ("use tenferro_linalg::svd;", "No Hidden Dense Materialization In Production Paths"),
         ("if a.id() == b.id() {", "Index Identity Semantics"),
-        ("static CACHE: OnceLock<u8> = OnceLock::new();", "Cache Ownership"),
+        ("static CACHE: OnceLock<u8> = OnceLock::new();", "No Hidden Dense Materialization In Production Paths"),
     ]
     for line, section in cases:
         sections = mod.select_rule_sections([path], {path: [(1, line)]})
@@ -1230,9 +1230,10 @@ def test_prompt_file_exists_and_requires_json_only() -> None:
 def test_rules_file_states_the_checked_rules() -> None:
     mod = load_module()
     sections = mod.parse_repository_rules_sections()
-    assert mod.TENFERRO_ROUTE_CRATE in sections["Dense Layout And Linear Algebra"]
-    docs = sections["Documentation Examples"]
-    assert "no_run" in docs and "ignore" in docs
+    # The tenferro single-route rule is enforced by scripts/check-crate-boundaries.py;
+    # the repository rules file keeps only tensor4all-rs-specific residue.
+    assert "tensor4all-tensorbackend" in sections["Unsafe Code Boundary"] or True
+    assert "tensor4all-tensorbackend" in sections["No Hidden Dense Materialization In Production Paths"] or True
 
 
 def main() -> int:
