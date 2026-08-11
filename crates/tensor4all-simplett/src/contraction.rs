@@ -138,10 +138,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                 &[result.nrows(), result.ncols()],
             )
             .map_err(|err| {
-                contraction_helper_error(
-                    "Failed to prepare intermediate inner_product environment",
-                    err,
-                )
+                contraction_helper_error("Failed to prepare intermediate inner_product env", err)
             })?;
 
             result = Matrix::from_col_major_vec(
