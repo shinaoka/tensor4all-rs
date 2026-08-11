@@ -5,6 +5,7 @@ pub mod contract;
 pub mod error;
 pub mod linsolve;
 pub mod options;
+pub mod prelude;
 pub mod tensortrain;
 
 pub use contract::contract;

@@ -69,6 +69,7 @@ pub mod globalpivot;
 pub mod globalsearch;
 pub mod integration;
 pub mod optfirstpivot;
+pub mod prelude;
 pub mod tensorci1;
 pub mod tensorci2;
 

@@ -126,8 +126,8 @@ contraction cost at the expense of a controlled approximation error.
 internally so the result is always exact (up to floating-point precision).
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-use tensor4all_treetn::TreeTN;
+use tensor4all_core::prelude::*;
+use tensor4all_treetn::prelude::*;
 
 let s = DynIndex::new_dyn(2);
 let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
@@ -171,8 +171,8 @@ result has the same tree structure, but each bond dimension is the sum of the tw
 dimensions (direct-sum construction).
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-use tensor4all_treetn::TreeTN;
+use tensor4all_core::prelude::*;
+use tensor4all_treetn::prelude::*;
 
 let s = DynIndex::new_dyn(2);
 let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0_f64, 2.0]).unwrap();

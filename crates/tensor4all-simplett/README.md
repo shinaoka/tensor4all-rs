@@ -12,7 +12,7 @@ Simple, efficient Tensor Train (MPS) implementation for numerical computation.
 ## Example
 
 ```rust
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
+use tensor4all_simplett::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Create a constant tensor train (all entries = 1.0) over a 2x3x4 grid
@@ -29,7 +29,7 @@ assert!((total - 24.0).abs() < 1e-10);
 // Compress with tolerance
 let options = CompressionOptions {
     tolerance: 1e-10,
-    max_bond_dim: 20,
+    max_bond_dim: Some(20),
     ..Default::default()
 };
 let compressed = tt.compressed(&options)?;

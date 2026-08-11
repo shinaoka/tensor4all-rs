@@ -27,6 +27,8 @@ tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", pac
 
 This skill tracks `main`; a release tag may not contain every API described below. Add each crate that your code imports directly. Do not add transitive crates that you never name.
 
+- **Import the crate's `prelude`** — every user-facing crate (`tensor4all-core`, `tensor4all-simplett`, `tensor4all-treetn`, `tensor4all-itensorlike`, `tensor4all-tensorci`, `tensor4all-quanticstci`, `tensor4all-aci`, `tensor4all-interpolativeqtt`) ships a `prelude` re-exporting its public traits plus the types needed to call them. Start with `use tensor4all_<crate>::prelude::*;` instead of guessing trait imports; a missing trait import is the top first-try failure (`error[E0599]`).
+
 - **Backend defaults to pure-Rust `faer` — no system BLAS.** Compute crates enable `tenferro-cpu-faer` by default, so a plain dependency compiles standalone. To link a system BLAS (OpenBLAS / MKL / Apple Accelerate) instead, set `default-features = false` and enable `tenferro-system-blas` on each directly imported crate where it is exposed.
 - **Build with `--release`.** Tensor linalg in debug is orders of magnitude slower; TCI and DMRG are unusable without optimization. For benchmarks set `opt-level = 3` (and `lto`, `codegen-units = 1`).
 - **TensorDynLen scalars** are `f32`, `f64`, `Complex32`, and `Complex64` (`num-complex` 0.4). Compact `Storage` snapshots support only `f64`/`Complex64`; 32-bit tensors retain eager authoritative payloads without promotion. Recipes that build random tensors assume you add `rand` + `rand_chacha` (matching the library's `0.9`) as dev-dependencies.
@@ -35,8 +37,8 @@ This skill tracks `main`; a release tag may not contain every API described belo
 Done when `cargo build --release` succeeds and a constant TT evaluates:
 
 ```rust
-use tensor4all_simplett::AbstractTensorTrain;
-let tt = tensor4all_simplett::SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+use tensor4all_simplett::prelude::*;
+let tt = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
 assert!((tt.evaluate(&[0, 0])? - 1.0).abs() < 1e-12);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

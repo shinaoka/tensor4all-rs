@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Tree Tensor Network (TreeTN) library for tensor4all.
 //!
 //! This crate provides data structures and algorithms for working with tree tensor networks,
@@ -18,7 +19,12 @@
 //! - **Linear operators**: Apply and compose linear operators on tree tensor networks.
 //! - **Linear solvers**: Solve linear systems involving tree tensor network operators.
 
-#![warn(missing_docs)]
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+pub mod prelude;
+
 mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.

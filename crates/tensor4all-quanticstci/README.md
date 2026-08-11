@@ -12,7 +12,7 @@ High-level Quantics Tensor Train interpolation interface. Port of QuanticsTCI.jl
 ## Example
 
 ```rust
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+use tensor4all_quanticstci::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Interpolate f(i, j) = i + j on a 16x16 discrete grid (1-indexed)

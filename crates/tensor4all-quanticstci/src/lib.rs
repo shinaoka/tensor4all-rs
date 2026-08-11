@@ -82,6 +82,12 @@
 //! | Grid points given as explicit arrays | [`quanticscrossinterpolate_from_arrays`] |
 //! | Vector/tensor-valued function | [`quanticscrossinterpolate_batched`] |
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+pub mod prelude;
+
 mod batched;
 mod error;
 mod options;

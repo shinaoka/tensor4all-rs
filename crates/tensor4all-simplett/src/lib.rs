@@ -46,6 +46,12 @@
 //! assert!((val2 - 1.0).abs() < 1e-10);
 //! ```
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+pub mod prelude;
+
 pub mod arithmetic;
 pub mod cache;
 pub mod canonical;

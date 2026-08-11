@@ -58,6 +58,10 @@
 //! assert_eq!(op.mpo().node_count(), 8);
 //! ```
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 mod affine;
 mod common;
 mod cumsum;

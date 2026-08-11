@@ -13,7 +13,7 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
   - `Index::new_dyn_with_tag(dim, tag) -> Result` — named index.
   - `DynIndex::new_bond(dim) -> Result` — bond index; fallible (metadata validated).
   - `.prime()` / `.noprime()` — raise / clear prime level (ket vs bra).
-  - `.dim()`, `.plev()` via the `IndexLike` trait (`use tensor4all_core::IndexLike;`).
+  - `.dim()`, `.plev()` via the `IndexLike` trait (in `tensor4all_core::prelude`).
   - Two independently created indices are always distinct even with equal dim.
 - `TensorDynLen` — dynamic-rank tensor supporting `f32`, `f64`, `Complex32`, and `Complex64`; `f64`/`Complex64` may use compact dense/diagonal/structured snapshots while 32-bit tensors retain eager authoritative payloads. Axes are matched by index identity, with no fixed ordering.
   - `TensorDynLen::from_dense(indices, data)` — column-major `data`; first index varies fastest.

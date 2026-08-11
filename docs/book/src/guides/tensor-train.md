@@ -26,7 +26,7 @@ manage named indices.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
+use tensor4all_simplett::prelude::*;
 
 // Constant TT: all entries equal to 1.0, physical dimensions [2, 3, 4]
 let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
@@ -45,7 +45,7 @@ assert!((zero_tt.sum()).abs() < 1e-14);
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+# use tensor4all_simplett::prelude::*;
 # let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 // Evaluate the tensor at a specific multi-index
 let value = tt.evaluate(&[0, 1, 2])?;
@@ -65,7 +65,7 @@ assert!((total - 24.0).abs() < 1e-10);
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
+# use tensor4all_simplett::prelude::*;
 // Build a TT with artificially inflated bond dimension by adding two constants
 let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
@@ -102,7 +102,7 @@ verify.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
+use tensor4all_simplett::prelude::*;
 
 // Step 1: Create two constant TTs
 let a = SimpleTensorTrain::<f64>::constant(&[4, 4, 4], 1.0);
@@ -149,8 +149,7 @@ ordering.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_core::{DynIndex, TensorDynLen};
-use tensor4all_itensorlike::{CanonicalForm, TensorTrain, TruncateOptions};
+use tensor4all_itensorlike::prelude::*;
 
 // Site and bond indices
 let s0 = DynIndex::new_dyn(2);
@@ -193,8 +192,7 @@ After orthogonalization you can truncate bond dimensions by SVD:
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_core::{DynIndex, TensorDynLen};
-# use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
+# use tensor4all_itensorlike::prelude::*;
 # let s0 = DynIndex::new_dyn(2);
 # let s1 = DynIndex::new_dyn(2);
 # let s2 = DynIndex::new_dyn(2);
@@ -232,8 +230,7 @@ To emulate ITensor-style discarded-weight cutoffs, use
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_core::{DynIndex, TensorDynLen};
-# use tensor4all_itensorlike::TensorTrain;
+# use tensor4all_itensorlike::prelude::*;
 # let s0 = DynIndex::new_dyn(2);
 # let s1 = DynIndex::new_dyn(2);
 # let b = DynIndex::new_bond(2)?;
@@ -263,8 +260,7 @@ The same API works with `Complex64`:
 ```rust
 # fn main() -> anyhow::Result<()> {
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorDynLen};
-use tensor4all_itensorlike::TensorTrain;
+use tensor4all_itensorlike::prelude::*;
 
 let s0 = DynIndex::new_dyn(2);
 let s1 = DynIndex::new_dyn(2);
