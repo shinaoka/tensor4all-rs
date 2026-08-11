@@ -13,6 +13,7 @@
   - [Quantics Transform](guides/quantics.md)
   - [Quantum Fourier Transform](guides/qft.md)
   - [Tree Tensor Networks](guides/tree-tn.md)
+  - [HDF5 Serialization](guides/hdf5-serialization.md)
 - [Tutorials]()
   - [Quantics Basics]()
     - [QTT of a Scalar Function](tutorials/quantics-basics/qtt-scalar-function.md)

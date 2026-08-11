@@ -30,10 +30,26 @@ if [[ -z "$extern_args" ]]; then
 fi
 
 real_rustdoc="$(rustup which rustdoc)"
+# book-tests' dependency closure includes tensor4all-hdf5, whose doctests
+# link the native HDF5 library. The raw rustdoc invocation cannot see the
+# search path that hdf5-metno-sys emits as cargo build-script output, so
+# forward it explicitly when pkg-config resolves hdf5 (same resolution the
+# build script uses on Linux). Harmless no-op when hdf5 is absent.
+native_link_args=()
+if pkg-config --exists hdf5 2>/dev/null; then
+    # Same resolution hdf5-metno-sys uses on Linux; forward every native
+    # search dir (Debian/Ubuntu puts libhdf5 in .../hdf5/serial).
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] && native_link_args+=(-L "native=${dir}")
+    done < <(pkg-config --libs-only-L hdf5 | tr ' ' '\n' | sed 's/^ *-L//; s/ *$//' | grep -v '^$')
+fi
 {
     echo '#!/usr/bin/env bash'
     echo 'set -euo pipefail'
     printf 'exec %q ' "$real_rustdoc"
+    for ((i = 0; i < ${#native_link_args[@]}; i += 2)); do
+        printf '%q %q ' "${native_link_args[i]}" "${native_link_args[i + 1]}"
+    done
     while IFS= read -r extern_arg; do
         [[ -n "$extern_arg" ]] || continue
         crate_name="${extern_arg%%=*}"

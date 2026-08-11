@@ -10,6 +10,7 @@
 //! |-----------|-------------|------------------|
 //! | [`TensorDynLen`] | `ITensor` | `ITensors.ITensor` |
 //! | [`TensorTrain`] | `MPS` | `ITensorMPS.MPS` |
+//! | [`TreeTN`](tensor4all_treetn::TreeTN) | `TreeTN` (tensor4all-rs schema) | — (no ITensorNetworks.jl equivalent) |
 //!
 //! Both `f64` and `Complex64` element types are supported for dense storage.
 //!
@@ -72,6 +73,7 @@ mod index;
 mod itensor;
 mod mps;
 mod schema;
+mod treetn;
 /// Error returned by tensor4all-hdf5 save/load operations.
 ///
 /// The full original diagnostic is preserved in [`Hdf5Error::source`].
@@ -122,8 +124,12 @@ impl From<anyhow::Error> for Hdf5Error {
 }
 
 use backend::File;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::str::FromStr;
 use tensor4all_core::TensorDynLen;
 use tensor4all_itensorlike::TensorTrain;
+use tensor4all_treetn::TreeTN;
 
 // Re-export the HDF5 initialization functions (runtime-loading mode only)
 #[cfg(feature = "runtime-loading")]
@@ -459,4 +465,120 @@ pub fn load_mps(filepath: &str, name: &str) -> std::result::Result<TensorTrain, 
     let file = File::open(filepath)?;
     let group = file.group(name)?;
     mps::read_mps(&group).map_err(Hdf5Error::from)
+}
+
+/// Save a [`TreeTN`] as a tensor4all-rs `TreeTN` in an HDF5 file.
+///
+/// Creates the file if it does not exist, or overwrites an existing file.
+/// The tree is stored under a group named `name`, with each node tensor
+/// written as a 1-indexed subgroup (`node_1/`, `node_2/`, ...) using the
+/// ITensor schema, plus a `node_name` attribute per node. Topology is not
+/// stored explicitly; on load it is recovered from shared index identity via
+/// [`TreeTN::from_tensors`].
+///
+/// The node name type `V` is serialized via [`ToString`] and restored via
+/// [`FromStr`]; any type supporting both round-trips exactly (e.g. `String`
+/// or `usize`) can be stored.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be created, if any node tensor uses
+/// an unsupported storage type (only `f64` and `Complex64` are supported),
+/// or if the tree is internally inconsistent.
+///
+/// # Examples
+///
+/// Round-trip a small tree with `String` node names:
+///
+/// ```
+/// use tensor4all_hdf5::{load_treetn, save_treetn};
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_treetn::TreeTN;
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let s0 = DynIndex::new_dyn(2);
+/// let s1 = DynIndex::new_dyn(2);
+/// let b01 = DynIndex::new_dyn(4);
+/// let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
+/// let t1 = TensorDynLen::from_dense(vec![b01, s1], vec![1.0; 8])?;
+/// let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+///     vec![t0, t1],
+///     vec!["left".to_string(), "right".to_string()],
+/// )?;
+///
+/// let dir = tempfile::tempdir()?;
+/// let path = dir.path().join("treetn.h5");
+/// let path = path.to_str().unwrap();
+///
+/// save_treetn(path, "tn", &tn)?;
+/// let loaded = load_treetn::<String>(path, "tn")?;
+///
+/// assert_eq!(loaded.node_count(), 2);
+/// assert_eq!(loaded.edge_count(), 1);
+/// assert_eq!(loaded.node_names(), vec!["left".to_string(), "right".to_string()]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn save_treetn<V>(
+    filepath: &str,
+    name: &str,
+    tn: &TreeTN<TensorDynLen, V>,
+) -> std::result::Result<(), Hdf5Error>
+where
+    V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
+{
+    let file = File::create(filepath)?;
+    let group = file.create_group(name)?;
+    treetn::write_treetn(&group, tn).map_err(Hdf5Error::from)
+}
+
+/// Append a [`TreeTN`] to an HDF5 file.
+///
+/// Opens `filepath` read/write if it exists, or creates it otherwise, then
+/// writes the tree under `name`. This keeps the same `TreeTN` v1 schema as
+/// [`save_treetn`] while allowing multiple named trees in a single file.
+/// The target group must not already exist.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened or the group already exists.
+pub fn append_treetn<V>(
+    filepath: &str,
+    name: &str,
+    tn: &TreeTN<TensorDynLen, V>,
+) -> std::result::Result<(), Hdf5Error>
+where
+    V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
+{
+    let file = File::append(filepath)?;
+    let group = file.create_group(name)?;
+    treetn::write_treetn(&group, tn).map_err(Hdf5Error::from)
+}
+
+/// Load a [`TreeTN`] from a tensor4all-rs `TreeTN` in an HDF5 file.
+///
+/// Opens the file in read-only mode and reads the tree from the group named
+/// `name`. Node tensors, node names, and the tree topology (recovered from
+/// shared index identity) are all restored.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file does not exist or cannot be opened
+/// - The named group is missing or has an incompatible schema
+/// - The type/version metadata does not match `TreeTN` v1
+/// - A `node_name` attribute fails to parse as `V`
+/// - The stored tensors do not form a consistent tree (e.g. a bond index
+///   shared by more than two nodes)
+pub fn load_treetn<V>(
+    filepath: &str,
+    name: &str,
+) -> std::result::Result<TreeTN<TensorDynLen, V>, Hdf5Error>
+where
+    V: FromStr + Ord + Clone + Hash + Eq + Send + Sync + Debug,
+    V::Err: std::fmt::Display,
+{
+    let file = File::open(filepath)?;
+    let group = file.group(name)?;
+    treetn::read_treetn(&group).map_err(Hdf5Error::from)
 }

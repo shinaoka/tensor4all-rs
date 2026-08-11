@@ -5,7 +5,10 @@ use num_complex::Complex64;
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
-use tensor4all_hdf5::{append_itensor, append_mps, load_itensor, load_mps, save_itensor, save_mps};
+use tensor4all_hdf5::{
+    append_itensor, append_mps, append_treetn, load_itensor, load_mps, load_treetn, save_itensor,
+    save_mps, save_treetn,
+};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
 fn temp_path(name: &str) -> String {
@@ -941,6 +944,128 @@ fn test_type_mismatch_error() {
         msg.contains("Expected HDF5 type 'MPS'"),
         "Expected type mismatch error, got: {}",
         msg
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+use tensor4all_treetn::TreeTN;
+
+/// A 3-node tree (root connected to two leaves) with known data.
+fn make_test_treetn() -> TreeTN<TensorDynLen, String> {
+    let s_left = DynIndex::new_dyn(2);
+    let s_root = DynIndex::new_dyn(3);
+    let s_right = DynIndex::new_dyn(2);
+    let b_left = DynIndex::new_dyn(4);
+    let b_right = DynIndex::new_dyn(5);
+
+    let left = TensorDynLen::from_dense(vec![s_left, b_left.clone()], vec![1.0; 8]).unwrap();
+    let root =
+        TensorDynLen::from_dense(vec![b_left, s_root, b_right.clone()], vec![2.0; 60]).unwrap();
+    let right = TensorDynLen::from_dense(vec![b_right, s_right], vec![3.0; 10]).unwrap();
+
+    TreeTN::from_tensors(
+        vec![left, root, right],
+        vec!["left".to_string(), "root".to_string(), "right".to_string()],
+    )
+    .unwrap()
+}
+
+fn treetn_node_tensors(tn: &TreeTN<TensorDynLen, String>) -> Vec<TensorDynLen> {
+    tn.node_indices()
+        .iter()
+        .map(|idx| tn.tensor(*idx).unwrap().clone())
+        .collect()
+}
+
+#[test]
+fn test_treetn_roundtrip() {
+    let path = TempHdf5Path::new("treetn_roundtrip");
+    let tn = make_test_treetn();
+
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+    let loaded = load_treetn::<String>(path.as_str(), "tn").unwrap();
+
+    // Structural equality: same node count, same edges, same names in order.
+    assert_eq!(loaded.node_count(), tn.node_count());
+    assert_eq!(loaded.edge_count(), tn.edge_count());
+    assert_eq!(loaded.node_names(), tn.node_names());
+
+    // Numerical equality: each node tensor is identical (index identity and
+    // data), so the reconstructed topology matches the original exactly.
+    let orig = treetn_node_tensors(&tn);
+    let reloaded = treetn_node_tensors(&loaded);
+    assert_eq!(orig.len(), reloaded.len());
+    for (a, b) in orig.iter().zip(&reloaded) {
+        assert_eq!(a.indices(), b.indices());
+        assert!(a.distance(b).unwrap() < 1e-15);
+    }
+}
+
+#[test]
+fn test_treetn_append_multiple() {
+    let path = TempHdf5Path::new("treetn_append");
+    let tn = make_test_treetn();
+
+    save_treetn(path.as_str(), "a", &tn).unwrap();
+    append_treetn(path.as_str(), "b", &tn).unwrap();
+
+    let a = load_treetn::<String>(path.as_str(), "a").unwrap();
+    let b = load_treetn::<String>(path.as_str(), "b").unwrap();
+    assert_eq!(a.node_count(), 3);
+    assert_eq!(b.node_count(), 3);
+    assert_eq!(a.node_names(), b.node_names());
+}
+
+#[test]
+fn test_treetn_usize_node_names_roundtrip() {
+    let path = TempHdf5Path::new("treetn_usize");
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let b01 = DynIndex::new_dyn(4);
+    let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 8]).unwrap();
+    let t1 = TensorDynLen::from_dense(vec![b01, s1], vec![1.0; 8]).unwrap();
+    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+    let loaded = load_treetn::<usize>(path.as_str(), "tn").unwrap();
+    assert_eq!(loaded.node_names(), vec![0, 1]);
+    assert_eq!(loaded.edge_count(), 1);
+}
+
+#[test]
+fn test_treetn_bad_node_name_parse_error() {
+    // Save with String names, then request usize: parsing must fail loudly.
+    let path = TempHdf5Path::new("treetn_bad_name");
+    let tn = make_test_treetn();
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+
+    let err = load_treetn::<usize>(path.as_str(), "tn").unwrap_err();
+    assert!(
+        err.to_string().contains("Failed to parse TreeTN node name"),
+        "Expected node-name parse error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_treetn_missing_child_group_error() {
+    // Corrupt the file: remove a node group, then loading must fail with a
+    // child-count mismatch rather than reading a partial tree.
+    let path = temp_path("treetn_missing_child");
+    save_treetn(&path, "tn", &make_test_treetn()).unwrap();
+
+    {
+        let file = File::open_rw(&path).unwrap();
+        let group = file.group("tn").unwrap();
+        group.unlink("node_3").unwrap();
+    }
+
+    let err = load_treetn::<String>(&path, "tn").unwrap_err();
+    assert!(
+        err.to_string().contains("declares 3 TreeTN children"),
+        "Expected child-count mismatch error, got: {}",
+        err
     );
 
     std::fs::remove_file(&path).ok();

@@ -21,6 +21,7 @@ tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
+tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5" }
 anyhow = { workspace = true }
 num-complex = { workspace = true }
 num-rational = "0.4"
@@ -28,3 +29,4 @@ num-traits = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 approx = { workspace = true }
+tempfile = "3"

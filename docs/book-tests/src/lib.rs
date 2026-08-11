@@ -38,6 +38,9 @@ mod tci_advanced {}
 #[doc = include_str!("../../book/src/guides/tree-tn.md")]
 mod tree_tn {}
 
+#[doc = include_str!("../../book/src/guides/hdf5-serialization.md")]
+mod hdf5_serialization {}
+
 #[doc = include_str!("../../book/src/guides/quantics.md")]
 mod quantics {}
 

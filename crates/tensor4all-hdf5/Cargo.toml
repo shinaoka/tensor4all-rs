@@ -13,15 +13,18 @@ runtime-loading = ["dep:hdf5-rt"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-itensorlike/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-itensorlike/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
 ]
 
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 hdf5-metno = { workspace = true, default-features = false, features = ["complex"], optional = true }
 hdf5-metno-sys = { version = "0.12", default-features = false, optional = true }
 hdf5-rt = { workspace = true, default-features = false, features = ["complex"], optional = true }
