@@ -948,8 +948,8 @@ fn naive_apply_long_identity_chain_keeps_local_bonds_bounded() {
     }
     let shape = [length, sample_points.len()];
     let value_ref = ColMajorArrayRef::new(&values, &shape).unwrap();
-    let state_values = state.evaluate_at(&site_indices, value_ref).unwrap();
-    let result_values = result.evaluate_at(&site_indices, value_ref).unwrap();
+    let state_values = state.evaluate(&site_indices, value_ref).unwrap();
+    let result_values = result.evaluate(&site_indices, value_ref).unwrap();
 
     for (state_value, result_value) in state_values.iter().zip(result_values.iter()) {
         assert!((state_value.real() - result_value.real()).abs() < 1e-10);

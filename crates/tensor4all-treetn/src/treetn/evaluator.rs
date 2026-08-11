@@ -32,7 +32,7 @@ where
 /// TCI-style sampling loops.
 ///
 /// Related convenience methods such as [`TreeTN::evaluate`] and
-/// [`TreeTN::evaluate_at`] construct a temporary evaluator internally.
+/// [`TreeTN::evaluate`] constructs a temporary evaluator internally.
 ///
 /// # Examples
 ///

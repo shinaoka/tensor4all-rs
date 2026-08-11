@@ -779,55 +779,6 @@ where
         }
         Ok((indices, node_names))
     }
-
-    /// Evaluate the TreeTN at multiple multi-indices (batch).
-    ///
-    /// Alias for [`evaluate()`](Self::evaluate).
-    ///
-    /// # Arguments
-    /// * `indices` - Identifies each site index by its `Index` object
-    ///
-    ///   (e.g. from [`all_site_indices()`](Self::all_site_indices)).
-    ///   Must enumerate every site index exactly once.
-    /// * `values` - Column-major array of shape `[n_indices, n_points]`.
-    ///
-    ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
-    ///
-    /// # Returns
-    /// A `Vec<AnyScalar>` of length `n_points`.
-    ///
-    /// # Errors
-    /// Returns an error when the coordinate is out of range (an out of bounds
-    /// failure) or evaluation fails (a backend failure).
-    /// # Examples
-    /// ```
-    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};
-    /// use tensor4all_treetn::TreeTN;
-    ///
-    /// let s0 = DynIndex::new_dyn(3);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![10.0, 20.0, 30.0]).unwrap();
-    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
-    ///
-    /// let (indices, _vertices) = tn.all_site_indices().unwrap();
-    ///
-    /// // Evaluate at index value 2
-    /// let data = [2usize];
-    /// let shape = [indices.len(), 1];
-    /// let values = ColMajorArrayRef::new(&data, &shape).unwrap();
-    /// let result = tn.evaluate_at(&indices, values).unwrap();
-    /// assert!((result[0].real() - 30.0).abs() < 1e-10);
-    /// ```
-    pub fn evaluate_at(
-        &self,
-        indices: &[T::Index],
-        values: ColMajorArrayRef<'_, usize>,
-    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError>
-    where
-        T::Index: Clone + Hash + Eq,
-        <T::Index as IndexLike>::Id: Ord,
-    {
-        self.evaluate(indices, values)
-    }
 }
 
 #[cfg(test)]
