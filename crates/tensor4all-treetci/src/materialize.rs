@@ -159,6 +159,17 @@ where
         ));
     };
 
+    // A numerically zero pivot matrix (the function underflows in this
+    // subdomain) cannot be solved; emit a zero site tensor of the same shape
+    // instead of failing the solve. Mirrors the guard in
+    // `tensor4all-tensorci`'s `fill_site_tensors`.
+    if p_values
+        .iter()
+        .all(|value| Scalar::abs_val(*value) < f64::EPSILON)
+    {
+        return Ok(vec![T::zero(); rows * cols]);
+    }
+
     T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
         .map_err(anyhow::Error::from)
 }

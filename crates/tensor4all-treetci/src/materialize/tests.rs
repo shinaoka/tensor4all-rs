@@ -36,6 +36,7 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
             max_iter: 4,
             max_bond_dim: None,
             normalize_error: true,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -154,4 +155,22 @@ fn solve_right_full_piv_lu_recovers_complex_rhs_for_nontrivial_pivot() {
         .map(|value| value.norm())
         .fold(0.0_f64, f64::max);
     assert_complex_slice_close(&solved, &target, max_sample, 1e-12);
+}
+
+#[test]
+fn to_treetn_emits_zero_core_for_zero_pivot_matrix() {
+    // A pivot whose sampled function values are all exactly zero produces a
+    // singular pivot matrix in `site_tensor_with_parent`; materialization
+    // must emit a zero core instead of failing the solve.
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+
+    // Evaluator that is exactly zero at every pivot cross-section.
+    let batch_eval =
+        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0; batch.n_points()]) };
+
+    let tn = to_treetn(&tci, batch_eval, Some(0)).unwrap();
+    let dense = tn.to_dense().unwrap();
+    let values = dense.to_vec::<f64>().unwrap();
+    assert_eq!(values, vec![0.0; 4]);
 }

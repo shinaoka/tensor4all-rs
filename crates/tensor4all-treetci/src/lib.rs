@@ -76,6 +76,8 @@ pub mod assemble;
 /// Batch views for global site-order evaluation.
 pub mod batch;
 pub mod error;
+/// Automatic global pivot search for the optimization loop.
+pub mod globalpivot;
 /// Tree graph helpers and edge-bipartition utilities for TreeTCI.
 pub mod graph;
 /// Canonical subtree-key types.
@@ -100,6 +102,7 @@ pub use api::crossinterpolate2;
 pub use assemble::{assemble_global_point, assemble_points_column_major, MultiIndex};
 pub use batch::{GlobalIndexBatch, OwnedGlobalIndexBatch};
 pub use error::{Result as TreeTciResult, TreeTciError};
+pub use globalpivot::find_global_pivots;
 pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use key::SubtreeKey;
 pub use materialize::to_treetn;
