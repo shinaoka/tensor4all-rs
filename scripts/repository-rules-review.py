@@ -148,10 +148,10 @@ SEVERITY_ALIASES = {
 
 ALWAYS_SECTIONS = frozenset(
     {
-        "Public Surface Discipline",
         "Public Boundary Safety Audits",
         "Work Logs And Design Records",
-        "No Ad Hoc Fixes",
+        "No Hidden Dense Materialization In Production Paths",
+        "Tensor Network Test Comparisons",
     }
 )
 
@@ -166,7 +166,6 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         re.compile(r"tensor4all-capi|/capi|\.h$|cbindgen|_capi"),
         frozenset(
             {
-                "C API And Language-Binding ABI",
                 "Language Bindings",
                 "Index Identity Semantics",
                 "Unsafe Code Boundary",
@@ -175,7 +174,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(r"julia|python|Tensor4all\.jl|binding"),
-        frozenset({"Language Bindings", "C API And Language-Binding ABI"}),
+        frozenset({"Language Bindings"}),
     ),
     (
         re.compile(
@@ -184,8 +183,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         ),
         frozenset(
             {
-                "Dense Layout And Linear Algebra",
-                "Performance And Complexity Discipline",
+                "No Hidden Dense Materialization In Production Paths",
                 "Unsafe Code Boundary",
             }
         ),
@@ -199,7 +197,6 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
             {
                 "No Hidden Dense Materialization In Production Paths",
                 "Tensor Network Test Comparisons",
-                "Performance And Complexity Discipline",
                 "Index Identity Semantics",
             }
         ),
@@ -212,9 +209,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         frozenset(
             {
                 "No Hidden Dense Materialization In Production Paths",
-                "Dense Layout And Linear Algebra",
-                "Performance And Complexity Discipline",
-                "Cache Ownership",
+                "Tensor Network Test Comparisons",
             }
         ),
     ),
@@ -223,11 +218,11 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
             r"graph|petgraph|topology|node_name_network|site_index_network"
             r"|/restructure|/transform"
         ),
-        frozenset({"Graph Algorithms", "Performance And Complexity Discipline"}),
+        frozenset({"Tensor Network Test Comparisons"}),
     ),
     (
         re.compile(r"cache|evaluator|memo|/context"),
-        frozenset({"Cache Ownership", "Performance And Complexity Discipline"}),
+        frozenset({"No Hidden Dense Materialization In Production Paths"}),
     ),
     (
         re.compile(r"(?:^|/)ad(?:/|\.rs$)|autodiff|differentia|grad|vjp|jvp"),
@@ -243,21 +238,19 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(r"Cargo\.toml$"),
-        frozenset({"Dependencies And Numeric Conventions"}),
+        frozenset({"File Organization"}),
     ),
     (
         re.compile(r"(?:^|/)tests?/|_tests?\.rs$|(?:^|/)tests?\.rs$"),
         frozenset(
             {
-                "Unit Test Organization",
-                "Testing And Coverage",
                 "Tensor Network Test Comparisons",
             }
         ),
     ),
     (
         re.compile(r"coverage-thresholds\.json$|check-coverage"),
-        frozenset({"Testing And Coverage"}),
+        frozenset({"Tensor Network Test Comparisons"}),
     ),
     (
         re.compile(r"^docs/worklogs/|^docs/design/"),
@@ -268,23 +261,20 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         frozenset(
             {
                 "Online Tutorial Synchronization",
-                "Documentation Examples",
-                "Public Surface Drift",
+                "Tensor Network Test Comparisons",
             }
         ),
     ),
     (
         re.compile(r"^docs/api/"),
-        frozenset({"Source Of Truth"}),
+        frozenset({"File Organization"}),
     ),
     (
         re.compile(r"\.md$|^README"),
         frozenset(
             {
-                "Public Surface Drift",
-                "Documentation Examples",
                 "Online Tutorial Synchronization",
-                "Source Of Truth",
+                "No Hidden Dense Materialization In Production Paths",
             }
         ),
     ),
@@ -292,11 +282,8 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         re.compile(r"\.rs$"),
         frozenset(
             {
-                "Error Handling",
-                "API Design",
                 "File Organization",
-                "Documentation Examples",
-                "Public Surface Drift",
+                "No Hidden Dense Materialization In Production Paths",
             }
         ),
     ),
@@ -312,7 +299,7 @@ CONTENT_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(r"anyhow::Result|anyhow!|\bbail!\("),
-        frozenset({"Error Handling"}),
+        frozenset({"Tensor Network Test Comparisons"}),
     ),
     (
         re.compile(r"to_dense\(|contract_to_tensor\(|fulltensor\(|max_dense_elements"),
@@ -320,7 +307,7 @@ CONTENT_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(r"tenferro_\w+::|CpuBackend|with_default_backend"),
-        frozenset({"Dense Layout And Linear Algebra"}),
+        frozenset({"No Hidden Dense Materialization In Production Paths"}),
     ),
     (
         re.compile(r"\.id\(\)|IndexLike::Id|prime_level"),
@@ -328,19 +315,19 @@ CONTENT_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(r"petgraph|NodeNameNetwork|SiteIndexNetwork"),
-        frozenset({"Graph Algorithms"}),
+        frozenset({"Tensor Network Test Comparisons"}),
     ),
     (
         re.compile(r"OnceLock|lazy_static|thread_local!|struct \w*Cache\b"),
-        frozenset({"Cache Ownership"}),
+        frozenset({"No Hidden Dense Materialization In Production Paths"}),
     ),
     (
         re.compile(r"#\[cfg\(test\)\]|\binclude!\("),
-        frozenset({"Unit Test Organization"}),
+        frozenset({"Tensor Network Test Comparisons"}),
     ),
     (
         re.compile(r"t4a_[a-z_]+|catch_unwind|extern \"C\""),
-        frozenset({"C API And Language-Binding ABI"}),
+        frozenset({"Language Bindings"}),
     ),
 )
 
@@ -523,7 +510,7 @@ def build_rules_payload(section_names: list[str]) -> str:
         if body:
             chunks.append(body)
     if not chunks:
-        return sections.get("Public Surface Discipline", "")
+        return sections.get("Tensor Network Test Comparisons", "")
     return "\n\n".join(chunks)
 
 
@@ -1419,7 +1406,7 @@ def deterministic_checks(
             Finding(
                 id="tenferro-route",
                 severity="block",
-                rule_section="Dense Layout And Linear Algebra",
+                rule_section="No Hidden Dense Materialization In Production Paths",
                 file=route[0].split(":")[0],
                 line=None,
                 summary=(
