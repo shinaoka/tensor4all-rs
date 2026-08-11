@@ -32,7 +32,7 @@ tensor4all-simplett = { path = "../tensor4all-rs/crates/tensor4all-simplett" }
 ```
 
 ```rust
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_simplett::prelude::*;
 
 let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 assert!((tt.evaluate(&[0, 1, 2]).unwrap() - 1.0).abs() < 1e-12);

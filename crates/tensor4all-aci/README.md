@@ -23,8 +23,7 @@ originally authored by Marc Ritter and contributors.
 input values per interpolation point.
 
 ```rust
-use tensor4all_aci::{elementwise, AciOptions};
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_aci::prelude::*;
 
 let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
 let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
@@ -47,8 +46,7 @@ batch is a borrowed column-major view with `n_inputs` rows and `n_points`
 columns. Use `batch.get(input, point)` for checked access.
 
 ```rust
-use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_aci::prelude::*;
 
 let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
 let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);
@@ -75,8 +73,7 @@ For hot callbacks, the flat batch slice can be read directly. Values are stored
 as `data[input + n_inputs * point]`.
 
 ```rust
-use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_aci::prelude::*;
 
 let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
 let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 4.0);

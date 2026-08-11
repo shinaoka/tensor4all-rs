@@ -42,7 +42,7 @@ tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn" }
 The following example uses `tensor4all-simplett` to create a constant tensor train, evaluate it at a specific index, and compress it.
 
 ```rust
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorTrain};
+use tensor4all_simplett::prelude::*;
 
 fn main() {
     // Create a constant tensor train with local dimensions [2, 3, 4].

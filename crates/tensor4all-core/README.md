@@ -14,9 +14,7 @@ Core tensor library: Index system, dynamic-rank Tensor, contraction, SVD/QR/LU f
 ## Example
 
 ```rust
-use tensor4all_core::{
-    factorize, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
-};
+use tensor4all_core::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Create indices

@@ -16,8 +16,8 @@ Tensor Cross Interpolation algorithms. TCI2 is the primary maintained implementa
 ## Example
 
 ```rust
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
-use tensor4all_simplett::AbstractTensorTrain;
+use tensor4all_simplett::prelude::*;
+use tensor4all_tensorci::prelude::*;
 
 // Function to interpolate: f(i, j) = (i + j + 1) as f64
 let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;

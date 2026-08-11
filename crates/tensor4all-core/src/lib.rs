@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Core tensor operations and types for tensor4all-rs.
 //!
 //! This crate provides the foundational types and operations for tensor networks:
@@ -21,7 +22,11 @@
 //! let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 //! ```
 
-#![warn(missing_docs)]
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+pub mod prelude;
 
 pub mod col_major_array;
 pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};

@@ -7,9 +7,7 @@ This crate ports the tested public algorithms from
 `SimpleTensorTrain<f64>` values.
 
 ```rust
-use tensor4all_interpolativeqtt::{
-    interpolate_single_scale, AbstractTensorTrain, InterpolativeQttOptions,
-};
+use tensor4all_interpolativeqtt::prelude::*;
 
 let tt = interpolate_single_scale(
     |x| (-x * x).exp(),

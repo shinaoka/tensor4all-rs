@@ -27,6 +27,12 @@
 //! assert!((value - (-1.0_f64).exp()).abs() < 1e-10);
 //! ```
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+pub mod prelude;
+
 mod basis;
 mod error;
 mod interpolation;

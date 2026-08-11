@@ -32,8 +32,7 @@ ITensors.jl-inspired TensorTrain API with orthogonality tracking and multiple ca
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
-use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
+use tensor4all_itensorlike::prelude::*;
 
 // Build a 3-site tensor train
 let s0 = DynIndex::new_dyn(2);
@@ -69,8 +68,7 @@ assert!((inner.real() - norm * norm).abs() < 1e-10);
 ```rust
 # fn main() -> anyhow::Result<()> {
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorDynLen};
-use tensor4all_itensorlike::TensorTrain;
+use tensor4all_itensorlike::prelude::*;
 
 let site = DynIndex::new_dyn(2);
 let tensor = TensorDynLen::from_dense(

@@ -20,8 +20,8 @@ or `1e-6`.
 ```rust
 # fn main() -> anyhow::Result<()> {
 use std::f64::consts::PI;
-use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
+use tensor4all_simplett::prelude::*;
+use tensor4all_tensorci::prelude::*;
 
 let local_dims = vec![128, 128, 128];
 let f = |idx: &Vec<usize>| {
@@ -70,8 +70,8 @@ The quality of the compression is visible in the bond dimensions and the paramet
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use std::f64::consts::PI;
-# use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-# use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+# use tensor4all_simplett::prelude::*;
+# use tensor4all_tensorci::prelude::*;
 # let local_dims = vec![128, 128, 128];
 # let f = |idx: &Vec<usize>| {
 #     let x = 2.0 * PI * idx[0] as f64 / 128.0;

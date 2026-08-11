@@ -13,8 +13,8 @@ Tree tensor networks with arbitrary graph topology. Supports canonicalization, t
 ## Example
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen};
-use tensor4all_treetn::{TreeTN, CanonicalizationOptions, TruncationOptions};
+use tensor4all_core::prelude::*;
+use tensor4all_treetn::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 // 3-site MPS chain: t0 -- t1 -- t2

@@ -55,8 +55,8 @@ let r = factorize(&t, &[i], &opts)?;   // r.left=[i,bond], r.right=[bond,k]
 ## TCI on a black-box function (low-level, 0-indexed)
 
 ```rust
-use tensor4all_simplett::AbstractTensorTrain;
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+use tensor4all_simplett::prelude::*;
+use tensor4all_tensorci::prelude::*;
 
 let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 let result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
@@ -248,8 +248,8 @@ Define `f(idx)` computing each element on demand; let TCI find low-rank structur
 
 ```rust
 use std::f64::consts::PI;
-use tensor4all_simplett::AbstractTensorTrain;
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+use tensor4all_simplett::prelude::*;
+use tensor4all_tensorci::prelude::*;
 
 let f = |idx: &Vec<usize>| {
     let x = 2.0 * PI * idx[0] as f64 / 128.0;

@@ -22,6 +22,12 @@
 //! assert_eq!(result.tensor_train.site_dims(), vec![2, 3]);
 //! ```
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+pub mod prelude;
+
 mod batch;
 mod elementwise;
 mod error;

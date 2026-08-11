@@ -14,8 +14,8 @@ Use `crossinterpolate2` when you already know the local dimensions and want dire
 The function must accept a `&Vec<usize>` of 0-indexed multi-indices and return a scalar value. Here is a simple 2D example where `f(i, j) = i + j + 1`:
 
 ```rust
-use tensor4all_simplett::AbstractTensorTrain;
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TCI2Termination};
+use tensor4all_simplett::prelude::*;
+use tensor4all_tensorci::prelude::*;
 
 let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 let local_dims = vec![4, 4];
@@ -83,8 +83,8 @@ If the errors plateau above your tolerance, try:
 Convert to a tensor train for further manipulation:
 
 ```rust
-# use tensor4all_simplett::AbstractTensorTrain;
-# use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+# use tensor4all_simplett::prelude::*;
+# use tensor4all_tensorci::prelude::*;
 # let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 # let tensor4all_tensorci::TCI2OptimizationResult { tci, ranks: _ranks, errors: _errors, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 #     f, None, vec![4, 4], vec![vec![3, 3]],
@@ -131,7 +131,7 @@ Use `quanticscrossinterpolate_discrete` when your function is naturally defined 
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+use tensor4all_quanticstci::prelude::*;
 
 let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
 let sizes = vec![16, 16];
@@ -162,9 +162,7 @@ For functions on continuous domains, build a `DiscretizedGrid` that maps grid in
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_quanticstci::{
-    quanticscrossinterpolate, DiscretizedGrid, QtciOptions,
-};
+use tensor4all_quanticstci::prelude::*;
 
 // 2^4 = 16 grid points on [0, 1)
 let grid = DiscretizedGrid::builder(&[4])
@@ -203,9 +201,7 @@ This has O(h) convergence where h is the grid spacing. The result depends on whe
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_quanticstci::{
-#     quanticscrossinterpolate, DiscretizedGrid, QtciOptions,
-# };
+# use tensor4all_quanticstci::prelude::*;
 # let grid = DiscretizedGrid::builder(&[4])
 #     .with_lower_bound(&[0.0])
 #     .with_upper_bound(&[1.0])
@@ -239,7 +235,7 @@ with `B = 2^-30` on `[0, ln(20))` using `R = 40` quantics bits.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_quanticstci::{quanticscrossinterpolate, DiscretizedGrid, QtciOptions};
+use tensor4all_quanticstci::prelude::*;
 
 // Use R = 10 bits (2^10 = 1024 points) for a fast doctest.
 // In practice, set R = 40 for the full multi-scale resolution.
@@ -290,7 +286,7 @@ This section corresponds to the Julia [Quantics TCI of multivariate function](ht
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+use tensor4all_quanticstci::prelude::*;
 
 // Use 64x64 for a faster doctest (256x256 in practice)
 let sizes = vec![64, 64];
