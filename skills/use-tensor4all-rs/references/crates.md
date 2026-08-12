@@ -15,9 +15,9 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
   - `.prime()` / `.noprime()` — raise / clear prime level (ket vs bra).
   - `.dim()`, `.plev()` via the `IndexLike` trait (in `tensor4all_core::prelude`).
   - Two independently created indices are always distinct even with equal dim.
-- `TensorDynLen` — dynamic-rank tensor supporting `f32`, `f64`, `Complex32`, and `Complex64`; `f64`/`Complex64` may use compact dense/diagonal/structured snapshots while 32-bit tensors retain eager authoritative payloads. Axes are matched by index identity, with no fixed ordering.
-  - `TensorDynLen::from_dense(indices, data)` — column-major `data`; first index varies fastest.
-  - `TensorDynLen::zeros::<f64>(indices)`, `::random::<f64, _>(&mut rng, indices)`.
+- `IdxTensor` — dynamic-rank tensor supporting `f32`, `f64`, `Complex32`, and `Complex64`; `f64`/`Complex64` may use compact dense/diagonal/structured snapshots while 32-bit tensors retain eager authoritative payloads. Axes are matched by index identity, with no fixed ordering.
+  - `IdxTensor::from_dense(indices, data)` — column-major `data`; first index varies fastest.
+  - `IdxTensor::zeros::<f64>(indices)`, `::random::<f64, _>(&mut rng, indices)`.
   - `.to_vec::<f32>()` / `.to_vec::<f64>()` / `.to_vec::<Complex32>()` / `.to_vec::<Complex64>()`, `.sum()`, `.dims()`.
 - `contract(&[&a, &b, ...])` — sum over all shared indices; inputs must be connected (else error). `outer_product(&a, &b)` for disconnected products.
 - `factorize(&t, &[left_indices], &opts) -> FactorizeResult { left, right, rank, singular_values }`.
@@ -41,7 +41,7 @@ Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the 
 
 Named `DynIndex` objects; orthogonality-center tracking; multiple canonical forms. Use when you need named indices or ITensors.jl compatibility.
 
-- `SimpleTensorTrain::new(vec![t0, t1, ...])` from `TensorDynLen` cores.
+- `SimpleTensorTrain::new(vec![t0, t1, ...])` from `IdxTensor` cores.
 - `.orthogonalize(site)`, `.orthogonalize_with(site, CanonicalForm::...)` (LU / CI forms).
 - `.truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol)).with_max_bond_dim(n))`.
 - `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, `.isortho()`, `.orthocenter()`, `.max_bond_dim()`.
@@ -103,7 +103,7 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 
 Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special case).
 
-- `TreeTN::<TensorDynLen, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
+- `TreeTN::<IdxTensor, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
 - `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `.replaceind(&old, &new)`.
 - `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_bond_dim(n).with_rtol(t))`.
 - `apply_linear_operator(&op, &state, ApplyOptions)`:
@@ -115,7 +115,7 @@ Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special 
 - Optimization sweeps (ground state + time evolution). All take a `LinearOperator` (or a bare MPO `TreeTN` via the `*_with_treetn_operator` wrappers), an initial `TreeTN` state, and a `center: &V` root node; the state is canonicalized at `center` first. v1: one input and one output site mapping per node. Build the mapping with `LinearOperator::from_mpo_and_state(mpo, &state)` when site indices are unambiguous, else hand-build `IndexMapping { true_index, internal_index }` input/output maps.
   - `dmrg(operator, init, center, DmrgOptions) -> Result<DmrgResult>` — two-site ground-state DMRG (Lanczos local solve; Rayleigh-quotient energy, no dense materialization). `DmrgOptions::default()` = `nsite 2, nsweeps 5, max_bond_dim None, svd_policy None, energy_tol None`. Builders: `with_nsweeps`, `with_max_bond_dim`, `with_svd_policy`, `with_energy_tol`, `with_lanczos_options`. `DmrgResult { state, energy, sweeps_completed, local_updates, converged, max_residual_norm }`. `nsite` must be 2.
   - `tdvp(operator, init, center, TdvpOptions) -> Result<TdvpResult>` — time-dependent variational principle via Krylov `exp(exponent_step·H)`. `exponent_step` is the Hamiltonian coefficient: real time `dt` → `Complex64::new(0.0, -dt)`; imaginary time `tau` → `-tau` (real negative). `TdvpOptions::default()` = `nsite 2, nsweeps 1, order 2, exponent_step -0.1i, max_bond_dim None, svd_policy None`. `order` ∈ {1,2,4} (Suzuki–Trotter/applyexp, ITensorNetworks.jl parity). `nsite 1` = fixed-rank one-site (rejects truncation options); `nsite 2` allows bond changes. For ITensors `cutoff` parity use `SvdTruncationPolicy::new(cutoff).with_squared_values().with_discarded_tail_sum()`. `TdvpResult { state, sweeps_completed, local_updates, max_error_estimate, max_krylov_iterations }`.
-  - `gse_tdvp(operator, init, center, GseTdvpOptions) -> Result<GseTdvpResult>` — Global Subspace Expansion: build Krylov references `H·ψ, H²·ψ, …` and expand bond bases between TDVP sweeps to grow rank where needed. `GseTdvpOptions { gse: GseOptions, tdvp: TdvpOptions }`; `GseOptions::default()` = `krylov_dim 0, density_weight_cutoff 1e-12, hermitian_tol 1e-12, normalize_references true, expand_before_first_sweep true`. Also `global_subspace_expand(operator, init, center, GseOptions)` and `global_subspace_expand_with_references(init, references, center, GseOptions)` for standalone expansion. v1: `TensorDynLen` states, one state site index per node.
+  - `gse_tdvp(operator, init, center, GseTdvpOptions) -> Result<GseTdvpResult>` — Global Subspace Expansion: build Krylov references `H·ψ, H²·ψ, …` and expand bond bases between TDVP sweeps to grow rank where needed. `GseTdvpOptions { gse: GseOptions, tdvp: TdvpOptions }`; `GseOptions::default()` = `krylov_dim 0, density_weight_cutoff 1e-12, hermitian_tol 1e-12, normalize_references true, expand_before_first_sweep true`. Also `global_subspace_expand(operator, init, center, GseOptions)` and `global_subspace_expand_with_references(init, references, center, GseOptions)` for standalone expansion. v1: `IdxTensor` states, one state site index per node.
 
 ## tensor4all-aci — elementwise TT operations
 
@@ -140,7 +140,7 @@ Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 
 ## tensor4all-partitionedtt — subdomain patches + adaptive TCI
 
-Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `TensorDynLen`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than depending on `tensor4all-tcicore`.
+Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than depending on `tensor4all-tcicore`.
 
 - `Projector` — maps site `DynIndex` → fixed coordinate, defining a subdomain.
   - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])`.
@@ -171,7 +171,7 @@ Split a function's domain into non-overlapping projected patches, each its own T
 
 ## tensor4all-hdf5 — ITensors.jl-compatible I/O
 
-- `save_itensor()` / `load_itensor()` — `TensorDynLen` as ITensors.jl `ITensor`.
+- `save_itensor()` / `load_itensor()` — `IdxTensor` as ITensors.jl `ITensor`.
 - `save_mps()` / `load_mps()` — `SimpleTensorTrain` as ITensorMPS.jl `MPS`.
 - Features: `link` (default, compile-time HDF5), `runtime-loading` (dlopen for FFI).
 

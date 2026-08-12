@@ -455,7 +455,7 @@ where
             gmres_options.verbose = true;
         }
 
-        // Solve using GMRES (works directly with TensorDynLen)
+        // Solve using GMRES (works directly with IdxTensor)
         let result = match self.options.gmres_tolerance_mode {
             GmresToleranceMode::Relative => gmres_affine(
                 apply_a,
@@ -864,19 +864,19 @@ fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
 
 #[cfg(test)]
 mod tests {
-    use tensor4all_core::{DynId, DynIndex, TagSet, TensorDynLen};
+    use tensor4all_core::{DynId, DynIndex, IdxTensor, TagSet};
 
     use super::*;
 
-    fn one_node_state(node: usize, indices: Vec<DynIndex>) -> TreeTN<TensorDynLen, usize> {
+    fn one_node_state(node: usize, indices: Vec<DynIndex>) -> TreeTN<IdxTensor, usize> {
         let len = indices.iter().map(|idx| idx.dim()).product();
-        let tensor = TensorDynLen::from_dense(indices, vec![1.0_f64; len]).unwrap();
-        TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![node]).unwrap()
+        let tensor = IdxTensor::from_dense(indices, vec![1.0_f64; len]).unwrap();
+        TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![node]).unwrap()
     }
 
     #[test]
     fn index_sets_match_distinguishes_same_id_prime_pair() {
-        let updater = SquareLinsolveUpdater::<TensorDynLen, usize>::new(
+        let updater = SquareLinsolveUpdater::<IdxTensor, usize>::new(
             TreeTN::new(),
             TreeTN::new(),
             LinsolveOptions::default(),
@@ -897,7 +897,7 @@ mod tests {
         let rhs = one_node_state(0, vec![state_site]);
         let operator = one_node_state(0, vec![op_site]);
 
-        let updater = SquareLinsolveUpdater::<TensorDynLen, usize>::new(
+        let updater = SquareLinsolveUpdater::<IdxTensor, usize>::new(
             operator,
             rhs,
             LinsolveOptions::default(),
@@ -936,7 +936,7 @@ mod tests {
             },
         );
 
-        let mut updater = SquareLinsolveUpdater::<TensorDynLen, usize>::with_index_mappings(
+        let mut updater = SquareLinsolveUpdater::<IdxTensor, usize>::with_index_mappings(
             operator,
             input_mapping,
             output_mapping,

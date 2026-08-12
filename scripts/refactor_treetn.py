@@ -4,7 +4,7 @@ Refactor treetn modules from TreeTN<I, V> to TreeTN<T, V> pattern.
 
 Pattern changes:
 - impl<I, V> TreeTN<I, V> where I: IndexLike -> impl<T, V> TreeTN<T, V> where T: TensorLike
-- TensorDynLen<I::Id, I::Symm> -> T
+- IdxTensor<I::Id, I::Symm> -> T
 - I (as index type in TreeTN context) -> T::Index
 - I::Id -> <T::Index as IndexLike>::Id
 - I::Symm -> (remove entirely)
@@ -97,19 +97,19 @@ class RustRefactorer:
         return content
 
     def fix_tensor_dynlen(self, content: str) -> str:
-        """Replace TensorDynLen<I::Id, I::Symm> with T."""
-        # TensorDynLen<I::Id, I::Symm> -> T
-        pattern = r'TensorDynLen<I::Id,\s*I::Symm>'
+        """Replace IdxTensor<I::Id, I::Symm> with T."""
+        # IdxTensor<I::Id, I::Symm> -> T
+        pattern = r'IdxTensor<I::Id,\s*I::Symm>'
         replacement = r'T'
         content = re.sub(pattern, replacement, content)
 
-        # Vec<TensorDynLen<I::Id, I::Symm>> -> Vec<T>
-        pattern = r'Vec<TensorDynLen<I::Id,\s*I::Symm>>'
+        # Vec<IdxTensor<I::Id, I::Symm>> -> Vec<T>
+        pattern = r'Vec<IdxTensor<I::Id,\s*I::Symm>>'
         replacement = r'Vec<T>'
         content = re.sub(pattern, replacement, content)
 
-        # HashMap<..., TensorDynLen<I::Id, I::Symm>> -> HashMap<..., T>
-        pattern = r'HashMap<([^,]+),\s*TensorDynLen<I::Id,\s*I::Symm>>'
+        # HashMap<..., IdxTensor<I::Id, I::Symm>> -> HashMap<..., T>
+        pattern = r'HashMap<([^,]+),\s*IdxTensor<I::Id,\s*I::Symm>>'
         replacement = r'HashMap<\1, T>'
         content = re.sub(pattern, replacement, content)
 

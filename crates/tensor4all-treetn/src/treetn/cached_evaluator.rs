@@ -8,8 +8,8 @@ use std::hash::Hash;
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::{
-    contract_with_options, AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IndexLike,
-    TensorContractionLike, TensorDynLen, TensorIndex, TensorLike,
+    contract_with_options, AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor,
+    IndexLike, TensorContractionLike, TensorIndex, TensorLike,
 };
 
 use super::TreeTN;
@@ -65,7 +65,7 @@ struct ComponentBatch<V> {
 #[derive(Clone, Debug)]
 struct StackedMessage {
     assignment_index: DynIndex,
-    tensor: TensorDynLen,
+    tensor: IdxTensor,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -99,7 +99,7 @@ where
     /// /// index mismatch, or a backend failure).
     ///
     fn new(
-        tree: &TreeTN<TensorDynLen, V>,
+        tree: &TreeTN<IdxTensor, V>,
         indices: &[DynIndex],
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<Self> {
@@ -108,7 +108,7 @@ where
     }
 
     fn from_layout(
-        tree: &TreeTN<TensorDynLen, V>,
+        tree: &TreeTN<IdxTensor, V>,
         layout: &EvaluatorLayout<V>,
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<Self> {
@@ -318,7 +318,7 @@ where
     /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
-    fn new(tree: &TreeTN<TensorDynLen, V>, center: &V) -> Result<Self> {
+    fn new(tree: &TreeTN<IdxTensor, V>, center: &V) -> Result<Self> {
         let neighbors = sorted_neighbors(tree);
         let (parent, order) = rooted_tree(&neighbors, center)?;
 
@@ -582,11 +582,11 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{ColMajorArrayRef, DynIndex, TensorDynLen};
+/// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 ///
 /// let s = DynIndex::new_dyn(2);
-/// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![4.0_f64, 6.0])?;
+/// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![4.0_f64, 6.0])?;
 /// let tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
 /// let values = [0usize, 1usize];
 /// let shape = [1usize, 2usize];
@@ -608,7 +608,7 @@ pub struct TreeTNCachedEvaluator<'a, V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
-    tree: &'a TreeTN<TensorDynLen, V>,
+    tree: &'a TreeTN<IdxTensor, V>,
     layout: EvaluatorLayout<V>,
     options: CachedEvaluatorOptions<V>,
     center: Option<V>,
@@ -633,11 +633,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0_f64, 2.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0_f64, 2.0])?;
     /// let tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![5])?;
     /// let evaluator = TreeTNCachedEvaluator::new(
     ///     &tree,
@@ -648,7 +648,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn new(
-        tree: &'a TreeTN<TensorDynLen, V>,
+        tree: &'a TreeTN<IdxTensor, V>,
         indices: &[DynIndex],
         options: CachedEvaluatorOptions<V>,
     ) -> std::result::Result<Self, TreeTNOperationError> {
@@ -681,11 +681,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
     /// use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0_f64, 2.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0_f64, 2.0])?;
     /// let tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
     /// let mut evaluator = TreeTNCachedEvaluator::new(
     ///     &tree,
@@ -716,11 +716,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
     /// use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![4.0_f64, 6.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![4.0_f64, 6.0])?;
     /// let tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
     /// let values = [0usize, 1usize];
     /// let shape = [1usize, 2usize];
@@ -1099,10 +1099,7 @@ where
     }
 }
 
-fn build_layout<V>(
-    tree: &TreeTN<TensorDynLen, V>,
-    indices: &[DynIndex],
-) -> Result<EvaluatorLayout<V>>
+fn build_layout<V>(tree: &TreeTN<IdxTensor, V>, indices: &[DynIndex]) -> Result<EvaluatorLayout<V>>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
@@ -1266,7 +1263,7 @@ where
     Ok(())
 }
 
-fn ensure_node_exists<V>(tree: &TreeTN<TensorDynLen, V>, node: &V, context: &str) -> Result<()>
+fn ensure_node_exists<V>(tree: &TreeTN<IdxTensor, V>, node: &V, context: &str) -> Result<()>
 where
     V: Clone + Eq + Hash + Debug + Send + Sync,
 {
@@ -1276,7 +1273,7 @@ where
     Ok(())
 }
 
-fn tensor_for_node<'a, V>(tree: &'a TreeTN<TensorDynLen, V>, node: &V) -> Result<&'a TensorDynLen>
+fn tensor_for_node<'a, V>(tree: &'a TreeTN<IdxTensor, V>, node: &V) -> Result<&'a IdxTensor>
 where
     V: Clone + Eq + Hash + Debug + Send + Sync,
 {
@@ -1287,7 +1284,7 @@ where
         .ok_or_else(|| anyhow::anyhow!("tensor for node {:?} is not present", node))
 }
 
-fn slice_tensor(tensor: &TensorDynLen, index_vals: &[(DynIndex, usize)]) -> Result<TensorDynLen> {
+fn slice_tensor(tensor: &IdxTensor, index_vals: &[(DynIndex, usize)]) -> Result<IdxTensor> {
     if index_vals.is_empty() {
         return Ok(tensor.clone());
     }
@@ -1305,7 +1302,7 @@ fn slice_tensor(tensor: &TensorDynLen, index_vals: &[(DynIndex, usize)]) -> Resu
         .map_err(anyhow::Error::from)
 }
 
-fn tensor_values_any(tensor: &TensorDynLen) -> Result<Vec<AnyScalar>> {
+fn tensor_values_any(tensor: &IdxTensor) -> Result<Vec<AnyScalar>> {
     if tensor.is_complex() {
         tensor
             .to_vec::<Complex64>()
@@ -1326,8 +1323,8 @@ fn tensor_values_any(tensor: &TensorDynLen) -> Result<Vec<AnyScalar>> {
 
 fn stack_tensors_with_assignment_index(
     assignment_index: &DynIndex,
-    tensors: &[TensorDynLen],
-) -> Result<TensorDynLen> {
+    tensors: &[IdxTensor],
+) -> Result<IdxTensor> {
     anyhow::ensure!(
         !tensors.is_empty(),
         "stack_tensors_with_assignment_index requires at least one tensor"
@@ -1340,16 +1337,16 @@ fn stack_tensors_with_assignment_index(
     );
 
     let tensor_refs = tensors.iter().collect::<Vec<_>>();
-    TensorDynLen::stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
+    IdxTensor::stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
         .map_err(anyhow::Error::from)
 }
 
 fn gather_stacked_tensor(
-    stacked: &TensorDynLen,
+    stacked: &IdxTensor,
     source_assignment_index: &DynIndex,
     target_assignment_index: &DynIndex,
     selected_assignments: &[usize],
-) -> Result<TensorDynLen> {
+) -> Result<IdxTensor> {
     anyhow::ensure!(
         stacked.indices().last() == Some(source_assignment_index),
         "source assignment index must be the last stacked axis"
@@ -1371,9 +1368,9 @@ fn gather_stacked_tensor(
 }
 
 fn ensure_assignment_axis_last(
-    tensor: TensorDynLen,
+    tensor: IdxTensor,
     assignment_index: &DynIndex,
-) -> Result<TensorDynLen> {
+) -> Result<IdxTensor> {
     if tensor.indices().last() == Some(assignment_index) {
         return Ok(tensor);
     }
@@ -1448,7 +1445,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core::{ColMajorArrayRef, DynIndex, TensorDynLen};
+    use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 
     fn assert_scalars_close(actual: &[AnyScalar], expected: &[AnyScalar]) {
         assert_eq!(actual.len(), expected.len());
@@ -1466,8 +1463,8 @@ mod tests {
     fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
         let batch = DynIndex::new_dyn(2);
         let i = DynIndex::new_dyn(2);
-        let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
-        let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+        let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+        let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
 
         let stacked = stack_tensors_with_assignment_index(&batch, &[a, b]).unwrap();
 
@@ -1480,7 +1477,7 @@ mod tests {
         let source_batch = DynIndex::new_dyn(3);
         let target_batch = DynIndex::new_dyn(4);
         let i = DynIndex::new_dyn(2);
-        let stacked = TensorDynLen::from_dense(
+        let stacked = IdxTensor::from_dense(
             vec![i.clone(), source_batch.clone()],
             vec![10.0_f64, 11.0, 20.0, 21.0, 30.0, 31.0],
         )
@@ -1496,68 +1493,66 @@ mod tests {
         );
     }
 
-    fn two_node_tree() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
+    fn two_node_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
         let s0 = DynIndex::new_dyn(2);
         let bond = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(2);
 
         let t0 =
-            TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+            IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
                 .unwrap();
         let t1 =
-            TensorDynLen::from_dense(vec![bond, s1.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
+            IdxTensor::from_dense(vec![bond, s1.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
 
         let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
         (tree, vec![s0, s1])
     }
 
-    fn three_node_chain() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
+    fn three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
         let s0 = DynIndex::new_dyn(2);
         let b01 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(2);
         let b12 = DynIndex::new_dyn(2);
         let s2 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0_f64; 4]).unwrap();
+        let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0_f64; 4]).unwrap();
         let t1 =
-            TensorDynLen::from_dense(vec![b01, s1.clone(), b12.clone()], vec![1.0_f64; 8]).unwrap();
-        let t2 = TensorDynLen::from_dense(vec![b12, s2.clone()], vec![1.0_f64; 4]).unwrap();
+            IdxTensor::from_dense(vec![b01, s1.clone(), b12.clone()], vec![1.0_f64; 8]).unwrap();
+        let t2 = IdxTensor::from_dense(vec![b12, s2.clone()], vec![1.0_f64; 4]).unwrap();
         let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
         (tree, vec![s0, s1, s2])
     }
 
-    fn five_node_chain() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
+    fn five_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
         let sites: Vec<DynIndex> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
         let bonds: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
 
-        let t0 =
-            TensorDynLen::from_dense(vec![sites[0].clone(), bonds[0].clone()], vec![1.0_f64; 4])
-                .unwrap();
-        let t1 = TensorDynLen::from_dense(
+        let t0 = IdxTensor::from_dense(vec![sites[0].clone(), bonds[0].clone()], vec![1.0_f64; 4])
+            .unwrap();
+        let t1 = IdxTensor::from_dense(
             vec![bonds[0].clone(), sites[1].clone(), bonds[1].clone()],
             vec![1.0_f64; 8],
         )
         .unwrap();
-        let t2 = TensorDynLen::from_dense(
+        let t2 = IdxTensor::from_dense(
             vec![bonds[1].clone(), sites[2].clone(), bonds[2].clone()],
             vec![1.0_f64; 8],
         )
         .unwrap();
-        let t3 = TensorDynLen::from_dense(
+        let t3 = IdxTensor::from_dense(
             vec![bonds[2].clone(), sites[3].clone(), bonds[3].clone()],
             vec![1.0_f64; 8],
         )
         .unwrap();
-        let t4 =
-            TensorDynLen::from_dense(vec![bonds[3].clone(), sites[4].clone()], vec![1.0_f64; 4])
-                .unwrap();
+        let t4 = IdxTensor::from_dense(vec![bonds[3].clone(), sites[4].clone()], vec![1.0_f64; 4])
+            .unwrap();
 
         let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2, t3, t4], vec![0, 1, 2, 3, 4])
             .unwrap();
         (tree, sites)
     }
 
-    fn star_tree() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
+    fn star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
         let sc = DynIndex::new_dyn(2);
         let s0 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(2);
@@ -1566,17 +1561,17 @@ mod tests {
         let b1 = DynIndex::new_dyn(2);
         let b2 = DynIndex::new_dyn(2);
         let center_data: Vec<f64> = (0..16).map(|value| value as f64 + 1.0).collect();
-        let center = TensorDynLen::from_dense(
+        let center = IdxTensor::from_dense(
             vec![sc.clone(), b0.clone(), b1.clone(), b2.clone()],
             center_data,
         )
         .unwrap();
         let leaf0 =
-            TensorDynLen::from_dense(vec![b0, s0.clone()], vec![1.0_f64, 0.5, 1.5, 2.0]).unwrap();
+            IdxTensor::from_dense(vec![b0, s0.clone()], vec![1.0_f64, 0.5, 1.5, 2.0]).unwrap();
         let leaf1 =
-            TensorDynLen::from_dense(vec![b1, s1.clone()], vec![0.25_f64, 1.0, 1.25, 2.0]).unwrap();
+            IdxTensor::from_dense(vec![b1, s1.clone()], vec![0.25_f64, 1.0, 1.25, 2.0]).unwrap();
         let leaf2 =
-            TensorDynLen::from_dense(vec![b2, s2.clone()], vec![2.0_f64, 1.0, 0.75, 1.5]).unwrap();
+            IdxTensor::from_dense(vec![b2, s2.clone()], vec![2.0_f64, 1.0, 0.75, 1.5]).unwrap();
         let tree =
             TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
                 .unwrap();

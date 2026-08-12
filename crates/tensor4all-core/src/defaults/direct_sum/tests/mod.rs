@@ -9,7 +9,7 @@ fn test_direct_sum_simple() {
     let k = DynIndex::new_dyn(4);
 
     // A[i, j] - 2x3 tensor
-    let a = TensorDynLen::from_dense(
+    let a = IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         vec![
             1.0, 2.0, 3.0, // i=0
@@ -19,7 +19,7 @@ fn test_direct_sum_simple() {
     .unwrap();
 
     // B[i, k] - 2x4 tensor
-    let b = TensorDynLen::from_dense(
+    let b = IdxTensor::from_dense(
         vec![i.clone(), k.clone()],
         vec![
             10.0, 20.0, 30.0, 40.0, // i=0
@@ -56,10 +56,10 @@ fn test_direct_sum_multiple_pairs() {
     let l = DynIndex::new_dyn(3);
 
     // A[i, j] - 2x2 tensor
-    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     // B[k, l] - 3x3 tensor (no common indices)
-    let b = TensorDynLen::from_dense(
+    let b = IdxTensor::from_dense(
         vec![k.clone(), l.clone()],
         vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0],
     )
@@ -84,12 +84,12 @@ fn test_direct_sum_preserves_same_id_prime_pair_common_indices() {
     let j_a = DynIndex::new_dyn(2);
     let j_b = DynIndex::new_dyn(3);
 
-    let a = TensorDynLen::from_dense(
+    let a = IdxTensor::from_dense(
         vec![i.clone(), i_prime.clone(), j_a.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
     )
     .unwrap();
-    let b = TensorDynLen::from_dense(
+    let b = IdxTensor::from_dense(
         vec![i.clone(), i_prime.clone(), j_b.clone()],
         vec![
             10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
@@ -120,7 +120,7 @@ fn test_direct_sum_c64() {
     let k = DynIndex::new_dyn(3);
 
     // A[i, j] - 2x2 complex tensor
-    let a = TensorDynLen::from_dense(
+    let a = IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         vec![
             Complex64::new(1.0, 0.5),
@@ -132,7 +132,7 @@ fn test_direct_sum_c64() {
     .unwrap();
 
     // B[i, k] - 2x3 complex tensor
-    let b = TensorDynLen::from_dense(
+    let b = IdxTensor::from_dense(
         vec![i.clone(), k.clone()],
         vec![
             Complex64::new(10.0, 0.1),
@@ -172,8 +172,8 @@ fn test_direct_sum_mixed_types_error() {
     let j = DynIndex::new_dyn(3);
     let k = DynIndex::new_dyn(3);
 
-    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-    let b = TensorDynLen::from_dense(
+    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(
         vec![i.clone(), k.clone()],
         vec![Complex64::new(1.0, 0.0); 6],
     )
@@ -190,8 +190,8 @@ fn test_direct_sum_empty_pairs_error() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
 
-    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-    let b = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64; 6]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64; 6]).unwrap();
 
     let result = direct_sum(&a, &b, &[]);
     assert!(result.is_err());
@@ -206,8 +206,8 @@ fn test_direct_sum_index_not_in_first_tensor_error() {
     let k = DynIndex::new_dyn(3);
     let phantom = DynIndex::new_dyn(3); // not in either tensor
 
-    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-    let b = TensorDynLen::from_dense(vec![i.clone(), k.clone()], vec![2.0_f64; 6]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![2.0_f64; 6]).unwrap();
 
     // phantom is not in tensor a
     let result = direct_sum(&a, &b, &[(phantom.clone(), k.clone())]);
@@ -223,8 +223,8 @@ fn test_direct_sum_index_not_in_second_tensor_error() {
     let k = DynIndex::new_dyn(3);
     let phantom = DynIndex::new_dyn(3); // not in either tensor
 
-    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-    let b = TensorDynLen::from_dense(vec![i.clone(), k.clone()], vec![2.0_f64; 6]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![2.0_f64; 6]).unwrap();
 
     // phantom is not in tensor b
     let result = direct_sum(&a, &b, &[(j.clone(), phantom.clone())]);
@@ -248,8 +248,8 @@ fn test_direct_sum_common_index_dimension_mismatch_error() {
     // This requires indices that share the same ID but different dims,
     // which is not directly possible with DynIndex::new_dyn.
     // We'll just verify the happy path with matching common indices works.
-    let a = TensorDynLen::from_dense(vec![i_a.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-    let b = TensorDynLen::from_dense(vec![i_b.clone(), k.clone()], vec![2.0_f64; 8]).unwrap();
+    let a = IdxTensor::from_dense(vec![i_a.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i_b.clone(), k.clone()], vec![2.0_f64; 8]).unwrap();
 
     // No common indices (i_a and i_b have different ids), so no mismatch possible
     // Both indices are paired

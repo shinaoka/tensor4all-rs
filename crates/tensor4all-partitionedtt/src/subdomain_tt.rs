@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorDynLenError};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IdxTensorError};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
@@ -18,14 +18,14 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtt::{DynIndex, Projector, SubDomainTT, TensorDynLen, TensorTrain};
+/// use tensor4all_partitionedtt::{DynIndex, Projector, SubDomainTT, IdxTensor, TensorTrain};
 ///
 /// let site0 = DynIndex::new_dyn(2);
 /// let bond = DynIndex::new_dyn(1);
 /// let site1 = DynIndex::new_dyn(2);
 ///
-/// let t0 = TensorDynLen::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
-/// let t1 = TensorDynLen::from_dense(vec![bond.clone(), site1.clone()], vec![3.0, 4.0]).unwrap();
+/// let t0 = IdxTensor::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+/// let t1 = IdxTensor::from_dense(vec![bond.clone(), site1.clone()], vec![3.0, 4.0]).unwrap();
 /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 ///
 /// let projector = Projector::from_pairs([(site0.clone(), 1)]);
@@ -153,10 +153,10 @@ impl SubDomainTT {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_partitionedtt::{DynIndex, Projector, SubDomainTT, TensorDynLen, TensorTrain};
+    /// use tensor4all_partitionedtt::{DynIndex, Projector, SubDomainTT, IdxTensor, TensorTrain};
     ///
     /// let site = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
     /// let subdomain = SubDomainTT::from_tt(TensorTrain::new(vec![tensor]).unwrap());
     /// let projected = subdomain
     ///     .project(&Projector::from_pairs([(site.clone(), 1)]))
@@ -229,9 +229,9 @@ impl SubDomainTT {
         TensorTrain::new(new_tensors).map_err(|source| PartitionedTTError::TensorTrain { source })
     }
 
-    fn tensor_operation_error(error: TensorDynLenError) -> PartitionedTTError {
+    fn tensor_operation_error(error: IdxTensorError) -> PartitionedTTError {
         match error {
-            TensorDynLenError::Storage { source } => PartitionedTTError::TensorStorage { source },
+            IdxTensorError::Storage { source } => PartitionedTTError::TensorStorage { source },
             other => PartitionedTTError::TensorConstruction {
                 source: anyhow::Error::new(other),
             },
@@ -240,10 +240,10 @@ impl SubDomainTT {
 
     /// Project a single tensor by applying a backend-level one-hot mask.
     fn project_tensor_at_index(
-        tensor: &TensorDynLen,
+        tensor: &IdxTensor,
         index: &DynIndex,
         projected_value: usize,
-    ) -> Result<TensorDynLen> {
+    ) -> Result<IdxTensor> {
         if !tensor.indices().iter().any(|candidate| candidate == index) {
             return Err(PartitionedTTError::ProjectorIndexNotFound {
                 index: index.clone(),
@@ -316,16 +316,16 @@ impl SubDomainTT {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_partitionedtt::{DynIndex, SubDomainTT, TensorDynLen, TensorTrain};
+    /// use tensor4all_partitionedtt::{DynIndex, SubDomainTT, IdxTensor, TensorTrain};
     /// use tensor4all_itensorlike::ContractOptions;
     ///
     /// let left_index = DynIndex::new_dyn(2);
     /// let right_index = DynIndex::new_dyn(2);
     /// let left = SubDomainTT::from_tt(TensorTrain::new(vec![
-    ///     TensorDynLen::from_dense(vec![left_index], vec![1.0_f64, 2.0]).unwrap(),
+    ///     IdxTensor::from_dense(vec![left_index], vec![1.0_f64, 2.0]).unwrap(),
     /// ]).unwrap());
     /// let right = SubDomainTT::from_tt(TensorTrain::new(vec![
-    ///     TensorDynLen::from_dense(vec![right_index], vec![3.0_f64, 4.0]).unwrap(),
+    ///     IdxTensor::from_dense(vec![right_index], vec![3.0_f64, 4.0]).unwrap(),
     /// ]).unwrap());
     ///
     /// let result = left.contract(&right, &ContractOptions::default()).unwrap();

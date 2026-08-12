@@ -4,10 +4,10 @@ HDF5 serialization for tensor4all-rs, compatible with ITensors.jl / ITensorMPS.j
 
 ## Key Types
 
-- `save_itensor()` / `load_itensor()` — read/write `TensorDynLen` as ITensors.jl `ITensor`
+- `save_itensor()` / `load_itensor()` — read/write `IdxTensor` as ITensors.jl `ITensor`
 - `save_mps()` / `load_mps()` — read/write `TensorTrain` as ITensorMPS.jl `MPS`
 - `save_treetn()` / `append_treetn()` / `load_treetn()` — read/write a general
-  `TreeTN<TensorDynLen, V>` (`String` or `usize` node names) using the
+  `TreeTN<IdxTensor, V>` (`String` or `usize` node names) using the
   tensor4all-rs `TreeTN` v1 schema: one `node_i/` ITensor subgroup per node
   with a `node_name` attribute; topology is recovered on load from shared
   index identity via `TreeTN::from_tensors`

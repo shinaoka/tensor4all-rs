@@ -72,7 +72,7 @@ pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 /// - **Topology**: Graph structure (which nodes connect to which)
 /// - **Site Space**: Physical indices organized by node
 /// # Type Parameters
-/// - `T`: Tensor type implementing `TensorLike` (default: `TensorDynLen`)
+/// - `T`: Tensor type implementing `TensorLike` (default: `IdxTensor`)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
 /// # Construction
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
@@ -81,17 +81,17 @@ pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 /// Build a 2-node chain manually and verify node count:
 /// ```
 /// use tensor4all_treetn::TreeTN;
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
 /// // Create site and bond indices
 /// let s0 = DynIndex::new_dyn(2);
 /// let bond = DynIndex::new_dyn(3);
 /// let s1 = DynIndex::new_dyn(2);
 /// // Build tensors
-/// let t0 = TensorDynLen::from_dense(
+/// let t0 = IdxTensor::from_dense(
 ///     vec![s0.clone(), bond.clone()],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
-/// let t1 = TensorDynLen::from_dense(
+/// let t1 = IdxTensor::from_dense(
 ///     vec![bond.clone(), s1.clone()],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
@@ -103,7 +103,7 @@ pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 /// assert_eq!(tn.node_count(), 2);
 /// assert_eq!(tn.edge_count(), 1);
 /// ```
-pub struct TreeTN<T = tensor4all_core::TensorDynLen, V = NodeIndex>
+pub struct TreeTN<T = tensor4all_core::IdxTensor, V = NodeIndex>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
@@ -193,17 +193,17 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     ///
     /// let s0 = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(3);
     /// let s1 = DynIndex::new_dyn(2);
     ///
-    /// let t0 = TensorDynLen::from_dense(
+    /// let t0 = IdxTensor::from_dense(
     ///     vec![s0.clone(), bond.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
     /// ).unwrap();
-    /// let t1 = TensorDynLen::from_dense(
+    /// let t1 = IdxTensor::from_dense(
     ///     vec![bond.clone(), s1.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
     /// ).unwrap();
@@ -350,14 +350,14 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(3);
-    /// let tensor = TensorDynLen::from_dense(vec![i, j], vec![0.0_f64; 6]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![i, j], vec![0.0_f64; 6]).unwrap();
     ///
-    /// let mut tn = TreeTN::<TensorDynLen>::new();
+    /// let mut tn = TreeTN::<IdxTensor>::new();
     /// let node = tn.add_tensor_auto_name(tensor).unwrap();
     ///
     /// assert_eq!(node.index(), 0);
@@ -1749,7 +1749,7 @@ where
     /// ```
     /// use std::collections::HashMap;
     ///
-    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IndexLike, IdxTensor};
     /// use tensor4all_treetn::{SwapOptions, TreeTN};
     ///
     /// # fn main() -> anyhow::Result<()> {
@@ -1758,9 +1758,9 @@ where
     /// let idx_a = DynIndex::new_dyn(2);
     /// let idx_b = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(1);
-    /// let t0 = TensorDynLen::from_dense(vec![idx_a.clone(), bond.clone()], vec![1.0, 0.0])?;
-    /// let t1 = TensorDynLen::from_dense(vec![bond, idx_b.clone()], vec![1.0, 0.0])?;
-    /// let mut treetn = TreeTN::<TensorDynLen, String>::from_tensors(
+    /// let t0 = IdxTensor::from_dense(vec![idx_a.clone(), bond.clone()], vec![1.0, 0.0])?;
+    /// let t1 = IdxTensor::from_dense(vec![bond, idx_b.clone()], vec![1.0, 0.0])?;
+    /// let mut treetn = TreeTN::<IdxTensor, String>::from_tensors(
     ///     vec![t0, t1],
     ///     vec![node_name_a.clone(), node_name_b.clone()],
     /// )?;
@@ -2013,11 +2013,11 @@ pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core::TensorDynLen;
+    use tensor4all_core::IdxTensor;
 
     #[test]
     fn from_tensors_empty_returns_empty_network() {
-        let tn = TreeTN::<TensorDynLen, usize>::from_tensors(Vec::new(), Vec::new()).unwrap();
+        let tn = TreeTN::<IdxTensor, usize>::from_tensors(Vec::new(), Vec::new()).unwrap();
 
         assert_eq!(tn.node_count(), 0);
         assert_eq!(tn.edge_count(), 0);

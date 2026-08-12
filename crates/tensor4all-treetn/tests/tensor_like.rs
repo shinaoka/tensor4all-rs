@@ -6,25 +6,25 @@
 //! - `contract_to_tensor()` instead of `to_tensor()`
 //!
 //! Migrated from tensor4all-rs main branch with type adjustments:
-//! - TreeTN<DynId, NoSymmSpace, String> -> TreeTN<TensorDynLen, String>
+//! - TreeTN<DynId, NoSymmSpace, String> -> TreeTN<IdxTensor, String>
 //! - Index<DynId> -> DynIndex
-//! - TensorDynLen<DynId, NoSymmSpace> -> TensorDynLen
+//! - IdxTensor<DynId, NoSymmSpace> -> IdxTensor
 //! - idx.id -> idx.id() (IndexLike trait method)
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_treetn::TreeTN;
 
 /// Helper to create a simple tensor with given indices
-fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
     let total_size: usize = dims.iter().product();
     let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Helper to collect all site (physical) indices from a TreeTN.
 /// This corresponds to `external_indices()` in the original TensorLike trait.
-fn collect_site_indices(tn: &TreeTN<TensorDynLen, String>) -> Vec<DynIndex> {
+fn collect_site_indices(tn: &TreeTN<IdxTensor, String>) -> Vec<DynIndex> {
     let mut indices = Vec::new();
     for node_name in tn.node_names() {
         if let Some(site_space) = tn.site_space(&node_name) {
@@ -43,7 +43,7 @@ fn test_treetn_site_indices_single_node() {
 
     // Use from_tensors to create the network
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     // Site indices should be all indices (since no connections)
     let site_indices = collect_site_indices(&tn);
@@ -70,7 +70,7 @@ fn test_treetn_site_indices_connected_nodes() {
     let tensor_b = make_tensor(vec![bond_ab.clone(), j.clone()]);
 
     // from_tensors automatically connects tensors that share common indices
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -96,7 +96,7 @@ fn test_treetn_num_site_indices() {
     let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
     let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -115,16 +115,16 @@ fn test_treetn_contract_to_tensor() {
 
     // Tensor A: 2x2 with values
     let tensor_a =
-        TensorDynLen::from_dense(vec![i.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap(); // identity-like
+        IdxTensor::from_dense(vec![i.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap(); // identity-like
 
     // Tensor B: 2x3 with values
-    let tensor_b = TensorDynLen::from_dense(
+    let tensor_b = IdxTensor::from_dense(
         vec![bond.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )
     .unwrap();
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -160,7 +160,7 @@ fn test_treetn_site_indices_deterministic_ordering() {
     // C has site index idx_c and bond to A
     // A has site index idx_a and bonds to C and B
     // B has site index idx_b and bond to A
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![
             make_tensor(vec![idx_c.clone(), bond_ca.clone()]),
             make_tensor(vec![bond_ca.clone(), idx_a.clone(), bond_ab.clone()]),
@@ -212,7 +212,7 @@ fn test_treetn_external_indices_via_trait() {
     let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
     let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -239,7 +239,7 @@ fn test_treetn_replaceind_site_index() {
     let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
     let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -320,7 +320,7 @@ fn test_treetn_replaceind_not_found() {
 
     let tensor = make_tensor(vec![i.clone(), j.clone()]);
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     // Try to replace an index that doesn't exist
     let unknown = DynIndex::new_dyn(5);
@@ -338,7 +338,7 @@ fn test_treetn_replaceind_dimension_mismatch() {
 
     let tensor = make_tensor(vec![i.clone(), j.clone()]);
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     // Try to replace with index of different dimension
     let wrong_size = DynIndex::new_dyn(5);
@@ -366,7 +366,7 @@ fn test_treetn_replace_indices_multiple() {
 
     let tensor = make_tensor(vec![i.clone(), j.clone(), k.clone()]);
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     // Replace i and j with new indices
     let i_new = DynIndex::new_dyn(2);
@@ -393,7 +393,7 @@ fn test_treetn_external_indices_single_node_multiple_indices() {
 
     let tensor = make_tensor(indices.clone());
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     let ext = tn.external_indices();
     assert_eq!(ext.len(), 5);

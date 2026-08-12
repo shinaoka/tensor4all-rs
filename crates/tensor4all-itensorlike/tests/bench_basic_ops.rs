@@ -2,7 +2,7 @@
 //! Run: cargo test --release -p tensor4all-itensorlike --test bench_basic_ops -- --nocapture
 
 use std::time::Instant;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 fn make_random_mps(n_sites: usize, d: usize, bond_dim: usize, seed: u64) -> TensorTrain {
@@ -27,7 +27,7 @@ fn make_random_mps(n_sites: usize, d: usize, bond_dim: usize, seed: u64) -> Tens
         };
         let size: usize = indices.iter().map(|idx| idx.dim()).product();
         let data: Vec<f64> = (0..size).map(|_| rng.random::<f64>() - 0.5).collect();
-        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
+        tensors.push(IdxTensor::from_dense(indices, data).unwrap());
         prev_bond = next_bond;
     }
     TensorTrain::new(tensors).unwrap()
@@ -66,7 +66,7 @@ fn make_random_mpo_pair(n_sites: usize, d: usize, bond_dim: usize) -> (TensorTra
                 };
                 let size: usize = indices.iter().map(|idx| idx.dim()).product();
                 let data: Vec<f64> = (0..size).map(|_| rng.random::<f64>() - 0.5).collect();
-                tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
+                tensors.push(IdxTensor::from_dense(indices, data).unwrap());
                 prev_bond = next_bond;
             }
             TensorTrain::new(tensors).unwrap()

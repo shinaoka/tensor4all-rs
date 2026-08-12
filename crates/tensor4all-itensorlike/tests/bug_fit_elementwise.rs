@@ -6,7 +6,7 @@
 //!
 //! This blocks using fit() for bubble computations in quanticsnegf-rs.
 
-use tensor4all_core::{factorize, DynIndex, FactorizeOptions, IndexLike, TensorDynLen};
+use tensor4all_core::{factorize, DynIndex, FactorizeOptions, IdxTensor, IndexLike};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// Convert a column-major matrix buffer to quantics interleaved bit ordering.
@@ -55,7 +55,7 @@ fn create_function_2d_tt(
         all_sites.push(col_sites[i].clone());
     }
 
-    let big = TensorDynLen::from_dense(all_sites.clone(), quantics_data).unwrap();
+    let big = IdxTensor::from_dense(all_sites.clone(), quantics_data).unwrap();
     let opts = FactorizeOptions::qr().with_qr_rtol(0.0);
     let n_sites = all_sites.len();
     let mut remaining = big;
@@ -86,11 +86,11 @@ fn create_function_2d_tt(
 
 /// Diagonalize: replace index `s` with [s_new1, s_new2], non-zero when s_new1==s_new2.
 fn as_diagonal(
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
     s: &DynIndex,
     s_new1: &DynIndex,
     s_new2: &DynIndex,
-) -> TensorDynLen {
+) -> IdxTensor {
     let indices = tensor.indices();
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
     let dim = s.dim();
@@ -121,11 +121,11 @@ fn as_diagonal(
         }
         new_data[nf] = val;
     }
-    TensorDynLen::from_dense(new_indices, new_data).unwrap()
+    IdxTensor::from_dense(new_indices, new_data).unwrap()
 }
 
 /// Extract diagonal: keep only s==s_result, remove s_result index.
-fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) -> TensorDynLen {
+fn extract_diagonal(tensor: &IdxTensor, s: &DynIndex, s_result: &DynIndex) -> IdxTensor {
     let indices = tensor.indices();
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
     let s_pos = indices.iter().position(|idx| idx.id() == s.id()).unwrap();
@@ -166,7 +166,7 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
         }
         new_data[nf] = val;
     }
-    TensorDynLen::from_dense(new_indices, new_data).unwrap()
+    IdxTensor::from_dense(new_indices, new_data).unwrap()
 }
 
 /// Element-wise product via diagonal embedding + TT contraction.

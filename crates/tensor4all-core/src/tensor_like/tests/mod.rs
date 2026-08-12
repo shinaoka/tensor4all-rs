@@ -1,5 +1,5 @@
 use super::*;
-use crate::{DynIndex, TensorDynLen};
+use crate::{DynIndex, IdxTensor};
 
 // Compile-time check that TensorLike requires Sized (no dyn TensorLike)
 fn _assert_sized<T: TensorLike>() {
@@ -80,14 +80,14 @@ fn tensor_like_default_neg_and_delta_helpers_work() {
     let k = DynIndex::new_dyn(2);
     let l = DynIndex::new_dyn(3);
 
-    let tensor = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, -3.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone()], vec![2.0, -3.0]).unwrap();
     let negated = tensor.neg().unwrap();
     assert_eq!(negated.to_vec::<f64>().unwrap(), vec![-2.0, 3.0]);
 
-    let delta = TensorDynLen::delta(&[i.clone(), j.clone()], &[k, l]).unwrap();
+    let delta = IdxTensor::delta(&[i.clone(), j.clone()], &[k, l]).unwrap();
     assert_eq!(delta.dims(), vec![2, 2, 3, 3]);
     assert!((delta.sum().unwrap().real() - 6.0).abs() < 1.0e-12);
 
-    let err = TensorDynLen::delta(&[i], &[]).unwrap_err();
+    let err = IdxTensor::delta(&[i], &[]).unwrap_err();
     assert!(err.to_string().contains("Number of input indices"));
 }

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use num_complex::Complex64;
 use tensor4all_core::krylov::HermitianKrylovExpmOptions;
 use tensor4all_core::{
-    DynIndex, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorContractionLike,
-    TensorDynLen, TensorIndex,
+    DynIndex, FactorizeOptions, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike,
+    TensorIndex,
 };
 use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
 use tensor4all_treetn::{
@@ -12,49 +12,49 @@ use tensor4all_treetn::{
     TdvpError, TdvpOptions, TreeTN, TreeTopology,
 };
 
-fn chain_state() -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
+fn chain_state() -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 2]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![Complex64::new(0.5, 0.0), Complex64::new(-1.0, 0.0)],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();
     (state, [s0, s1])
 }
 
-fn star_state() -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
+fn star_state() -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 3]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
     let b01 = DynIndex::new_dyn(1);
     let b02 = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone(), b02.clone()],
         vec![Complex64::new(1.0, 0.0), Complex64::new(-0.25, 0.0)],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone()],
         vec![Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b02.clone(), s2.clone()],
         vec![Complex64::new(-2.0, 0.0), Complex64::new(0.75, 0.0)],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     let n2 = state.add_tensor("site2", t2).unwrap();
@@ -67,7 +67,7 @@ fn identity_operator(
     state_sites: &[DynIndex],
     node_names: &[&'static str],
     edges: &[(&'static str, &'static str)],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let mut tensors = HashMap::new();
     let mut node_indices = HashMap::new();
     let mut input_mapping = HashMap::new();
@@ -98,7 +98,7 @@ fn identity_operator(
         op_bonds.insert((a, b), DynIndex::new_dyn(1));
     }
 
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
     for &name in node_names {
         let (input, output) = tensors.get(name).unwrap();
         let mut inds = Vec::new();
@@ -120,7 +120,7 @@ fn identity_operator(
             data[col_major_offset(&coord, &dims)] = Complex64::new(1.0, 0.0);
         }
         let node = mpo
-            .add_tensor(name, TensorDynLen::from_dense(inds, data).unwrap())
+            .add_tensor(name, IdxTensor::from_dense(inds, data).unwrap())
             .unwrap();
         node_indices.insert(name, node);
     }
@@ -143,7 +143,7 @@ fn diagonal_sum_z_operator(
     node_names: &[&'static str],
     edges: &[(&'static str, &'static str)],
     coeffs: &[f64],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let mut dense_indices = Vec::new();
     let mut topology_nodes = HashMap::new();
     let mut input_mapping = HashMap::new();
@@ -185,7 +185,7 @@ fn diagonal_sum_z_operator(
         data[col_major_offset(&coord, &dims)] = Complex64::new(energy, 0.0);
     }
 
-    let dense = TensorDynLen::from_dense(dense_indices, data).unwrap();
+    let dense = IdxTensor::from_dense(dense_indices, data).unwrap();
     let topology = TreeTopology::new(topology_nodes, edges.to_vec());
     let mpo = factorize_tensor_to_treetn_with(
         &dense,
@@ -202,7 +202,7 @@ fn heisenberg_operator(
     state_sites: &[DynIndex],
     node_names: &[&'static str],
     edges: &[(&'static str, &'static str)],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let mut dense_indices = Vec::new();
     let mut topology_nodes = HashMap::new();
     let mut input_mapping = HashMap::new();
@@ -269,7 +269,7 @@ fn heisenberg_operator(
         }
     }
 
-    let dense = TensorDynLen::from_dense(dense_indices, data).unwrap();
+    let dense = IdxTensor::from_dense(dense_indices, data).unwrap();
     let topology = TreeTopology::new(topology_nodes, edges.to_vec());
     let mpo = factorize_tensor_to_treetn_with(
         &dense,
@@ -344,7 +344,7 @@ fn exact_evolve(
     result
 }
 
-fn state_vector(state: &TreeTN<TensorDynLen, &'static str>, sites: &[DynIndex]) -> Vec<Complex64> {
+fn state_vector(state: &TreeTN<IdxTensor, &'static str>, sites: &[DynIndex]) -> Vec<Complex64> {
     state
         .contract_to_tensor()
         .unwrap()
@@ -374,8 +374,8 @@ fn col_major_offset(coord: &[usize], dims: &[usize]) -> usize {
 }
 
 fn assert_phase_evolution(
-    before: &TensorDynLen,
-    after: &TensorDynLen,
+    before: &IdxTensor,
+    after: &IdxTensor,
     exponent: Complex64,
     tolerance: f64,
 ) {
@@ -395,8 +395,8 @@ fn assert_phase_evolution(
 }
 
 fn assert_diagonal_sum_z_evolution(
-    before: &TensorDynLen,
-    after: &TensorDynLen,
+    before: &IdxTensor,
+    after: &IdxTensor,
     exponent: Complex64,
     coeffs: &[f64],
     tolerance: f64,
@@ -537,14 +537,13 @@ fn two_site_tdvp_sum_z_star_matches_exact_dense_phase() {
 #[test]
 fn one_site_tdvp_identity_single_node_matches_global_phase() {
     let site = DynIndex::new_dyn(2);
-    let state_tensor = TensorDynLen::from_dense(
+    let state_tensor = IdxTensor::from_dense(
         vec![site.clone()],
         vec![Complex64::new(0.75, 0.0), Complex64::new(-1.25, 0.0)],
     )
     .unwrap();
     let state =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![state_tensor], vec!["site0"])
-            .unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![state_tensor], vec!["site0"]).unwrap();
     let before = state.contract_to_tensor().unwrap();
     let operator = identity_operator(&[site], &["site0"], &[]);
     let exponent = Complex64::new(0.0, -0.3);
@@ -857,14 +856,13 @@ fn tdvp_rejects_missing_center_and_topology_mismatch() {
 #[test]
 fn two_site_tdvp_rejects_single_node_empty_sweep() {
     let site = DynIndex::new_dyn(2);
-    let state_tensor = TensorDynLen::from_dense(
+    let state_tensor = IdxTensor::from_dense(
         vec![site.clone()],
         vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
     )
     .unwrap();
     let state =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![state_tensor], vec!["site0"])
-            .unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![state_tensor], vec!["site0"]).unwrap();
     let operator = identity_operator(&[site], &["site0"], &[]);
 
     let err = tdvp(
@@ -900,18 +898,17 @@ fn two_site_tdvp_accepts_truncation_options() {
 #[test]
 fn tdvp_with_treetn_operator_single_node_identity_runs() {
     let site = DynIndex::new_dyn(2);
-    let state_tensor = TensorDynLen::from_dense(
+    let state_tensor = IdxTensor::from_dense(
         vec![site.clone()],
         vec![Complex64::new(0.6, 0.0), Complex64::new(-0.8, 0.0)],
     )
     .unwrap();
     let state =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![state_tensor], vec!["site0"])
-            .unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![state_tensor], vec!["site0"]).unwrap();
 
     let input = DynIndex::new_dyn(2);
     let output = DynIndex::new_dyn(2);
-    let op_tensor = TensorDynLen::from_dense(
+    let op_tensor = IdxTensor::from_dense(
         vec![output, input],
         vec![
             Complex64::new(1.0, 0.0),
@@ -922,7 +919,7 @@ fn tdvp_with_treetn_operator_single_node_identity_runs() {
     )
     .unwrap();
     let operator =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![op_tensor], vec!["site0"]).unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![op_tensor], vec!["site0"]).unwrap();
 
     let result = tdvp_with_treetn_operator(
         &operator,

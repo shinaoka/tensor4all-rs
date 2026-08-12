@@ -7,7 +7,7 @@
 
 use crate::error::TreeTNOperationError;
 
-use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, TensorConstructionLike};
 
 /// Build an identity operator tensor for a gap node.
 ///
@@ -41,8 +41,8 @@ use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 pub fn build_identity_operator_tensor(
     site_indices: &[DynIndex],
     output_site_indices: &[DynIndex],
-) -> std::result::Result<TensorDynLen, TreeTNOperationError> {
-    <TensorDynLen as TensorConstructionLike>::delta(site_indices, output_site_indices)
+) -> std::result::Result<IdxTensor, TreeTNOperationError> {
+    <IdxTensor as TensorConstructionLike>::delta(site_indices, output_site_indices)
         .map_err(TreeTNOperationError::from)
 }
 

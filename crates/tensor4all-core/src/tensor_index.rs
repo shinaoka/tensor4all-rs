@@ -10,7 +10,7 @@ use std::fmt::Debug;
 /// Trait for objects that have external indices and support index operations.
 ///
 /// This is a minimal trait that can be implemented by:
-/// - Dense tensors (`TensorDynLen`)
+/// - Dense tensors (`IdxTensor`)
 /// - Tensor networks (`TreeTN`)
 /// - Any other structure that organizes tensors with indices
 ///

@@ -10,7 +10,7 @@ use crate::{
 };
 use num_complex::Complex64;
 use num_rational::Rational64;
-use tensor4all_core::{IndexLike, TensorDynLen};
+use tensor4all_core::{IdxTensor, IndexLike};
 use tensor4all_quanticstransform::{
     affine_operator, cumsum_operator, flip_operator, phase_rotation_operator,
     quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
@@ -243,7 +243,7 @@ fn validate_single_var_materialization_layout(
 
 fn validate_affine_materialization_layout(layout: &InternalQttLayout) -> CapiResult<()> {
     checked_allocation_len::<SourceSite>(&[layout.nsites()], "affine site list")?;
-    checked_allocation_len::<TensorDynLen>(&[layout.nsites()], "affine tensor list")?;
+    checked_allocation_len::<IdxTensor>(&[layout.nsites()], "affine tensor list")?;
     checked_allocation_len::<InternalIndex>(
         &[layout.nsites().saturating_sub(1)],
         "affine bond index list",
@@ -273,7 +273,7 @@ fn build_chain_tensor<F>(
     in_index: InternalIndex,
     right_bond: Option<InternalIndex>,
     eval: F,
-) -> CapiResult<TensorDynLen>
+) -> CapiResult<IdxTensor>
 where
     F: Fn(usize, usize, usize, usize) -> Complex64,
 {
@@ -322,7 +322,7 @@ where
         }
     }
 
-    TensorDynLen::from_dense(indices, data).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))
+    IdxTensor::from_dense(indices, data).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))
 }
 
 fn build_identity_site(
@@ -330,7 +330,7 @@ fn build_identity_site(
     out_index: InternalIndex,
     in_index: InternalIndex,
     right_bond: Option<InternalIndex>,
-) -> CapiResult<TensorDynLen> {
+) -> CapiResult<IdxTensor> {
     let left_dim = left_bond.as_ref().map_or(1, |idx| idx.dim());
     let right_dim = right_bond.as_ref().map_or(1, |idx| idx.dim());
     if left_dim != right_dim {
@@ -357,7 +357,7 @@ fn build_identity_site(
     )
 }
 
-fn build_treetn_from_chain(tensors: Vec<TensorDynLen>) -> CapiResult<InternalTreeTN> {
+fn build_treetn_from_chain(tensors: Vec<IdxTensor>) -> CapiResult<InternalTreeTN> {
     let mut node_names = try_vec_with_capacity::<usize>("chain node-name list", tensors.len())?;
     node_names.extend(0..tensors.len());
     InternalTreeTN::from_tensors(tensors, node_names)
@@ -452,7 +452,7 @@ fn expand_chain_with_identities(
         bond_indices.push(InternalIndex::new_dyn(dim));
     }
 
-    let mut tensors = try_vec_with_capacity::<TensorDynLen>("expanded tensor list", nsites)?;
+    let mut tensors = try_vec_with_capacity::<IdxTensor>("expanded tensor list", nsites)?;
     let mut next_source = 0usize;
     for site in 0..nsites {
         let left_bond = (site > 0).then(|| bond_indices[site - 1].clone());
@@ -509,7 +509,7 @@ fn embed_single_var_fused(
         bond_indices.push(InternalIndex::new_dyn(site.right_dim));
     }
 
-    let mut tensors = try_vec_with_capacity::<TensorDynLen>("fused tensor list", nsites)?;
+    let mut tensors = try_vec_with_capacity::<IdxTensor>("fused tensor list", nsites)?;
     for (site_idx, src) in source_sites.iter().enumerate() {
         let left_bond = (site_idx > 0).then(|| bond_indices[site_idx - 1].clone());
         let right_bond = (site_idx + 1 < nsites).then(|| bond_indices[site_idx].clone());

@@ -49,18 +49,18 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::{TreeTN, TruncationOptions};
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     ///
     /// // Build a 2-node chain
     /// let s0 = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(3);
     /// let s1 = DynIndex::new_dyn(2);
     ///
-    /// let t0 = TensorDynLen::from_dense(
+    /// let t0 = IdxTensor::from_dense(
     ///     vec![s0.clone(), bond.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
     /// ).unwrap();
-    /// let t1 = TensorDynLen::from_dense(
+    /// let t1 = IdxTensor::from_dense(
     ///     vec![bond.clone(), s1.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
     /// ).unwrap();

@@ -1,6 +1,6 @@
 ---
 name: use-tensor4all-rs
-description: Use the tensor4all-rs Rust tensor-network library (TCI, quantics tensor trains, tree tensor networks, DMRG/TDVP/GSE time evolution, adaptive patch interpolation). Use when working with `tensor4all-*` crates (core/simplett/tensorci/quanticstci/treetn/partitionedtt/...), their `TensorDynLen`/`SimpleTensorTrain`/`TreeTN`/`QuanticsTensorCI2`/`PartitionedTT` APIs, or the `dmrg`/`tdvp`/`gse_tdvp`/`adaptiveinterpolate` entry points. Also when porting ITensors.jl, QuanticsTCI.jl, or TCI patterns to Rust, or debugging column-major, `rtol`, or 0-vs-1 indexing mismatches in tensor4all-rs code.
+description: Use the tensor4all-rs Rust tensor-network library (TCI, quantics tensor trains, tree tensor networks, DMRG/TDVP/GSE time evolution, adaptive patch interpolation). Use when working with `tensor4all-*` crates (core/simplett/tensorci/quanticstci/treetn/partitionedtt/...), their `IdxTensor`/`SimpleTensorTrain`/`TreeTN`/`QuanticsTensorCI2`/`PartitionedTT` APIs, or the `dmrg`/`tdvp`/`gse_tdvp`/`adaptiveinterpolate` entry points. Also when porting ITensors.jl, QuanticsTCI.jl, or TCI patterns to Rust, or debugging column-major, `rtol`, or 0-vs-1 indexing mismatches in tensor4all-rs code.
 license: MIT
 ---
 
@@ -31,7 +31,7 @@ This skill tracks `main`; a release tag may not contain every API described belo
 
 - **Backend defaults to pure-Rust `faer` — no system BLAS.** Compute crates enable `tenferro-cpu-faer` by default, so a plain dependency compiles standalone. To link a system BLAS (OpenBLAS / MKL / Apple Accelerate) instead, set `default-features = false` and enable `tenferro-system-blas` on each directly imported crate where it is exposed.
 - **Build with `--release`.** Tensor linalg in debug is orders of magnitude slower; TCI and DMRG are unusable without optimization. For benchmarks set `opt-level = 3` (and `lto`, `codegen-units = 1`).
-- **TensorDynLen scalars** are `f32`, `f64`, `Complex32`, and `Complex64` (`num-complex` 0.4). Compact `Storage` snapshots support only `f64`/`Complex64`; 32-bit tensors retain eager authoritative payloads without promotion. Recipes that build random tensors assume you add `rand` + `rand_chacha` (matching the library's `0.9`) as dev-dependencies.
+- **IdxTensor scalars** are `f32`, `f64`, `Complex32`, and `Complex64` (`num-complex` 0.4). Compact `Storage` snapshots support only `f64`/`Complex64`; 32-bit tensors retain eager authoritative payloads without promotion. Recipes that build random tensors assume you add `rand` + `rand_chacha` (matching the library's `0.9`) as dev-dependencies.
 - **`tensor4all-tensorbackend` is internal** — never depend on it or instantiate `CpuBackend` directly; get scalars, storage, and linalg through the public crates. `tensor4all-tcicore` is the home of `CachedFunction` and `MultiIndex`: depend on it for `CachedFunction`, or take `MultiIndex` re-exported from `tensor4all-partitionedtt`.
 
 Done when `cargo build --release` succeeds and a constant TT evaluates:
@@ -79,7 +79,7 @@ Only read source when the API doc is insufficient. For concrete task patterns (b
 
 These apply across crates and fail silently when ignored. Check them against every data-handling path.
 
-**Dense layout is column-major (Fortran order).** `TensorDynLen::from_dense(indices, data)` and all flat buffers, `reshape`, the C API, and HDF5 use column-major: the **first listed index varies fastest**. Matches Julia / ITensors.jl. When feeding NumPy data, use `order="F"`.
+**Dense layout is column-major (Fortran order).** `IdxTensor::from_dense(indices, data)` and all flat buffers, `reshape`, the C API, and HDF5 use column-major: the **first listed index varies fastest**. Matches Julia / ITensors.jl. When feeding NumPy data, use `order="F"`.
 
 **Indexing base depends on the crate.** Rust sites are **0-indexed**, unlike ITensors.jl (1-indexed). One exception: `tensor4all-quanticstci` grid indices are **1-indexed** (`1..=grid_size`), matching QuanticsTCI.jl. The low-level `tensor4all-tensorci::crossinterpolate2` is **0-indexed** (`0..local_dim`). `tensor4all-partitionedtt::adaptiveinterpolate` pivots are full-domain **0-indexed** too (it wraps `tensorci`). Mixing 0- and 1-indexed territory is the commonest off-by-one.
 

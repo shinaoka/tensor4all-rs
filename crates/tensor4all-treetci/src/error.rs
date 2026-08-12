@@ -45,8 +45,8 @@ impl From<anyhow::Error> for TreeTciError {
     }
 }
 
-impl From<tensor4all_core::TensorDynLenError> for TreeTciError {
-    fn from(source: tensor4all_core::TensorDynLenError) -> Self {
+impl From<tensor4all_core::IdxTensorError> for TreeTciError {
+    fn from(source: tensor4all_core::IdxTensorError) -> Self {
         Self::Operation {
             source: anyhow::Error::new(source),
         }
@@ -96,7 +96,7 @@ mod tests {
         );
 
         let dyn_err =
-            TreeTciError::from(tensor4all_core::TensorDynLenError::NaNInput { operation: "test" });
+            TreeTciError::from(tensor4all_core::IdxTensorError::NaNInput { operation: "test" });
         assert!(dyn_err.to_string().contains("tree-TCI operation failed"));
     }
 }

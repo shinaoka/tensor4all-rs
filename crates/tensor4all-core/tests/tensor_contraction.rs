@@ -2,20 +2,20 @@ use num_complex::{Complex32, Complex64};
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
 use tensor4all_core::{
-    contract, contract_pair, contract_pair_with_operand_options, tensordot, DynIndex,
-    PairwiseContractionOptions, TensorContractionLike, TensorDynLen,
+    contract, contract_pair, contract_pair_with_operand_options, tensordot, DynIndex, IdxTensor,
+    PairwiseContractionOptions, TensorContractionLike,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
-fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn assert_all_f64(tensor: &TensorDynLen, expected_len: usize, expected_value: f64) {
+fn assert_all_f64(tensor: &IdxTensor, expected_len: usize, expected_value: f64) {
     let data = tensor.to_vec::<f64>().unwrap();
     assert_eq!(data.len(), expected_len);
     for value in data {
@@ -109,9 +109,9 @@ fn test_contract_no_common_indices_gives_outer_product() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
 
-    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor_a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
+    let tensor_b = IdxTensor::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // No common indices → outer product
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
@@ -124,13 +124,13 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let tensor_a = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, -1.0]).unwrap();
-    let tensor_b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, -2.0]).unwrap();
+    let tensor_a = IdxTensor::from_dense(vec![i.clone()], vec![2.0, -1.0]).unwrap();
+    let tensor_b = IdxTensor::from_dense(vec![j.clone()], vec![3.0, 4.0, -2.0]).unwrap();
 
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
 
     assert_eq!(result.indices, vec![i, j]);
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         result.indices.clone(),
         vec![
             6.0, -3.0, 8.0, //
@@ -146,13 +146,13 @@ fn structured_tensor_contract_materializes_to_correct_dense_result() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
     let k = Index::new_dyn(2);
-    let diag = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![2.0_f64, 3.0]).unwrap();
+    let diag = IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![2.0_f64, 3.0]).unwrap();
     assert!(diag.is_diag());
-    let dense = TensorDynLen::from_dense(vec![j, k.clone()], vec![5.0, 7.0, 11.0, 13.0]).unwrap();
+    let dense = IdxTensor::from_dense(vec![j, k.clone()], vec![5.0, 7.0, 11.0, 13.0]).unwrap();
 
     let result = diag.contract_pair(&dense).unwrap();
 
-    let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
+    let expected = IdxTensor::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
     assert!(result.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
 }
 
@@ -162,7 +162,7 @@ fn general_structured_contract_preserves_output_axis_classes() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(2);
     let l = Index::new_dyn(2);
-    let structured = TensorDynLen::from_storage(
+    let structured = IdxTensor::from_storage(
         vec![i.clone(), j.clone(), k.clone()],
         Storage::new_structured(
             vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -174,7 +174,7 @@ fn general_structured_contract_preserves_output_axis_classes() {
         .unwrap(),
     )
     .unwrap();
-    let dense = TensorDynLen::from_dense(
+    let dense = IdxTensor::from_dense(
         vec![j, l.clone()],
         vec![10.0, 20.0, 30.0, 100.0, 200.0, 300.0],
     )
@@ -233,13 +233,13 @@ fn structured_mixed_dtype_nary_contract_preserves_compact_result() {
     let j = Index::new_dyn(2);
     let k = Index::new_dyn(2);
     let l = Index::new_dyn(2);
-    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f32, 2.0]).unwrap();
-    let b = TensorDynLen::from_diag(
+    let a = IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1.0_f32, 2.0]).unwrap();
+    let b = IdxTensor::from_diag(
         vec![j.clone(), k.clone()],
         vec![Complex32::new(3.0, 1.0), Complex32::new(4.0, -2.0)],
     )
     .unwrap();
-    let c = TensorDynLen::from_diag(vec![k, l.clone()], vec![2.0_f64, 3.0]).unwrap();
+    let c = IdxTensor::from_diag(vec![k, l.clone()], vec![2.0_f64, 3.0]).unwrap();
 
     let result = contract(&[&a, &b, &c]).unwrap();
     assert_eq!(result.storage_kind(), StorageKind::Diagonal);
@@ -259,11 +259,11 @@ fn structured_mixed_dtype_nary_contract_preserves_compact_result() {
 fn structured_mixed_dtype_ad_contract_preserves_gradient() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0])
+    let a = IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0])
         .unwrap()
         .enable_grad()
         .unwrap();
-    let b = TensorDynLen::from_diag(
+    let b = IdxTensor::from_diag(
         vec![j, Index::new_dyn(2)],
         vec![Complex64::new(3.0, 0.0), Complex64::new(4.0, 0.0)],
     )
@@ -281,11 +281,11 @@ fn structured_mixed_dtype_ad_contract_preserves_gradient() {
 #[test]
 fn dense_mixed_dtype_ad_contract_preserves_gradient() {
     let i = Index::new_dyn(2);
-    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0])
+    let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0])
         .unwrap()
         .enable_grad()
         .unwrap();
-    let b = TensorDynLen::from_dense(
+    let b = IdxTensor::from_dense(
         vec![i],
         vec![Complex64::new(3.0, 0.0), Complex64::new(4.0, 0.0)],
     )
@@ -493,9 +493,9 @@ fn test_tensordot_dimension_mismatch() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(5); // Different dimension from j
 
-    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor_a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
+    let tensor_b = IdxTensor::zeros::<f64>(vec![k.clone()]).unwrap();
 
     let result = tensordot(&tensor_a, &tensor_b, &[(j.clone(), k.clone())]);
     assert!(result.is_err());
@@ -517,9 +517,9 @@ fn test_tensordot_index_not_found() {
     let k = Index::new_dyn(3);
     let nonexistent = Index::new_dyn(3);
 
-    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor_a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
+    let tensor_b = IdxTensor::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // Try to contract with a non-existent index from tensor_a
     let result = tensordot(&tensor_a, &tensor_b, &[(nonexistent.clone(), k.clone())]);
@@ -542,9 +542,9 @@ fn test_tensordot_duplicate_axis() {
     let k = Index::new_dyn(3);
     let l = Index::new_dyn(4);
 
-    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor_a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone(), l.clone()]).unwrap();
+    let tensor_b = IdxTensor::zeros::<f64>(vec![k.clone(), l.clone()]).unwrap();
 
     // Try to contract j twice (duplicate axis in self)
     let result = tensordot(
@@ -565,9 +565,9 @@ fn test_tensordot_empty_pairs() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor_a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let tensor_b = TensorDynLen::zeros::<f64>(vec![j.clone()]).unwrap();
+    let tensor_b = IdxTensor::zeros::<f64>(vec![j.clone()]).unwrap();
 
     let result = tensordot(&tensor_a, &tensor_b, &[]);
     assert!(result.is_err());
@@ -594,10 +594,10 @@ fn test_tensordot_common_index_not_in_pairs() {
     let l = Index::new_dyn(5);
 
     // Create tensor A[i, j, k]
-    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone(), k.clone()]).unwrap();
+    let tensor_a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone(), k.clone()]).unwrap();
 
     // Create tensor B[j, l] where j is a common index with A
-    let tensor_b = TensorDynLen::zeros::<f64>(vec![j.clone(), l.clone()]).unwrap();
+    let tensor_b = IdxTensor::zeros::<f64>(vec![j.clone(), l.clone()]).unwrap();
 
     // Try to contract only k with l, leaving j as a "batch" dimension
     // This should fail because batch contraction is not yet implemented
@@ -640,11 +640,11 @@ fn test_tensordot_common_index_in_pairs_ok() {
 #[test]
 fn test_scalar_times_tensor() {
     // scalar_one() * tensor = tensor
-    let scalar = TensorDynLen::scalar_one().unwrap();
+    let scalar = IdxTensor::scalar_one().unwrap();
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
 
     let result = scalar.contract_pair(&tensor).unwrap();
     assert_eq!(result.dims(), vec![2, 3]);
@@ -654,10 +654,10 @@ fn test_scalar_times_tensor() {
 #[test]
 fn test_tensor_times_scalar() {
     // tensor * scalar_one() = tensor
-    let scalar = TensorDynLen::scalar_one().unwrap();
+    let scalar = IdxTensor::scalar_one().unwrap();
     let i = Index::new_dyn(2);
     let data = vec![10.0, 20.0];
-    let tensor = TensorDynLen::from_dense(vec![i.clone()], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone()], data.clone()).unwrap();
 
     let result = tensor.contract_pair(&scalar).unwrap();
     assert_eq!(result.dims(), vec![2]);
@@ -666,8 +666,8 @@ fn test_tensor_times_scalar() {
 
 #[test]
 fn test_scalar_times_scalar() {
-    let s1 = TensorDynLen::scalar(3.0).unwrap();
-    let s2 = TensorDynLen::scalar(5.0).unwrap();
+    let s1 = IdxTensor::scalar(3.0).unwrap();
+    let s2 = IdxTensor::scalar(5.0).unwrap();
 
     let result = s1.contract_pair(&s2).unwrap();
     assert_eq!(result.dims().len(), 0);
@@ -679,10 +679,10 @@ fn test_scalar_times_scalar() {
 #[test]
 fn test_mul_operator_scalar_times_tensor() {
     // &scalar * &tensor via Mul trait
-    let scalar = TensorDynLen::scalar_one().unwrap();
+    let scalar = IdxTensor::scalar_one().unwrap();
     let i = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0];
-    let tensor = TensorDynLen::from_dense(vec![i.clone()], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone()], data.clone()).unwrap();
 
     let result = scalar.contract_pair(&tensor).unwrap();
     assert_eq!(result.dims(), vec![3]);
@@ -694,10 +694,10 @@ fn test_foldl_sequential_contraction() {
     // Simulate foldl-style: acc = scalar_one; acc = acc * a; acc = acc * b;
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0; 6]).unwrap();
-    let b = TensorDynLen::from_dense(vec![j.clone(), i.clone()], vec![2.0; 6]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![j.clone(), i.clone()], vec![2.0; 6]).unwrap();
 
-    let mut acc = TensorDynLen::scalar_one().unwrap();
+    let mut acc = IdxTensor::scalar_one().unwrap();
     acc = acc.contract_pair(&a).unwrap(); // acc = a (outer product with scalar)
     acc = acc.contract_pair(&b).unwrap(); // acc = contract(a, b) over i and j
 

@@ -7,7 +7,7 @@ use thiserror::Error;
 /// Result type for TensorTrain operations.
 pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
-use tensor4all_core::TensorDynLenError;
+use tensor4all_core::IdxTensorError;
 
 /// Errors that can occur in `TensorTrain` operations.
 ///
@@ -64,12 +64,12 @@ pub enum TensorTrainError {
     #[error("Factorization error: {0}")]
     Factorize(#[from] tensor4all_core::FactorizeError),
 
-    /// A typed TensorDynLen metric or materialization error.
-    #[error("TensorDynLen operation error: {source}")]
-    TensorDynLen {
+    /// A typed IdxTensor metric or materialization error.
+    #[error("IdxTensor operation error: {source}")]
+    IdxTensor {
         /// The typed tensor diagnostic.
         #[source]
-        source: tensor4all_core::TensorDynLenError,
+        source: tensor4all_core::IdxTensorError,
     },
 
     /// General operation error.
@@ -96,9 +96,9 @@ impl From<anyhow::Error> for TensorTrainError {
     }
 }
 
-impl From<TensorDynLenError> for TensorTrainError {
-    fn from(source: TensorDynLenError) -> Self {
-        Self::TensorDynLen { source }
+impl From<IdxTensorError> for TensorTrainError {
+    fn from(source: IdxTensorError) -> Self {
+        Self::IdxTensor { source }
     }
 }
 

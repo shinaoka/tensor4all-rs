@@ -77,8 +77,8 @@ the nested rules' transcribers contribute findings.
 
 The panic-audit tool itself adds no Rust library or C API surface. Task 8 also
 carries an API checkpoint (committed as `6add467` and its successors) that
-makes `TensorDynLen` compact-support metrics, scaling, and comparison
-allocation-safe (`tensordynlen.rs`, tensorbackend `storage.rs`); it was
+makes `IdxTensor` compact-support metrics, scaling, and comparison
+allocation-safe (`idx_tensor.rs`, tensorbackend `storage.rs`); it was
 validated by workspace nextest, doctests, mdBook, API dump, workspace clippy,
 and the scanner self-test/audit.
 
@@ -93,7 +93,7 @@ findings, all fixed and re-confirmed:
    entries via the whole-backing `Storage::scale` fast path. Fixed by routing
    all `Eager`/`Compact`/`Materialized` scaling through `scale_eager_payload`,
    which converts only the compact payload and returns compact storage
-   (commit `53897d3`); the now-unused `TensorDynLenStorage::scale` method and
+   (commit `53897d3`); the now-unused `IdxTensorStorage::scale` method and
    `BackendScalar` import were removed.
 2. Dense logical materialization silently returned an empty buffer when the
    logical-dim product overflowed. `StructuredStorage::logical_dense_col_major_vec`

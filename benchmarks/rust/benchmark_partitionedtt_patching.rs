@@ -15,7 +15,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtt::{
     add_with_patching, PartitionedTT, PatchSplitStrategy, PatchingOptions, SubDomainTT,
     TensorTrain,
@@ -268,8 +268,8 @@ fn make_anisotropic_gaussian_input(options: &Options) -> Result<BenchmarkInput> 
         }
     }
 
-    let t0 = TensorDynLen::from_dense(vec![x_index.clone(), component_index.clone()], left)?;
-    let t1 = TensorDynLen::from_dense(vec![component_index, y_index.clone()], right)?;
+    let t0 = IdxTensor::from_dense(vec![x_index.clone(), component_index.clone()], left)?;
+    let t1 = IdxTensor::from_dense(vec![component_index, y_index.clone()], right)?;
     let tt = TensorTrain::new(vec![t0, t1])?;
     let dense = tt.to_dense()?.to_vec::<f64>()?;
     let reference_norm = dense.iter().map(|value| value * value).sum::<f64>().sqrt();

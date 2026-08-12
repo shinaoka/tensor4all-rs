@@ -22,7 +22,7 @@ use num_complex::Complex64;
 use tensor4all_core::{
     contract, contract_pair, print_and_reset_pairwise_contract_profile,
     reset_pairwise_contract_profile, AnyScalar, DynIndex, SvdTruncationPolicy,
-    TensorContractionLike, TensorDynLen,
+    TensorContractionLike, IdxTensor,
 };
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
 use tenferro::{DotGeneralConfig, Tensor, TypedTensor};
@@ -151,12 +151,12 @@ fn deterministic_value(idx: usize, seed: usize) -> Complex64 {
     Complex64::new(real, imag)
 }
 
-fn deterministic_tensor(indices: Vec<DynIndex>, seed: usize) -> Result<TensorDynLen> {
+fn deterministic_tensor(indices: Vec<DynIndex>, seed: usize) -> Result<IdxTensor> {
     let len = indices.iter().map(|index| index.size()).product::<usize>();
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    TensorDynLen::from_dense(indices, data).map_err(anyhow::Error::from)
+    IdxTensor::from_dense(indices, data).map_err(anyhow::Error::from)
 }
 
 fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -418,14 +418,14 @@ fn inner_sitewise_pair_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<An
     env.sum().map_err(anyhow::Error::from)
 }
 
-fn preconjugate_sites(bra: &TensorTrain) -> Result<Vec<TensorDynLen>> {
+fn preconjugate_sites(bra: &TensorTrain) -> Result<Vec<IdxTensor>> {
     (0..bra.len())
         .map(|site| Ok(bra.tensor(site)?.conj()))
         .collect()
 }
 
 fn inner_sitewise_pair_preconj_no_sim(
-    bra_conj: &[TensorDynLen],
+    bra_conj: &[IdxTensor],
     ket: &TensorTrain,
 ) -> Result<AnyScalar> {
     if bra_conj.len() != ket.len() {

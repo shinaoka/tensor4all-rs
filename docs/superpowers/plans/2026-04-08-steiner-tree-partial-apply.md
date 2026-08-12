@@ -233,7 +233,7 @@ fn test_apply_linear_operator_non_contiguous() {
     // This should work by inserting identity at site1 (Steiner tree)
     // and identity at site3 (outer gap)
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = make_index(2);
     let s1 = make_index(2);
     let s2 = make_index(2);
@@ -242,10 +242,10 @@ fn test_apply_linear_operator_non_contiguous() {
     let b12 = make_index(3);
     let b23 = make_index(3);
 
-    let t0 = TensorDynLen::random_f64(&mut rng(), vec![s0.clone(), b01.clone()]);
-    let t1 = TensorDynLen::random_f64(&mut rng(), vec![b01.clone(), s1.clone(), b12.clone()]);
-    let t2 = TensorDynLen::random_f64(&mut rng(), vec![b12.clone(), s2.clone(), b23.clone()]);
-    let t3 = TensorDynLen::random_f64(&mut rng(), vec![b23.clone(), s3.clone()]);
+    let t0 = IdxTensor::random_f64(&mut rng(), vec![s0.clone(), b01.clone()]);
+    let t1 = IdxTensor::random_f64(&mut rng(), vec![b01.clone(), s1.clone(), b12.clone()]);
+    let t2 = IdxTensor::random_f64(&mut rng(), vec![b12.clone(), s2.clone(), b23.clone()]);
+    let t3 = IdxTensor::random_f64(&mut rng(), vec![b23.clone(), s3.clone()]);
 
     state.add_tensor("site0".into(), t0).unwrap();
     state.add_tensor("site1".into(), t1).unwrap();

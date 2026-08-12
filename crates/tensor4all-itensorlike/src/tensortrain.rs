@@ -4,7 +4,7 @@
 //! (also known as MPS) with orthogonality tracking, inspired by ITensorMPS.jl.
 //!
 //! Internally, TensorTrain is implemented as a thin wrapper around
-//! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
+//! `TreeTN<IdxTensor, usize>` where node names are site indices (0, 1, 2, ...).
 
 use num_complex::Complex64;
 use std::any::TypeId;
@@ -18,8 +18,8 @@ use tensor4all_core::{
 };
 use tensor4all_core::{
     AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg, FactorizeError,
-    FactorizeOptions, FactorizeResult, LinearizationOrder, TensorConstructionLike,
-    TensorContractionLike, TensorDynLen, TensorDynLenError, TensorElement, TensorFactorizationLike,
+    FactorizeOptions, FactorizeResult, IdxTensor, IdxTensorError, LinearizationOrder,
+    TensorConstructionLike, TensorContractionLike, TensorElement, TensorFactorizationLike,
     TensorIndex, TensorVectorSpace,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
@@ -85,23 +85,23 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 /// - When `ortho_region` is empty, no orthogonality is assumed
 /// - When `ortho_region` contains a single site, that site is the orthogonality center
 /// # Implementation
-/// Internally wraps `TreeTN<TensorDynLen, usize>` where node names are site indices.
+/// Internally wraps `TreeTN<IdxTensor, usize>` where node names are site indices.
 /// This allows reuse of TreeTN's canonicalization and contraction algorithms.
 /// # Examples
 /// Build a 2-site tensor train and query its properties:
 /// ```
 /// use tensor4all_itensorlike::TensorTrain;
-/// use tensor4all_core::{DynIndex, TensorDynLen, Index};
+/// use tensor4all_core::{DynIndex, IdxTensor, Index};
 /// use tensor4all_core::DynId;
 /// // Site indices and link index
 /// let s0 = Index::new_with_size(DynId(0), 2);
 /// let link = Index::new_with_size(DynId(1), 3);
 /// let s1 = Index::new_with_size(DynId(2), 2);
-/// let t0 = TensorDynLen::from_dense(
+/// let t0 = IdxTensor::from_dense(
 ///     vec![s0.clone(), link.clone()],
 ///     (0..6).map(|i| i as f64).collect(),
 /// ).unwrap();
-/// let t1 = TensorDynLen::from_dense(
+/// let t1 = IdxTensor::from_dense(
 ///     vec![link.clone(), s1.clone()],
 ///     (0..6).map(|i| i as f64).collect(),
 /// ).unwrap();
@@ -114,7 +114,7 @@ fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
 pub struct TensorTrain {
     /// The underlying TreeTN with linear chain topology.
     /// Node names are usize (0, 1, 2, ...) representing site indices.
-    pub(crate) treetn: TreeTN<TensorDynLen, usize>,
+    pub(crate) treetn: TreeTN<IdxTensor, usize>,
     /// The canonical form used (if known).
     canonical_form: Option<CanonicalForm>,
 }
@@ -173,10 +173,10 @@ impl TensorTrain {
     /// /// its neighbors (a shape mismatch) or the chain is structurally
     /// /// inconsistent (an invalid-state failure).
     ///
-    pub fn new(tensors: Vec<TensorDynLen>) -> Result<Self> {
+    pub fn new(tensors: Vec<IdxTensor>) -> Result<Self> {
         if tensors.is_empty() {
             // Create an empty TreeTN
-            let treetn = TreeTN::<TensorDynLen, usize>::new();
+            let treetn = TreeTN::<IdxTensor, usize>::new();
             return Ok(Self {
                 treetn,
                 canonical_form: None,
@@ -215,7 +215,7 @@ impl TensorTrain {
 
         // Create TreeTN with from_tensors (auto-connects by shared index IDs)
         let treetn =
-            TreeTN::<TensorDynLen, usize>::from_tensors(tensors, node_names).map_err(|e| {
+            TreeTN::<IdxTensor, usize>::from_tensors(tensors, node_names).map_err(|e| {
                 TensorTrainError::InvalidStructure {
                     message: format!("Failed to create TreeTN: {}", e),
                 }
@@ -244,7 +244,7 @@ impl TensorTrain {
     /// /// out of bounds failure) or orthogonalization fails.
     ///
     pub fn with_ortho(
-        tensors: Vec<TensorDynLen>,
+        tensors: Vec<IdxTensor>,
         llim: i32,
         rlim: i32,
         canonical_form: Option<CanonicalForm>,
@@ -270,7 +270,7 @@ impl TensorTrain {
     ///
     /// This is a crate-internal constructor used by `contract` and `linsolve`.
     pub(crate) fn from_inner(
-        treetn: TreeTN<TensorDynLen, usize>,
+        treetn: TreeTN<IdxTensor, usize>,
         canonical_form: Option<CanonicalForm>,
     ) -> Result<Self> {
         let mut node_names = treetn.node_names();
@@ -305,7 +305,7 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     /// use tensor4all_treetn::TreeTN;
     ///
@@ -313,8 +313,8 @@ impl TensorTrain {
     /// let site0 = DynIndex::new_dyn(2);
     /// let link = DynIndex::new_bond(1)?;
     /// let site1 = DynIndex::new_dyn(2);
-    /// let t0 = TensorDynLen::from_dense(vec![site0, link.clone()], vec![1.0, 0.0])?;
-    /// let t1 = TensorDynLen::from_dense(vec![link, site1], vec![2.0, 0.0])?;
+    /// let t0 = IdxTensor::from_dense(vec![site0, link.clone()], vec![1.0, 0.0])?;
+    /// let t1 = IdxTensor::from_dense(vec![link, site1], vec![2.0, 0.0])?;
     /// let tree = TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1usize])?;
     ///
     /// let tt = TensorTrain::from_treetn(tree)?;
@@ -329,7 +329,7 @@ impl TensorTrain {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_treetn(treetn: TreeTN<TensorDynLen, usize>) -> Result<Self> {
+    pub fn from_treetn(treetn: TreeTN<IdxTensor, usize>) -> Result<Self> {
         Self::from_inner(treetn, None)
     }
 
@@ -342,12 +342,12 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let site = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![site], vec![1.0, 2.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![site], vec![1.0, 2.0])?;
     /// let tt = TensorTrain::new(vec![tensor])?;
     ///
     /// let tree = tt.into_treetn();
@@ -355,14 +355,14 @@ impl TensorTrain {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn into_treetn(self) -> TreeTN<TensorDynLen, usize> {
+    pub fn into_treetn(self) -> TreeTN<IdxTensor, usize> {
         self.treetn
     }
 
     /// Get a reference to the underlying TreeTN.
     ///
     /// This is a crate-internal accessor used by `contract` and `linsolve`.
-    pub(crate) fn as_treetn(&self) -> &TreeTN<TensorDynLen, usize> {
+    pub(crate) fn as_treetn(&self) -> &TreeTN<IdxTensor, usize> {
         &self.treetn
     }
 
@@ -484,7 +484,7 @@ impl TensorTrain {
     ///
     /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
-    pub fn tensor(&self, site: usize) -> Result<&TensorDynLen> {
+    pub fn tensor(&self, site: usize) -> Result<&IdxTensor> {
         self.tensor_checked(site)
     }
 
@@ -494,7 +494,7 @@ impl TensorTrain {
     ///
     /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
-    pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
+    pub fn tensor_checked(&self, site: usize) -> Result<&IdxTensor> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
                 site,
@@ -523,7 +523,7 @@ impl TensorTrain {
     ///
     /// Returns an error when `site` is out of range (an out of bounds failure).
     ///
-    pub fn tensor_mut(&mut self, site: usize) -> Result<&mut TensorDynLen> {
+    pub fn tensor_mut(&mut self, site: usize) -> Result<&mut IdxTensor> {
         self.tensor_mut_checked(site)
     }
 
@@ -536,20 +536,20 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_core::{DynId, Index, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// let s0 = Index::new_with_size(DynId(0), 2);
     /// let link = Index::new_with_size(DynId(1), 3);
     /// let s1 = Index::new_with_size(DynId(2), 2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// assert_eq!(tt.tensor_mut_checked(0).unwrap().indices()[0], s0);
     /// assert!(tt.tensor_mut_checked(2).is_err());
     /// ```
-    pub fn tensor_mut_checked(&mut self, site: usize) -> Result<&mut TensorDynLen> {
+    pub fn tensor_mut_checked(&mut self, site: usize) -> Result<&mut IdxTensor> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
                 site,
@@ -570,7 +570,7 @@ impl TensorTrain {
 
     /// Get a reference to all tensors.
     #[inline]
-    pub fn tensors(&self) -> Vec<&TensorDynLen> {
+    pub fn tensors(&self) -> Vec<&IdxTensor> {
         (0..self.len())
             .filter_map(|site| {
                 let node_idx = self.treetn.node_index(&site)?;
@@ -591,7 +591,7 @@ impl TensorTrain {
     /// Returns an error when the operation fails (a shape or index mismatch, or
     /// /// a backend failure).
     ///
-    pub fn tensors_mut(&mut self) -> Result<Vec<&mut TensorDynLen>> {
+    pub fn tensors_mut(&mut self) -> Result<Vec<&mut IdxTensor>> {
         self.tensors_mut_checked()
     }
 
@@ -605,14 +605,14 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_core::{DynId, Index, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// let s0 = Index::new_with_size(DynId(0), 2);
     /// let link = Index::new_with_size(DynId(1), 3);
     /// let s1 = Index::new_with_size(DynId(2), 2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0, link.clone()], vec![1.0; 6]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0, link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// let tensors = tt.tensors_mut_checked().unwrap();
@@ -620,7 +620,7 @@ impl TensorTrain {
     /// assert_eq!(tensors[0].indices().len(), 2);
     /// assert_eq!(tensors[1].indices().len(), 2);
     /// ```
-    pub fn tensors_mut_checked(&mut self) -> Result<Vec<&mut TensorDynLen>> {
+    pub fn tensors_mut_checked(&mut self) -> Result<Vec<&mut IdxTensor>> {
         let length = self.len();
         let node_indices: Vec<_> = (0..length)
             .map(|site| {
@@ -636,7 +636,7 @@ impl TensorTrain {
                     message: format!("missing tensor storage for site {site}"),
                 }
             })?;
-            tensor_ptrs.push(tensor as *mut TensorDynLen);
+            tensor_ptrs.push(tensor as *mut IdxTensor);
         }
 
         // SAFETY: TensorTrain site names are unique, so each site resolves to a
@@ -801,14 +801,15 @@ impl TensorTrain {
             }
 
             let link = DynIndex::new_dyn(1);
-            let left_link =
-                <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&link))
-                    .map_err(|e| {
-                        TensorTrainError::operation_source(
-                            "failed to build implicit unit link tensor",
-                            anyhow::Error::new(e),
-                        )
-                    })?;
+            let left_link = <IdxTensor as TensorConstructionLike>::ones(std::slice::from_ref(
+                &link,
+            ))
+            .map_err(|e| {
+                TensorTrainError::operation_source(
+                    "failed to build implicit unit link tensor",
+                    anyhow::Error::new(e),
+                )
+            })?;
             tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
                 TensorTrainError::operation_source(
                     "failed to attach implicit unit link",
@@ -816,13 +817,12 @@ impl TensorTrain {
                 )
             })?;
 
-            let right_link =
-                <TensorDynLen as TensorConstructionLike>::ones(&[link]).map_err(|e| {
-                    TensorTrainError::operation_source(
-                        "failed to build implicit unit link tensor",
-                        anyhow::Error::new(e),
-                    )
-                })?;
+            let right_link = <IdxTensor as TensorConstructionLike>::ones(&[link]).map_err(|e| {
+                TensorTrainError::operation_source(
+                    "failed to build implicit unit link tensor",
+                    anyhow::Error::new(e),
+                )
+            })?;
             tensors[site + 1] = tensors[site + 1].outer_product(&right_link).map_err(|e| {
                 TensorTrainError::operation_source(
                     "failed to attach implicit unit link",
@@ -961,7 +961,7 @@ impl TensorTrain {
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    fn set_tensor_raw(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
+    fn set_tensor_raw(&mut self, site: usize, tensor: IdxTensor) -> Result<()> {
         let node_idx =
             self.treetn
                 .node_index(&site)
@@ -989,21 +989,21 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_core::{DynId, Index, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// let s0 = Index::new_with_size(DynId(0), 2);
     /// let link = Index::new_with_size(DynId(1), 3);
     /// let s1 = Index::new_with_size(DynId(2), 2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let replacement = TensorDynLen::from_dense(vec![s0, link], vec![3.0; 6]).unwrap();
+    /// let replacement = IdxTensor::from_dense(vec![s0, link], vec![3.0; 6]).unwrap();
     /// tt.set_tensor(0, replacement).unwrap();
     /// assert_eq!(tt.tensor(0).unwrap().to_vec::<f64>().unwrap(), vec![3.0; 6]);
     /// ```
-    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
+    pub fn set_tensor(&mut self, site: usize, tensor: IdxTensor) -> Result<()> {
         self.set_tensor_checked(site, tensor)
     }
 
@@ -1019,21 +1019,21 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_core::{DynId, Index, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// let s0 = Index::new_with_size(DynId(0), 2);
     /// let link = Index::new_with_size(DynId(1), 3);
     /// let s1 = Index::new_with_size(DynId(2), 2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let replacement = TensorDynLen::from_dense(vec![s0, link], vec![4.0; 6]).unwrap();
+    /// let replacement = IdxTensor::from_dense(vec![s0, link], vec![4.0; 6]).unwrap();
     /// tt.set_tensor_checked(0, replacement).unwrap();
     /// assert!(tt.set_tensor_checked(2, tt.tensor(0).unwrap().clone()).is_err());
     /// ```
-    pub fn set_tensor_checked(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
+    pub fn set_tensor_checked(&mut self, site: usize, tensor: IdxTensor) -> Result<()> {
         self.set_tensor_raw(site, tensor)?;
         // Invalidate orthogonality
         self.treetn
@@ -1061,17 +1061,17 @@ impl TensorTrain {
     ///
     /// ```
     /// use tensor4all_itensorlike::TensorTrain;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, Index, DynId};
+    /// use tensor4all_core::{DynIndex, IdxTensor, Index, DynId};
     ///
     /// let s0 = Index::new_with_size(DynId(0), 2);
     /// let link = Index::new_with_size(DynId(1), 3);
     /// let s1 = Index::new_with_size(DynId(2), 2);
     ///
-    /// let t0 = TensorDynLen::from_dense(
+    /// let t0 = IdxTensor::from_dense(
     ///     vec![s0.clone(), link.clone()],
     ///     (0..6).map(|i| i as f64).collect(),
     /// ).unwrap();
-    /// let t1 = TensorDynLen::from_dense(
+    /// let t1 = IdxTensor::from_dense(
     ///     vec![link.clone(), s1.clone()],
     ///     (0..6).map(|i| i as f64).collect(),
     /// ).unwrap();
@@ -1143,7 +1143,7 @@ impl TensorTrain {
     ///
     /// ```
     /// use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
-    /// use tensor4all_core::{DynIndex, TensorDynLen, Index, DynId};
+    /// use tensor4all_core::{DynIndex, IdxTensor, Index, DynId};
     ///
     /// // Build a 3-site tensor train with bond dimension 4
     /// let s0 = Index::new_with_size(DynId(0), 2);
@@ -1152,15 +1152,15 @@ impl TensorTrain {
     /// let l12 = Index::new_with_size(DynId(3), 4);
     /// let s2 = Index::new_with_size(DynId(4), 2);
     ///
-    /// let t0 = TensorDynLen::from_dense(
+    /// let t0 = IdxTensor::from_dense(
     ///     vec![s0.clone(), l01.clone()],
     ///     (0..8).map(|i| i as f64).collect(),
     /// ).unwrap();
-    /// let t1 = TensorDynLen::from_dense(
+    /// let t1 = IdxTensor::from_dense(
     ///     vec![l01.clone(), s1.clone(), l12.clone()],
     ///     (0..32).map(|i| i as f64).collect(),
     /// ).unwrap();
-    /// let t2 = TensorDynLen::from_dense(
+    /// let t2 = IdxTensor::from_dense(
     ///     vec![l12.clone(), s2.clone()],
     ///     (0..8).map(|i| i as f64).collect(),
     /// ).unwrap();
@@ -1220,11 +1220,11 @@ impl TensorTrain {
     ///
     /// ```
     /// use tensor4all_itensorlike::TensorTrain;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, Index, DynId, AnyScalar};
+    /// use tensor4all_core::{DynIndex, IdxTensor, Index, DynId, AnyScalar};
     ///
     /// // Single-site tensor train with values [1.0, 0.0]
     /// let s0 = Index::new_with_size(DynId(0), 2);
-    /// let t = TensorDynLen::from_dense(
+    /// let t = IdxTensor::from_dense(
     ///     vec![s0.clone()],
     ///     vec![1.0_f64, 0.0],
     /// ).unwrap();
@@ -1259,7 +1259,7 @@ impl TensorTrain {
                 other.treetn.sim_internal_inds()
             });
 
-        let node_idx = |ttn: &TreeTN<TensorDynLen, usize>, site: usize| {
+        let node_idx = |ttn: &TreeTN<IdxTensor, usize>, site: usize| {
             ttn.node_index(&site)
                 .ok_or_else(|| TensorTrainError::InvalidStructure {
                     message: format!("missing node for site {site}"),
@@ -1277,7 +1277,7 @@ impl TensorTrain {
                 })?;
             let b0 =
                 profile_tt_inner_section(profile_enabled, &mut profile.right_tensor_clone, || {
-                    Ok::<TensorDynLen, TensorTrainError>(
+                    Ok::<IdxTensor, TensorTrainError>(
                         other_sim
                             .tensor(b0_node)
                             .ok_or_else(|| TensorTrainError::InvalidStructure {
@@ -1385,11 +1385,11 @@ impl TensorTrain {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// let site = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
     /// let tt = TensorTrain::new(vec![tensor])?;
     /// assert!((tt.norm_squared()? - 25.0).abs() < 1e-12);
     /// # Ok(())
@@ -1403,8 +1403,8 @@ impl TensorTrain {
     /// so the returned value is clamped to be non-negative.
     pub fn norm_squared(&self) -> Result<f64> {
         match self.norm_squared_fast_path()? {
-            Some(value) if value.is_nan() => Err(TensorTrainError::TensorDynLen {
-                source: TensorDynLenError::NaNInput {
+            Some(value) if value.is_nan() => Err(TensorTrainError::IdxTensor {
+                source: IdxTensorError::NaNInput {
                     operation: "norm_squared",
                 },
             }),
@@ -1412,8 +1412,8 @@ impl TensorTrain {
             None => self.inner(self).and_then(|value| {
                 let value = value.real();
                 if value.is_nan() {
-                    Err(TensorTrainError::TensorDynLen {
-                        source: TensorDynLenError::NaNInput {
+                    Err(TensorTrainError::IdxTensor {
+                        source: IdxTensorError::NaNInput {
                             operation: "norm_squared",
                         },
                     })
@@ -1435,11 +1435,11 @@ impl TensorTrain {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// let site = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
     /// let tt = TensorTrain::new(vec![tensor])?;
     /// assert!((tt.norm()? - 5.0).abs() < 1e-12);
     /// # Ok(())
@@ -1596,15 +1596,15 @@ impl TensorTrain {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let s0 = DynIndex::new_dyn(2);
     /// let link = DynIndex::new_dyn(1);
     /// let s1 = DynIndex::new_dyn(2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0, 2.0])?;
-    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1.clone()], vec![3.0, 4.0])?;
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), link.clone()], vec![1.0, 2.0])?;
+    /// let t1 = IdxTensor::from_dense(vec![link.clone(), s1.clone()], vec![3.0, 4.0])?;
     ///
     /// let tt = TensorTrain::new(vec![t0, t1])?;
     /// let dense = tt.to_dense()?;
@@ -1614,7 +1614,7 @@ impl TensorTrain {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn to_dense(&self) -> Result<TensorDynLen> {
+    pub fn to_dense(&self) -> Result<IdxTensor> {
         if self.is_empty() {
             return Err(TensorTrainError::InvalidStructure {
                 message: "Cannot convert empty tensor train to dense".to_string(),
@@ -1649,12 +1649,12 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let site = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![site], vec![-2.0, 3.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![site], vec![-2.0, 3.0])?;
     /// let tt = TensorTrain::new(vec![tensor])?;
     /// assert_eq!(tt.dense_maxabs()?, 3.0);
     /// # Ok(())
@@ -1663,7 +1663,7 @@ impl TensorTrain {
     pub fn dense_maxabs(&self) -> Result<f64> {
         self.to_dense()?
             .maxabs()
-            .map_err(|source| TensorTrainError::TensorDynLen { source })
+            .map_err(|source| TensorTrainError::IdxTensor { source })
     }
 
     /// Add two tensor trains using direct-sum construction.
@@ -1743,12 +1743,12 @@ impl TensorTrain {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_core::{DynId, Index, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// fn one_site(id: u64, values: Vec<f64>) -> TensorTrain {
     ///     let site = Index::new_with_size(DynId(id), 2);
-    ///     let tensor = TensorDynLen::from_dense(vec![site], values).unwrap();
+    ///     let tensor = IdxTensor::from_dense(vec![site], values).unwrap();
     ///     TensorTrain::new(vec![tensor]).unwrap()
     /// }
     ///
@@ -1815,12 +1815,12 @@ impl TensorTrain {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
     /// use tensor4all_itensorlike::TensorTrain;
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let s0 = DynIndex::new_dyn(2);
-    /// let tt = TensorTrain::new(vec![TensorDynLen::from_dense(
+    /// let tt = TensorTrain::new(vec![IdxTensor::from_dense(
     ///     vec![s0.clone()],
     ///     vec![1.0, 2.0],
     /// )?])?;
@@ -2058,7 +2058,7 @@ impl TensorConstructionLike for TensorTrain {
         output: &Self::Index,
     ) -> std::result::Result<Self, Self::Error> {
         // Create a single-site TensorTrain with an identity tensor
-        let delta = TensorDynLen::diagonal(input, output)?;
+        let delta = IdxTensor::diagonal(input, output)?;
         Self::new(vec![delta])
     }
 
@@ -2068,12 +2068,12 @@ impl TensorConstructionLike for TensorTrain {
     }
 
     fn ones(indices: &[Self::Index]) -> std::result::Result<Self, Self::Error> {
-        let t = TensorDynLen::ones(indices)?;
+        let t = IdxTensor::ones(indices)?;
         Self::new(vec![t])
     }
 
     fn onehot(index_vals: &[(Self::Index, usize)]) -> std::result::Result<Self, Self::Error> {
-        let t = TensorDynLen::onehot(index_vals)?;
+        let t = IdxTensor::onehot(index_vals)?;
         Self::new(vec![t])
     }
 }

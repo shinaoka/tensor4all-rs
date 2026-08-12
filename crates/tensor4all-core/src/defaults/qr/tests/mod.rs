@@ -44,7 +44,7 @@ fn unfold_split_preserves_column_major_linearization_with_unit_dims() {
     let i1 = Index::new_dyn(1);
     let i2 = Index::new_dyn(2);
     let i3 = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![i1.clone(), i2.clone(), i3.clone()],
         vec![1.0, 2.0, 3.0, 4.0],
     )
@@ -82,7 +82,7 @@ fn qr_options_report_rtol_and_default_roundtrips() {
 fn qr_with_invalid_rtol_is_rejected_before_linalg() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![0.0; 4]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![0.0; 4]).unwrap();
 
     let nan = qr_with::<f64>(
         &tensor,
@@ -106,7 +106,7 @@ fn qr_with_native_truncation_reduces_bond_dimension() {
     let mut data = vec![0.0; 4];
     data[0] = 1.0;
     data[3] = 1.0e-14;
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 
     let (q, r) = qr_with::<f64>(
         &tensor,
@@ -125,7 +125,7 @@ fn qr_with_complex_fallback_truncation_reduces_bond_dimension() {
     let mut data = vec![Complex64::new(0.0, 0.0); 4];
     data[0] = Complex64::new(1.0, 0.0);
     data[3] = Complex64::new(1.0e-14, 0.0);
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 
     let (q, r) = qr_with::<Complex64>(
         &tensor,

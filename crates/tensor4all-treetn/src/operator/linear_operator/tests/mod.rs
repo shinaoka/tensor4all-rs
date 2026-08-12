@@ -1,6 +1,6 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
-use tensor4all_core::{DynIndex, LinearizationOrder, TensorConstructionLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, LinearizationOrder, TensorConstructionLike};
 
 use crate::operator::index_mapping::IndexMapping;
 use crate::operator::Operator;
@@ -11,8 +11,8 @@ use crate::{RestructureOptions, SiteIndexNetwork};
 /// Structure: single node "A" with indices (s_in_tmp, s_out_tmp)
 /// Also returns a "state" TreeTN with a single site index s.
 fn make_simple_mpo_and_state() -> (
-    TreeTN<TensorDynLen, String>,
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex, // s (true site index)
     DynIndex, // s_in_tmp
     DynIndex, // s_out_tmp
@@ -25,15 +25,15 @@ fn make_simple_mpo_and_state() -> (
     // s_in_tmp x s_out_tmp with identity values
     let mpo_data = vec![1.0, 0.0, 0.0, 1.0]; // identity matrix
     let mpo_tensor =
-        TensorDynLen::from_dense(vec![s_in_tmp.clone(), s_out_tmp.clone()], mpo_data).unwrap();
-    let mpo = TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()])
-        .unwrap();
+        IdxTensor::from_dense(vec![s_in_tmp.clone(), s_out_tmp.clone()], mpo_data).unwrap();
+    let mpo =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()]).unwrap();
 
     // State tensor
     let state_data = vec![1.0, 0.0]; // |0> state
-    let state_tensor = TensorDynLen::from_dense(vec![s.clone()], state_data).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![s.clone()], state_data).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
     (mpo, state, s, s_in_tmp, s_out_tmp)
@@ -42,7 +42,7 @@ fn make_simple_mpo_and_state() -> (
 /// Create a simple LinearOperator for testing.
 /// Returns (operator, s, s_in_tmp, s_out_tmp)
 fn make_linear_operator() -> (
-    LinearOperator<TensorDynLen, String>,
+    LinearOperator<IdxTensor, String>,
     DynIndex, // s (true site index)
     DynIndex, // s_in_tmp
     DynIndex, // s_out_tmp
@@ -71,7 +71,7 @@ fn make_linear_operator() -> (
     (op, s, s_in_tmp, s_out_tmp)
 }
 
-fn make_three_node_linear_operator() -> LinearOperator<TensorDynLen, usize> {
+fn make_three_node_linear_operator() -> LinearOperator<IdxTensor, usize> {
     let site0 = DynIndex::new_dyn(2);
     let site1 = DynIndex::new_dyn(2);
     let site2 = DynIndex::new_dyn(2);
@@ -84,17 +84,17 @@ fn make_three_node_linear_operator() -> LinearOperator<TensorDynLen, usize> {
     let bond01 = DynIndex::new_dyn(2);
     let bond12 = DynIndex::new_dyn(3);
 
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![in0.clone(), out0.clone(), bond01.clone()],
         vec![1.0_f64; 2 * 2 * 2],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond01.clone(), in1.clone(), out1.clone(), bond12.clone()],
         vec![1.0_f64; 2 * 2 * 2 * 3],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![bond12.clone(), in2.clone(), out2.clone()],
         vec![1.0_f64; 3 * 2 * 2],
     )
@@ -151,7 +151,7 @@ fn make_three_node_linear_operator() -> LinearOperator<TensorDynLen, usize> {
 }
 
 fn make_fused_identity_operator() -> (
-    LinearOperator<TensorDynLen, String>,
+    LinearOperator<IdxTensor, String>,
     DynIndex,
     DynIndex,
     DynIndex,
@@ -167,10 +167,9 @@ fn make_fused_identity_operator() -> (
         data[value + 4 * value] = 1.0;
     }
     let tensor =
-        TensorDynLen::from_dense(vec![output_internal.clone(), input_internal.clone()], data)
-            .unwrap();
+        IdxTensor::from_dense(vec![output_internal.clone(), input_internal.clone()], data).unwrap();
     let mpo =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     let mut input_mapping = HashMap::new();
     input_mapping.insert(
@@ -299,7 +298,7 @@ fn test_linear_operator_apply_local_identity() {
     let (op, s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
     // Create a local tensor to apply operator to: |0> = [1, 0]
-    let local_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
+    let local_tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
 
     let result = op.apply_local(&local_tensor, &["A".to_string()]).unwrap();
 
@@ -339,17 +338,17 @@ fn test_from_mpo_and_state_mismatched_site_count() {
     let s_out_tmp = DynIndex::new_dyn(2);
     let s_extra = DynIndex::new_dyn(2);
 
-    let mpo_tensor = TensorDynLen::from_dense(
+    let mpo_tensor = IdxTensor::from_dense(
         vec![s_in_tmp.clone(), s_out_tmp.clone(), s_extra.clone()],
         vec![0.0; 8],
     )
     .unwrap();
-    let mpo = TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()])
-        .unwrap();
+    let mpo =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()]).unwrap();
 
-    let state_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
     let result = LinearOperator::from_mpo_and_state(mpo, &state);
@@ -366,9 +365,9 @@ fn test_from_mpo_and_state_no_site_indices() {
     let s_out = DynIndex::new_dyn(2);
 
     // State: A has site index, B has no site index (only bond)
-    let t_a = TensorDynLen::from_dense(vec![s.clone(), bond.clone()], vec![1.0; 4]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![bond.clone()], vec![1.0; 2]).unwrap();
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let t_a = IdxTensor::from_dense(vec![s.clone(), bond.clone()], vec![1.0; 4]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![bond.clone()], vec![1.0; 2]).unwrap();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     state.add_tensor("A".to_string(), t_a).unwrap();
     state.add_tensor("B".to_string(), t_b).unwrap();
     let a = state.node_index(&"A".to_string()).unwrap();
@@ -377,13 +376,13 @@ fn test_from_mpo_and_state_no_site_indices() {
 
     // MPO: A has two site indices, B has no site index (only bond)
     let bond2 = DynIndex::new_dyn(2);
-    let t_a_mpo = TensorDynLen::from_dense(
+    let t_a_mpo = IdxTensor::from_dense(
         vec![s_in.clone(), s_out.clone(), bond2.clone()],
         vec![0.0; 8],
     )
     .unwrap();
-    let t_b_mpo = TensorDynLen::from_dense(vec![bond2.clone()], vec![0.0; 2]).unwrap();
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let t_b_mpo = IdxTensor::from_dense(vec![bond2.clone()], vec![0.0; 2]).unwrap();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     mpo.add_tensor("A".to_string(), t_a_mpo).unwrap();
     mpo.add_tensor("B".to_string(), t_b_mpo).unwrap();
     let a2 = mpo.node_index(&"A".to_string()).unwrap();
@@ -400,16 +399,16 @@ fn test_from_mpo_and_state_mismatched_presence() {
     // State has site indices at A, but MPO has none at A -> (Some, None) branch
     let s = DynIndex::new_dyn(2);
 
-    let state_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
     // MPO with no site indices
     let mpo_idx = DynIndex::new_dyn(1);
-    let mpo_tensor = TensorDynLen::from_dense(vec![mpo_idx.clone()], vec![1.0]).unwrap();
-    let mpo = TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()])
-        .unwrap();
+    let mpo_tensor = IdxTensor::from_dense(vec![mpo_idx.clone()], vec![1.0]).unwrap();
+    let mpo =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()]).unwrap();
 
     // The state has site indices but the mpo's site indices are different,
     // so this should trigger a mismatch error
@@ -426,13 +425,13 @@ fn test_from_mpo_and_state_not_enough_matching_dims() {
     let s_out_tmp = DynIndex::new_dyn(3);
 
     let mpo_tensor =
-        TensorDynLen::from_dense(vec![s_in_tmp.clone(), s_out_tmp.clone()], vec![0.0; 9]).unwrap();
-    let mpo = TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()])
-        .unwrap();
+        IdxTensor::from_dense(vec![s_in_tmp.clone(), s_out_tmp.clone()], vec![0.0; 9]).unwrap();
+    let mpo =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()]).unwrap();
 
-    let state_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
     let result = LinearOperator::from_mpo_and_state(mpo, &state);
@@ -441,7 +440,7 @@ fn test_from_mpo_and_state_not_enough_matching_dims() {
 
 /// Create a 2-node MPO and state for multi-node apply_local test.
 fn make_two_node_mpo_and_operator() -> (
-    LinearOperator<TensorDynLen, String>,
+    LinearOperator<IdxTensor, String>,
     DynIndex, // s0 (true site index for A)
     DynIndex, // s1 (true site index for B)
 ) {
@@ -455,19 +454,19 @@ fn make_two_node_mpo_and_operator() -> (
 
     // Identity MPO: two nodes with bond dim 1
     // A tensor: s0_in x s0_out x bond
-    let t_a = TensorDynLen::from_dense(
+    let t_a = IdxTensor::from_dense(
         vec![s0_in.clone(), s0_out.clone(), bond.clone()],
         vec![1.0, 0.0, 0.0, 1.0], // identity for each bond=0 slice
     )
     .unwrap();
     // B tensor: bond x s1_in x s1_out
-    let t_b = TensorDynLen::from_dense(
+    let t_b = IdxTensor::from_dense(
         vec![bond.clone(), s1_in.clone(), s1_out.clone()],
         vec![1.0, 0.0, 0.0, 1.0],
     )
     .unwrap();
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     mpo.add_tensor("A".to_string(), t_a).unwrap();
     mpo.add_tensor("B".to_string(), t_b).unwrap();
     let a = mpo.node_index(&"A".to_string()).unwrap();
@@ -516,7 +515,7 @@ fn test_apply_local_multi_node_region() {
 
     // Create a local tensor spanning both nodes: |00> = [1, 0, 0, 0]
     let local_tensor =
-        TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 0.0]).unwrap();
+        IdxTensor::from_dense(vec![s0.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 0.0]).unwrap();
 
     let result = op
         .apply_local(&local_tensor, &["A".to_string(), "B".to_string()])
@@ -540,9 +539,9 @@ fn test_align_to_state_single_node() {
     let new_s = DynIndex::new_dyn(2);
     assert_ne!(original_s, new_s);
 
-    let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![0.5, 0.5]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![new_s.clone()], vec![0.5, 0.5]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
     // Align operator to the new state
@@ -556,7 +555,7 @@ fn test_align_to_state_single_node() {
     assert_eq!(output_mapping.true_index, new_s);
 
     // Verify: operator should still work correctly after alignment
-    let local_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
+    let local_tensor = IdxTensor::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
     let result = op.apply_local(&local_tensor, &["A".to_string()]).unwrap();
     let result_data = result.to_vec::<f64>().unwrap();
     assert_eq!(result_data.len(), 2);
@@ -576,9 +575,9 @@ fn test_align_to_state_two_nodes() {
     assert_ne!(original_s0, new_s0);
     assert_ne!(original_s1, new_s1);
 
-    let t_a = TensorDynLen::from_dense(vec![new_s0.clone(), bond.clone()], vec![1.0; 2]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![bond.clone(), new_s1.clone()], vec![1.0; 2]).unwrap();
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let t_a = IdxTensor::from_dense(vec![new_s0.clone(), bond.clone()], vec![1.0; 2]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![bond.clone(), new_s1.clone()], vec![1.0; 2]).unwrap();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     state.add_tensor("A".to_string(), t_a).unwrap();
     state.add_tensor("B".to_string(), t_b).unwrap();
     let a = state.node_index(&"A".to_string()).unwrap();
@@ -602,7 +601,7 @@ fn test_align_to_state_two_nodes() {
     assert_eq!(output_b.true_index, new_s1);
 
     // Verify: operator still works after alignment
-    let local_tensor = TensorDynLen::from_dense(
+    let local_tensor = IdxTensor::from_dense(
         vec![new_s0.clone(), new_s1.clone()],
         vec![1.0, 0.0, 0.0, 0.0],
     )
@@ -624,9 +623,9 @@ fn test_align_to_state_dimension_mismatch() {
 
     // Create a state with a different dimension
     let new_s = DynIndex::new_dyn(3); // dim 3 != dim 2
-    let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0, 0.0]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![new_s.clone()], vec![1.0, 0.0, 0.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
             .unwrap();
 
     // Should fail due to shape mismatch
@@ -640,9 +639,9 @@ fn test_align_to_state_missing_node() {
 
     // Create a state that doesn't have node "A"
     let new_s = DynIndex::new_dyn(2);
-    let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["B".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["B".to_string()])
             .unwrap();
 
     // Should fail because node "A" is not in the state
@@ -760,7 +759,7 @@ fn test_unfuse_input_and_output_indices_splits_internal_mpo_axes() {
         .map(|mapping| mapping.internal_index.clone())
         .collect::<Vec<_>>();
     let expected =
-        <TensorDynLen as TensorConstructionLike>::delta(&output_internal, &input_internal).unwrap();
+        <IdxTensor as TensorConstructionLike>::delta(&output_internal, &input_internal).unwrap();
     let actual = op.mpo().contract_to_tensor().unwrap();
 
     assert!(actual.distance(&expected).unwrap() < 1.0e-12);

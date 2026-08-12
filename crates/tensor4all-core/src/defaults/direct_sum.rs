@@ -4,12 +4,12 @@
 //! along specified index pairs. The direct sum concatenates tensor data along
 //! the paired indices, creating new indices with combined dimensions.
 //!
-//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
 use crate::defaults::DynIndex;
-use crate::defaults::TensorDynLenError;
+use crate::defaults::IdxTensorError;
 use crate::index_like::IndexLike;
-use crate::tensor::TensorDynLen;
+use crate::tensor::IdxTensor;
 use anyhow::Result;
 use num_traits::Zero;
 use tensor4all_tensorbackend::TensorElement;
@@ -42,14 +42,14 @@ use tensor4all_tensorbackend::TensorElement;
 /// # Example
 ///
 /// ```
-/// use tensor4all_core::{direct_sum, DynIndex, TensorDynLen};
+/// use tensor4all_core::{direct_sum, DynIndex, IdxTensor};
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let j = DynIndex::new_dyn(2);
 /// let k = DynIndex::new_dyn(3);
 ///
-/// let a = TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0])?;
-/// let b = TensorDynLen::from_dense(vec![k.clone()], vec![3.0, 4.0, 5.0])?;
+/// let a = IdxTensor::from_dense(vec![j.clone()], vec![1.0, 2.0])?;
+/// let b = IdxTensor::from_dense(vec![k.clone()], vec![3.0, 4.0, 5.0])?;
 /// let (result, new_indices) = direct_sum(&a, &b, &[(j.clone(), k.clone())])?;
 ///
 /// assert_eq!(new_indices.len(), 1);
@@ -58,16 +58,16 @@ use tensor4all_tensorbackend::TensorElement;
 /// # }
 /// ```
 pub fn direct_sum(
-    a: &TensorDynLen,
-    b: &TensorDynLen,
+    a: &IdxTensor,
+    b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
-) -> std::result::Result<(TensorDynLen, Vec<DynIndex>), TensorDynLenError> {
+) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
     if a.is_f64() && b.is_f64() {
-        direct_sum_typed::<f64>(a, b, pairs).map_err(TensorDynLenError::from)
+        direct_sum_typed::<f64>(a, b, pairs).map_err(IdxTensorError::from)
     } else if a.is_complex() && b.is_complex() {
-        direct_sum_typed::<num_complex::Complex64>(a, b, pairs).map_err(TensorDynLenError::from)
+        direct_sum_typed::<num_complex::Complex64>(a, b, pairs).map_err(IdxTensorError::from)
     } else {
-        Err(TensorDynLenError::Operation {
+        Err(IdxTensorError::Operation {
             operation: "direct_sum",
             source: std::sync::Arc::new(std::io::Error::other(
                 "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)",
@@ -96,8 +96,8 @@ struct DirectSumSetup {
 }
 
 fn setup_direct_sum(
-    a: &TensorDynLen,
-    b: &TensorDynLen,
+    a: &IdxTensor,
+    b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<DirectSumSetup> {
     use std::collections::HashMap;
@@ -259,10 +259,10 @@ fn multi_to_linear(multi: &[usize], strides: &[usize]) -> usize {
 }
 
 fn direct_sum_typed<T: TensorElement + Zero>(
-    a: &TensorDynLen,
-    b: &TensorDynLen,
+    a: &IdxTensor,
+    b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
-) -> Result<(TensorDynLen, Vec<DynIndex>)> {
+) -> Result<(IdxTensor, Vec<DynIndex>)> {
     let setup = setup_direct_sum(a, b, pairs)?;
     let a_data = a.to_vec::<T>()?;
     let b_data = b.to_vec::<T>()?;
@@ -310,7 +310,7 @@ fn direct_sum_typed<T: TensorElement + Zero>(
         // else: mixed case stays T::zero()
     }
 
-    let result = TensorDynLen::from_dense(setup.result_indices, result_data)?;
+    let result = IdxTensor::from_dense(setup.result_indices, result_data)?;
     Ok((result, setup.new_indices))
 }
 

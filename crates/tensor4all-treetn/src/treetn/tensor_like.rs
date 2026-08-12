@@ -25,7 +25,7 @@
 use std::hash::Hash;
 
 use tensor4all_core::{
-    DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorIndex, TensorLike,
+    DynIndex, IdxTensor, IndexLike, LinearizationOrder, TensorIndex, TensorLike,
 };
 
 use crate::error::{NumberedTagSelectionError, TreeTNOperationError};
@@ -193,7 +193,7 @@ where
     }
 }
 
-impl<V> TreeTN<TensorDynLen, V>
+impl<V> TreeTN<IdxTensor, V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -213,13 +213,13 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, TagSet, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, TagSet, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let x = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,x").unwrap());
     /// let y = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,y").unwrap());
-    /// let tensor = TensorDynLen::from_dense(vec![x.clone(), y], vec![0.0; 4]).unwrap();
-    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![x.clone(), y], vec![0.0; 4]).unwrap();
+    /// let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
     ///
     /// assert_eq!(tn.external_indices_with_tag("x"), vec![x]);
     /// assert!(tn.external_indices_with_tag("missing").is_empty());
@@ -259,13 +259,13 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, TagSet, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, TagSet, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let k1 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
     /// let k2 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
-    /// let tensor = TensorDynLen::from_dense(vec![k2.clone(), k1.clone()], vec![0.0; 4]).unwrap();
-    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![k2.clone(), k1.clone()], vec![0.0; 4]).unwrap();
+    /// let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
     ///
     /// let indices = tn.external_indices_with_numbered_tag("k", 1, 2).unwrap();
     /// assert_eq!(indices, vec![k1, k2]);
@@ -314,7 +314,7 @@ where
 
     /// Replace one site index with multiple site indices using an exact reshape.
     ///
-    /// This is a TreeTN-level wrapper around [`TensorDynLen::unfuse_index`].
+    /// This is a TreeTN-level wrapper around [`IdxTensor::unfuse_index`].
     /// It updates the owning node tensor and the site-index metadata, without
     /// introducing any approximation.
     ///
@@ -325,12 +325,12 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let fused = DynIndex::new_dyn(4);
-    /// let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
     /// let left = DynIndex::new_dyn(2);
     /// let right = DynIndex::new_dyn(2);
     ///
@@ -343,7 +343,7 @@ where
     ///     .unwrap();
     ///
     /// let dense = unfused.contract_to_tensor().unwrap();
-    /// let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// let expected = IdxTensor::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     /// assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     /// ```
     pub fn replace_site_index_with_indices(

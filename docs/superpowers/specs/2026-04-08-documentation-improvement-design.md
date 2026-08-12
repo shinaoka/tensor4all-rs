@@ -178,7 +178,7 @@ Add assertion-bearing examples to major public API items. Priority:
 
 | Priority | Crate | Key items |
 |----------|-------|-----------|
-| High | tensor4all-core | `Index`, `TensorDynLen`, `contract`, `svd`, `qr` |
+| High | tensor4all-core | `Index`, `IdxTensor`, `contract`, `svd`, `qr` |
 | High | tensor4all-simplett | `TensorTrain`, `evaluate`, `sum`, `compressed` |
 | High | tensor4all-tensorci | `crossinterpolate2`, `TCI2Options` |
 | High | tensor4all-quanticstci | `QuanticsTensorCI2`, `DiscretizedGrid` |

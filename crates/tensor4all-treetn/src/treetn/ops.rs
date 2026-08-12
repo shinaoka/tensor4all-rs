@@ -107,10 +107,10 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
     /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
     /// // log(||[3, 4]||) = log(5)
@@ -202,12 +202,12 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     ///
     /// // Single-node TreeTN with tensor [1, 0, 0, 1] (identity 2x2)
     /// let s0 = DynIndex::new_dyn(2);
     /// let s1 = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(
+    /// let t = IdxTensor::from_dense(
     ///     vec![s0.clone(), s1.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0],
     /// ).unwrap();
@@ -242,10 +242,10 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
     /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
     /// // ||[3, 4]||^2 = 9 + 16 = 25
@@ -281,17 +281,17 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorIndex, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
     /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
     /// tn.scale_mut(AnyScalar::new_real(2.0)).unwrap();
     ///
     /// let dense = tn.to_dense().unwrap();
-    /// let expected = TensorDynLen::from_dense(
+    /// let expected = IdxTensor::from_dense(
     ///     dense.external_indices(),
     ///     vec![2.0_f64, -4.0],
     /// ).unwrap();
@@ -346,17 +346,17 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorIndex, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
     /// let tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
     /// let scaled = tn.scale(AnyScalar::new_real(2.0)).unwrap();
     ///
     /// let dense = scaled.to_dense().unwrap();
-    /// let expected = TensorDynLen::from_dense(
+    /// let expected = IdxTensor::from_dense(
     ///     dense.external_indices(),
     ///     vec![2.0_f64, -4.0],
     /// ).unwrap();
@@ -390,10 +390,10 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
     /// let tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
     /// // <v|v> = 3^2 + 4^2 = 25
@@ -531,7 +531,7 @@ where
     ///
     /// ```
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorIndex, TensorLike};
     ///
     /// // Build a 2-node chain
     /// let s0 = DynIndex::new_dyn(2);
@@ -539,11 +539,11 @@ where
     /// let s1 = DynIndex::new_dyn(2);
     ///
     /// // Identity matrices
-    /// let t0 = TensorDynLen::from_dense(
+    /// let t0 = IdxTensor::from_dense(
     ///     vec![s0.clone(), bond.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0],
     /// ).unwrap();
-    /// let t1 = TensorDynLen::from_dense(
+    /// let t1 = IdxTensor::from_dense(
     ///     vec![bond.clone(), s1.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 1.0],
     /// ).unwrap();
@@ -586,12 +586,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
-    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
+    /// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0])?;
     ///
     /// let evaluator = tree.evaluator(&[s])?;
     /// assert_eq!(evaluator.input_count(), 1);
@@ -670,12 +670,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s = DynIndex::new_dyn(3);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0])?;
-    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0])?;
+    /// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0])?;
     ///
     /// let value = tree.evaluate_point(&[s], &[2])?;
     /// assert!((value.real() - 30.0).abs() < 1e-12);
@@ -723,21 +723,21 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s0 = DynIndex::new_dyn(2);
     /// let s1 = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(3);
-    /// let left = TensorDynLen::from_dense(
+    /// let left = IdxTensor::from_dense(
     ///     vec![s0, bond.clone()],
     ///     vec![1.0_f64; 2 * 3],
     /// )?;
-    /// let right = TensorDynLen::from_dense(
+    /// let right = IdxTensor::from_dense(
     ///     vec![bond, s1],
     ///     vec![1.0_f64; 3 * 2],
     /// )?;
-    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![left, right], vec![0, 1])?;
+    /// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![left, right], vec![0, 1])?;
     ///
     /// assert_eq!(tree.link_dims(), vec![3]);
     /// # Ok::<(), anyhow::Error>(())
@@ -773,19 +773,19 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s0 = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(3);
     /// let s1 = DynIndex::new_dyn(2);
-    /// let t0 = TensorDynLen::from_dense(
+    /// let t0 = IdxTensor::from_dense(
     ///     vec![s0.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     /// ).unwrap();
-    /// let t1 = TensorDynLen::from_dense(
+    /// let t1 = IdxTensor::from_dense(
     ///     vec![bond.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     /// ).unwrap();
-    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    /// let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
     ///
     /// let (indices, vertices) = tn.all_site_indices().unwrap();
     /// assert_eq!(indices.len(), 2);

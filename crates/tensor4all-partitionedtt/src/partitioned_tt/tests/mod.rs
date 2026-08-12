@@ -1,17 +1,17 @@
 use super::*;
 use tensor4all_core::index::Index;
-use tensor4all_core::{TensorContractionLike, TensorDynLen};
+use tensor4all_core::{IdxTensor, TensorContractionLike};
 use tensor4all_itensorlike::TensorTrainError;
 
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
 }
 
-fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
     let size: usize = dims.iter().product();
     let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Create shared indices for testing
@@ -175,10 +175,10 @@ fn make_tt2(s1: &DynIndex, l12: &DynIndex, s2: &DynIndex) -> TensorTrain {
 }
 
 fn project_dense_tensor_at_index(
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
     index: &DynIndex,
     projected_value: usize,
-) -> TensorDynLen {
+) -> IdxTensor {
     let indices = tensor.indices().to_vec();
     let axis = indices
         .iter()
@@ -197,7 +197,7 @@ fn project_dense_tensor_at_index(
         }
     }
 
-    TensorDynLen::from_dense(indices, projected_data).unwrap()
+    IdxTensor::from_dense(indices, projected_data).unwrap()
 }
 
 #[test]

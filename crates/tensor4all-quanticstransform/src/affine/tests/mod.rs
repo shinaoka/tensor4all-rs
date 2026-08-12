@@ -1,7 +1,7 @@
 use super::*;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
-fn tensor_axis_lookup(template: &TensorDynLen) -> std::collections::HashMap<DynIndex, usize> {
+fn tensor_axis_lookup(template: &IdxTensor) -> std::collections::HashMap<DynIndex, usize> {
     template
         .indices()
         .iter()
@@ -25,7 +25,7 @@ fn tensor_axis_position(
 fn tensor_axis_lookup_uses_full_index_identity() {
     let base = DynIndex::new_dyn(2);
     let primed = base.prime();
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![base.clone(), primed.clone()],
         vec![Complex64::new(0.0, 0.0); 4],
     )
@@ -637,8 +637,8 @@ fn affine_matrix_to_dense_tensor(
     r: usize,
     m: usize,
     n: usize,
-    template: &TensorDynLen,
-) -> TensorDynLen {
+    template: &IdxTensor,
+) -> IdxTensor {
     let indices = template.indices().to_vec();
     let dims = template.dims();
     let axis_lookup = tensor_axis_lookup(template);
@@ -677,7 +677,7 @@ fn affine_matrix_to_dense_tensor(
         }
     }
 
-    TensorDynLen::from_dense(indices, data).expect("failed to build affine reference tensor")
+    IdxTensor::from_dense(indices, data).expect("failed to build affine reference tensor")
 }
 
 fn affine_interleaved_matrix_to_dense_tensor(
@@ -686,8 +686,8 @@ fn affine_interleaved_matrix_to_dense_tensor(
     r: usize,
     m: usize,
     n: usize,
-    template: &TensorDynLen,
-) -> TensorDynLen {
+    template: &IdxTensor,
+) -> IdxTensor {
     let indices = template.indices().to_vec();
     let dims = template.dims();
     let axis_lookup = tensor_axis_lookup(template);
@@ -733,7 +733,7 @@ fn affine_interleaved_matrix_to_dense_tensor(
         }
     }
 
-    TensorDynLen::from_dense(indices, data)
+    IdxTensor::from_dense(indices, data)
         .expect("failed to build interleaved affine reference tensor")
 }
 
@@ -751,10 +751,10 @@ fn affine_dense_reference_element_count(r: usize, m: usize, n: usize) -> Option<
 
 fn affine_operator_expected_dense_tensor(
     op: &QuanticsOperator,
-    template: &TensorDynLen,
+    template: &IdxTensor,
     r: usize,
     mut expected: impl FnMut(usize, usize) -> Complex64,
-) -> TensorDynLen {
+) -> IdxTensor {
     let indices = template.indices().to_vec();
     let dims = template.dims();
     let axis_lookup = tensor_axis_lookup(template);
@@ -793,7 +793,7 @@ fn affine_operator_expected_dense_tensor(
         }
     }
 
-    TensorDynLen::from_dense(indices, data).expect("failed to build expected affine tensor")
+    IdxTensor::from_dense(indices, data).expect("failed to build expected affine tensor")
 }
 
 #[allow(clippy::needless_range_loop)]

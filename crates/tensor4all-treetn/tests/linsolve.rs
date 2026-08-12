@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use tensor4all_core::{
-    AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+    AnyScalar, DynIndex, IdxTensor, IndexLike, TensorContractionLike, TensorIndex,
 };
 use tensor4all_treetn::{
     relative_linear_system_residual, ApplyOptions, EnvironmentCache, IndexMapping, LinearOperator,
@@ -65,11 +65,11 @@ fn create_fixed_site_index_mappings<const N: usize>(
 /// Create a simple 3-site MPS chain for testing.
 /// Returns (mps, site indices, bond indices)
 fn create_simple_mps_chain() -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
-    let mut mps = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mps = TreeTN::<IdxTensor, &'static str>::new();
 
     // Physical indices (dimension 2 for each site)
     let s0 = DynIndex::new_dyn(2);
@@ -82,14 +82,14 @@ fn create_simple_mps_chain() -> (
 
     // Create tensors with random data
     // Site 0: [s0, b01] shape (2, 4)
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 8]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 8]).unwrap();
 
     // Site 1: [b01, s1, b12] shape (4, 2, 4)
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 32])
-        .unwrap();
+    let t1 =
+        IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 32]).unwrap();
 
     // Site 2: [b12, s2] shape (4, 2)
-    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 8]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 8]).unwrap();
 
     // Add nodes with string names (add_tensor returns Result)
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -114,18 +114,18 @@ fn create_simple_mps_chain() -> (
 
 #[test]
 fn test_environment_cache_basic() {
-    let cache: EnvironmentCache<TensorDynLen, &str> = EnvironmentCache::new();
+    let cache: EnvironmentCache<IdxTensor, &str> = EnvironmentCache::new();
     assert!(cache.is_empty());
     assert_eq!(cache.len(), 0);
 }
 
 #[test]
 fn test_environment_cache_insert_get() {
-    let mut cache: EnvironmentCache<TensorDynLen, &str> = EnvironmentCache::new();
+    let mut cache: EnvironmentCache<IdxTensor, &str> = EnvironmentCache::new();
 
     // Create a simple tensor to cache
     let idx = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![idx], vec![1.0, 2.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![idx], vec![1.0, 2.0]).unwrap();
 
     cache.insert("a", "b", tensor.clone());
 
@@ -140,10 +140,10 @@ fn test_environment_cache_insert_get() {
 
 #[test]
 fn test_environment_cache_clear() {
-    let mut cache: EnvironmentCache<TensorDynLen, &str> = EnvironmentCache::new();
+    let mut cache: EnvironmentCache<IdxTensor, &str> = EnvironmentCache::new();
 
     let idx = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![idx], vec![1.0, 2.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![idx], vec![1.0, 2.0]).unwrap();
 
     cache.insert("a", "b", tensor);
     assert_eq!(cache.len(), 1);
@@ -278,21 +278,21 @@ fn test_projected_operator_apply_distinguishes_same_id_prime_level() {
 
     let site = DynIndex::new_dyn(2);
     let site_prime = site.prime();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     state
         .add_tensor(
             "site0",
-            TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0]).unwrap(),
+            IdxTensor::from_dense(vec![site.clone()], vec![1.0, 0.0]).unwrap(),
         )
         .unwrap();
 
     let op_in = DynIndex::new_dyn(2);
     let op_out = DynIndex::new_dyn(2);
-    let mut operator = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut operator = TreeTN::<IdxTensor, &'static str>::new();
     operator
         .add_tensor(
             "site0",
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![op_out.clone(), op_in.clone()],
                 vec![1.0, 0.0, 0.0, 1.0],
             )
@@ -319,7 +319,7 @@ fn test_projected_operator_apply_distinguishes_same_id_prime_level() {
     );
 
     for data in [vec![1.0, 2.0, 3.0, 4.0], vec![4.0, 3.0, 2.0, 1.0]] {
-        let input = TensorDynLen::from_dense(vec![site.clone(), site_prime.clone()], data).unwrap();
+        let input = IdxTensor::from_dense(vec![site.clone(), site_prime.clone()], data).unwrap();
         let output = projected_op
             .apply(&input, &["site0"], &state, &state, &SingleNode)
             .unwrap();
@@ -339,11 +339,11 @@ fn test_projected_operator_apply_distinguishes_same_id_prime_level() {
 /// Create a simple 2-site MPS chain for testing.
 /// Returns (mps, site indices, bond indices)
 fn create_two_site_mps() -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
-    let mut mps = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mps = TreeTN::<IdxTensor, &'static str>::new();
 
     // Physical indices (dimension 2 for each site)
     let s0 = DynIndex::new_dyn(2);
@@ -354,7 +354,7 @@ fn create_two_site_mps() -> (
 
     // Create tensors with normalized data
     // Site 0: [s0, b01] shape (2, 2)
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![
             1.0, 0.0, // s0=0: b01=0, b01=1
@@ -364,7 +364,7 @@ fn create_two_site_mps() -> (
     .unwrap();
 
     // Site 1: [b01, s1] shape (2, 2)
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone()],
         vec![
             1.0, 0.0, // b01=0: s1=0, s1=1
@@ -399,7 +399,7 @@ fn create_two_site_mps() -> (
 fn create_diagonal_mpo(
     site_indices: &[DynIndex],
     diag_values: &[f64],
-) -> (TreeTN<TensorDynLen, &'static str>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, &'static str>, Vec<DynIndex>) {
     assert_eq!(
         site_indices.len(),
         diag_values.len(),
@@ -407,7 +407,7 @@ fn create_diagonal_mpo(
     );
     assert_eq!(site_indices.len(), 2, "Currently only supports 2-site MPO");
 
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     // Physical dimension
     let phys_dim = site_indices[0].dim();
@@ -431,7 +431,7 @@ fn create_diagonal_mpo(
         data0[i * phys_dim + i] = diag_values[0];
     }
     let t0 =
-        TensorDynLen::from_dense(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0).unwrap();
+        IdxTensor::from_dense(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0).unwrap();
 
     // Diagonal tensor at site 1: [b01, s1_out, s1_in] shape (1, 2, 2)
     let mut data1 = vec![0.0; phys_dim * phys_dim];
@@ -439,7 +439,7 @@ fn create_diagonal_mpo(
         data1[i * phys_dim + i] = diag_values[1];
     }
     let t1 =
-        TensorDynLen::from_dense(vec![b01.clone(), s1_out.clone(), s1_in.clone()], data1).unwrap();
+        IdxTensor::from_dense(vec![b01.clone(), s1_out.clone(), s1_in.clone()], data1).unwrap();
 
     // Add nodes
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -455,7 +455,7 @@ fn create_diagonal_mpo(
 /// Returns (MPO, output_indices) where output_indices are the new output site indices.
 fn create_identity_mpo(
     site_indices: &[DynIndex],
-) -> (TreeTN<TensorDynLen, &'static str>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, &'static str>, Vec<DynIndex>) {
     let diag_values = vec![1.0; site_indices.len()];
     create_diagonal_mpo(site_indices, &diag_values)
 }
@@ -467,7 +467,7 @@ fn create_mps_from_values(
     values: &[f64],
     phys_dim: usize,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
@@ -477,7 +477,7 @@ fn create_mps_from_values(
         "values length must be phys_dim^2"
     );
 
-    let mut mps = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mps = TreeTN::<IdxTensor, &'static str>::new();
 
     // Physical indices
     let s0 = DynIndex::new_dyn(phys_dim);
@@ -505,10 +505,10 @@ fn create_mps_from_values(
     for i in 0..phys_dim.min(bond_dim) {
         data0[i * bond_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], data0).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], data0).unwrap();
 
     // Site 1 tensor: [b01, s1] - contains the values
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], values.to_vec()).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01.clone(), s1.clone()], values.to_vec()).unwrap();
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
     let n1 = mps.add_tensor("site1", t1).unwrap();
@@ -659,14 +659,14 @@ fn test_linsolve_nonuniform_diagonal() {
 fn create_three_site_mps(
     values: Option<&[f64]>,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
     let phys_dim = 2;
     let bond_dim = 2;
 
-    let mut mps = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mps = TreeTN::<IdxTensor, &'static str>::new();
 
     // Physical indices
     let s0 = DynIndex::new_dyn(phys_dim);
@@ -692,7 +692,7 @@ fn create_three_site_mps(
     for i in 0..phys_dim.min(bond_dim) {
         data0[i * bond_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], data0).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], data0).unwrap();
 
     // Site 1: [b01, s1, b12] shape (2, 2, 2) - identity-like
     // B[b, s, b'] = delta(b, s) * delta(s, b')
@@ -702,7 +702,7 @@ fn create_three_site_mps(
         let idx = i * phys_dim * bond_dim + i * bond_dim + i;
         data1[idx] = 1.0;
     }
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], data1).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], data1).unwrap();
 
     // Site 2: [b12, s2] shape (2, 2) - contains values or identity
     let data2 = if let Some(vals) = values {
@@ -721,7 +721,7 @@ fn create_three_site_mps(
         }
         d
     };
-    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], data2).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone(), s2.clone()], data2).unwrap();
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
     let n1 = mps.add_tensor("site1", t1).unwrap();
@@ -747,10 +747,10 @@ fn create_three_site_mps(
 /// - s_in should SHARE the ID with the state's site index (for input/ket side)
 fn create_three_site_identity_mpo(
     site_indices: &[DynIndex],
-) -> (TreeTN<TensorDynLen, &'static str>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, &'static str>, Vec<DynIndex>) {
     assert_eq!(site_indices.len(), 3);
 
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     let phys_dim = 2;
 
@@ -774,14 +774,14 @@ fn create_three_site_identity_mpo(
         data0[i * phys_dim + i] = 1.0;
     }
     let t0 =
-        TensorDynLen::from_dense(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0).unwrap();
+        IdxTensor::from_dense(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0).unwrap();
 
     // Site 1: [b01, s1_out, s1_in, b12] - identity on physical indices
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = 1.0;
     }
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1_out.clone(), s1_in.clone(), b12.clone()],
         data1,
     )
@@ -793,7 +793,7 @@ fn create_three_site_identity_mpo(
         data2[i * phys_dim + i] = 1.0;
     }
     let t2 =
-        TensorDynLen::from_dense(vec![b12.clone(), s2_out.clone(), s2_in.clone()], data2).unwrap();
+        IdxTensor::from_dense(vec![b12.clone(), s2_out.clone(), s2_in.clone()], data2).unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -919,13 +919,13 @@ fn create_mpo_with_internal_indices(
     diag_values: &[f64],
     phys_dim: usize,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>, // s_in_tmp (internal input indices)
     Vec<DynIndex>, // s_out_tmp (internal output indices)
 ) {
     assert_eq!(diag_values.len(), 2);
 
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     // Internal input indices (new IDs)
     let s0_in_tmp = DynIndex::new_dyn(phys_dim);
@@ -943,7 +943,7 @@ fn create_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         data0,
     )
@@ -954,7 +954,7 @@ fn create_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         data1,
     )
@@ -976,11 +976,11 @@ fn create_mpo_with_internal_indices(
 fn create_mapped_identity_mpo_with_spectator_node(
     phys_dim: usize,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     let s0_in_tmp = DynIndex::new_dyn(phys_dim);
     let s1_in_tmp = DynIndex::new_dyn(phys_dim);
@@ -994,12 +994,12 @@ fn create_mapped_identity_mpo_with_spectator_node(
         id_data[i * phys_dim + i] = 1.0;
     }
 
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         id_data.clone(),
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![
             b01.clone(),
             s1_out_tmp.clone(),
@@ -1009,7 +1009,7 @@ fn create_mapped_identity_mpo_with_spectator_node(
         id_data,
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(vec![b12.clone()], vec![1.0]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone()], vec![1.0]).unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -1123,7 +1123,7 @@ fn test_linear_operator_apply_local() {
 
     // Create a local tensor for site0 only
     // v = [1.0, 0.0] representing |0⟩ at site0
-    let local_v = TensorDynLen::from_dense(vec![site_indices[0].clone()], vec![1.0, 0.0]).unwrap();
+    let local_v = IdxTensor::from_dense(vec![site_indices[0].clone()], vec![1.0, 0.0]).unwrap();
 
     // Apply operator locally at site0
     let result = linear_op.apply_local(&local_v, &["site0"]);
@@ -1210,7 +1210,7 @@ fn test_linear_operator_apply_local_two_sites() {
 
     // Create a local tensor for both sites (merged region)
     // v = |00⟩ = [1, 0, 0, 0] in (s0, s1) basis
-    let local_v = TensorDynLen::from_dense(
+    let local_v = IdxTensor::from_dense(
         vec![site_indices[0].clone(), site_indices[1].clone()],
         vec![
             1.0, 0.0, // s0=0: s1=0, s1=1
@@ -1434,7 +1434,7 @@ fn create_three_site_mpo_with_internal_indices(
     diag_values: &[f64],
     phys_dim: usize,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>, // s_in_tmp for each site
     Vec<DynIndex>, // s_out_tmp for each site
 ) {
@@ -1444,7 +1444,7 @@ fn create_three_site_mpo_with_internal_indices(
         "Need 3 diagonal values for 3-site MPO"
     );
 
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     // Internal indices (independent IDs)
     let s0_in_tmp = DynIndex::new_dyn(phys_dim);
@@ -1463,7 +1463,7 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         data0,
     )
@@ -1474,7 +1474,7 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![
             b01.clone(),
             s1_out_tmp.clone(),
@@ -1490,7 +1490,7 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data2[i * phys_dim + i] = diag_values[2];
     }
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b12.clone(), s2_out_tmp.clone(), s2_in_tmp.clone()],
         data2,
     )
@@ -1640,11 +1640,11 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
 fn create_pauli_x_mpo(
     phys_dim: usize,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     // MPO internal indices
     let s0_in_tmp = DynIndex::new_dyn(phys_dim);
@@ -1666,7 +1666,7 @@ fn create_pauli_x_mpo(
             data0[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
         }
     }
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         data0,
     )
@@ -1681,7 +1681,7 @@ fn create_pauli_x_mpo(
             data1[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
         }
     }
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         data1,
     )
@@ -1800,11 +1800,11 @@ fn create_general_2x2_mpo(
     mat: &[f64; 4], // [a, b, c, d] encoding [[a, b], [c, d]]
     phys_dim: usize,
 ) -> (
-    TreeTN<TensorDynLen, &'static str>,
+    TreeTN<IdxTensor, &'static str>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 ) {
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
 
     // MPO internal indices
     let s0_in_tmp = DynIndex::new_dyn(phys_dim);
@@ -1821,7 +1821,7 @@ fn create_general_2x2_mpo(
             data0[out_idx + phys_dim * in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         data0,
     )
@@ -1835,7 +1835,7 @@ fn create_general_2x2_mpo(
             data1[out_idx + phys_dim * in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         data1,
     )
@@ -2049,10 +2049,10 @@ fn create_n_site_mps(
     n_sites: usize,
     phys_dim: usize,
     bond_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     // Physical indices
     let site_indices: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -2071,7 +2071,7 @@ fn create_n_site_mps(
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * bond_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
+            IdxTensor::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
                 .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_{n-1}] - identity-like
@@ -2079,7 +2079,7 @@ fn create_n_site_mps(
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * phys_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
             )
@@ -2091,7 +2091,7 @@ fn create_n_site_mps(
                 let idx = j * phys_dim * bond_dim + j * bond_dim + j;
                 data[idx] = 1.0;
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     site_indices[i].clone(),
@@ -2121,11 +2121,11 @@ fn create_n_site_mps(
 fn create_n_site_mpo_with_internal_indices(
     diag_values: &[f64],
     phys_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     let n_sites = diag_values.len();
     assert!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // Internal indices (independent IDs)
     let s_in_tmp: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -2144,7 +2144,7 @@ fn create_n_site_mpo_with_internal_indices(
 
         let tensor = if i == 0 {
             // First site: [s_out, s_in, b01]
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -2155,7 +2155,7 @@ fn create_n_site_mpo_with_internal_indices(
             .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_out, s_in]
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -2166,7 +2166,7 @@ fn create_n_site_mpo_with_internal_indices(
             .unwrap()
         } else {
             // Middle sites: [b_{i-1,i}, s_out, s_in, b_{i,i+1}]
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -2196,12 +2196,12 @@ fn create_n_site_mpo_with_internal_indices(
 /// Returns (mpo, input_mapping, output_mapping)
 #[allow(clippy::type_complexity)]
 fn create_n_site_index_mappings(
-    mpo: TreeTN<TensorDynLen, String>,
+    mpo: TreeTN<IdxTensor, String>,
     state_site_indices: &[DynIndex],
     s_in_tmp: &[DynIndex],
     s_out_tmp: &[DynIndex],
 ) -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 ) {
@@ -2471,8 +2471,8 @@ fn test_square_linsolve_rejects_one_site_systems() {
     let site = DynIndex::new_dyn(2);
     let s_in = DynIndex::new_dyn(2);
     let s_out = DynIndex::new_dyn(2);
-    let operator = TreeTN::<TensorDynLen, usize>::from_tensors(
-        vec![TensorDynLen::from_dense(
+    let operator = TreeTN::<IdxTensor, usize>::from_tensors(
+        vec![IdxTensor::from_dense(
             vec![s_out.clone(), s_in.clone()],
             vec![1.0_f64, 0.0, 0.0, 1.0],
         )
@@ -2480,8 +2480,8 @@ fn test_square_linsolve_rejects_one_site_systems() {
         vec![0],
     )
     .unwrap();
-    let rhs = TreeTN::<TensorDynLen, usize>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap()],
+    let rhs = TreeTN::<IdxTensor, usize>::from_tensors(
+        vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap()],
         vec![0],
     )
     .unwrap();

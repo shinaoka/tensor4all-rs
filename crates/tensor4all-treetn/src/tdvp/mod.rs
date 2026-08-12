@@ -1071,21 +1071,21 @@ where
 /// ```
 /// use std::collections::HashMap;
 /// use num_complex::Complex64;
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{tdvp, IndexMapping, LinearOperator, TdvpOptions, TreeTN};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let site = DynIndex::new_dyn(2);
-/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+/// let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0])?;
 ///
 /// let input = DynIndex::new_dyn(2);
 /// let output = DynIndex::new_dyn(2);
-/// let op_tensor = TensorDynLen::from_dense(
+/// let op_tensor = IdxTensor::from_dense(
 ///     vec![output.clone(), input.clone()],
 ///     vec![1.0, 0.0, 0.0, 1.0],
 /// )?;
-/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![op_tensor], vec![0])?;
+/// let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![op_tensor], vec![0])?;
 /// let operator = LinearOperator::new(
 ///     mpo,
 ///     HashMap::from([(0, IndexMapping { true_index: site.clone(), internal_index: input })]),
@@ -1228,17 +1228,17 @@ where
 ///
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{tdvp_with_treetn_operator, TdvpOptions, TreeTN};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let site = DynIndex::new_dyn(2);
-/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+/// let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0])?;
 /// let input = DynIndex::new_dyn(2);
 /// let output = DynIndex::new_dyn(2);
-/// let op_tensor = TensorDynLen::from_dense(vec![output, input], vec![1.0, 0.0, 0.0, 1.0])?;
-/// let operator = TreeTN::<TensorDynLen, usize>::from_tensors(vec![op_tensor], vec![0])?;
+/// let op_tensor = IdxTensor::from_dense(vec![output, input], vec![1.0, 0.0, 0.0, 1.0])?;
+/// let operator = TreeTN::<IdxTensor, usize>::from_tensors(vec![op_tensor], vec![0])?;
 ///
 /// let result = tdvp_with_treetn_operator(&operator, state, &0, TdvpOptions::default().with_nsite(1))?;
 /// assert_eq!(result.sweeps_completed, 1);

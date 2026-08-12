@@ -4,17 +4,17 @@ use tensor4all_core::{
     default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdOptions,
     SvdTruncationPolicy,
 };
-use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike};
 
-fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn vh_from_v(v: &TensorDynLen) -> TensorDynLen {
+fn vh_from_v(v: &IdxTensor) -> IdxTensor {
     assert!(
         !v.indices.is_empty(),
         "V tensor must have at least one (bond) index"
@@ -26,7 +26,7 @@ fn vh_from_v(v: &TensorDynLen) -> TensorDynLen {
     v_conj.permute(&perm).unwrap()
 }
 
-fn reconstruct_from_svd(u: &TensorDynLen, s: &TensorDynLen, v: &TensorDynLen) -> TensorDynLen {
+fn reconstruct_from_svd(u: &IdxTensor, s: &IdxTensor, v: &IdxTensor) -> IdxTensor {
     let vh = vh_from_v(v);
     let svh = s.contract_pair(&vh).unwrap();
     let sim_bond = s.indices[1].clone();
@@ -130,7 +130,7 @@ fn test_svd_invalid_rank() {
     // Test that SVD fails for rank-1 tensors
     let i = Index::new_dyn(2);
 
-    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone()]).unwrap();
+    let tensor = IdxTensor::zeros::<f64>(vec![i.clone()]).unwrap();
 
     let result = svd::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
@@ -146,7 +146,7 @@ fn test_svd_invalid_split() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
     // Empty left_inds should fail
     let result = svd::<f64>(&tensor, &[]);
@@ -426,7 +426,7 @@ fn test_svd_uses_global_default() {
 }
 
 /// Helper: compute SVD reconstruction error for a given tensor and split.
-fn svd_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+fn svd_reconstruction_error_f64(t: &IdxTensor, left_inds: &[DynIndex]) -> f64 {
     let (u, s, v) = svd::<f64>(t, left_inds).expect("SVD should succeed");
     let recon = reconstruct_from_svd(&u, &s, &v);
     let neg = recon

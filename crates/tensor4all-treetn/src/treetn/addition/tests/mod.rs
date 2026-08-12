@@ -1,13 +1,13 @@
 use std::collections::HashSet;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 
 use crate::treetn::TreeTN;
 
 /// Create two TreeTNs with the same topology for testing addition.
 /// Both are 2-node chains: A -- bond -- B
 fn make_two_matching_treetns() -> (
-    TreeTN<TensorDynLen, String>,
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex, // s0
     DynIndex, // s1
 ) {
@@ -15,18 +15,18 @@ fn make_two_matching_treetns() -> (
     let bond_a = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(2);
 
-    let t0_a = TensorDynLen::from_dense(
+    let t0_a = IdxTensor::from_dense(
         vec![s0.clone(), bond_a.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1_a = TensorDynLen::from_dense(
+    let t1_a = IdxTensor::from_dense(
         vec![bond_a.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
 
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0_a, t1_a],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -34,12 +34,12 @@ fn make_two_matching_treetns() -> (
 
     let bond_b = DynIndex::new_dyn(2);
 
-    let t0_b = TensorDynLen::from_dense(vec![s0.clone(), bond_b.clone()], vec![0.0, 1.0, 1.0, 0.0])
-        .unwrap();
-    let t1_b = TensorDynLen::from_dense(vec![bond_b.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0])
-        .unwrap();
+    let t0_b =
+        IdxTensor::from_dense(vec![s0.clone(), bond_b.clone()], vec![0.0, 1.0, 1.0, 0.0]).unwrap();
+    let t1_b =
+        IdxTensor::from_dense(vec![bond_b.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0_b, t1_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -49,22 +49,22 @@ fn make_two_matching_treetns() -> (
 }
 
 fn make_two_matching_treetns_different_site_ids(
-) -> (TreeTN<TensorDynLen, String>, TreeTN<TensorDynLen, String>) {
+) -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     let s0_a = DynIndex::new_dyn(2);
     let bond_a = DynIndex::new_dyn(3);
     let s1_a = DynIndex::new_dyn(2);
 
-    let t0_a = TensorDynLen::from_dense(
+    let t0_a = IdxTensor::from_dense(
         vec![s0_a.clone(), bond_a.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1_a = TensorDynLen::from_dense(
+    let t1_a = IdxTensor::from_dense(
         vec![bond_a.clone(), s1_a.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0_a, t1_a],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -74,13 +74,11 @@ fn make_two_matching_treetns_different_site_ids(
     let bond_b = DynIndex::new_dyn(2);
     let s1_b = DynIndex::new_dyn(2);
 
-    let t0_b =
-        TensorDynLen::from_dense(vec![s0_b.clone(), bond_b.clone()], vec![0.0, 1.0, 1.0, 0.0])
-            .unwrap();
-    let t1_b =
-        TensorDynLen::from_dense(vec![bond_b.clone(), s1_b.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t0_b = IdxTensor::from_dense(vec![s0_b.clone(), bond_b.clone()], vec![0.0, 1.0, 1.0, 0.0])
+        .unwrap();
+    let t1_b = IdxTensor::from_dense(vec![bond_b.clone(), s1_b.clone()], vec![1.0, 0.0, 0.0, 1.0])
+        .unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0_b, t1_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -108,14 +106,14 @@ fn make_same_id_prime_pair_mpo_like_treetn(
     inputs: &[DynIndex],
     outputs: &[DynIndex],
     links: &[DynIndex],
-) -> TreeTN<TensorDynLen, usize> {
+) -> TreeTN<IdxTensor, usize> {
     let tensors = vec![
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![inputs[0].clone(), outputs[0].clone(), links[0].clone()],
             scaled_sequence(scale, 18),
         )
         .unwrap(),
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![
                 links[0].clone(),
                 inputs[1].clone(),
@@ -125,13 +123,13 @@ fn make_same_id_prime_pair_mpo_like_treetn(
             scaled_sequence(scale, 36),
         )
         .unwrap(),
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![links[1].clone(), inputs[2].clone(), outputs[2].clone()],
             scaled_sequence(scale, 18),
         )
         .unwrap(),
     ];
-    TreeTN::<TensorDynLen, usize>::from_tensors(tensors, vec![0, 1, 2]).unwrap()
+    TreeTN::<IdxTensor, usize>::from_tensors(tensors, vec![0, 1, 2]).unwrap()
 }
 
 #[test]
@@ -202,18 +200,18 @@ fn test_add_topology_mismatch() {
     let bond = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 6]).unwrap();
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 6]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1],
         vec!["A".to_string(), "B".to_string()],
     )
     .unwrap();
 
     // Single-node TN (different topology)
-    let t_single = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(vec![t_single], vec!["X".to_string()])
-        .unwrap();
+    let t_single = IdxTensor::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
+    let tn_b =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![t_single], vec!["X".to_string()]).unwrap();
 
     let result = tn_a.add(&tn_b);
     assert!(result.is_err());
@@ -224,19 +222,17 @@ fn test_add_topology_mismatch() {
 fn test_add_single_site() {
     let s = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let result = tn_a.add(&tn_b).unwrap();
     assert_eq!(result.node_count(), 1);
 
     let dense = result.contract_to_tensor().unwrap();
-    let expected = TensorDynLen::from_dense(vec![s.clone()], vec![11.0, 22.0, 33.0]).unwrap();
+    let expected = IdxTensor::from_dense(vec![s.clone()], vec![11.0, 22.0, 33.0]).unwrap();
     assert!(
         dense.isapprox(&expected, 1e-10, 0.0).unwrap(),
         "single-site add failed: maxabs diff = {}",
@@ -262,7 +258,7 @@ fn test_sorted_site_space_orders_deterministically() {
     site_space.insert(a.clone());
     site_space.insert(b.clone());
 
-    let sorted = TreeTN::<TensorDynLen, usize>::sorted_site_space(&site_space);
+    let sorted = TreeTN::<IdxTensor, usize>::sorted_site_space(&site_space);
     assert_eq!(sorted, vec![b, c, a]);
 }
 
@@ -271,9 +267,9 @@ fn test_reindex_site_space_like_rejects_incompatible_inputs() {
     let (tn_a, _) = make_two_matching_treetns_different_site_ids();
 
     let lone_site = DynIndex::new_dyn(2);
-    let lone_tensor = TensorDynLen::from_dense(vec![lone_site], vec![1.0, 2.0]).unwrap();
+    let lone_tensor = IdxTensor::from_dense(vec![lone_site], vec![1.0, 2.0]).unwrap();
     let single =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![lone_tensor], vec!["A".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![lone_tensor], vec!["A".to_string()])
             .unwrap();
     let err = tn_a.reindex_site_space_like(&single).unwrap_err();
     assert!(err.to_string().contains("incompatible topologies"));
@@ -281,10 +277,9 @@ fn test_reindex_site_space_like_rejects_incompatible_inputs() {
     let self_s0 = DynIndex::new_dyn(2);
     let self_s1 = DynIndex::new_dyn(2);
     let self_bond = DynIndex::new_dyn(1);
-    let self_t0 =
-        TensorDynLen::from_dense(vec![self_s0, self_bond.clone()], vec![1.0, 2.0]).unwrap();
-    let self_t1 = TensorDynLen::from_dense(vec![self_bond, self_s1], vec![1.0, 2.0]).unwrap();
-    let self_two_node = TreeTN::<TensorDynLen, String>::from_tensors(
+    let self_t0 = IdxTensor::from_dense(vec![self_s0, self_bond.clone()], vec![1.0, 2.0]).unwrap();
+    let self_t1 = IdxTensor::from_dense(vec![self_bond, self_s1], vec![1.0, 2.0]).unwrap();
+    let self_two_node = TreeTN::<IdxTensor, String>::from_tensors(
         vec![self_t0, self_t1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -294,13 +289,13 @@ fn test_reindex_site_space_like_rejects_incompatible_inputs() {
     let tmpl_extra = DynIndex::new_dyn(2);
     let tmpl_s1 = DynIndex::new_dyn(2);
     let tmpl_bond = DynIndex::new_dyn(1);
-    let tmpl_t0 = TensorDynLen::from_dense(
+    let tmpl_t0 = IdxTensor::from_dense(
         vec![tmpl_s0, tmpl_extra, tmpl_bond.clone()],
         vec![1.0, 2.0, 3.0, 4.0],
     )
     .unwrap();
-    let tmpl_t1 = TensorDynLen::from_dense(vec![tmpl_bond, tmpl_s1], vec![1.0, 2.0]).unwrap();
-    let template_extra_site = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tmpl_t1 = IdxTensor::from_dense(vec![tmpl_bond, tmpl_s1], vec![1.0, 2.0]).unwrap();
+    let template_extra_site = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tmpl_t0, tmpl_t1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -316,9 +311,9 @@ fn test_reindex_site_space_like_rejects_incompatible_inputs() {
     let tmpl_s1 = DynIndex::new_dyn(2);
     let tmpl_bond = DynIndex::new_dyn(1);
     let tmpl_t0 =
-        TensorDynLen::from_dense(vec![tmpl_s0, tmpl_bond.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    let tmpl_t1 = TensorDynLen::from_dense(vec![tmpl_bond, tmpl_s1], vec![1.0, 2.0]).unwrap();
-    let template_dim_mismatch = TreeTN::<TensorDynLen, String>::from_tensors(
+        IdxTensor::from_dense(vec![tmpl_s0, tmpl_bond.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let tmpl_t1 = IdxTensor::from_dense(vec![tmpl_bond, tmpl_s1], vec![1.0, 2.0]).unwrap();
+    let template_dim_mismatch = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tmpl_t0, tmpl_t1],
         vec!["A".to_string(), "B".to_string()],
     )

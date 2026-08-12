@@ -4,7 +4,7 @@ use hdf5_metno::File;
 use num_complex::Complex64;
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_hdf5::{
     append_itensor, append_mps, append_treetn, load_itensor, load_mps, load_treetn, save_itensor,
     save_mps, save_treetn,
@@ -63,15 +63,15 @@ fn mps_error(name: &str, mutate: impl FnOnce(&hdf5_metno::Group)) -> String {
 }
 
 /// Create a simple 2x3 f64 tensor with known data.
-fn make_test_tensor_f64() -> TensorDynLen {
+fn make_test_tensor_f64() -> IdxTensor {
     let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap()).set_plev(1);
     let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap()).set_plev(2);
     let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    TensorDynLen::from_dense(vec![i1, i2], data).unwrap()
+    IdxTensor::from_dense(vec![i1, i2], data).unwrap()
 }
 
 /// Create a simple 2x3 complex tensor with known data.
-fn make_test_tensor_c64() -> TensorDynLen {
+fn make_test_tensor_c64() -> IdxTensor {
     let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap()).set_plev(1);
     let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap()).set_plev(2);
     let data: Vec<Complex64> = vec![
@@ -82,7 +82,7 @@ fn make_test_tensor_c64() -> TensorDynLen {
         Complex64::new(5.0, 0.5),
         Complex64::new(6.0, 0.6),
     ];
-    TensorDynLen::from_dense(vec![i1, i2], data).unwrap()
+    IdxTensor::from_dense(vec![i1, i2], data).unwrap()
 }
 
 #[test]
@@ -165,8 +165,8 @@ fn test_itensor_c64_roundtrip() {
 fn test_append_itensor_keeps_multiple_named_objects() {
     let path = temp_path("append_itensor_multiple");
     std::fs::remove_file(&path).ok();
-    let first = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0]).unwrap();
-    let second = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0]).unwrap();
+    let first = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0]).unwrap();
+    let second = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0]).unwrap();
 
     append_itensor(&path, "first", &first).unwrap();
     append_itensor(&path, "second", &second).unwrap();
@@ -219,7 +219,7 @@ fn test_itensor_3d_roundtrip() {
     let i3 = Index::new_dyn_with_tags(4, TagSet::from_str("Link,l=1").unwrap());
     let n = 2 * 3 * 4;
     let data: Vec<f64> = (0..n).map(|i| i as f64).collect();
-    let tensor = TensorDynLen::from_dense(vec![i1, i2, i3], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i1, i2, i3], data.clone()).unwrap();
 
     save_itensor(&path, "tensor3d", &tensor).unwrap();
     let loaded = load_itensor(&path, "tensor3d").unwrap();
@@ -445,15 +445,15 @@ fn make_test_mps() -> TensorTrain {
 
     // Tensor 0: shape (1, 2, 3) = 6 elements
     let data0: Vec<f64> = (0..6).map(|i| i as f64 * 0.1).collect();
-    let t0 = TensorDynLen::from_dense(vec![left_dummy, site0, link01_left], data0).unwrap();
+    let t0 = IdxTensor::from_dense(vec![left_dummy, site0, link01_left], data0).unwrap();
 
     // Tensor 1: shape (3, 2, 4) = 24 elements
     let data1: Vec<f64> = (0..24).map(|i| i as f64 * 0.01).collect();
-    let t1 = TensorDynLen::from_dense(vec![link01_right, site1, link12_left], data1).unwrap();
+    let t1 = IdxTensor::from_dense(vec![link01_right, site1, link12_left], data1).unwrap();
 
     // Tensor 2: shape (4, 2, 1) = 8 elements
     let data2: Vec<f64> = (0..8).map(|i| i as f64 * 0.05).collect();
-    let t2 = TensorDynLen::from_dense(vec![link12_right, site2, right_dummy], data2).unwrap();
+    let t2 = IdxTensor::from_dense(vec![link12_right, site2, right_dummy], data2).unwrap();
 
     TensorTrain::new(vec![t0, t1, t2]).unwrap()
 }
@@ -747,12 +747,12 @@ fn test_mps_load_preserves_site_tensor_index_order() {
     let site0 = Index::new_with_size(DynId(10), 2);
     let link = Index::new_with_size(DynId(11), 3);
     let site1 = Index::new_with_size(DynId(12), 2);
-    let left = TensorDynLen::from_dense(
+    let left = IdxTensor::from_dense(
         vec![link.clone(), site0.clone()],
         vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
     )
     .unwrap();
-    let right = TensorDynLen::from_dense(
+    let right = IdxTensor::from_dense(
         vec![site1.clone(), link.clone()],
         vec![6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
     )
@@ -772,13 +772,13 @@ fn test_mps_load_preserves_site_tensor_index_order() {
 fn test_append_mps_keeps_multiple_named_objects() {
     let path = temp_path("append_mps_multiple");
     std::fs::remove_file(&path).ok();
-    let first = TensorTrain::new(vec![TensorDynLen::from_dense(
+    let first = TensorTrain::new(vec![IdxTensor::from_dense(
         vec![DynIndex::new_dyn(2)],
         vec![1.0, 2.0],
     )
     .unwrap()])
     .unwrap();
-    let second = TensorTrain::new(vec![TensorDynLen::from_dense(
+    let second = TensorTrain::new(vec![IdxTensor::from_dense(
         vec![DynIndex::new_dyn(2)],
         vec![3.0, 4.0],
     )
@@ -905,7 +905,7 @@ fn mps_attribute_lookup_does_not_enumerate_attribute_names() {
 
 #[test]
 fn test_roundtrip_preserves_same_id_distinct_metadata_indices() -> anyhow::Result<()> {
-    use tensor4all_core::{DynId, Index, TagSet, TensorDynLen};
+    use tensor4all_core::{DynId, IdxTensor, Index, TagSet};
     use tensor4all_hdf5::{load_itensor, save_itensor};
 
     let tags_a = TagSet::from_str("Site,A")?;
@@ -914,7 +914,7 @@ fn test_roundtrip_preserves_same_id_distinct_metadata_indices() -> anyhow::Resul
     let j = Index::new_with_tags(DynId(7), 3, tags_b).set_plev(1);
     assert_ne!(i, j);
 
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )?;
@@ -952,17 +952,16 @@ fn test_type_mismatch_error() {
 use tensor4all_treetn::TreeTN;
 
 /// A 3-node tree (root connected to two leaves) with known data.
-fn make_test_treetn() -> TreeTN<TensorDynLen, String> {
+fn make_test_treetn() -> TreeTN<IdxTensor, String> {
     let s_left = DynIndex::new_dyn(2);
     let s_root = DynIndex::new_dyn(3);
     let s_right = DynIndex::new_dyn(2);
     let b_left = DynIndex::new_dyn(4);
     let b_right = DynIndex::new_dyn(5);
 
-    let left = TensorDynLen::from_dense(vec![s_left, b_left.clone()], vec![1.0; 8]).unwrap();
-    let root =
-        TensorDynLen::from_dense(vec![b_left, s_root, b_right.clone()], vec![2.0; 60]).unwrap();
-    let right = TensorDynLen::from_dense(vec![b_right, s_right], vec![3.0; 10]).unwrap();
+    let left = IdxTensor::from_dense(vec![s_left, b_left.clone()], vec![1.0; 8]).unwrap();
+    let root = IdxTensor::from_dense(vec![b_left, s_root, b_right.clone()], vec![2.0; 60]).unwrap();
+    let right = IdxTensor::from_dense(vec![b_right, s_right], vec![3.0; 10]).unwrap();
 
     TreeTN::from_tensors(
         vec![left, root, right],
@@ -971,7 +970,7 @@ fn make_test_treetn() -> TreeTN<TensorDynLen, String> {
     .unwrap()
 }
 
-fn treetn_node_tensors(tn: &TreeTN<TensorDynLen, String>) -> Vec<TensorDynLen> {
+fn treetn_node_tensors(tn: &TreeTN<IdxTensor, String>) -> Vec<IdxTensor> {
     tn.node_indices()
         .iter()
         .map(|idx| tn.tensor(*idx).unwrap().clone())
@@ -1023,9 +1022,9 @@ fn test_treetn_usize_node_names_roundtrip() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let b01 = DynIndex::new_dyn(4);
-    let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 8]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![b01, s1], vec![1.0; 8]).unwrap();
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0; 8]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01, s1], vec![1.0; 8]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
 
     save_treetn(path.as_str(), "tn", &tn).unwrap();
     let loaded = load_treetn::<usize>(path.as_str(), "tn").unwrap();

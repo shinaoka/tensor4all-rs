@@ -34,19 +34,19 @@ assert!((c.evaluate(&[0, 1, 2])? - 3.0).abs() < 1e-10);
 
 ```rust
 use rand::SeedableRng;
-use tensor4all_core::{Index, IndexLike, TensorDynLen, contract, factorize, FactorizeOptions, SvdTruncationPolicy};
+use tensor4all_core::{Index, IndexLike, IdxTensor, contract, factorize, FactorizeOptions, SvdTruncationPolicy};
 
 let i = Index::new_dyn(2);
 let j = Index::new_dyn(3);
 let k = Index::new_dyn(4);
 
-let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6])?;
-let b = TensorDynLen::from_dense(vec![j, k.clone()], vec![1.0_f64; 12])?;
+let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6])?;
+let b = IdxTensor::from_dense(vec![j, k.clone()], vec![1.0_f64; 12])?;
 let c = contract(&[&a, &b])?;          // j summed away -> [i, k]
 assert_eq!(c.dims(), vec![2, 4]);
 
 // SVD split along i | k, truncating below rtol.
-let t = TensorDynLen::random::<f64, _>(&mut rand_chacha::ChaCha8Rng::seed_from_u64(1), vec![i.clone(), k.clone()])?;
+let t = IdxTensor::random::<f64, _>(&mut rand_chacha::ChaCha8Rng::seed_from_u64(1), vec![i.clone(), k.clone()])?;
 let opts = FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1e-10));
 let r = factorize(&t, &[i], &opts)?;   // r.left=[i,bond], r.right=[bond,k]
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -160,14 +160,14 @@ identity tensors at the skipped sites automatically.
 ## Tree TN: build, canonicalize, truncate
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::{TreeTN, TruncationOptions};
 
 let s0 = DynIndex::new_dyn(2);
 let s1 = DynIndex::new_dyn(2);
 let bond = DynIndex::new_dyn(3);
-let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0_f64; 6])?;
-let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0_f64; 6])?;
+let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0_f64; 6])?;
+let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0_f64; 6])?;
 let mut ttn = TreeTN::<_, i32>::from_tensors(vec![t0, t1], vec![0, 1])?;
 assert_eq!(ttn.edge_count(), 1);
 
@@ -190,18 +190,18 @@ and one output site mapping per node.
 
 ```rust
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::{tdvp_with_treetn_operator, TdvpOptions, TreeTN};
 
 // One-site TDVP under a 2x2 identity MPO: |0> evolves under exp(-0.1i * I).
 let site = DynIndex::new_dyn(2);
-let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
-let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
+let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0])?;
 
 let op_in = DynIndex::new_dyn(2);
 let op_out = DynIndex::new_dyn(2);
-let op_tensor = TensorDynLen::from_dense(vec![op_out, op_in], vec![1.0, 0.0, 0.0, 1.0])?;
-let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![op_tensor], vec![0])?;
+let op_tensor = IdxTensor::from_dense(vec![op_out, op_in], vec![1.0, 0.0, 0.0, 1.0])?;
+let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![op_tensor], vec![0])?;
 
 let result = tdvp_with_treetn_operator(
     &mpo, state, &0,
@@ -220,14 +220,14 @@ assert_eq!(result.sweeps_completed, 1);
 ## ITensorLike TT: orthogonalize, truncate, inner
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
 
 let s0 = DynIndex::new_dyn(2);
 let s1 = DynIndex::new_dyn(2);
 let b01 = DynIndex::new_bond(2)?;
-let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
-let t1 = TensorDynLen::from_dense(vec![b01, s1], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+let t1 = IdxTensor::from_dense(vec![b01, s1], vec![1.0_f64, 0.0, 0.0, 1.0])?;
 let mut tt = SimpleTensorTrain::new(vec![t0, t1])?;
 
 let norm_before = tt.norm();

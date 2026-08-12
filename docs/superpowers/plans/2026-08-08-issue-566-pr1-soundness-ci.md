@@ -702,7 +702,7 @@ Expected: FAIL because source-aware assertion handling and baseline semantics do
 Classify and remove/fix:
 
 ```text
-crates/tensor4all-core/src/defaults/tensordynlen.rs:2354
+crates/tensor4all-core/src/defaults/idx_tensor.rs:2354
 crates/tensor4all-simplett/src/mpo/test_support.rs:40
 crates/tensor4all-tensorbackend/src/context.rs:115
 crates/tensor4all-tensorbackend/src/matrix.rs:901
@@ -841,22 +841,22 @@ Replace the `square_linsolve` example's invalid one-index operator with a one-si
 
 ```rust
 use std::collections::HashMap;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::{square_linsolve, IndexMapping, LinsolveOptions, TreeTN};
 
 # fn main() -> anyhow::Result<()> {
 let site = DynIndex::new_dyn(2);
 let s_in = DynIndex::new_dyn(2);
 let s_out = DynIndex::new_dyn(2);
-let operator_tensor = TensorDynLen::from_dense(
+let operator_tensor = IdxTensor::from_dense(
     vec![s_out.clone(), s_in.clone()],
     vec![1.0_f64, 0.0, 0.0, 1.0],
 )?;
-let rhs_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0_f64, 2.0])?;
-let init_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![0.0_f64, 0.0])?;
-let operator = TreeTN::<TensorDynLen, usize>::from_tensors(vec![operator_tensor], vec![0])?;
-let rhs = TreeTN::<TensorDynLen, usize>::from_tensors(vec![rhs_tensor], vec![0])?;
-let init = TreeTN::<TensorDynLen, usize>::from_tensors(vec![init_tensor], vec![0])?;
+let rhs_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0])?;
+let init_tensor = IdxTensor::from_dense(vec![site.clone()], vec![0.0_f64, 0.0])?;
+let operator = TreeTN::<IdxTensor, usize>::from_tensors(vec![operator_tensor], vec![0])?;
+let rhs = TreeTN::<IdxTensor, usize>::from_tensors(vec![rhs_tensor], vec![0])?;
+let init = TreeTN::<IdxTensor, usize>::from_tensors(vec![init_tensor], vec![0])?;
 let mut input_mapping = HashMap::new();
 input_mapping.insert(0usize, IndexMapping { true_index: site.clone(), internal_index: s_in });
 let mut output_mapping = HashMap::new();

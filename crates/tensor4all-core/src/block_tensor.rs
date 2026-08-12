@@ -10,17 +10,17 @@
 //! ```
 //! use tensor4all_core::block_tensor::BlockTensor;
 //! use tensor4all_core::krylov::{gmres, GmresOptions};
-//! use tensor4all_core::{DynIndex, TensorDynLen};
+//! use tensor4all_core::{DynIndex, IdxTensor};
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let i = DynIndex::new_dyn(2);
-//! let b_block = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0])?;
-//! let zero_block = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
+//! let b_block = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0])?;
+//! let zero_block = IdxTensor::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
 //!
 //! let b = BlockTensor::new(vec![b_block], (1, 1))?;
 //! let x0 = BlockTensor::new(vec![zero_block], (1, 1))?;
 //!
-//! let apply_a = |x: &BlockTensor<TensorDynLen>| Ok(x.clone());
+//! let apply_a = |x: &BlockTensor<IdxTensor>| Ok(x.clone());
 //! let result = gmres(apply_a, &b, &x0, &GmresOptions::default())?;
 //!
 //! assert!(result.converged);
@@ -73,17 +73,17 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    /// let t2 = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
     ///
     /// let bt = BlockTensor::try_new(vec![t1, t2], (2, 1)).unwrap();
     /// assert_eq!(bt.shape(), (2, 1));
     ///
     /// // Wrong number of blocks returns an error
-    /// let t3 = TensorDynLen::from_dense(vec![i], vec![5.0, 6.0]).unwrap();
+    /// let t3 = IdxTensor::from_dense(vec![i], vec![5.0, 6.0]).unwrap();
     /// assert!(BlockTensor::try_new(vec![t3], (2, 1)).is_err());
     /// ```
     pub fn try_new(
@@ -119,10 +119,10 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// let bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// assert_eq!(bt.shape(), (1, 1));
     /// ```
@@ -139,11 +139,11 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let blocks: Vec<TensorDynLen> = (0..6)
-    ///     .map(|_| TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap())
+    /// let blocks: Vec<IdxTensor> = (0..6)
+    ///     .map(|_| IdxTensor::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap())
     ///     .collect();
     /// let bt = BlockTensor::new(blocks, (2, 3)).unwrap();
     /// assert_eq!(bt.shape(), (2, 3));
@@ -163,11 +163,11 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    /// let t2 = TensorDynLen::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
     /// let bt = BlockTensor::new(vec![t1, t2], (2, 1)).unwrap();
     /// assert_eq!(bt.get(0, 0).unwrap().dims(), vec![2]);
     /// assert_eq!(bt.get(1, 0).unwrap().dims(), vec![2]);
@@ -186,10 +186,10 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     /// let mut bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// let block = bt.get_mut(0, 0).unwrap();
     /// assert_eq!(block.dims(), vec![2]);
@@ -208,11 +208,11 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    /// let t2 = TensorDynLen::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
     /// let bt = BlockTensor::new(vec![t1, t2], (1, 2)).unwrap();
     /// assert_eq!(bt.blocks().len(), 2);
     /// ```
@@ -226,10 +226,10 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// let mut bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// assert_eq!(bt.blocks_mut().len(), 1);
     /// ```
@@ -243,10 +243,10 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// let bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// let blocks = bt.into_blocks();
     /// assert_eq!(blocks.len(), 1);
@@ -276,13 +276,13 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// ```
     /// use tensor4all_core::block_tensor::BlockTensor;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// // Column vector: always valid regardless of index sharing
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
-    /// let t1 = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
-    /// let t2 = TensorDynLen::from_dense(vec![j], vec![3.0, 4.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![j], vec![3.0, 4.0]).unwrap();
     /// let bt = BlockTensor::new(vec![t1, t2], (2, 1)).unwrap();
     /// assert!(bt.validate_indices().is_ok());
     /// ```

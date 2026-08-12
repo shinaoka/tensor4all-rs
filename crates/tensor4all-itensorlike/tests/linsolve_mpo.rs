@@ -5,7 +5,7 @@
 //! it did not pass IndexMapping to the treetn solver.
 
 use num_complex::Complex64;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
 use tensor4all_itensorlike::{LinsolveOptions, TensorTrain};
 
 /// Build a 2-site identity MPO where input indices are the SAME objects
@@ -34,12 +34,11 @@ fn test_linsolve_identity_mpo_distinct_output_indices() {
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = 1.0;
     }
-    let t0_mps = TensorDynLen::from_dense(vec![s0.clone(), b_mps.clone()], data0).unwrap();
+    let t0_mps = IdxTensor::from_dense(vec![s0.clone(), b_mps.clone()], data0).unwrap();
 
     // Site 1: [b_mps, s1] = values
     let t1_mps =
-        TensorDynLen::from_dense(vec![b_mps.clone(), s1.clone()], vec![1.0, 2.0, 3.0, 4.0])
-            .unwrap();
+        IdxTensor::from_dense(vec![b_mps.clone(), s1.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let rhs = TensorTrain::new(vec![t0_mps.clone(), t1_mps.clone()]).unwrap();
     let init = TensorTrain::new(vec![t0_mps, t1_mps]).unwrap();
@@ -52,7 +51,7 @@ fn test_linsolve_identity_mpo_distinct_output_indices() {
     for i in 0..phys_dim {
         id_data[i * phys_dim + i] = 1.0;
     }
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0.clone(), b_mpo.clone()],
         id_data.clone(),
     )
@@ -60,7 +59,7 @@ fn test_linsolve_identity_mpo_distinct_output_indices() {
 
     // Site 1: [b_mpo, s1_out, s1] - identity
     let t1_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1.clone()], id_data).unwrap();
+        IdxTensor::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1.clone()], id_data).unwrap();
 
     let operator = TensorTrain::new(vec![t0_mpo, t1_mpo]).unwrap();
 
@@ -91,7 +90,7 @@ fn test_linsolve_identity_mpo_accepts_complex_coefficients() {
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = Complex64::new(1.0, 0.0);
     }
-    let t0_mps = TensorDynLen::from_dense(vec![s0.clone(), b_mps.clone()], data0).unwrap();
+    let t0_mps = IdxTensor::from_dense(vec![s0.clone(), b_mps.clone()], data0).unwrap();
 
     let rhs_values = vec![
         Complex64::new(1.0, 0.5),
@@ -100,11 +99,11 @@ fn test_linsolve_identity_mpo_accepts_complex_coefficients() {
         Complex64::new(0.5, 1.5),
     ];
     let t1_mps =
-        TensorDynLen::from_dense(vec![b_mps.clone(), s1.clone()], rhs_values.clone()).unwrap();
+        IdxTensor::from_dense(vec![b_mps.clone(), s1.clone()], rhs_values.clone()).unwrap();
     let rhs = TensorTrain::new(vec![t0_mps.clone(), t1_mps]).unwrap();
 
     let zero0 = t0_mps.scale(AnyScalar::new_real(0.0)).unwrap();
-    let zero1 = TensorDynLen::from_dense(
+    let zero1 = IdxTensor::from_dense(
         vec![b_mps.clone(), s1.clone()],
         vec![Complex64::new(0.0, 0.0); phys_dim * phys_dim],
     )
@@ -115,12 +114,12 @@ fn test_linsolve_identity_mpo_accepts_complex_coefficients() {
     for i in 0..phys_dim {
         id_data[i * phys_dim + i] = Complex64::new(1.0, 0.0);
     }
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0.clone(), b_mpo.clone()],
         id_data.clone(),
     )
     .unwrap();
-    let t1_mpo = TensorDynLen::from_dense(vec![b_mpo, s1_out, s1.clone()], id_data).unwrap();
+    let t1_mpo = IdxTensor::from_dense(vec![b_mpo, s1_out, s1.clone()], id_data).unwrap();
     let operator = TensorTrain::new(vec![t0_mpo, t1_mpo]).unwrap();
 
     let options = LinsolveOptions::new(3)

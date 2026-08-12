@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tensor4all_core::index::DynId;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 
 use crate::operator::IndexMapping;
 use crate::treetn::TreeTN;
@@ -17,7 +17,7 @@ fn unique_dyn_index(used: &mut HashSet<DynId>, dim: usize) -> DynIndex {
     }
 }
 
-fn tensor_indices(state: &TreeTN<TensorDynLen, String>, node: &str) -> Vec<DynIndex> {
+fn tensor_indices(state: &TreeTN<IdxTensor, String>, node: &str) -> Vec<DynIndex> {
     state
         .tensor(state.node_index(&node.to_string()).unwrap())
         .unwrap()
@@ -28,9 +28,9 @@ fn tensor_indices(state: &TreeTN<TensorDynLen, String>, node: &str) -> Vec<DynIn
 fn test_local_linop_new() {
     use crate::linsolve::common::ProjectedOperator;
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
     state.add_tensor("site0".to_string(), t0).unwrap();
 
     let reference_state = state.clone();
@@ -53,9 +53,9 @@ fn test_local_linop_new() {
 fn test_local_linop_apply_projected_rejects_mismatch() {
     use crate::linsolve::common::ProjectedOperator;
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
     state.add_tensor("site0".to_string(), t0).unwrap();
 
     let reference_state = state.clone();
@@ -84,9 +84,9 @@ fn test_local_linop_apply_projected_rejects_mismatch() {
 fn test_local_linop_apply_index_mismatch() {
     use crate::linsolve::common::ProjectedOperator;
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
     state.add_tensor("site0".to_string(), t0).unwrap();
 
     let reference_state = state.clone();
@@ -102,7 +102,7 @@ fn test_local_linop_apply_index_mismatch() {
     );
 
     let other = DynIndex::new_dyn(2);
-    let x = TensorDynLen::from_dense(vec![other], vec![1.0, 0.0]).unwrap();
+    let x = IdxTensor::from_dense(vec![other], vec![1.0, 0.0]).unwrap();
     let err = linop.apply_projected(&x).unwrap_err();
     assert!(err.to_string().contains("index structure mismatch"));
 }
@@ -118,9 +118,9 @@ fn test_local_linop_apply_success_mappings() {
     let contracted = unique_dyn_index(&mut used, phys_dim);
     let external = unique_dyn_index(&mut used, ext_dim);
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let nelem = ext_dim * phys_dim;
-    let t = TensorDynLen::from_dense(vec![external.clone(), contracted.clone()], vec![1.0; nelem])
+    let t = IdxTensor::from_dense(vec![external.clone(), contracted.clone()], vec![1.0; nelem])
         .unwrap();
     state.add_tensor("site0".to_string(), t).unwrap();
 
@@ -130,8 +130,8 @@ fn test_local_linop_apply_success_mappings() {
     for k in 0..phys_dim {
         id_data[k * phys_dim + k] = 1.0;
     }
-    let op_t = TensorDynLen::from_dense(vec![s_out.clone(), s_in.clone()], id_data).unwrap();
-    let mut op_tn = TreeTN::<TensorDynLen, String>::new();
+    let op_t = IdxTensor::from_dense(vec![s_out.clone(), s_in.clone()], id_data).unwrap();
+    let mut op_tn = TreeTN::<IdxTensor, String>::new();
     op_tn.add_tensor("site0".to_string(), op_t).unwrap();
 
     let mut im = HashMap::new();

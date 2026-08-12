@@ -5,18 +5,18 @@
 //!
 //! # Note
 //!
-//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 //! Generic tensor types are not supported.
 //!
 //! # Example
 //!
 //! ```
-//! use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen, TensorLike};
+//! use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, IdxTensor, TensorLike};
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let i = DynIndex::new_dyn(2);
 //! let j = DynIndex::new_dyn(2);
-//! let tensor = TensorDynLen::from_dense(
+//! let tensor = IdxTensor::from_dense(
 //!     vec![i.clone(), j.clone()],
 //!     vec![1.0, 0.0, 0.0, 1.0],
 //! )?;
@@ -32,9 +32,9 @@
 //! # }
 //! ```
 
-use crate::defaults::tensordynlen::unfold_split_inner;
+use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
-use crate::{contract_pair, unfold_split, TensorDynLen};
+use crate::{contract_pair, unfold_split, IdxTensor};
 use anyhow::Result as AnyhowResult;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
@@ -78,10 +78,10 @@ pub use crate::tensor_like::{
 /// - QR is used with `Canonical::Right`
 /// - The underlying algorithm fails
 pub fn factorize(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     options.validate()?;
 
     if t.is_diag() {
@@ -126,12 +126,12 @@ pub fn factorize(
 ///
 /// ```
 /// use tensor4all_core::{
-///     factorize_full_rank, Canonical, DynIndex, FactorizeAlg, TensorContractionLike, TensorDynLen,
+///     factorize_full_rank, Canonical, DynIndex, FactorizeAlg, TensorContractionLike, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
-/// let tensor = TensorDynLen::from_dense(
+/// let tensor = IdxTensor::from_dense(
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0_f64, 0.0, 0.0, 1.0e-16],
 /// )?;
@@ -147,11 +147,11 @@ pub fn factorize(
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn factorize_full_rank(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     alg: FactorizeAlg,
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
@@ -170,10 +170,10 @@ pub fn factorize_full_rank(
 }
 
 fn factorize_impl_f64(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     match options.alg {
         FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
         FactorizeAlg::QR => factorize_qr(t, left_inds, options),
@@ -183,11 +183,11 @@ fn factorize_impl_f64(
 }
 
 fn factorize_impl_f64_full_rank(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     alg: FactorizeAlg,
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     match alg {
         FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
         FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
@@ -197,10 +197,10 @@ fn factorize_impl_f64_full_rank(
 }
 
 fn factorize_impl_c64(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     match options.alg {
         FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
         FactorizeAlg::QR => factorize_qr(t, left_inds, options),
@@ -210,11 +210,11 @@ fn factorize_impl_c64(
 }
 
 fn factorize_impl_c64_full_rank(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     alg: FactorizeAlg,
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     match alg {
         FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
         FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
@@ -225,10 +225,10 @@ fn factorize_impl_c64_full_rank(
 
 /// SVD factorization implementation.
 fn factorize_svd(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let mut svd_options = SvdOptions::new();
     if let Some(policy) = options.svd_policy {
         svd_options = svd_options.with_policy(policy);
@@ -241,20 +241,20 @@ fn factorize_svd(
 }
 
 fn factorize_svd_full_rank(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let svd_options = SvdOptions::full_rank();
     factorize_svd_with_options(t, left_inds, canonical, &svd_options)
 }
 
 fn factorize_svd_with_options(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
     svd_options: &SvdOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let result = svd_for_factorize(t, left_inds, svd_options)?;
     let u = result.u;
     let s = result.s;
@@ -300,10 +300,10 @@ fn factorize_svd_with_options(
 
 /// QR factorization implementation.
 fn factorize_qr(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     if options.canonical == Canonical::Right {
         return Err(FactorizeError::UnsupportedCanonical(
             "QR only supports Canonical::Left (would need LQ for right)",
@@ -320,10 +320,10 @@ fn factorize_qr(
 }
 
 fn factorize_qr_full_rank(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     if canonical == Canonical::Right {
         return Err(FactorizeError::UnsupportedCanonical(
             "QR only supports Canonical::Left (would need LQ for right)",
@@ -334,10 +334,10 @@ fn factorize_qr_full_rank(
 }
 
 fn factorize_qr_with_options(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     qr_options: &QrOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let (q, r) = qr_with::<f64>(t, left_inds, qr_options)?;
 
     // Get bond index from Q tensor (last index)
@@ -363,10 +363,10 @@ fn factorize_qr_with_options(
 
 /// LU factorization implementation.
 fn factorize_lu<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
 where
     T: TensorElement
         + ComplexFloat
@@ -387,10 +387,10 @@ where
 }
 
 fn factorize_lu_full_rank<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
 where
     T: TensorElement
         + ComplexFloat
@@ -405,12 +405,12 @@ where
 }
 
 fn factorize_lu_with_options<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
     max_bond_dim: usize,
     rel_tol: f64,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
 where
     T: TensorElement
         + ComplexFloat
@@ -453,14 +453,14 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let left = TensorDynLen::from_dense(l_indices, l_vec)
+    let left = IdxTensor::from_dense(l_indices, l_vec)
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     // Convert U matrix back to tensor
     let u_vec = matrix_to_vec(&u_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let right = TensorDynLen::from_dense(r_indices, u_vec)
+    let right = IdxTensor::from_dense(r_indices, u_vec)
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok(FactorizeResult {
@@ -474,10 +474,10 @@ where
 
 /// CI (Cross Interpolation) factorization implementation.
 fn factorize_ci<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
 where
     T: TensorElement
         + ComplexFloat
@@ -498,10 +498,10 @@ where
 }
 
 fn factorize_ci_full_rank<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
 where
     T: TensorElement
         + ComplexFloat
@@ -522,16 +522,16 @@ where
 // MatrixLuciScalar) below the algorithm layer. tensor4all-tcicore has no
 // dependency on tensor4all-core, so the direction core -> tcicore is
 // high-to-low and acyclic: the crate-boundary script rejects any reverse or
-// dev-dependency cycle. TensorDynLen data is unfolded into a column-major
+// dev-dependency cycle. IdxTensor data is unfolded into a column-major
 // eager matrix at this boundary, and fixed-pivot CI factors are rebuilt from
 // that primal value.
 fn factorize_ci_with_options<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     canonical: Canonical,
     max_bond_dim: usize,
     rel_tol: f64,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
 where
     T: TensorElement
         + ComplexFloat
@@ -609,8 +609,8 @@ where
     let left_inner = left_inner.reshape(&l_dims).map_err(|e| {
         FactorizeError::ComputationError(anyhow::anyhow!("fixed-pivot CI left reshape failed: {e}"))
     })?;
-    let left = TensorDynLen::from_inner(l_indices, left_inner)
-        .map_err(FactorizeError::ComputationError)?;
+    let left =
+        IdxTensor::from_inner(l_indices, left_inner).map_err(FactorizeError::ComputationError)?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
@@ -620,8 +620,8 @@ where
             "fixed-pivot CI right reshape failed: {e}"
         ))
     })?;
-    let right = TensorDynLen::from_inner(r_indices, right_inner)
-        .map_err(FactorizeError::ComputationError)?;
+    let right =
+        IdxTensor::from_inner(r_indices, right_inner).map_err(FactorizeError::ComputationError)?;
 
     Ok(FactorizeResult {
         left,

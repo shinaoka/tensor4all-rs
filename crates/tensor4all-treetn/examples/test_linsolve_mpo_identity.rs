@@ -16,7 +16,7 @@ use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
-    index::DynId, AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+    index::DynId, AnyScalar, DynIndex, IdxTensor, IndexLike, TensorContractionLike, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -77,13 +77,13 @@ fn create_identity_mpo_with_mappings(
     true_site_indices: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
 ) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 )> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // MPO bonds: dim 1
     let bonds: Vec<_> = (0..n.saturating_sub(1))
@@ -126,7 +126,7 @@ fn create_identity_mpo_with_mappings(
                 base_data[idx] = 1.0;
             }
         }
-        let base = TensorDynLen::from_dense(
+        let base = IdxTensor::from_dense(
             vec![
                 true_site_indices[i].clone(), // external index (appears in site_space)
                 s_out_tmp[i].clone(),
@@ -142,8 +142,8 @@ fn create_identity_mpo_with_mappings(
         } else {
             // Add bond indices via outer product
             let bond_indices = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
-            TensorDynLen::outer_product(&base, &ones)?
+            let ones = IdxTensor::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
+            IdxTensor::outer_product(&base, &ones)?
         };
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
@@ -176,16 +176,16 @@ fn create_identity_mpo_with_mappings(
 /// Create a random MPO with the same structure (same index IDs) as `template`.
 /// Replaces each node's tensor with random **real** data. Used for init != rhs (real case).
 fn create_random_mpo_matching_structure(
-    template: &TreeTN<TensorDynLen, String>,
+    template: &TreeTN<IdxTensor, String>,
     seed: u64,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut mpo = template.clone();
     for node_name in template.node_names() {
         let node_idx = mpo.node_index(&node_name).unwrap();
         let t = mpo.tensor(node_idx).unwrap();
         let indices = t.external_indices();
-        let new_t = TensorDynLen::random::<f64, _>(&mut rng, indices)?;
+        let new_t = IdxTensor::random::<f64, _>(&mut rng, indices)?;
         mpo.replace_tensor(node_idx, new_t)?;
     }
     Ok(mpo)
@@ -194,16 +194,16 @@ fn create_random_mpo_matching_structure(
 /// Like `create_random_mpo_matching_structure` but uses **complex** random tensors.
 /// Use for init=random when RHS is complex (e.g. b = i*I) so storage matches DenseC64.
 fn create_random_mpo_matching_structure_c64(
-    template: &TreeTN<TensorDynLen, String>,
+    template: &TreeTN<IdxTensor, String>,
     seed: u64,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut mpo = template.clone();
     for node_name in template.node_names() {
         let node_idx = mpo.node_index(&node_name).unwrap();
         let t = mpo.tensor(node_idx).unwrap();
         let indices = t.external_indices();
-        let new_t = TensorDynLen::random::<Complex64, _>(&mut rng, indices)?;
+        let new_t = IdxTensor::random::<Complex64, _>(&mut rng, indices)?;
         mpo.replace_tensor(node_idx, new_t)?;
     }
     Ok(mpo)
@@ -220,13 +220,13 @@ fn create_identity_mpo_operator_only(
     true_site_indices: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
 ) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 )> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, 1))
         .collect();
@@ -250,15 +250,15 @@ fn create_identity_mpo_operator_only(
             base_data[k * phys_dim + k] = 1.0;
         }
         let base =
-            TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], base_data)
+            IdxTensor::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], base_data)
                 .unwrap();
 
         let t = if indices.len() == 2 {
             base
         } else {
             let bond_indices = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
-            TensorDynLen::outer_product(&base, &ones)?
+            let ones = IdxTensor::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
+            IdxTensor::outer_product(&base, &ones)?
         };
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
@@ -287,7 +287,7 @@ fn create_identity_mpo_operator_only(
     Ok((mpo, input_mapping, output_mapping))
 }
 
-fn print_bond_dims(treetn: &TreeTN<TensorDynLen, String>, label: &str) {
+fn print_bond_dims(treetn: &TreeTN<IdxTensor, String>, label: &str) {
     let edges: Vec<_> = treetn.site_index_network().edges().collect();
     if edges.is_empty() {
         println!("{label}: no bonds");
@@ -306,10 +306,10 @@ fn print_bond_dims(treetn: &TreeTN<TensorDynLen, String>, label: &str) {
 
 /// Scale a TreeTN by a scalar factor (scale only one tensor to avoid scalar^n scaling).
 fn scale_treetn(
-    treetn: &TreeTN<TensorDynLen, String>,
+    treetn: &TreeTN<IdxTensor, String>,
     scalar: AnyScalar,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
-    let mut scaled = TreeTN::<TensorDynLen, String>::new();
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
+    let mut scaled = TreeTN::<IdxTensor, String>::new();
     let node_names: Vec<String> = treetn.node_names().into_iter().collect();
     let last_idx = node_names.len().saturating_sub(1);
 
@@ -336,13 +336,13 @@ fn scale_treetn(
 }
 
 fn compute_residual(
-    op: &TreeTN<TensorDynLen, String>,
+    op: &TreeTN<IdxTensor, String>,
     im: &HashMap<String, IndexMapping<DynIndex>>,
     om: &HashMap<String, IndexMapping<DynIndex>>,
     a0: f64,
     a1: f64,
-    x: &TreeTN<TensorDynLen, String>,
-    rhs: &TreeTN<TensorDynLen, String>,
+    x: &TreeTN<IdxTensor, String>,
+    rhs: &TreeTN<IdxTensor, String>,
 ) -> anyhow::Result<(f64, f64)> {
     let linop = LinearOperator::new(op.clone(), im.clone(), om.clone());
     let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
@@ -351,7 +351,7 @@ fn compute_residual(
     let b_full = rhs.contract_to_tensor()?;
     let ref_order = b_full.external_indices();
 
-    let order_for = |tensor: &TensorDynLen| -> anyhow::Result<Vec<DynIndex>> {
+    let order_for = |tensor: &IdxTensor| -> anyhow::Result<Vec<DynIndex>> {
         let inds = tensor.external_indices();
         let by_id: HashMap<DynId, DynIndex> = inds.into_iter().map(|i| (*i.id(), i)).collect();
         let mut out = Vec::with_capacity(ref_order.len());

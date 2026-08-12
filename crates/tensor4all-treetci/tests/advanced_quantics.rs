@@ -24,7 +24,7 @@ fn branching_tree(n_sites: usize) -> TreeTciGraph {
 }
 
 fn evaluate_treetn(
-    tn: &tensor4all_treetn::TreeTN<tensor4all_core::TensorDynLen, usize>,
+    tn: &tensor4all_treetn::TreeTN<tensor4all_core::IdxTensor, usize>,
     point: &[usize],
 ) -> f64 {
     let (indices, _vertices) = tn.all_site_indices().unwrap();

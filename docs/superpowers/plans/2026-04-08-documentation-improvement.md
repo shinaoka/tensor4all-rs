@@ -359,7 +359,7 @@ Source material: `crates/tensor4all-core/README.md`
 
 Content:
 - **Index**: Creating indices with `Index::new(dim)`, tags, prime levels
-- **Tensor**: Creating tensors with `TensorDynLen`, random tensors
+- **Tensor**: Creating tensors with `IdxTensor`, random tensors
 - **Contraction**: `contract()`, `contract_multi()`, `AllowedPairs`
 - **Factorization**: SVD with truncation, QR
 - Code examples from current core README, adapted with assertions
@@ -440,7 +440,7 @@ Content migrated from current README sections:
 | ITensors.jl | tensor4all-rs |
 |-------------|---------------|
 | `Index{Int}` | `Index<Id, NoSymmSpace>` |
-| `ITensor` | `TensorDynLen` |
+| `ITensor` | `IdxTensor` |
 | `Dense` | `Storage::StructuredF64/C64` |
 | `Diag` | `Storage::StructuredF64/C64` (diagonal) |
 | `A * B` | `a.contract(&b)` |
@@ -631,7 +631,7 @@ For each crate, replace the existing README with the unified template format:
 Read each existing README, extract the key types and one short example with assertions. Discard detailed explanations (now in Book). Keep the example minimal (~10-15 lines of code).
 
 Key types per crate:
-- **core**: `Index`, `TensorDynLen`, `Storage`, `contract()`, `svd()`
+- **core**: `Index`, `IdxTensor`, `Storage`, `contract()`, `svd()`
 - **treetn**: `TreeTN`, `from_tensors()`, `canonicalize()`, `truncate()`
 - **itensorlike**: `TensorTrain`, `orthogonalize()`, `truncate()`, `inner()`
 - **simplett**: `TensorTrain`, `evaluate()`, `sum()`, `compressed()`
@@ -723,7 +723,7 @@ HDF5 serialization for tensor4all-rs, compatible with ITensors.jl / ITensorMPS.j
 
 ## Key Types
 
-- `save_itensor()` / `load_itensor()` — read/write `TensorDynLen` as ITensors.jl `ITensor`
+- `save_itensor()` / `load_itensor()` — read/write `IdxTensor` as ITensors.jl `ITensor`
 - `save_mps()` / `load_mps()` — read/write `TensorTrain` as ITensorMPS.jl `MPS`
 
 ## Feature Flags
@@ -807,14 +807,14 @@ For each crate, identify public types/traits/functions that lack `/// # Examples
 
 - [ ] **Step 1: Add doc examples to tensor4all-core**
 
-Key items: `Index::new()`, `TensorDynLen` creation, `contract()`, `svd()`, `qr()`
+Key items: `Index::new()`, `IdxTensor` creation, `contract()`, `svd()`, `qr()`
 
 Pattern for each:
 ```rust
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_core::{Index, IdxTensor};
 ///
 /// let i = Index::new(3);
 /// assert_eq!(i.dim(), 3);

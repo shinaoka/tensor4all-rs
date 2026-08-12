@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike, TensorIndex};
 use tensor4all_treetn::{tdvp, IndexMapping, LinearOperator, TdvpOptions, TreeTN};
 
 #[test]
@@ -9,19 +9,18 @@ fn profiling_env_preserves_single_site_identity_evolution() {
     std::env::set_var("T4A_PROFILE_TDVP", "1");
 
     let site = DynIndex::new_dyn(2);
-    let state_tensor = TensorDynLen::from_dense(
+    let state_tensor = IdxTensor::from_dense(
         vec![site.clone()],
         vec![Complex64::new(0.75, 0.5), Complex64::new(-1.25, 0.25)],
     )
     .unwrap();
     let state =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![state_tensor], vec!["site0"])
-            .unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![state_tensor], vec!["site0"]).unwrap();
     let before = state.contract_to_tensor().unwrap();
 
     let input = DynIndex::new_dyn(2);
     let output = DynIndex::new_dyn(2);
-    let op_tensor = TensorDynLen::from_dense(
+    let op_tensor = IdxTensor::from_dense(
         vec![output.clone(), input.clone()],
         vec![
             Complex64::new(1.0, 0.0),
@@ -32,7 +31,7 @@ fn profiling_env_preserves_single_site_identity_evolution() {
     )
     .unwrap();
     let mpo =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![op_tensor], vec!["site0"]).unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![op_tensor], vec!["site0"]).unwrap();
     let operator = LinearOperator::new(
         mpo,
         HashMap::from([(

@@ -120,7 +120,7 @@ that impl, around line 440):
     ///
     /// ```
     /// use std::collections::HashMap;
-    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IndexLike, IdxTensor};
     /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
     ///
     /// let site_in = DynIndex::new_dyn(2);
@@ -128,7 +128,7 @@ that impl, around line 440):
     /// let s_in_tmp = DynIndex::new_dyn(2);
     /// let s_out_tmp = DynIndex::new_dyn(3);
     ///
-    /// let mpo_tensor = TensorDynLen::from_dense(
+    /// let mpo_tensor = IdxTensor::from_dense(
     ///     vec![s_in_tmp.clone(), s_out_tmp.clone()],
     ///     vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0],
     /// ).unwrap();

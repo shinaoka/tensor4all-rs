@@ -2,14 +2,14 @@
 //!
 //! This module implements the v1 TreeTN form of the MPS global subspace
 //! expansion documented in `docs/design/gse-chain-mps-algorithm.md`.
-//! The implementation is intentionally narrow: it supports `TensorDynLen`
+//! The implementation is intentionally narrow: it supports `IdxTensor`
 //! states with exactly one state site index per node and mapped TreeTN
 //! operators with one input and one output index per node.
 //!
 //! During expansion, old bonds are reconstructed from full-rank local SVDs. This
 //! preserves the represented state, but can remove exactly redundant bond
 //! directions while adding missing reference directions. Local projected-density
-//! contractions and basis reconstruction stay in `TensorDynLen` form; only the
+//! contractions and basis reconstruction stay in `IdxTensor` form; only the
 //! eigenvalue cutoff itself reads detached primal eigenvalues for rank
 //! selection.
 
@@ -18,9 +18,9 @@ use std::hash::Hash;
 
 use anyhow::Result;
 use tensor4all_core::{
-    contract_pair_with_operand_options, AnyScalar, Canonical, DynIndex, FactorizeAlg, IndexLike,
-    LinearizationOrder, PairwiseContractionOptions, SvdTruncationPolicy, TensorContractionLike,
-    TensorDynLen, TensorFactorizationLike, TensorIndex,
+    contract_pair_with_operand_options, AnyScalar, Canonical, DynIndex, FactorizeAlg, IdxTensor,
+    IndexLike, LinearizationOrder, PairwiseContractionOptions, SvdTruncationPolicy,
+    TensorContractionLike, TensorFactorizationLike, TensorIndex,
 };
 use thiserror::Error;
 
@@ -122,7 +122,7 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Expanded TreeTN state.
-    pub state: TreeTN<TensorDynLen, V>,
+    pub state: TreeTN<IdxTensor, V>,
     /// Number of reference states supplied or generated.
     pub references_built: usize,
     /// Number of directed edges visited by the expansion sweep.
@@ -149,7 +149,7 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Final evolved state.
-    pub state: TreeTN<TensorDynLen, V>,
+    pub state: TreeTN<IdxTensor, V>,
     /// Number of one-sweep TDVP calls completed.
     pub sweeps_completed: usize,
     /// Total number of projected local TDVP updates.
@@ -270,8 +270,8 @@ struct EdgeExpansionStats {
 /// /// mismatch, a non-convergence failure, or a backend failure).
 ///
 pub fn global_subspace_expand<V>(
-    operator: &LinearOperator<TensorDynLen, V>,
-    init: TreeTN<TensorDynLen, V>,
+    operator: &LinearOperator<IdxTensor, V>,
+    init: TreeTN<IdxTensor, V>,
     center: &V,
     options: GseOptions,
 ) -> std::result::Result<GseResult<V>, GseError>
@@ -304,8 +304,8 @@ where
 /// /// mismatch, a non-convergence failure, or a backend failure).
 ///
 pub fn global_subspace_expand_with_references<V>(
-    init: TreeTN<TensorDynLen, V>,
-    references: Vec<TreeTN<TensorDynLen, V>>,
+    init: TreeTN<IdxTensor, V>,
+    references: Vec<TreeTN<IdxTensor, V>>,
     center: &V,
     options: GseOptions,
 ) -> std::result::Result<GseResult<V>, GseError>
@@ -372,8 +372,8 @@ where
 /// /// mismatch, a non-convergence failure, or a backend failure).
 ///
 pub fn gse_tdvp<V>(
-    operator: &LinearOperator<TensorDynLen, V>,
-    init: TreeTN<TensorDynLen, V>,
+    operator: &LinearOperator<IdxTensor, V>,
+    init: TreeTN<IdxTensor, V>,
     center: &V,
     options: GseTdvpOptions,
 ) -> std::result::Result<GseTdvpResult<V>, GseError>
@@ -448,11 +448,11 @@ fn validate_options(options: &GseOptions) -> Result<(), GseError> {
 }
 
 fn build_references<V>(
-    operator: &LinearOperator<TensorDynLen, V>,
-    init: &TreeTN<TensorDynLen, V>,
+    operator: &LinearOperator<IdxTensor, V>,
+    init: &TreeTN<IdxTensor, V>,
     center: &V,
     options: &GseOptions,
-) -> Result<Vec<TreeTN<TensorDynLen, V>>, GseError>
+) -> Result<Vec<TreeTN<IdxTensor, V>>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
@@ -505,7 +505,7 @@ where
     Ok(references)
 }
 
-fn validate_single_site_state<V>(state: &TreeTN<TensorDynLen, V>) -> Result<(), GseError>
+fn validate_single_site_state<V>(state: &TreeTN<IdxTensor, V>) -> Result<(), GseError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
@@ -522,8 +522,8 @@ where
 }
 
 fn validate_reference<V>(
-    target: &TreeTN<TensorDynLen, V>,
-    reference: &TreeTN<TensorDynLen, V>,
+    target: &TreeTN<IdxTensor, V>,
+    reference: &TreeTN<IdxTensor, V>,
 ) -> Result<(), GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -546,8 +546,8 @@ where
 }
 
 fn expand_edges<V>(
-    state: &mut TreeTN<TensorDynLen, V>,
-    references: &mut [TreeTN<TensorDynLen, V>],
+    state: &mut TreeTN<IdxTensor, V>,
+    references: &mut [TreeTN<IdxTensor, V>],
     center: &V,
     options: &GseOptions,
 ) -> Result<EdgeExpansionStats, GseError>
@@ -599,8 +599,8 @@ where
 }
 
 fn expand_one_edge<V>(
-    state: &mut TreeTN<TensorDynLen, V>,
-    references: &mut [TreeTN<TensorDynLen, V>],
+    state: &mut TreeTN<IdxTensor, V>,
+    references: &mut [TreeTN<IdxTensor, V>],
     parent: &V,
     child: &V,
     options: &GseOptions,
@@ -681,7 +681,7 @@ where
         state, references, parent, child, &q_indices, &q_left, &q_right,
     )?;
     let trace_identity = identity_on_index_pairs(&q_left, &q_right)?;
-    let trace_tensor = TensorDynLen::contract(&[&density, &trace_identity]).map_err(|source| {
+    let trace_tensor = IdxTensor::contract(&[&density, &trace_identity]).map_err(|source| {
         GseError::Algorithm {
             context: "GSE failed to compute local reference-density trace",
             source: anyhow::Error::new(source),
@@ -755,7 +755,7 @@ where
     let target_child = stack_basis_rows(&basis_rows, new_bond.clone())?;
     let coeff_tensor = coefficient_tensor(&child_tensor, &target_child)?;
     let target_parent =
-        TensorDynLen::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
+        IdxTensor::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
             GseError::Algorithm {
                 context: "GSE failed to absorb expanded coefficients into target parent",
                 source: anyhow::Error::new(source),
@@ -810,12 +810,12 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn update_reference_edge<V>(
-    reference: &mut TreeTN<TensorDynLen, V>,
-    target: &TreeTN<TensorDynLen, V>,
+    reference: &mut TreeTN<IdxTensor, V>,
+    target: &TreeTN<IdxTensor, V>,
     parent: &V,
     child: &V,
     target_q_indices: &[DynIndex],
-    expanded_basis: &TensorDynLen,
+    expanded_basis: &IdxTensor,
     target_new_bond: &DynIndex,
 ) -> Result<(), GseError>
 where
@@ -889,7 +889,7 @@ where
             other => other,
         })?;
     let parent_replacement =
-        TensorDynLen::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
+        IdxTensor::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
             GseError::Algorithm {
                 context: "GSE failed to absorb expanded coefficients into reference parent",
                 source: anyhow::Error::new(source),
@@ -930,18 +930,18 @@ where
 }
 
 fn build_reference_density<V>(
-    target: &TreeTN<TensorDynLen, V>,
-    references: &[TreeTN<TensorDynLen, V>],
+    target: &TreeTN<IdxTensor, V>,
+    references: &[TreeTN<IdxTensor, V>],
     parent: &V,
     child: &V,
     target_q_indices: &[DynIndex],
     q_left: &[DynIndex],
     q_right: &[DynIndex],
-) -> Result<TensorDynLen, GseError>
+) -> Result<IdxTensor, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut density: Option<TensorDynLen> = None;
+    let mut density: Option<IdxTensor> = None;
     for reference in references {
         let ref_edge =
             reference
@@ -1020,10 +1020,10 @@ where
 }
 
 fn old_basis_rows(
-    basis: &TensorDynLen,
+    basis: &IdxTensor,
     basis_bond: &DynIndex,
     basis_rank: usize,
-) -> Result<Vec<TensorDynLen>, GseError> {
+) -> Result<Vec<IdxTensor>, GseError> {
     (0..basis_rank)
         .map(|row| {
             basis
@@ -1037,13 +1037,13 @@ fn old_basis_rows(
 }
 
 fn eigenvector_basis_row(
-    eigenvectors: &TensorDynLen,
+    eigenvectors: &IdxTensor,
     flat_left: &DynIndex,
     eigenvector_index: &DynIndex,
     col: usize,
     q_left: &[DynIndex],
     q_indices: &[DynIndex],
-) -> Result<TensorDynLen, GseError> {
+) -> Result<IdxTensor, GseError> {
     let vector = eigenvectors
         .select_indices(std::slice::from_ref(eigenvector_index), &[col])
         .map_err(|source| GseError::Algorithm {
@@ -1060,18 +1060,18 @@ fn eigenvector_basis_row(
     Ok(row)
 }
 
-fn stack_basis_rows(rows: &[TensorDynLen], new_bond: DynIndex) -> Result<TensorDynLen, GseError> {
+fn stack_basis_rows(rows: &[IdxTensor], new_bond: DynIndex) -> Result<IdxTensor, GseError> {
     let refs = rows.iter().collect::<Vec<_>>();
-    TensorDynLen::stack_along_new_index(&refs, new_bond, 0).map_err(|source| GseError::Algorithm {
+    IdxTensor::stack_along_new_index(&refs, new_bond, 0).map_err(|source| GseError::Algorithm {
         context: "GSE failed to stack expanded basis rows",
         source: anyhow::Error::new(source),
     })
 }
 
 fn coefficient_tensor(
-    child_tensor: &TensorDynLen,
-    expanded_basis: &TensorDynLen,
-) -> Result<TensorDynLen, GseError> {
+    child_tensor: &IdxTensor,
+    expanded_basis: &IdxTensor,
+) -> Result<IdxTensor, GseError> {
     contract_pair_with_operand_options(
         child_tensor,
         expanded_basis,
@@ -1084,13 +1084,13 @@ fn coefficient_tensor(
 }
 
 fn projected_missing_density_tensor(
-    density: &TensorDynLen,
-    basis: &TensorDynLen,
+    density: &IdxTensor,
+    basis: &IdxTensor,
     basis_bond: &DynIndex,
     q_indices: &[DynIndex],
     q_left: &[DynIndex],
     q_right: &[DynIndex],
-) -> Result<TensorDynLen, GseError> {
+) -> Result<IdxTensor, GseError> {
     let identity = identity_on_index_pairs(q_left, q_right)?;
     let basis_left =
         basis
@@ -1147,7 +1147,7 @@ fn projected_missing_density_tensor(
             context: "GSE failed to relabel right projected-density projector",
             source: anyhow::Error::new(source),
         })?;
-    TensorDynLen::contract(&[&p_left_mid, &density_mid, &p_mid_right]).map_err(|source| {
+    IdxTensor::contract(&[&p_left_mid, &density_mid, &p_mid_right]).map_err(|source| {
         GseError::Algorithm {
             context: "GSE failed to contract projected missing reference density",
             source: anyhow::Error::new(source),
@@ -1155,10 +1155,7 @@ fn projected_missing_density_tensor(
     })
 }
 
-fn identity_on_index_pairs(
-    left: &[DynIndex],
-    right: &[DynIndex],
-) -> Result<TensorDynLen, GseError> {
+fn identity_on_index_pairs(left: &[DynIndex], right: &[DynIndex]) -> Result<IdxTensor, GseError> {
     if left.len() != right.len() {
         return Err(GseError::Algorithm {
             context: "GSE failed to build identity on q-space",
@@ -1169,9 +1166,9 @@ fn identity_on_index_pairs(
             ),
         });
     }
-    let mut identity: Option<TensorDynLen> = None;
+    let mut identity: Option<IdxTensor> = None;
     for (left_index, right_index) in left.iter().zip(right.iter()) {
-        let pair = TensorDynLen::copy_tensor(
+        let pair = IdxTensor::copy_tensor(
             vec![left_index.clone(), right_index.clone()],
             AnyScalar::new_real(1.0),
         )
@@ -1193,7 +1190,7 @@ fn identity_on_index_pairs(
     }
     match identity {
         Some(tensor) => Ok(tensor),
-        None => TensorDynLen::scalar(1.0_f64).map_err(|source| GseError::Algorithm {
+        None => IdxTensor::scalar(1.0_f64).map_err(|source| GseError::Algorithm {
             context: "GSE failed to build scalar q-space identity",
             source: anyhow::Error::new(source),
         }),
@@ -1201,10 +1198,10 @@ fn identity_on_index_pairs(
 }
 
 fn hermitianize_by_index_groups(
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
     left: &[DynIndex],
     right: &[DynIndex],
-) -> Result<TensorDynLen, GseError> {
+) -> Result<IdxTensor, GseError> {
     let adjoint = adjoint_by_index_groups(tensor, left, right)?;
     tensor
         .axpby(AnyScalar::new_real(0.5), &adjoint, AnyScalar::new_real(0.5))
@@ -1215,10 +1212,10 @@ fn hermitianize_by_index_groups(
 }
 
 fn adjoint_by_index_groups(
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
     left: &[DynIndex],
     right: &[DynIndex],
-) -> Result<TensorDynLen, GseError> {
+) -> Result<IdxTensor, GseError> {
     if left.len() != right.len() {
         return Err(GseError::Algorithm {
             context: "GSE failed to adjoint grouped tensor",
@@ -1249,8 +1246,8 @@ fn fresh_indices_like(indices: &[DynIndex]) -> Vec<DynIndex> {
 }
 
 fn map_q_indices<V>(
-    target: &TreeTN<TensorDynLen, V>,
-    reference: &TreeTN<TensorDynLen, V>,
+    target: &TreeTN<IdxTensor, V>,
+    reference: &TreeTN<IdxTensor, V>,
     child: &V,
     parent: &V,
     target_q_indices: &[DynIndex],
@@ -1316,7 +1313,7 @@ where
 }
 
 fn neighbor_for_bond<V>(
-    state: &TreeTN<TensorDynLen, V>,
+    state: &TreeTN<IdxTensor, V>,
     node: &V,
     bond: &DynIndex,
 ) -> Result<Option<V>, GseError>
@@ -1334,7 +1331,7 @@ where
     Ok(None)
 }
 
-fn single_site_index<V>(state: &TreeTN<TensorDynLen, V>, node: &V) -> Result<DynIndex, GseError>
+fn single_site_index<V>(state: &TreeTN<IdxTensor, V>, node: &V) -> Result<DynIndex, GseError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
@@ -1364,17 +1361,14 @@ fn product_dim(indices: &[DynIndex]) -> usize {
     indices.iter().map(DynIndex::dim).product()
 }
 
-fn max_link_dim<V>(state: &TreeTN<TensorDynLen, V>) -> usize
+fn max_link_dim<V>(state: &TreeTN<IdxTensor, V>) -> usize
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     state.link_dims().into_iter().max().unwrap_or(1)
 }
 
-fn move_center_to_region_full_rank<V>(
-    state: &mut TreeTN<TensorDynLen, V>,
-    region: &[V],
-) -> Result<()>
+fn move_center_to_region_full_rank<V>(state: &mut TreeTN<IdxTensor, V>, region: &[V]) -> Result<()>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
@@ -1450,40 +1444,36 @@ mod tests {
         values
     }
 
-    fn product_chain_state(
-        left_dim: usize,
-        right_dim: usize,
-    ) -> TreeTN<TensorDynLen, &'static str> {
+    fn product_chain_state(left_dim: usize, right_dim: usize) -> TreeTN<IdxTensor, &'static str> {
         let left = DynIndex::new_dyn(left_dim);
         let right = DynIndex::new_dyn(right_dim);
         let bond = DynIndex::new_dyn(1);
         let left_tensor =
-            TensorDynLen::from_dense(vec![left, bond.clone()], basis_vector(left_dim, 0)).unwrap();
+            IdxTensor::from_dense(vec![left, bond.clone()], basis_vector(left_dim, 0)).unwrap();
         let right_tensor =
-            TensorDynLen::from_dense(vec![bond.clone(), right], basis_vector(right_dim, 0))
-                .unwrap();
-        let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+            IdxTensor::from_dense(vec![bond.clone(), right], basis_vector(right_dim, 0)).unwrap();
+        let mut state = TreeTN::<IdxTensor, &'static str>::new();
         let left_node = state.add_tensor("site0", left_tensor).unwrap();
         let right_node = state.add_tensor("site1", right_tensor).unwrap();
         state.connect(left_node, &bond, right_node, &bond).unwrap();
         state
     }
 
-    fn product_chain3_state(tail_bond_dim: usize) -> TreeTN<TensorDynLen, &'static str> {
+    fn product_chain3_state(tail_bond_dim: usize) -> TreeTN<IdxTensor, &'static str> {
         let s0 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(2);
         let s2 = DynIndex::new_dyn(2);
         let b01 = DynIndex::new_dyn(1);
         let b12 = DynIndex::new_dyn(tail_bond_dim);
-        let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0, 0.0]).unwrap();
+        let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0, 0.0]).unwrap();
         let mut t1_data = vec![0.0; 2 * tail_bond_dim];
         t1_data[0] = 1.0;
-        let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1, b12.clone()], t1_data).unwrap();
+        let t1 = IdxTensor::from_dense(vec![b01.clone(), s1, b12.clone()], t1_data).unwrap();
         let mut t2_data = vec![0.0; tail_bond_dim * 2];
         t2_data[0] = 1.0;
-        let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2], t2_data).unwrap();
+        let t2 = IdxTensor::from_dense(vec![b12.clone(), s2], t2_data).unwrap();
 
-        let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+        let mut state = TreeTN::<IdxTensor, &'static str>::new();
         let n0 = state.add_tensor("site0", t0).unwrap();
         let n1 = state.add_tensor("site1", t1).unwrap();
         let n2 = state.add_tensor("site2", t2).unwrap();
@@ -1582,7 +1572,7 @@ mod tests {
         let left = DynIndex::new_dyn(2);
         let right = DynIndex::new_dyn(2);
         let tensor =
-            TensorDynLen::from_dense(vec![left.clone(), right.clone()], vec![1.0, 2.0, 3.0, 4.0])
+            IdxTensor::from_dense(vec![left.clone(), right.clone()], vec![1.0, 2.0, 3.0, 4.0])
                 .unwrap();
 
         let adjoint = adjoint_by_index_groups(

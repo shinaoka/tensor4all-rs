@@ -9,7 +9,7 @@ use std::collections::{HashSet, VecDeque};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
+use tensor4all_core::{DynIndex, IdxTensor, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
 use tensor4all_tcicore::{MatrixLuciScalar, MultiIndex, Scalar};
@@ -561,7 +561,7 @@ where
 }
 
 fn embed_active_tt<T>(
-    active_tree: TreeTN<TensorDynLen, usize>,
+    active_tree: TreeTN<IdxTensor, usize>,
     site_indices: &[DynIndex],
     active_positions: &[usize],
     projector: &Projector,
@@ -625,7 +625,7 @@ where
                 indices.push(index.clone());
             }
             tensors.push(
-                TensorDynLen::from_dense(indices, core.clone()).map_err(|error| {
+                IdxTensor::from_dense(indices, core.clone()).map_err(|error| {
                     PartitionedTTError::tensor_train_operation(error.to_string())
                 })?,
             );
@@ -655,19 +655,15 @@ fn projected_site_tensor<T>(
     right: Option<&DynIndex>,
     value: usize,
     scale: T,
-) -> Result<TensorDynLen>
+) -> Result<IdxTensor>
 where
     T: Scalar + TensorElement + StorageScalar + Default + Copy,
 {
     match (left, right) {
-        (Some(left), Some(right)) => TensorDynLen::from_copy_selector(
-            left.clone(),
-            site.clone(),
-            right.clone(),
-            value,
-            scale,
-        )
-        .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string())),
+        (Some(left), Some(right)) => {
+            IdxTensor::from_copy_selector(left.clone(), site.clone(), right.clone(), value, scale)
+                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
+        }
         (None, Some(right)) => {
             if right.dim != 1 {
                 return Err(PartitionedTTError::tensor_train_operation(format!(
@@ -677,7 +673,7 @@ where
             }
             let mut data = vec![T::zero(); site.dim];
             data[value] = scale;
-            TensorDynLen::from_dense(vec![site.clone(), right.clone()], data)
+            IdxTensor::from_dense(vec![site.clone(), right.clone()], data)
                 .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
         }
         (Some(left), None) => {
@@ -689,13 +685,13 @@ where
             }
             let mut data = vec![T::zero(); site.dim];
             data[value] = scale;
-            TensorDynLen::from_dense(vec![left.clone(), site.clone()], data)
+            IdxTensor::from_dense(vec![left.clone(), site.clone()], data)
                 .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
         }
         (None, None) => {
             let mut data = vec![T::zero(); site.dim];
             data[value] = scale;
-            TensorDynLen::from_dense(vec![site.clone()], data)
+            IdxTensor::from_dense(vec![site.clone()], data)
                 .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))
         }
     }
@@ -735,9 +731,9 @@ where
                 indices.push(index.clone());
             }
             tensors.push(
-                TensorDynLen::from_dense(indices, vec![local_scale; site.dim]).map_err(
-                    |error| PartitionedTTError::tensor_train_operation(error.to_string()),
-                )?,
+                IdxTensor::from_dense(indices, vec![local_scale; site.dim]).map_err(|error| {
+                    PartitionedTTError::tensor_train_operation(error.to_string())
+                })?,
             );
         }
     }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_treetn::{
     fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
@@ -159,7 +159,7 @@ fn tensor_train_to_treetn_preserves_dense_values() -> Result<()> {
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
     let dense = treetn.contract_to_tensor()?;
     let (values, _shape) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(site_indices.clone(), values)?;
+    let expected = IdxTensor::from_dense(site_indices.clone(), values)?;
 
     assert_eq!(treetn.node_names(), vec![0, 1]);
     assert_eq!(site_indices.len(), tt.len());
@@ -186,7 +186,7 @@ fn tensor_train_to_treetn_supports_complex_scalars() -> Result<()> {
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
     let dense = treetn.contract_to_tensor()?;
     let (values, _shape) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(site_indices, values)?;
+    let expected = IdxTensor::from_dense(site_indices, values)?;
 
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
@@ -220,7 +220,7 @@ fn tensor_train_to_treetn_single_site_preserves_dense_values() -> Result<()> {
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
     let dense = treetn.contract_to_tensor()?;
     let (values, _shape) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(site_indices.clone(), values)?;
+    let expected = IdxTensor::from_dense(site_indices.clone(), values)?;
 
     assert_eq!(treetn.node_names(), vec![0]);
     assert_eq!(site_indices.len(), 1);
@@ -235,7 +235,7 @@ fn tensor_train_to_treetn_three_site_preserves_dense_values() -> Result<()> {
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
     let dense = treetn.contract_to_tensor()?;
     let (values, _shape) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(site_indices, values)?;
+    let expected = IdxTensor::from_dense(site_indices, values)?;
 
     assert_eq!(treetn.node_names(), vec![0, 1, 2]);
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
@@ -282,8 +282,8 @@ fn treetn_to_tensor_train_handles_local_axis_permutations() -> Result<()> {
     let site0 = DynIndex::new_dyn(2);
     let site1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_bond(2)?;
-    let t0 = TensorDynLen::from_dense(vec![bond.clone(), site0], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    let t1 = TensorDynLen::from_dense(vec![site1, bond], vec![1.0_f64, -1.0, 0.5, 2.0])?;
+    let t0 = IdxTensor::from_dense(vec![bond.clone(), site0], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    let t1 = IdxTensor::from_dense(vec![site1, bond], vec![1.0_f64, -1.0, 0.5, 2.0])?;
     let treetn = TreeTN::from_tensors(vec![t0, t1], vec![0, 1])?;
 
     let roundtrip = treetn_to_tensor_train::<f64>(treetn)?;
@@ -317,7 +317,7 @@ fn insert_onehot_site_in_treetn_chain_prepends_fixed_site() -> Result<()> {
     let result = insert_onehot_site_in_treetn_chain::<f64>(treetn, 0, inserted_site.clone(), 0)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, _) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![inserted_site, old_sites[0].clone(), old_sites[1].clone()],
         vec![
             old_values[0],
@@ -345,7 +345,7 @@ fn insert_onehot_site_in_treetn_chain_preserves_edge_bond_flow() -> Result<()> {
     let result = insert_onehot_site_in_treetn_chain::<f64>(treetn, 1, inserted_site.clone(), 1)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, _) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![old_sites[0].clone(), inserted_site, old_sites[1].clone()],
         vec![
             0.0,
@@ -377,7 +377,7 @@ fn insert_onehot_site_in_treetn_chain_appends_fixed_site() -> Result<()> {
     let result = insert_onehot_site_in_treetn_chain::<f64>(treetn, 2, inserted_site.clone(), 1)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, _) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![old_sites[0].clone(), old_sites[1].clone(), inserted_site],
         vec![
             0.0,
@@ -430,7 +430,7 @@ fn fix_and_remove_site_from_treetn_chain_removes_first_site() -> Result<()> {
     let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 1)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![site_indices[1].clone(), site_indices[2].clone()],
         fixed_removed_dense(&old_values, &old_dims, 0, 1),
     )?;
@@ -452,7 +452,7 @@ fn fix_and_remove_site_from_treetn_chain_removes_middle_site() -> Result<()> {
     let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 1, 0)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![site_indices[0].clone(), site_indices[2].clone()],
         fixed_removed_dense(&old_values, &old_dims, 1, 0),
     )?;
@@ -474,7 +474,7 @@ fn fix_and_remove_site_from_treetn_chain_removes_last_site() -> Result<()> {
     let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 2, 1)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![site_indices[0].clone(), site_indices[1].clone()],
         fixed_removed_dense(&old_values, &old_dims, 2, 1),
     )?;
@@ -497,7 +497,7 @@ fn weighted_remove_site_from_treetn_chain_removes_middle_site() -> Result<()> {
     let result = weighted_remove_site_from_treetn_chain::<f64>(treetn, 1, &weights)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![site_indices[0].clone(), site_indices[2].clone()],
         weighted_removed_dense(&old_values, &old_dims, 1, &weights),
     )?;
@@ -520,7 +520,7 @@ fn weighted_remove_site_from_treetn_chain_removes_boundary_site() -> Result<()> 
     let result = weighted_remove_site_from_treetn_chain::<f64>(treetn, 2, &weights)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![site_indices[0].clone(), site_indices[1].clone()],
         weighted_removed_dense(&old_values, &old_dims, 2, &weights),
     )?;

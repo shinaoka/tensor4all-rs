@@ -6,12 +6,12 @@ use crate::{
 };
 use num_complex::Complex64;
 use tensor4all_core::{
-    DynIndex, FactorizeAlg, SvdTruncationPolicy, TensorContractionLike, TensorDynLen, TensorIndex,
+    DynIndex, FactorizeAlg, IdxTensor, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
 };
 
 struct PartialContractionInputs {
-    tn_a: TreeTN<TensorDynLen, String>,
-    tn_b: TreeTN<TensorDynLen, String>,
+    tn_a: TreeTN<IdxTensor, String>,
+    tn_b: TreeTN<IdxTensor, String>,
     s_contract_a: DynIndex,
     s_contract_b: DynIndex,
     s_multiply_a: DynIndex,
@@ -31,28 +31,26 @@ fn make_partial_contraction_inputs() -> PartialContractionInputs {
     let s_b_only = DynIndex::new_dyn(4);
     let bond_b = DynIndex::new_dyn(2);
 
-    let t_a0 = TensorDynLen::from_dense(
+    let t_a0 = IdxTensor::from_dense(
         vec![s_contract_a.clone(), s_multiply_a.clone(), bond_a.clone()],
         vec![1.0; 8],
     )
     .unwrap();
-    let t_a1 =
-        TensorDynLen::from_dense(vec![bond_a.clone(), s_a_only.clone()], vec![1.0; 6]).unwrap();
+    let t_a1 = IdxTensor::from_dense(vec![bond_a.clone(), s_a_only.clone()], vec![1.0; 6]).unwrap();
 
-    let t_b0 = TensorDynLen::from_dense(
+    let t_b0 = IdxTensor::from_dense(
         vec![s_contract_b.clone(), s_multiply_b.clone(), bond_b.clone()],
         vec![2.0; 8],
     )
     .unwrap();
-    let t_b1 =
-        TensorDynLen::from_dense(vec![bond_b.clone(), s_b_only.clone()], vec![2.0; 8]).unwrap();
+    let t_b1 = IdxTensor::from_dense(vec![bond_b.clone(), s_b_only.clone()], vec![2.0; 8]).unwrap();
 
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_a0, t_a1],
         vec!["A".to_string(), "B".to_string()],
     )
     .unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_b0, t_b1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -159,13 +157,13 @@ fn helper_factorize_options_and_union_topology_paths_are_exercised() {
 fn hadamard_multiplies_paired_external_indices() {
     let left_index = DynIndex::new_dyn(2);
     let right_index = DynIndex::new_dyn(2);
-    let lhs = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![left_index.clone()], vec![2.0, 3.0]).unwrap()],
+    let lhs = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![left_index.clone()], vec![2.0, 3.0]).unwrap()],
         vec!["A".to_string()],
     )
     .unwrap();
-    let rhs = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![right_index.clone()], vec![5.0, 7.0]).unwrap()],
+    let rhs = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![right_index.clone()], vec![5.0, 7.0]).unwrap()],
         vec!["A".to_string()],
     )
     .unwrap();
@@ -189,8 +187,8 @@ fn weighted_sum_over_index_pairs_contracts_only_selected_axes() {
     let x = DynIndex::new_dyn(2);
     let z = DynIndex::new_dyn(3);
     let wz = DynIndex::new_dyn(3);
-    let state = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(
             vec![x.clone(), z.clone()],
             vec![0.0, 1.0, 10.0, 11.0, 20.0, 21.0],
         )
@@ -198,8 +196,8 @@ fn weighted_sum_over_index_pairs_contracts_only_selected_axes() {
         vec!["A".to_string()],
     )
     .unwrap();
-    let weights = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![wz.clone()], vec![2.0, 3.0, 5.0]).unwrap()],
+    let weights = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![wz.clone()], vec![2.0, 3.0, 5.0]).unwrap()],
         vec!["A".to_string()],
     )
     .unwrap();
@@ -222,8 +220,8 @@ fn weighted_sum_over_index_pairs_contracts_only_selected_axes() {
 fn sum_over_indices_uses_factorized_ones_weights() {
     let x = DynIndex::new_dyn(2);
     let z = DynIndex::new_dyn(3);
-    let state = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(
             vec![x.clone(), z.clone()],
             vec![0.0, 1.0, 10.0, 11.0, 20.0, 21.0],
         )
@@ -248,8 +246,8 @@ fn sum_over_indices_uses_factorized_ones_weights() {
 #[test]
 fn sum_over_indices_reports_typed_selection_errors() {
     let x = DynIndex::new_dyn(2);
-    let state = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![x.clone()], vec![1.0, 2.0]).unwrap()],
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![x.clone()], vec![1.0, 2.0]).unwrap()],
         vec!["A".to_string()],
     )
     .unwrap();
@@ -459,13 +457,11 @@ fn test_partial_contract_contract_only() {
     let extra_a = DynIndex::new_dyn(2);
     let extra_b = DynIndex::new_dyn(2);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone(), extra_a.clone()], vec![1.0; 6]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s_b.clone(), extra_b.clone()], vec![2.0; 6]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s_a.clone(), extra_a.clone()], vec![1.0; 6]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s_b.clone(), extra_b.clone()], vec![2.0; 6]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let spec = PartialContractionSpec {
         contract_pairs: vec![(s_a, s_b)],
@@ -494,29 +490,29 @@ fn partial_contract_fit_inserts_dummy_links_for_nodewise_outer_product_spectator
     let bond_left = DynIndex::new_dyn(2);
     let bond_right = DynIndex::new_dyn(2);
 
-    let a0 = TensorDynLen::from_dense(
+    let a0 = IdxTensor::from_dense(
         vec![k_left.clone(), bond_left.clone()],
         vec![1.0, 2.0, 3.0, 4.0],
     )
     .unwrap();
-    let a1 = TensorDynLen::from_dense(vec![bond_left.clone(), i.clone()], vec![5.0, 6.0, 7.0, 8.0])
+    let a1 = IdxTensor::from_dense(vec![bond_left.clone(), i.clone()], vec![5.0, 6.0, 7.0, 8.0])
         .unwrap();
-    let b0 = TensorDynLen::from_dense(
+    let b0 = IdxTensor::from_dense(
         vec![k_right.clone(), bond_right.clone()],
         vec![0.5, 1.5, 2.5, 3.5],
     )
     .unwrap();
-    let b1 = TensorDynLen::from_dense(
+    let b1 = IdxTensor::from_dense(
         vec![bond_right.clone(), j.clone()],
         vec![1.0, -1.0, 2.0, -2.0],
     )
     .unwrap();
-    let lhs = TreeTN::<TensorDynLen, String>::from_tensors(
+    let lhs = TreeTN::<IdxTensor, String>::from_tensors(
         vec![a0, a1],
         vec!["left".to_string(), "right".to_string()],
     )
     .unwrap();
-    let rhs = TreeTN::<TensorDynLen, String>::from_tensors(
+    let rhs = TreeTN::<IdxTensor, String>::from_tensors(
         vec![b0, b1],
         vec!["left".to_string(), "right".to_string()],
     )
@@ -554,13 +550,11 @@ fn test_partial_contract_empty_spec() {
     let s_a = DynIndex::new_dyn(2);
     let s_b = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s_b.clone()], vec![2.0; 3]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s_b.clone()], vec![2.0; 3]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let spec: PartialContractionSpec<DynIndex> = PartialContractionSpec {
         contract_pairs: vec![],
@@ -585,13 +579,11 @@ fn test_partial_contract_rejects_bad_output_order_length() {
     let s_a = DynIndex::new_dyn(2);
     let s_b = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s_b], vec![2.0; 3]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s_b], vec![2.0; 3]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let spec = PartialContractionSpec {
         contract_pairs: vec![],
@@ -618,13 +610,11 @@ fn test_partial_contract_rejects_unknown_output_order_index() {
     let s_b = DynIndex::new_dyn(3);
     let unknown = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s_b], vec![2.0; 3]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s_b], vec![2.0; 3]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let spec = PartialContractionSpec {
         contract_pairs: vec![],
@@ -653,9 +643,9 @@ fn test_partial_contract_allows_same_node_in_second_network() {
     let bond_a = DynIndex::new_dyn(2);
 
     // tn_a: node "A" has s_a1 only, node "B" has s_a2 only
-    let t_a0 = TensorDynLen::from_dense(vec![s_a1.clone(), bond_a.clone()], vec![1.0; 4]).unwrap();
-    let t_a1 = TensorDynLen::from_dense(vec![bond_a.clone(), s_a2.clone()], vec![1.0; 4]).unwrap();
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t_a0 = IdxTensor::from_dense(vec![s_a1.clone(), bond_a.clone()], vec![1.0; 4]).unwrap();
+    let t_a1 = IdxTensor::from_dense(vec![bond_a.clone(), s_a2.clone()], vec![1.0; 4]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_a0, t_a1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -667,14 +657,13 @@ fn test_partial_contract_allows_same_node_in_second_network() {
     let bond_b = DynIndex::new_dyn(2);
     let s_b_only = DynIndex::new_dyn(3);
 
-    let t_b0 = TensorDynLen::from_dense(
+    let t_b0 = IdxTensor::from_dense(
         vec![s_b_contract.clone(), s_b_multiply.clone(), bond_b.clone()],
         vec![2.0; 8],
     )
     .unwrap();
-    let t_b1 =
-        TensorDynLen::from_dense(vec![bond_b.clone(), s_b_only.clone()], vec![2.0; 6]).unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t_b1 = IdxTensor::from_dense(vec![bond_b.clone(), s_b_only.clone()], vec![2.0; 6]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_b0, t_b1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -716,32 +705,32 @@ fn test_partial_contract_moves_misaligned_same_topology_contract_pair() {
     let b_b23 = DynIndex::new_dyn(1);
     let b_b34 = DynIndex::new_dyn(1);
 
-    let tn_a = TreeTN::<TensorDynLen, usize>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, usize>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![a_row0.clone(), a_b01.clone()], vec![1.0; 2]).unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(vec![a_row0.clone(), a_b01.clone()], vec![1.0; 2]).unwrap(),
+            IdxTensor::from_dense(
                 vec![a_b01.clone(), a_contract.clone(), a_b12.clone()],
                 vec![1.0; 2],
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![a_b12.clone(), a_row1.clone(), a_b23.clone()],
                 vec![1.0; 2],
             )
             .unwrap(),
-            TensorDynLen::from_dense(vec![a_b23.clone(), a_b34.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(vec![a_b34.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![a_b23.clone(), a_b34.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![a_b34.clone()], vec![1.0]).unwrap(),
         ],
         vec![0, 1, 2, 3, 4],
     )
     .unwrap();
 
-    let tn_b = TreeTN::<TensorDynLen, usize>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, usize>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![b_b01.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(vec![b_b01.clone(), b_b12.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(vec![b_b12.clone(), b_b23.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(vec![b_b01.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![b_b01.clone(), b_b12.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![b_b12.clone(), b_b23.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(
                 vec![
                     b_b23.clone(),
                     b_contract.clone(),
@@ -751,7 +740,7 @@ fn test_partial_contract_moves_misaligned_same_topology_contract_pair() {
                 vec![1.0; 4],
             )
             .unwrap(),
-            TensorDynLen::from_dense(vec![b_b34.clone(), b_col1.clone()], vec![1.0; 2]).unwrap(),
+            IdxTensor::from_dense(vec![b_b34.clone(), b_col1.clone()], vec![1.0; 2]).unwrap(),
         ],
         vec![0, 1, 2, 3, 4],
     )
@@ -787,13 +776,12 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
     let bond_b = DynIndex::new_dyn(2);
     let s_b2 = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
 
-    let t_b0 = TensorDynLen::from_dense(vec![s_b.clone(), bond_b.clone()], vec![2.0; 4]).unwrap();
-    let t_b1 = TensorDynLen::from_dense(vec![bond_b.clone(), s_b2.clone()], vec![2.0; 6]).unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t_b0 = IdxTensor::from_dense(vec![s_b.clone(), bond_b.clone()], vec![2.0; 4]).unwrap();
+    let t_b1 = IdxTensor::from_dense(vec![bond_b.clone(), s_b2.clone()], vec![2.0; 6]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_b0, t_b1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -823,7 +811,7 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
 
 #[test]
 fn test_partial_contract_aligns_long_mismatched_chain_without_dense_limit() {
-    fn binary_chain(node_count: usize) -> TreeTN<TensorDynLen, usize> {
+    fn binary_chain(node_count: usize) -> TreeTN<IdxTensor, usize> {
         let mut tensors = Vec::with_capacity(node_count);
         let mut names = Vec::with_capacity(node_count);
         let mut left_bond: Option<DynIndex> = None;
@@ -841,12 +829,12 @@ fn test_partial_contract_aligns_long_mismatched_chain_without_dense_limit() {
             }
 
             let element_count = indices.iter().map(IndexLike::dim).product();
-            tensors.push(TensorDynLen::from_dense(indices, vec![1.0; element_count]).unwrap());
+            tensors.push(IdxTensor::from_dense(indices, vec![1.0; element_count]).unwrap());
             names.push(site);
             left_bond = right_bond;
         }
 
-        TreeTN::<TensorDynLen, usize>::from_tensors(tensors, names).unwrap()
+        TreeTN::<IdxTensor, usize>::from_tensors(tensors, names).unwrap()
     }
 
     let tn_a = binary_chain(24);
@@ -877,21 +865,21 @@ fn test_partial_contract_rejects_incompatible_topology_union() {
     let ab2 = DynIndex::new_dyn(2);
     let ac2 = DynIndex::new_dyn(2);
 
-    let ta0 = TensorDynLen::from_dense(vec![sa.clone(), ab.clone()], vec![1.0; 4]).unwrap();
+    let ta0 = IdxTensor::from_dense(vec![sa.clone(), ab.clone()], vec![1.0; 4]).unwrap();
     let ta1 =
-        TensorDynLen::from_dense(vec![ab.clone(), sb.clone(), bc.clone()], vec![1.0; 8]).unwrap();
-    let ta2 = TensorDynLen::from_dense(vec![bc.clone(), sc.clone()], vec![1.0; 4]).unwrap();
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        IdxTensor::from_dense(vec![ab.clone(), sb.clone(), bc.clone()], vec![1.0; 8]).unwrap();
+    let ta2 = IdxTensor::from_dense(vec![bc.clone(), sc.clone()], vec![1.0; 4]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![ta0, ta1, ta2],
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
     )
     .unwrap();
 
     let tb0 =
-        TensorDynLen::from_dense(vec![sa.sim(), ab2.clone(), ac2.clone()], vec![2.0; 8]).unwrap();
-    let tb1 = TensorDynLen::from_dense(vec![ab2.clone(), sb.sim()], vec![2.0; 4]).unwrap();
-    let tb2 = TensorDynLen::from_dense(vec![ac2.clone(), sc.sim()], vec![2.0; 4]).unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        IdxTensor::from_dense(vec![sa.sim(), ab2.clone(), ac2.clone()], vec![2.0; 8]).unwrap();
+    let tb1 = IdxTensor::from_dense(vec![ab2.clone(), sb.sim()], vec![2.0; 4]).unwrap();
+    let tb2 = IdxTensor::from_dense(vec![ac2.clone(), sc.sim()], vec![2.0; 4]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![tb0, tb1, tb2],
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
     )
@@ -920,13 +908,12 @@ fn test_partial_contract_mismatched_topology_scalar_result() {
     let s_b = DynIndex::new_dyn(2);
     let bond_b = DynIndex::new_dyn(1);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0, 2.0]).unwrap();
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s_a.clone()], vec![1.0, 2.0]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
 
-    let t_b0 = TensorDynLen::from_dense(vec![s_b.clone(), bond_b.clone()], vec![3.0, 4.0]).unwrap();
-    let t_b1 = TensorDynLen::from_dense(vec![bond_b], vec![1.0]).unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t_b0 = IdxTensor::from_dense(vec![s_b.clone(), bond_b.clone()], vec![3.0, 4.0]).unwrap();
+    let t_b1 = IdxTensor::from_dense(vec![bond_b], vec![1.0]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_b0, t_b1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -960,17 +947,15 @@ fn test_partial_contract_honors_output_order() {
     let bond_a1 = DynIndex::new_dyn(2);
 
     let t_a0 =
-        TensorDynLen::from_dense(vec![a0.clone(), bond_a0.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
-    let t_a1 = TensorDynLen::from_dense(
+        IdxTensor::from_dense(vec![a0.clone(), bond_a0.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let t_a1 = IdxTensor::from_dense(
         vec![bond_a0.clone(), a1.clone(), bond_a1.clone()],
         vec![1.0; 8],
     )
     .unwrap();
     let t_a2 =
-        TensorDynLen::from_dense(vec![bond_a1.clone(), a2.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        IdxTensor::from_dense(vec![bond_a1.clone(), a2.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_a0, t_a1, t_a2],
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
     )
@@ -983,17 +968,15 @@ fn test_partial_contract_honors_output_order() {
     let bond_b1 = DynIndex::new_dyn(2);
 
     let t_b0 =
-        TensorDynLen::from_dense(vec![b0.clone(), bond_b0.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
-    let t_b1 = TensorDynLen::from_dense(
+        IdxTensor::from_dense(vec![b0.clone(), bond_b0.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let t_b1 = IdxTensor::from_dense(
         vec![bond_b0.clone(), b1.clone(), bond_b1.clone()],
         vec![1.0; 8],
     )
     .unwrap();
     let t_b2 =
-        TensorDynLen::from_dense(vec![bond_b1.clone(), b2.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        IdxTensor::from_dense(vec![bond_b1.clone(), b2.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t_b0, t_b1, t_b2],
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
     )
@@ -1038,35 +1021,35 @@ fn test_partial_contract_output_order_rejects_multiple_survivors_on_one_node() {
     let b_b23 = DynIndex::new_dyn(1);
     let b_b34 = DynIndex::new_dyn(1);
 
-    let tn_a = TreeTN::<TensorDynLen, usize>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, usize>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![a_row0.clone(), a_b01.clone()], vec![1.0; 2]).unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(vec![a_row0.clone(), a_b01.clone()], vec![1.0; 2]).unwrap(),
+            IdxTensor::from_dense(
                 vec![a_b01.clone(), a_contract.clone(), a_b12.clone()],
                 vec![1.0; 2],
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![a_b12.clone(), a_row1.clone(), a_b23.clone()],
                 vec![1.0; 2],
             )
             .unwrap(),
-            TensorDynLen::from_dense(vec![a_b23.clone(), a_b34.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(vec![a_b34.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![a_b23.clone(), a_b34.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![a_b34.clone()], vec![1.0]).unwrap(),
         ],
         vec![0, 1, 2, 3, 4],
     )
     .unwrap();
-    let tn_b = TreeTN::<TensorDynLen, usize>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, usize>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![b_b01.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(vec![b_b01.clone(), b_b12.clone()], vec![1.0]).unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(vec![b_b01.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![b_b01.clone(), b_b12.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(
                 vec![b_b12.clone(), b_col1.clone(), b_b23.clone()],
                 vec![1.0; 2],
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     b_b23.clone(),
                     b_contract.clone(),
@@ -1076,7 +1059,7 @@ fn test_partial_contract_output_order_rejects_multiple_survivors_on_one_node() {
                 vec![1.0; 4],
             )
             .unwrap(),
-            TensorDynLen::from_dense(vec![b_b34.clone()], vec![1.0]).unwrap(),
+            IdxTensor::from_dense(vec![b_b34.clone()], vec![1.0]).unwrap(),
         ],
         vec![0, 1, 2, 3, 4],
     )
@@ -1110,17 +1093,17 @@ fn test_partial_contract_to_site_network_splits_onto_explicit_target() {
     let k_right = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
 
-    let a = TreeTN::<TensorDynLen, &str>::from_tensors(
+    let a = TreeTN::<IdxTensor, &str>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![i.clone(), k_left.clone()], vec![1.0, 2.0, 3.0, 4.0])
+            IdxTensor::from_dense(vec![i.clone(), k_left.clone()], vec![1.0, 2.0, 3.0, 4.0])
                 .unwrap(),
         ],
         vec!["center"],
     )
     .unwrap();
-    let b = TreeTN::<TensorDynLen, &str>::from_tensors(
+    let b = TreeTN::<IdxTensor, &str>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![k_right.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0])
+            IdxTensor::from_dense(vec![k_right.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0])
                 .unwrap(),
         ],
         vec!["center"],
@@ -1176,13 +1159,13 @@ fn test_partial_contract_to_site_network_splits_onto_explicit_target() {
 fn test_partial_contract_to_site_network_rejects_output_order() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
-    let a = TreeTN::<TensorDynLen, &str>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap()],
+    let a = TreeTN::<IdxTensor, &str>::from_tensors(
+        vec![IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap()],
         vec!["center"],
     )
     .unwrap();
-    let b = TreeTN::<TensorDynLen, &str>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![j], vec![3.0, 4.0]).unwrap()],
+    let b = TreeTN::<IdxTensor, &str>::from_tensors(
+        vec![IdxTensor::from_dense(vec![j], vec![3.0, 4.0]).unwrap()],
         vec!["center"],
     )
     .unwrap();
@@ -1215,21 +1198,19 @@ fn test_partial_contract_complex_diagonal_pair_keeps_left_leg() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
 
-    let a = TensorDynLen::from_dense(
+    let a = IdxTensor::from_dense(
         vec![i.clone()],
         vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
     )
     .unwrap();
-    let b = TensorDynLen::from_dense(
+    let b = IdxTensor::from_dense(
         vec![j.clone()],
         vec![Complex64::new(3.0, 0.5), Complex64::new(-1.0, 4.0)],
     )
     .unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![b], vec!["A".to_string()]).unwrap();
 
     let spec = PartialContractionSpec {
         contract_pairs: vec![],
@@ -1246,7 +1227,7 @@ fn test_partial_contract_complex_diagonal_pair_keeps_left_leg() {
     .unwrap();
 
     let dense = result.contract_to_tensor().unwrap();
-    let expected = TensorDynLen::from_dense(
+    let expected = IdxTensor::from_dense(
         vec![i],
         vec![Complex64::new(2.5, 3.5), Complex64::new(2.0, 9.0)],
     )
@@ -1259,13 +1240,11 @@ fn test_partial_contract_diagonal_pair_keeps_left_leg() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
 
-    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
-    let b = TensorDynLen::from_dense(vec![j.clone()], vec![10.0_f64, 20.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![j.clone()], vec![10.0_f64, 20.0]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![b], vec!["A".to_string()]).unwrap();
 
     let spec = PartialContractionSpec {
         contract_pairs: vec![],
@@ -1283,7 +1262,7 @@ fn test_partial_contract_diagonal_pair_keeps_left_leg() {
     .unwrap();
 
     let dense = result.contract_to_tensor().unwrap();
-    let expected = TensorDynLen::from_dense(vec![i], vec![10.0_f64, 40.0]).unwrap();
+    let expected = IdxTensor::from_dense(vec![i], vec![10.0_f64, 40.0]).unwrap();
     assert!(dense.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
@@ -1298,7 +1277,7 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
     let i_b = DynIndex::new_dyn(2);
     let j_b = DynIndex::new_dyn(3);
 
-    let dense_a = TensorDynLen::from_dense(vec![x_a.clone(), w_a.clone(), i_a.clone()], {
+    let dense_a = IdxTensor::from_dense(vec![x_a.clone(), w_a.clone(), i_a.clone()], {
         let mut values = Vec::new();
         for i in 0..i_a.dim() {
             for w in 0..w_a.dim() {
@@ -1310,7 +1289,7 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
         values
     })
     .unwrap();
-    let dense_b = TensorDynLen::from_dense(
+    let dense_b = IdxTensor::from_dense(
         vec![
             x_b.clone(),
             w_b.clone(),
@@ -1390,7 +1369,7 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
     .unwrap();
     let result_dense = result.to_dense().unwrap();
 
-    let expected = TensorDynLen::from_dense(vec![x_a, z_b, j_b], {
+    let expected = IdxTensor::from_dense(vec![x_a, z_b, j_b], {
         let mut values = Vec::new();
         for j in 0..3 {
             for z in 0..2 {

@@ -6,13 +6,13 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{ColMajorArrayRef, SvdTruncationPolicy, TensorDynLen};
+use tensor4all_core::{ColMajorArrayRef, IdxTensor, SvdTruncationPolicy};
 use tensor4all_tensorbackend::StorageKind;
 
 type DynIndex = Index<DynId, TagSet>;
 type ChainStateAndIdentity = (
-    TreeTN<TensorDynLen, String>,
-    LinearOperator<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
+    LinearOperator<IdxTensor, String>,
     Vec<(String, DynIndex)>,
 );
 
@@ -20,7 +20,7 @@ fn make_index(dim: usize) -> DynIndex {
     Index::new_dyn(dim)
 }
 
-fn build_identity_operator(sites: &[(String, DynIndex)]) -> LinearOperator<TensorDynLen, String> {
+fn build_identity_operator(sites: &[(String, DynIndex)]) -> LinearOperator<IdxTensor, String> {
     let mut mpo = TreeTN::new();
     let mut input_mapping = HashMap::new();
     let mut output_mapping = HashMap::new();
@@ -28,7 +28,7 @@ fn build_identity_operator(sites: &[(String, DynIndex)]) -> LinearOperator<Tenso
     for (name, true_index) in sites {
         let internal_input = make_index(true_index.dim());
         let internal_output = make_index(true_index.dim());
-        let tensor = TensorDynLen::from_dense(
+        let tensor = IdxTensor::from_dense(
             vec![internal_output.clone(), internal_input.clone()],
             vec![1.0, 0.0, 0.0, 1.0],
         )
@@ -56,7 +56,7 @@ fn build_identity_operator(sites: &[(String, DynIndex)]) -> LinearOperator<Tenso
 
 fn build_bonded_identity_operator(
     sites: &[(String, DynIndex)],
-) -> LinearOperator<TensorDynLen, String> {
+) -> LinearOperator<IdxTensor, String> {
     assert_eq!(sites.len(), 2);
 
     let mut mpo = TreeTN::new();
@@ -68,7 +68,7 @@ fn build_bonded_identity_operator(
         let internal_input = make_index(true_index.dim());
         let internal_output = make_index(true_index.dim());
         let tensor = if name == &sites[0].0 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     internal_output.clone(),
                     internal_input.clone(),
@@ -78,7 +78,7 @@ fn build_bonded_identity_operator(
             )
             .unwrap()
         } else {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond.clone(),
                     internal_output.clone(),
@@ -116,7 +116,7 @@ fn build_bonded_identity_operator(
 fn build_redundant_bonded_identity_operator(
     sites: &[(String, DynIndex)],
     mpo_bond_dim: usize,
-) -> LinearOperator<TensorDynLen, String> {
+) -> LinearOperator<IdxTensor, String> {
     assert_eq!(sites.len(), 2);
 
     let mut mpo = TreeTN::new();
@@ -135,7 +135,7 @@ fn build_redundant_bonded_identity_operator(
                     data[site_value + dim * (site_value + dim * bond_value)] = 1.0;
                 }
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     internal_output.clone(),
                     internal_input.clone(),
@@ -152,7 +152,7 @@ fn build_redundant_bonded_identity_operator(
                         1.0 / mpo_bond_dim as f64;
                 }
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond.clone(),
                     internal_output.clone(),
@@ -187,7 +187,7 @@ fn build_redundant_bonded_identity_operator(
     LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
-fn build_chain_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>) {
+fn build_chain_state() -> (TreeTN<IdxTensor, String>, Vec<(String, DynIndex)>) {
     let s0 = make_index(2);
     let s1 = make_index(2);
     let s2 = make_index(2);
@@ -196,12 +196,12 @@ fn build_chain_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>
     let b12 = make_index(2);
     let b23 = make_index(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
     let t1 =
-        TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
+        IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
     let t2 =
-        TensorDynLen::from_dense(vec![b12.clone(), s2.clone(), b23.clone()], vec![1.0; 8]).unwrap();
-    let t3 = TensorDynLen::from_dense(vec![b23.clone(), s3.clone()], vec![1.0; 4]).unwrap();
+        IdxTensor::from_dense(vec![b12.clone(), s2.clone(), b23.clone()], vec![1.0; 8]).unwrap();
+    let t3 = IdxTensor::from_dense(vec![b23.clone(), s3.clone()], vec![1.0; 4]).unwrap();
 
     let state = TreeTN::from_tensors(
         vec![t0, t1, t2, t3],
@@ -230,9 +230,9 @@ fn apply_linear_operator_supports_multiple_index_mappings_per_node() {
     let x = make_index(2);
     let y = make_index(2);
     let state_tensor =
-        TensorDynLen::from_dense(vec![x.clone(), y.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        IdxTensor::from_dense(vec![x.clone(), y.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
             .unwrap();
 
     let x_in = make_index(2);
@@ -247,14 +247,13 @@ fn apply_linear_operator_supports_multiple_index_mappings_per_node() {
             data[xo + 2 * (yo + 2 * (xi + 2 * yi))] = 1.0;
         }
     }
-    let mpo_tensor = TensorDynLen::from_dense(
+    let mpo_tensor = IdxTensor::from_dense(
         vec![x_out.clone(), y_out.clone(), x_in.clone(), y_in.clone()],
         data,
     )
     .unwrap();
-    let mpo =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
-            .unwrap();
+    let mpo = TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
+        .unwrap();
 
     let mut input_mapping = HashMap::new();
     input_mapping.insert(
@@ -301,23 +300,22 @@ fn apply_linear_operator_supports_multiple_index_mappings_per_node() {
 #[test]
 fn apply_linear_operator_to_indices_binds_explicit_external_indices() {
     let state_index = make_index(2);
-    let state_tensor = TensorDynLen::from_dense(vec![state_index.clone()], vec![2.0, 5.0]).unwrap();
+    let state_tensor = IdxTensor::from_dense(vec![state_index.clone()], vec![2.0, 5.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
             .unwrap();
 
     let op_true_input = make_index(2);
     let op_true_output = make_index(2);
     let internal_input = make_index(2);
     let internal_output = make_index(2);
-    let mpo_tensor = TensorDynLen::from_dense(
+    let mpo_tensor = IdxTensor::from_dense(
         vec![internal_output.clone(), internal_input.clone()],
         vec![1.0, 0.0, 0.0, 1.0],
     )
     .unwrap();
-    let mpo =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
-            .unwrap();
+    let mpo = TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
+        .unwrap();
 
     let mut input_mapping = HashMap::new();
     input_mapping.insert(
@@ -401,10 +399,10 @@ fn apply_linear_operator_to_numbered_tags_binds_state_indices_in_tag_order() {
     let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
     let k2 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
     let bond = make_index(1);
-    let state = TreeTN::<TensorDynLen, String>::from_tensors(
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
         vec![
-            TensorDynLen::from_dense(vec![k1.clone(), bond.clone()], vec![1.0, 2.0]).unwrap(),
-            TensorDynLen::from_dense(vec![bond, k2.clone()], vec![3.0, 5.0]).unwrap(),
+            IdxTensor::from_dense(vec![k1.clone(), bond.clone()], vec![1.0, 2.0]).unwrap(),
+            IdxTensor::from_dense(vec![bond, k2.clone()], vec![3.0, 5.0]).unwrap(),
         ],
         vec!["site0".to_string(), "site1".to_string()],
     )
@@ -431,8 +429,8 @@ fn apply_linear_operator_to_numbered_tags_binds_state_indices_in_tag_order() {
 #[test]
 fn apply_linear_operator_to_numbered_tags_reports_missing_tag() {
     let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
-    let state = TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![TensorDynLen::from_dense(vec![k1], vec![1.0, 2.0]).unwrap()],
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![k1], vec![1.0, 2.0]).unwrap()],
         vec!["site0".to_string()],
     )
     .unwrap();
@@ -453,7 +451,7 @@ fn apply_linear_operator_to_numbered_tags_reports_missing_tag() {
     ));
 }
 
-fn build_tree_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>) {
+fn build_tree_state() -> (TreeTN<IdxTensor, String>, Vec<(String, DynIndex)>) {
     let s_a = make_index(2);
     let s_b = make_index(2);
     let s_c = make_index(2);
@@ -464,16 +462,16 @@ fn build_tree_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>)
     let b_bd = make_index(2);
     let b_be = make_index(2);
 
-    let t_a = TensorDynLen::from_dense(vec![s_a.clone(), b_ab.clone()], vec![1.0; 4]).unwrap();
-    let t_b = TensorDynLen::from_dense(
+    let t_a = IdxTensor::from_dense(vec![s_a.clone(), b_ab.clone()], vec![1.0; 4]).unwrap();
+    let t_b = IdxTensor::from_dense(
         vec![b_ab.clone(), s_b.clone(), b_bc.clone(), b_bd.clone()],
         vec![1.0; 16],
     )
     .unwrap();
-    let t_c = TensorDynLen::from_dense(vec![b_bc.clone(), s_c.clone()], vec![1.0; 4]).unwrap();
-    let t_d = TensorDynLen::from_dense(vec![b_bd.clone(), s_d.clone(), b_be.clone()], vec![1.0; 8])
-        .unwrap();
-    let t_e = TensorDynLen::from_dense(vec![b_be.clone(), s_e.clone()], vec![1.0; 4]).unwrap();
+    let t_c = IdxTensor::from_dense(vec![b_bc.clone(), s_c.clone()], vec![1.0; 4]).unwrap();
+    let t_d =
+        IdxTensor::from_dense(vec![b_bd.clone(), s_d.clone(), b_be.clone()], vec![1.0; 8]).unwrap();
+    let t_e = IdxTensor::from_dense(vec![b_be.clone(), s_e.clone()], vec![1.0; 4]).unwrap();
 
     let state = TreeTN::from_tensors(
         vec![t_a, t_b, t_c, t_d, t_e],
@@ -531,7 +529,7 @@ fn build_uniform_chain_state_and_identity_operator(
             state_indices.push(state_bonds[site].clone());
         }
         let state_len = state_indices.iter().map(|idx| idx.dim()).product();
-        state_tensors.push(TensorDynLen::from_dense(state_indices, vec![1.0; state_len]).unwrap());
+        state_tensors.push(IdxTensor::from_dense(state_indices, vec![1.0; state_len]).unwrap());
 
         let internal_input = make_index(2);
         let internal_output = make_index(2);
@@ -567,7 +565,7 @@ fn build_uniform_chain_state_and_identity_operator(
                 }
             }
         }
-        mpo_tensors.push(TensorDynLen::from_dense(mpo_indices, mpo_data).unwrap());
+        mpo_tensors.push(IdxTensor::from_dense(mpo_indices, mpo_data).unwrap());
 
         input_mapping.insert(
             name.clone(),
@@ -601,8 +599,8 @@ fn build_uniform_chain_state_and_identity_operator(
 }
 
 fn assert_identity_application(
-    state: &TreeTN<TensorDynLen, String>,
-    operator: &LinearOperator<TensorDynLen, String>,
+    state: &TreeTN<IdxTensor, String>,
+    operator: &LinearOperator<IdxTensor, String>,
 ) {
     use crate::operator::apply_linear_operator;
 
@@ -748,20 +746,20 @@ fn test_apply_linear_operator_full_coverage() {
     use crate::operator::ApplyOptions;
 
     // Create a 2-site state
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = make_index(2);
     let s1 = make_index(2);
     let b01 = make_index(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
 
     let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
     let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
     state.connect(n0, &b01, n1, &b01).unwrap();
 
     // Create identity operator covering both sites
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     let s0_in = make_index(2);
     let s0_out = make_index(2);
     let s1_in = make_index(2);
@@ -769,14 +767,13 @@ fn test_apply_linear_operator_full_coverage() {
     let b_mpo = make_index(1);
 
     let id_data = vec![1.0, 0.0, 0.0, 1.0]; // Identity matrix
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
         id_data.clone(),
     )
     .unwrap();
     let t1_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
-            .unwrap();
+        IdxTensor::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data).unwrap();
 
     let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
     let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
@@ -835,12 +832,12 @@ fn naive_apply_preserves_product_link_space_for_redundant_mpo_bond() {
     let state_bond = make_index(2);
     let state = TreeTN::from_tensors(
         vec![
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![s0.clone(), state_bond.clone()],
                 vec![1.0, 3.0, 2.0, 5.0],
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![state_bond.clone(), s1.clone()],
                 vec![7.0, 11.0, 13.0, 17.0],
             )
@@ -962,17 +959,17 @@ fn test_apply_linear_operator_partial() {
     use crate::operator::ApplyOptions;
 
     // Create a 3-site state
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = make_index(2);
     let s1 = make_index(2);
     let s2 = make_index(2);
     let b01 = make_index(2);
     let b12 = make_index(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
     let t1 =
-        TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
-    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 4]).unwrap();
+        IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 4]).unwrap();
 
     let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
     let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
@@ -981,7 +978,7 @@ fn test_apply_linear_operator_partial() {
     state.connect(n1, &b12, n2, &b12).unwrap();
 
     // Create operator covering only site0 and site1 (partial)
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     let s0_in = make_index(2);
     let s0_out = make_index(2);
     let s1_in = make_index(2);
@@ -989,14 +986,13 @@ fn test_apply_linear_operator_partial() {
     let b_mpo = make_index(1);
 
     let id_data = vec![1.0, 0.0, 0.0, 1.0];
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
         id_data.clone(),
     )
     .unwrap();
     let t1_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
-            .unwrap();
+        IdxTensor::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data).unwrap();
 
     let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
     let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
@@ -1046,17 +1042,17 @@ fn test_apply_linear_operator_partial_preserves_site_index_set() {
     use crate::operator::apply_linear_operator;
     use crate::operator::ApplyOptions;
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = make_index(2);
     let s1 = make_index(2);
     let s2 = make_index(2);
     let b01 = make_index(2);
     let b12 = make_index(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
     let t1 =
-        TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
-    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 4]).unwrap();
+        IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 4]).unwrap();
 
     let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
     let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
@@ -1064,7 +1060,7 @@ fn test_apply_linear_operator_partial_preserves_site_index_set() {
     state.connect(n0, &b01, n1, &b01).unwrap();
     state.connect(n1, &b12, n2, &b12).unwrap();
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     let s0_in = make_index(2);
     let s0_out = make_index(2);
     let s1_in = make_index(2);
@@ -1072,14 +1068,13 @@ fn test_apply_linear_operator_partial_preserves_site_index_set() {
     let b_mpo = make_index(1);
 
     let id_data = vec![1.0, 0.0, 0.0, 1.0];
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
         id_data.clone(),
     )
     .unwrap();
     let t1_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
-            .unwrap();
+        IdxTensor::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data).unwrap();
 
     let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
     let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
@@ -1132,7 +1127,7 @@ fn test_apply_linear_operator_partial_shift_factorized_rooted_state_intermediate
     let s0 = make_index(2);
     let s1 = make_index(2);
     let spectator = make_index(2);
-    let dense = TensorDynLen::from_dense(
+    let dense = IdxTensor::from_dense(
         vec![s0.clone(), s1.clone(), spectator.clone()],
         vec![10.0, 30.0, 20.0, 40.0, 11.0, 31.0, 21.0, 41.0],
     )
@@ -1148,7 +1143,7 @@ fn test_apply_linear_operator_partial_shift_factorized_rooted_state_intermediate
     state_edges.sort();
     assert_eq!(state_edges, vec![(0usize, 1usize), (1usize, 2usize)]);
 
-    let mut mpo = TreeTN::<TensorDynLen, usize>::new();
+    let mut mpo = TreeTN::<IdxTensor, usize>::new();
     let s0_in = make_index(2);
     let s0_out = make_index(2);
     let s1_in = make_index(2);
@@ -1156,14 +1151,13 @@ fn test_apply_linear_operator_partial_shift_factorized_rooted_state_intermediate
     let b_mpo = make_index(1);
 
     let id_data = vec![1.0, 0.0, 0.0, 1.0];
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
         id_data.clone(),
     )
     .unwrap();
     let t1_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
-            .unwrap();
+        IdxTensor::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data).unwrap();
 
     let n0_mpo = mpo.add_tensor(0usize, t0_mpo).unwrap();
     let n1_mpo = mpo.add_tensor(1usize, t1_mpo).unwrap();
@@ -1325,20 +1319,20 @@ fn test_apply_linear_operator_error_cases() {
     use crate::operator::ApplyOptions;
 
     // Create a 2-site state
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let s0 = make_index(2);
     let s1 = make_index(2);
     let b01 = make_index(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
 
     let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
     let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
     state.connect(n0, &b01, n1, &b01).unwrap();
 
     // Create operator with extra node not in state (should error)
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     let s0_in = make_index(2);
     let s0_out = make_index(2);
     let s2_in = make_index(2); // site2 doesn't exist in state
@@ -1346,14 +1340,13 @@ fn test_apply_linear_operator_error_cases() {
     let b_mpo = make_index(1);
 
     let id_data = vec![1.0, 0.0, 0.0, 1.0];
-    let t0_mpo = TensorDynLen::from_dense(
+    let t0_mpo = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
         id_data.clone(),
     )
     .unwrap();
     let t2_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s2_out.clone(), s2_in.clone()], id_data)
-            .unwrap();
+        IdxTensor::from_dense(vec![b_mpo.clone(), s2_out.clone(), s2_in.clone()], id_data).unwrap();
 
     let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
     let n2_mpo = mpo.add_tensor("site2".to_string(), t2_mpo).unwrap();
@@ -1492,12 +1485,12 @@ fn test_compose_operator_along_state_paths_missing_state_node() {
     let g_out = make_index(2);
     let bond = make_index(1);
 
-    let t_a = TensorDynLen::from_dense(
+    let t_a = IdxTensor::from_dense(
         vec![a_out.clone(), a_in.clone(), bond.clone()],
         vec![1.0, 0.0, 0.0, 1.0],
     )
     .unwrap();
-    let t_g = TensorDynLen::from_dense(
+    let t_g = IdxTensor::from_dense(
         vec![bond.clone(), g_out.clone(), g_in.clone()],
         vec![1.0, 0.0, 0.0, 1.0],
     )

@@ -13,7 +13,7 @@ that appears in both tensors). Physical (site) indices appear in exactly one ten
 The example below builds a 3-site MPS chain `t0 -- t1 -- t2`:
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
 use tensor4all_treetn::TreeTN;
 
 // Site indices (appear in one tensor each)
@@ -25,11 +25,11 @@ let s2 = DynIndex::new_dyn(2);
 let b01 = DynIndex::new_dyn(3);
 let b12 = DynIndex::new_dyn(3);
 
-let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 6]).unwrap();
-let t1 = TensorDynLen::from_dense(vec![b01, s1, b12.clone()], vec![1.0; 18]).unwrap();
-let t2 = TensorDynLen::from_dense(vec![b12, s2], vec![1.0; 6]).unwrap();
+let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0; 6]).unwrap();
+let t1 = IdxTensor::from_dense(vec![b01, s1, b12.clone()], vec![1.0; 18]).unwrap();
+let t2 = IdxTensor::from_dense(vec![b12, s2], vec![1.0; 6]).unwrap();
 
-let ttn = TreeTN::<TensorDynLen, usize>::from_tensors(
+let ttn = TreeTN::<IdxTensor, usize>::from_tensors(
     vec![t0, t1, t2],
     vec![0, 1, 2],   // vertex labels
 ).unwrap();
@@ -47,7 +47,7 @@ and arbitrary branching topologies. Below is a **Y-shaped** tree with a central 
 to three leaves:
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
 use tensor4all_treetn::TreeTN;
 
 // Site indices for the four nodes
@@ -62,15 +62,15 @@ let b_hb = DynIndex::new_dyn(3);
 let b_hc = DynIndex::new_dyn(3);
 
 // Hub tensor has 1 site index + 3 bond indices (2 * 3 * 3 * 3 = 54 elements)
-let t_hub = TensorDynLen::from_dense(
+let t_hub = IdxTensor::from_dense(
     vec![s_hub, b_ha.clone(), b_hb.clone(), b_hc.clone()],
     vec![1.0_f64; 54],
 ).unwrap();
 
 // Leaf tensors each have 1 site index + 1 bond index
-let t_a = TensorDynLen::from_dense(vec![b_ha, s_a], vec![1.0; 6]).unwrap();
-let t_b = TensorDynLen::from_dense(vec![b_hb, s_b], vec![1.0; 6]).unwrap();
-let t_c = TensorDynLen::from_dense(vec![b_hc, s_c], vec![1.0; 6]).unwrap();
+let t_a = IdxTensor::from_dense(vec![b_ha, s_a], vec![1.0; 6]).unwrap();
+let t_b = IdxTensor::from_dense(vec![b_hb, s_b], vec![1.0; 6]).unwrap();
+let t_c = IdxTensor::from_dense(vec![b_hc, s_c], vec![1.0; 6]).unwrap();
 
 let ttn = TreeTN::<_, String>::from_tensors(
     vec![t_hub, t_a, t_b, t_c],
@@ -89,17 +89,17 @@ except the root into isometries. This puts the full norm information into the ro
 prerequisite for efficient norm computation and truncation.
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
 use tensor4all_treetn::{TreeTN, CanonicalizationOptions, TruncationOptions};
 
 let s0 = DynIndex::new_dyn(2);
 let bond = DynIndex::new_dyn(3);
 let s1 = DynIndex::new_dyn(2);
 
-let t0 = TensorDynLen::from_dense(
+let t0 = IdxTensor::from_dense(
     vec![s0, bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 ).unwrap();
-let t1 = TensorDynLen::from_dense(
+let t1 = IdxTensor::from_dense(
     vec![bond, s1], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 ).unwrap();
 
@@ -130,7 +130,7 @@ use tensor4all_core::prelude::*;
 use tensor4all_treetn::prelude::*;
 
 let s = DynIndex::new_dyn(2);
-let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+let t = IdxTensor::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
 let mut ttn = TreeTN::<_, i32>::from_tensors(vec![t], vec![0]).unwrap();
 
 let norm = ttn.norm().unwrap();
@@ -140,22 +140,22 @@ assert!((norm - 5.0).abs() < 1e-10);
 
 ### Dense Conversion
 
-`to_dense()` contracts all bond indices and returns a single `TensorDynLen` whose indices are the
+`to_dense()` contracts all bond indices and returns a single `IdxTensor` whose indices are the
 physical (site) indices of the network. For large networks this can be expensive — use it mainly
 for testing or small examples.
 
 ```rust
-use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{DynIndex, IdxTensor, TensorIndex, TensorLike};
 use tensor4all_treetn::TreeTN;
 
 let s0 = DynIndex::new_dyn(2);
 let bond = DynIndex::new_dyn(2);
 let s1 = DynIndex::new_dyn(2);
 
-let t0 = TensorDynLen::from_dense(
+let t0 = IdxTensor::from_dense(
     vec![s0, bond.clone()], vec![1.0_f64, 0.0, 0.0, 1.0],
 ).unwrap();
-let t1 = TensorDynLen::from_dense(
+let t1 = IdxTensor::from_dense(
     vec![bond, s1], vec![1.0_f64, 0.0, 0.0, 1.0],
 ).unwrap();
 
@@ -175,13 +175,13 @@ use tensor4all_core::prelude::*;
 use tensor4all_treetn::prelude::*;
 
 let s = DynIndex::new_dyn(2);
-let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0_f64, 2.0]).unwrap();
+let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0_f64, 2.0]).unwrap();
 let ttn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
 
 // sum represents ttn + ttn
 let sum = ttn.add(&ttn).unwrap();
 let dense = sum.to_dense().unwrap();
-let expected = TensorDynLen::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
+let expected = IdxTensor::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
 assert!(dense.distance(&expected).unwrap() < 1e-12);
 ```
 

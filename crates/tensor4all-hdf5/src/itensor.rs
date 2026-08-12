@@ -1,14 +1,14 @@
-//! Layer 1: ITensor (TensorDynLen) HDF5 read/write (ITensors.jl compatible).
+//! Layer 1: ITensor (IdxTensor) HDF5 read/write (ITensors.jl compatible).
 
 use crate::backend::Group;
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 
 use crate::index;
 use crate::schema;
 
-/// Write a [`TensorDynLen`] as an ITensors.jl `ITensor` to an HDF5 group.
+/// Write a [`IdxTensor`] as an ITensors.jl `ITensor` to an HDF5 group.
 ///
 /// The tensor data is stored in column-major order (matching ITensors.jl convention).
 /// Both `f64` and `Complex64` storage types are supported.
@@ -25,7 +25,7 @@ use crate::schema;
 ///     @version = 1
 ///     data: [N]    (flat column-major array)
 /// ```
-pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> {
+pub(crate) fn write_itensor(group: &Group, tensor: &IdxTensor) -> Result<()> {
     schema::write_type_version(group, "ITensor", 1)?;
 
     // Write indices
@@ -66,7 +66,7 @@ pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> 
     Ok(())
 }
 
-/// Read a [`TensorDynLen`] from an ITensors.jl `ITensor` in an HDF5 group.
+/// Read a [`IdxTensor`] from an ITensors.jl `ITensor` in an HDF5 group.
 ///
 /// Validates the `@type` and `@version` attributes before reading. Supports
 /// both `Dense{Float64}` and `Dense{ComplexF64}` storage types.
@@ -74,7 +74,7 @@ pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> 
 /// String attributes are read using [`crate::compat`] helpers, which handle
 /// both variable-length Unicode (our format) and fixed-length Unicode
 /// (ITensors.jl format).
-pub(crate) fn read_itensor(group: &Group) -> Result<TensorDynLen> {
+pub(crate) fn read_itensor(group: &Group) -> Result<IdxTensor> {
     schema::require_type_version(group, "ITensor", 1)?;
 
     // Read indices
@@ -91,8 +91,8 @@ pub(crate) fn read_itensor(group: &Group) -> Result<TensorDynLen> {
             .read_1d()
             .context("Failed to read f64 data")?
             .to_vec();
-        TensorDynLen::from_dense(indices, col_major_data)
-            .context("Failed to build f64 TensorDynLen from HDF5 data")
+        IdxTensor::from_dense(indices, col_major_data)
+            .context("Failed to build f64 IdxTensor from HDF5 data")
     } else if storage_type_str.contains("Dense{ComplexF64}") {
         let data_ds = storage_group.dataset("data")?;
         // Read as native HDF5 compound type (Complex64)
@@ -101,8 +101,8 @@ pub(crate) fn read_itensor(group: &Group) -> Result<TensorDynLen> {
             .read_1d()
             .context("Failed to read complex data")?
             .to_vec();
-        TensorDynLen::from_dense(indices, col_major_data)
-            .context("Failed to build complex TensorDynLen from HDF5 data")
+        IdxTensor::from_dense(indices, col_major_data)
+            .context("Failed to build complex IdxTensor from HDF5 data")
     } else {
         bail!(
             "Unsupported storage type: {}. Only Dense{{Float64}} and Dense{{ComplexF64}} are supported.",

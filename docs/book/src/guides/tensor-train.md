@@ -142,7 +142,7 @@ ordering.
 
 > **Key conventions**
 > - Sites are **0-indexed** (Julia uses 1-indexed).
-> - `TensorDynLen::from_dense` expects data in **column-major** (Fortran) order.
+> - `IdxTensor::from_dense` expects data in **column-major** (Fortran) order.
 > - `inner()` computes `<self|other>` with complex conjugation on `self`.
 
 ### Creating and orthogonalizing
@@ -159,15 +159,15 @@ let b01 = DynIndex::new_bond(2)?;
 let b12 = DynIndex::new_bond(2)?;
 
 // Build site tensors (column-major data)
-let t0 = TensorDynLen::from_dense(
+let t0 = IdxTensor::from_dense(
     vec![s0.clone(), b01.clone()],
     vec![1.0_f64, 0.0, 0.0, 1.0],
 )?;
-let t1 = TensorDynLen::from_dense(
+let t1 = IdxTensor::from_dense(
     vec![b01.clone(), s1.clone(), b12.clone()],
     vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
 )?;
-let t2 = TensorDynLen::from_dense(
+let t2 = IdxTensor::from_dense(
     vec![b12.clone(), s2.clone()],
     vec![1.0, 0.0, 0.0, 1.0],
 )?;
@@ -198,15 +198,15 @@ After orthogonalization you can truncate bond dimensions by SVD:
 # let s2 = DynIndex::new_dyn(2);
 # let b01 = DynIndex::new_bond(4)?;
 # let b12 = DynIndex::new_bond(4)?;
-# let t0 = TensorDynLen::from_dense(
+# let t0 = IdxTensor::from_dense(
 #     vec![s0, b01.clone()],
 #     (0..8).map(|i| i as f64).collect(),
 # )?;
-# let t1 = TensorDynLen::from_dense(
+# let t1 = IdxTensor::from_dense(
 #     vec![b01, s1, b12.clone()],
 #     (0..32).map(|i| i as f64).collect(),
 # )?;
-# let t2 = TensorDynLen::from_dense(
+# let t2 = IdxTensor::from_dense(
 #     vec![b12, s2],
 #     (0..8).map(|i| i as f64).collect(),
 # )?;
@@ -234,11 +234,11 @@ To emulate ITensor-style discarded-weight cutoffs, use
 # let s0 = DynIndex::new_dyn(2);
 # let s1 = DynIndex::new_dyn(2);
 # let b = DynIndex::new_bond(2)?;
-# let t0 = TensorDynLen::from_dense(
+# let t0 = IdxTensor::from_dense(
 #     vec![s0, b.clone()],
 #     vec![1.0_f64, 0.0, 0.0, 1.0],
 # )?;
-# let t1 = TensorDynLen::from_dense(
+# let t1 = IdxTensor::from_dense(
 #     vec![b, s1],
 #     vec![1.0, 0.0, 0.0, 1.0],
 # )?;
@@ -266,14 +266,14 @@ let s0 = DynIndex::new_dyn(2);
 let s1 = DynIndex::new_dyn(2);
 let b  = DynIndex::new_bond(2)?;
 
-let t0 = TensorDynLen::from_dense(
+let t0 = IdxTensor::from_dense(
     vec![s0, b.clone()],
     vec![
         Complex64::new(1.0,  0.0), Complex64::new(0.0,  1.0),
         Complex64::new(0.0, -1.0), Complex64::new(1.0,  0.0),
     ],
 )?;
-let t1 = TensorDynLen::from_dense(
+let t1 = IdxTensor::from_dense(
     vec![b, s1],
     vec![
         Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0),

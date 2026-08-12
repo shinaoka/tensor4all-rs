@@ -33,7 +33,7 @@ impl Drop for ScopedEnvVar {
     }
 }
 
-fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
+fn make_test_tensor(shape: &[usize], ids: &[u64]) -> IdxTensor {
     let indices: Vec<DynIndex> = ids
         .iter()
         .zip(shape.iter())
@@ -43,17 +43,17 @@ fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
     let data: Vec<Complex64> = (0..total_size)
         .map(|i| Complex64::new(i as f64, 0.0))
         .collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 fn make_test_tensor_from_data(
     shape: &[usize],
     indices: Vec<DynIndex>,
     data: Vec<f64>,
-) -> TensorDynLen {
+) -> IdxTensor {
     assert_eq!(shape.iter().product::<usize>(), data.len());
     assert_eq!(shape.len(), indices.len());
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 fn col_major_offset(coords: &[usize], dims: &[usize]) -> usize {
@@ -73,7 +73,7 @@ fn col_major_offset(coords: &[usize], dims: &[usize]) -> usize {
 
 #[test]
 fn test_contract_empty() {
-    let tensors: Vec<&TensorDynLen> = vec![];
+    let tensors: Vec<&IdxTensor> = vec![];
     let result = contract(&tensors);
     assert!(result.is_err());
 }
@@ -99,8 +99,8 @@ fn test_contract_default_entry_rejects_disconnected_inputs() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
 
-    let a = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
-    let b = TensorDynLen::from_dense(vec![j], vec![3.0_f64, 4.0, 5.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![j], vec![3.0_f64, 4.0, 5.0]).unwrap();
 
     let err = contract(&[&a, &b]).unwrap_err();
     assert!(err.to_string().contains("Disconnected"));
@@ -112,8 +112,8 @@ fn test_contract_same_id_different_tags_is_disconnected() {
     let site = Index::new_with_tags(id, 2, TagSet::from_str("site").unwrap());
     let link = Index::new_with_tags(id, 2, TagSet::from_str("link").unwrap());
 
-    let a = TensorDynLen::from_dense(vec![site], vec![1.0_f64, 2.0]).unwrap();
-    let b = TensorDynLen::from_dense(vec![link], vec![3.0_f64, 4.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![site], vec![1.0_f64, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![link], vec![3.0_f64, 4.0]).unwrap();
 
     let err = contract(&[&a, &b]).unwrap_err();
     assert!(err.to_string().contains("Disconnected"));
@@ -124,8 +124,8 @@ fn test_outer_product_is_explicit_disconnected_entry() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
 
-    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
-    let b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0_f64, 4.0, 5.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![j.clone()], vec![3.0_f64, 4.0, 5.0]).unwrap();
 
     let result = outer_product(&a, &b).unwrap();
     assert_eq!(result.indices(), &[i, j]);
@@ -140,8 +140,8 @@ fn test_contract_owned_rejects_disconnected_inputs() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
 
-    let a = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
-    let b = TensorDynLen::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap();
 
     let err = contract_owned(vec![a, b]).unwrap_err();
     assert!(err.to_string().contains("disconnected"));
@@ -153,8 +153,8 @@ fn test_contract_diag_diag_partial_preserves_diagonal_storage() {
     let j = Index::new(DynId(2), 3);
     let k = Index::new(DynId(3), 3);
 
-    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let b = TensorDynLen::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
+    let a = IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = IdxTensor::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
 
     let result = contract(&[&a, &b]).unwrap();
 
@@ -165,7 +165,7 @@ fn test_contract_diag_diag_partial_preserves_diagonal_storage() {
         StorageKind::Diagonal
     );
 
-    let expected = TensorDynLen::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
+    let expected = IdxTensor::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
@@ -504,8 +504,8 @@ fn test_contract_owned_with_options_falls_back_for_structured_storage() {
     let j = Index::new(DynId(77), 3);
     let k = Index::new(DynId(78), 3);
 
-    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let b = TensorDynLen::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
+    let a = IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = IdxTensor::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let options = ContractionOptions::new();
 
     let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();
@@ -517,7 +517,7 @@ fn test_contract_owned_with_options_falls_back_for_structured_storage() {
         StorageKind::Diagonal
     );
     assert!(owned.isapprox(&borrowed, 1e-12, 0.0).unwrap());
-    let expected = TensorDynLen::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
+    let expected = IdxTensor::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
     assert!(owned.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
@@ -586,7 +586,7 @@ fn test_contract_owned_with_options_falls_back_to_borrowed_for_grad_tensors() {
     let options = ContractionOptions::new().with_retain_indices(&retain_indices);
     let owned = contract_owned_with_options(vec![x.clone(), y], options).unwrap();
 
-    let ones = TensorDynLen::from_dense(owned.indices().to_vec(), vec![1.0; 8]).unwrap();
+    let ones = IdxTensor::from_dense(owned.indices().to_vec(), vec![1.0; 8]).unwrap();
     let loss = contract(&[&owned, &ones]).unwrap();
     loss.backward().unwrap();
 
@@ -597,7 +597,7 @@ fn test_contract_owned_with_options_falls_back_to_borrowed_for_grad_tensors() {
 
 #[test]
 fn test_find_tensor_connected_components_trivial_cases() {
-    let empty: Vec<&TensorDynLen> = Vec::new();
+    let empty: Vec<&IdxTensor> = Vec::new();
     assert!(find_tensor_connected_components(&empty).is_empty());
 
     let a = make_test_tensor(&[2, 3], &[1, 2]);
@@ -1015,7 +1015,7 @@ fn test_remap_preserves_order() {
 // dense contract tests
 // ========================================================================
 
-fn make_dense_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
+fn make_dense_tensor(shape: &[usize], ids: &[u64]) -> IdxTensor {
     let indices: Vec<DynIndex> = ids
         .iter()
         .zip(shape.iter())
@@ -1025,12 +1025,12 @@ fn make_dense_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
     let data: Vec<Complex64> = (0..total_size)
         .map(|i| Complex64::new((i + 1) as f64, 0.0))
         .collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 #[test]
 fn test_contract_empty_dense_entry() {
-    let tensors: Vec<&TensorDynLen> = vec![];
+    let tensors: Vec<&IdxTensor> = vec![];
     let result = contract(&tensors);
     assert!(result.is_err());
 }

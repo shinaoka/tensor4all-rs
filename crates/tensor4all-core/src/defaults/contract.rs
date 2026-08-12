@@ -4,7 +4,7 @@
 //! using einsum optimization via the tensorbackend
 //! (tenferro-backed implementation).
 //!
-//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 //!
 //! # Main Functions
 //!
@@ -33,8 +33,8 @@ use tensor4all_tensorbackend::{einsum_native_tensors, einsum_native_tensors_owne
 
 #[cfg(test)]
 use crate::defaults::DynId;
-use crate::defaults::TensorDynLenError;
-use crate::defaults::{DynIndex, TensorDynLen};
+use crate::defaults::IdxTensorError;
+use crate::defaults::{DynIndex, IdxTensor};
 
 use crate::index_like::IndexLike;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -184,15 +184,15 @@ impl Default for ContractionOptions<'_> {
 /// use num_complex::Complex64;
 /// use tensor4all_core::{
 ///     contract_pair, contract_pair_with_operand_options, DynIndex,
-///     PairwiseContractionOptions, TensorDynLen,
+///     PairwiseContractionOptions, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(2);
-/// let lhs = TensorDynLen::from_dense(
+/// let lhs = IdxTensor::from_dense(
 ///     vec![i.clone()],
 ///     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)],
 /// ).unwrap();
-/// let rhs = TensorDynLen::from_dense(
+/// let rhs = IdxTensor::from_dense(
 ///     vec![i],
 ///     vec![Complex64::new(2.0, 0.5), Complex64::new(-1.0, 4.0)],
 /// ).unwrap();
@@ -279,7 +279,7 @@ impl PairwiseContractionOptions {
 /// /// failure), when indices are incompatible (a shape or index mismatch), or
 /// /// when the contraction reports a failure (a backend failure).
 ///
-pub fn contract(tensors: &[&TensorDynLen]) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_with_options(tensors, ContractionOptions::new())
 }
 
@@ -291,10 +291,10 @@ pub fn contract(tensors: &[&TensorDynLen]) -> std::result::Result<TensorDynLen, 
 /// /// when the contraction reports a failure (a backend failure).
 ///
 pub fn contract_with_options(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     options: ContractionOptions<'_>,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
-    contract_with_options_impl(tensors, options).map_err(TensorDynLenError::from)
+) -> std::result::Result<IdxTensor, IdxTensorError> {
+    contract_with_options_impl(tensors, options).map_err(IdxTensorError::from)
 }
 
 /// Contract owned tensors with the default connected-network semantics.
@@ -304,9 +304,7 @@ pub fn contract_with_options(
 /// /// failure), when indices are incompatible (a shape or index mismatch), or
 /// /// when the contraction reports a failure (a backend failure).
 ///
-pub fn contract_owned(
-    tensors: Vec<TensorDynLen>,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_owned_with_options(tensors, ContractionOptions::new())
 }
 
@@ -318,24 +316,24 @@ pub fn contract_owned(
 /// /// when the contraction reports a failure (a backend failure).
 ///
 pub fn contract_owned_with_options(
-    tensors: Vec<TensorDynLen>,
+    tensors: Vec<IdxTensor>,
     options: ContractionOptions<'_>,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+) -> std::result::Result<IdxTensor, IdxTensorError> {
     let tensor_refs = tensors.iter().collect::<Vec<_>>();
     let components =
         find_tensor_connected_components_with_retained(&tensor_refs, options.retain_indices);
     if components.len() > 1 {
-        return Err(TensorDynLenError::from(anyhow::anyhow!(
+        return Err(IdxTensorError::from(anyhow::anyhow!(
             "Tensors form disconnected components; use explicit outer_product operations for an intentional disconnected product"
         )));
     }
     drop(tensor_refs);
-    contract_owned_with_options_impl(tensors, options).map_err(TensorDynLenError::from)
+    contract_owned_with_options_impl(tensors, options).map_err(IdxTensorError::from)
 }
 
 /// Contract two tensors with the default pairwise semantics.
 ///
-/// This is the concrete `TensorDynLen` entry point for binary contraction. It
+/// This is the concrete `IdxTensor` entry point for binary contraction. It
 /// contracts all common indices and preserves the pairwise structured fast
 /// paths used by [`TensorContractionLike::contract_pair`].
 /// # Errors
@@ -345,11 +343,11 @@ pub fn contract_owned_with_options(
 /// /// backend failure).
 ///
 pub fn contract_pair(
-    lhs: &TensorDynLen,
-    rhs: &TensorDynLen,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+) -> std::result::Result<IdxTensor, IdxTensorError> {
     lhs.try_contract_pairwise_default_with_options(rhs, PairwiseContractionOptions::new())
-        .map_err(TensorDynLenError::from)
+        .map_err(IdxTensorError::from)
 }
 
 /// Contract two tensors with operand-level conjugation options.
@@ -371,15 +369,15 @@ pub fn contract_pair(
 /// use num_complex::Complex64;
 /// use tensor4all_core::{
 ///     contract_pair, contract_pair_with_operand_options, DynIndex,
-///     PairwiseContractionOptions, TensorDynLen,
+///     PairwiseContractionOptions, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(2);
-/// let lhs = TensorDynLen::from_dense(
+/// let lhs = IdxTensor::from_dense(
 ///     vec![i.clone()],
 ///     vec![Complex64::new(1.0, 1.0), Complex64::new(0.0, 2.0)],
 /// ).unwrap();
-/// let rhs = TensorDynLen::from_dense(
+/// let rhs = IdxTensor::from_dense(
 ///     vec![i],
 ///     vec![Complex64::new(2.0, 0.0), Complex64::new(3.0, -1.0)],
 /// ).unwrap();
@@ -394,12 +392,12 @@ pub fn contract_pair(
 /// assert!((flagged.sum().unwrap() - materialized.sum().unwrap()).abs() < 1e-12);
 /// ```
 pub fn contract_pair_with_operand_options(
-    lhs: &TensorDynLen,
-    rhs: &TensorDynLen,
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
     options: PairwiseContractionOptions,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+) -> std::result::Result<IdxTensor, IdxTensorError> {
     lhs.try_contract_pairwise_default_with_options(rhs, options)
-        .map_err(TensorDynLenError::from)
+        .map_err(IdxTensorError::from)
 }
 
 /// Contract two tensors with explicit contraction options.
@@ -410,10 +408,10 @@ pub fn contract_pair_with_operand_options(
 /// /// backend failure).
 ///
 pub fn contract_pair_with_options(
-    lhs: &TensorDynLen,
-    rhs: &TensorDynLen,
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
     options: ContractionOptions<'_>,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_with_options(&[lhs, rhs], options)
 }
 
@@ -424,12 +422,12 @@ pub fn contract_pair_with_options(
 /// /// index mismatch) or the contraction reports a failure (a backend failure).
 ///
 pub fn tensordot(
-    lhs: &TensorDynLen,
-    rhs: &TensorDynLen,
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+) -> std::result::Result<IdxTensor, IdxTensorError> {
     lhs.try_tensordot_pairwise_explicit(rhs, pairs)
-        .map_err(TensorDynLenError::from)
+        .map_err(IdxTensorError::from)
 }
 
 /// Compute the outer product of two tensors.
@@ -443,11 +441,11 @@ pub fn tensordot(
 /// /// failure).
 ///
 pub fn outer_product(
-    lhs: &TensorDynLen,
-    rhs: &TensorDynLen,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+) -> std::result::Result<IdxTensor, IdxTensorError> {
     lhs.try_outer_product_pairwise(rhs)
-        .map_err(TensorDynLenError::from)
+        .map_err(IdxTensorError::from)
 }
 
 /// Contract multiple owned tensors into a single tensor.
@@ -459,9 +457,9 @@ pub fn outer_product(
 /// path, this function falls back to the shared borrowed execution so semantics
 /// and reverse-mode AD remain intact.
 fn contract_owned_with_options_impl(
-    tensors: Vec<TensorDynLen>,
+    tensors: Vec<IdxTensor>,
     options: ContractionOptions<'_>,
-) -> Result<TensorDynLen> {
+) -> Result<IdxTensor> {
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         _ => {
@@ -511,7 +509,7 @@ fn contract_owned_with_options_impl(
                 })
                 .collect::<Result<Vec<_>>>()?;
             let result_native = einsum_native_tensors_owned(native_operands, &plan.output_ids)?;
-            TensorDynLen::from_native_with_axis_classes(
+            IdxTensor::from_native_with_axis_classes(
                 plan.result_indices,
                 result_native,
                 plan.result_axis_classes,
@@ -520,7 +518,7 @@ fn contract_owned_with_options_impl(
     }
 }
 
-fn has_dense_axis_classes(tensor: &TensorDynLen) -> Result<bool> {
+fn has_dense_axis_classes(tensor: &IdxTensor) -> Result<bool> {
     Ok(tensor
         .axis_classes()
         .iter()
@@ -529,9 +527,9 @@ fn has_dense_axis_classes(tensor: &TensorDynLen) -> Result<bool> {
 }
 
 fn contract_with_options_impl(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     options: ContractionOptions<'_>,
-) -> Result<TensorDynLen> {
+) -> Result<IdxTensor> {
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         _ => {
@@ -559,7 +557,7 @@ fn contract_with_options_impl(
             let has_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
             if has_structured_storage || has_grad {
                 let plan = build_contraction_plan(tensors, options)?;
-                return TensorDynLen::contract_structured_payloads_nary(
+                return IdxTensor::contract_structured_payloads_nary(
                     tensors,
                     plan.result_indices,
                     plan.input_ids,
@@ -672,10 +670,7 @@ impl Default for AxisUnionFind {
 /// Returns a vector of remapped IDs for each tensor, suitable for passing
 /// to einsum. The original tensors are not modified.
 #[cfg(test)]
-pub(crate) fn remap_tensor_ids(
-    tensors: &[&TensorDynLen],
-    uf: &mut AxisUnionFind,
-) -> Vec<Vec<DynId>> {
+pub(crate) fn remap_tensor_ids(tensors: &[&IdxTensor], uf: &mut AxisUnionFind) -> Vec<Vec<DynId>> {
     tensors
         .iter()
         .map(|t| t.indices.iter().map(|idx| uf.find(*idx.id())).collect())
@@ -694,7 +689,7 @@ pub(crate) fn remap_output_ids(output: &[DynIndex], uf: &mut AxisUnionFind) -> V
 /// so we just take the first occurrence.
 #[cfg(test)]
 pub(crate) fn collect_sizes(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     uf: &mut AxisUnionFind,
 ) -> HashMap<DynId, usize> {
     let mut sizes = HashMap::new();
@@ -722,10 +717,7 @@ pub(crate) fn collect_sizes(
 ///
 /// The result keeps the common eager dtype across `f32`, `f64`, `c32`, and
 /// `c64` operands, using the backend's normal mixed-dtype promotion rules.
-fn contract_impl(
-    tensors: &[&TensorDynLen],
-    options: ContractionOptions<'_>,
-) -> Result<TensorDynLen> {
+fn contract_impl(tensors: &[&IdxTensor], options: ContractionOptions<'_>) -> Result<IdxTensor> {
     // 1. Build the contraction plan from internal labels.
     let plan = build_contraction_plan(tensors, options)?;
 
@@ -779,10 +771,10 @@ fn contract_impl(
 }
 
 fn execute_contraction_plan(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     plan: &ContractionPlan,
     has_retained_indices: bool,
-) -> Result<TensorDynLen> {
+) -> Result<IdxTensor> {
     let any_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
     let first_dtype = tensors[0].as_native()?.dtype();
     let same_dtype = tensors
@@ -830,7 +822,7 @@ fn execute_contraction_plan(
             .collect::<Result<Vec<_>>>()?;
         let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
         let result = eager_einsum_ad(&operands, &subscripts)?;
-        return TensorDynLen::from_inner_with_axis_classes(
+        return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
             result,
             plan.result_axis_classes.clone(),
@@ -845,7 +837,7 @@ fn execute_contraction_plan(
         })
         .collect::<Result<Vec<_>>>()?;
     let result_native = einsum_native_tensors(&native_operands, &plan.output_ids)?;
-    TensorDynLen::from_native_with_axis_classes(
+    IdxTensor::from_native_with_axis_classes(
         plan.result_indices.clone(),
         result_native,
         plan.result_axis_classes.clone(),
@@ -887,7 +879,7 @@ struct ContractionPlan {
 }
 
 fn build_contraction_plan(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     options: ContractionOptions<'_>,
 ) -> Result<ContractionPlan> {
     let retained_indices: HashSet<DynIndex> = options.retain_indices.iter().cloned().collect();
@@ -945,7 +937,7 @@ fn build_contraction_plan(
 }
 
 fn validate_retained_indices_exist(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     retain_indices: &[DynIndex],
 ) -> Result<()> {
     for retain in retain_indices {
@@ -975,7 +967,7 @@ fn validate_unique_output_indices(indices: &[DynIndex]) -> Result<()> {
 }
 
 fn output_axis_classes(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     ixs: &[Vec<usize>],
     output: &[usize],
     internal_id_to_original: &HashMap<usize, (usize, usize)>,
@@ -1057,7 +1049,7 @@ fn output_axis_classes(
 /// Returns: (ixs, internal_id_to_original)
 #[allow(clippy::type_complexity)]
 fn build_internal_ids(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     retained_indices: &HashSet<DynIndex>,
 ) -> Result<(Vec<Vec<usize>>, HashMap<usize, (usize, usize)>)> {
     let mut next_id = 0usize;
@@ -1154,7 +1146,7 @@ fn build_internal_ids(
 // ============================================================================
 
 /// Check if two tensors have any contractable indices.
-fn has_contractable_indices(a: &TensorDynLen, b: &TensorDynLen) -> bool {
+fn has_contractable_indices(a: &IdxTensor, b: &IdxTensor) -> bool {
     a.indices
         .iter()
         .any(|idx_a| b.indices.iter().any(|idx_b| idx_a.is_contractable(idx_b)))
@@ -1164,12 +1156,12 @@ fn has_contractable_indices(a: &TensorDynLen, b: &TensorDynLen) -> bool {
 ///
 /// Uses petgraph for O(V+E) connected component detection.
 #[allow(dead_code)]
-fn find_tensor_connected_components(tensors: &[&TensorDynLen]) -> Vec<Vec<usize>> {
+fn find_tensor_connected_components(tensors: &[&IdxTensor]) -> Vec<Vec<usize>> {
     find_tensor_connected_components_with_retained(tensors, &[])
 }
 
 fn find_tensor_connected_components_with_retained(
-    tensors: &[&TensorDynLen],
+    tensors: &[&IdxTensor],
     retain_indices: &[DynIndex],
 ) -> Vec<Vec<usize>> {
     let n = tensors.len();
@@ -1234,7 +1226,7 @@ fn find_tensor_connected_components_with_retained(
     components
 }
 
-fn shares_retained_index(a: &TensorDynLen, b: &TensorDynLen, retain_indices: &[DynIndex]) -> bool {
+fn shares_retained_index(a: &IdxTensor, b: &IdxTensor, retain_indices: &[DynIndex]) -> bool {
     retain_indices.iter().any(|retain| {
         a.indices().iter().any(|idx_a| idx_a == retain)
             && b.indices().iter().any(|idx_b| idx_b == retain)

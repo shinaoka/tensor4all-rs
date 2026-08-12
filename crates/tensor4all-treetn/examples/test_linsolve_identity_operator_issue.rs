@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
@@ -39,11 +39,11 @@ fn create_all_ones_mps(
     n_sites: usize,
     phys_dim: usize,
     bond_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
     assert!(bond_dim >= 1, "bond_dim must be at least 1");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     // Physical indices with tags
     let site_indices: Vec<DynIndex> = (0..n_sites)
@@ -72,7 +72,7 @@ fn create_all_ones_mps(
                     data[idx] = 1.0 / (phys_dim as f64).sqrt();
                 }
             }
-            TensorDynLen::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
+            IdxTensor::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
                 .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_{n-1}]
@@ -84,7 +84,7 @@ fn create_all_ones_mps(
                     data[idx] = 1.0 / (phys_dim as f64).sqrt();
                 }
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
             )
@@ -103,7 +103,7 @@ fn create_all_ones_mps(
                     }
                 }
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     site_indices[i].clone(),
@@ -135,14 +135,14 @@ fn create_all_ones_mps(
 fn create_simple_two_state_mps(
     n_sites: usize,
     phys_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
     assert!(phys_dim >= 2, "phys_dim must be at least 2");
 
     // This state requires bond_dim=2: one bond index for |000...0⟩, one for |111...1⟩
     let bond_dim = 2usize;
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     // Physical indices with tags
     let site_indices: Vec<DynIndex> = (0..n_sites)
@@ -164,7 +164,7 @@ fn create_simple_two_state_mps(
             let mut data = vec![0.0; phys_dim * bond_dim];
             data[0] = 1.0 / 2.0_f64.sqrt(); // |0⟩ -> bond 0
             data[bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // |1⟩ -> bond 1
-            TensorDynLen::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
+            IdxTensor::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
                 .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_{n-1}]
@@ -172,7 +172,7 @@ fn create_simple_two_state_mps(
             let mut data = vec![0.0; bond_dim * phys_dim];
             data[0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩
             data[phys_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
             )
@@ -183,7 +183,7 @@ fn create_simple_two_state_mps(
             let mut data = vec![0.0; bond_dim * phys_dim * bond_dim];
             data[0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩ -> bond 0
             data[phys_dim * bond_dim + bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩ -> bond 1
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     site_indices[i].clone(),
@@ -213,7 +213,7 @@ fn create_random_mps_with_same_sites(
     site_indices: &[DynIndex],
     init_bond_dim: usize,
     seed: u64,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(site_indices.len() == n_sites, "site index count mismatch");
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
@@ -221,22 +221,22 @@ fn create_random_mps_with_same_sites(
         .map(|i| DynIndex::new_dyn_with_tag(init_bond_dim, &format!("init_bond{i}")).unwrap())
         .collect();
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     for i in 0..n_sites {
         let name = format!("site{i}");
         let tensor = if i == 0 {
-            TensorDynLen::random::<f64, _>(
+            IdxTensor::random::<f64, _>(
                 &mut rng,
                 vec![site_indices[i].clone(), bond_indices[i].clone()],
             )
         } else if i == n_sites - 1 {
-            TensorDynLen::random::<f64, _>(
+            IdxTensor::random::<f64, _>(
                 &mut rng,
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
             )
         } else {
-            TensorDynLen::random::<f64, _>(
+            IdxTensor::random::<f64, _>(
                 &mut rng,
                 vec![
                     bond_indices[i - 1].clone(),
@@ -262,10 +262,10 @@ fn create_random_mps_with_same_sites(
 /// Scale a TreeTN by a scalar factor.
 /// For MPS, we only scale one tensor (the last one) to avoid scaling by scalar^n_sites.
 fn scale_treetn(
-    treetn: &TreeTN<TensorDynLen, String>,
+    treetn: &TreeTN<IdxTensor, String>,
     scalar: f64,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
-    let mut scaled = TreeTN::<TensorDynLen, String>::new();
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
+    let mut scaled = TreeTN::<IdxTensor, String>::new();
     let node_names: Vec<String> = treetn.node_names().into_iter().collect();
 
     // For MPS, scale only the last tensor to scale the entire vector by scalar
@@ -313,11 +313,11 @@ fn scale_treetn(
 fn create_n_site_pauli_x_mpo_with_internal_indices(
     n_sites: usize,
     phys_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
     assert_eq!(phys_dim, 2, "Pauli-X requires phys_dim=2");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // Internal indices (independent IDs)
     let s_in_tmp: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -340,7 +340,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         }
 
         let tensor = if i == 0 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -350,7 +350,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
             )
             .unwrap()
         } else if i == n_sites - 1 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -360,7 +360,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
             )
             .unwrap()
         } else {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -387,7 +387,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
 }
 
 /// Print bond dimensions of a TreeTN MPS.
-fn print_bond_dims(mps: &TreeTN<TensorDynLen, String>, label: &str) {
+fn print_bond_dims(mps: &TreeTN<IdxTensor, String>, label: &str) {
     let edges: Vec<_> = mps.site_index_network().edges().collect();
     if edges.is_empty() {
         println!("{label}: no bonds");
@@ -622,7 +622,7 @@ fn run_test_case(
     );
 
     // Helper: compute relative residual ||(a0*I + a1*A) x - b|| / ||b|| in full space.
-    let compute_rel_residual = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+    let compute_rel_residual = |x: &TreeTN<IdxTensor, String>| -> anyhow::Result<f64> {
         let linop = LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
         let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
 
@@ -651,7 +651,7 @@ fn run_test_case(
     };
 
     // Helper: compute error relative to exact solution ||x - x_exact|| / ||x_exact||
-    let compute_exact_error = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+    let compute_exact_error = |x: &TreeTN<IdxTensor, String>| -> anyhow::Result<f64> {
         let x_full = x.contract_to_tensor()?;
         let x_exact_full = x_exact.contract_to_tensor()?;
         let x_vec = x_full.to_vec::<f64>()?;

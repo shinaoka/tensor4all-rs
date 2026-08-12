@@ -46,17 +46,17 @@ struct PairwiseContractProfileEntry {
     total_bytes: usize,
 }
 
-/// Hermitian eigendecomposition of a rank-2 [`TensorDynLen`].
+/// Hermitian eigendecomposition of a rank-2 [`IdxTensor`].
 /// Eigenvectors are returned as a rank-2 tensor whose first index is the input
 /// matrix row index and whose second index labels eigenvector columns. The
 /// eigenvalues are detached primal values intended for nonsmooth selection
 /// logic such as truncation cutoffs.
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// let row = DynIndex::new_dyn(2);
 /// let col = DynIndex::new_dyn(2);
-/// let matrix = TensorDynLen::from_dense(
+/// let matrix = IdxTensor::from_dense(
 ///     vec![row.clone(), col],
 ///     vec![1.0_f64, 0.0, 0.0, 2.0],
 /// ).unwrap();
@@ -72,7 +72,7 @@ pub struct TensorHermitianEigendecomposition {
     /// Real eigenvalues in backend Hermitian eigensolver order.
     pub eigenvalues: Vec<f64>,
     /// Eigenvector matrix with one eigenvector in each column.
-    pub eigenvectors: TensorDynLen,
+    pub eigenvectors: IdxTensor,
     /// Index labeling the eigenvector columns.
     pub eigenvector_index: DynIndex,
 }
@@ -120,12 +120,12 @@ fn profile_pairwise_contract_section<T>(section: &'static str, f: impl FnOnce() 
     result
 }
 
-/// Reset the aggregated pairwise `TensorDynLen` contraction profile.
+/// Reset the aggregated pairwise `IdxTensor` contraction profile.
 pub fn reset_pairwise_contract_profile() {
     PAIRWISE_CONTRACT_PROFILE_STATE.with(|state| state.borrow_mut().clear());
 }
 
-/// Print and clear the aggregated pairwise `TensorDynLen` contraction profile.
+/// Print and clear the aggregated pairwise `IdxTensor` contraction profile.
 pub fn print_and_reset_pairwise_contract_profile() {
     if !pairwise_contract_profile_enabled() {
         return;
@@ -139,7 +139,7 @@ pub fn print_and_reset_pairwise_contract_profile() {
         state.borrow_mut().clear();
         entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
 
-        eprintln!("=== TensorDynLen pairwise contract profile ===");
+        eprintln!("=== IdxTensor pairwise contract profile ===");
         for (section, entry) in entries {
             let per_call_us = if entry.calls == 0 {
                 0.0
@@ -172,7 +172,7 @@ fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
 
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
-/// This enables the generic [`TensorDynLen::random`] constructor.
+/// This enables the generic [`IdxTensor::random`] constructor.
 pub trait RandomScalar: TensorElement {
     /// Generate a random value from the standard normal distribution.
     fn random_value<R: Rng>(rng: &mut R) -> Self;
@@ -218,7 +218,7 @@ impl RandomScalar for Complex64 {
 pub fn compute_permutation_from_indices(
     original_indices: &[DynIndex],
     new_indices: &[DynIndex],
-) -> std::result::Result<Vec<usize>, TensorDynLenError> {
+) -> std::result::Result<Vec<usize>, IdxTensorError> {
     if !(new_indices.len() == original_indices.len()) {
         return Err(
             anyhow::anyhow!("new_indices length must match original_indices length").into(),
@@ -258,8 +258,8 @@ pub(crate) struct StructuredPayload {
     axis_classes: Vec<usize>,
 }
 
-/// Error returned when [`TensorDynLen::storage`] or
-/// [`TensorDynLen::to_storage`] cannot produce a compact `f64`/`Complex64`
+/// Error returned when [`IdxTensor::storage`] or
+/// [`IdxTensor::to_storage`] cannot produce a compact `f64`/`Complex64`
 /// storage snapshot from the authoritative payload.
 /// Backend diagnostics remain available through [`std::error::Error::source`]
 /// instead of being erased into a display string. The error is cloneable so a
@@ -279,7 +279,7 @@ pub(crate) struct StructuredPayload {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum TensorStorageError {
     /// The eager or structured payload could not be converted to compact storage.
-    #[error("failed to materialize TensorDynLen storage: {source}")]
+    #[error("failed to materialize IdxTensor storage: {source}")]
     Materialization {
         /// Original diagnostic returned by the backend or storage conversion seam.
         #[source]
@@ -287,15 +287,15 @@ pub enum TensorStorageError {
     },
     /// An eager payload uses a scalar dtype that compact [`Storage`] cannot hold.
     #[error(
-        "compact TensorDynLen storage does not support dtype {dtype}; the eager payload remains authoritative"
+        "compact IdxTensor storage does not support dtype {dtype}; the eager payload remains authoritative"
     )]
     UnsupportedDtype {
         /// Native scalar dtype retained by the eager representation.
         dtype: &'static str,
     },
     /// An eager conjugation operation failed and was deferred by the infallible
-    /// [`TensorDynLen::conj`] API.
-    #[error("failed to conjugate TensorDynLen storage: {source}")]
+    /// [`IdxTensor::conj`] API.
+    #[error("failed to conjugate IdxTensor storage: {source}")]
     Conjugation {
         /// Original diagnostic returned by the eager AD backend.
         #[source]
@@ -304,7 +304,7 @@ pub enum TensorStorageError {
 }
 
 /// Errors returned by the fallible numerical and comparison methods on
-/// [`TensorDynLen`].
+/// [`IdxTensor`].
 /// The enum is intentionally owned by `tensor4all-core`: callers can match
 /// storage, shape, scalar, subtraction, and invalid-value failures without
 /// depending on the internal `anyhow` plumbing. Wrapped backend diagnostics
@@ -322,30 +322,30 @@ pub enum TensorStorageError {
 ///   re-run with the backend diagnostic visible (see `source`).
 /// # Examples
 /// ```
-/// use tensor4all_core::TensorDynLenError;
-/// let error = TensorDynLenError::NaNInput {
+/// use tensor4all_core::IdxTensorError;
+/// let error = IdxTensorError::NaNInput {
 ///     operation: "norm_squared",
 /// };
 /// assert!(error.to_string().contains("NaN"));
 /// ```
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum TensorDynLenError {
+pub enum IdxTensorError {
     /// Compact storage or deferred storage materialization failed.
-    #[error("TensorDynLen storage operation failed: {source}")]
+    #[error("IdxTensor storage operation failed: {source}")]
     Storage {
         /// Original storage diagnostic, including its backend source chain.
         #[source]
         source: TensorStorageError,
     },
     /// A native eager payload could not be materialized for a numerical operation.
-    #[error("TensorDynLen materialization failed: {source}")]
+    #[error("IdxTensor materialization failed: {source}")]
     Materialization {
         /// Original backend or eager-runtime diagnostic.
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
     /// A rank-zero scalar could not be extracted from a reduction result.
-    #[error("TensorDynLen scalar extraction failed: {source}")]
+    #[error("IdxTensor scalar extraction failed: {source}")]
     ScalarExtraction {
         /// Original scalar-wrapper or backend diagnostic.
         #[source]
@@ -353,7 +353,7 @@ pub enum TensorDynLenError {
     },
     /// The reduction result has a scalar dtype that this real-valued operation
     /// cannot interpret.
-    #[error("TensorDynLen scalar type mismatch: expected {expected}, got {actual}")]
+    #[error("IdxTensor scalar type mismatch: expected {expected}, got {actual}")]
     ScalarTypeMismatch {
         /// Scalar dtype required by the operation.
         expected: &'static str,
@@ -363,7 +363,7 @@ pub enum TensorDynLenError {
     /// Tensor shapes, index spaces, or dimension metadata cannot be aligned
     /// for an operation (comparison, index replacement, or other shape-sensitive
     /// transformations).
-    #[error("TensorDynLen shape mismatch during {operation}: expected {expected}, got {actual}")]
+    #[error("IdxTensor shape mismatch during {operation}: expected {expected}, got {actual}")]
     ShapeMismatch {
         /// Operation that attempted the alignment.
         operation: &'static str,
@@ -373,7 +373,7 @@ pub enum TensorDynLenError {
         actual: String,
     },
     /// Tensor subtraction failed while evaluating a comparison.
-    #[error("TensorDynLen subtraction failed: {source}")]
+    #[error("IdxTensor subtraction failed: {source}")]
     Subtraction {
         /// Original arithmetic or backend diagnostic.
         #[source]
@@ -381,13 +381,13 @@ pub enum TensorDynLenError {
     },
     /// An input contained a NaN and the operation rejected it rather than
     /// silently converting it to zero.
-    #[error("TensorDynLen {operation} received NaN input")]
+    #[error("IdxTensor {operation} received NaN input")]
     NaNInput {
         /// Numerical operation that observed the NaN.
         operation: &'static str,
     },
     /// A comparison tolerance was NaN, infinite, or negative.
-    #[error("TensorDynLen tolerance {name} is invalid: {value}")]
+    #[error("IdxTensor tolerance {name} is invalid: {value}")]
     InvalidTolerance {
         /// Name of the invalid tolerance.
         name: &'static str,
@@ -395,7 +395,7 @@ pub enum TensorDynLenError {
         value: f64,
     },
     /// Another eager tensor operation failed while preparing a comparison.
-    #[error("TensorDynLen {operation} failed: {source}")]
+    #[error("IdxTensor {operation} failed: {source}")]
     Operation {
         /// Name of the eager operation that failed.
         operation: &'static str,
@@ -405,19 +405,19 @@ pub enum TensorDynLenError {
     },
 }
 
-impl From<anyhow::Error> for TensorDynLenError {
+impl From<anyhow::Error> for IdxTensorError {
     fn from(source: anyhow::Error) -> Self {
-        Self::operation("TensorDynLen", source)
+        Self::operation("IdxTensor", source)
     }
 }
 
-impl From<TensorStorageError> for TensorDynLenError {
+impl From<TensorStorageError> for IdxTensorError {
     fn from(source: TensorStorageError) -> Self {
         Self::Storage { source }
     }
 }
 
-impl From<tenferro_ad::Error> for TensorDynLenError {
+impl From<tenferro_ad::Error> for IdxTensorError {
     fn from(source: tenferro_ad::Error) -> Self {
         Self::Materialization {
             source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
@@ -425,7 +425,7 @@ impl From<tenferro_ad::Error> for TensorDynLenError {
     }
 }
 
-impl From<tensor4all_tensorbackend::EagerContextError> for TensorDynLenError {
+impl From<tensor4all_tensorbackend::EagerContextError> for IdxTensorError {
     fn from(source: tensor4all_tensorbackend::EagerContextError) -> Self {
         Self::Materialization {
             source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
@@ -433,7 +433,7 @@ impl From<tensor4all_tensorbackend::EagerContextError> for TensorDynLenError {
     }
 }
 
-impl From<tensor4all_tensorbackend::BridgeError> for TensorDynLenError {
+impl From<tensor4all_tensorbackend::BridgeError> for IdxTensorError {
     fn from(source: tensor4all_tensorbackend::BridgeError) -> Self {
         Self::Materialization {
             source: Arc::new(source),
@@ -441,7 +441,7 @@ impl From<tensor4all_tensorbackend::BridgeError> for TensorDynLenError {
     }
 }
 
-impl TensorDynLenError {
+impl IdxTensorError {
     fn boxed(error: anyhow::Error) -> Arc<dyn std::error::Error + Send + Sync + 'static> {
         Arc::from(error.into_boxed_dyn_error())
     }
@@ -467,7 +467,7 @@ impl TensorDynLenError {
 }
 
 #[derive(Clone)]
-pub(crate) enum TensorDynLenStorage {
+pub(crate) enum IdxTensorStorage {
     Materialized(Arc<Storage>),
     Eager {
         inner: Arc<EagerTensor>,
@@ -483,7 +483,7 @@ pub(crate) enum TensorDynLenStorage {
     },
 }
 
-impl TensorDynLenStorage {
+impl IdxTensorStorage {
     fn from_storage(storage: Arc<Storage>) -> Self {
         Self::Materialized(storage)
     }
@@ -491,7 +491,7 @@ impl TensorDynLenStorage {
     fn from_eager_dense(inner: EagerTensor, rank: usize) -> Self {
         Self::Eager {
             inner: Arc::new(inner),
-            axis_classes: TensorDynLen::dense_axis_classes(rank),
+            axis_classes: IdxTensor::dense_axis_classes(rank),
         }
     }
 
@@ -544,10 +544,10 @@ impl TensorDynLenStorage {
         match self {
             Self::Materialized(storage) => storage.payload_strides().to_vec(),
             Self::Eager { inner, .. } => {
-                TensorDynLen::col_major_strides(inner.data().shape()).unwrap_or_default()
+                IdxTensor::col_major_strides(inner.data().shape()).unwrap_or_default()
             }
             Self::Compact(payload) => {
-                TensorDynLen::col_major_strides(&payload.payload_dims).unwrap_or_default()
+                IdxTensor::col_major_strides(&payload.payload_dims).unwrap_or_default()
             }
             Self::Deferred { source, .. } => source.payload_strides_vec(),
         }
@@ -598,8 +598,8 @@ impl TensorDynLenStorage {
     fn is_diag(&self) -> bool {
         match self {
             Self::Materialized(storage) => storage.is_diag(),
-            Self::Eager { axis_classes, .. } => TensorDynLen::is_diag_axis_classes(axis_classes),
-            Self::Compact(payload) => TensorDynLen::is_diag_axis_classes(&payload.axis_classes),
+            Self::Eager { axis_classes, .. } => IdxTensor::is_diag_axis_classes(axis_classes),
+            Self::Compact(payload) => IdxTensor::is_diag_axis_classes(&payload.axis_classes),
             Self::Deferred { source, .. } => source.is_diag(),
         }
     }
@@ -610,7 +610,7 @@ impl TensorDynLenStorage {
             Self::Eager { axis_classes, .. } => {
                 if axis_classes.iter().copied().eq(0..axis_classes.len()) {
                     StorageKind::Dense
-                } else if TensorDynLen::is_diag_axis_classes(axis_classes) {
+                } else if IdxTensor::is_diag_axis_classes(axis_classes) {
                     StorageKind::Diagonal
                 } else {
                     StorageKind::Structured
@@ -624,7 +624,7 @@ impl TensorDynLenStorage {
                     .eq(0..payload.axis_classes.len())
                 {
                     StorageKind::Dense
-                } else if TensorDynLen::is_diag_axis_classes(&payload.axis_classes) {
+                } else if IdxTensor::is_diag_axis_classes(&payload.axis_classes) {
                     StorageKind::Diagonal
                 } else {
                     StorageKind::Structured
@@ -647,10 +647,10 @@ impl TensorDynLenStorage {
                 let dtype = inner.data().dtype();
                 if matches!(dtype, DType::F32 | DType::C32) {
                     return Err(TensorStorageError::UnsupportedDtype {
-                        dtype: TensorDynLen::dtype_name(dtype),
+                        dtype: IdxTensor::dtype_name(dtype),
                     });
                 }
-                TensorDynLen::storage_from_native_with_axis_classes(
+                IdxTensor::storage_from_native_with_axis_classes(
                     inner.data(),
                     axis_classes,
                     logical_rank,
@@ -664,10 +664,10 @@ impl TensorDynLenStorage {
                 let dtype = payload.payload.data().dtype();
                 if matches!(dtype, DType::F32 | DType::C32) {
                     return Err(TensorStorageError::UnsupportedDtype {
-                        dtype: TensorDynLen::dtype_name(dtype),
+                        dtype: IdxTensor::dtype_name(dtype),
                     });
                 }
-                TensorDynLen::storage_from_native_with_axis_classes(
+                IdxTensor::storage_from_native_with_axis_classes(
                     payload.payload.data(),
                     &payload.axis_classes,
                     logical_rank,
@@ -718,7 +718,7 @@ impl TensorDynLenStorage {
         };
         let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
         let target_dtype =
-            TensorDynLen::scale_target_dtype(payload.data().dtype(), scalar_inner.data().dtype())?;
+            IdxTensor::scale_target_dtype(payload.data().dtype(), scalar_inner.data().dtype())?;
         let payload = if payload.data().dtype() == target_dtype {
             payload
         } else {
@@ -732,7 +732,7 @@ impl TensorDynLenStorage {
         let scaled = if payload.data().shape().is_empty() {
             payload.mul(&scalar_inner)?
         } else {
-            let subscripts = TensorDynLen::scale_subscripts(payload.data().shape().len())?;
+            let subscripts = IdxTensor::scale_subscripts(payload.data().shape().len())?;
             eager_einsum_ad(&[&payload, &scalar_inner], &subscripts)?
         };
         match self {
@@ -794,8 +794,8 @@ impl TensorDynLenStorage {
                     Ok(AnyScalar::new_complex(value.re, value.im))
                 }
             }
-            Self::Eager { inner, .. } => TensorDynLen::native_sum_scalar(inner.data()),
-            Self::Compact(payload) => TensorDynLen::native_sum_scalar(payload.payload.data()),
+            Self::Eager { inner, .. } => IdxTensor::native_sum_scalar(inner.data()),
+            Self::Compact(payload) => IdxTensor::native_sum_scalar(payload.payload.data()),
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
     }
@@ -803,8 +803,8 @@ impl TensorDynLenStorage {
     fn nonfinite_flags(&self) -> Result<(bool, bool)> {
         match self {
             Self::Materialized(storage) => Ok(storage.payload_nonfinite_flags()),
-            Self::Eager { inner, .. } => TensorDynLen::native_nonfinite_flags(inner.data()),
-            Self::Compact(payload) => TensorDynLen::native_nonfinite_flags(payload.payload.data()),
+            Self::Eager { inner, .. } => IdxTensor::native_nonfinite_flags(inner.data()),
+            Self::Compact(payload) => IdxTensor::native_nonfinite_flags(payload.payload.data()),
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
     }
@@ -816,12 +816,11 @@ impl TensorDynLenStorage {
                 .map(Complex64::from)
                 .map_err(anyhow::Error::new),
             Self::Eager { inner, .. } => {
-                TensorDynLen::native_complex_payload_value_at(inner.data(), payload_coords)
+                IdxTensor::native_complex_payload_value_at(inner.data(), payload_coords)
             }
-            Self::Compact(payload) => TensorDynLen::native_complex_payload_value_at(
-                payload.payload.data(),
-                payload_coords,
-            ),
+            Self::Compact(payload) => {
+                IdxTensor::native_complex_payload_value_at(payload.payload.data(), payload_coords)
+            }
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
     }
@@ -863,11 +862,11 @@ impl TensorDynLenStorage {
 /// carry a bond through a fixed physical site without dense bond-squared storage.
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, StructuredSelectorError, TensorDynLen};
+/// use tensor4all_core::{DynIndex, StructuredSelectorError, IdxTensor};
 /// let left = DynIndex::new_dyn(2);
 /// let site = DynIndex::new_dyn(3);
 /// let right = DynIndex::new_dyn(4);
-/// let error = TensorDynLen::from_copy_selector(left, site, right, 1, 1.0_f64)
+/// let error = IdxTensor::from_copy_selector(left, site, right, 1, 1.0_f64)
 ///     .unwrap_err();
 /// assert!(matches!(error, StructuredSelectorError::BondDimensionMismatch { .. }));
 /// ```
@@ -925,7 +924,7 @@ pub enum StructuredSelectorError {
 
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
-/// `TensorDynLen` stores a logical multi-dimensional tensor of supported scalar
+/// `IdxTensor` stores a logical multi-dimensional tensor of supported scalar
 /// values (`f32`, `f64`, `Complex32`, or `Complex64`) together with a list of
 /// [`DynIndex`] labels. `f64`/`Complex64` tensors may use compact [`Storage`]
 /// snapshots; `f32`/`Complex32` tensors retain an eager payload as the
@@ -951,12 +950,12 @@ pub enum StructuredSelectorError {
 /// and logical-axis classes.
 /// # Examples
 /// ```
-/// use tensor4all_core::{TensorDynLen, DynIndex};
+/// use tensor4all_core::{IdxTensor, DynIndex};
 /// // Create a 2x3 real tensor
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-/// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let t = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 /// assert_eq!(t.dims(), vec![2, 3]);
 /// assert!(t.is_f64());
 /// // Sum all elements: 1+2+3+4+5+6 = 21
@@ -967,18 +966,18 @@ pub enum StructuredSelectorError {
 /// assert_eq!(data_out, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 /// ```
 #[derive(Clone)]
-pub struct TensorDynLen {
+pub struct IdxTensor {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
     /// Authoritative payload representation. Compact storage is used when the
     /// dtype is supported by [`Storage`]; otherwise this retains an eager
     /// payload without promotion.
-    pub(crate) storage: TensorDynLenStorage,
+    pub(crate) storage: IdxTensorStorage,
     /// Lazily materialized logical-dense eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor>>>,
 }
 
-impl TensorDynLen {
+impl IdxTensor {
     fn dense_axis_classes(rank: usize) -> Vec<usize> {
         (0..rank).collect()
     }
@@ -1005,7 +1004,7 @@ impl TensorDynLen {
             Ok(DType::C64)
         } else {
             Err(anyhow::anyhow!(
-                "unable to determine TensorDynLen scalar dtype"
+                "unable to determine IdxTensor scalar dtype"
             ))
         }
     }
@@ -1567,7 +1566,7 @@ impl TensorDynLen {
         });
         Ok(Self {
             indices,
-            storage: TensorDynLenStorage::Compact(structured_payload),
+            storage: IdxTensorStorage::Compact(structured_payload),
             eager_cache: Self::empty_eager_cache(),
         })
     }
@@ -1667,9 +1666,9 @@ impl TensorDynLen {
         let storage_owners = operands
             .iter()
             .map(|operand| match &operand.storage {
-                TensorDynLenStorage::Materialized(storage) => Some(Arc::clone(storage)),
-                TensorDynLenStorage::Deferred { source, .. } => match source.as_ref() {
-                    TensorDynLenStorage::Materialized(storage) => Some(Arc::clone(storage)),
+                IdxTensorStorage::Materialized(storage) => Some(Arc::clone(storage)),
+                IdxTensorStorage::Deferred { source, .. } => match source.as_ref() {
+                    IdxTensorStorage::Materialized(storage) => Some(Arc::clone(storage)),
                     _ => None,
                 },
                 _ => None,
@@ -1754,7 +1753,7 @@ impl TensorDynLen {
     ) -> Result<Storage> {
         if matches!(native.dtype(), DType::F32 | DType::C32) {
             return Err(anyhow::anyhow!(
-                "compact TensorDynLen storage does not support dtype {:?}; retain the eager payload",
+                "compact IdxTensor storage does not support dtype {:?}; retain the eager payload",
                 native.dtype()
             ));
         }
@@ -1769,7 +1768,7 @@ impl TensorDynLen {
                     logical_rank,
                 ),
                 DType::F32 | DType::C32 => Err(anyhow::anyhow!(
-                    "compact TensorDynLen storage does not support dtype {:?}",
+                    "compact IdxTensor storage does not support dtype {:?}",
                     native.dtype()
                 )),
             }
@@ -2169,7 +2168,7 @@ impl TensorDynLen {
                 .get()
                 .map(|inner| inner.as_ref())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("TensorDynLen structured AD cache was not initialized")
+                    anyhow::anyhow!("IdxTensor structured AD cache was not initialized")
                 });
         }
         if let Some(inner) = self.storage.eager() {
@@ -2189,7 +2188,7 @@ impl TensorDynLen {
                 .get()
                 .map(|inner| inner.as_ref())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("TensorDynLen structured eager cache was not initialized")
+                    anyhow::anyhow!("IdxTensor structured eager cache was not initialized")
                 });
         }
         if self.eager_cache.get().is_none() {
@@ -2197,7 +2196,7 @@ impl TensorDynLen {
                 let storage = self.storage.materialize(self.indices.len())?;
                 Self::seed_native_payload(storage.as_ref(), &logical_dims)
             })
-            .context("TensorDynLen materialization failed")?;
+            .context("IdxTensor materialization failed")?;
             record_pairwise_contract_profile_bytes(
                 "materialize_storage_to_native",
                 native_tensor_profile_bytes(&native),
@@ -2210,9 +2209,7 @@ impl TensorDynLen {
         self.eager_cache
             .get()
             .map(|inner| inner.as_ref())
-            .ok_or_else(|| {
-                anyhow::anyhow!("TensorDynLen materialization cache was not initialized")
-            })
+            .ok_or_else(|| anyhow::anyhow!("IdxTensor materialization cache was not initialized"))
     }
 
     pub(crate) fn as_inner(&self) -> Result<&EagerTensor> {
@@ -2232,12 +2229,12 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(3);
     /// let k = DynIndex::new_dyn(4);
-    /// let t = TensorDynLen::from_dense(
+    /// let t = IdxTensor::from_dense(
     ///     vec![i, j, k],
     ///     vec![0.0; 24],
     /// ).unwrap();
@@ -2278,12 +2275,12 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(3);
     /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
     ///
     /// let selected = tensor.select_indices(&[j], &[1]).unwrap();
     /// assert_eq!(selected.dims(), vec![2]);
@@ -2293,7 +2290,7 @@ impl TensorDynLen {
         &self,
         selected_indices: &[DynIndex],
         positions: &[usize],
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if selected_indices.len() != positions.len() {
             return Err(anyhow::anyhow!(
                 "selected_indices length {} does not match positions length {}",
@@ -2346,7 +2343,7 @@ impl TensorDynLen {
         if self.storage.storage_kind() == StorageKind::Diagonal {
             return self
                 .select_diag_indices(kept_indices, kept_dims, positions)
-                .map_err(TensorDynLenError::from);
+                .map_err(IdxTensorError::from);
         }
         if self.storage.storage_kind() == StorageKind::Structured {
             return self
@@ -2357,7 +2354,7 @@ impl TensorDynLen {
                     &selected_axes,
                     positions,
                 )
-                .map_err(TensorDynLenError::from);
+                .map_err(IdxTensorError::from);
         }
         if self.storage.storage_kind() != StorageKind::Dense {
             return Err(anyhow::anyhow!(
@@ -2383,7 +2380,7 @@ impl TensorDynLen {
         let sliced = self
             .try_materialized_inner()?
             .dynamic_slice(&starts_tensor, &slice_sizes)?;
-        Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?).map_err(TensorDynLenError::from)
+        Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?).map_err(IdxTensorError::from)
     }
 
     /// Stack tensors along a newly inserted index.
@@ -2406,14 +2403,14 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let batch = DynIndex::new_dyn(2);
-    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
-    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
     ///
-    /// let stacked = TensorDynLen::stack_along_new_index(&[&a, &b], batch.clone(), -1).unwrap();
+    /// let stacked = IdxTensor::stack_along_new_index(&[&a, &b], batch.clone(), -1).unwrap();
     ///
     /// assert_eq!(stacked.indices(), &[i, batch]);
     /// assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
@@ -2422,7 +2419,7 @@ impl TensorDynLen {
         tensors: &[&Self],
         new_index: DynIndex,
         axis: isize,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         let first = tensors
             .first()
             .copied()
@@ -2459,7 +2456,7 @@ impl TensorDynLen {
             .map(|tensor| tensor.try_materialized_inner())
             .collect::<Result<Vec<_>>>()?;
         let stacked = EagerTensor::stack(&inner_refs, axis)?;
-        Self::from_inner(result_indices, stacked).map_err(TensorDynLenError::from)
+        Self::from_inner(result_indices, stacked).map_err(IdxTensorError::from)
     }
 
     /// Select positions along one index and replace it with a new index.
@@ -2477,11 +2474,11 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let source = DynIndex::new_dyn(3);
     /// let target = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![source.clone()],
     ///     vec![10.0_f64, 20.0, 30.0],
     /// ).unwrap();
@@ -2496,7 +2493,7 @@ impl TensorDynLen {
         source_index: &DynIndex,
         target_index: DynIndex,
         positions: &[usize],
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if !(target_index.dim() == positions.len()) {
             return Err(anyhow::anyhow!(
                 "index_select: target index dim {} does not match position count {}",
@@ -2528,7 +2525,7 @@ impl TensorDynLen {
             .index_select(axis, positions)?;
         let mut result_indices = self.indices.clone();
         result_indices[axis as usize] = target_index;
-        Self::from_inner(result_indices, selected).map_err(TensorDynLenError::from)
+        Self::from_inner(result_indices, selected).map_err(IdxTensorError::from)
     }
 
     /// Create a new tensor with dynamic rank.
@@ -2540,19 +2537,19 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::Storage;
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(3);
     /// let storage = Arc::new(Storage::new_dense::<f64>(3).unwrap());
-    /// let t = TensorDynLen::new(vec![i], storage).unwrap();
+    /// let t = IdxTensor::new(vec![i], storage).unwrap();
     /// assert_eq!(t.dims(), vec![3]);
     /// ```
     pub fn new(
         indices: Vec<DynIndex>,
         storage: Arc<Storage>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         Self::from_storage(indices, storage)
     }
 
@@ -2567,19 +2564,19 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::Storage;
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(4);
     /// let storage = Arc::new(Storage::new_dense::<f64>(4).unwrap());
-    /// let t = TensorDynLen::from_indices(vec![i], storage).unwrap();
+    /// let t = IdxTensor::from_indices(vec![i], storage).unwrap();
     /// assert_eq!(t.dims(), vec![4]);
     /// ```
     pub fn from_indices(
         indices: Vec<DynIndex>,
         storage: Arc<Storage>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         Self::new(indices, storage)
     }
 
@@ -2592,32 +2589,32 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::Storage;
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
     /// let storage = Arc::new(Storage::new_diag(vec![1.0_f64, 2.0]).unwrap());
-    /// let t = TensorDynLen::from_storage(vec![i, j], storage).unwrap();
+    /// let t = IdxTensor::from_storage(vec![i, j], storage).unwrap();
     /// assert_eq!(t.dims(), vec![2, 2]);
     /// ```
     pub fn from_storage(
         indices: Vec<DynIndex>,
         storage: Arc<Storage>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         Self::validate_indices(&indices)?;
         Self::validate_storage_matches_indices(&indices, storage.as_ref())?;
         Ok(Self {
             indices,
-            storage: TensorDynLenStorage::from_storage(storage),
+            storage: IdxTensorStorage::from_storage(storage),
             eager_cache: Self::empty_eager_cache(),
         })
     }
 
     /// Create a tensor from explicit structured storage.
     ///
-    /// This is an alias for [`TensorDynLen::from_storage`] with a name that
+    /// This is an alias for [`IdxTensor::from_storage`] with a name that
     /// emphasizes that compact structured metadata is preserved.
     ///
     /// # Errors
@@ -2627,19 +2624,19 @@ impl TensorDynLen {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::{Storage, StorageKind};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
     /// let storage = Arc::new(Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap());
-    /// let tensor = TensorDynLen::from_structured_storage(vec![i, j], storage).unwrap();
+    /// let tensor = IdxTensor::from_structured_storage(vec![i, j], storage).unwrap();
     /// assert_eq!(tensor.storage().unwrap().storage_kind(), StorageKind::Diagonal);
     /// ```
     pub fn from_structured_storage(
         indices: Vec<DynIndex>,
         storage: Arc<Storage>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         Self::from_storage(indices, storage)
     }
 
@@ -2677,13 +2674,13 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::StorageKind;
     ///
     /// let left = DynIndex::new_dyn(2);
     /// let site = DynIndex::new_dyn(3);
     /// let right = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_copy_selector(
+    /// let tensor = IdxTensor::from_copy_selector(
     ///     left,
     ///     site,
     ///     right,
@@ -2808,7 +2805,7 @@ impl TensorDynLen {
     /// Compute the Hermitian eigendecomposition of a rank-2 tensor.
     ///
     /// The tensor must have two square matrix axes. The returned eigenvectors
-    /// stay in [`TensorDynLen`] form so downstream tensor algebra can preserve
+    /// stay in [`IdxTensor`] form so downstream tensor algebra can preserve
     /// AD metadata where the backend supports it. Eigenvalues are returned as
     /// detached real primal values because truncation and rank selection are
     /// nonsmooth control-flow decisions.
@@ -2824,11 +2821,11 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, IdxTensor};
     ///
     /// let row = DynIndex::new_dyn(2);
     /// let col = DynIndex::new_dyn(2);
-    /// let matrix = TensorDynLen::from_dense(
+    /// let matrix = IdxTensor::from_dense(
     ///     vec![row.clone(), col.clone()],
     ///     vec![3.0_f64, 0.0, 0.0, 5.0],
     /// ).unwrap();
@@ -2839,7 +2836,7 @@ impl TensorDynLen {
     ///     .select_indices(&[decomp.eigenvector_index.clone()], &[0])
     ///     .unwrap();
     /// let eigenvector_as_col = eigenvector.replaceind(&row, &col).unwrap();
-    /// let applied = TensorDynLen::contract(&[&matrix, &eigenvector_as_col]).unwrap();
+    /// let applied = IdxTensor::contract(&[&matrix, &eigenvector_as_col]).unwrap();
     /// let expected = eigenvector.scale(AnyScalar::new_real(decomp.eigenvalues[0])).unwrap();
     ///
     /// assert!(applied.isapprox(&expected, 1.0e-12, 0.0).unwrap());
@@ -2847,10 +2844,10 @@ impl TensorDynLen {
     pub fn hermitian_eigendecomposition(
         &self,
         hermitian_tol: f64,
-    ) -> std::result::Result<TensorHermitianEigendecomposition, TensorDynLenError> {
+    ) -> std::result::Result<TensorHermitianEigendecomposition, IdxTensorError> {
         if !(self.indices.len() == 2) {
             return Err(anyhow::anyhow!(
-                "TensorDynLen::hermitian_eigendecomposition requires a rank-2 tensor, got rank {}",
+                "IdxTensor::hermitian_eigendecomposition requires a rank-2 tensor, got rank {}",
                 self.indices.len()
             )
             .into());
@@ -2858,7 +2855,7 @@ impl TensorDynLen {
         let dims = self.dims();
         if !(dims[0] == dims[1]) {
             return Err(anyhow::anyhow!(
-                "TensorDynLen::hermitian_eigendecomposition requires a square matrix, got {}x{}",
+                "IdxTensor::hermitian_eigendecomposition requires a square matrix, got {}x{}",
                 dims[0],
                 dims[1]
             )
@@ -2866,12 +2863,15 @@ impl TensorDynLen {
         };
         if !(dims[0] > 0) {
             return Err(anyhow::anyhow!(
-                "TensorDynLen::hermitian_eigendecomposition requires a non-empty matrix"
+                "IdxTensor::hermitian_eigendecomposition requires a non-empty matrix"
             )
             .into());
         };
         if !(hermitian_tol.is_finite() && hermitian_tol >= 0.0) {
-            return Err(anyhow::anyhow!("TensorDynLen::hermitian_eigendecomposition requires a finite non-negative tolerance").into());
+            return Err(anyhow::anyhow!(
+                "IdxTensor::hermitian_eigendecomposition requires a finite non-negative tolerance"
+            )
+            .into());
         };
 
         let input = self.try_materialized_inner()?;
@@ -2883,7 +2883,7 @@ impl TensorDynLen {
         let eigenvalue_tensor = Self::from_inner(vec![eigenvalue_index], values)?;
         let eigenvalues = Self::read_real_eigenvalues(&eigenvalue_tensor, hermitian_tol)
             .with_context(|| {
-                "TensorDynLen::hermitian_eigendecomposition failed to read eigenvalues"
+                "IdxTensor::hermitian_eigendecomposition failed to read eigenvalues"
             })?;
         let eigenvectors = Self::from_inner(
             vec![self.indices[0].clone(), eigenvector_index.clone()],
@@ -2970,11 +2970,11 @@ impl TensorDynLen {
             })?;
         }
         let storage = if axis_classes == Self::dense_axis_classes(indices.len()) {
-            TensorDynLenStorage::from_eager_dense(inner, indices.len())
+            IdxTensorStorage::from_eager_dense(inner, indices.len())
         } else {
             let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
             let payload_dims = payload.data().shape().to_vec();
-            TensorDynLenStorage::Compact(Arc::new(StructuredPayload {
+            IdxTensorStorage::Compact(Arc::new(StructuredPayload {
                 payload: Arc::new(payload),
                 payload_dims,
                 axis_classes,
@@ -3006,7 +3006,7 @@ impl TensorDynLen {
     /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
     /// AD backend cannot track the tensor's dtype.
     ///
-    pub fn enable_grad(self) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn enable_grad(self) -> std::result::Result<Self, IdxTensorError> {
         self.ensure_storage_ready()?;
         // Keep the eager payload when available: compact Storage currently
         // stores only f64/C64 and must not promote f32/C32 leaves before AD.
@@ -3020,19 +3020,19 @@ impl TensorDynLen {
             None => {
                 let materialized = self.storage.materialize(self.indices.len())?;
                 storage_payload_native(materialized.as_ref())
-                    .context("TensorDynLen::enable_grad failed")?
+                    .context("IdxTensor::enable_grad failed")?
             }
         };
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
         let tracked = Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx()?));
         let storage = if axis_classes == Self::dense_axis_classes(self.indices.len()) {
-            TensorDynLenStorage::Eager {
+            IdxTensorStorage::Eager {
                 inner: tracked,
                 axis_classes,
             }
         } else {
-            TensorDynLenStorage::Compact(Arc::new(StructuredPayload {
+            IdxTensorStorage::Compact(Arc::new(StructuredPayload {
                 payload: tracked,
                 payload_dims,
                 axis_classes,
@@ -3059,7 +3059,7 @@ impl TensorDynLen {
     /// Returns an error when the tensor is not a tracked leaf or the gradient is
     /// unavailable for the tensor's dtype (an unavailable-gradient failure).
     ///
-    pub fn grad(&self) -> std::result::Result<Option<Self>, TensorDynLenError> {
+    pub fn grad(&self) -> std::result::Result<Option<Self>, IdxTensorError> {
         if let Some(value) = self.tracked_compact_payload_value() {
             return value
                 .payload
@@ -3089,7 +3089,7 @@ impl TensorDynLen {
                     )
                 })
                 .transpose()
-                .map_err(TensorDynLenError::from);
+                .map_err(IdxTensorError::from);
         }
         self.try_materialized_inner()?
             .grad()
@@ -3101,7 +3101,7 @@ impl TensorDynLen {
                 )
             })
             .transpose()
-            .map_err(TensorDynLenError::from)
+            .map_err(IdxTensorError::from)
     }
 
     /// Clear the accumulated gradient stored for this tensor.
@@ -3109,7 +3109,7 @@ impl TensorDynLen {
     /// Returns an error when the tensor is not a tracked leaf (a missing-graph
     /// failure).
     ///
-    pub fn clear_grad(&self) -> std::result::Result<(), TensorDynLenError> {
+    pub fn clear_grad(&self) -> std::result::Result<(), IdxTensorError> {
         self.ensure_storage_ready()?;
         if let Some(value) = self.tracked_compact_payload_value() {
             value.payload.clear_grad();
@@ -3128,18 +3128,16 @@ impl TensorDynLen {
     /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
     /// reverse pass fails (a graph failure).
     ///
-    pub fn backward(&self) -> std::result::Result<(), TensorDynLenError> {
+    pub fn backward(&self) -> std::result::Result<(), IdxTensorError> {
         if let Some(value) = self.tracked_compact_payload_value() {
             return value.payload.backward().map(|_| ()).map_err(|e| {
-                TensorDynLenError::from(anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
+                IdxTensorError::from(anyhow::anyhow!("IdxTensor::backward failed: {e}"))
             });
         }
         self.try_materialized_inner()?
             .backward()
             .map(|_| ())
-            .map_err(|e| {
-                TensorDynLenError::from(anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
-            })
+            .map_err(|e| IdxTensorError::from(anyhow::anyhow!("IdxTensor::backward failed: {e}")))
     }
 
     /// Detach this tensor from the reverse graph.
@@ -3147,13 +3145,13 @@ impl TensorDynLen {
     /// Returns an error when the tensor is not a tracked leaf (a missing-graph
     /// failure).
     ///
-    pub fn detach(&self) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn detach(&self) -> std::result::Result<Self, IdxTensorError> {
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
             self.try_materialized_inner()?.detach(),
             self.storage.axis_classes().to_vec(),
         )
-        .map_err(TensorDynLenError::from)
+        .map_err(IdxTensorError::from)
     }
 
     /// Check if this tensor is already in canonical form.
@@ -3183,10 +3181,10 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::StorageKind;
     ///
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![DynIndex::new_dyn(2)],
     ///     vec![1.0_f64, 2.0],
     /// )
@@ -3205,10 +3203,10 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::StorageKind;
     ///
-    /// let tensor = TensorDynLen::from_diag(
+    /// let tensor = IdxTensor::from_diag(
     ///     vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)],
     ///     vec![1.0_f32, 2.0],
     /// )
@@ -3227,25 +3225,25 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(3);
-    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
     /// let s = t.sum().unwrap();
     /// assert!((s.real() - 6.0).abs() < 1e-12);
     /// ```
-    pub fn sum(&self) -> std::result::Result<AnyScalar, TensorDynLenError> {
+    pub fn sum(&self) -> std::result::Result<AnyScalar, IdxTensorError> {
         self.ensure_storage_ready()?;
         if self.indices.is_empty() {
-            return AnyScalar::from_tensor(self.clone()).map_err(TensorDynLenError::from);
+            return AnyScalar::from_tensor(self.clone()).map_err(IdxTensorError::from);
         }
         if let Some(payload) = self.storage.eager().filter(|payload| payload.tracks_grad()) {
             let axes: Vec<usize> = (0..payload.data().shape().len()).collect();
             let reduced = payload.reduce_sum(&axes)?;
             return AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?)
-                .map_err(TensorDynLenError::from);
+                .map_err(IdxTensorError::from);
         }
-        self.storage.sum_scalar().map_err(TensorDynLenError::from)
+        self.storage.sum_scalar().map_err(IdxTensorError::from)
     }
 
     /// Extract the scalar value from a 0-dimensional tensor (or 1-element tensor).
@@ -3262,16 +3260,16 @@ impl TensorDynLen {
     /// # Example
     ///
     /// ```
-    /// use tensor4all_core::{TensorDynLen, AnyScalar};
+    /// use tensor4all_core::{IdxTensor, AnyScalar};
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// // Create a scalar tensor (0 dimensions, 1 element)
     /// let indices: Vec<Index<DynId>> = vec![];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![42.0]).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(indices, vec![42.0]).unwrap();
     ///
     /// assert_eq!(tensor.only().unwrap().real(), 42.0);
     /// ```
-    pub fn only(&self) -> std::result::Result<AnyScalar, TensorDynLenError> {
+    pub fn only(&self) -> std::result::Result<AnyScalar, IdxTensorError> {
         let dims = self.dims();
         let total_size = checked_product(&dims)?;
         if !(total_size == 1 || dims.is_empty()) {
@@ -3306,14 +3304,14 @@ impl TensorDynLen {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// // Create a 2×3 tensor
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let indices = vec![i.clone(), j.clone()];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Permute to 3×2: swap the two dimensions by providing new indices order
     /// let permuted = tensor.permute_indices(&[j, i]).unwrap();
@@ -3322,7 +3320,7 @@ impl TensorDynLen {
     pub fn permute_indices(
         &self,
         new_indices: &[DynIndex],
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
         if perm.iter().copied().eq(0..perm.len()) {
@@ -3336,7 +3334,7 @@ impl TensorDynLen {
         let permuted = self.try_materialized_inner()?.transpose(&perm)?;
         let axis_classes = self.permute_axis_classes(&perm);
         Self::from_inner_with_axis_classes(new_indices.to_vec(), permuted, axis_classes)
-            .map_err(TensorDynLenError::from)
+            .map_err(IdxTensorError::from)
     }
 
     /// Permute the tensor dimensions, returning a new tensor.
@@ -3356,7 +3354,7 @@ impl TensorDynLen {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// // Create a 2×3 tensor
@@ -3364,13 +3362,13 @@ impl TensorDynLen {
     ///     Index::new_dyn(2),
     ///     Index::new_dyn(3),
     /// ];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Permute to 3×2: swap the two dimensions
     /// let permuted = tensor.permute(&[1, 0]).unwrap();
     /// assert_eq!(permuted.dims(), vec![3, 2]);
     /// ```
-    pub fn permute(&self, perm: &[usize]) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn permute(&self, perm: &[usize]) -> std::result::Result<Self, IdxTensorError> {
         if !(perm.len() == self.indices.len()) {
             return Err(anyhow::anyhow!("permutation length must match tensor rank").into());
         };
@@ -3392,7 +3390,7 @@ impl TensorDynLen {
         let permuted = self.try_materialized_inner()?.transpose(perm)?;
         let axis_classes = self.permute_axis_classes(perm);
         Self::from_inner_with_axis_classes(new_indices, permuted, axis_classes)
-            .map_err(TensorDynLenError::from)
+            .map_err(IdxTensorError::from)
     }
 
     pub(crate) fn try_contract_pairwise_default(&self, other: &Self) -> Result<Self> {
@@ -3702,7 +3700,7 @@ impl TensorDynLen {
 // Random tensor generation
 // ============================================================================
 
-impl TensorDynLen {
+impl IdxTensor {
     /// Create a random tensor with values from standard normal distribution (generic over scalar type).
     ///
     /// For `f64`, each element is drawn from the standard normal distribution.
@@ -3721,7 +3719,7 @@ impl TensorDynLen {
     /// or the backend cannot generate the requested scalar type.
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use rand::SeedableRng;
     /// use rand_chacha::ChaCha8Rng;
@@ -3729,13 +3727,13 @@ impl TensorDynLen {
     /// let mut rng = ChaCha8Rng::seed_from_u64(42);
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i, j]).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::random::<f64, _>(&mut rng, vec![i, j]).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
     pub fn random<T: RandomScalar, R: Rng>(
         rng: &mut R,
         indices: Vec<DynIndex>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
         let size = checked_product(&dims)?;
         let data: Vec<T> = (0..size).map(|_| T::random_value(rng)).collect();
@@ -3743,7 +3741,7 @@ impl TensorDynLen {
     }
 }
 
-impl TensorDynLen {
+impl IdxTensor {
     /// Add two tensors element-wise.
     ///
     /// The tensors must have the same index set (matched by ID). If the indices
@@ -3763,7 +3761,7 @@ impl TensorDynLen {
     /// index-set mismatch) or the arithmetic reports a failure.
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
@@ -3771,16 +3769,16 @@ impl TensorDynLen {
     ///
     /// let indices_a = vec![i.clone(), j.clone()];
     /// let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, data_a).unwrap();
+    /// let tensor_a: IdxTensor = IdxTensor::from_dense(indices_a, data_a).unwrap();
     ///
     /// let indices_b = vec![i.clone(), j.clone()];
     /// let data_b = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, data_b).unwrap();
+    /// let tensor_b: IdxTensor = IdxTensor::from_dense(indices_b, data_b).unwrap();
     ///
     /// let sum = tensor_a.add(&tensor_b).unwrap();
     /// // sum = [[2, 3, 4], [5, 6, 7]]
     /// ```
-    pub fn add(&self, other: &Self) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn add(&self, other: &Self) -> std::result::Result<Self, IdxTensorError> {
         // Validate that both tensors have the same number of indices
         if self.indices.len() != other.indices.len() {
             return Err(anyhow::anyhow!(
@@ -3849,11 +3847,11 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    /// let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
     ///
     /// // 2*a + 3*b = [2+9, 4+12] = [11, 16]
     /// let result = a.axpby(AnyScalar::new_real(2.0), &b, AnyScalar::new_real(3.0)).unwrap();
@@ -3866,7 +3864,7 @@ impl TensorDynLen {
         a: AnyScalar,
         other: &Self,
         b: AnyScalar,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         // Validate that both tensors have the same number of indices.
         if self.indices.len() != other.indices.len() {
             return Err(anyhow::anyhow!(
@@ -3912,8 +3910,8 @@ impl TensorDynLen {
             && self.storage.payload_strides_vec() == other_aligned.storage.payload_strides_vec()
             && self.storage.axis_classes() == other_aligned.storage.axis_classes();
         if same_compact_layout
-            && matches!(&self.storage, TensorDynLenStorage::Materialized(_))
-            && matches!(&other_aligned.storage, TensorDynLenStorage::Materialized(_))
+            && matches!(&self.storage, IdxTensorStorage::Materialized(_))
+            && matches!(&other_aligned.storage, IdxTensorStorage::Materialized(_))
             && !self.tracks_grad()
             && !other_aligned.tracks_grad()
             && !a.tracks_grad()
@@ -3949,7 +3947,7 @@ impl TensorDynLen {
                 combined,
                 axis_classes,
             )
-            .map_err(TensorDynLenError::from);
+            .map_err(IdxTensorError::from);
         }
 
         let a_native = a.as_tensor()?.as_native()?;
@@ -3969,7 +3967,7 @@ impl TensorDynLen {
                 combined,
                 axis_classes,
             )
-            .map_err(TensorDynLenError::from);
+            .map_err(IdxTensorError::from);
         }
 
         let lhs = self.scale(a)?;
@@ -3979,7 +3977,7 @@ impl TensorDynLen {
             .add(rhs.try_materialized_inner()?)
             .map_err(|e| anyhow::anyhow!("tensor addition failed: {e}"))?;
         Self::from_inner_with_axis_classes(self.indices.clone(), combined, axis_classes)
-            .map_err(TensorDynLenError::from)
+            .map_err(IdxTensorError::from)
     }
 
     /// Scalar multiplication.
@@ -3993,19 +3991,19 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(3);
-    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
     /// let scaled = t.scale(AnyScalar::new_real(2.0)).unwrap();
     /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
-    pub fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, IdxTensorError> {
         if matches!(
             &self.storage,
-            TensorDynLenStorage::Eager { .. }
-                | TensorDynLenStorage::Compact(_)
-                | TensorDynLenStorage::Materialized(_)
+            IdxTensorStorage::Eager { .. }
+                | IdxTensorStorage::Compact(_)
+                | IdxTensorStorage::Materialized(_)
         ) {
             // Scale via the compact payload only. Materialized structured
             // storage is converted payload-coordinate by payload-coordinate
@@ -4052,7 +4050,7 @@ impl TensorDynLen {
                 scaled,
                 self.storage.axis_classes().to_vec(),
             )
-            .map_err(TensorDynLenError::from);
+            .map_err(IdxTensorError::from);
         }
         if self_native.dtype() != scalar_native.dtype() {
             let scaled = scale_native_tensor(self_native, &scalar.to_backend_scalar())?;
@@ -4061,7 +4059,7 @@ impl TensorDynLen {
                 scaled,
                 self.storage.axis_classes().to_vec(),
             )
-            .map_err(TensorDynLenError::from);
+            .map_err(IdxTensorError::from);
         }
 
         let scaled = if self.indices.is_empty() {
@@ -4084,7 +4082,7 @@ impl TensorDynLen {
             scaled,
             self.storage.axis_classes().to_vec(),
         )
-        .map_err(TensorDynLenError::from)
+        .map_err(IdxTensorError::from)
     }
 
     /// Inner product (dot product) of two tensors.
@@ -4097,17 +4095,17 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(3);
-    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 5.0, 6.0]).unwrap();
+    /// let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let b = IdxTensor::from_dense(vec![i.clone()], vec![4.0, 5.0, 6.0]).unwrap();
     ///
     /// // <a, b> = 1*4 + 2*5 + 3*6 = 32
     /// let ip = a.inner_product(&b).unwrap();
     /// assert!((ip.real() - 32.0).abs() < 1e-12);
     /// ```
-    pub fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, TensorDynLenError> {
+    pub fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, IdxTensorError> {
         if self.indices.len() == other.indices.len() {
             let self_set: HashSet<_> = self.indices.iter().collect();
             let other_set: HashSet<_> = other.indices.iter().collect();
@@ -4137,7 +4135,7 @@ impl TensorDynLen {
 // Index Replacement Methods
 // ============================================================================
 
-impl TensorDynLen {
+impl IdxTensor {
     /// Replace an index in the tensor with a new index.
     ///
     /// This replaces every index equal to `old_index` (full index equality,
@@ -4157,7 +4155,7 @@ impl TensorDynLen {
     /// (a shape mismatch: the replacement dimension must equal the original).
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
@@ -4165,7 +4163,7 @@ impl TensorDynLen {
     /// let new_i = Index::new_dyn(2);  // Same dimension, different ID
     ///
     /// let indices = vec![i.clone(), j.clone()];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Replace index i with new_i
     /// let replaced = tensor.replaceind(&i, &new_i).unwrap();
@@ -4176,10 +4174,10 @@ impl TensorDynLen {
         &self,
         old_index: &DynIndex,
         new_index: &DynIndex,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
-            return Err(TensorDynLenError::ShapeMismatch {
+            return Err(IdxTensorError::ShapeMismatch {
                 operation: "replaceind",
                 expected: format!("dimension {}", old_index.dim()),
                 actual: format!("dimension {}", new_index.dim()),
@@ -4226,7 +4224,7 @@ impl TensorDynLen {
     /// original).
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
@@ -4235,7 +4233,7 @@ impl TensorDynLen {
     /// let new_j = Index::new_dyn(3);
     ///
     /// let indices = vec![i.clone(), j.clone()];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Replace both indices
     /// let replaced = tensor
@@ -4248,9 +4246,9 @@ impl TensorDynLen {
         &self,
         old_indices: &[DynIndex],
         new_indices: &[DynIndex],
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if old_indices.len() != new_indices.len() {
-            return Err(TensorDynLenError::ShapeMismatch {
+            return Err(IdxTensorError::ShapeMismatch {
                 operation: "replace_indices",
                 expected: format!("{} indices", old_indices.len()),
                 actual: format!("{} indices", new_indices.len()),
@@ -4260,7 +4258,7 @@ impl TensorDynLen {
         // Validate dimension matches for all replacements
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             if old.dim() != new.dim() {
-                return Err(TensorDynLenError::ShapeMismatch {
+                return Err(IdxTensorError::ShapeMismatch {
                     operation: "replace_indices",
                     expected: format!("dimension {}", old.dim()),
                     actual: format!("dimension {}", new.dim()),
@@ -4296,7 +4294,7 @@ impl TensorDynLen {
 // Complex Conjugation
 // ============================================================================
 
-impl TensorDynLen {
+impl IdxTensor {
     /// Complex conjugate of all tensor elements.
     ///
     /// For real (`f32`/`f64`) tensors, returns a copy (conjugate of real is
@@ -4311,13 +4309,13 @@ impl TensorDynLen {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use num_complex::Complex64;
     ///
     /// let i = Index::new_dyn(2);
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i], data).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(vec![i], data).unwrap();
     ///
     /// let conj_tensor = tensor.conj();
     /// assert_eq!(
@@ -4478,7 +4476,7 @@ impl Lassq {
 // Norm Computation
 // ============================================================================
 
-impl TensorDynLen {
+impl IdxTensor {
     /// Compute the squared Frobenius norm of the tensor: ||T||² = Σ|T_ijk...|²
     ///
     /// For real tensors: sum of squares of all elements.
@@ -4487,38 +4485,38 @@ impl TensorDynLen {
     /// accumulator, so it does not form a source-dtype `self * conj(self)`.
     ///
     /// # Errors
-    /// Returns [`TensorDynLenError`] when storage/materialization or scalar
+    /// Returns [`IdxTensorError`] when storage/materialization or scalar
     /// extraction fails, or when the input produces NaN. The result is
     /// accumulated from squared magnitudes, so it is never negative;
     /// positive infinity is preserved.
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];  // 1² + 2² + ... + 6² = 91
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i, j], data).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(vec![i, j], data).unwrap();
     ///
     /// assert!((tensor.norm_squared().unwrap() - 91.0).abs() < 1e-10);
     /// ```
-    pub fn norm_squared(&self) -> std::result::Result<f64, TensorDynLenError> {
+    pub fn norm_squared(&self) -> std::result::Result<f64, IdxTensorError> {
         let dtype = self
             .scalar_dtype()
-            .map_err(TensorDynLenError::scalar_extraction)?;
+            .map_err(IdxTensorError::scalar_extraction)?;
         if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
-            return Err(TensorDynLenError::ScalarTypeMismatch {
+            return Err(IdxTensorError::ScalarTypeMismatch {
                 expected: "f32, f64, c32, or c64",
                 actual: Self::dtype_name(dtype).to_string(),
             });
         }
         let (has_nan, _) = self
             .compact_nonfinite_flags()
-            .map_err(TensorDynLenError::materialization)?;
+            .map_err(IdxTensorError::materialization)?;
         if has_nan {
-            return Err(TensorDynLenError::NaNInput {
+            return Err(IdxTensorError::NaNInput {
                 operation: "norm_squared",
             });
         }
@@ -4526,10 +4524,10 @@ impl TensorDynLen {
         let mut norm = Lassq::default();
         self.storage
             .for_each_payload_value(|value| norm.add_complex(value))
-            .map_err(TensorDynLenError::materialization)?;
+            .map_err(IdxTensorError::materialization)?;
         let value = norm.norm_squared();
         if value.is_nan() {
-            return Err(TensorDynLenError::NaNInput {
+            return Err(IdxTensorError::NaNInput {
                 operation: "norm_squared",
             });
         }
@@ -4539,63 +4537,63 @@ impl TensorDynLen {
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
     ///
     /// # Errors
-    /// Returns [`TensorDynLenError`] when norm evaluation fails or when the
+    /// Returns [`IdxTensorError`] when norm evaluation fails or when the
     /// input contains NaN. Positive infinity is preserved.
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let data = vec![3.0, 4.0];  // sqrt(9 + 16) = 5
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i], data).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(vec![i], data).unwrap();
     ///
     /// assert!((tensor.norm().unwrap() - 5.0).abs() < 1e-10);
     /// ```
-    pub fn norm(&self) -> std::result::Result<f64, TensorDynLenError> {
+    pub fn norm(&self) -> std::result::Result<f64, IdxTensorError> {
         Ok(self.norm_squared()?.sqrt())
     }
 
     /// Maximum absolute value of all elements (L-infinity norm).
     ///
     /// # Errors
-    /// Returns [`TensorDynLenError`] when authoritative storage or eager
+    /// Returns [`IdxTensorError`] when authoritative storage or eager
     /// materialization cannot be read, or when the input contains NaN.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(4);
-    /// let t = TensorDynLen::from_dense(vec![i], vec![-5.0, 1.0, 3.0, -2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![i], vec![-5.0, 1.0, 3.0, -2.0]).unwrap();
     /// assert!((t.maxabs().unwrap() - 5.0).abs() < 1e-12);
     /// ```
-    pub fn maxabs(&self) -> std::result::Result<f64, TensorDynLenError> {
+    pub fn maxabs(&self) -> std::result::Result<f64, IdxTensorError> {
         if let Some(error) = self.storage.deferred_error() {
-            return Err(TensorDynLenError::Storage {
+            return Err(IdxTensorError::Storage {
                 source: error.clone(),
             });
         }
         let dtype = self
             .storage
             .dtype()
-            .ok_or_else(|| TensorDynLenError::ScalarTypeMismatch {
+            .ok_or_else(|| IdxTensorError::ScalarTypeMismatch {
                 expected: "f32, f64, c32, or c64",
                 actual: "unknown".to_string(),
             })?;
         if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
-            return Err(TensorDynLenError::ScalarTypeMismatch {
+            return Err(IdxTensorError::ScalarTypeMismatch {
                 expected: "f32, f64, c32, or c64",
                 actual: Self::dtype_name(dtype).to_string(),
             });
         }
         let (has_nan, _) = self
             .compact_nonfinite_flags()
-            .map_err(TensorDynLenError::materialization)?;
+            .map_err(IdxTensorError::materialization)?;
         if has_nan {
-            return Err(TensorDynLenError::NaNInput {
+            return Err(IdxTensorError::NaNInput {
                 operation: "maxabs",
             });
         }
@@ -4605,7 +4603,7 @@ impl TensorDynLen {
                 let magnitude = scalar.re.hypot(scalar.im);
                 value = value.max(magnitude);
             })
-            .map_err(TensorDynLenError::materialization)?;
+            .map_err(IdxTensorError::materialization)?;
         Ok(value)
     }
 
@@ -4743,7 +4741,7 @@ impl TensorDynLen {
     /// Returns an error when the tensors have different index sets (an index-set
     /// mismatch) or the arithmetic reports a failure.
     ///
-    pub fn sub(&self, other: &Self) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn sub(&self, other: &Self) -> std::result::Result<Self, IdxTensorError> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
 
@@ -4753,7 +4751,7 @@ impl TensorDynLen {
     /// Returns an error when scalar multiplication fails for the tensor storage
     /// (a dtype mismatch) or the backend reports a failure.
     ///
-    pub fn neg(&self) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn neg(&self) -> std::result::Result<Self, IdxTensorError> {
         self.scale(AnyScalar::new_real(-1.0))
     }
 
@@ -4765,7 +4763,7 @@ impl TensorDynLen {
     /// avoiding logical-dense traversal and avoidable underflow/overflow.
     ///
     /// # Errors
-    /// Returns [`TensorDynLenError`] when tolerances are invalid, the index
+    /// Returns [`IdxTensorError`] when tolerances are invalid, the index
     /// spaces cannot be aligned, storage cannot be read, or either input
     /// contains NaN.
     pub fn isapprox(
@@ -4773,14 +4771,14 @@ impl TensorDynLen {
         other: &Self,
         atol: f64,
         rtol: f64,
-    ) -> std::result::Result<bool, TensorDynLenError> {
+    ) -> std::result::Result<bool, IdxTensorError> {
         for (name, value) in [("atol", atol), ("rtol", rtol)] {
             if !value.is_finite() || value < 0.0 {
-                return Err(TensorDynLenError::InvalidTolerance { name, value });
+                return Err(IdxTensorError::InvalidTolerance { name, value });
             }
         }
         if self.indices.len() != other.indices.len() {
-            return Err(TensorDynLenError::ShapeMismatch {
+            return Err(IdxTensorError::ShapeMismatch {
                 operation: "isapprox",
                 expected: format!("indices {:?}", self.indices),
                 actual: format!("indices {:?}", other.indices),
@@ -4799,7 +4797,7 @@ impl TensorDynLen {
             .iter()
             .map(|index| {
                 other_axis_by_index.get(index).copied().ok_or_else(|| {
-                    TensorDynLenError::ShapeMismatch {
+                    IdxTensorError::ShapeMismatch {
                         operation: "isapprox",
                         expected: format!("indices {:?}", self.indices),
                         actual: format!("indices {:?}", other.indices),
@@ -4811,7 +4809,7 @@ impl TensorDynLen {
         let other_dims = other.dims();
         for (axis, &other_axis) in other_positions.iter().enumerate() {
             if self_dims[axis] != other_dims[other_axis] {
-                return Err(TensorDynLenError::ShapeMismatch {
+                return Err(IdxTensorError::ShapeMismatch {
                     operation: "isapprox",
                     expected: format!("dims {:?}", self_dims),
                     actual: format!("dims {:?}", other_dims),
@@ -4821,10 +4819,10 @@ impl TensorDynLen {
         for tensor in [self, other] {
             if tensor
                 .compact_nonfinite_flags()
-                .map_err(TensorDynLenError::materialization)?
+                .map_err(IdxTensorError::materialization)?
                 .0
             {
-                return Err(TensorDynLenError::NaNInput {
+                return Err(IdxTensorError::NaNInput {
                     operation: "isapprox",
                 });
             }
@@ -4834,9 +4832,9 @@ impl TensorDynLen {
         let lhs_payload_dims = self.storage.payload_dims().to_vec();
         let rhs_payload_dims = other.storage.payload_dims().to_vec();
         let lhs_payload_len =
-            checked_product(&lhs_payload_dims).map_err(TensorDynLenError::materialization)?;
+            checked_product(&lhs_payload_dims).map_err(IdxTensorError::materialization)?;
         let rhs_payload_len =
-            checked_product(&rhs_payload_dims).map_err(TensorDynLenError::materialization)?;
+            checked_product(&rhs_payload_dims).map_err(IdxTensorError::materialization)?;
         let lhs_axis_classes = self.storage.axis_classes();
         let rhs_axis_classes = other.storage.axis_classes();
         let self_to_other = other_positions.clone();
@@ -4873,7 +4871,7 @@ impl TensorDynLen {
             let lhs = self
                 .storage
                 .payload_value_at(&lhs_coords)
-                .map_err(TensorDynLenError::materialization)?;
+                .map_err(IdxTensorError::materialization)?;
             if map_payload_support_coordinate(
                 lhs_axis_classes,
                 rhs_axis_classes,
@@ -4885,7 +4883,7 @@ impl TensorDynLen {
                 let rhs = other
                     .storage
                     .payload_value_at(&rhs_from_lhs)
-                    .map_err(TensorDynLenError::materialization)?;
+                    .map_err(IdxTensorError::materialization)?;
                 if !compare(lhs, rhs) {
                     return Ok(false);
                 }
@@ -4906,7 +4904,7 @@ impl TensorDynLen {
             let rhs = other
                 .storage
                 .payload_value_at(&rhs_coords)
-                .map_err(TensorDynLenError::materialization)?;
+                .map_err(IdxTensorError::materialization)?;
             if !map_payload_support_coordinate(
                 rhs_axis_classes,
                 lhs_axis_classes,
@@ -4953,7 +4951,7 @@ impl TensorDynLen {
     pub fn diagonal(
         input_index: &DynIndex,
         output_index: &DynIndex,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::diagonal(input_index, output_index)
     }
 
@@ -4965,7 +4963,7 @@ impl TensorDynLen {
     pub fn delta(
         input_indices: &[DynIndex],
         output_indices: &[DynIndex],
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::delta(input_indices, output_indices)
     }
 
@@ -4975,7 +4973,7 @@ impl TensorDynLen {
     /// Returns an error when dense scalar construction fails for the element type
     /// (an invalid scalar dtype or a construction failure).
     ///
-    pub fn scalar_one() -> std::result::Result<Self, TensorDynLenError> {
+    pub fn scalar_one() -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::scalar_one()
     }
 
@@ -4985,7 +4983,7 @@ impl TensorDynLen {
     /// Returns an error when the tensor size overflows (an overflow failure) or
     /// dense construction fails.
     ///
-    pub fn ones(indices: &[DynIndex]) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn ones(indices: &[DynIndex]) -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::ones(indices)
     }
 
@@ -4995,9 +4993,7 @@ impl TensorDynLen {
     /// Returns an error when any coordinate is outside its index dimension (an
     /// out of bounds failure).
     ///
-    pub fn onehot(
-        index_vals: &[(DynIndex, usize)],
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn onehot(index_vals: &[(DynIndex, usize)]) -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::onehot(index_vals)
     }
 
@@ -5023,15 +5019,15 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
     /// let masked = tensor.mask_index(&i, 1).unwrap();
     ///
     /// assert_eq!(masked.indices(), &[i]);
     /// assert_eq!(masked.to_vec::<f64>().unwrap(), vec![0.0, 4.0]);
-    /// assert!(TensorDynLen::from_dense(
+    /// assert!(IdxTensor::from_dense(
     ///     vec![DynIndex::new_dyn(2)],
     ///     vec![1.0_f64, 2.0],
     /// )
@@ -5043,7 +5039,7 @@ impl TensorDynLen {
         &self,
         index: &DynIndex,
         position: usize,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if !(self.indices.iter().any(|candidate| candidate == index)) {
             return Err(anyhow::anyhow!("mask_index: index is not present in tensor").into());
         };
@@ -5119,7 +5115,7 @@ impl TensorDynLen {
     /// * `other` - The other tensor to compare with
     ///
     /// # Errors
-    /// Returns [`TensorDynLenError`] when either norm contains NaN, or when
+    /// Returns [`IdxTensorError`] when either norm contains NaN, or when
     /// scaling and subtracting the tensors fails.
     ///
     /// # Returns
@@ -5131,18 +5127,18 @@ impl TensorDynLen {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let data_a = vec![1.0, 0.0];
     /// let data_b = vec![1.0, 0.0];  // Same tensor
-    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], data_a).unwrap();
-    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], data_b).unwrap();
+    /// let tensor_a: IdxTensor = IdxTensor::from_dense(vec![i.clone()], data_a).unwrap();
+    /// let tensor_b: IdxTensor = IdxTensor::from_dense(vec![i.clone()], data_b).unwrap();
     ///
     /// assert!(tensor_a.distance(&tensor_b).unwrap() < 1e-10);  // Zero distance
     /// ```
-    pub fn distance(&self, other: &Self) -> std::result::Result<f64, TensorDynLenError> {
+    pub fn distance(&self, other: &Self) -> std::result::Result<f64, IdxTensorError> {
         let norm_self = self.norm()?;
 
         // Compute A - B = A + (-1) * B
@@ -5158,9 +5154,9 @@ impl TensorDynLen {
     }
 }
 
-impl std::fmt::Debug for TensorDynLen {
+impl std::fmt::Debug for IdxTensor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TensorDynLen")
+        f.debug_struct("IdxTensor")
             .field("indices", &self.indices)
             .field("dims", &self.dims())
             .field("is_diag", &self.is_diag())
@@ -5174,7 +5170,7 @@ impl std::fmt::Debug for TensorDynLen {
 /// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
 ///
 /// The returned tensor preserves compact diagonal payload metadata; use
-/// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
+/// [`IdxTensor::is_diag`] or [`IdxTensor::storage`] to inspect that
 /// representation.
 ///
 /// # Errors
@@ -5184,18 +5180,18 @@ impl std::fmt::Debug for TensorDynLen {
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, diag_tensor_dyn_len};
+/// use tensor4all_core::{DynIndex, diag_idx_tensor};
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
-/// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
+/// let t = diag_idx_tensor(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert_eq!(t.dims(), vec![3, 3]);
 /// assert!(t.is_diag());
 /// ```
-pub fn diag_tensor_dyn_len(
+pub fn diag_idx_tensor(
     indices: Vec<DynIndex>,
     diag_data: Vec<f64>,
-) -> std::result::Result<TensorDynLen, TensorDynLenError> {
-    TensorDynLen::from_diag(indices, diag_data)
+) -> std::result::Result<IdxTensor, IdxTensorError> {
+    IdxTensor::from_diag(indices, diag_data)
 }
 
 #[allow(clippy::type_complexity)]
@@ -5231,11 +5227,11 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// failure).
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, unfold_split};
+/// use tensor4all_core::{DynIndex, IdxTensor, unfold_split};
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// // 2x3 dense tensor with data [1..6]
-/// let t = TensorDynLen::from_dense(
+/// let t = IdxTensor::from_dense(
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ).unwrap();
@@ -5249,7 +5245,7 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// ```
 #[allow(clippy::type_complexity)]
 pub fn unfold_split(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
 ) -> std::result::Result<
     (
@@ -5260,7 +5256,7 @@ pub fn unfold_split(
         Vec<DynIndex>,
         Vec<DynIndex>,
     ),
-    TensorDynLenError,
+    IdxTensorError,
 > {
     let (matrix_inner, left_len, m, n, left_indices, right_indices) =
         unfold_split_inner(t, left_inds)?;
@@ -5276,7 +5272,7 @@ pub fn unfold_split(
 }
 
 pub(crate) fn unfold_split_inner(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
 ) -> Result<UnfoldSplitInnerResult> {
     let rank = t.indices.len();
@@ -5345,17 +5341,17 @@ pub(crate) fn unfold_split_inner(
 }
 
 // ============================================================================
-// TensorIndex implementation for TensorDynLen
+// TensorIndex implementation for IdxTensor
 // ============================================================================
 
 use crate::tensor_index::TensorIndex;
 
-impl TensorIndex for TensorDynLen {
+impl TensorIndex for IdxTensor {
     type Index = DynIndex;
-    type Error = TensorDynLenError;
+    type Error = IdxTensorError;
 
     fn external_indices(&self) -> Vec<DynIndex> {
-        // For TensorDynLen, all indices are external.
+        // For IdxTensor, all indices are external.
         self.indices.clone()
     }
 
@@ -5369,7 +5365,7 @@ impl TensorIndex for TensorDynLen {
         new_index: &DynIndex,
     ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method.
-        TensorDynLen::replaceind(self, old_index, new_index)
+        IdxTensor::replaceind(self, old_index, new_index)
     }
 
     fn replace_indices(
@@ -5378,12 +5374,12 @@ impl TensorIndex for TensorDynLen {
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method.
-        TensorDynLen::replace_indices(self, old_indices, new_indices)
+        IdxTensor::replace_indices(self, old_indices, new_indices)
     }
 }
 
 // ============================================================================
-// TensorLike implementation for TensorDynLen
+// TensorLike implementation for IdxTensor
 // ============================================================================
 
 use crate::tensor_like::{
@@ -5391,13 +5387,13 @@ use crate::tensor_like::{
     TensorContractionLike, TensorFactorizationLike, TensorVectorSpace,
 };
 
-impl TensorVectorSpace for TensorDynLen {
+impl TensorVectorSpace for IdxTensor {
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
-        TensorDynLen::norm_squared(self)
+        IdxTensor::norm_squared(self)
     }
 
     fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
-        TensorDynLen::maxabs(self)
+        IdxTensor::maxabs(self)
     }
 
     fn isapprox(
@@ -5406,7 +5402,7 @@ impl TensorVectorSpace for TensorDynLen {
         atol: f64,
         rtol: f64,
     ) -> std::result::Result<bool, Self::Error> {
-        TensorDynLen::isapprox(self, other, atol, rtol)
+        IdxTensor::isapprox(self, other, atol, rtol)
     }
 
     fn axpby(
@@ -5415,19 +5411,19 @@ impl TensorVectorSpace for TensorDynLen {
         other: &Self,
         b: crate::AnyScalar,
     ) -> std::result::Result<Self, Self::Error> {
-        TensorDynLen::axpby(self, a, other, b)
+        IdxTensor::axpby(self, a, other, b)
     }
 
     fn scale(&self, scalar: crate::AnyScalar) -> std::result::Result<Self, Self::Error> {
-        TensorDynLen::scale(self, scalar)
+        IdxTensor::scale(self, scalar)
     }
 
     fn inner_product(&self, other: &Self) -> std::result::Result<crate::AnyScalar, Self::Error> {
-        TensorDynLen::inner_product(self, other)
+        IdxTensor::inner_product(self, other)
     }
 }
 
-impl TensorFactorizationLike for TensorDynLen {
+impl TensorFactorizationLike for IdxTensor {
     fn factorize(
         &self,
         left_inds: &[DynIndex],
@@ -5446,10 +5442,10 @@ impl TensorFactorizationLike for TensorDynLen {
     }
 }
 
-impl TensorContractionLike for TensorDynLen {
+impl TensorContractionLike for IdxTensor {
     fn conj(&self) -> Self {
         // Delegate to the inherent method (complex conjugate for dense tensors)
-        TensorDynLen::conj(self)
+        IdxTensor::conj(self)
     }
 
     fn direct_sum(
@@ -5470,7 +5466,7 @@ impl TensorContractionLike for TensorDynLen {
 
     fn permuteinds(&self, new_order: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
         // Delegate to the inherent method
-        TensorDynLen::permute_indices(self, new_order)
+        IdxTensor::permute_indices(self, new_order)
     }
 
     fn fuse_indices(
@@ -5479,7 +5475,7 @@ impl TensorContractionLike for TensorDynLen {
         new_index: DynIndex,
         order: LinearizationOrder,
     ) -> std::result::Result<Self, Self::Error> {
-        TensorDynLen::fuse_indices(self, old_indices, new_index, order)
+        IdxTensor::fuse_indices(self, old_indices, new_index, order)
     }
 
     fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
@@ -5491,13 +5487,13 @@ impl TensorContractionLike for TensorDynLen {
     }
 }
 
-impl TensorConstructionLike for TensorDynLen {
+impl TensorConstructionLike for IdxTensor {
     fn select_indices(
         &self,
         selected_indices: &[DynIndex],
         positions: &[usize],
     ) -> std::result::Result<Self, Self::Error> {
-        TensorDynLen::select_indices(self, selected_indices, positions)
+        IdxTensor::select_indices(self, selected_indices, positions)
     }
 
     fn diagonal(
@@ -5514,14 +5510,14 @@ impl TensorConstructionLike for TensorDynLen {
             .into());
         }
 
-        TensorDynLen::from_diag(
+        IdxTensor::from_diag(
             vec![input_index.clone(), output_index.clone()],
             vec![1.0_f64; dim],
         )
     }
 
     fn scalar_one() -> std::result::Result<Self, Self::Error> {
-        TensorDynLen::from_dense(vec![], vec![1.0_f64])
+        IdxTensor::from_dense(vec![], vec![1.0_f64])
     }
 
     fn ones(indices: &[DynIndex]) -> std::result::Result<Self, Self::Error> {
@@ -5530,7 +5526,7 @@ impl TensorConstructionLike for TensorDynLen {
         }
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size = checked_total_size(&dims)?;
-        TensorDynLen::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
+        IdxTensor::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
     }
 
     fn onehot(index_vals: &[(DynIndex, usize)]) -> std::result::Result<Self, Self::Error> {
@@ -5614,7 +5610,7 @@ fn column_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
 // High-level API for tensor construction (avoids direct Storage access)
 // ============================================================================
 
-impl TensorDynLen {
+impl IdxTensor {
     fn any_scalar_payload_to_complex(data: Vec<AnyScalar>) -> Vec<Complex64> {
         data.into_iter()
             .map(|value| {
@@ -5676,24 +5672,24 @@ impl TensorDynLen {
     /// product (a shape mismatch).
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i, j], data).unwrap();
+    /// let tensor: IdxTensor = IdxTensor::from_dense(vec![i, j], data).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
     pub fn from_dense<T: TensorElement>(
         indices: Vec<DynIndex>,
         data: Vec<T>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_dense_payload_len(data.len(), &dims)?;
         let native = dense_native_tensor_from_col_major(&data, &dims)?;
-        Self::from_native(indices, native).map_err(TensorDynLenError::from)
+        Self::from_native(indices, native).map_err(IdxTensorError::from)
     }
 
     /// Create a tensor from dense payload data provided as [`AnyScalar`] values.
@@ -5706,12 +5702,12 @@ impl TensorDynLen {
     /// product (a shape mismatch) or a scalar conversion fails.
     /// # Examples
     /// ```
-    /// use tensor4all_core::{AnyScalar, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, IdxTensor};
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense_any(
+    /// let tensor = IdxTensor::from_dense_any(
     ///     vec![i, j],
     ///     vec![
     ///         AnyScalar::new_real(1.0),
@@ -5727,7 +5723,7 @@ impl TensorDynLen {
     pub fn from_dense_any(
         indices: Vec<DynIndex>,
         data: Vec<AnyScalar>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if data.iter().any(AnyScalar::is_complex) {
             Self::from_dense(indices, Self::any_scalar_payload_to_complex(data))
         } else {
@@ -5742,7 +5738,7 @@ impl TensorDynLen {
     /// the multi-index diagonal (`T[i,i,...,i] = data[i]`).
     ///
     /// The returned tensor preserves diagonal metadata; use
-    /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage_kind`] to inspect
+    /// [`IdxTensor::is_diag`] or [`IdxTensor::storage_kind`] to inspect
     /// that representation. `f32` and `Complex32` values remain eager and are
     /// never promoted into compact `f64`/`Complex64` storage.
     ///
@@ -5752,11 +5748,11 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(3);
     /// let j = DynIndex::new_dyn(3);
-    /// let diag = TensorDynLen::from_diag(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let diag = IdxTensor::from_diag(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
     /// assert!(diag.is_diag());
     ///
     /// let data = diag.to_vec::<f64>().unwrap();
@@ -5769,13 +5765,13 @@ impl TensorDynLen {
     pub fn from_diag<T: TensorElement>(
         indices: Vec<DynIndex>,
         data: Vec<T>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_diag_payload_len(data.len(), &dims)?;
         let native = diag_native_tensor_from_col_major(&data, dims.len())?;
         Self::from_native_with_axis_classes(indices, native, Self::diag_axis_classes(dims.len()))
-            .map_err(TensorDynLenError::from)
+            .map_err(IdxTensorError::from)
     }
 
     /// Create a diagonal tensor from diagonal payload data provided as
@@ -5790,12 +5786,12 @@ impl TensorDynLen {
     /// fails.
     /// # Examples
     /// ```
-    /// use tensor4all_core::{AnyScalar, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, IdxTensor};
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::from_diag_any(
+    /// let tensor = IdxTensor::from_diag_any(
     ///     vec![i, j],
     ///     vec![AnyScalar::new_real(1.0), AnyScalar::new_complex(2.0, -1.0)],
     /// ).unwrap();
@@ -5806,7 +5802,7 @@ impl TensorDynLen {
     pub fn from_diag_any(
         indices: Vec<DynIndex>,
         data: Vec<AnyScalar>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if data.iter().any(AnyScalar::is_complex) {
             Self::from_diag(indices, Self::any_scalar_payload_to_complex(data))
         } else {
@@ -5824,13 +5820,13 @@ impl TensorDynLen {
     /// mismatch) or the construction fails.
     /// # Examples
     /// ```
-    /// use tensor4all_core::{AnyScalar, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, IdxTensor};
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(2);
     /// let k = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::copy_tensor(
+    /// let tensor = IdxTensor::copy_tensor(
     ///     vec![i, j, k],
     ///     AnyScalar::new_real(1.0),
     /// ).unwrap();
@@ -5840,7 +5836,7 @@ impl TensorDynLen {
     pub fn copy_tensor(
         indices: Vec<DynIndex>,
         value: AnyScalar,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if indices.is_empty() {
             return Self::from_dense_any(vec![], vec![value]);
         }
@@ -5885,12 +5881,12 @@ impl TensorDynLen {
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
     /// let fused = DynIndex::new_link(4).unwrap();
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![i.clone(), j.clone()],
     ///     vec![1.0, 2.0, 3.0, 4.0],
     /// ).unwrap();
@@ -5910,7 +5906,7 @@ impl TensorDynLen {
         old_indices: &[DynIndex],
         new_index: DynIndex,
         order: LinearizationOrder,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if !(!old_indices.is_empty()) {
             return Err(anyhow::anyhow!("fuse_indices requires at least one index to fuse").into());
         };
@@ -5997,7 +5993,7 @@ impl TensorDynLen {
 
         let packed = self.permute(&perm)?;
         let reshaped = packed.try_materialized_inner()?.reshape(&new_dims)?;
-        Self::from_inner(result_indices, reshaped).map_err(TensorDynLenError::from)
+        Self::from_inner(result_indices, reshaped).map_err(IdxTensorError::from)
     }
 
     /// Replace one fused index with multiple indices using an exact reshape.
@@ -6010,18 +6006,18 @@ impl TensorDynLen {
     /// the new index dimensions (a shape mismatch).
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, IdxTensor};
     ///
     /// let fused = DynIndex::new_dyn(4);
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     ///
     /// let unfused = tensor
     ///     .unfuse_index(&fused, &[i.clone(), j.clone()], LinearizationOrder::ColumnMajor)
     ///     .unwrap();
     ///
-    /// let expected = TensorDynLen::from_dense(vec![i, j], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// let expected = IdxTensor::from_dense(vec![i, j], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     /// assert!(unfused.isapprox(&expected, 1e-12, 0.0).unwrap());
     /// ```
     pub fn unfuse_index(
@@ -6029,7 +6025,7 @@ impl TensorDynLen {
         old_index: &DynIndex,
         new_indices: &[DynIndex],
         order: LinearizationOrder,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         if !(!new_indices.is_empty()) {
             return Err(
                 anyhow::anyhow!("unfuse_index requires at least one replacement index").into(),
@@ -6099,13 +6095,13 @@ impl TensorDynLen {
     /// unsupported-dtype failure).
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     ///
-    /// let scalar = TensorDynLen::scalar(42.0).unwrap();
+    /// let scalar = IdxTensor::scalar(42.0).unwrap();
     /// assert_eq!(scalar.dims(), Vec::<usize>::new());
     /// assert_eq!(scalar.only().unwrap().real(), 42.0);
     /// ```
-    pub fn scalar<T: TensorElement>(value: T) -> std::result::Result<Self, TensorDynLenError> {
+    pub fn scalar<T: TensorElement>(value: T) -> std::result::Result<Self, IdxTensorError> {
         Self::from_dense(vec![], vec![value])
     }
 
@@ -6116,17 +6112,17 @@ impl TensorDynLen {
     /// or the element type is unsupported.
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor = TensorDynLen::zeros::<f64>(vec![i, j]).unwrap();
+    /// let tensor = IdxTensor::zeros::<f64>(vec![i, j]).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
     pub fn zeros<T: TensorElement + Zero + Clone>(
         indices: Vec<DynIndex>,
-    ) -> std::result::Result<Self, TensorDynLenError> {
+    ) -> std::result::Result<Self, IdxTensorError> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
         let size: usize = dims.iter().product();
         Self::from_dense(indices, vec![T::zero(); size])
@@ -6137,7 +6133,7 @@ impl TensorDynLen {
 // High-level API for data extraction (avoids direct .storage() access)
 // ============================================================================
 
-impl TensorDynLen {
+impl IdxTensor {
     /// Extract tensor data as a column-major `Vec<T>`.
     ///
     /// # Type Parameters
@@ -6153,16 +6149,16 @@ impl TensorDynLen {
     /// type (a scalar-kind mismatch) or materialization fails.
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// let data = tensor.to_vec::<f64>().unwrap();
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
-    pub fn to_vec<T: TensorElement>(&self) -> std::result::Result<Vec<T>, TensorDynLenError> {
-        native_tensor_primal_to_dense_col_major(self.as_native()?).map_err(TensorDynLenError::from)
+    pub fn to_vec<T: TensorElement>(&self) -> std::result::Result<Vec<T>, IdxTensorError> {
+        native_tensor_primal_to_dense_col_major(self.as_native()?).map_err(IdxTensorError::from)
     }
 
     /// Consume the tensor and return its indices with dense column-major values.
@@ -6185,11 +6181,11 @@ impl TensorDynLen {
     /// type (a scalar-kind mismatch) or materialization fails.
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![i.clone(), j.clone()],
     ///     vec![1.0_f64, 2.0, 3.0, 4.0],
     /// ).unwrap();
@@ -6201,9 +6197,9 @@ impl TensorDynLen {
     /// ```
     pub fn into_dense_col_major_parts<T: TensorElement>(
         self,
-    ) -> std::result::Result<(Vec<DynIndex>, Vec<T>), TensorDynLenError> {
+    ) -> std::result::Result<(Vec<DynIndex>, Vec<T>), IdxTensorError> {
         if !(!self.tracks_grad()) {
-            return Err(anyhow::anyhow!("TensorDynLen::into_dense_col_major_parts cannot consume tensors with tracked autodiff state").into());
+            return Err(anyhow::anyhow!("IdxTensor::into_dense_col_major_parts cannot consume tensors with tracked autodiff state").into());
         };
         let data = self.to_vec::<T>()?;
         Ok((self.indices, data))
@@ -6213,11 +6209,11 @@ impl TensorDynLen {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let tensor = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// assert!(tensor.is_f64());
     /// assert!(!tensor.is_complex());
     /// ```
@@ -6230,9 +6226,9 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![DynIndex::new_dyn(2)],
     ///     vec![1.0_f32, 2.0],
     /// )
@@ -6249,9 +6245,9 @@ impl TensorDynLen {
     ///
     /// ```
     /// use num_complex::Complex32;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![DynIndex::new_dyn(2)],
     ///     vec![Complex32::new(1.0, 0.0), Complex32::new(0.0, 1.0)],
     /// )
@@ -6267,10 +6263,10 @@ impl TensorDynLen {
     /// # Example
     /// ```
     /// use num_complex::Complex64;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(
+    /// let tensor = IdxTensor::from_dense(
     ///     vec![i],
     ///     vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
     /// )
@@ -6286,19 +6282,19 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::Storage;
     ///
     /// // Tensors from `from_dense` use dense storage
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
-    /// let dense = TensorDynLen::from_dense(vec![i, j], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    /// let dense = IdxTensor::from_dense(vec![i, j], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
     /// assert!(!dense.is_diag());
     ///
     /// // Diagonal metadata is preserved when constructing from diagonal storage.
     /// let k = DynIndex::new_dyn(2);
     /// let l = DynIndex::new_dyn(2);
-    /// let diag = TensorDynLen::from_storage(
+    /// let diag = IdxTensor::from_storage(
     ///     vec![k, l],
     ///     Storage::from_diag_col_major(vec![1.0, 2.0], 2)
     ///         .map(std::sync::Arc::new)
@@ -6316,14 +6312,14 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use num_complex::Complex64;
     ///
     /// let i = DynIndex::new_dyn(2);
-    /// let real_t = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let real_t = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     /// assert!(!real_t.is_complex());
     ///
-    /// let complex_t = TensorDynLen::from_dense(
+    /// let complex_t = IdxTensor::from_dense(
     ///     vec![i],
     ///     vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
     /// ).unwrap();
@@ -6454,11 +6450,11 @@ mod tests {
         let right = DynIndex::new_dyn(n);
         let far = DynIndex::new_dyn(n);
         let end = DynIndex::new_dyn(n);
-        let a = TensorDynLen::from_copy_selector(left, site.clone(), right.clone(), 1, 1.0_f64)
-            .unwrap();
+        let a =
+            IdxTensor::from_copy_selector(left, site.clone(), right.clone(), 1, 1.0_f64).unwrap();
         let b =
-            TensorDynLen::from_copy_selector(right, site.clone(), far.clone(), 1, 2.0_f64).unwrap();
-        let c = TensorDynLen::from_copy_selector(far, site.clone(), end, 1, 3.0_f64).unwrap();
+            IdxTensor::from_copy_selector(right, site.clone(), far.clone(), 1, 2.0_f64).unwrap();
+        let c = IdxTensor::from_copy_selector(far, site.clone(), end, 1, 3.0_f64).unwrap();
         let result = crate::defaults::contract::contract_with_options(
             &[&a, &b, &c],
             crate::defaults::contract::ContractionOptions::new()
@@ -6473,8 +6469,8 @@ mod tests {
 
     #[test]
     fn structured_metrics_use_authoritative_compact_payload_for_all_dtypes() {
-        fn check(tensor: TensorDynLen, expected_sum: f64, expected_norm_squared: f64) {
-            assert!(matches!(tensor.storage, TensorDynLenStorage::Compact(_)));
+        fn check(tensor: IdxTensor, expected_sum: f64, expected_norm_squared: f64) {
+            assert!(matches!(tensor.storage, IdxTensorStorage::Compact(_)));
             assert!(tensor.eager_cache.get().is_none());
             assert!((tensor.sum().unwrap().real() - expected_sum).abs() < 1.0e-6);
             assert!((tensor.norm_squared().unwrap() - expected_norm_squared).abs() < 1.0e-6);
@@ -6485,17 +6481,17 @@ mod tests {
 
         let indices = || vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
         check(
-            TensorDynLen::from_diag(indices(), vec![1.0_f32, 2.0]).unwrap(),
+            IdxTensor::from_diag(indices(), vec![1.0_f32, 2.0]).unwrap(),
             3.0,
             5.0,
         );
         check(
-            TensorDynLen::from_diag(indices(), vec![1.0_f64, 2.0]).unwrap(),
+            IdxTensor::from_diag(indices(), vec![1.0_f64, 2.0]).unwrap(),
             3.0,
             5.0,
         );
         check(
-            TensorDynLen::from_diag(
+            IdxTensor::from_diag(
                 indices(),
                 vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
             )
@@ -6504,7 +6500,7 @@ mod tests {
             5.0,
         );
         check(
-            TensorDynLen::from_diag(
+            IdxTensor::from_diag(
                 indices(),
                 vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
             )
@@ -6525,7 +6521,7 @@ mod tests {
     fn materialization_error_retains_backend_source() {
         let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
         let inner = EagerTensor::from_tensor_in(native, default_eager_ctx().unwrap());
-        let storage = TensorDynLenStorage::Eager {
+        let storage = IdxTensorStorage::Eager {
             inner: Arc::new(inner),
             axis_classes: vec![0, 0],
         };
@@ -6536,10 +6532,10 @@ mod tests {
     }
 
     fn conjugate_with_injected_failure(
-        tensor: &TensorDynLen,
+        tensor: &IdxTensor,
         target: *const EagerTensor,
         message: &'static str,
-    ) -> TensorDynLen {
+    ) -> IdxTensor {
         let calls = Cell::new(0usize);
         let conjugated = tensor.conj_with(&|inner| {
             calls.set(calls.get() + 1);
@@ -6554,10 +6550,10 @@ mod tests {
     }
 
     fn assert_unwrapped_conjugation_error(
-        tensor: TensorDynLen,
+        tensor: IdxTensor,
         target: *const EagerTensor,
         message: &'static str,
-    ) -> TensorDynLen {
+    ) -> IdxTensor {
         let conjugated = conjugate_with_injected_failure(&tensor, target, message);
         let error = conjugated.to_storage().unwrap_err();
         assert!(matches!(error, TensorStorageError::Conjugation { .. }));
@@ -6575,11 +6571,11 @@ mod tests {
         let i = DynIndex::new_dyn(2);
         let native = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
         let inner = EagerTensor::requires_grad_in(native, default_eager_ctx().unwrap());
-        let tensor = TensorDynLen::from_inner(vec![i], inner).unwrap();
+        let tensor = IdxTensor::from_inner(vec![i], inner).unwrap();
         let source = match &tensor.storage {
-            TensorDynLenStorage::Eager { inner, .. } => Arc::clone(inner),
-            TensorDynLenStorage::Compact(payload) => Arc::clone(&payload.payload),
-            TensorDynLenStorage::Materialized(_) | TensorDynLenStorage::Deferred { .. } => {
+            IdxTensorStorage::Eager { inner, .. } => Arc::clone(inner),
+            IdxTensorStorage::Compact(payload) => Arc::clone(&payload.payload),
+            IdxTensorStorage::Materialized(_) | IdxTensorStorage::Deferred { .. } => {
                 panic!("tracked eager source expected")
             }
         };
@@ -6608,7 +6604,7 @@ mod tests {
     fn structured_payload_conjugation_failure_retains_graph_and_blocks_detached_primal() {
         let i = DynIndex::new_dyn(2);
         let j = DynIndex::new_dyn(2);
-        let tensor = TensorDynLen::from_diag(
+        let tensor = IdxTensor::from_diag(
             vec![i, j],
             vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
         )
@@ -6649,7 +6645,7 @@ mod tests {
     fn eager_cache_conjugation_failure_is_deferred_with_original_diagnostic() {
         let i = DynIndex::new_dyn(2);
         let j = DynIndex::new_dyn(2);
-        let tensor = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap();
+        let tensor = IdxTensor::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap();
         tensor.as_inner().unwrap();
         let target = Arc::as_ptr(tensor.eager_cache.get().unwrap());
 

@@ -18,15 +18,15 @@
 //! ```
 //! use tensor4all_core::{
 //!     krylov::{gmres, GmresOptions},
-//!     DynIndex, TensorDynLen, TensorVectorSpace,
+//!     DynIndex, IdxTensor, TensorVectorSpace,
 //! };
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let i = DynIndex::new_dyn(2);
-//! let rhs = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -1.0])?;
-//! let initial_guess = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
+//! let rhs = IdxTensor::from_dense(vec![i.clone()], vec![1.0, -1.0])?;
+//! let initial_guess = IdxTensor::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
 //!
-//! let apply_operator = |x: &TensorDynLen| Ok(x.clone());
+//! let apply_operator = |x: &IdxTensor| Ok(x.clone());
 //! let result = gmres(apply_operator, &rhs, &initial_guess, &GmresOptions::default())?;
 //!
 //! assert!(result.converged);
@@ -268,12 +268,12 @@ impl GmresTolerance {
 /// convergence status.
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
 /// use tensor4all_core::krylov::{gmres, GmresOptions};
 /// let i = DynIndex::new_dyn(2);
-/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 7.0]).unwrap();
-/// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
-/// let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &GmresOptions::default()).unwrap();
+/// let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0, 7.0]).unwrap();
+/// let x0 = IdxTensor::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
+/// let result = gmres(|x: &IdxTensor| Ok(x.clone()), &b, &x0, &GmresOptions::default()).unwrap();
 /// assert!(result.converged);
 /// assert!(result.residual_norm < 1e-10);
 /// ```
@@ -502,12 +502,12 @@ struct HermitianRitzState {
 /// [`HermitianLanczosResult::converged`] and does not produce an error.
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
 /// use tensor4all_core::krylov::{hermitian_lanczos_lowest_eigenpair, HermitianLanczosOptions};
 /// let i = DynIndex::new_dyn(2);
-/// let initial = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 1.0]).unwrap();
+/// let initial = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 1.0]).unwrap();
 /// let result = hermitian_lanczos_lowest_eigenpair(
-///     |x: &TensorDynLen| Ok(x.clone()),
+///     |x: &IdxTensor| Ok(x.clone()),
 ///     &initial,
 ///     &HermitianLanczosOptions::default(),
 /// ).unwrap();
@@ -658,10 +658,10 @@ where
 /// use tensor4all_core::krylov::{
 ///     hermitian_krylov_expm_multiply, HermitianKrylovExpmOptions,
 /// };
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// # fn main() -> anyhow::Result<()> {
 /// let index = DynIndex::new_dyn(2);
-/// let initial = TensorDynLen::from_dense(
+/// let initial = IdxTensor::from_dense(
 ///     vec![index.clone()],
 ///     vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
 /// )?;
@@ -671,9 +671,9 @@ where
 ///     ..Default::default()
 /// };
 /// let result = hermitian_krylov_expm_multiply(
-///     |x: &TensorDynLen| {
+///     |x: &IdxTensor| {
 ///         let data = x.to_vec::<Complex64>()?;
-///         TensorDynLen::from_dense(
+///         IdxTensor::from_dense(
 ///             vec![index.clone()],
 ///             vec![data[0], Complex64::new(2.0, 0.0) * data[1]],
 ///         )
@@ -1793,21 +1793,21 @@ where
 /// # Examples
 /// Solve `2x = b` with a no-op truncation function:
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{gmres_with_truncation, GmresOptions};
 /// let i = DynIndex::new_dyn(2);
-/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 6.0]).unwrap();
-/// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
+/// let b = IdxTensor::from_dense(vec![i.clone()], vec![4.0, 6.0]).unwrap();
+/// let x0 = IdxTensor::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
 /// // Operator A = 2*I (scales input by 2)
-/// let apply_a = |x: &TensorDynLen| {
+/// let apply_a = |x: &IdxTensor| {
 ///     x.scale(AnyScalar::new_real(2.0)).map_err(anyhow::Error::from)
 /// };
 /// // No-op truncation
-/// let truncate = |_x: &mut TensorDynLen| Ok(());
+/// let truncate = |_x: &mut IdxTensor| Ok(());
 /// let result = gmres_with_truncation(apply_a, &b, &x0, &GmresOptions::default(), truncate).unwrap();
 /// assert!(result.converged);
 /// // Solution should be [2.0, 3.0]
-/// let expected = TensorDynLen::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
+/// let expected = IdxTensor::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn gmres_with_truncation<T, F, Tr>(
@@ -2222,14 +2222,14 @@ impl RestartGmresOptions {
 /// Result of restarted GMRES solver.
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, AnyScalar};
+/// use tensor4all_core::{DynIndex, IdxTensor, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
 /// let i = DynIndex::new_dyn(2);
-/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
-/// let apply_a = |x: &TensorDynLen| {
+/// let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
+/// let apply_a = |x: &IdxTensor| {
 ///     x.scale(AnyScalar::new_real(3.0)).map_err(anyhow::Error::from)
 /// };
-/// let truncate = |_x: &mut TensorDynLen| Ok(());
+/// let truncate = |_x: &mut IdxTensor| Ok(());
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
 /// ).unwrap();
@@ -2291,19 +2291,19 @@ pub struct RestartGmresResult<T> {
 /// # Examples
 /// Solve `5x = b` with no truncation:
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
 /// let i = DynIndex::new_dyn(3);
-/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0, 15.0]).unwrap();
-/// let apply_a = |x: &TensorDynLen| {
+/// let b = IdxTensor::from_dense(vec![i.clone()], vec![5.0, 10.0, 15.0]).unwrap();
+/// let apply_a = |x: &IdxTensor| {
 ///     x.scale(AnyScalar::new_real(5.0)).map_err(anyhow::Error::from)
 /// };
-/// let truncate = |_x: &mut TensorDynLen| Ok(());
+/// let truncate = |_x: &mut IdxTensor| Ok(());
 /// let result = restart_gmres_with_truncation(
 ///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
 /// ).unwrap();
 /// assert!(result.converged);
-/// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
+/// let expected = IdxTensor::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-8);
 /// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(

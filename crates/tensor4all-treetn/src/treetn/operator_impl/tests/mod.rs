@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
 use crate::operator::Operator;
 use crate::treetn::TreeTN;
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex, // s0
     DynIndex, // bond
     DynIndex, // s1
@@ -16,10 +16,10 @@ fn make_two_node_treetn() -> (
     let bond = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(4);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 12]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 12]).unwrap();
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -65,8 +65,8 @@ fn test_node_names() {
 fn test_site_indices_single_node() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(3);
-    let t = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], vec![0.0; 6]).unwrap();
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
+    let t = IdxTensor::from_dense(vec![s0.clone(), s1.clone()], vec![0.0; 6]).unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
 
     let site_indices = tn.site_indices();
     assert_eq!(site_indices.len(), 2);
@@ -84,15 +84,15 @@ fn test_site_indices_three_node_chain() {
     let bond12 = DynIndex::new_dyn(3);
     let s2 = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond01.clone()], vec![1.0; 6]).unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond01.clone()], vec![1.0; 6]).unwrap();
+    let t1 = IdxTensor::from_dense(
         vec![bond01.clone(), s1.clone(), bond12.clone()],
         vec![1.0; 18],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(vec![bond12.clone(), s2.clone()], vec![1.0; 6]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![bond12.clone(), s2.clone()], vec![1.0; 6]).unwrap();
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1, t2],
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
     )

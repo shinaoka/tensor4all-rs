@@ -24,16 +24,16 @@ use tensor4all_itensorlike::ContractOptions;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtt::{contract, DynIndex, SubDomainTT, TensorDynLen, TensorTrain};
+/// use tensor4all_partitionedtt::{contract, DynIndex, SubDomainTT, IdxTensor, TensorTrain};
 /// use tensor4all_itensorlike::ContractOptions;
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
 /// let left = SubDomainTT::from_tt(TensorTrain::new(vec![
-///     TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap(),
+///     IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap(),
 /// ]).unwrap());
 /// let right = SubDomainTT::from_tt(TensorTrain::new(vec![
-///     TensorDynLen::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap(),
+///     IdxTensor::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap(),
 /// ]).unwrap());
 ///
 /// assert!(contract(&left, &right, &ContractOptions::default()).unwrap().is_some());
@@ -59,15 +59,15 @@ pub fn contract(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtt::{proj_contract, DynIndex, Projector, SubDomainTT, TensorDynLen, TensorTrain};
+/// use tensor4all_partitionedtt::{proj_contract, DynIndex, Projector, SubDomainTT, IdxTensor, TensorTrain};
 /// use tensor4all_itensorlike::ContractOptions;
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let left = SubDomainTT::from_tt(TensorTrain::new(vec![
-///     TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap(),
+///     IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap(),
 /// ]).unwrap());
 /// let right = SubDomainTT::from_tt(TensorTrain::new(vec![
-///     TensorDynLen::from_dense(vec![i], vec![3.0_f64, 4.0]).unwrap(),
+///     IdxTensor::from_dense(vec![i], vec![3.0_f64, 4.0]).unwrap(),
 /// ]).unwrap());
 /// let projector = Projector::from_pairs([(left.all_indices()[0].clone(), 0)]);
 ///

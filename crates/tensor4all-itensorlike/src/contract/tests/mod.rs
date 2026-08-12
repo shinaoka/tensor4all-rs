@@ -1,13 +1,13 @@
 use super::*;
 use crate::TensorTrainError;
-use tensor4all_core::{DynId, DynIndex, Index, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{DynId, DynIndex, IdxTensor, Index, TensorContractionLike};
 
 /// Helper to create a simple tensor for testing
-fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
     let size: usize = dims.iter().product();
     let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Helper to create a DynIndex
@@ -171,7 +171,7 @@ fn test_contract_zipup_matches_naive_for_zero_masked_inputs() {
     let l12 = idx(1038, 3);
 
     let tt1 = TensorTrain::new(vec![
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![s0.clone(), l01.clone()],
             vec![0.0, 0.0, 0.0, 4.0, 5.0, 6.0],
         )
@@ -182,7 +182,7 @@ fn test_contract_zipup_matches_naive_for_zero_masked_inputs() {
 
     let tt2 = TensorTrain::new(vec![
         make_tensor(vec![s0.clone(), l12.clone()]),
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![l12.clone(), s2.clone()],
             vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
         )
@@ -204,7 +204,7 @@ fn test_treetn_zipup_matches_naive_for_zero_masked_inputs() {
     let l12 = idx(1043, 3);
 
     let tt1 = TensorTrain::new(vec![
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![s0.clone(), l01.clone()],
             vec![0.0, 0.0, 0.0, 4.0, 5.0, 6.0],
         )
@@ -215,7 +215,7 @@ fn test_treetn_zipup_matches_naive_for_zero_masked_inputs() {
 
     let tt2 = TensorTrain::new(vec![
         make_tensor(vec![s0.clone(), l12.clone()]),
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![l12.clone(), s2.clone()],
             vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
         )

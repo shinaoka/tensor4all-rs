@@ -14,7 +14,7 @@ use num_complex::Complex64;
 use tensor4all_core::krylov::HermitianKrylovExpmOptions;
 use tensor4all_core::{
     DynIndex, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorContractionLike,
-    TensorDynLen,
+    IdxTensor,
 };
 use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
 use tensor4all_treetn::{
@@ -24,7 +24,7 @@ use tensor4all_treetn::{
 
 const ITENSOR_CUTOFF: f64 = 1.0e-12;
 
-type BenchmarkState = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<Complex64>);
+type BenchmarkState = (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<Complex64>);
 
 fn itensor_cutoff_policy() -> SvdTruncationPolicy {
     SvdTruncationPolicy::new(ITENSOR_CUTOFF)
@@ -123,7 +123,7 @@ fn make_initial_state(
         incident[b].push((a, bonds[edge_id].clone()));
     }
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let mut graph_nodes = Vec::with_capacity(n_sites);
     for i in 0..n_sites {
         let mut indices = Vec::with_capacity(1 + incident[i].len());
@@ -133,7 +133,7 @@ fn make_initial_state(
         indices.push(sites[i].clone());
         let mut data = vec![Complex64::new(0.0, 0.0); indices.iter().map(DynIndex::dim).product()];
         data[initial_bit(i)] = Complex64::new(1.0, 0.0);
-        let tensor = TensorDynLen::from_dense(indices, data)?;
+        let tensor = IdxTensor::from_dense(indices, data)?;
         graph_nodes.push(state.add_tensor(node_name(i), tensor)?);
     }
     for (edge_id, &(a, b)) in edges.iter().enumerate() {
@@ -155,7 +155,7 @@ fn local_heisenberg_tensor(
     in_left: DynIndex,
     out_right: DynIndex,
     in_right: DynIndex,
-) -> anyhow::Result<TensorDynLen> {
+) -> anyhow::Result<IdxTensor> {
     let dims = [2, 2, 2, 2];
     let mut data = vec![0.0; dims.iter().product()];
 
@@ -173,7 +173,7 @@ fn local_heisenberg_tensor(
         }
     }
 
-    TensorDynLen::from_dense(vec![out_left, in_left, out_right, in_right], data)
+    IdxTensor::from_dense(vec![out_left, in_left, out_right, in_right], data)
         .map_err(anyhow::Error::from)
 }
 
@@ -183,7 +183,7 @@ fn make_edge_heisenberg_operator(
     state_sites: &[DynIndex],
     op_inputs: &[DynIndex],
     op_outputs: &[DynIndex],
-) -> anyhow::Result<LinearOperator<TensorDynLen, String>> {
+) -> anyhow::Result<LinearOperator<IdxTensor, String>> {
     let left_name = node_name(left);
     let right_name = node_name(right);
     let local = local_heisenberg_tensor(
@@ -248,9 +248,9 @@ fn make_edge_heisenberg_operator(
 
 fn make_heisenberg_operator(
     topology: Topology,
-    state: &TreeTN<TensorDynLen, String>,
+    state: &TreeTN<IdxTensor, String>,
     state_sites: &[DynIndex],
-) -> anyhow::Result<LinearOperator<TensorDynLen, String>> {
+) -> anyhow::Result<LinearOperator<IdxTensor, String>> {
     let n_sites = state_sites.len();
     let edges = edges_for(topology, n_sites);
     let op_inputs: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
@@ -371,7 +371,7 @@ fn exact_evolve(
 }
 
 fn state_vector(
-    state: &TreeTN<TensorDynLen, String>,
+    state: &TreeTN<IdxTensor, String>,
     sites: &[DynIndex],
 ) -> anyhow::Result<Vec<Complex64>> {
     let tensor = state.contract_to_tensor()?;

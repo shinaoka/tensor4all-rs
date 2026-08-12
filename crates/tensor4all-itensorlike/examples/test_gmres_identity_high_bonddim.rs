@@ -15,7 +15,7 @@
 
 use anyhow::Result;
 use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
 use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
 
 /// Create a product-state MPS (bond dim 1) with given per-site values.
@@ -39,7 +39,7 @@ fn create_product_mps(
             indices.push(bond_indices[i].clone());
         }
         let data = site_values[i].to_vec();
-        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
+        tensors.push(IdxTensor::from_dense(indices, data).unwrap());
     }
     TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("{e}"))
 }

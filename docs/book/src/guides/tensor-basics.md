@@ -52,9 +52,9 @@ assert_eq!(site.plev(), 0);
 assert_eq!(bra.plev(), 1);
 ```
 
-## Tensor (TensorDynLen)
+## Tensor (IdxTensor)
 
-`TensorDynLen` is a dynamic-rank tensor parameterized by a list of `Index`
+`IdxTensor` is a dynamic-rank tensor parameterized by a list of `Index`
 values and backed by compact storage that may be dense, diagonal, or explicitly
 structured. Each index uniquely identifies an axis; there is no fixed axis
 ordering in the abstract sense — operations match axes by index identity.
@@ -62,7 +62,7 @@ ordering in the abstract sense — operations match axes by index identity.
 ### Creating tensors
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index};
+use tensor4all_core::{IdxTensor, Index};
 use tensor4all_core::index::DynId;
 
 let i = Index::new_dyn(2);
@@ -70,30 +70,30 @@ let j = Index::new_dyn(3);
 
 // From explicit column-major data (2×3 tensor, 6 elements).
 let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+let t = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 assert_eq!(t.dims(), vec![2, 3]);
 
 // All-zeros tensor.
-let zeros = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+let zeros = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
 // Random tensor (standard normal).
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 let mut rng = ChaCha8Rng::seed_from_u64(42);
-let rand_t: TensorDynLen =
-    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
+let rand_t: IdxTensor =
+    IdxTensor::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
 assert_eq!(rand_t.dims(), vec![2, 3]);
 ```
 
 ### Extracting data
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index};
+use tensor4all_core::{IdxTensor, Index};
 use tensor4all_core::index::DynId;
 
 let i = Index::new_dyn(2);
 let data = vec![10.0_f64, 20.0];
-let t = TensorDynLen::from_dense(vec![i], data).unwrap();
+let t = IdxTensor::from_dense(vec![i], data).unwrap();
 
 // Extract all elements in column-major order.
 let out: Vec<f64> = t.to_vec().unwrap();
@@ -112,7 +112,7 @@ Think of it as a generalization of matrix multiplication.
 ### Pairwise contraction
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index, contract};
+use tensor4all_core::{IdxTensor, Index, contract};
 use tensor4all_core::index::DynId;
 
 // A[i,j] and B[j,k] — contracting over j gives C[i,k].
@@ -120,8 +120,8 @@ let i = Index::new_dyn(2);
 let j = Index::new_dyn(3);
 let k = Index::new_dyn(4);
 
-let a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
-let b = TensorDynLen::zeros::<f64>(vec![j.clone(), k.clone()]).unwrap();
+let a = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+let b = IdxTensor::zeros::<f64>(vec![j.clone(), k.clone()]).unwrap();
 
 let c = contract(&[&a, &b]).unwrap();
 assert_eq!(c.dims(), vec![2, 4]);  // j is summed away
@@ -135,7 +135,7 @@ pieces is intended.
 
 ```rust
 use tensor4all_core::{
-    TensorDynLen, Index, contract, outer_product,
+    IdxTensor, Index, contract, outer_product,
 };
 use tensor4all_core::index::DynId;
 
@@ -148,12 +148,12 @@ let mut rng = {
     use rand::SeedableRng;
     rand_chacha::ChaCha8Rng::seed_from_u64(0)
 };
-let a: TensorDynLen =
-    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
-let b: TensorDynLen =
-    TensorDynLen::random::<f64, _>(&mut rng, vec![j.clone(), k.clone()]).unwrap();
-let c: TensorDynLen =
-    TensorDynLen::random::<f64, _>(&mut rng, vec![k.clone(), l.clone()]).unwrap();
+let a: IdxTensor =
+    IdxTensor::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
+let b: IdxTensor =
+    IdxTensor::random::<f64, _>(&mut rng, vec![j.clone(), k.clone()]).unwrap();
+let c: IdxTensor =
+    IdxTensor::random::<f64, _>(&mut rng, vec![k.clone(), l.clone()]).unwrap();
 
 // Contract A(i,j) * B(j,k) * C(k,l) -> result(i,l)
 let result = contract(&[&a, &b, &c]).unwrap();
@@ -173,7 +173,7 @@ factor connected by a new bond index.
 ### SVD with truncation
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions, SvdTruncationPolicy};
+use tensor4all_core::{IdxTensor, Index, factorize, FactorizeOptions, SvdTruncationPolicy};
 use tensor4all_core::index::DynId;
 
 let i = Index::new_dyn(4);
@@ -183,8 +183,8 @@ let mut rng = {
     use rand::SeedableRng;
     rand_chacha::ChaCha8Rng::seed_from_u64(1)
 };
-let t: TensorDynLen =
-    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
+let t: IdxTensor =
+    IdxTensor::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
 
 // SVD: split along i | j, discarding singular values below the chosen policy threshold.
 let opts = FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1e-10));
@@ -205,7 +205,7 @@ assert!(result_capped.rank <= 2);
 ### QR decomposition
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions};
+use tensor4all_core::{IdxTensor, Index, factorize, FactorizeOptions};
 use tensor4all_core::index::DynId;
 
 let i = Index::new_dyn(4);
@@ -215,8 +215,8 @@ let mut rng = {
     use rand::SeedableRng;
     rand_chacha::ChaCha8Rng::seed_from_u64(2)
 };
-let t: TensorDynLen =
-    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
+let t: IdxTensor =
+    IdxTensor::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
 
 // QR: left factor is orthogonal (Q), right factor is upper-triangular (R).
 let opts = FactorizeOptions::qr();

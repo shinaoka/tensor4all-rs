@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorContractionLike};
 use tensor4all_treetn::{
     global_subspace_expand, global_subspace_expand_with_references, gse_tdvp, GseError, GseOptions,
     GseTdvpOptions, IndexMapping, LinearOperator, TdvpOptions, TreeTN,
@@ -9,21 +9,21 @@ use tensor4all_treetn::{
 
 fn product_chain_state(
     amplitudes: [[Complex64; 2]; 2],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 2]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![amplitudes[0][0], amplitudes[0][1]],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![amplitudes[1][0], amplitudes[1][1]],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();
@@ -32,21 +32,21 @@ fn product_chain_state(
 
 fn product_chain_state_f64(
     amplitudes: [[f64; 2]; 2],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 2]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![amplitudes[0][0], amplitudes[0][1]],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![amplitudes[1][0], amplitudes[1][1]],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();
@@ -56,15 +56,15 @@ fn product_chain_state_f64(
 fn product_chain_state_from_vectors(
     left_amplitudes: &[Complex64],
     right_amplitudes: &[Complex64],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 2]) {
     let s0 = DynIndex::new_dyn(left_amplitudes.len());
     let s1 = DynIndex::new_dyn(right_amplitudes.len());
     let bond = DynIndex::new_dyn(1);
     let t0 =
-        TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], left_amplitudes.to_vec()).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], right_amplitudes.to_vec())
-        .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+        IdxTensor::from_dense(vec![s0.clone(), bond.clone()], left_amplitudes.to_vec()).unwrap();
+    let t1 =
+        IdxTensor::from_dense(vec![bond.clone(), s1.clone()], right_amplitudes.to_vec()).unwrap();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();
@@ -73,28 +73,28 @@ fn product_chain_state_from_vectors(
 
 fn product_chain3_state(
     amplitudes: [[Complex64; 2]; 3],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 3]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
     let b01 = DynIndex::new_dyn(1);
     let b12 = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![amplitudes[0][0], amplitudes[0][1]],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![amplitudes[1][0], amplitudes[1][1]],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b12.clone(), s2.clone()],
         vec![amplitudes[2][0], amplitudes[2][1]],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     let n2 = state.add_tensor("site2", t2).unwrap();
@@ -105,28 +105,28 @@ fn product_chain3_state(
 
 fn product_star_state(
     amplitudes: [[Complex64; 2]; 3],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 3]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
     let b01 = DynIndex::new_dyn(1);
     let b02 = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone(), b02.clone()],
         vec![amplitudes[0][0], amplitudes[0][1]],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone()],
         vec![amplitudes[1][0], amplitudes[1][1]],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b02.clone(), s2.clone()],
         vec![amplitudes[2][0], amplitudes[2][1]],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     let n2 = state.add_tensor("site2", t2).unwrap();
@@ -137,7 +137,7 @@ fn product_star_state(
 
 fn product_internal_branch_state(
     amplitudes: [[Complex64; 2]; 4],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 4]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 4]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
@@ -145,27 +145,27 @@ fn product_internal_branch_state(
     let b01 = DynIndex::new_dyn(1);
     let b12 = DynIndex::new_dyn(1);
     let b13 = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![amplitudes[0][0], amplitudes[0][1]],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone(), b12.clone(), b13.clone()],
         vec![amplitudes[1][0], amplitudes[1][1]],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b12.clone(), s2.clone()],
         vec![amplitudes[2][0], amplitudes[2][1]],
     )
     .unwrap();
-    let t3 = TensorDynLen::from_dense(
+    let t3 = IdxTensor::from_dense(
         vec![b13.clone(), s3.clone()],
         vec![amplitudes[3][0], amplitudes[3][1]],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     let n2 = state.add_tensor("site2", t2).unwrap();
@@ -178,7 +178,7 @@ fn product_internal_branch_state(
 
 fn entangled_chain3_state(
     leaf_matrix: [[Complex64; 2]; 2],
-) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
+) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 3]) {
     let zero = Complex64::new(0.0, 0.0);
     let one = Complex64::new(1.0, 0.0);
     let s0 = DynIndex::new_dyn(2);
@@ -187,13 +187,13 @@ fn entangled_chain3_state(
     let b01 = DynIndex::new_dyn(1);
     let b12 = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![one, zero]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![one, zero]).unwrap();
 
     let mut t1_data = vec![zero; 4];
     for b in 0..2 {
         t1_data[b + 2 * b] = one;
     }
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], t1_data).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], t1_data).unwrap();
 
     let mut t2_data = vec![zero; 4];
     for b in 0..2 {
@@ -201,9 +201,9 @@ fn entangled_chain3_state(
             t2_data[b + 2 * s] = leaf_matrix[b][s];
         }
     }
-    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], t2_data).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone(), s2.clone()], t2_data).unwrap();
 
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     let n2 = state.add_tensor("site2", t2).unwrap();
@@ -217,7 +217,7 @@ fn identity_or_x_operator(
     node_names: &[&'static str],
     edges: &[(&'static str, &'static str)],
     x_nodes: &[&'static str],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let mut node_indices = HashMap::new();
     let mut input_mapping = HashMap::new();
     let mut output_mapping = HashMap::new();
@@ -227,7 +227,7 @@ fn identity_or_x_operator(
         op_bonds.insert((a, b), DynIndex::new_dyn(1));
     }
 
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut mpo = TreeTN::<IdxTensor, &'static str>::new();
     for (i, &name) in node_names.iter().enumerate() {
         let input = DynIndex::new_dyn(2);
         let output = DynIndex::new_dyn(2);
@@ -270,7 +270,7 @@ fn identity_or_x_operator(
             data[col_major_offset(&coord, &dims)] = Complex64::new(1.0, 0.0);
         }
         let node = mpo
-            .add_tensor(name, TensorDynLen::from_dense(inds, data).unwrap())
+            .add_tensor(name, IdxTensor::from_dense(inds, data).unwrap())
             .unwrap();
         node_indices.insert(name, node);
     }
@@ -300,8 +300,8 @@ fn col_major_offset(coord: &[usize], dims: &[usize]) -> usize {
 }
 
 fn dense_distance(
-    lhs: &TreeTN<TensorDynLen, &'static str>,
-    rhs: &TreeTN<TensorDynLen, &'static str>,
+    lhs: &TreeTN<IdxTensor, &'static str>,
+    rhs: &TreeTN<IdxTensor, &'static str>,
 ) -> f64 {
     lhs.contract_to_tensor()
         .unwrap()
@@ -309,14 +309,12 @@ fn dense_distance(
         .unwrap()
 }
 
-fn edge_dim(state: &TreeTN<TensorDynLen, &'static str>, a: &str, b: &str) -> usize {
+fn edge_dim(state: &TreeTN<IdxTensor, &'static str>, a: &str, b: &str) -> usize {
     let edge = state.edge_between(&a, &b).unwrap();
     state.bond_index(edge).unwrap().dim()
 }
 
-fn enable_grad_all(
-    mut state: TreeTN<TensorDynLen, &'static str>,
-) -> TreeTN<TensorDynLen, &'static str> {
+fn enable_grad_all(mut state: TreeTN<IdxTensor, &'static str>) -> TreeTN<IdxTensor, &'static str> {
     let nodes = state.node_indices().to_vec();
     for node in nodes {
         let tensor = state.tensor(node).unwrap().clone().enable_grad().unwrap();
@@ -326,7 +324,7 @@ fn enable_grad_all(
 }
 
 fn local_basis_matrix(
-    state: &TreeTN<TensorDynLen, &'static str>,
+    state: &TreeTN<IdxTensor, &'static str>,
     parent: &str,
     child: &str,
     q_indices: &[DynIndex],
@@ -876,9 +874,9 @@ fn gse_rejects_invalid_options_and_missing_center() {
 fn gse_rejects_multiple_state_sites_per_node() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![s0, s1], vec![Complex64::new(0.0, 0.0); 4]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![s0, s1], vec![Complex64::new(0.0, 0.0); 4]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
 
     let err =
         global_subspace_expand_with_references(state, Vec::new(), &"site0", GseOptions::default())
@@ -933,13 +931,13 @@ fn global_subspace_expand_accepts_mixed_scalar_storage_inside_target_tree() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 0.0]).unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 0.0]).unwrap();
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
     )
     .unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();

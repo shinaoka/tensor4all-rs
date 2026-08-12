@@ -14,7 +14,7 @@
 //! requires bonddim=2 to represent exactly. truncate(rtol=1e-15) drops to
 //! bonddim=1, losing 15% of the function.
 
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// Create identity MPO with bond dim 1.
@@ -39,7 +39,7 @@ fn create_identity_mpo(row_indices: &[DynIndex], col_indices: &[DynIndex]) -> Te
         if i < nsites - 1 {
             indices.push(bonds[i].clone());
         }
-        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
+        tensors.push(IdxTensor::from_dense(indices, data).unwrap());
     }
     TensorTrain::new(tensors).unwrap()
 }
@@ -62,7 +62,7 @@ fn create_ones_mpo(row_indices: &[DynIndex], col_indices: &[DynIndex]) -> Tensor
             indices.push(bonds[i].clone());
         }
         let data = vec![1.0_f64; row_indices[i].dim() * col_indices[i].dim()];
-        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
+        tensors.push(IdxTensor::from_dense(indices, data).unwrap());
     }
     TensorTrain::new(tensors).unwrap()
 }

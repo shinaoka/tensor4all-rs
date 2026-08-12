@@ -15,7 +15,7 @@ use tensor4all_treetn::TreeTN;
 /// - `ranks_per_iter`: Maximum bond dimension at each iteration.
 /// - `normalized_errors_per_iter`: Normalized bond error at each iteration.
 pub type TreeTciRunResult = (
-    TreeTN<tensor4all_core::TensorDynLen, usize>,
+    TreeTN<tensor4all_core::IdxTensor, usize>,
     Vec<usize>,
     Vec<f64>,
 );

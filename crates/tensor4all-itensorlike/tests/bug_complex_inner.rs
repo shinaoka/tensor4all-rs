@@ -9,7 +9,7 @@
 //! ITensors.jl, which doesn't enforce a particular in-memory index ordering.
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::TensorTrain;
 
 fn c(re: f64, im: f64) -> Complex64 {
@@ -29,15 +29,15 @@ fn test_inner_wrong_with_nonstandard_index_order() {
 
     // Standard ordering: site 0 = [s0, b], site 1 = [b, s1] → PASSES
     let tt_std = TensorTrain::new(vec![
-        TensorDynLen::from_dense(vec![s0.clone(), b.clone()], data0.clone()).unwrap(),
-        TensorDynLen::from_dense(vec![b.clone(), s1.clone()], data1.clone()).unwrap(),
+        IdxTensor::from_dense(vec![s0.clone(), b.clone()], data0.clone()).unwrap(),
+        IdxTensor::from_dense(vec![b.clone(), s1.clone()], data1.clone()).unwrap(),
     ])
     .unwrap();
 
     // Non-standard ordering: site 1 = [s1, b] (site index first)
     let tt_ns = TensorTrain::new(vec![
-        TensorDynLen::from_dense(vec![s0.clone(), b.clone()], data0).unwrap(),
-        TensorDynLen::from_dense(vec![s1.clone(), b.clone()], data1).unwrap(),
+        IdxTensor::from_dense(vec![s0.clone(), b.clone()], data0).unwrap(),
+        IdxTensor::from_dense(vec![s1.clone(), b.clone()], data1).unwrap(),
     ])
     .unwrap();
 
@@ -124,9 +124,9 @@ fn test_inner_wrong_3site_nonstandard() {
 
     // Non-standard: [s0, b0], [s1, b0, b1], [s2, b1]
     let tt = TensorTrain::new(vec![
-        TensorDynLen::from_dense(vec![s0.clone(), b0.clone()], data0).unwrap(),
-        TensorDynLen::from_dense(vec![s1.clone(), b0.clone(), b1.clone()], data1).unwrap(),
-        TensorDynLen::from_dense(vec![s2.clone(), b1.clone()], data2).unwrap(),
+        IdxTensor::from_dense(vec![s0.clone(), b0.clone()], data0).unwrap(),
+        IdxTensor::from_dense(vec![s1.clone(), b0.clone(), b1.clone()], data1).unwrap(),
+        IdxTensor::from_dense(vec![s2.clone(), b1.clone()], data2).unwrap(),
     ])
     .unwrap();
 
@@ -192,8 +192,8 @@ fn test_inner_wrong_with_two_site_indices_per_site_nonstandard_order() {
     ];
 
     let tt = TensorTrain::new(vec![
-        TensorDynLen::from_dense(vec![s0_in, s0_out, b.clone()], data0).unwrap(),
-        TensorDynLen::from_dense(vec![s1_in, s1_out, b], data1).unwrap(),
+        IdxTensor::from_dense(vec![s0_in, s0_out, b.clone()], data0).unwrap(),
+        IdxTensor::from_dense(vec![s1_in, s1_out, b], data1).unwrap(),
     ])
     .unwrap();
 

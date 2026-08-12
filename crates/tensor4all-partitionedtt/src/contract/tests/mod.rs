@@ -1,7 +1,7 @@
 use super::*;
 use num_complex::Complex64;
 use tensor4all_core::index::Index;
-use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen, TensorElement};
+use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 
 /// Trait for scalar types used in tests.
@@ -14,7 +14,7 @@ trait TestScalar: TensorElement + From<f64> + std::ops::Sub<Output = Self> + std
     fn zero_val() -> Self;
 
     /// Extract dense data from tensor.
-    fn extract_slice(tensor: &TensorDynLen) -> Vec<Self>;
+    fn extract_slice(tensor: &IdxTensor) -> Vec<Self>;
 }
 
 impl TestScalar for f64 {
@@ -26,7 +26,7 @@ impl TestScalar for f64 {
         0.0
     }
 
-    fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
+    fn extract_slice(tensor: &IdxTensor) -> Vec<Self> {
         tensor.to_vec::<f64>().unwrap()
     }
 }
@@ -40,7 +40,7 @@ impl TestScalar for Complex64 {
         Complex64::new(0.0, 0.0)
     }
 
-    fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
+    fn extract_slice(tensor: &IdxTensor) -> Vec<Self> {
         tensor.to_vec::<Complex64>().unwrap()
     }
 }
@@ -50,11 +50,11 @@ fn make_index(size: usize) -> DynIndex {
 }
 
 /// Create a tensor with generic scalar type
-fn make_tensor_generic<T: TestScalar>(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor_generic<T: TestScalar>(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
     let size: usize = dims.iter().product();
     let data: Vec<T> = (0..size).map(|i| T::from((i + 1) as f64)).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Create indices for testing TT contraction
@@ -86,10 +86,10 @@ fn naive_reference_options() -> ContractOptions {
 }
 
 fn project_dense_tensor_at_index<T: TestScalar>(
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
     index: &DynIndex,
     projected_value: usize,
-) -> TensorDynLen {
+) -> IdxTensor {
     let indices = tensor.indices().to_vec();
     let axis = indices
         .iter()
@@ -108,7 +108,7 @@ fn project_dense_tensor_at_index<T: TestScalar>(
         }
     }
 
-    TensorDynLen::from_dense(indices, projected_data).unwrap()
+    IdxTensor::from_dense(indices, projected_data).unwrap()
 }
 
 #[test]

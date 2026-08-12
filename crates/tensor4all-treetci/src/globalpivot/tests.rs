@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::Result;
 use num_complex::Complex64;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
 /// Batch evaluator for a two-peak function on a 10-site chain.
@@ -76,7 +76,7 @@ fn seeded_state() -> TreeTCI2<f64> {
 }
 
 /// Evaluate the materialized tree at a full-site index.
-fn tree_value(tree: &TreeTN<TensorDynLen, usize>, index: &[usize]) -> f64 {
+fn tree_value(tree: &TreeTN<IdxTensor, usize>, index: &[usize]) -> f64 {
     let mut site_indices = Vec::with_capacity(index.len());
     for site in 0..index.len() {
         let node = tree.node_index(&site).unwrap();

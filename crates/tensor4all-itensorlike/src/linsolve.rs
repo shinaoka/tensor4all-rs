@@ -277,10 +277,10 @@ impl TensorTrain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core::{DynIndex, TensorDynLen};
+    use tensor4all_core::{DynIndex, IdxTensor};
 
-    fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-        TensorDynLen::from_dense(indices, data).unwrap()
+    fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+        IdxTensor::from_dense(indices, data).unwrap()
     }
 
     #[test]

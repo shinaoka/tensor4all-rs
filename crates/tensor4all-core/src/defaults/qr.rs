@@ -1,11 +1,11 @@
 //! QR decomposition for tensors.
 //!
-//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
-use crate::defaults::tensordynlen::unfold_split_inner;
+use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
-use crate::TensorDynLen;
+use crate::IdxTensor;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro::DType;
 use tenferro_linalg::eager_tensor::qr as eager_qr;
@@ -29,12 +29,12 @@ pub enum QrError {
 ///
 /// ```
 /// use tensor4all_core::qr::{QrOptions, qr_with};
-/// use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
+/// use tensor4all_core::{DynIndex, TensorContractionLike, IdxTensor};
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// let opts = QrOptions::new().with_rtol(1e-10);
 /// let (q, r) = qr_with::<f64>(&tensor, &[i], &opts).unwrap();
@@ -189,14 +189,14 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{TensorDynLen, DynIndex, qr};
+/// use tensor4all_core::{IdxTensor, DynIndex, qr};
 ///
 /// // Create a 4x3 matrix
 /// let i = DynIndex::new_dyn(4);
 /// let j = DynIndex::new_dyn(3);
 /// // Identity-like data (4x3 column-major)
 /// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-/// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let t = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// let (q, r) = qr::<f64>(&t, &[i.clone()]).unwrap();
 ///
@@ -204,10 +204,7 @@ where
 /// assert_eq!(q.dims()[0], 4);
 /// assert_eq!(r.dims()[r.dims().len() - 1], 3);
 /// ```
-pub fn qr<T>(
-    t: &TensorDynLen,
-    left_inds: &[DynIndex],
-) -> Result<(TensorDynLen, TensorDynLen), QrError> {
+pub fn qr<T>(t: &IdxTensor, left_inds: &[DynIndex]) -> Result<(IdxTensor, IdxTensor), QrError> {
     qr_with::<T>(t, left_inds, &QrOptions::default())
 }
 
@@ -250,10 +247,10 @@ pub fn qr<T>(
 /// - The QR computation fails
 /// - `options.rtol` is invalid (not finite or negative)
 pub fn qr_with<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &QrOptions,
-) -> Result<(TensorDynLen, TensorDynLen), QrError> {
+) -> Result<(IdxTensor, IdxTensor), QrError> {
     // Unfold tensor into an eager rank-2 tensor so linalg AD nodes stay connected.
     let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
@@ -309,7 +306,7 @@ pub fn qr_with<T>(
     let q_reshaped = q_inner.reshape(&q_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}"))
     })?;
-    let q = TensorDynLen::from_inner(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
+    let q = IdxTensor::from_inner(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
@@ -317,7 +314,7 @@ pub fn qr_with<T>(
     let r_reshaped = r_inner.reshape(&r_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}"))
     })?;
-    let r = TensorDynLen::from_inner(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
+    let r = IdxTensor::from_inner(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
 
     Ok((q, r))
 }

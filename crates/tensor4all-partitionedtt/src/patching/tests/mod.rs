@@ -2,18 +2,18 @@ use super::*;
 use crate::projector::Projector;
 use approx::assert_abs_diff_eq;
 use tensor4all_core::index::Index;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_itensorlike::{ContractOptions, TensorTrain};
 
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
 }
 
-fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
     let size: usize = dims.iter().product();
     let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Create shared indices for testing
@@ -33,12 +33,12 @@ fn make_tt_with_indices(site_inds: &[DynIndex], link_ind: &DynIndex) -> TensorTr
 
 fn make_scaled_rank_one_tt(site_inds: &[DynIndex], scale: f64) -> TensorTrain {
     let link = make_index(1);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![site_inds[0].clone(), link.clone()],
         vec![scale; site_inds[0].dim],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![link, site_inds[1].clone()],
         vec![1.0; site_inds[1].dim],
     )
@@ -53,14 +53,14 @@ fn make_selector_middle_site_tt() -> (TensorTrain, Vec<DynIndex>) {
     let l01 = make_index(2);
     let l12 = make_index(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), l01.clone()], vec![1.0; 8]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), l01.clone()], vec![1.0; 8]).unwrap();
     let mut center_data = vec![0.0; 8];
     for channel in 0..2 {
         let flat = channel + 2 * channel + 4 * channel;
         center_data[flat] = 1.0;
     }
-    let t1 = TensorDynLen::from_dense(vec![l01, s1.clone(), l12.clone()], center_data).unwrap();
-    let t2 = TensorDynLen::from_dense(vec![l12, s2.clone()], vec![1.0; 4]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![l01, s1.clone(), l12.clone()], center_data).unwrap();
+    let t2 = IdxTensor::from_dense(vec![l12, s2.clone()], vec![1.0; 4]).unwrap();
 
     (
         TensorTrain::new(vec![t0, t1, t2]).unwrap(),
@@ -77,8 +77,8 @@ fn make_overcomplete_rank_one_tt(site_inds: &[DynIndex], link_ind: &DynIndex) ->
     for (y, chunk) in right.chunks_exact_mut(link_ind.dim).enumerate() {
         chunk[0] = (y + 1) as f64;
     }
-    let t0 = TensorDynLen::from_dense(vec![site_inds[0].clone(), link_ind.clone()], left).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![link_ind.clone(), site_inds[1].clone()], right).unwrap();
+    let t0 = IdxTensor::from_dense(vec![site_inds[0].clone(), link_ind.clone()], left).unwrap();
+    let t1 = IdxTensor::from_dense(vec![link_ind.clone(), site_inds[1].clone()], right).unwrap();
     TensorTrain::new(vec![t0, t1]).unwrap()
 }
 

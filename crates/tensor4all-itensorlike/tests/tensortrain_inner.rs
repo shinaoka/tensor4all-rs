@@ -1,7 +1,7 @@
 //! Tests for TensorTrain inner product operations
 
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_itensorlike::TensorTrain;
 
 /// Test inner product of empty tensor trains
@@ -22,14 +22,14 @@ fn test_inner_single_site() {
     let link_right = Index::new_dyn(1);
 
     // Create [1, 0] as tensor with shape [1, 2, 1]
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![link_left.clone(), site.clone(), link_right.clone()],
         vec![1.0, 0.0],
     )
     .unwrap();
 
     // Create [0, 1] as tensor with shape [1, 2, 1]
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![link_left.clone(), site.clone(), link_right.clone()],
         vec![0.0, 1.0],
     )
