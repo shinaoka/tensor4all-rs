@@ -36,16 +36,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_verbosity(0);
 
     // `quanticscrossinterpolate_discrete(...)` builds the fused quantics source QTT.
-    let source_callback = move |grid_1based: &[i64]| -> f64 {
-        let u = (grid_1based[0] - 1) as usize;
-        let v = (grid_1based[1] - 1) as usize;
-        source_function(u, v, n)
-    };
-    let initial_pivots = vec![
-        vec![1, 1],
-        vec![(n / 2) as i64, (n / 2) as i64],
-        vec![n as i64, n as i64],
-    ];
+    let source_callback =
+        move |grid_idx: &[usize]| -> f64 { source_function(grid_idx[0], grid_idx[1], n) };
+    // Grid indices are 0-based.
+    let initial_pivots = vec![vec![0, 0], vec![n / 2 - 1, n / 2 - 1], vec![n - 1, n - 1]];
     let (source, _ranks, _errors) = quanticscrossinterpolate_discrete(
         &source_grid,
         source_callback,

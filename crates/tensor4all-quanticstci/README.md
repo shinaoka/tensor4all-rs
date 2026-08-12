@@ -15,8 +15,8 @@ High-level Quantics Tensor Train interpolation interface. Port of QuanticsTCI.jl
 use tensor4all_quanticstci::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-// Interpolate f(i, j) = i + j on a 16x16 discrete grid (1-indexed)
-let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+// Interpolate f(i, j) = i + j on a 16x16 discrete grid (0-indexed)
+let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
 
 let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete(
     &[16, 16],   // grid sizes (must be equal powers of 2)
@@ -25,9 +25,9 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete(
     QtciOptions::default().with_tolerance(1e-10),
 )?;
 
-// Evaluate at a point (1-indexed)
-let value = qtci.evaluate(&[5, 10])?;
-assert!((value - 15.0).abs() < 1e-10);
+// Evaluate at a point (0-indexed)
+let value = qtci.evaluate(&[4, 9])?;
+assert!((value - 13.0).abs() < 1e-10);
 assert!(errors.last().copied().unwrap() < 1e-10);
 
 Ok(())

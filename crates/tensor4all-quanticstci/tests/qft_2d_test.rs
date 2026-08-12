@@ -22,9 +22,9 @@ fn test_2d_qft_x_only_interleaved() -> Result<()> {
     let r = 3;
     let n = 1usize << r; // 8
 
-    // f(x, y) = cos(2π (x-1) / N), 1-indexed
-    let f = move |idx: &[i64]| -> f64 {
-        let x = (idx[0] - 1) as f64;
+    // f(x, y) = cos(2π x / N), 0-indexed
+    let f = move |idx: &[usize]| -> f64 {
+        let x = idx[0] as f64;
         (2.0 * PI * x / n as f64).cos()
     };
 
@@ -47,8 +47,8 @@ fn test_2d_qft_x_only_interleaved() -> Result<()> {
     // Convert to TreeTN
     let tci_state = qtci.tci();
     let r_copy = r;
-    let f_copy = move |idx: &[i64]| -> f64 {
-        let x = (idx[0] - 1) as f64;
+    let f_copy = move |idx: &[usize]| -> f64 {
+        let x = idx[0] as f64;
         (2.0 * PI * x / (1usize << r_copy) as f64).cos()
     };
 
@@ -63,7 +63,7 @@ fn test_2d_qft_x_only_interleaved() -> Result<()> {
                 x_val |= x_bit << bit;
                 y_val |= y_bit << bit;
             }
-            values.push(f_copy(&[(x_val + 1) as i64, (y_val + 1) as i64]));
+            values.push(f_copy(&[x_val, y_val]));
         }
         Ok(values)
     };

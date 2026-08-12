@@ -85,11 +85,12 @@ where
         .with_verbosity(0);
 
     let f = move |coords: &[f64]| -> f64 { target_fn(coords[0], coords[1]) };
-    let npoints = point_count(config) as i64;
+    let npoints = point_count(config);
+    // Grid indices are 0-based.
     let initial_pivots = vec![
-        vec![1, 1],
-        vec![npoints / 2, npoints / 2],
-        vec![npoints, npoints],
+        vec![0, 0],
+        vec![npoints / 2 - 1, npoints / 2 - 1],
+        vec![npoints - 1, npoints - 1],
     ];
 
     Ok(quanticscrossinterpolate(
@@ -155,10 +156,10 @@ fn dense_quantics_batch(
     let mut indices = Vec::with_capacity(len);
 
     for flat_index in start..start + len {
-        let x_index = (flat_index / y_count) + 1;
-        let y_index = (flat_index % y_count) + 1;
-        let quantics = grid.grididx_to_quantics(&[x_index as i64, y_index as i64])?;
-        indices.push(quantics.iter().map(|&q| (q - 1) as usize).collect());
+        let x_index = flat_index / y_count;
+        let y_index = flat_index % y_count;
+        let quantics = grid.grididx_to_quantics(&[x_index, y_index])?;
+        indices.push(quantics);
     }
 
     Ok(indices)
@@ -450,8 +451,8 @@ mod tests {
             assert!(!ranks.is_empty());
             assert!(!errors.is_empty());
 
-            let value = qtci.evaluate(&[1, 1])?;
-            let exact = test_multivariate_target(0.0, 0.0);
+            let value = qtci.evaluate(&[0, 0])?;
+            let exact = test_multivariate_target(config.lower_bound, config.lower_bound);
             assert!((value - exact).abs() < 1e-9);
         }
 
@@ -497,9 +498,9 @@ mod tests {
 
         let dense_values = evaluate_dense_qtt(&qtt)?;
 
-        for (x_index, y_index) in [(1, 1), (2, 5), (8, 8)] {
-            let flat_index = (x_index - 1) * point_count(&config) + (y_index - 1);
-            let direct = qtt.evaluate(&[x_index as i64, y_index as i64])?;
+        for (x_index, y_index) in [(0, 0), (1, 4), (7, 7)] {
+            let flat_index = x_index * point_count(&config) + y_index;
+            let direct = qtt.evaluate(&[x_index, y_index])?;
             assert!((dense_values[flat_index] - direct).abs() < 1e-12);
         }
 

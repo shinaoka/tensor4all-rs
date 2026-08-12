@@ -22,12 +22,12 @@ pointwise product. The two target functions are `f(x) = x^2` and
 # };
 let npoints = 8usize;
 let sizes = [npoints];
-let f = move |idx: &[i64]| -> f64 {
-    let x = (idx[0] as f64 - 1.0) / npoints as f64;
+let f = move |idx: &[usize]| -> f64 {
+    let x = idx[0] as f64 / npoints as f64;
     x.powi(2)
 };
-let g = move |idx: &[i64]| -> f64 {
-    let x = (idx[0] as f64 - 1.0) / npoints as f64;
+let g = move |idx: &[usize]| -> f64 {
+    let x = idx[0] as f64 / npoints as f64;
     (10.0 * x).sin()
 };
 let options = QtciOptions::default()

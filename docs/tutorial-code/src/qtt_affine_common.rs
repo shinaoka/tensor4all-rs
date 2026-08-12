@@ -135,17 +135,11 @@ pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput
         .with_unfoldingscheme(UnfoldingScheme::Fused)
         .with_verbosity(0);
 
-    let callback = move |grid_1based: &[i64]| -> f64 {
-        let u = (grid_1based[0] - 1) as usize;
-        let v = (grid_1based[1] - 1) as usize;
-        source_function(u, v, n)
-    };
+    let callback =
+        move |grid_idx: &[usize]| -> f64 { source_function(grid_idx[0], grid_idx[1], n) };
 
-    let initial_pivots = vec![
-        vec![1, 1],
-        vec![(n / 2) as i64, (n / 2) as i64],
-        vec![n as i64, n as i64],
-    ];
+    // Grid indices are 0-based.
+    let initial_pivots = vec![vec![0, 0], vec![n / 2 - 1, n / 2 - 1], vec![n - 1, n - 1]];
 
     Ok(quanticscrossinterpolate_discrete(
         &sizes,
@@ -247,11 +241,7 @@ pub fn collect_samples(
 
     for x in 0..n {
         for y in 0..n {
-            let sites: Vec<usize> = evaluation_grid
-                .grididx_to_quantics(&[(x + 1) as i64, (y + 1) as i64])?
-                .into_iter()
-                .map(|site| (site - 1) as usize)
-                .collect();
+            let sites = evaluation_grid.grididx_to_quantics(&[x, y])?;
             let periodic_qtt = evaluate_tree_point(periodic, periodic_site_indices, &sites)?.re;
             let antiperiodic_qtt =
                 evaluate_tree_point(antiperiodic, antiperiodic_site_indices, &sites)?.re;

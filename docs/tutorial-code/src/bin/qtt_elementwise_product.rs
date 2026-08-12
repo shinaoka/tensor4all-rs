@@ -238,13 +238,13 @@ where
         .with_verbosity(0);
 
     // Library callback: the quantics interpolator asks for values on discrete
-    // grid points, so we convert the 1-based index into a floating-point x.
-    let callback = move |idx: &[i64]| -> f64 {
-        let x = (idx[0] as f64 - 1.0) / NPOINTS as f64;
+    // grid points, so we convert the 0-based grid index into a floating-point x.
+    let callback = move |idx: &[usize]| -> f64 {
+        let x = idx[0] as f64 / NPOINTS as f64;
         target_fn(x)
     };
 
-    let initial_pivots = vec![vec![2], vec![(NPOINTS / 2) as i64], vec![NPOINTS as i64]];
+    let initial_pivots = vec![vec![1], vec![NPOINTS / 2 - 1], vec![NPOINTS - 1]];
 
     Ok(quanticscrossinterpolate_discrete(
         &sizes,

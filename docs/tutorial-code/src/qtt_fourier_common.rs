@@ -119,8 +119,9 @@ pub fn build_gaussian_qtt(
         .with_verbosity(0);
 
     let f = |coords: &[f64]| -> f64 { gaussian_target(coords[0]) };
-    let npoints = 1_i64 << config.bits;
-    let initial_pivots = vec![vec![1], vec![npoints / 2], vec![npoints]];
+    let npoints = 1usize << config.bits;
+    // Grid indices are 0-based.
+    let initial_pivots = vec![vec![0], vec![npoints / 2 - 1], vec![npoints - 1]];
 
     Ok(quanticscrossinterpolate(
         grid,
@@ -147,12 +148,12 @@ pub fn build_fourier_operator(
     Ok(quantics_fourier_operator(config.bits, options)?)
 }
 
-/// Convert a 1-based discrete index into the binary site values used by the quantics grid.
-pub fn global_index_to_quantics_sites(index_1based: usize, bits: usize) -> Vec<usize> {
+/// Convert a grid index into the binary site values used by the quantics grid.
+pub fn global_index_to_quantics_sites(index: usize, bits: usize) -> Vec<usize> {
     let mut sites = Vec::with_capacity(bits);
 
     for bit in (0..bits).rev() {
-        sites.push(((index_1based - 1) >> bit) & 1);
+        sites.push((index >> bit) & 1);
     }
 
     sites
@@ -215,7 +216,7 @@ pub fn collect_samples(
     for (row_index, &k) in k_coords.iter().enumerate() {
         let centered_bin = row_index as isize - (npoints as isize / 2);
         let coefficient_index = centered_bin.rem_euclid(npoints as isize) as usize;
-        let mut site_values = global_index_to_quantics_sites(coefficient_index + 1, config.bits);
+        let mut site_values = global_index_to_quantics_sites(coefficient_index, config.bits);
         site_values.reverse();
         // this is the actual extraction, the rest is just scaling and phase factors to match the continuous Fourier convention
         let raw_qtt = evaluate_tree_point(transformed, site_indices, &site_values)?;
@@ -378,8 +379,8 @@ mod tests {
 
     #[test]
     fn global_index_to_quantics_sites_uses_msb_first_order() {
-        assert_eq!(global_index_to_quantics_sites(1, 3), vec![0, 0, 0]);
-        assert_eq!(global_index_to_quantics_sites(5, 3), vec![1, 0, 0]);
-        assert_eq!(global_index_to_quantics_sites(8, 3), vec![1, 1, 1]);
+        assert_eq!(global_index_to_quantics_sites(0, 3), vec![0, 0, 0]);
+        assert_eq!(global_index_to_quantics_sites(4, 3), vec![1, 0, 0]);
+        assert_eq!(global_index_to_quantics_sites(7, 3), vec![1, 1, 1]);
     }
 }

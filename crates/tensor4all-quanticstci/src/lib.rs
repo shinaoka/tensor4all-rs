@@ -10,8 +10,8 @@
 //!
 //! # Important Conventions
 //!
-//! - **1-indexed grid indices**: All grid indices are **1-indexed** (following the Julia
-//!   QuanticsTCI.jl convention). The first grid point is `[1, 1]`, not `[0, 0]`.
+//! - **0-indexed grid indices**: All grid indices are **0-indexed** (matching the rest of
+//!   the workspace). The first grid point is `[0, 0]`. QuanticsTCI.jl scripts must subtract 1.
 //! - **Equal dimensions**: [`quanticscrossinterpolate_discrete`] and
 //!   [`quanticscrossinterpolate_from_arrays`] require all dimensions to have the **same**
 //!   number of points (same power of 2). Use [`quanticscrossinterpolate`] with an explicit
@@ -31,8 +31,8 @@
 //! use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
 //!
 //! // Interpolate f(i, j) = i + j on a 16x16 grid
-//! // Discrete indices are 1-indexed and passed as `&[i64]`.
-//! let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+//! // Discrete indices are 0-indexed and passed as `&[usize]`.
+//! let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
 //! let sizes = vec![16, 16];
 //!
 //! let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(
@@ -42,8 +42,8 @@
 //!     QtciOptions::default(),
 //! ).unwrap();
 //!
-//! let value = qtci.evaluate(&[5, 10]).unwrap();  // 1-indexed
-//! assert!((value - 15.0).abs() < 1e-10);
+//! let value = qtci.evaluate(&[4, 9]).unwrap();  // 0-indexed
+//! assert!((value - 13.0).abs() < 1e-10);
 //! ```
 //!
 //! # Example: Continuous Grid with `DiscretizedGrid`

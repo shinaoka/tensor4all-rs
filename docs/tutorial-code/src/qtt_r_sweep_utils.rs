@@ -32,9 +32,9 @@ pub struct SweepStats {
     pub rank: usize,
 }
 
-/// Convert the 1-based discrete index used by the quantics callback into `x`.
-pub fn discrete_index_to_unit_interval(index_1based: i64, npoints: usize) -> f64 {
-    (index_1based as f64 - 1.0) / npoints as f64
+/// Convert a grid index into `x` in [0, 1).
+pub fn discrete_index_to_unit_interval(index: i64, npoints: usize) -> f64 {
+    index as f64 / npoints as f64
 }
 
 /// Re-evaluate one QTT on all grid points and collect the error against the
@@ -55,15 +55,16 @@ where
 {
     let mut rows = Vec::with_capacity(npoints);
 
-    for index in 1..=npoints {
+    for index in 0..npoints {
         let x = discrete_index_to_unit_interval(index as i64, npoints);
         let exact = target_fn(x);
-        // Library call: evaluate one grid point from the QTT approximation.
-        let qtt = qtci.evaluate(&[index as i64])?;
+        // Library call: evaluate one grid point from the QTT approximation
+        // (0-based index).
+        let qtt = qtci.evaluate(&[index])?;
         rows.push(SweepSample {
             r,
             npoints,
-            index,
+            index: index + 1,
             x,
             exact,
             qtt,

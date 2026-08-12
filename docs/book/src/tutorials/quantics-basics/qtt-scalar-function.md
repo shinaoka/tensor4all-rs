@@ -19,8 +19,8 @@ written in terms of grid indices.
 # };
 let npoints = 128usize;
 let sizes = [npoints];
-let f = move |idx: &[i64]| -> f64 {
-    let x = (idx[0] as f64 - 1.0) / npoints as f64;
+let f = move |idx: &[usize]| -> f64 {
+    let x = idx[0] as f64 / npoints as f64;
     x.cosh()
 };
 let options = QtciOptions::default()
@@ -31,7 +31,7 @@ let (qtt, ranks, _errors) =
     quanticscrossinterpolate_discrete::<f64, _>(&sizes, f, None, options)?;
 
 let x = 0.5_f64;
-assert!((qtt.evaluate(&[65])? - x.cosh()).abs() < 1e-8);
+assert!((qtt.evaluate(&[64])? - x.cosh()).abs() < 1e-8);
 assert!(!ranks.is_empty());
 # Ok(())
 # }

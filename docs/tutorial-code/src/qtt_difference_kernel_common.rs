@@ -99,16 +99,14 @@ pub fn build_kernel_qtt(
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
-    let callback = move |idx: &[i64]| -> f64 {
-        let z = (idx[0] - 1) as usize;
-        kernel_value(z, n)
-    };
+    let callback = move |idx: &[usize]| -> f64 { kernel_value(idx[0], n) };
 
+    // Grid indices are 0-based.
     let initial_pivots = vec![
-        vec![1],
-        vec![(n / 4).max(1) as i64],
-        vec![(n / 2).max(1) as i64],
-        vec![n as i64],
+        vec![0],
+        vec![(n / 4).max(1) - 1],
+        vec![(n / 2).max(1) - 1],
+        vec![n - 1],
     ];
 
     Ok(quanticscrossinterpolate_discrete(
@@ -211,7 +209,7 @@ pub fn collect_samples(
         for xprime in 0..n {
             let difference = periodic_difference(x, xprime, n);
             let source_exact = kernel_value(difference, n);
-            let source_qtt = kernel.evaluate(&[(difference + 1) as i64])?;
+            let source_qtt = kernel.evaluate(&[difference])?;
             let kernel_exact = source_exact;
             let kernel_mpo = evaluate_difference_kernel_mpo(mpo, x, xprime, config.bits)?;
 

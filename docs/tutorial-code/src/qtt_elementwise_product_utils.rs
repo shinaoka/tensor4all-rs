@@ -48,20 +48,20 @@ pub struct BondProfileRow {
     pub product_compressed: usize,
 }
 
-/// Convert the 1-based indexing used by the quantics callback into x in [0, 1).
-pub fn discrete_index_to_unit_interval(index_1based: i64, npoints: usize) -> f64 {
-    (index_1based as f64 - 1.0) / npoints as f64
+/// Convert a grid index into x in [0, 1).
+pub fn discrete_index_to_unit_interval(index: i64, npoints: usize) -> f64 {
+    index as f64 / npoints as f64
 }
 
-/// Convert a 1-based grid index into binary TT site indices.
+/// Convert a grid index into binary TT site indices.
 ///
 /// The returned indices follow the Quantics grid convention used here:
 /// the first TT site corresponds to the most significant bit.
-pub fn global_index_to_quantics_sites(index_1based: usize, bits: usize) -> Vec<usize> {
+pub fn global_index_to_quantics_sites(index: usize, bits: usize) -> Vec<usize> {
     let mut sites = Vec::with_capacity(bits);
 
     for bit in (0..bits).rev() {
-        sites.push(((index_1based - 1) >> bit) & 1);
+        sites.push((index >> bit) & 1);
     }
 
     sites
@@ -200,15 +200,15 @@ where
 {
     let mut samples = Vec::with_capacity(npoints);
 
-    for i in 1..=npoints {
+    for i in 0..npoints {
         let x = discrete_index_to_unit_interval(i as i64, npoints);
         let cosh_exact = cosh_fn(x);
         let factor_b_exact = factor_b_fn(x);
         let product_exact = cosh_exact * factor_b_exact;
 
-        // Library call: read one value back from each factor QTT.
-        let cosh_qtt = cosh_qtci.evaluate(&[i as i64])?;
-        let factor_b_qtt = factor_b_qtci.evaluate(&[i as i64])?;
+        // Library call: read one value back from each factor QTT (0-based index).
+        let cosh_qtt = cosh_qtci.evaluate(&[i])?;
+        let factor_b_qtt = factor_b_qtci.evaluate(&[i])?;
         let site_values = global_index_to_quantics_sites(i, bits);
         // Library call: read the pointwise product back from the TreeTN.
         let product_raw = evaluate_tree_point(product_raw_tn, product_site_indices, &site_values)?;
@@ -216,7 +216,7 @@ where
             evaluate_tree_point(product_compressed_tn, product_site_indices, &site_values)?;
 
         samples.push(SamplePoint {
-            index: i,
+            index: i + 1,
             x,
             cosh_exact,
             cosh_qtt,

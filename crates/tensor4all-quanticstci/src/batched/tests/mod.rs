@@ -37,15 +37,13 @@ fn test_batched_tci_2component_1d() {
     // Verify values at all grid points.
     let n_grid_points = 1usize << 6; // 2^6 = 64
     for i in 0..n_grid_points {
-        let grid_idx = vec![(i + 1) as i64]; // 1-indexed
+        let grid_idx = vec![i]; // 0-indexed
         let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
-        let quantics_usize: Vec<usize> = quantics.iter().map(|&q| (q - 1) as usize).collect();
-
         let coord = grid.quantics_to_origcoord(&quantics).unwrap();
         let x = coord[0];
 
         // Evaluate component 0 (sin + 1)
-        let mut indices0 = quantics_usize.clone();
+        let mut indices0 = quantics.clone();
         indices0.push(0);
         let val0 = result.tensor_train().evaluate(&indices0).unwrap();
         let expected0 = (2.0 * std::f64::consts::PI * x).sin() + 1.0;
@@ -58,7 +56,7 @@ fn test_batched_tci_2component_1d() {
         );
 
         // Evaluate component 1 (cos)
-        let mut indices1 = quantics_usize.clone();
+        let mut indices1 = quantics.clone();
         indices1.push(1);
         let val1 = result.tensor_train().evaluate(&indices1).unwrap();
         let expected1 = (2.0 * std::f64::consts::PI * x).cos();
@@ -108,13 +106,12 @@ fn test_batched_tci_scalar_equivalent() {
     // Both should produce the same values at grid points.
     let n_grid_points = 1usize << 4; // 16
     for i in 0..n_grid_points {
-        let grid_idx = vec![(i + 1) as i64];
+        let grid_idx = vec![i];
         let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
-        let quantics_usize: Vec<usize> = quantics.iter().map(|&q| (q - 1) as usize).collect();
 
         let scalar_val = scalar_result.evaluate(&grid_idx).unwrap();
 
-        let mut batched_indices = quantics_usize;
+        let mut batched_indices = quantics;
         batched_indices.push(0); // single component
         let batched_val = batched_result
             .tensor_train()
@@ -124,7 +121,7 @@ fn test_batched_tci_scalar_equivalent() {
         assert!(
             (scalar_val - batched_val).abs() < 1e-10,
             "mismatch at grid_idx={}: scalar={}, batched={}",
-            i + 1,
+            i,
             scalar_val,
             batched_val
         );
@@ -191,14 +188,13 @@ fn test_batched_tci_matrix_valued() {
     // Verify values at several grid points.
     let n_grid_points = 1usize << 4;
     for i in 0..n_grid_points {
-        let grid_idx = vec![(i + 1) as i64];
+        let grid_idx = vec![i];
         let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
-        let quantics_usize: Vec<usize> = quantics.iter().map(|&q| (q - 1) as usize).collect();
         let coord = grid.quantics_to_origcoord(&quantics).unwrap();
         let x = coord[0];
 
         for comp in 0..4 {
-            let mut indices = quantics_usize.clone();
+            let mut indices = quantics.clone();
             indices.push(comp);
             let val = result.tensor_train().evaluate(&indices).unwrap();
             let expected = (comp as f64 + 1.0) * (x + 1.0);

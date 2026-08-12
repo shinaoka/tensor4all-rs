@@ -37,8 +37,9 @@ pub fn collect_samples<F>(
 where
     F: Fn(f64) -> f64,
 {
-    // The grid gives us the physical coordinates.  We keep the 1-based grid
-    // index alongside each sample so the user can compare Rust and Julia output.
+    // The grid gives us the physical coordinates.  We keep a 1-based display
+    // index alongside each sample so the user can compare Rust and Julia output;
+    // the grid indices passed to the library are 0-based.
     //
     // `grid_origcoords(0)` is a `DiscretizedGrid` API call.  It returns the
     // physical coordinates for the first dimension, which is exactly what we
@@ -51,8 +52,8 @@ where
         let exact = exact_fn(x);
 
         // `evaluate(...)` is the QTT read-back step.  The input index is
-        // 1-based, matching the convention used throughout tensor4all-rs.
-        let qtt = qtci.evaluate(&[index as i64])?;
+        // 0-based, matching the convention used throughout tensor4all-rs.
+        let qtt = qtci.evaluate(&[i])?;
 
         samples.push(SamplePoint {
             index,

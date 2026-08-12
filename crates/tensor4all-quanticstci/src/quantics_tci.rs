@@ -33,8 +33,8 @@ fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usi
 }
 
 fn evaluate_grid_point<V>(
-    quantics: &[i64],
-    to_coord: impl FnOnce(&[i64]) -> Result<Vec<f64>>,
+    quantics: &[usize],
+    to_coord: impl FnOnce(&[usize]) -> Result<Vec<f64>>,
     evaluate: impl FnOnce(&[f64]) -> V,
 ) -> Result<V> {
     let coords = to_coord(quantics)
@@ -58,20 +58,20 @@ fn evaluate_grid_point<V>(
 /// ```
 /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
 ///
-/// // Interpolate f(i) = i on a grid of size 8 (1-indexed)
-/// let f = |idx: &[i64]| idx[0] as f64;
+/// // Interpolate f(i) = i on a grid of size 8 (0-indexed)
+/// let f = |idx: &[usize]| idx[0] as f64;
 /// let (qtci, _ranks, _errors) =
 ///     quanticscrossinterpolate_discrete::<f64, _>(
 ///         &[8], f, None, QtciOptions::default(),
 ///     ).unwrap();
 ///
-/// // Evaluate at grid point 5
-/// let val = qtci.evaluate(&[5]).unwrap();
-/// assert!((val - 5.0).abs() < 1e-8);
+/// // Evaluate at grid point 4
+/// let val = qtci.evaluate(&[4]).unwrap();
+/// assert!((val - 4.0).abs() < 1e-8);
 ///
-/// // Sum over all grid points: 1 + 2 + ... + 8 = 36
+/// // Sum over all grid points: 0 + 1 + ... + 7 = 28
 /// let sum = qtci.sum().unwrap();
-/// assert!((sum - 36.0).abs() < 1e-6);
+/// assert!((sum - 28.0).abs() < 1e-6);
 ///
 /// // rank() gives the maximum bond dimension
 /// assert!(qtci.rank() >= 1);
@@ -90,7 +90,7 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
     /// Grid for coordinate conversion (InherentDiscreteGrid)
     inherent_grid: Option<InherentDiscreteGrid>,
     /// Cached function values (quantics index -> value)
-    cache: HashMap<Vec<i64>, V>,
+    cache: HashMap<Vec<usize>, V>,
 }
 
 impl<V> QuanticsTensorCI2<V>
@@ -102,7 +102,7 @@ where
         tt: SimpleTensorTrain<V>,
         tci_state: TreeTCI2<V>,
         grid: DiscretizedGrid,
-        cache: HashMap<Vec<i64>, V>,
+        cache: HashMap<Vec<usize>, V>,
     ) -> Self {
         Self {
             tt,
@@ -118,7 +118,7 @@ where
         tt: SimpleTensorTrain<V>,
         tci_state: TreeTCI2<V>,
         grid: InherentDiscreteGrid,
-        cache: HashMap<Vec<i64>, V>,
+        cache: HashMap<Vec<usize>, V>,
     ) -> Self {
         Self {
             tt,
@@ -150,7 +150,7 @@ where
     }
 
     /// Convert grid indices to quantics indices.
-    fn grididx_to_quantics(&self, indices: &[i64]) -> Result<Vec<i64>> {
+    fn grididx_to_quantics(&self, indices: &[usize]) -> Result<Vec<usize>> {
         if let Some(grid) = &self.discretized_grid {
             grid.grididx_to_quantics(indices)
                 .map_err(|e| anyhow!("Grid index conversion error: {}", e))
@@ -165,9 +165,9 @@ where
     /// Evaluate at grid indices.
     ///
     /// # Arguments
-    /// * `indices` - Grid indices (1-indexed). For a grid of size N,
+    /// * `indices` - Grid indices (0-indexed). For a grid of size N,
     ///
-    ///   valid indices are `1..=N`.
+    ///   valid indices are `0..N`.
     ///
     /// # Returns
     /// The interpolated value at the specified grid point.
@@ -182,21 +182,19 @@ where
     /// ```
     /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
     ///
-    /// let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+    /// let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
     ///     &[4, 4], f, None, QtciOptions::default(),
     /// ).unwrap();
     ///
-    /// // Indices are 1-indexed: f(2, 3) = 2 + 3 = 5
-    /// let val = qtci.evaluate(&[2, 3]).unwrap();
-    /// assert!((val - 5.0).abs() < 1e-8);
+    /// // Indices are 0-indexed: f(1, 2) = 1 + 2 = 3
+    /// let val = qtci.evaluate(&[1, 2]).unwrap();
+    /// assert!((val - 3.0).abs() < 1e-8);
     /// ```
-    pub fn evaluate(&self, indices: &[i64]) -> QtciResult<V> {
+    pub fn evaluate(&self, indices: &[usize]) -> QtciResult<V> {
         let quantics = self.grididx_to_quantics(indices)?;
-        // Convert 1-indexed i64 quantics to 0-indexed usize for tensor train evaluation
-        let quantics_usize: Vec<usize> = quantics.iter().map(|&x| (x - 1) as usize).collect();
         self.tt
-            .evaluate(&quantics_usize)
+            .evaluate(&quantics)
             .map_err(|e| anyhow!("Evaluation error: {e}"))
             .map_err(QuanticsTCIError::from)
     }
@@ -216,7 +214,7 @@ where
     /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
     ///
     /// // f(i) = 1 on a grid of size 8 => sum = 8
-    /// let f = |_idx: &[i64]| 1.0_f64;
+    /// let f = |_idx: &[usize]| 1.0_f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
     ///     &[8], f, None, QtciOptions::default(),
     /// ).unwrap();
@@ -290,7 +288,7 @@ where
     ///     quanticscrossinterpolate_discrete, AbstractTensorTrain, QtciOptions,
     /// };
     ///
-    /// let f = |idx: &[i64]| idx[0] as f64;
+    /// let f = |idx: &[usize]| idx[0] as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
     ///     &[4], f, None, QtciOptions::default(),
     /// ).unwrap();
@@ -311,7 +309,7 @@ where
     /// Access cached evaluation points.
     ///
     /// Returns a map from quantics indices to function values.
-    pub fn cachedata(&self) -> &HashMap<Vec<i64>, V> {
+    pub fn cachedata(&self) -> &HashMap<Vec<usize>, V> {
         &self.cache
     }
 
@@ -390,7 +388,7 @@ where
 pub fn quanticscrossinterpolate<V, F>(
     grid: &DiscretizedGrid,
     f: F,
-    initial_pivots: Option<Vec<Vec<i64>>>,
+    initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
 ) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
@@ -408,24 +406,21 @@ where
     let n_sites = local_dims.len();
 
     // Use RefCell to allow mutation from within the closure
-    let cache: Rc<RefCell<HashMap<Vec<i64>, V>>> = Rc::new(RefCell::new(HashMap::new()));
+    let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
     let cache_clone = cache.clone();
 
     // Wrap function to accept quantics indices (usize 0-indexed for TCI)
     let grid_clone = grid.clone();
     let qf = move |q: &Vec<usize>| -> Result<V> {
-        // Convert 0-indexed TCI values to 1-indexed for quanticsgrids
-        let q_i64: Vec<i64> = q.iter().map(|&x| (x + 1) as i64).collect();
-
         // Check cache first
-        if let Some(v) = cache_clone.borrow().get(&q_i64) {
+        if let Some(v) = cache_clone.borrow().get(q) {
             #[allow(clippy::clone_on_copy)]
             return Ok(v.clone());
         }
 
         // Compute and cache
         let value = evaluate_grid_point(
-            &q_i64,
+            q,
             |quantics| {
                 grid_clone
                     .quantics_to_origcoord(quantics)
@@ -434,7 +429,7 @@ where
             |coords| f(coords),
         )?;
         #[allow(clippy::clone_on_copy)]
-        cache_clone.borrow_mut().insert(q_i64, value.clone());
+        cache_clone.borrow_mut().insert(q.clone(), value.clone());
         Ok(value)
     };
 
@@ -456,8 +451,6 @@ where
             .map(|pivot| {
                 grid.grididx_to_quantics(pivot)
                     .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
-                    // Convert 1-indexed quantics to 0-indexed for TCI
-                    .map(|q| q.iter().map(|&x| (x - 1) as usize).collect())
             })
             .collect::<Result<Vec<_>>>()?
     } else {
@@ -535,7 +528,7 @@ where
 ///
 ///   **same** number of points and each must be a power of 2.
 /// * `f` - Function to interpolate, takes original coordinates as `&[f64]`
-/// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)
+/// * `initial_pivots` - Initial pivot grid indices (0-indexed, optional)
 /// * `options` - TCI options
 ///
 /// # Returns
@@ -559,14 +552,14 @@ where
 ///     &xvals, f, None, QtciOptions::default(),
 /// ).unwrap();
 ///
-/// // Grid index 3 maps to x = 2.0, so f = 4.0
-/// let val = qtci.evaluate(&[3]).unwrap();
+/// // Grid index 2 maps to x = 2.0, so f = 4.0
+/// let val = qtci.evaluate(&[2]).unwrap();
 /// assert!((val - 4.0).abs() < 1e-8);
 /// ```
 pub fn quanticscrossinterpolate_from_arrays<V, F>(
     xvals: &[Vec<f64>],
     f: F,
-    initial_pivots: Option<Vec<Vec<i64>>>,
+    initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
 ) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
@@ -644,8 +637,8 @@ where
 ///
 /// Use this when your function is naturally indexed by integers (e.g.,
 /// lattice models, combinatorial functions). Grid indices are
-/// **1-indexed**: the first grid point is `[1, 1, ...]`, and the last
-/// is `[size[0], size[1], ...]`.
+/// **0-indexed**: the first grid point is `[0, 0, ...]`, and the last
+/// is `[size[0] - 1, size[1] - 1, ...]`.
 ///
 /// For functions on continuous domains, use [`quanticscrossinterpolate`]
 /// with a [`DiscretizedGrid`] instead.
@@ -654,8 +647,8 @@ where
 /// * `size` - Grid size in each dimension. All dimensions must have the **same** number of
 ///
 ///   points and each must be a power of 2 (e.g., `&[16, 16]`).
-/// * `f` - Function to interpolate, taking **1-indexed** grid indices as `&[i64]`
-/// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)
+/// * `f` - Function to interpolate, taking **0-indexed** grid indices as `&[usize]`
+/// * `initial_pivots` - Initial pivot grid indices (0-indexed, optional)
 /// * `options` - TCI options
 ///
 /// # Returns
@@ -673,7 +666,7 @@ where
 /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
 ///
 /// // Interpolate f(i, j) = i * j on a 16x16 grid
-/// let f = |idx: &[i64]| (idx[0] * idx[1]) as f64;
+/// let f = |idx: &[usize]| (idx[0] * idx[1]) as f64;
 /// let (qtci, ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
 ///     &[16, 16],
 ///     f,
@@ -684,14 +677,14 @@ where
 /// // Check convergence
 /// assert!(*errors.last().unwrap() < 1e-8);
 ///
-/// // Evaluate: f(3, 5) = 15
-/// let val = qtci.evaluate(&[3, 5]).unwrap();
-/// assert!((val - 15.0).abs() < 1e-8);
+/// // Evaluate: f(2, 4) = 8
+/// let val = qtci.evaluate(&[2, 4]).unwrap();
+/// assert!((val - 8.0).abs() < 1e-8);
 /// ```
 pub fn quanticscrossinterpolate_discrete<V, F>(
     size: &[usize],
     f: F,
-    initial_pivots: Option<Vec<Vec<i64>>>,
+    initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
 ) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
@@ -703,7 +696,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
-    F: Fn(&[i64]) -> V + 'static,
+    F: Fn(&[usize]) -> V + 'static,
 {
     if size.is_empty() {
         return Err(QuanticsTCIError::InvalidConfiguration {
@@ -742,28 +735,25 @@ where
     let n_sites = local_dims.len();
 
     // Use RefCell to allow mutation from within the closure
-    let cache: Rc<RefCell<HashMap<Vec<i64>, V>>> = Rc::new(RefCell::new(HashMap::new()));
+    let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
     let cache_clone = cache.clone();
 
     // Wrap function to accept quantics indices (usize 0-indexed for TCI)
     let grid_clone = grid.clone();
     let qf = move |q: &[usize]| -> Result<V> {
-        // Convert 0-indexed TCI values to 1-indexed for quanticsgrids
-        let q_i64: Vec<i64> = q.iter().map(|&x| (x + 1) as i64).collect();
-
         // Check cache first
-        if let Some(v) = cache_clone.borrow().get(&q_i64) {
+        if let Some(v) = cache_clone.borrow().get(q) {
             #[allow(clippy::clone_on_copy)]
             return Ok(v.clone());
         }
 
         // Compute and cache
         let grididx = grid_clone
-            .quantics_to_grididx(&q_i64)
-            .map_err(|err| anyhow!("failed to convert quantics index {q_i64:?}: {err}"))?;
+            .quantics_to_grididx(q)
+            .map_err(|err| anyhow!("failed to convert quantics index {q:?}: {err}"))?;
         let value = f(&grididx);
         #[allow(clippy::clone_on_copy)]
-        cache_clone.borrow_mut().insert(q_i64, value.clone());
+        cache_clone.borrow_mut().insert(q.to_vec(), value.clone());
         Ok(value)
     };
 
@@ -785,8 +775,6 @@ where
             .map(|pivot| {
                 grid.grididx_to_quantics(pivot)
                     .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
-                    // Convert 1-indexed quantics to 0-indexed for TCI
-                    .map(|q| q.iter().map(|&x| (x - 1) as usize).collect())
             })
             .collect::<Result<Vec<_>>>()?
     } else {

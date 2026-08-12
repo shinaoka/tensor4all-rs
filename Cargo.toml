@@ -79,7 +79,7 @@ dyn-clone = "1.0"
 omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
-quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "a76b8fb" }
+quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
 tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "f68b33d9e06cc0af8d2b9c40f7c52d8972cd1266", default-features = false }
 tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "f68b33d9e06cc0af8d2b9c40f7c52d8972cd1266", default-features = false }
