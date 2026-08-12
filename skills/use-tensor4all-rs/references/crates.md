@@ -77,7 +77,7 @@ Do **not** depend on `tensor4all-tensorbackend` — it is internal (storage + li
 Quantics encoding (binary bits across sites) often yields far lower bond dims. Port of QuanticsTCI.jl.
 
 - Entry points (return `(QuanticsTensorCI2, ranks, errors)`):
-  - `quanticscrossinterpolate_discrete::<T, F>(&sizes, f, None, opts)` — integer grid; indices **1-indexed** (`1..=grid_size`). `sizes` must be equal powers of 2.
+  - `quanticscrossinterpolate_discrete::<T, F>(&sizes, f, None, opts)` — integer grid; `f` receives **0-indexed** grid indices as `&[usize]` (`0..grid_size`). `sizes` must be equal powers of 2.
   - `quanticscrossinterpolate(&grid, f, None, opts)` — continuous domain via `DiscretizedGrid`.
   - `quanticscrossinterpolate_from_arrays` — explicit coordinate arrays.
   - `quanticscrossinterpolate_batched` — vector/tensor-valued `f`.
