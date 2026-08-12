@@ -1,6 +1,6 @@
-use super::update_edge_default;
+use super::{evaluate_candidate_matrix, update_edge_default};
 use crate::test_support::assert_scalar_close;
-use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
+use crate::{GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 use tensor4all_core::ColMajorArray;
 use tensor4all_tcicore::RrLUOptions;
@@ -75,5 +75,111 @@ fn update_edge_rejects_bad_batch_length() {
         &no_truncation_options(),
     );
 
+    assert!(result.is_err());
+}
+
+#[test]
+fn evaluate_candidate_matrix_writes_points_in_column_major_order() {
+    // Unequal candidate counts, so a transposed or mis-ordered assembly shows up.
+    let n_sites = 4;
+    // Local dims large enough for the probe values (2/3 on sites 2/3).
+    let local_dims = vec![4, 4, 4, 4];
+    let left_key = SubtreeKey::new(vec![0, 1]);
+    let left_candidates = vec![vec![0, 0], vec![1, 1], vec![0, 1]];
+    let right_key = SubtreeKey::new(vec![2, 3]);
+    let right_candidates = vec![vec![2, 3], vec![1, 0]];
+
+    // Encode each point's site values into a scalar so order and values are
+    // both asserted in one shot: right candidates vary slowest (column-major).
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        let mut out = Vec::with_capacity(batch.n_points());
+        for p in 0..batch.n_points() {
+            let code = (0..n_sites)
+                .map(|s| batch.get(s, p).unwrap())
+                .fold(0f64, |acc, v| acc * 10.0 + v as f64);
+            out.push(code);
+        }
+        Ok(out)
+    };
+
+    let values = evaluate_candidate_matrix(
+        n_sites,
+        &left_key,
+        &left_candidates,
+        &right_key,
+        &right_candidates,
+        &local_dims,
+        evaluate,
+    )
+    .unwrap();
+
+    // right=[2,3] x left=[0,0],[1,1],[0,1], then right=[1,0] x same lefts.
+    assert_eq!(values, vec![23.0, 1123.0, 123.0, 10.0, 1110.0, 110.0]);
+}
+
+#[test]
+fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
+    // Unequal partitions: left subtree has 2 sites, right has 3. A left
+    // candidate whose length coincides with the *right* key's length is the
+    // case the previous length-based side inference got wrong: it passed
+    // validation and silently dropped the excess entry, leaving part of its
+    // point at zero.
+    let n_sites = 5;
+    let local_dims = vec![2, 2, 2, 2, 2];
+    let left_key = SubtreeKey::new(vec![0, 1]);
+    let right_key = SubtreeKey::new(vec![2, 3, 4]);
+    let right_candidates = vec![vec![1, 0, 1]];
+
+    let malformed_left = vec![vec![0, 0, 1]]; // len 3 == right key len
+    let evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
+    let result = evaluate_candidate_matrix(
+        n_sites,
+        &left_key,
+        &malformed_left,
+        &right_key,
+        &right_candidates,
+        &local_dims,
+        evaluate,
+    );
+    assert!(result.is_err());
+
+    // A well-formed candidate still assembles correctly.
+    let ok_left = vec![vec![0, 1]];
+    let result = evaluate_candidate_matrix(
+        n_sites,
+        &left_key,
+        &ok_left,
+        &right_key,
+        &right_candidates,
+        &local_dims,
+        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+            Ok(vec![
+                (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
+            ])
+        },
+    );
+    assert_eq!(result.unwrap(), vec![1.0]);
+}
+
+#[test]
+fn evaluate_candidate_matrix_rejects_out_of_range_coordinates() {
+    let n_sites = 4;
+    let local_dims = vec![2, 2, 2, 2];
+    let left_key = SubtreeKey::new(vec![0, 1]);
+    let right_key = SubtreeKey::new(vec![2, 3]);
+    let right_candidates = vec![vec![0, 1]];
+    let evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
+
+    // Value 2 is out of range for a 2-state site.
+    let bad_left = vec![vec![0, 2]];
+    let result = evaluate_candidate_matrix(
+        n_sites,
+        &left_key,
+        &bad_left,
+        &right_key,
+        &right_candidates,
+        &local_dims,
+        evaluate,
+    );
     assert!(result.is_err());
 }

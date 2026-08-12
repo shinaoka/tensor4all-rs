@@ -5,7 +5,7 @@ use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use tensor4all_core::ColMajorArray;
 
@@ -248,21 +248,31 @@ fn subtree_position(key: &SubtreeKey, site: usize) -> Result<usize> {
         .ok_or_else(|| anyhow::anyhow!("site {} not found in subtree key {:?}", site, key))
 }
 
+/// Concatenate `values` with the previous iteration's pivots for `key`,
+/// dropping duplicates and preserving first-occurrence order.
+///
+/// Membership is tested through a `HashSet`, mirroring `TreeTCI.jl`'s
+/// hash-based `union`. A linear `Vec::contains` scan here would be
+/// O(n^2), which is ruinous at a branching vertex: the candidate count is
+/// the *product* of the other incident bonds' dimensions (`d * chi_1 * chi_2`)
+/// rather than `d * chi` as on a chain, so n reaches O(10^5) and the
+/// quadratic term dominates the whole optimization.
 fn union_with_history(
     values: Vec<MultiIndex>,
     history: Option<&HashMap<SubtreeKey, ColMajorArray<usize>>>,
     key: &SubtreeKey,
 ) -> Result<Vec<MultiIndex>> {
     let mut unique = Vec::with_capacity(values.len());
+    let mut seen: HashSet<MultiIndex> = HashSet::with_capacity(values.len());
     for candidate in values {
-        if !unique.contains(&candidate) {
+        if seen.insert(candidate.clone()) {
             unique.push(candidate);
         }
     }
     if let Some(arr) = history.and_then(|history| history.get(key)) {
         for j in 0..ncols_2d(arr)? {
             let col = column_2d(arr, j)?.to_vec();
-            if !unique.contains(&col) {
+            if seen.insert(col.clone()) {
                 unique.push(col);
             }
         }
