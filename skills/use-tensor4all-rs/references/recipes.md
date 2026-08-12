@@ -70,20 +70,20 @@ assert!((tt.evaluate(&[2, 3])? - 6.0).abs() < 1e-10); // f(2,3)=6
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## Quantics TCI on a discrete grid (1-indexed, equal powers of 2)
+## Quantics TCI on a discrete grid (0-indexed, equal powers of 2)
 
 ```rust
 use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
 
-let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;       // 1-indexed
+let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;      // 0-indexed
 let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
     &vec![16, 16], f, None,
     QtciOptions::default().with_tolerance(1e-10),
 )?;
 assert!(*errors.last().unwrap() < 1e-10);
-assert!((qtci.evaluate(&[5, 10])? - 15.0).abs() < 1e-8);
-// sum of (i+j) for i,j in 1..=16 = 2 * 16 * (16*17/2) = 4352
-assert!((qtci.sum()? - 4352.0).abs() < 1e-6);
+assert!((qtci.evaluate(&[4, 9])? - 13.0).abs() < 1e-8);
+// sum of (i+j) for i,j in 0..16 = 2 * 16 * (16*15/2) = 3840
+assert!((qtci.sum()? - 3840.0).abs() < 1e-6);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -98,7 +98,7 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate::<f64, _>(
     &grid, |x: &[f64]| x[0] * x[0], None, QtciOptions::default(),
 )?;
 assert!(*errors.last().unwrap() < 1e-8);
-assert!((qtci.evaluate(&[1])? - 0.0).abs() < 1e-10);   // grid point 1 -> x=0
+assert!((qtci.evaluate(&[0])? - 0.0).abs() < 1e-10);   // grid point 0 -> x=0
 let integral = qtci.integral()?;                         // left Riemann sum, O(h)
 assert!((integral - 1.0 / 3.0).abs() < 5e-2);
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -326,6 +326,6 @@ use tensor4all_hdf5::{load_mps, save_mps};
 
 - `errors.last()` plateaus above `tolerance`: raise `max_bond_dim` (needs higher rank), raise `max_iter` (more sweeps), or pick better initial pivots where `|f|` is large (`opt_first_pivot`).
 - Quantics discrete: all `sizes` equal and powers of 2; raise `nrandominitpivot` (10–20) for multi-feature / high-dim.
-- Off-by-one at a boundary: confirm whether you are in 0-indexed (`tensorci`, `partitionedtt::adaptiveinterpolate`) or 1-indexed (`quanticstci`) territory.
+- Off-by-one at a boundary: all tensor4all-rs indices are 0-indexed — QuanticsTCI.jl scripts must subtract 1 from grid indices.
 - Tolerance mismatch with Julia: `rtol = sqrt(cutoff)`.
 - Running in a debug build (no `--release`): tensor linalg is orders of magnitude slower — always run TCI/DMRG in release.
