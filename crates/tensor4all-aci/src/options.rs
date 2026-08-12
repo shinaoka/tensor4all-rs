@@ -26,6 +26,10 @@ use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 /// assert!(!options.scale_tolerance);
 /// assert!(options.initial_guess.is_none());
 /// assert_eq!(options.rng_seed, 0);
+/// assert!(options.enable_global_guard);
+/// assert_eq!(options.nsearch_global_pivots, 5);
+/// assert_eq!(options.max_nglobal_pivot, 5);
+/// assert!((options.tol_margin_global_search - 10.0).abs() < 1e-15);
 /// ```
 #[derive(Debug, Clone)]
 pub struct AciOptions<T: TTScalar> {
@@ -82,6 +86,42 @@ pub struct AciOptions<T: TTScalar> {
     /// the same inputs and options. Change this to sample a different initial
     /// pivot path when convergence depends on random choices.
     pub rng_seed: u64,
+
+    /// Whether to run the global pivot search guard before accepting convergence.
+    ///
+    /// The local sweep estimates error from bond-local 2-site blocks only, so a
+    /// feature outside the sampled crosses (e.g. a near-degenerate second peak
+    /// far from the initial pivots) is invisible to the stopping rule. When
+    /// enabled, the optimizer samples the current solution against the true
+    /// operator at global points before accepting convergence and injects any
+    /// significantly-wrong points as pivots. The search runs only at the moment
+    /// the local criterion would otherwise stop, so the default-on guard adds no
+    /// operator evaluations during normal sweeps. Default: `true`.
+    pub enable_global_guard: bool,
+
+    /// Number of random starting points for the global pivot search guard.
+    ///
+    /// Each starting point is locally optimized over all site coordinates.
+    /// Larger values explore the index space more thoroughly at the cost of more
+    /// evaluations. Ignored when `enable_global_guard` is `false`; `0` disables
+    /// the search. Default: `5`.
+    pub nsearch_global_pivots: usize,
+
+    /// Maximum number of global pivots injected per guard run.
+    ///
+    /// Ignored when `enable_global_guard` is `false`; `0` disables the search.
+    /// Default: `5`.
+    pub max_nglobal_pivot: usize,
+
+    /// Tolerance margin for the global pivot search guard.
+    ///
+    /// A candidate point is injected when its interpolation error exceeds
+    /// `abs_tol * tol_margin_global_search`, where `abs_tol` is the configured
+    /// tolerance (scaled by the maximum sampled operator magnitude when
+    /// `scale_tolerance` is enabled). The value is always validated (finite and
+    /// nonnegative) but only consulted when `enable_global_guard` is `true`.
+    /// Default: `10.0`.
+    pub tol_margin_global_search: f64,
 }
 
 impl<T: TTScalar> Default for AciOptions<T> {
@@ -94,6 +134,10 @@ impl<T: TTScalar> Default for AciOptions<T> {
             scale_tolerance: false,
             initial_guess: None,
             rng_seed: 0,
+            enable_global_guard: true,
+            nsearch_global_pivots: 5,
+            max_nglobal_pivot: 5,
+            tol_margin_global_search: 10.0,
         }
     }
 }
