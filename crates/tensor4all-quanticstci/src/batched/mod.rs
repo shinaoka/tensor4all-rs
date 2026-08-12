@@ -227,7 +227,8 @@ where
         + 'static
         + TensorElement
         + tensor4all_tcicore::MatrixLuciScalar
-        + FullPivLuScalar,
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
 {
     // Validate output_dims
     if output_dims.is_empty() {

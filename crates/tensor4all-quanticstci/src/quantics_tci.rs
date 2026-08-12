@@ -400,7 +400,8 @@ where
         + 'static
         + tensor4all_core::TensorElement
         + tensor4all_tcicore::MatrixLuciScalar
-        + FullPivLuScalar,
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(&[f64]) -> V + 'static,
 {
     let local_dims = grid.local_dimensions();
@@ -575,7 +576,8 @@ where
         + 'static
         + tensor4all_core::TensorElement
         + tensor4all_tcicore::MatrixLuciScalar
-        + FullPivLuScalar,
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(&[f64]) -> V + 'static,
 {
     if xvals.is_empty() {
@@ -699,7 +701,8 @@ where
         + 'static
         + tensor4all_core::TensorElement
         + tensor4all_tcicore::MatrixLuciScalar
-        + FullPivLuScalar,
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(&[i64]) -> V + 'static,
 {
     if size.is_empty() {

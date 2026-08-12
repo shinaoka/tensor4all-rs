@@ -1,10 +1,13 @@
 use crate::error::Result as TreeTciResult;
 use crate::{
-    update::update_edge, AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
+    globalpivot::{find_global_pivots, ScalarParts},
+    update::update_edge,
+    AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
 use anyhow::Result;
 use tensor4all_core::CommonScalar;
 use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
+use tensor4all_tensorbackend::FullPivLuScalar;
 
 /// MVP optimization options for TreeTCI.
 ///
@@ -13,12 +16,17 @@ use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 ///
 /// # Defaults
 ///
-/// | Field              | Default       | Description                                         |
-/// |--------------------|---------------|-----------------------------------------------------|
-/// | `tolerance`        | `1e-8`        | Relative stopping tolerance on normalized bond error |
-/// | `max_iter`         | `20`          | Maximum number of edge-order iterations              |
-/// | `max_bond_dim`     | `None`        | Maximum bond dimension (no cap by default)           |
-/// | `normalize_error`  | `true`        | Normalize error by maximum sample magnitude          |
+/// | Field                     | Default       | Description                                         |
+/// |---------------------------|---------------|-----------------------------------------------------|
+/// | `tolerance`               | `1e-8`        | Relative stopping tolerance on normalized bond error |
+/// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
+/// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
+/// | `normalize_error`         | `true`        | Normalize error by maximum sample magnitude          |
+/// | `enable_global_pivots`    | `false`       | Run automatic global pivot search after each sweep   |
+/// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
+/// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
+/// | `tol_margin_global_search`| `10.0`        | Global pivot acceptance margin over `abs_tol`        |
+/// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
 ///
 /// # Examples
 ///
@@ -31,6 +39,7 @@ use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 /// assert_eq!(opts.max_iter, 20);
 /// assert_eq!(opts.max_bond_dim, None);
 /// assert!(opts.normalize_error);
+/// assert!(!opts.enable_global_pivots);
 ///
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
@@ -38,10 +47,17 @@ use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 ///     max_iter: 50,
 ///     max_bond_dim: Some(100),
 ///     normalize_error: true,
+///     enable_global_pivots: true,
+///     nsearch: 20,
+///     max_nglobal_pivot: 10,
+///     tol_margin_global_search: 5.0,
+///     seed: Some(42),
 /// };
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(opts.max_iter, 50);
 /// assert_eq!(opts.max_bond_dim, Some(100));
+/// assert!(opts.enable_global_pivots);
+/// assert_eq!(opts.seed, Some(42));
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeTciOptions {
@@ -71,6 +87,46 @@ pub struct TreeTciOptions {
     /// `max_bond_error / max_sample_value`. When `false`, the raw absolute
     /// bond error is used. Default: `true`.
     pub normalize_error: bool,
+
+    /// Whether to run an automatic global pivot search after each sweep.
+    ///
+    /// When `true`, the optimizer materializes the current approximation
+    /// after each iteration and searches for multi-indices where
+    /// `|f(idx) - tt(idx)|` is large, injecting the best finds via
+    /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots).
+    /// This recovers separated features that local pivot updates miss when
+    /// the initial pivots sit in a single basin. Default: `false` (opt-in,
+    /// preserves existing behavior).
+    pub enable_global_pivots: bool,
+
+    /// Number of random starting points for the global pivot search.
+    ///
+    /// Each starting point is locally optimized over all site coordinates.
+    /// Larger values explore the index space more thoroughly at the cost of
+    /// more evaluations. Ignored when `enable_global_pivots` is `false`.
+    /// Default: `5`.
+    pub nsearch: usize,
+
+    /// Maximum number of global pivots added per iteration.
+    ///
+    /// Ignored when `enable_global_pivots` is `false`. Default: `5`.
+    pub max_nglobal_pivot: usize,
+
+    /// Tolerance margin for the global pivot search.
+    ///
+    /// A candidate pivot is accepted when its interpolation error exceeds
+    /// `abs_tol * tol_margin_global_search`, where `abs_tol` is the sweep's
+    /// absolute tolerance (`tolerance * max_sample_value` when
+    /// `normalize_error` is enabled). The value is always validated (it must
+    /// be finite and nonnegative) but only consulted when `enable_global_pivots`
+    /// is `true`. Default: `10.0`.
+    pub tol_margin_global_search: f64,
+
+    /// Random seed for the global pivot search.
+    ///
+    /// `None` seeds from OS entropy. Only used when `enable_global_pivots`
+    /// is `true`. Default: `None`.
+    pub seed: Option<u64>,
 }
 
 impl Default for TreeTciOptions {
@@ -80,6 +136,11 @@ impl Default for TreeTciOptions {
             max_iter: 20,
             max_bond_dim: None,
             normalize_error: true,
+            enable_global_pivots: false,
+            nsearch: 5,
+            max_nglobal_pivot: 5,
+            tol_margin_global_search: 10.0,
+            seed: None,
         }
     }
 }
@@ -137,7 +198,7 @@ pub fn optimize_default<T, F>(
     options: &TreeTciOptions,
 ) -> TreeTciResult<(Vec<usize>, Vec<f64>)>
 where
-    T: Scalar + CommonScalar,
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
@@ -198,7 +259,7 @@ pub fn optimize_with_proposer<T, F, P>(
     proposer: &P,
 ) -> TreeTciResult<(Vec<usize>, Vec<f64>)>
 where
-    T: Scalar + CommonScalar,
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
@@ -208,18 +269,25 @@ where
     if options.max_bond_dim == Some(0) {
         return Err(anyhow::anyhow!("TreeTCI optimization requires max_bond_dim > 0").into());
     };
+    if !options.tol_margin_global_search.is_finite() || options.tol_margin_global_search < 0.0 {
+        return Err(anyhow::anyhow!(
+            "TreeTCI optimization requires a finite nonnegative tol_margin_global_search"
+        )
+        .into());
+    };
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
+    let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let visitor = AllEdges;
     const INNER_EDGE_PASSES: usize = 2;
-    // Matches `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
+    // Mirrors `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
     // (see `convergence_criterion` in tensorci2.rs, itself a port of Julia's
     // `convergencecriterion`). A single below-tolerance sweep is not reliable:
     // the bond-error estimate can dip before the pivot search has actually
-    // stabilized. TreeTCI2 has no per-sweep "new global pivots" count to check
-    // (unlike TensorCI2), so this only checks error-below-tolerance + rank
-    // stability over the trailing window, not the third TensorCI2 criterion.
+    // stabilized. Like TensorCI2, the window must also contain no newly added
+    // global pivots: an iteration that injected pivots has not yet swept them,
+    // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
 
     for _iter in 0..options.max_iter {
@@ -252,6 +320,39 @@ where
         };
         errors.push(normalized_error);
 
+        // Global pivot search: after each sweep, materialize the current
+        // approximation and inject pivots where |f - tt| is large, so
+        // separated features that the local pivot updates miss are sampled
+        // in the next sweep. Opt-in; see `TreeTciOptions::enable_global_pivots`.
+        // The search is skipped on the final iteration: a pivot injected after
+        // the last sweep would never be processed by a subsequent sweep, so the
+        // recorded error and termination reason would not reflect it.
+        if options.enable_global_pivots && _iter + 1 < options.max_iter {
+            let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
+                state.max_sample_value
+            } else {
+                1.0
+            };
+            let abs_tol = options.tolerance * error_scale;
+            let seed = match options.seed {
+                Some(base) => base.wrapping_add(_iter as u64),
+                None => rand::random(),
+            };
+            let pivots = find_global_pivots(
+                state,
+                &evaluate,
+                options.nsearch,
+                options.max_nglobal_pivot,
+                options.tol_margin_global_search,
+                abs_tol,
+                seed,
+            )?;
+            state.add_global_pivots(&pivots)?;
+            nglobal_pivots_history.push(pivots.len());
+        } else {
+            nglobal_pivots_history.push(0);
+        }
+
         // BUGFIX (local, not upstream): the sweep loop previously always ran
         // to `max_iter` with no convergence check, wasting O(max_iter /
         // actual_sweeps_needed) work on already-converged problems. See
@@ -268,13 +369,15 @@ where
             let n = errors.len();
             let last_errors = &errors[n - NCHECK_HISTORY..];
             let last_ranks = &ranks[n - NCHECK_HISTORY..];
+            let last_ngp = &nglobal_pivots_history[n - NCHECK_HISTORY..];
             let errors_converged = last_errors.iter().all(|&e| e < options.tolerance);
+            let no_global_pivots = last_ngp.iter().all(|&n| n == 0);
             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
                 == last_ranks.last().copied().unwrap_or(0);
             let bond_dim_saturated = options
                 .max_bond_dim
                 .is_some_and(|cap| last_ranks.iter().all(|&r| r >= cap));
-            if (errors_converged && rank_stable) || bond_dim_saturated {
+            if (errors_converged && no_global_pivots && rank_stable) || bond_dim_saturated {
                 break;
             }
         }

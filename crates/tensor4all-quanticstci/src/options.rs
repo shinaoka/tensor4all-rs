@@ -286,6 +286,13 @@ impl QtciOptions {
             max_iter: self.maxiter,
             max_bond_dim: self.max_bond_dim,
             normalize_error: self.normalize_error,
+            // Global pivot search stays opt-in; the legacy `nsearchglobalpivot`
+            // and `nsearch` fields are not wired through yet.
+            enable_global_pivots: false,
+            nsearch: self.nsearch,
+            max_nglobal_pivot: self.nsearchglobalpivot,
+            tol_margin_global_search: 10.0,
+            seed: None,
         }
     }
 }

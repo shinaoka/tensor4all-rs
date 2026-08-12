@@ -56,6 +56,7 @@ pub type TreeTciRunResult = (
 ///     max_iter: 10,
 ///     max_bond_dim: Some(10),
 ///     normalize_error: true,
+///     ..Default::default()
 /// };
 ///
 /// let proposer = DefaultProposer;
@@ -93,7 +94,8 @@ where
     T: FullPivLuScalar
         + CommonScalar
         + tensor4all_tcicore::MatrixLuciScalar
-        + tensor4all_core::TensorElement,
+        + tensor4all_core::TensorElement
+        + crate::globalpivot::ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {

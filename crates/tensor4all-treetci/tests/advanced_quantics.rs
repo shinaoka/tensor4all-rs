@@ -93,6 +93,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
             max_iter: 12,
             max_bond_dim: Some(8),
             normalize_error: true,
+            ..Default::default()
         },
         Some(1),
         &SimpleProposer::seeded(0),
@@ -156,6 +157,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         max_iter: 12,
         max_bond_dim: Some(8),
         normalize_error: true,
+        ..Default::default()
     };
 
     // Run with point-eval-based batch closure
