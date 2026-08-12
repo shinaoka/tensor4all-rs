@@ -31,6 +31,7 @@ pub mod prelude;
 mod batch;
 mod elementwise;
 mod error;
+mod global_guard;
 #[allow(dead_code)]
 mod local;
 mod options;

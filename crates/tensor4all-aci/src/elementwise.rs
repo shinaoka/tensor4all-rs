@@ -1,9 +1,12 @@
 //! Public elementwise Alternating Cross Interpolation sweep APIs.
 
+use crate::global_guard::find_global_pivots;
 use crate::scalar::AciScalar;
 use crate::validation::{validate_inputs, validate_options};
 use crate::{AciOptions, AciResult, ElementwiseBatch, ElementwiseProblem, Result};
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_simplett::{
+    tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain,
+};
 
 /// Runs batched elementwise ACI over tensor-train inputs.
 ///
@@ -16,6 +19,14 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTr
 /// each bond's pivot error is divided by that bond's largest sampled
 /// operator-output magnitude from the completed sweep, and the largest
 /// normalized value is used.
+///
+/// When [`AciOptions::enable_global_guard`] is enabled (the default), the
+/// local stopping rule is gated by a global pivot search: before accepting
+/// convergence, the current solution is sampled against the true operator at
+/// global points, and any significantly-wrong points are injected into the
+/// sweep's frames so the next sweep absorbs them. The search only runs at the
+/// moment the local criterion would otherwise stop, so it adds no operator
+/// evaluations during normal sweeps.
 ///
 /// Sweeping also stops once the solution rank has sat at
 /// [`AciOptions::max_bond_dim`] for [`AciOptions::min_iters`] consecutive
@@ -91,7 +102,7 @@ pub fn elementwise_batched<T, F>(
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar,
+    T: AciScalar + EinsumScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     validate_options(options)?;
@@ -105,6 +116,7 @@ where
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
+    let mut guard_runs = 0usize;
 
     for iteration in 0..options.max_iters {
         let forward = iteration % 2 == 0;
@@ -126,6 +138,12 @@ where
         ranks.push(problem.solution.rank());
         errors.push(max_error_metric);
 
+        // Global pivot search guard: the local criterion only sees
+        // bond-local samples, so a feature outside the sampled crosses can be
+        // silently lost while the run self-reports convergence. Before
+        // accepting, sample the current solution against the true operator at
+        // global points; if significantly-wrong points exist, inject them and
+        // keep sweeping instead of converging.
         if convergence_criterion_like_julia(
             iteration + 1,
             &ranks,
@@ -133,7 +151,25 @@ where
             options.min_iters,
             options.tolerance,
         ) {
-            break;
+            if !options.enable_global_guard
+                || options.nsearch_global_pivots == 0
+                || options.max_nglobal_pivot == 0
+            {
+                break;
+            }
+            guard_runs += 1;
+            let seed = options.rng_seed.wrapping_add(guard_runs as u64);
+            let pivots = find_global_pivots(&problem, &mut op, options, seed)?;
+            if pivots.is_empty() {
+                break;
+            }
+            let added = problem.add_global_pivots(&pivots)?;
+            if added == 0 {
+                // Every found pivot was already in the frames and the sweeps
+                // could not absorb it (e.g. the bond dimension is capped);
+                // further guard runs cannot help.
+                break;
+            }
         }
 
         if rank_is_saturated(&ranks, options.min_iters, options.max_bond_dim) {
@@ -237,7 +273,7 @@ pub fn elementwise<T, F>(
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar,
+    T: AciScalar + EinsumScalar + PartialEq,
     F: FnMut(&[T]) -> T,
 {
     let mut scratch = Vec::new();

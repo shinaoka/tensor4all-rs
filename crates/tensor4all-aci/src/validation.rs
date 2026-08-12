@@ -35,6 +35,12 @@ pub(crate) fn validate_options<T: TTScalar>(options: &crate::AciOptions<T>) -> R
         });
     }
 
+    if !options.tol_margin_global_search.is_finite() || options.tol_margin_global_search < 0.0 {
+        return Err(AciError::InvalidOptions {
+            message: "tol_margin_global_search must be finite and non-negative".to_string(),
+        });
+    }
+
     Ok(())
 }
 

@@ -493,6 +493,140 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         Ok(Some(frames))
     }
 
+    /// Inject global pivots into the frame index sets and the solution rank.
+    ///
+    /// For each pivot `x` and each bond `b`, the left environment
+    /// `L_j(x[0..b])` is appended as a row to `left_frames[j][b]` and the
+    /// right environment `R_j(x[b+2..])` as a column to `right_frames[j][b+2]`
+    /// for every input `j`, so the next sweep's local block at bond `b`
+    /// samples the point `x`. Because ACI couples the frame sizes to the
+    /// solution rank (every `local_update` cross-checks them), the solution's
+    /// internal bond dimensions are zero-padded by the same amount and the
+    /// empty prefixes/suffixes (the bond-0 left frame and the site-`n` right
+    /// frame) are skipped. A pivot already fully represented in the frames is
+    /// skipped, and all inputs grow uniformly so `validate_local_shapes` keeps
+    /// holding.
+    ///
+    /// Returns the number of pivots actually injected (0 when every found
+    /// pivot was already represented in the frames).
+    pub(crate) fn add_global_pivots(&mut self, pivots: &[Vec<usize>]) -> Result<usize>
+    where
+        T: PartialEq,
+    {
+        let n = self.len();
+        let mut new_pivots = 0usize;
+        for pivot in pivots {
+            if pivot.len() != n {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "global pivot length {} must match the number of sites {n}",
+                        pivot.len()
+                    ),
+                });
+            }
+
+            let mut fully_represented = true;
+            for bond in 0..n.saturating_sub(1) {
+                for input in 0..self.n_inputs() {
+                    if bond >= 1 {
+                        let row = left_environment(&self.inputs[input], &pivot[..bond])?;
+                        if !frame_has_row(self.left_frames[input][bond].as_ref(), &row)? {
+                            fully_represented = false;
+                        }
+                    }
+                    if bond + 2 < n {
+                        let col = right_environment(&self.inputs[input], &pivot[bond + 2..])?;
+                        if !frame_has_col(self.right_frames[input][bond + 2].as_ref(), &col)? {
+                            fully_represented = false;
+                        }
+                    }
+                }
+            }
+            if fully_represented {
+                continue;
+            }
+
+            for bond in 0..n.saturating_sub(1) {
+                for input in 0..self.n_inputs() {
+                    if bond >= 1 {
+                        let row = left_environment(&self.inputs[input], &pivot[..bond])?;
+                        append_row(
+                            self.left_frames[input][bond].as_mut().ok_or_else(|| {
+                                AciError::InvalidInitialGuess {
+                                    message: format!(
+                                        "missing left frame at input {input}, bond {bond}"
+                                    ),
+                                }
+                            })?,
+                            &row,
+                        )?;
+                    }
+                    if bond + 2 < n {
+                        let col = right_environment(&self.inputs[input], &pivot[bond + 2..])?;
+                        append_col(
+                            self.right_frames[input][bond + 2].as_mut().ok_or_else(|| {
+                                AciError::InvalidInitialGuess {
+                                    message: format!(
+                                        "missing right frame at input {input}, bond {}",
+                                        bond + 2
+                                    ),
+                                }
+                            })?,
+                            &col,
+                        )?;
+                    }
+                }
+            }
+            new_pivots += 1;
+        }
+        if new_pivots > 0 {
+            self.pad_solution_internal_bonds(new_pivots)?;
+        }
+        Ok(new_pivots)
+    }
+
+    /// Grow every internal bond of the solution by `growth` with zero padding.
+    ///
+    /// ACI couples the solution rank to the frame sizes, so injecting pivots
+    /// into the frames requires growing the solution's internal bond
+    /// dimensions by the same amount to keep `local_update`'s shape checks
+    /// consistent. The zero-padded entries preserve the current solution
+    /// values; the following sweep's LU fills them from the new crosses.
+    fn pad_solution_internal_bonds(&mut self, growth: usize) -> Result<()> {
+        if growth == 0 {
+            return Ok(());
+        }
+        let n = self.len();
+        let cores = self.solution.site_tensors().to_vec();
+        let mut new_cores = Vec::with_capacity(n);
+        for (site, core) in cores.iter().enumerate() {
+            let site_dim = core.site_dim();
+            let left_dim = core.left_dim();
+            let right_dim = core.right_dim();
+            let new_left = if site == 0 {
+                left_dim
+            } else {
+                left_dim + growth
+            };
+            let new_right = if site == n - 1 {
+                right_dim
+            } else {
+                right_dim + growth
+            };
+            let mut data = vec![T::zero(); new_left * site_dim * new_right];
+            for r in 0..right_dim {
+                for s in 0..site_dim {
+                    for l in 0..left_dim {
+                        data[l + new_left * (s + site_dim * r)] = *core.get3(l, s, r);
+                    }
+                }
+            }
+            new_cores.push(tensor3_from_data(data, new_left, site_dim, new_right)?);
+        }
+        self.solution = SimpleTensorTrain::new(new_cores)?;
+        Ok(())
+    }
+
     pub(crate) fn local_update<F>(
         &mut self,
         bond: usize,
@@ -1028,4 +1162,121 @@ fn frame_matmul_error(direction: &'static str, err: impl std::fmt::Display) -> A
     AciError::InvalidInitialGuess {
         message: format!("{direction} frame update failed: {err}"),
     }
+}
+
+/// Left environment of `tt` at a prefix: the contraction of cores
+/// `0..prefix.len()` at the given index values, as a row vector of length
+/// `site_tensor(prefix.len()).left_dim()`.
+fn left_environment<T: AciScalar>(tt: &SimpleTensorTrain<T>, prefix: &[usize]) -> Result<Vec<T>> {
+    let mut env = Matrix::from_col_major_vec(1, 1, vec![T::one()]);
+    for (site, &index) in prefix.iter().enumerate() {
+        let core = tt.site_tensor(site);
+        let slice =
+            Matrix::from_col_major_vec(core.left_dim(), core.right_dim(), core.slice_site(index));
+        env = mat_mul(&env, &slice).map_err(|err| AciError::InvalidInitialGuess {
+            message: format!("left environment contraction failed: {err}"),
+        })?;
+    }
+    Ok(env.as_col_major_slice().to_vec())
+}
+
+/// Right environment of `tt` at a suffix: the contraction of the last
+/// `suffix.len()` cores at the given index values, as a column vector of
+/// length `site_tensor(n - suffix.len()).left_dim()`.
+fn right_environment<T: AciScalar>(tt: &SimpleTensorTrain<T>, suffix: &[usize]) -> Result<Vec<T>> {
+    let start = tt.len() - suffix.len();
+    let mut env = Matrix::from_col_major_vec(1, 1, vec![T::one()]);
+    for offset in (0..suffix.len()).rev() {
+        let site = start + offset;
+        let core = tt.site_tensor(site);
+        let slice = Matrix::from_col_major_vec(
+            core.left_dim(),
+            core.right_dim(),
+            core.slice_site(suffix[offset]),
+        );
+        env = mat_mul(&slice, &env).map_err(|err| AciError::InvalidInitialGuess {
+            message: format!("right environment contraction failed: {err}"),
+        })?;
+    }
+    Ok(env.as_col_major_slice().to_vec())
+}
+
+/// Whether `frame` contains a row equal to `row`.
+fn frame_has_row<T: AciScalar + PartialEq>(frame: Option<&Matrix<T>>, row: &[T]) -> Result<bool> {
+    let Some(frame) = frame else {
+        return Ok(false);
+    };
+    if frame.ncols() != row.len() {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "cannot match a row of length {} against a frame with {} columns",
+                row.len(),
+                frame.ncols()
+            ),
+        });
+    }
+    for r in 0..frame.nrows() {
+        if (0..frame.ncols()).all(|c| frame[[r, c]] == row[c]) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Append `row` to `frame`. `row` must have length `frame.ncols()`.
+fn append_row<T: AciScalar>(frame: &mut Matrix<T>, row: &[T]) -> Result<()> {
+    if frame.ncols() != row.len() {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "cannot append a row of length {} to a frame with {} columns",
+                row.len(),
+                frame.ncols()
+            ),
+        });
+    }
+    let mut data = frame.as_col_major_slice().to_vec();
+    data.extend_from_slice(row);
+    *frame = Matrix::from_col_major_vec(frame.nrows() + 1, frame.ncols(), data);
+    Ok(())
+}
+
+/// Whether `frame` contains a column equal to `col`.
+fn frame_has_col<T: AciScalar + PartialEq>(frame: Option<&Matrix<T>>, col: &[T]) -> Result<bool> {
+    let Some(frame) = frame else {
+        return Ok(false);
+    };
+    if frame.nrows() != col.len() {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "cannot match a column of length {} against a frame with {} rows",
+                col.len(),
+                frame.nrows()
+            ),
+        });
+    }
+    for c in 0..frame.ncols() {
+        if (0..frame.nrows()).all(|r| frame[[r, c]] == col[r]) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Append `col` to `frame`. `col` must have length `frame.nrows()`.
+fn append_col<T: AciScalar>(frame: &mut Matrix<T>, col: &[T]) -> Result<()> {
+    if frame.nrows() != col.len() {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "cannot append a column of length {} to a frame with {} rows",
+                col.len(),
+                frame.nrows()
+            ),
+        });
+    }
+    let mut data = frame.as_col_major_slice().to_vec();
+    for value in col {
+        data.push(*value);
+    }
+    *frame = Matrix::from_col_major_vec(frame.nrows(), frame.ncols() + 1, data);
+    Ok(())
 }
