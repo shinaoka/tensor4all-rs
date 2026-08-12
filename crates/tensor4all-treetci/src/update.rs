@@ -1,8 +1,5 @@
 use crate::{
-    assemble::{assemble_points_column_major, MultiIndex},
-    assemble_global_point,
-    batch::GlobalIndexBatch,
-    PivotCandidateProposer, TreeTCI2, TreeTciEdge,
+    assemble::MultiIndex, batch::GlobalIndexBatch, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use tensor4all_core::{ColMajorArray, CommonScalar};
@@ -47,6 +44,7 @@ where
         &left_candidates,
         &right_key,
         &right_candidates,
+        &state.local_dims,
         evaluate,
     )?;
 
@@ -54,12 +52,9 @@ where
         state.max_sample_value = state.max_sample_value.max(CommonScalar::abs_val(*value));
     }
 
-    let mut matrix = Matrix::zeros(left_candidates.len(), right_candidates.len());
-    for col in 0..right_candidates.len() {
-        for row in 0..left_candidates.len() {
-            matrix[[row, col]] = values[row + left_candidates.len() * col];
-        }
-    }
+    // `evaluate_candidate_matrix` already returns column-major data with
+    // `left_candidates.len()` rows, so this hands over the buffer as-is.
+    let matrix = Matrix::from_col_major_vec(left_candidates.len(), right_candidates.len(), values);
     let selection = matrix_luci_factors_from_matrix(&matrix, Some(options.clone()))?;
 
     // The LU can select zero pivots when the sampled submatrix is numerically
@@ -121,35 +116,113 @@ where
     update_edge(state, edge, evaluate, options, &DefaultProposer)
 }
 
+/// Evaluate the function on the full `I x J` candidate matrix for one edge.
+///
+/// Returns the values in column-major order with `left_candidates.len()` rows.
+///
+/// The global points are written straight into one contiguous batch buffer.
+/// Assembling them as individual `Vec<usize>` points instead (via
+/// `assemble_global_point` + `assemble_points_column_major`) costs one heap
+/// allocation and one extra full copy per matrix *entry*, and re-validates the
+/// bipartition `n_left * n_right` times over -- at a branching vertex that is
+/// O(10^7) allocations for a single edge update. The bipartition is a property
+/// of the two subtree keys, so it is checked once up front instead.
 fn evaluate_candidate_matrix<T, F>(
     n_sites: usize,
     left_key: &crate::SubtreeKey,
     left_candidates: &[MultiIndex],
     right_key: &crate::SubtreeKey,
     right_candidates: &[MultiIndex],
+    local_dims: &[usize],
     evaluate: F,
 ) -> Result<Vec<T>>
 where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    let mut points = Vec::with_capacity(left_candidates.len() * right_candidates.len());
-    for right in right_candidates {
-        for left in left_candidates {
-            points.push(assemble_global_point(
-                n_sites,
-                &[(left_key, left), (right_key, right)],
-                &[],
-            )?);
+    let left_sites = left_key.as_slice();
+    let right_sites = right_key.as_slice();
+
+    let mut assigned = vec![false; n_sites];
+    for &site in left_sites.iter().chain(right_sites.iter()) {
+        ensure!(
+            site < n_sites,
+            "site {} is out of bounds for {} sites",
+            site,
+            n_sites
+        );
+        ensure!(!assigned[site], "site {} was assigned more than once", site);
+        assigned[site] = true;
+    }
+    ensure!(
+        assigned.iter().all(|&seen| seen),
+        "global point assembly left some sites unassigned"
+    );
+
+    // Every candidate must match its own side's subtree key length, and every
+    // coordinate must lie within the site's local dimension. The two sides are
+    // validated separately (rather than inferring the side from the candidate
+    // length): a malformed candidate whose length coincides with the *other*
+    // side's key would otherwise pass validation and then silently leave part
+    // of its point at zero in the fill loop below. Coordinates are validated
+    // at this public boundary so a caller-supplied proposer cannot submit
+    // out-of-domain indices.
+    for (side, (candidates, sites)) in [
+        ("left", (left_candidates, left_sites)),
+        ("right", (right_candidates, right_sites)),
+    ] {
+        for candidate in candidates {
+            ensure!(
+                candidate.len() == sites.len(),
+                "subtree key of length {} cannot be filled from {side} multi-index of length {}",
+                sites.len(),
+                candidate.len()
+            );
+            for (&site, &value) in sites.iter().zip(candidate.iter()) {
+                ensure!(
+                    value < local_dims[site],
+                    "{side} candidate value {value} out of range for site {site} with local dimension {}",
+                    local_dims[site]
+                );
+            }
         }
     }
-    let batch = assemble_points_column_major(&points)?;
-    let values = evaluate(batch.as_view())?;
+
+    let n_left = left_candidates.len();
+    let n_right = right_candidates.len();
+    let n_points = n_left.checked_mul(n_right).ok_or_else(|| {
+        anyhow::anyhow!("candidate matrix shape {n_left} x {n_right} overflows usize")
+    })?;
     ensure!(
-        values.len() == left_candidates.len() * right_candidates.len(),
+        n_sites > 0 && n_points > 0,
+        "at least one point with one site is required"
+    );
+    let data_len = n_sites
+        .checked_mul(n_points)
+        .ok_or_else(|| anyhow::anyhow!("batch size {n_sites} x {n_points} overflows usize"))?;
+
+    // Column-major (n_sites, n_points): point p occupies data[p * n_sites ..].
+    let mut data = vec![0usize; data_len];
+    let mut offset = 0;
+    for right in right_candidates {
+        for left in left_candidates {
+            let point = &mut data[offset..offset + n_sites];
+            for (&site, &value) in left_sites.iter().zip(left.iter()) {
+                point[site] = value;
+            }
+            for (&site, &value) in right_sites.iter().zip(right.iter()) {
+                point[site] = value;
+            }
+            offset += n_sites;
+        }
+    }
+
+    let values = evaluate(GlobalIndexBatch::new(&data, n_sites, n_points)?)?;
+    ensure!(
+        values.len() == n_points,
         "batch evaluator returned {} values for {} candidate-matrix entries",
         values.len(),
-        left_candidates.len() * right_candidates.len()
+        n_points
     );
     Ok(values)
 }

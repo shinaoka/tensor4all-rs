@@ -1,4 +1,7 @@
-use super::{DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer};
+use super::{
+    union_with_history, DefaultProposer, PivotCandidateProposer, SimpleProposer,
+    TruncatedDefaultProposer,
+};
 use crate::{AllEdges, EdgeVisitor, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use std::collections::HashMap;
 use tensor4all_core::ColMajorArray;
@@ -84,6 +87,27 @@ fn default_proposer_unions_history_candidates() {
         .unwrap();
 
     assert!(iset.contains(&vec![1, 1, 1, 1]));
+}
+
+#[test]
+fn union_with_history_dedups_in_first_occurrence_order() {
+    let key = SubtreeKey::new(vec![0, 1, 2]);
+    let history = HashMap::from([(
+        key.clone(),
+        ColMajorArray::new(vec![1, 1, 1, 0, 1, 2], vec![3, 2]).unwrap(), // [1,1,1], [0,1,2]
+    )]);
+
+    // `values` contains duplicates (the cartesian pivot expansion can produce
+    // them); history adds two columns, one of which is already present.
+    let values = vec![vec![0, 0, 0], vec![0, 0, 0], vec![1, 1, 1], vec![2, 2, 2]];
+    let out = union_with_history(values, Some(&history), &key).unwrap();
+
+    // First occurrence wins, both within `values` and across history: the
+    // already-seen [1,1,1] is not appended again, [0,1,2] is new and appended.
+    assert_eq!(
+        out,
+        vec![vec![0, 0, 0], vec![1, 1, 1], vec![2, 2, 2], vec![0, 1, 2]]
+    );
 }
 
 #[test]
