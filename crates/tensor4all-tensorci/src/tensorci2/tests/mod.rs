@@ -1187,3 +1187,61 @@ fn test_optimize_with_finder_invokes_custom_finder() {
     assert_eq!(calls.get(), 3);
     assert_eq!(termination, TCI2Termination::MaxIterations);
 }
+
+#[test]
+fn test_crossinterpolate2_numerically_zero_subdomain_issue598() {
+    // Regression test for issue #598: when the evaluator is numerically zero
+    // on a subdomain, the LU truncation can select zero pivots, emptying the
+    // I/J sets and producing an invalid tensor train. The sweep must keep the
+    // state valid (rank >= 1) and return a tensor train instead of failing
+    // with "First tensor must have left dimension 1" or a dimension mismatch.
+    const WEIGHTS: [f64; 3] = [1.3, 0.9, 0.9];
+    const ALPHAS: [f64; 3] = [2.8, 5.4, 0.7];
+    const CENTERS: [(f64, f64); 3] = [(0.4, 0.1), (3.8, -0.8), (-5.5, -2.1)];
+    const BOX_L: f64 = 12.0;
+    const R: usize = 10;
+    const PREFIX: [usize; 2] = [2, 3];
+
+    let eval_fused = |free_digits: &MultiIndex| -> f64 {
+        let mut ix = 0u64;
+        let mut iy = 0u64;
+        for (n, &fused) in PREFIX.iter().chain(free_digits.iter()).enumerate() {
+            let shift = R - 1 - n;
+            ix |= ((fused & 1) as u64) << shift;
+            iy |= (((fused >> 1) & 1) as u64) << shift;
+        }
+        let step = 2.0 * BOX_L / (1u64 << R) as f64;
+        let (x, y) = (-BOX_L + ix as f64 * step, -BOX_L + iy as f64 * step);
+        (0..3)
+            .map(|i| {
+                let (cx, cy) = CENTERS[i];
+                WEIGHTS[i] * (-ALPHAS[i] * ((x - cx).powi(2) + (y - cy).powi(2))).exp()
+            })
+            .sum()
+    };
+
+    let local_dims = vec![4usize; R - PREFIX.len()];
+    let options = TCI2Options {
+        tolerance: 1e-8,
+        max_bond_dim: Some(64),
+        max_iter: 20,
+        normalize_error: false,
+        seed: Some(1),
+        ..TCI2Options::default()
+    };
+
+    let result = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        eval_fused,
+        None,
+        local_dims,
+        Vec::new(),
+        options,
+    );
+
+    let result = result.expect("crossinterpolate2 must not fail on a numerically zero subdomain");
+    let tt = result.tci.to_tensor_train().expect("valid tensor train");
+    // The subdomain is numerically zero (max |f| ~ 1e-20), so the valid
+    // outcome is a rank-1 (near-zero) tensor train, not a shape error.
+    assert_eq!(tt.link_dims(), vec![1; R - PREFIX.len() - 1]);
+    assert_eq!(result.termination, crate::TCI2Termination::Converged);
+}
