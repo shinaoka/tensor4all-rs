@@ -8,7 +8,7 @@ use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_simplett::{
     tensor3_from_data, types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
@@ -75,7 +75,7 @@ pub enum CarryDirection {
 }
 
 /// Type alias for the standard LinearOperator used in this crate.
-/// Uses TensorDynLen as the tensor type and usize as the node name type.
+/// Uses IdxTensor as the tensor type and usize as the node name type.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::{
@@ -85,7 +85,7 @@ pub enum CarryDirection {
 /// let operator: QuanticsOperator = tensortrain_to_linear_operator(&mpo, &[2]).unwrap();
 /// assert_eq!(operator.mpo().node_count(), 1);
 /// ```
-pub type QuanticsOperator = LinearOperator<TensorDynLen, usize>;
+pub type QuanticsOperator = LinearOperator<IdxTensor, usize>;
 
 /// Convert a SimpleTensorTrain (MPO form) to a LinearOperator.
 /// The SimpleTensorTrain is assumed to be an MPO with site dimension 4 (2x2 for input/output).
@@ -128,7 +128,7 @@ pub fn tensortrain_to_linear_operator(
         .ok_or_else(|| anyhow::anyhow!("tensor-train bond count overflows usize"))?;
     checked_allocation_len::<DynIndex>(&[n], "operator site indices")?;
     checked_allocation_len::<DynIndex>(&[bond_capacity], "operator bond indices")?;
-    checked_allocation_len::<TensorDynLen>(&[n], "operator tensor list")?;
+    checked_allocation_len::<IdxTensor>(&[n], "operator tensor list")?;
     checked_allocation_len::<usize>(&[n], "operator node-name list")?;
     for (site, &dim) in site_dims.iter().enumerate() {
         checked_allocation_len::<Complex64>(&[dim, dim], &format!("site {site}"))?;
@@ -166,7 +166,7 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Build tensors for TreeTN
-    let mut tensors = try_vec_with_capacity::<TensorDynLen>("operator tensor list", n)?;
+    let mut tensors = try_vec_with_capacity::<IdxTensor>("operator tensor list", n)?;
     let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
 
     for i in 0..n {
@@ -265,7 +265,7 @@ pub fn tensortrain_to_linear_operator(
             }
         }
 
-        let tensor_dyn = TensorDynLen::from_dense(indices, data)?;
+        let tensor_dyn = IdxTensor::from_dense(indices, data)?;
         tensors.push(tensor_dyn);
         node_names.push(i);
     }
@@ -339,7 +339,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
         .ok_or_else(|| anyhow::anyhow!("tensor-train bond count overflows usize"))?;
     checked_allocation_len::<DynIndex>(&[n], "operator site indices")?;
     checked_allocation_len::<DynIndex>(&[bond_capacity], "operator bond indices")?;
-    checked_allocation_len::<TensorDynLen>(&[n], "operator tensor list")?;
+    checked_allocation_len::<IdxTensor>(&[n], "operator tensor list")?;
     checked_allocation_len::<usize>(&[n], "operator node-name list")?;
     for i in 0..n {
         checked_allocation_len::<Complex64>(
@@ -380,7 +380,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Build tensors for TreeTN
-    let mut tensors = try_vec_with_capacity::<TensorDynLen>("operator tensor list", n)?;
+    let mut tensors = try_vec_with_capacity::<IdxTensor>("operator tensor list", n)?;
     let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
 
     for i in 0..n {
@@ -478,7 +478,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
             }
         }
 
-        let tensor_dyn = TensorDynLen::from_dense(indices, data)?;
+        let tensor_dyn = IdxTensor::from_dense(indices, data)?;
         tensors.push(tensor_dyn);
         node_names.push(i);
     }

@@ -1,11 +1,11 @@
 use num_complex::Complex64;
-use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorContractionLike};
 
 #[test]
 fn hermitian_eigendecomposition_solves_complex_residuals() {
     let row = DynIndex::new_dyn(2);
     let col = DynIndex::new_dyn(2);
-    let matrix = TensorDynLen::from_dense(
+    let matrix = IdxTensor::from_dense(
         vec![row.clone(), col.clone()],
         vec![
             Complex64::new(2.0, 0.0),
@@ -32,7 +32,7 @@ fn hermitian_eigendecomposition_solves_complex_residuals() {
             .select_indices(std::slice::from_ref(&decomp.eigenvector_index), &[position])
             .unwrap();
         let vector_as_col = vector.replaceind(&row, &col).unwrap();
-        let applied = TensorDynLen::contract(&[&matrix, &vector_as_col]).unwrap();
+        let applied = IdxTensor::contract(&[&matrix, &vector_as_col]).unwrap();
         let expected = vector.scale(AnyScalar::new_real(lambda)).unwrap();
 
         assert!(
@@ -47,7 +47,7 @@ fn hermitian_eigendecomposition_solves_complex_residuals() {
 fn hermitian_eigendecomposition_keeps_eigenvectors_tracked() {
     let row = DynIndex::new_dyn(2);
     let col = DynIndex::new_dyn(2);
-    let matrix = TensorDynLen::from_dense(vec![row, col], vec![2.0_f64, 0.25, 0.25, 3.0])
+    let matrix = IdxTensor::from_dense(vec![row, col], vec![2.0_f64, 0.25, 0.25, 3.0])
         .unwrap()
         .enable_grad()
         .unwrap();

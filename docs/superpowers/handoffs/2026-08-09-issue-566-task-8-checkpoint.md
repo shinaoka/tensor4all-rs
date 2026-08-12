@@ -18,7 +18,7 @@ The seven source/test files below were dirty at `e1b0dfc`; the scanner changes a
 
 The interrupted checkpoint implements compact-support, allocation-safe tensor metrics and scaling:
 
-- `crates/tensor4all-core/src/defaults/tensordynlen.rs`
+- `crates/tensor4all-core/src/defaults/idx_tensor.rs`
   - Streams `isapprox` over compact payload support rather than the logical tensor domain, including aligned/permuted index layouts and unmatched support points.
   - Keeps exact comparisons exact and handles finite values, matching/mismatched infinities, and NaN errors during tolerant comparison.
   - Computes `norm`, `norm_squared`, and `maxabs` from compact payload values with an `f64` LASSQ accumulator rather than source-dtype `self * conj(self)` materialization.

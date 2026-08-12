@@ -12,7 +12,7 @@ ITensors.jl-inspired TensorTrain API with orthogonality tracking and multiple ca
 
 ## Conventions
 
-- Dense data passed to `TensorDynLen::from_dense` is **column-major**: the
+- Dense data passed to `IdxTensor::from_dense` is **column-major**: the
   first listed index varies fastest.
 - Complex tensors use `num_complex::Complex64`; `inner()` conjugates the left
   operand, so `tt.inner(&tt)` equals the square of `tt.norm()?` for real and
@@ -41,9 +41,9 @@ let s2 = DynIndex::new_dyn(2);
 let b01 = DynIndex::new_bond(2)?;
 let b12 = DynIndex::new_bond(2)?;
 
-let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0, 0.0, 0.0, 1.0])?;
-let t1 = TensorDynLen::from_dense(vec![b01, s1.clone(), b12.clone()], vec![1.0; 8])?;
-let t2 = TensorDynLen::from_dense(vec![b12, s2], vec![1.0, 0.0, 0.0, 1.0])?;
+let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0, 0.0, 0.0, 1.0])?;
+let t1 = IdxTensor::from_dense(vec![b01, s1.clone(), b12.clone()], vec![1.0; 8])?;
+let t2 = IdxTensor::from_dense(vec![b12, s2], vec![1.0, 0.0, 0.0, 1.0])?;
 
 let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
 tt.orthogonalize(1)?;
@@ -71,7 +71,7 @@ use num_complex::Complex64;
 use tensor4all_itensorlike::prelude::*;
 
 let site = DynIndex::new_dyn(2);
-let tensor = TensorDynLen::from_dense(
+let tensor = IdxTensor::from_dense(
     vec![site],
     vec![Complex64::new(1.0, 2.0), Complex64::new(0.0, -1.0)],
 )?;

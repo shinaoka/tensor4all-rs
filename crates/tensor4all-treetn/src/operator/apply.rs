@@ -18,21 +18,21 @@
 //! ```
 //! use std::collections::HashMap;
 //!
-//! use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+//! use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
 //! use tensor4all_treetn::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator, TreeTN};
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let site = DynIndex::new_dyn(2);
-//! let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 2.0])?;
-//! let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+//! let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 2.0])?;
+//! let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0])?;
 //!
 //! let input_internal = DynIndex::new_dyn(2);
 //! let output_internal = DynIndex::new_dyn(2);
-//! let mpo_tensor = TensorDynLen::from_dense(
+//! let mpo_tensor = IdxTensor::from_dense(
 //!     vec![input_internal.clone(), output_internal.clone()],
 //!     vec![1.0, 0.0, 0.0, 1.0],
 //! )?;
-//! let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0])?;
+//! let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![mpo_tensor], vec![0])?;
 //!
 //! let mut input_mapping = HashMap::new();
 //! input_mapping.insert(
@@ -70,7 +70,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use tensor4all_core::{
-    DynIndex, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorDynLen, TensorIndex,
+    DynIndex, IdxTensor, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorIndex,
     TensorLike,
 };
 
@@ -249,21 +249,21 @@ impl ApplyOptions {
 /// ```
 /// use std::collections::HashMap;
 ///
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
 /// use tensor4all_treetn::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator, TreeTN};
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let site = DynIndex::new_dyn(2);
-/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 2.0])?;
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+/// let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 2.0])?;
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0])?;
 ///
 /// let input_internal = DynIndex::new_dyn(2);
 /// let output_internal = DynIndex::new_dyn(2);
-/// let mpo_tensor = TensorDynLen::from_dense(
+/// let mpo_tensor = IdxTensor::from_dense(
 ///     vec![input_internal.clone(), output_internal.clone()],
 ///     vec![1.0, 0.0, 0.0, 1.0],
 /// )?;
-/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0])?;
+/// let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![mpo_tensor], vec![0])?;
 ///
 /// let mut input_mapping = HashMap::new();
 /// input_mapping.insert(
@@ -399,7 +399,7 @@ where
 /// # Examples
 /// ```
 /// use std::collections::HashMap;
-/// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IndexLike, IdxTensor};
 /// use tensor4all_treetn::{
 ///     bind_linear_operator_indices, IndexMapping, LinearOperator, TreeTN,
 /// };
@@ -408,11 +408,11 @@ where
 /// let op_output = DynIndex::new_dyn(2);
 /// let input_internal = DynIndex::new_dyn(2);
 /// let output_internal = DynIndex::new_dyn(2);
-/// let mpo_tensor = TensorDynLen::from_dense(
+/// let mpo_tensor = IdxTensor::from_dense(
 ///     vec![input_internal.clone(), output_internal.clone()],
 ///     vec![1.0, 0.0, 0.0, 1.0],
 /// ).unwrap();
-/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+/// let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
 ///
 /// let mut input_mapping = HashMap::new();
 /// input_mapping.insert(0usize, IndexMapping { true_index: op_input.clone(), internal_index: input_internal });
@@ -471,24 +471,24 @@ where
 /// # Examples
 /// ```
 /// use std::collections::HashMap;
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{
 ///     apply_linear_operator_to_indices, ApplyOptions, IndexMapping, LinearOperator, TreeTN,
 /// };
 ///
 /// let state_index = DynIndex::new_dyn(2);
-/// let state_tensor = TensorDynLen::from_dense(vec![state_index.clone()], vec![3.0, 5.0]).unwrap();
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
+/// let state_tensor = IdxTensor::from_dense(vec![state_index.clone()], vec![3.0, 5.0]).unwrap();
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
 ///
 /// let op_input = DynIndex::new_dyn(2);
 /// let op_output = DynIndex::new_dyn(2);
 /// let input_internal = DynIndex::new_dyn(2);
 /// let output_internal = DynIndex::new_dyn(2);
-/// let mpo_tensor = TensorDynLen::from_dense(
+/// let mpo_tensor = IdxTensor::from_dense(
 ///     vec![input_internal.clone(), output_internal.clone()],
 ///     vec![1.0, 0.0, 0.0, 1.0],
 /// ).unwrap();
-/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+/// let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
 ///
 /// let mut input_mapping = HashMap::new();
 /// input_mapping.insert(0usize, IndexMapping { true_index: op_input.clone(), internal_index: input_internal });
@@ -559,15 +559,15 @@ where
 /// # Examples
 /// ```
 /// use std::collections::HashMap;
-/// use tensor4all_core::{DynIndex, TagSet, TensorDynLen, TensorLike};
+/// use tensor4all_core::{DynIndex, TagSet, IdxTensor, TensorLike};
 /// use tensor4all_treetn::{
 ///     apply_linear_operator_to_numbered_tags, ApplyOptions, IndexMapping,
 ///     LinearOperator, TreeTN,
 /// };
 ///
 /// let k1 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![k1.clone()], vec![1.0, 2.0]).unwrap()],
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![k1.clone()], vec![1.0, 2.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
 ///
@@ -575,11 +575,11 @@ where
 /// let true_output = DynIndex::new_dyn(2);
 /// let internal_input = DynIndex::new_dyn(2);
 /// let internal_output = DynIndex::new_dyn(2);
-/// let mpo_tensor = TensorDynLen::from_dense(
+/// let mpo_tensor = IdxTensor::from_dense(
 ///     vec![internal_output.clone(), internal_input.clone()],
 ///     vec![1.0, 0.0, 0.0, 1.0],
 /// ).unwrap();
-/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+/// let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
 /// let mut input_mapping = HashMap::new();
 /// input_mapping.insert(0, IndexMapping {
 ///     true_index: true_input,
@@ -602,12 +602,12 @@ where
 /// assert!(result.to_dense().unwrap().distance(&state.to_dense().unwrap()).unwrap() < 1.0e-12);
 /// ```
 pub fn apply_linear_operator_to_numbered_tags<V>(
-    operator: &LinearOperator<TensorDynLen, V>,
-    state: &TreeTN<TensorDynLen, V>,
+    operator: &LinearOperator<IdxTensor, V>,
+    state: &TreeTN<IdxTensor, V>,
     tag_prefix: &str,
     start_index: usize,
     options: ApplyOptions,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, LinearOperatorTaggedApplyError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, LinearOperatorTaggedApplyError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
@@ -644,7 +644,7 @@ where
 }
 
 fn true_indices_in_operator_node_order<V>(
-    operator: &LinearOperator<TensorDynLen, V>,
+    operator: &LinearOperator<IdxTensor, V>,
     mappings_by_node: &HashMap<V, Vec<IndexMapping<DynIndex>>>,
 ) -> Vec<DynIndex>
 where

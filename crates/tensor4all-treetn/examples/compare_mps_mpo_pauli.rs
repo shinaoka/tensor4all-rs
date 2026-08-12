@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use tensor4all_core::{
-    index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+    index::DynId, DynIndex, IdxTensor, IndexLike, TensorContractionLike, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalForm,
@@ -20,7 +20,7 @@ use tensor4all_treetn::{
     SquareLinsolveUpdater, TreeTN, TruncationOptions,
 };
 
-type TnWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+type TnWithInternalIndices = (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>);
 
 fn make_node_name(i: usize) -> String {
     format!("site{i}")
@@ -45,7 +45,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
     anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
     anyhow::ensure!(phys_dim == 2, "Pauli-X requires phys_dim=2");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     let s_in_tmp: Vec<DynIndex> = (0..n_sites)
         .map(|_| unique_dyn_index(used_ids, phys_dim))
@@ -67,15 +67,15 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         let data = pauli_x.to_vec();
 
         let tensor = if n_sites == 1 {
-            TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data).unwrap()
+            IdxTensor::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data).unwrap()
         } else if i == 0 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![s_out_tmp[i].clone(), s_in_tmp[i].clone(), bonds[i].clone()],
                 data,
             )
             .unwrap()
         } else if i + 1 == n_sites {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bonds[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -85,7 +85,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
             )
             .unwrap()
         } else {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bonds[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -151,10 +151,10 @@ fn create_all_ones_mps(
     bond_dim: usize,
     sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim))
         .collect();
@@ -173,7 +173,7 @@ fn create_all_ones_mps(
 
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
         let data = vec![1.0_f64; nelem];
-        let t = TensorDynLen::from_dense(indices, data).unwrap();
+        let t = IdxTensor::from_dense(indices, data).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -196,7 +196,7 @@ fn create_all_ones_mpo_state(
     true_site_indices: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
 ) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 )> {
@@ -205,7 +205,7 @@ fn create_all_ones_mpo_state(
         "true_site_indices.len() must equal n"
     );
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // MPO bonds
     let bonds: Vec<_> = (0..n.saturating_sub(1))
@@ -264,7 +264,7 @@ fn create_all_ones_mpo_state(
 
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
         let data = vec![1.0_f64; nelem];
-        let t = TensorDynLen::from_dense(indices, data).unwrap();
+        let t = IdxTensor::from_dense(indices, data).unwrap();
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
         nodes.push(node);
@@ -294,13 +294,13 @@ fn create_all_ones_mpo_state(
 }
 
 fn compute_residual(
-    op: &TreeTN<TensorDynLen, String>,
+    op: &TreeTN<IdxTensor, String>,
     im: &HashMap<String, IndexMapping<DynIndex>>,
     om: &HashMap<String, IndexMapping<DynIndex>>,
     a0: f64,
     a1: f64,
-    x: &TreeTN<TensorDynLen, String>,
-    rhs: &TreeTN<TensorDynLen, String>,
+    x: &TreeTN<IdxTensor, String>,
+    rhs: &TreeTN<IdxTensor, String>,
 ) -> anyhow::Result<f64> {
     let linop = LinearOperator::new(op.clone(), im.clone(), om.clone());
     let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
@@ -309,7 +309,7 @@ fn compute_residual(
     let b_full = rhs.contract_to_tensor()?;
     let ref_order = b_full.external_indices();
 
-    let order_for = |tensor: &TensorDynLen| -> anyhow::Result<Vec<DynIndex>> {
+    let order_for = |tensor: &IdxTensor| -> anyhow::Result<Vec<DynIndex>> {
         let inds = tensor.external_indices();
         let by_id: HashMap<DynId, DynIndex> = inds.into_iter().map(|i| (*i.id(), i)).collect();
         let mut out = Vec::with_capacity(ref_order.len());

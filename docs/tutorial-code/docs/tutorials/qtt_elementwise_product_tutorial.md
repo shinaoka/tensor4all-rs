@@ -230,7 +230,7 @@ Inputs:
 
 Outputs:
 
-- a `TreeTN<TensorDynLen, usize>`
+- a `TreeTN<IdxTensor, usize>`
 - the corresponding site indices, which are reused later for pairing and
   evaluation
 

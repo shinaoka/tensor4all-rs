@@ -1,13 +1,13 @@
 use super::*;
-use crate::defaults::tensordynlen::TensorDynLen;
+use crate::defaults::idx_tensor::IdxTensor;
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::krylov::{gmres, GmresOptions};
 use crate::tensor_like::TensorContractionLike;
 
 /// Helper to create a 1D tensor (vector) with given data and shared index.
-fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
-    TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
+fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> IdxTensor {
+    IdxTensor::from_dense(vec![idx.clone()], data).unwrap()
 }
 
 // ========================================================================
@@ -76,13 +76,13 @@ fn test_fuse_indices_delegates_to_blocks_and_preserves_shape() {
     let j = DynIndex::new_dyn(2);
     let fused = DynIndex::new_dyn(4);
     let block_a =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     let block_b =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
     let block = BlockTensor::new(vec![block_a, block_b], (1, 2)).unwrap();
 
     let fused_block =
-        <BlockTensor<TensorDynLen> as crate::tensor_like::TensorContractionLike>::fuse_indices(
+        <BlockTensor<IdxTensor> as crate::tensor_like::TensorContractionLike>::fuse_indices(
             &block,
             &[i, j],
             fused,
@@ -123,9 +123,8 @@ fn test_gmres_identity_block() {
     let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1)).unwrap();
 
     // Identity operator: A x = x
-    let apply_a = |x: &BlockTensor<TensorDynLen>| -> anyhow::Result<BlockTensor<TensorDynLen>> {
-        Ok(x.clone())
-    };
+    let apply_a =
+        |x: &BlockTensor<IdxTensor>| -> anyhow::Result<BlockTensor<IdxTensor>> { Ok(x.clone()) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -178,31 +177,30 @@ fn test_gmres_diagonal_block() {
     let diag1 = [2.0, 3.0];
     let diag2 = [4.0, 5.0];
 
-    let apply_a =
-        move |x: &BlockTensor<TensorDynLen>| -> anyhow::Result<BlockTensor<TensorDynLen>> {
-            let x1 = x.get(0, 0).unwrap();
-            let x2 = x.get(1, 0).unwrap();
+    let apply_a = move |x: &BlockTensor<IdxTensor>| -> anyhow::Result<BlockTensor<IdxTensor>> {
+        let x1 = x.get(0, 0).unwrap();
+        let x2 = x.get(1, 0).unwrap();
 
-            // Apply D1 to x1
-            let x1_data = x1.to_vec::<f64>()?;
-            let y1_data: Vec<f64> = x1_data
-                .iter()
-                .zip(diag1.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let y1 = TensorDynLen::from_dense(x1.indices.clone(), y1_data).unwrap();
+        // Apply D1 to x1
+        let x1_data = x1.to_vec::<f64>()?;
+        let y1_data: Vec<f64> = x1_data
+            .iter()
+            .zip(diag1.iter())
+            .map(|(&xi, &di)| xi * di)
+            .collect();
+        let y1 = IdxTensor::from_dense(x1.indices.clone(), y1_data).unwrap();
 
-            // Apply D2 to x2
-            let x2_data = x2.to_vec::<f64>()?;
-            let y2_data: Vec<f64> = x2_data
-                .iter()
-                .zip(diag2.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let y2 = TensorDynLen::from_dense(x2.indices.clone(), y2_data).unwrap();
+        // Apply D2 to x2
+        let x2_data = x2.to_vec::<f64>()?;
+        let y2_data: Vec<f64> = x2_data
+            .iter()
+            .zip(diag2.iter())
+            .map(|(&xi, &di)| xi * di)
+            .collect();
+        let y2 = IdxTensor::from_dense(x2.indices.clone(), y2_data).unwrap();
 
-            BlockTensor::new(vec![y1, y2], (2, 1)).map_err(anyhow::Error::from)
-        };
+        BlockTensor::new(vec![y1, y2], (2, 1)).map_err(anyhow::Error::from)
+    };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -257,7 +255,7 @@ fn test_gmres_upper_triangular_block() {
     let expected = BlockTensor::new(vec![expected1, expected2], (2, 1)).unwrap();
 
     // Upper triangular block operator: A = [[I, I], [0, I]]
-    let apply_a = |x: &BlockTensor<TensorDynLen>| -> anyhow::Result<BlockTensor<TensorDynLen>> {
+    let apply_a = |x: &BlockTensor<IdxTensor>| -> anyhow::Result<BlockTensor<IdxTensor>> {
         let x1 = x.get(0, 0).unwrap();
         let x2 = x.get(1, 0).unwrap();
 
@@ -325,11 +323,11 @@ fn test_isapprox_uses_trait_default_with_error_propagation() {
     assert!(TensorVectorSpace::isapprox(&a, &b, 1.0e-12, 0.0).unwrap());
 
     // A NaN block makes the default norm fail; the trait default propagates it.
-    let nan = BlockTensor::new(vec![TensorDynLen::scalar(f64::NAN).unwrap()], (1, 1)).unwrap();
+    let nan = BlockTensor::new(vec![IdxTensor::scalar(f64::NAN).unwrap()], (1, 1)).unwrap();
     assert!(TensorVectorSpace::isapprox(&nan, &a, 1.0e-12, 1.0e-12).is_err());
 
     // A shape mismatch makes the default sub fail before any norm is taken.
-    let wide = BlockTensor::new(vec![TensorDynLen::scalar(1.0).unwrap(); 2], (2, 1)).unwrap();
+    let wide = BlockTensor::new(vec![IdxTensor::scalar(1.0).unwrap(); 2], (2, 1)).unwrap();
     assert!(TensorVectorSpace::isapprox(&a, &wide, 1.0e-12, 1.0e-12).is_err());
 }
 
@@ -424,16 +422,16 @@ fn test_validate_indices_matrix_shared() {
 
     // Block (0,0): [col0_idx, row0_idx]
     let b00 =
-        TensorDynLen::from_dense(vec![col0_idx.clone(), row0_idx.clone()], vec![0.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![col0_idx.clone(), row0_idx.clone()], vec![0.0; 6]).unwrap();
     // Block (0,1): [col1_idx, row0_idx] — same row → shares row0_idx
     let b01 =
-        TensorDynLen::from_dense(vec![col1_idx.clone(), row0_idx.clone()], vec![0.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![col1_idx.clone(), row0_idx.clone()], vec![0.0; 6]).unwrap();
     // Block (1,0): [col0_idx, row1_idx] — same column → shares col0_idx
     let b10 =
-        TensorDynLen::from_dense(vec![col0_idx.clone(), row1_idx.clone()], vec![0.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![col0_idx.clone(), row1_idx.clone()], vec![0.0; 6]).unwrap();
     // Block (1,1): [col1_idx, row1_idx]
     let b11 =
-        TensorDynLen::from_dense(vec![col1_idx.clone(), row1_idx.clone()], vec![0.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![col1_idx.clone(), row1_idx.clone()], vec![0.0; 6]).unwrap();
 
     let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2)).unwrap();
     assert!(block.validate_indices().is_ok());
@@ -442,10 +440,10 @@ fn test_validate_indices_matrix_shared() {
 #[test]
 fn test_validate_indices_matrix_no_row_sharing() {
     // 2x2 matrix: all indices independent → should fail (no common indices in same row)
-    let b00 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
-    let b01 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
-    let b10 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
-    let b11 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+    let b00 = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+    let b01 = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+    let b10 = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+    let b11 = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
 
     let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2)).unwrap();
     assert!(block.validate_indices().is_err());
@@ -455,8 +453,8 @@ fn test_validate_indices_matrix_no_row_sharing() {
 fn test_validate_indices_matrix_same_id_prime_is_not_shared_index() {
     let row = DynIndex::new_dyn(2);
     let row_prime = row.prime();
-    let b00 = TensorDynLen::from_dense(vec![row], vec![0.0; 2]).unwrap();
-    let b01 = TensorDynLen::from_dense(vec![row_prime], vec![0.0; 2]).unwrap();
+    let b00 = IdxTensor::from_dense(vec![row], vec![0.0; 2]).unwrap();
+    let b01 = IdxTensor::from_dense(vec![row_prime], vec![0.0; 2]).unwrap();
 
     let block = BlockTensor::new(vec![b00, b01], (1, 2)).unwrap();
 
@@ -581,8 +579,8 @@ fn test_replace_indices() {
     let new_idx1 = DynIndex::new_dyn(2);
     let new_idx2 = DynIndex::new_dyn(3);
 
-    let b1 = TensorDynLen::from_dense(vec![idx1.clone(), idx2.clone()], vec![0.0; 6]).unwrap();
-    let b2 = TensorDynLen::from_dense(vec![idx1.clone(), idx2.clone()], vec![1.0; 6]).unwrap();
+    let b1 = IdxTensor::from_dense(vec![idx1.clone(), idx2.clone()], vec![0.0; 6]).unwrap();
+    let b2 = IdxTensor::from_dense(vec![idx1.clone(), idx2.clone()], vec![1.0; 6]).unwrap();
     let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let replaced = block
@@ -671,7 +669,7 @@ fn test_contract_unsupported() {
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
 
-    let result = BlockTensor::<TensorDynLen>::contract(&[&block]);
+    let result = BlockTensor::<IdxTensor>::contract(&[&block]);
     assert!(result.is_err());
 }
 
@@ -680,13 +678,13 @@ fn test_diagonal_unsupported() {
     let idx1 = DynIndex::new_dyn(2);
     let idx2 = DynIndex::new_dyn(2);
 
-    let result = BlockTensor::<TensorDynLen>::diagonal(&idx1, &idx2);
+    let result = BlockTensor::<IdxTensor>::diagonal(&idx1, &idx2);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_scalar_one_unsupported() {
-    let result = BlockTensor::<TensorDynLen>::scalar_one();
+    let result = BlockTensor::<IdxTensor>::scalar_one();
     assert!(result.is_err());
 }
 
@@ -694,7 +692,7 @@ fn test_scalar_one_unsupported() {
 fn test_ones_unsupported() {
     let idx = DynIndex::new_dyn(2);
 
-    let result = BlockTensor::<TensorDynLen>::ones(&[idx]);
+    let result = BlockTensor::<IdxTensor>::ones(&[idx]);
     assert!(result.is_err());
 }
 
@@ -702,6 +700,6 @@ fn test_ones_unsupported() {
 fn test_onehot_unsupported() {
     let idx = DynIndex::new_dyn(2);
 
-    let result = BlockTensor::<TensorDynLen>::onehot(&[(idx, 0)]);
+    let result = BlockTensor::<IdxTensor>::onehot(&[(idx, 0)]);
     assert!(result.is_err());
 }

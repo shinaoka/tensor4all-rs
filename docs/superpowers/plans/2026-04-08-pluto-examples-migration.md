@@ -382,7 +382,7 @@ The worker must:
 2. Read `apply_linear_operator` (file: `crates/tensor4all-treetn/src/operator/apply.rs:139`)
 3. Read how to convert `QuanticsTensorCI2` → `TreeTN`:
    - `qtci.tci()` returns `&TreeTCI2<V>`
-   - `tensor4all_treetci::materialize::to_treetn(tci, batch_eval, center)` returns `TreeTN<TensorDynLen, usize>`
+   - `tensor4all_treetci::materialize::to_treetn(tci, batch_eval, center)` returns `TreeTN<IdxTensor, usize>`
 4. Read `FourierOptions` (file: `crates/tensor4all-quanticstransform/src/fourier.rs:22`)
 
 Write an example that:

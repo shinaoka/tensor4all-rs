@@ -12,7 +12,7 @@
 use num_complex::Complex64;
 use rand::{rngs::StdRng, SeedableRng};
 use tensor4all_core::krylov::{gmres_with_truncation, GmresOptions};
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// Shared indices for all MPS/MPO operations.
@@ -308,7 +308,7 @@ fn create_identity_mpo(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
             for j in 0..site_dim {
                 data[j * site_dim + j] = 1.0;
             }
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             // First site: [s_in, s_out, right]
@@ -317,7 +317,7 @@ fn create_identity_mpo(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
             for j in 0..site_dim {
                 data[j * site_dim + j] = 1.0;
             }
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out, right_bond], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             // Last site: [left, s_in, s_out]
@@ -326,7 +326,7 @@ fn create_identity_mpo(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
             for j in 0..site_dim {
                 data[j * site_dim + j] = 1.0;
             }
-            let tensor = TensorDynLen::from_dense(vec![left_bond, s_in, s_out], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![left_bond, s_in, s_out], data).unwrap();
             tensors.push(tensor);
         } else {
             // Middle site: [left, s_in, s_out, right]
@@ -337,7 +337,7 @@ fn create_identity_mpo(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
                 data[j * site_dim + j] = 1.0;
             }
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, s_in, s_out, right_bond], data).unwrap();
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out, right_bond], data).unwrap();
             tensors.push(tensor);
         }
     }
@@ -356,24 +356,24 @@ fn create_ones_mps(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
 
         if i == 0 && n == 1 {
             let data = vec![1.0; site_dim];
-            let tensor = TensorDynLen::from_dense(vec![site_idx], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![site_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = indices.bonds[i].clone();
             let data = vec![1.0; site_dim * 1];
-            let tensor = TensorDynLen::from_dense(vec![site_idx, right_bond], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![site_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = indices.bonds[i - 1].clone();
             let data = vec![1.0; 1 * site_dim];
-            let tensor = TensorDynLen::from_dense(vec![left_bond, site_idx], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![left_bond, site_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = indices.bonds[i - 1].clone();
             let right_bond = indices.bonds[i].clone();
             let data = vec![1.0; 1 * site_dim * 1];
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, site_idx, right_bond], data).unwrap();
+                IdxTensor::from_dense(vec![left_bond, site_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         }
     }
@@ -428,26 +428,24 @@ fn create_pauli_x_mpo(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
         let s_out = indices.mpo_outputs[i].clone();
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out], pauli_x.to_vec()).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out], pauli_x.to_vec()).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = mpo_bonds[i].clone();
             let tensor =
-                TensorDynLen::from_dense(vec![s_in, s_out, right_bond], pauli_x.to_vec()).unwrap();
+                IdxTensor::from_dense(vec![s_in, s_out, right_bond], pauli_x.to_vec()).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = mpo_bonds[i - 1].clone();
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, s_in, s_out], pauli_x.to_vec()).unwrap();
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out], pauli_x.to_vec()).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = mpo_bonds[i - 1].clone();
             let right_bond = mpo_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense(
-                vec![left_bond, s_in, s_out, right_bond],
-                pauli_x.to_vec(),
-            )
-            .unwrap();
+            let tensor =
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out, right_bond], pauli_x.to_vec())
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -595,7 +593,7 @@ fn create_imaginary_identity_mpo(indices: &SharedIndices) -> anyhow::Result<Tens
             for j in 0..site_dim {
                 data[j * site_dim + j] = factor;
             }
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             // First site: [s_in, s_out, right]
@@ -604,7 +602,7 @@ fn create_imaginary_identity_mpo(indices: &SharedIndices) -> anyhow::Result<Tens
             for j in 0..site_dim {
                 data[j * site_dim + j] = factor;
             }
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out, right_bond], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             // Last site: [left, s_in, s_out]
@@ -613,7 +611,7 @@ fn create_imaginary_identity_mpo(indices: &SharedIndices) -> anyhow::Result<Tens
             for j in 0..site_dim {
                 data[j * site_dim + j] = factor;
             }
-            let tensor = TensorDynLen::from_dense(vec![left_bond, s_in, s_out], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![left_bond, s_in, s_out], data).unwrap();
             tensors.push(tensor);
         } else {
             // Middle site: [left, s_in, s_out, right]
@@ -624,7 +622,7 @@ fn create_imaginary_identity_mpo(indices: &SharedIndices) -> anyhow::Result<Tens
                 data[j * site_dim + j] = factor;
             }
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, s_in, s_out, right_bond], data).unwrap();
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out, right_bond], data).unwrap();
             tensors.push(tensor);
         }
     }
@@ -649,24 +647,24 @@ fn create_imaginary_ones_mps(indices: &SharedIndices) -> anyhow::Result<TensorTr
 
         if i == 0 && n == 1 {
             let data = vec![factor; site_dim];
-            let tensor = TensorDynLen::from_dense(vec![site_idx], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![site_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = indices.bonds[i].clone();
             let data = vec![factor; site_dim];
-            let tensor = TensorDynLen::from_dense(vec![site_idx, right_bond], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![site_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = indices.bonds[i - 1].clone();
             let data = vec![factor; site_dim];
-            let tensor = TensorDynLen::from_dense(vec![left_bond, site_idx], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![left_bond, site_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = indices.bonds[i - 1].clone();
             let right_bond = indices.bonds[i].clone();
             let data = vec![factor; site_dim];
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, site_idx, right_bond], data).unwrap();
+                IdxTensor::from_dense(vec![left_bond, site_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         }
     }
@@ -696,26 +694,24 @@ fn create_diagonal_mpo(indices: &SharedIndices) -> anyhow::Result<TensorTrain> {
         let s_out = indices.mpo_outputs[i].clone();
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out], diag_mat.to_vec()).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out], diag_mat.to_vec()).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = mpo_bonds[i].clone();
             let tensor =
-                TensorDynLen::from_dense(vec![s_in, s_out, right_bond], diag_mat.to_vec()).unwrap();
+                IdxTensor::from_dense(vec![s_in, s_out, right_bond], diag_mat.to_vec()).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = mpo_bonds[i - 1].clone();
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, s_in, s_out], diag_mat.to_vec()).unwrap();
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out], diag_mat.to_vec()).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = mpo_bonds[i - 1].clone();
             let right_bond = mpo_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense(
-                vec![left_bond, s_in, s_out, right_bond],
-                diag_mat.to_vec(),
-            )
-            .unwrap();
+            let tensor =
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out, right_bond], diag_mat.to_vec())
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -865,21 +861,21 @@ fn create_random_mpo(indices: &SharedIndices, seed: u64) -> anyhow::Result<Tenso
         }
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = mpo_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense(vec![s_in, s_out, right_bond], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![s_in, s_out, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = mpo_bonds[i - 1].clone();
-            let tensor = TensorDynLen::from_dense(vec![left_bond, s_in, s_out], data).unwrap();
+            let tensor = IdxTensor::from_dense(vec![left_bond, s_in, s_out], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = mpo_bonds[i - 1].clone();
             let right_bond = mpo_bonds[i].clone();
             let tensor =
-                TensorDynLen::from_dense(vec![left_bond, s_in, s_out, right_bond], data).unwrap();
+                IdxTensor::from_dense(vec![left_bond, s_in, s_out, right_bond], data).unwrap();
             tensors.push(tensor);
         }
     }

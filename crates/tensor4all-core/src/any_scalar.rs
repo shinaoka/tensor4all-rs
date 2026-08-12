@@ -11,7 +11,7 @@ use num_traits::{One, Zero};
 use tenferro::DType;
 use tensor4all_tensorbackend::AnyScalar as BackendScalar;
 
-use crate::defaults::tensordynlen::TensorDynLen;
+use crate::defaults::idx_tensor::IdxTensor;
 use crate::TensorElement;
 use tensor4all_tensorbackend::{Storage, SumFromStorage};
 
@@ -135,7 +135,7 @@ enum AnyScalarTensorError {
 
 fn initialize_tensor<T: ScalarTensorElement>(
     value: T,
-) -> std::result::Result<TensorDynLen, AnyScalarTensorError> {
+) -> std::result::Result<IdxTensor, AnyScalarTensorError> {
     #[cfg(test)]
     if FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(Cell::get) {
         return Err(AnyScalarTensorError::Initialization {
@@ -145,7 +145,7 @@ fn initialize_tensor<T: ScalarTensorElement>(
         });
     }
 
-    TensorDynLen::scalar(value).map_err(|source| AnyScalarTensorError::Initialization {
+    IdxTensor::scalar(value).map_err(|source| AnyScalarTensorError::Initialization {
         source: Arc::from(anyhow::Error::new(source).into_boxed_dyn_error()),
     })
 }
@@ -203,7 +203,7 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 }
 
 /// Dynamic scalar compatibility wrapper for tensor4all-core.
-/// This owns a rank-0 [`TensorDynLen`] so that scalar values can participate in
+/// This owns a rank-0 [`IdxTensor`] so that scalar values can participate in
 /// the same eager autodiff graph as tensors while preserving the existing
 /// dynamic scalar API shape. The infallible scalar constructors retain a
 /// tensor-initialization failure for later fallible tensor or AD operations.
@@ -211,13 +211,13 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 /// tracked-state marker when an eager operation fails.
 #[derive(Clone)]
 pub struct AnyScalar {
-    tensor: std::result::Result<TensorDynLen, AnyScalarTensorError>,
+    tensor: std::result::Result<IdxTensor, AnyScalarTensorError>,
     value: ScalarValue,
     tracks_grad: bool,
 }
 
 impl AnyScalar {
-    fn wrap_tensor(tensor: TensorDynLen) -> Result<Self> {
+    fn wrap_tensor(tensor: IdxTensor) -> Result<Self> {
         let dims = tensor.dims();
         anyhow::ensure!(
             dims.is_empty(),
@@ -233,7 +233,7 @@ impl AnyScalar {
         })
     }
 
-    fn from_tensor_result(tensor: Result<TensorDynLen>, op: &'static str) -> Result<Self> {
+    fn from_tensor_result(tensor: Result<IdxTensor>, op: &'static str) -> Result<Self> {
         let tensor = tensor.map_err(|error| operation_error_from_anyhow(op, error))?;
         Self::wrap_tensor(tensor).map_err(|error| operation_error_from_anyhow(op, error))
     }
@@ -302,7 +302,7 @@ impl AnyScalar {
     {
         let result = f(lhs.as_tensor()?.as_inner()?, rhs.as_tensor()?.as_inner()?)
             .map_err(|error| operation_error(op, error))?;
-        Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), op)
+        Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
     fn from_eager_unary<E>(
@@ -315,10 +315,10 @@ impl AnyScalar {
     {
         let result =
             f(input.as_tensor()?.as_inner()?).map_err(|error| operation_error(op, error))?;
-        Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), op)
+        Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
-    fn scalar_value_from_tensor(tensor: &TensorDynLen) -> Result<ScalarValue> {
+    fn scalar_value_from_tensor(tensor: &IdxTensor) -> Result<ScalarValue> {
         let native = tensor.as_native()?;
         match native.dtype() {
             DType::F32 => native
@@ -358,11 +358,11 @@ impl AnyScalar {
         }
     }
 
-    pub(crate) fn from_tensor(tensor: TensorDynLen) -> Result<Self> {
+    pub(crate) fn from_tensor(tensor: IdxTensor) -> Result<Self> {
         Self::wrap_tensor(tensor)
     }
 
-    pub(crate) fn as_tensor(&self) -> Result<&TensorDynLen> {
+    pub(crate) fn as_tensor(&self) -> Result<&IdxTensor> {
         self.tensor
             .as_ref()
             .map_err(|error| anyhow::Error::new(error.clone()))
@@ -576,7 +576,7 @@ impl AnyScalar {
     /// assert!(!scalar.tracks_grad());
     /// ```
     pub fn tracks_grad(&self) -> bool {
-        self.tracks_grad || self.tensor.as_ref().is_ok_and(TensorDynLen::tracks_grad)
+        self.tracks_grad || self.tensor.as_ref().is_ok_and(IdxTensor::tracks_grad)
     }
 
     /// Returns the stored gradient, if any.
@@ -1528,11 +1528,11 @@ mod tests {
     fn compact_sum_preserves_f32_and_c32_dtype_with_and_without_ad() {
         let indices = || vec![crate::DynIndex::new_dyn(2), crate::DynIndex::new_dyn(2)];
         for tensor in [
-            TensorDynLen::from_diag(indices(), vec![1.0_f32, 2.0_f32])
+            IdxTensor::from_diag(indices(), vec![1.0_f32, 2.0_f32])
                 .unwrap()
                 .sum()
                 .unwrap(),
-            TensorDynLen::from_diag(indices(), vec![1.0_f32, 2.0_f32])
+            IdxTensor::from_diag(indices(), vec![1.0_f32, 2.0_f32])
                 .unwrap()
                 .enable_grad()
                 .unwrap()
@@ -1542,14 +1542,14 @@ mod tests {
             assert!(matches!(tensor.value(), ScalarValue::F32(3.0)));
         }
         for tensor in [
-            TensorDynLen::from_diag(
+            IdxTensor::from_diag(
                 indices(),
                 vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
             )
             .unwrap()
             .sum()
             .unwrap(),
-            TensorDynLen::from_diag(
+            IdxTensor::from_diag(
                 indices(),
                 vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
             )

@@ -16,7 +16,7 @@
 //! use tensor4all_treetn::{square_linsolve, LinsolveOptions};
 //!
 //! let options = LinsolveOptions::default().with_nfullsweeps(2);
-//! let _solver = square_linsolve::<tensor4all_core::TensorDynLen, usize>;
+//! let _solver = square_linsolve::<tensor4all_core::IdxTensor, usize>;
 //!
 //! assert_eq!(options.nfullsweeps, 2);
 //! ```

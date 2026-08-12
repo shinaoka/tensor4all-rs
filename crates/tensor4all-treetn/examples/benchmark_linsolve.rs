@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tensor4all_core::{
-    index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+    index::DynId, DynIndex, IdxTensor, IndexLike, TensorContractionLike, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, random_treetn, ApplyOptions, CanonicalForm,
@@ -29,10 +29,10 @@ fn create_n_site_ones_mps(
     n_sites: usize,
     phys_dim: usize,
     bond_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     // Physical indices with tags (for readable debug output)
     let site_indices: Vec<DynIndex> = (0..n_sites)
@@ -59,7 +59,7 @@ fn create_n_site_ones_mps(
         };
 
         let nelem: usize = indices.iter().map(|idx| idx.dim).product();
-        let tensor = TensorDynLen::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
+        let tensor = IdxTensor::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
         mps.add_tensor(name, tensor).unwrap();
     }
 
@@ -81,7 +81,7 @@ fn create_random_chain_mpo_with_internal_indices(
     phys_dim: usize,
     mpo_bond_dim: usize,
     seed: u64,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
 
     let s_in_tmp: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
         .with_gmres_restart_dim(gmres_restart_dim)
         .with_coefficients(a0, a1);
 
-    let compute_rel_residual = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+    let compute_rel_residual = |x: &TreeTN<IdxTensor, String>| -> anyhow::Result<f64> {
         let linop = LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
         let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
 
@@ -250,7 +250,7 @@ fn main() -> anyhow::Result<()> {
 
         // Align tensor indices to b's order before converting to vectors
         let ref_order = b_full.external_indices();
-        let order_for = |tensor: &TensorDynLen| -> anyhow::Result<Vec<DynIndex>> {
+        let order_for = |tensor: &IdxTensor| -> anyhow::Result<Vec<DynIndex>> {
             let inds = tensor.external_indices();
             let by_id: HashMap<DynId, DynIndex> = inds.into_iter().map(|i| (*i.id(), i)).collect();
             let mut out = Vec::with_capacity(ref_order.len());
@@ -324,7 +324,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("Measured runs...");
     let mut times = Vec::with_capacity(n_runs);
-    let mut x_last: Option<TreeTN<TensorDynLen, String>> = None;
+    let mut x_last: Option<TreeTN<IdxTensor, String>> = None;
 
     for run in 1..=n_runs {
         let start = Instant::now();

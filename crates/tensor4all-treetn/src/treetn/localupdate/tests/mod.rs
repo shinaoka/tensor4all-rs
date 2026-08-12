@@ -1,5 +1,5 @@
 use super::*;
-use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
 
 /// Create a 4-node Y-shape TreeTN:
 ///     A
@@ -8,13 +8,13 @@ use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
 ///    / \
 ///   C   D
 fn create_y_shape_treetn() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex,
     DynIndex,
     DynIndex,
     DynIndex,
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let site_a = DynIndex::new_dyn(2);
     let site_c = DynIndex::new_dyn(2);
@@ -25,11 +25,11 @@ fn create_y_shape_treetn() -> (
 
     // Tensor A: [site_a, bond_ab]
     let tensor_a =
-        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
     // Tensor B: [bond_ab, bond_bc, bond_bd]
-    let tensor_b = TensorDynLen::from_dense(
+    let tensor_b = IdxTensor::from_dense(
         vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
         vec![1.0; 27],
     )
@@ -38,12 +38,12 @@ fn create_y_shape_treetn() -> (
 
     // Tensor C: [bond_bc, site_c]
     let tensor_c =
-        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
     // Tensor D: [bond_bd, site_d]
     let tensor_d =
-        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
     // Connect
@@ -66,16 +66,15 @@ fn truncate_updater_keeps_same_id_primed_nonbond_index() {
     let bond = DynIndex::new_dyn(1);
     let bond_prime = bond.prime();
 
-    let tensor_0 = TensorDynLen::from_dense(
+    let tensor_0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone(), bond_prime.clone()],
         vec![1.0, 0.0],
     )
     .unwrap();
-    let tensor_1 =
-        TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0, 0.0]).unwrap();
+    let tensor_1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![1.0, 0.0]).unwrap();
 
     let tn =
-        TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor_0, tensor_1], vec![0usize, 1usize])
+        TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor_0, tensor_1], vec![0usize, 1usize])
             .unwrap();
 
     let step = LocalUpdateStep {
@@ -98,16 +97,16 @@ fn canonicalize_keeps_same_id_primed_nonbond_index_on_source() {
     let bond = DynIndex::new_dyn(2);
     let bond_prime = bond.prime();
 
-    let tensor_0 = TensorDynLen::from_dense(
+    let tensor_0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone(), bond_prime.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.5, 0.0, 0.0, 0.25],
     )
     .unwrap();
     let tensor_1 =
-        TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+        IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
     let mut tn =
-        TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor_0, tensor_1], vec![0usize, 1usize])
+        TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor_0, tensor_1], vec![0usize, 1usize])
             .unwrap();
 
     tn.canonicalize_mut([1usize], Default::default()).unwrap();
@@ -402,8 +401,8 @@ fn test_sweep_plan_nonexistent_root() {
 
 /// Create a chain TreeTN: A - B - C
 /// Each node has a site index of dim 2, bonds of dim 4
-fn create_chain_treetn() -> TreeTN<TensorDynLen, String> {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+fn create_chain_treetn() -> TreeTN<IdxTensor, String> {
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let site_a = DynIndex::new_dyn(2);
     let site_b = DynIndex::new_dyn(2);
@@ -413,11 +412,11 @@ fn create_chain_treetn() -> TreeTN<TensorDynLen, String> {
 
     // Tensor A: [site_a, bond_ab] dim 2x4
     let tensor_a =
-        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 8]).unwrap();
+        IdxTensor::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 8]).unwrap();
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
     // Tensor B: [bond_ab, site_b, bond_bc] dim 4x2x4
-    let tensor_b = TensorDynLen::from_dense(
+    let tensor_b = IdxTensor::from_dense(
         vec![bond_ab.clone(), site_b.clone(), bond_bc.clone()],
         vec![1.0; 32],
     )
@@ -426,7 +425,7 @@ fn create_chain_treetn() -> TreeTN<TensorDynLen, String> {
 
     // Tensor C: [bond_bc, site_c] dim 4x2
     let tensor_c =
-        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 8]).unwrap();
+        IdxTensor::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 8]).unwrap();
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
     // Connect

@@ -5,41 +5,41 @@ use tensor4all_core::{
     factorize, factorize_full_rank, Canonical, DynIndex, FactorizeAlg, FactorizeError,
     FactorizeOptions, TensorContractionLike,
 };
-use tensor4all_core::{SvdTruncationPolicy, TensorDynLen};
+use tensor4all_core::{IdxTensor, SvdTruncationPolicy};
 
 // ============================================================================
 // Test Data Helpers
 // ============================================================================
 
 /// Helper to create a simple 2x3 matrix tensor for testing.
-fn create_test_matrix() -> TensorDynLen {
+fn create_test_matrix() -> IdxTensor {
     let i: DynIndex = Index::new_dyn(2);
     let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    TensorDynLen::from_dense(vec![i, j], data).unwrap()
+    IdxTensor::from_dense(vec![i, j], data).unwrap()
 }
 
 /// Helper to create a rank-3 tensor for testing.
-fn create_rank3_tensor() -> TensorDynLen {
+fn create_rank3_tensor() -> IdxTensor {
     let i: DynIndex = Index::new_dyn(2);
     let j: DynIndex = Index::new_dyn(3);
     let k: DynIndex = Index::new_dyn(2);
 
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    TensorDynLen::from_dense(vec![i, j, k], data).unwrap()
+    IdxTensor::from_dense(vec![i, j, k], data).unwrap()
 }
 
-fn create_unit_dim_rank3_tensor() -> TensorDynLen {
+fn create_unit_dim_rank3_tensor() -> IdxTensor {
     let i: DynIndex = Index::new_dyn(1);
     let j: DynIndex = Index::new_dyn(2);
     let k: DynIndex = Index::new_dyn(2);
 
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    TensorDynLen::from_dense(vec![i, j, k], data).unwrap()
+    IdxTensor::from_dense(vec![i, j, k], data).unwrap()
 }
 
-fn create_non_symmetric_col_major_matrix() -> TensorDynLen {
+fn create_non_symmetric_col_major_matrix() -> IdxTensor {
     let i: DynIndex = Index::new_dyn(2);
     let j: DynIndex = Index::new_dyn(3);
 
@@ -47,7 +47,7 @@ fn create_non_symmetric_col_major_matrix() -> TensorDynLen {
     // [[1, 2, 4],
     //  [3, 5, 6]]
     let data = vec![1.0, 3.0, 2.0, 5.0, 4.0, 6.0];
-    TensorDynLen::from_dense(vec![i, j], data).unwrap()
+    IdxTensor::from_dense(vec![i, j], data).unwrap()
 }
 
 // ============================================================================
@@ -282,7 +282,7 @@ fn test_factorize_full_rank_preserves_near_dependent_components() {
     let i: DynIndex = Index::new_dyn(2);
     let j: DynIndex = Index::new_dyn(2);
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 0.0, 0.0, 1.0e-16]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0, 0.0, 0.0, 1.0e-16]).unwrap();
 
     for alg in [FactorizeAlg::SVD, FactorizeAlg::QR, FactorizeAlg::LU] {
         let result =
@@ -339,7 +339,7 @@ fn test_diag_dense_contraction_svd_internals() {
     let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
@@ -368,7 +368,7 @@ fn test_diag_dense_contraction_svd_internals() {
 // Helper Functions
 // ============================================================================
 
-fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
+fn assert_tensors_approx_equal(a: &IdxTensor, b: &IdxTensor, tol: f64) {
     assert!(
         a.isapprox(b, tol, 0.0).unwrap(),
         "Tensors differ: maxabs diff = {}",

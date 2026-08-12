@@ -4,7 +4,7 @@
 //! `maxabs()` comparisons. They use local transfer-matrix references, structural
 //! assertions, and norm-based residuals instead.
 
-use tensor4all_core::defaults::tensordynlen::TensorDynLen;
+use tensor4all_core::defaults::idx_tensor::IdxTensor;
 use tensor4all_core::{AnyScalar, DynIndex, IndexLike};
 use tensor4all_itensorlike::TensorTrain;
 
@@ -17,17 +17,17 @@ fn make_tt(n_sites: usize) -> TensorTrain {
         if k == 0 {
             let bond_r = DynIndex::new_dyn(2);
             let t =
-                TensorDynLen::from_dense(vec![site_idx, bond_r], vec![1.0, 0.5, 0.3, 1.0]).unwrap();
+                IdxTensor::from_dense(vec![site_idx, bond_r], vec![1.0, 0.5, 0.3, 1.0]).unwrap();
             tensors.push(t);
         } else if k == n_sites - 1 {
             let bond_l = tensors[k - 1].indices().last().unwrap().clone();
             let t =
-                TensorDynLen::from_dense(vec![bond_l, site_idx], vec![1.0, 0.2, 0.7, 1.0]).unwrap();
+                IdxTensor::from_dense(vec![bond_l, site_idx], vec![1.0, 0.2, 0.7, 1.0]).unwrap();
             tensors.push(t);
         } else {
             let bond_l = tensors[k - 1].indices().last().unwrap().clone();
             let bond_r = DynIndex::new_dyn(2);
-            let t = TensorDynLen::from_dense(
+            let t = IdxTensor::from_dense(
                 vec![bond_l, site_idx, bond_r],
                 vec![1.0, 0.0, 0.5, 0.3, 0.0, 1.0, 0.2, 0.8],
             )

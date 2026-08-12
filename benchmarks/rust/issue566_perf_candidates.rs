@@ -144,12 +144,12 @@ fn main() {
         let i = tensor4all_core::DynIndex::new_dyn(4);
     let j = tensor4all_core::DynIndex::new_dyn(4);
     let k = tensor4all_core::DynIndex::new_dyn(4);
-    let a = tensor4all_core::TensorDynLen::from_dense(
+    let a = tensor4all_core::IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         (0..16).map(|x| x as f64).collect(),
     )
     .unwrap();
-    let b = tensor4all_core::TensorDynLen::from_dense(
+    let b = tensor4all_core::IdxTensor::from_dense(
         vec![j, k],
         (0..16).map(|x| (x as f64) * 0.5).collect(),
     )

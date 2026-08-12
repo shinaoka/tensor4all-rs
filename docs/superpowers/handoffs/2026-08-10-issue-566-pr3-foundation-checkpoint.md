@@ -28,7 +28,7 @@
   fuse_indices / contract / contract_pair / validate）と
   `TensorConstructionLike`（diagonal / delta / scalar_one / ones /
   select_indices / onehot）を typed 化。
-- 実装者: TensorDynLen → TensorDynLenError、BlockTensor →
+- 実装者: IdxTensor → IdxTensorError、BlockTensor →
   TensorVectorSpaceError、TensorTrain（itensorlike）→ TensorTrainError、
   TreeTN / LinearOperator（treetn）→ 新設 TreeTNOperationError。
 - 下流呼び出し元（gse / tdvp / linsolve / contraction / cached_evaluator /
@@ -58,13 +58,13 @@
 ## 注意
 - スライス単位のコミットはブランチに蓄積済み（未 push）。1 つの PR として
   全スライス完了後に push する想定（設計の「crate 単位コミット・1 PR」方針）。
-- tensordynlen.rs の # Errors バックログ 46 件が core の最大クラスタ。
+- idx_tensor.rs の # Errors バックログ 46 件が core の最大クラスタ。
 
 ## 追記（2026-08-10 続行分）
 
 - ブランチ: `chore/issue-566-pr3-errors`（origin/main から 22 コミット、未 push）。
 - **バックログ燃焼**: # Errors ドキュメントバックログを 545 → 321 まで削減。
-  対象: tensordynlen(46) / tenferro_bridge(26) / itensorlike tensortrain /
+  対象: idx_tensor(46) / tenferro_bridge(26) / itensorlike tensortrain /
   treetn mod・ops・named_graph / storage / interpolation / affine / graph /
   contract / krylov / backend / site_index_network ほか。
 - **教訓（繰り返す場合）**: ① doc 挿入は行番号シフトを避けるため降順処理。
@@ -132,23 +132,23 @@
 - 教訓: blanket `From<E: std::error::Error>` は E0119 自己衝突 → 使わない。trait メソッド（anyhow 返し）と tenferro エラーは map_err が異なる（前者 From 直、後者 anyhow::Error::new wrap）
 
 ### core contraction API 完了（レビュー済み・コミット済み）
-- `f62c4af` defaults/contract.rs 9 fn + direct_sum.rs 1 fn → Result<_, TensorDynLenError>
-- defaults/mod.rs で TensorDynLenError 再エクスポート追加
-- trait impl（TensorContractionLike for TensorDynLen）の identity map_err 削除
+- `f62c4af` defaults/contract.rs 9 fn + direct_sum.rs 1 fn → Result<_, IdxTensorError>
+- defaults/mod.rs で IdxTensorError 再エクスポート追加
+- trait impl（TensorContractionLike for IdxTensor）の identity map_err 削除
 - 呼び出し側: factorize.rs（anyhow::Error::new wrap）、treetn gse.rs 6 サイト（GseError::Algorithm source を anyhow::Error::new）、itensorlike tensortrain.rs 3 サイト（operation_source に anyhow::Error::new）
-- 教訓: `TensorDynLenError::Operation.source` は `Arc<dyn Error + Send + Sync>`（anyhow ではない）→ std::io::Error::other で構築
+- 教訓: `IdxTensorError::Operation.source` は `Arc<dyn Error + Send + Sync>`（anyhow ではない）→ std::io::Error::other で構築
 - reviewer-gpt: finding 0（clean）
 
 ### 次のスライス候補
 - defaults/index.rs + index_ops.rs（index 生成/置換系）
 - any_scalar.rs（13 fn、内部に AnyScalarTensorError 下地あり）
 - krylov.rs（9 fn、エラー enum 新設が必要）
-- 残り ~100 fn の tensordynlen inherent メソッド
+- 残り ~100 fn の idx_tensor inherent メソッド
 
 ## Session 2026-08-12 後半（typed-error step 2 継続）
 
 ### core index 置換 API 完了（レビュー済み・コミット済み）
-- `2c4720a` TensorDynLen::replaceind/replace_indices（inherent）→ Result<_, TensorDynLenError>（ShapeMismatch 構造化バリアント使用）、DynIndex::new_bond → TagSetError
+- `2c4720a` IdxTensor::replaceind/replace_indices（inherent）→ Result<_, IdxTensorError>（ShapeMismatch 構造化バリアント使用）、DynIndex::new_bond → TagSetError
 - 呼び出し側: factorize（anyhow::Error::new wrap）、treetn gse 多数サイト、simplett_bridge collect 修正、itensorlike tensortrain
 - tensor_basic.rs の 3 テストを構造化メッセージ（operation + "shape mismatch"）に更新
 - `bfc4236` reviewer 指摘の rustdoc 修正: replaceind(s) の全等価マッチ記述・new_bond の TagSetError 記述・ShapeMismatch バリアント説明拡張
@@ -162,21 +162,21 @@
 ### 現状
 - ブランチ chore/issue-566-pr3-errors、origin/main より 47 コミット
 - セッション内レビュー: 4 スライス（bridge/contraction/index/any_scalar）全て reviewer-gpt で finding 解消済み
-- core 残り anyhow 公開 fn: 92 → ~80（tensordynlen inherent が大半）
+- core 残り anyhow 公開 fn: 92 → ~80（idx_tensor inherent が大半）
 
 ### 次のスライス候補
-- tensordynlen inherent メソッド群（sum/scale/add/axpby/inner_product/sub/neg/permute/select_indices/from_dense/from_diag/to_vec/scalar/zeros/fuse_indices/unfuse_index/stack_along_new_index/index_select/mask_index/from_native/as_native 等 ~80 fn）— 最大ブロック
+- idx_tensor inherent メソッド群（sum/scale/add/axpby/inner_product/sub/neg/permute/select_indices/from_dense/from_diag/to_vec/scalar/zeros/fuse_indices/unfuse_index/stack_along_new_index/index_select/mask_index/from_native/as_native 等 ~80 fn）— 最大ブロック
 - block_tensor.rs / col_major_array.rs / krylov.rs
 - レイヤリング項目 c..i
 
-## Session 2026-08-12 後半2（TensorDynLen 一括型付け）
+## Session 2026-08-12 後半2（IdxTensor 一括型付け）
 
-### 完了: TensorDynLen inherent 43 fn 型付け（レビュー済み・コミット済み）
-- `cd61911`: select_indices/stack_along_new_index/index_select/from_dense(_any)/from_diag(_any)/from_indices/from_storage/from_structured_storage/enable_grad/grad/clear_grad/backward/detach/sum/only/inner_product/add/axpby/scale/sub/neg/permute_indices/permute/fuse_indices/unfuse_index/mask_index/diagonal/delta/scalar_one/ones/onehot/to_vec/scalar/zeros/copy_tensor/into_dense_col_major_parts/as_slice_f64/c64/compute_permutation_from_indices/hermitian_eigendecomposition/diag_tensor_dyn_len/unfold_split/norm/norm_squared/maxabs/isapprox/distance → Result<_, TensorDynLenError>
+### 完了: IdxTensor inherent 43 fn 型付け（レビュー済み・コミット済み）
+- `cd61911`: select_indices/stack_along_new_index/index_select/from_dense(_any)/from_diag(_any)/from_indices/from_storage/from_structured_storage/enable_grad/grad/clear_grad/backward/detach/sum/only/inner_product/add/axpby/scale/sub/neg/permute_indices/permute/fuse_indices/unfuse_index/mask_index/diagonal/delta/scalar_one/ones/onehot/to_vec/scalar/zeros/copy_tensor/into_dense_col_major_parts/as_slice_f64/c64/compute_permutation_from_indices/hermitian_eigendecomposition/diag_idx_tensor/unfold_split/norm/norm_squared/maxabs/isapprox/distance → Result<_, IdxTensorError>
 - 新設 From impl: TensorStorageError→Storage / tenferro_ad::Error・EagerContextError・BridgeError→Materialization
 - trait impl の identity map_err(Self::Error::from) 除去
-- 呼び出し側: itensorlike（From<TensorDynLenError> 追加）、treetn gse/cached_evaluator、partitionedtt、benchmarks 3 本、krylov doc examples
-- `862dcaa`: reviewer major 3 件修正 — (1) partitionedtt tensor_operation_error を TensorDynLenError::Storage 直接マッチ化、テスト実パス化、(2) From<BridgeError> は Arc::new(source) でフレーム保存、(3) tensortrain の二重ラップ削除（TensorTrainError::from 直）
+- 呼び出し側: itensorlike（From<IdxTensorError> 追加）、treetn gse/cached_evaluator、partitionedtt、benchmarks 3 本、krylov doc examples
+- `862dcaa`: reviewer major 3 件修正 — (1) partitionedtt tensor_operation_error を IdxTensorError::Storage 直接マッチ化、テスト実パス化、(2) From<BridgeError> は Arc::new(source) でフレーム保存、(3) tensortrain の二重ラップ削除（TensorTrainError::from 直）
 
 ### 教訓（ハンドオフ追記）
 - 一括変換は行範囲認識なしのブロック regex で破損が起きた（ファイルを bfc4236 に戻して再適用）。安全手順: (a) シグネチャ subn → (b) Err(anyhow) の .into() 付与 → (c) ensure! の paren-aware 変換 → (d) コンパイラ駆動で tail 修正 → (e) clippy の useless_conversion を報告行ベースで除去（ブロック regex は typed fn の .into() も消すため禁止）
@@ -212,7 +212,7 @@
 - reviewer minor: sum() を infallible と文書化、# Errors を variant 基準に、stray '///' 除去
 
 ### treetci（`5b7f133` + `44b9caf`）
-- 新規 TreeTciError（InvalidGraph/IndexOutOfBounds/Operation + From<anyhow>/From<TensorDynLenError>）+ TreeTciResult alias
+- 新規 TreeTciError（InvalidGraph/IndexOutOfBounds/Operation + From<anyhow>/From<IdxTensorError>）+ TreeTciResult alias
 - 21 公開 fn 型付け（api/assemble/batch/graph/materialize/optimize/state）
 - reviewer must-fix 3 件修正: (1) NaN セマンティクス復元（partial_cmp matches!）、(2) 専用 variant 到達可能化（graph 検証→InvalidGraph、site/edge bounds→IndexOutOfBounds、ConvergenceFailure 削除）、(3) 公開 trait メソッド（FullPivLuScalar::solve_right_full_piv_lu、PivotCandidateProposer::candidates）も TreeTciResult 化
 - 教訓: ensure! 変換の `anyhow!` は macro 未 import ファイルで E0433 → `anyhow::anyhow!` に正規化
@@ -271,7 +271,7 @@
 ## Session 2026-08-13 深夜2（step 5 完了）
 
 ### quanticstransform（`0c94b68`）
-- 新規 QuanticsTransformError（InvalidConfiguration/Operation + From<anyhow>/TensorDynLenError/TreeTNOperationError）
+- 新規 QuanticsTransformError（InvalidConfiguration/Operation + From<anyhow>/IdxTensorError/TreeTNOperationError）
 - 29 公開 fn 型付け（affine/cumsum/difference_kernel/flip/fourier/phase_rotation/shift/common MPO・LinearOperator 変換）
 - bail!/ensure!/Err 変換、TensorTrain::new・trait-op の wrap
 

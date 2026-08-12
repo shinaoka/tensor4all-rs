@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{TensorDynLen, TensorElement};
+use tensor4all_core::{IdxTensor, TensorElement};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 // ============================================================================
@@ -12,15 +12,15 @@ use tensor4all_treetn::{SwapOptions, TreeTN};
 
 /// 2-node chain: A -- B with one site index each. Returns (tn, site_at_A, site_at_B).
 fn two_node_chain<T: TensorElement + From<f64>>() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let s0 = tensor4all_core::DynIndex::new_dyn(2);
     let s1 = tensor4all_core::DynIndex::new_dyn(2);
     let bond = tensor4all_core::DynIndex::new_dyn(3);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
@@ -28,7 +28,7 @@ fn two_node_chain<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
@@ -46,18 +46,18 @@ fn two_node_chain<T: TensorElement + From<f64>>() -> (
 
 /// 3-node chain: "0" -- "1" -- "2" with one site index each.
 fn three_node_chain<T: TensorElement + From<f64>>() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let s0 = tensor4all_core::DynIndex::new_dyn(2);
     let s1 = tensor4all_core::DynIndex::new_dyn(2);
     let s2 = tensor4all_core::DynIndex::new_dyn(2);
     let b01 = tensor4all_core::DynIndex::new_dyn(3);
     let b12 = tensor4all_core::DynIndex::new_dyn(3);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
@@ -65,7 +65,7 @@ fn three_node_chain<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
@@ -76,7 +76,7 @@ fn three_node_chain<T: TensorElement + From<f64>>() -> (
         .collect(),
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b12.clone(), s2.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
@@ -97,13 +97,13 @@ fn three_node_chain<T: TensorElement + From<f64>>() -> (
 
 /// 4-node chain: "0" -- "1" -- "2" -- "3" with one site index each.
 fn four_node_chain<T: TensorElement + From<f64>>() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let s0 = tensor4all_core::DynIndex::new_dyn(2);
     let s1 = tensor4all_core::DynIndex::new_dyn(2);
     let s2 = tensor4all_core::DynIndex::new_dyn(2);
@@ -111,12 +111,12 @@ fn four_node_chain<T: TensorElement + From<f64>>() -> (
     let b01 = tensor4all_core::DynIndex::new_dyn(2);
     let b12 = tensor4all_core::DynIndex::new_dyn(2);
     let b23 = tensor4all_core::DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![1.0, 2.0, 3.0, 4.0].into_iter().map(T::from).collect(),
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
             .into_iter()
@@ -124,7 +124,7 @@ fn four_node_chain<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b12.clone(), s2.clone(), b23.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
             .into_iter()
@@ -132,7 +132,7 @@ fn four_node_chain<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t3 = TensorDynLen::from_dense(
+    let t3 = IdxTensor::from_dense(
         vec![b23.clone(), s3.clone()],
         vec![1.0, 2.0, 3.0, 4.0].into_iter().map(T::from).collect(),
     )
@@ -153,13 +153,13 @@ fn four_node_chain<T: TensorElement + From<f64>>() -> (
 
 /// 4-node chain with sites x0,x1 at nodes "0","1" and y0,y1 at nodes "2","3". R=2.
 fn chain_2r_interleave<T: TensorElement + From<f64>>() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     tensor4all_core::DynIndex, // x0
     tensor4all_core::DynIndex, // x1
     tensor4all_core::DynIndex, // y0
     tensor4all_core::DynIndex, // y1
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let x0 = tensor4all_core::DynIndex::new_dyn(2);
     let x1 = tensor4all_core::DynIndex::new_dyn(2);
     let y0 = tensor4all_core::DynIndex::new_dyn(2);
@@ -167,12 +167,12 @@ fn chain_2r_interleave<T: TensorElement + From<f64>>() -> (
     let b01 = tensor4all_core::DynIndex::new_dyn(2);
     let b12 = tensor4all_core::DynIndex::new_dyn(2);
     let b23 = tensor4all_core::DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![x0.clone(), b01.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![b01.clone(), x1.clone(), b12.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
             .into_iter()
@@ -180,7 +180,7 @@ fn chain_2r_interleave<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![b12.clone(), y0.clone(), b23.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
             .into_iter()
@@ -188,7 +188,7 @@ fn chain_2r_interleave<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t3 = TensorDynLen::from_dense(
+    let t3 = IdxTensor::from_dense(
         vec![b23.clone(), y1.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
     )
@@ -209,19 +209,19 @@ fn chain_2r_interleave<T: TensorElement + From<f64>>() -> (
 
 /// Y-shape: center "C", leaves "L0", "L1", "L2". Each leaf has one site index.
 fn y_shape_tree<T: TensorElement + From<f64>>() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let s0 = tensor4all_core::DynIndex::new_dyn(2);
     let s1 = tensor4all_core::DynIndex::new_dyn(2);
     let s2 = tensor4all_core::DynIndex::new_dyn(2);
     let bc0 = tensor4all_core::DynIndex::new_dyn(2);
     let bc1 = tensor4all_core::DynIndex::new_dyn(2);
     let bc2 = tensor4all_core::DynIndex::new_dyn(2);
-    let t_center = TensorDynLen::from_dense(
+    let t_center = IdxTensor::from_dense(
         vec![bc0.clone(), bc1.clone(), bc2.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
             .into_iter()
@@ -229,17 +229,17 @@ fn y_shape_tree<T: TensorElement + From<f64>>() -> (
             .collect(),
     )
     .unwrap();
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![bc0.clone(), s0.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bc1.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(
+    let t2 = IdxTensor::from_dense(
         vec![bc2.clone(), s2.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
     )
@@ -434,17 +434,17 @@ fn test_swap_by_index_alias_matches_swap_site_indices_generic<T: TensorElement +
 
 #[test]
 fn test_swap_by_index_distinguishes_same_id_prime_pair() {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let s = tensor4all_core::DynIndex::new_dyn(2);
     let s_prime = s.prime();
     let t = tensor4all_core::DynIndex::new_dyn(2);
     let bond = tensor4all_core::DynIndex::new_dyn(1);
-    let a = TensorDynLen::from_dense(
+    let a = IdxTensor::from_dense(
         vec![s.clone(), s_prime.clone(), bond.clone()],
         vec![1.0, 2.0, 3.0, 4.0],
     )
     .unwrap();
-    let b = TensorDynLen::from_dense(vec![bond.clone(), t.clone()], vec![1.0, 1.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![bond.clone(), t.clone()], vec![1.0, 1.0]).unwrap();
     tn.add_tensor("A".to_string(), a).unwrap();
     tn.add_tensor("B".to_string(), b).unwrap();
     let na = tn.node_index(&"A".to_string()).unwrap();

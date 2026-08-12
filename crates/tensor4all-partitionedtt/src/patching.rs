@@ -118,18 +118,18 @@ impl Default for PatchingOptions {
 /// ```
 /// use tensor4all_core::index::Index;
 /// use tensor4all_partitionedtt::{
-///     add_with_patching, PatchingOptions, SubDomainTT, TensorDynLen, TensorTrain,
+///     add_with_patching, PatchingOptions, SubDomainTT, IdxTensor, TensorTrain,
 /// };
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let s0 = Index::new_dyn(2);
 /// let bond = Index::new_dyn(3);
 /// let s1 = Index::new_dyn(2);
-/// let t0 = TensorDynLen::from_dense(
+/// let t0 = IdxTensor::from_dense(
 ///     vec![s0.clone(), bond.clone()],
 ///     (1..=6).map(f64::from).collect(),
 /// )?;
-/// let t1 = TensorDynLen::from_dense(vec![bond, s1], (1..=6).map(f64::from).collect())?;
+/// let t1 = IdxTensor::from_dense(vec![bond, s1], (1..=6).map(f64::from).collect())?;
 /// let tt = TensorTrain::new(vec![t0, t1])?;
 /// let options = PatchingOptions {
 ///     rtol: 1e-12,
@@ -227,7 +227,7 @@ pub fn add_with_patching(
 /// use tensor4all_core::index::Index;
 /// use tensor4all_partitionedtt::{
 ///     contract_adaptive, ContractOptions, PartitionedTT, PatchSplitStrategy, PatchingOptions,
-///     SubDomainTT, TensorDynLen, TensorTrain,
+///     SubDomainTT, IdxTensor, TensorTrain,
 /// };
 ///
 /// # fn three_site_tt(
@@ -237,12 +237,12 @@ pub fn add_with_patching(
 /// #     l12: &tensor4all_partitionedtt::DynIndex,
 /// #     s2: &tensor4all_partitionedtt::DynIndex,
 /// # ) -> Result<TensorTrain, Box<dyn std::error::Error>> {
-/// #     let t0 = TensorDynLen::from_dense(vec![s0.clone(), l01.clone()], vec![1.0; 6])?;
-/// #     let t1 = TensorDynLen::from_dense(
+/// #     let t0 = IdxTensor::from_dense(vec![s0.clone(), l01.clone()], vec![1.0; 6])?;
+/// #     let t1 = IdxTensor::from_dense(
 /// #         vec![l01.clone(), s1.clone(), l12.clone()],
 /// #         vec![1.0; 18],
 /// #     )?;
-/// #     let t2 = TensorDynLen::from_dense(vec![l12.clone(), s2.clone()], vec![1.0; 6])?;
+/// #     let t2 = IdxTensor::from_dense(vec![l12.clone(), s2.clone()], vec![1.0; 6])?;
 /// #     Ok(TensorTrain::new(vec![t0, t1, t2])?)
 /// # }
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -317,7 +317,7 @@ pub fn contract_adaptive(
 /// ```
 /// use tensor4all_core::index::Index;
 /// use tensor4all_partitionedtt::{
-///     truncate_adaptive, PartitionedTT, Projector, SubDomainTT, TensorDynLen, TensorTrain,
+///     truncate_adaptive, PartitionedTT, Projector, SubDomainTT, IdxTensor, TensorTrain,
 /// };
 ///
 /// # fn rank_one_tt(
@@ -326,8 +326,8 @@ pub fn contract_adaptive(
 /// #     scale: f64,
 /// # ) -> Result<TensorTrain, Box<dyn std::error::Error>> {
 /// #     let bond = Index::new_dyn(1);
-/// #     let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![scale; s0.dim])?;
-/// #     let t1 = TensorDynLen::from_dense(vec![bond, s1.clone()], vec![1.0; s1.dim])?;
+/// #     let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![scale; s0.dim])?;
+/// #     let t1 = IdxTensor::from_dense(vec![bond, s1.clone()], vec![1.0; s1.dim])?;
 /// #     Ok(TensorTrain::new(vec![t0, t1])?)
 /// # }
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -19,13 +19,13 @@ use crate::error::{format_anyhow_error, SelectedIndexContractionError};
 use crate::options::RestructureOptions;
 use crate::site_index_network::SiteIndexNetwork;
 use tensor4all_core::{
-    tensordot, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike,
-    TensorConstructionLike, TensorContractionLike, TensorDynLen, TensorIndex, TensorLike,
+    tensordot, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IdxTensor, IndexLike,
+    TensorConstructionLike, TensorContractionLike, TensorIndex, TensorLike,
 };
 
 type DiagonalPairApplication<V> = (
-    TreeTN<TensorDynLen, V>,
-    TreeTN<TensorDynLen, V>,
+    TreeTN<IdxTensor, V>,
+    TreeTN<IdxTensor, V>,
     Vec<DynIndex>,
     Vec<DynIndex>,
 );
@@ -153,7 +153,7 @@ where
     }
 }
 
-fn sorted_edge_set<V>(tn: &TreeTN<TensorDynLen, V>) -> Vec<(V, V)>
+fn sorted_edge_set<V>(tn: &TreeTN<IdxTensor, V>) -> Vec<(V, V)>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
 {
@@ -167,10 +167,7 @@ where
     edges
 }
 
-fn compatible_union_node_names<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
-) -> Vec<V>
+fn compatible_union_node_names<V>(a: &TreeTN<IdxTensor, V>, b: &TreeTN<IdxTensor, V>) -> Vec<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
 {
@@ -252,9 +249,9 @@ fn factorize_options_from_contraction_options(
 }
 
 fn union_result_topology<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
-    contracted_tensor: &TensorDynLen,
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
+    contracted_tensor: &IdxTensor,
 ) -> Result<TreeTopology<V, DynIndex>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
@@ -296,10 +293,10 @@ where
 }
 
 fn align_to_union_topology<V>(
-    tn: &TreeTN<TensorDynLen, V>,
+    tn: &TreeTN<IdxTensor, V>,
     node_names: &[V],
     union_edges: &[(V, V)],
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> Result<TreeTN<IdxTensor, V>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -340,7 +337,7 @@ where
                 )
             })?;
             if !links.is_empty() {
-                let link_tensor = <TensorDynLen as TensorConstructionLike>::ones(&links)
+                let link_tensor = <IdxTensor as TensorConstructionLike>::ones(&links)
                     .context("partial_contract: failed to build dimension-1 structural links")?;
                 tensor = tensor
                     .outer_product(&link_tensor)
@@ -348,7 +345,7 @@ where
             }
             tensor
         } else {
-            <TensorDynLen as TensorConstructionLike>::ones(&links)
+            <IdxTensor as TensorConstructionLike>::ones(&links)
                 .context("partial_contract: failed to build missing-node scalar tensor")?
         };
 
@@ -404,8 +401,8 @@ fn ensure_dense_reference_limit(
 }
 
 fn validate_mismatched_dense_reference_fallback<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
     options: &ContractionOptions,
 ) -> Result<()>
 where
@@ -427,11 +424,11 @@ where
 }
 
 fn contract_mismatched_topologies<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
     center: &V,
     options: ContractionOptions,
-) -> Result<TreeTN<TensorDynLen, V>>
+) -> Result<TreeTN<IdxTensor, V>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -474,7 +471,7 @@ where
         .context("partial_contract: failed dense contraction for mismatched topologies")?;
 
     if contracted_tensor.external_indices().is_empty() {
-        let mut result = TreeTN::<TensorDynLen, V>::new();
+        let mut result = TreeTN::<IdxTensor, V>::new();
         result
             .add_tensor(center.clone(), contracted_tensor)
             .context("partial_contract: failed to wrap scalar mismatched-topology result")?;
@@ -587,7 +584,7 @@ where
     Ok(reordered)
 }
 
-fn diagonal_copy_value(tensor: &TensorDynLen) -> AnyScalar {
+fn diagonal_copy_value(tensor: &IdxTensor) -> AnyScalar {
     if tensor.is_complex() {
         AnyScalar::new_complex(1.0, 0.0)
     } else {
@@ -596,8 +593,8 @@ fn diagonal_copy_value(tensor: &TensorDynLen) -> AnyScalar {
 }
 
 fn apply_diagonal_pairs<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
     diagonal_pairs: &[(DynIndex, DynIndex)],
 ) -> Result<DiagonalPairApplication<V>>
 where
@@ -637,7 +634,7 @@ where
 
         let aux_index = idx_a.sim();
         let kept_index = idx_a.sim();
-        let copy_tensor = TensorDynLen::copy_tensor(
+        let copy_tensor = IdxTensor::copy_tensor(
             vec![idx_a.clone(), aux_index.clone(), kept_index.clone()],
             diagonal_copy_value(&local_tensor),
         )
@@ -693,8 +690,8 @@ where
 }
 
 fn align_contract_pair_site_nodes<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &mut TreeTN<TensorDynLen, V>,
+    a: &TreeTN<IdxTensor, V>,
+    b: &mut TreeTN<IdxTensor, V>,
     contract_pairs: &[(DynIndex, DynIndex)],
 ) -> Result<()>
 where
@@ -744,8 +741,8 @@ fn has_contractable_index_pair(left: &[DynIndex], right: &[DynIndex]) -> bool {
 }
 
 fn connect_nodewise_outer_product_spectators<V>(
-    a: &mut TreeTN<TensorDynLen, V>,
-    b: &mut TreeTN<TensorDynLen, V>,
+    a: &mut TreeTN<IdxTensor, V>,
+    b: &mut TreeTN<IdxTensor, V>,
 ) -> Result<()>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
@@ -777,10 +774,10 @@ where
 
         let (dummy_a, dummy_b) = DynIndex::create_dummy_link_pair();
         let dummy_tensor_a =
-            <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_a))
+            <IdxTensor as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_a))
                 .context("partial_contract: failed to build dummy contraction link")?;
         let dummy_tensor_b =
-            <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_b))
+            <IdxTensor as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_b))
                 .context("partial_contract: failed to build matching dummy contraction link")?;
         let expanded_a = tensor_a
             .outer_product(&dummy_tensor_a)
@@ -837,7 +834,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{
 ///     contraction::ContractionOptions,
 ///     partial_contract,
@@ -847,12 +844,12 @@ where
 ///
 /// let idx_a = DynIndex::new_dyn(2);
 /// let idx_b = DynIndex::new_dyn(2);
-/// let a = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![idx_a.clone()], vec![1.0, 2.0]).unwrap()],
+/// let a = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![idx_a.clone()], vec![1.0, 2.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
-/// let b = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![idx_b.clone()], vec![3.0, 4.0]).unwrap()],
+/// let b = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![idx_b.clone()], vec![3.0, 4.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
 ///
@@ -867,12 +864,12 @@ where
 /// assert!((scalar - 11.0).abs() < 1.0e-12);
 /// ```
 pub fn partial_contract<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
     spec: &PartialContractionSpec<DynIndex>,
     center: &V,
     options: ContractionOptions,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, TreeTNOperationError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -951,7 +948,7 @@ where
 /// ```
 /// use std::collections::HashSet;
 ///
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
 /// use tensor4all_treetn::{
 ///     contraction::ContractionOptions,
 ///     partial_contract_to_site_network,
@@ -966,15 +963,15 @@ where
 /// let k_right = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
 ///
-/// let a = TreeTN::<TensorDynLen, &str>::from_tensors(
-///     vec![TensorDynLen::from_dense(
+/// let a = TreeTN::<IdxTensor, &str>::from_tensors(
+///     vec![IdxTensor::from_dense(
 ///         vec![i.clone(), k_left.clone()],
 ///         vec![1.0, 2.0, 3.0, 4.0],
 ///     ).unwrap()],
 ///     vec!["center"],
 /// ).unwrap();
-/// let b = TreeTN::<TensorDynLen, &str>::from_tensors(
-///     vec![TensorDynLen::from_dense(
+/// let b = TreeTN::<IdxTensor, &str>::from_tensors(
+///     vec![IdxTensor::from_dense(
 ///         vec![k_right.clone(), j.clone()],
 ///         vec![5.0, 6.0, 7.0, 8.0],
 ///     ).unwrap()],
@@ -1012,14 +1009,14 @@ where
 /// assert_eq!(result.site_index_network().find_node_by_index(&j), Some(&"1_col"));
 /// ```
 pub fn partial_contract_to_site_network<V, TargetV>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
     spec: &PartialContractionSpec<DynIndex>,
     center: &V,
     target: &SiteIndexNetwork<TargetV, DynIndex>,
     options: ContractionOptions,
     restructure_options: &RestructureOptions,
-) -> std::result::Result<TreeTN<TensorDynLen, TargetV>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, TargetV>, TreeTNOperationError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     TargetV: Clone + Hash + Eq + Send + Sync + Debug + Ord,
@@ -1063,17 +1060,17 @@ where
 ///
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
 /// use tensor4all_treetn::{contraction::ContractionOptions, hadamard, TreeTN};
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
-/// let left = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![i.clone()], vec![2.0, 3.0]).unwrap()],
+/// let left = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![i.clone()], vec![2.0, 3.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
-/// let right = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![j.clone()], vec![5.0, 7.0]).unwrap()],
+/// let right = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![j.clone()], vec![5.0, 7.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
 ///
@@ -1083,12 +1080,12 @@ where
 /// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![10.0, 21.0]);
 /// ```
 pub fn hadamard<V>(
-    left: &TreeTN<TensorDynLen, V>,
-    right: &TreeTN<TensorDynLen, V>,
+    left: &TreeTN<IdxTensor, V>,
+    right: &TreeTN<IdxTensor, V>,
     index_pairs: &[(DynIndex, DynIndex)],
     center: &V,
     options: ContractionOptions,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, SelectedIndexContractionError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, SelectedIndexContractionError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -1127,7 +1124,7 @@ where
 ///
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
 /// use tensor4all_treetn::{
 ///     contraction::ContractionOptions,
 ///     weighted_sum_over_index_pairs,
@@ -1137,12 +1134,12 @@ where
 /// let x = DynIndex::new_dyn(2);
 /// let z = DynIndex::new_dyn(2);
 /// let wz = DynIndex::new_dyn(2);
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![x.clone(), z.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![x.clone(), z.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
-/// let weights = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![wz.clone()], vec![10.0, 100.0]).unwrap()],
+/// let weights = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![wz.clone()], vec![10.0, 100.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
 ///
@@ -1158,12 +1155,12 @@ where
 /// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![310.0, 420.0]);
 /// ```
 pub fn weighted_sum_over_index_pairs<V>(
-    state: &TreeTN<TensorDynLen, V>,
-    weights: &TreeTN<TensorDynLen, V>,
+    state: &TreeTN<IdxTensor, V>,
+    weights: &TreeTN<IdxTensor, V>,
     index_pairs: &[(DynIndex, DynIndex)],
     center: &V,
     options: ContractionOptions,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, SelectedIndexContractionError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, SelectedIndexContractionError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -1204,13 +1201,13 @@ where
 ///
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
 /// use tensor4all_treetn::{contraction::ContractionOptions, sum_over_indices, TreeTN};
 ///
 /// let x = DynIndex::new_dyn(2);
 /// let z = DynIndex::new_dyn(2);
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(
-///     vec![TensorDynLen::from_dense(vec![x.clone(), z.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![x.clone(), z.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
 ///     vec![0],
 /// ).unwrap();
 ///
@@ -1220,11 +1217,11 @@ where
 /// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![4.0, 6.0]);
 /// ```
 pub fn sum_over_indices<V>(
-    state: &TreeTN<TensorDynLen, V>,
+    state: &TreeTN<IdxTensor, V>,
     sum_indices: &[DynIndex],
     center: &V,
     options: ContractionOptions,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, SelectedIndexContractionError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, SelectedIndexContractionError>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -1298,7 +1295,7 @@ where
             indices.append(&mut links);
         }
         tensors.push(
-            <TensorDynLen as TensorConstructionLike>::ones(&indices).map_err(|error| {
+            <IdxTensor as TensorConstructionLike>::ones(&indices).map_err(|error| {
                 SelectedIndexContractionError::BuildOnesTensor {
                     node: format!("{node:?}"),
                     message: format_anyhow_error(anyhow::Error::new(error)),

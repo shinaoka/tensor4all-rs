@@ -1,17 +1,17 @@
 use super::*;
 use std::sync::Arc;
 use tensor4all_core::index::Index;
-use tensor4all_core::{TensorDynLenError, TensorStorageError};
+use tensor4all_core::{IdxTensorError, TensorStorageError};
 use tensor4all_itensorlike::TensorTrainError;
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
 }
 
-fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
     let size: usize = dims.iter().product();
     let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 fn make_simple_tt() -> (TensorTrain, Vec<DynIndex>, Vec<DynIndex>) {
@@ -160,7 +160,7 @@ fn project_rejects_index_absent_from_tensor_train() {
 #[test]
 fn project_preserves_autodiff_metadata_and_backward_values() {
     let site = make_index(2);
-    let source = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 4.0])
+    let source = IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0])
         .unwrap()
         .enable_grad()
         .unwrap();
@@ -192,7 +192,7 @@ fn project_error_mapping_retains_typed_storage_source() {
     let storage_source = TensorStorageError::Materialization {
         source: Arc::new(std::io::Error::other("forced projection storage failure")),
     };
-    let error = SubDomainTT::tensor_operation_error(TensorDynLenError::Storage {
+    let error = SubDomainTT::tensor_operation_error(IdxTensorError::Storage {
         source: storage_source,
     });
 

@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{index::DynId, DynIndex, IdxTensor, IndexLike, TensorContractionLike};
 use tensor4all_treetn::{
     apply_local_update_sweep, CanonicalizationOptions, IndexMapping, LinsolveOptions,
     LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, SquareLinsolveUpdater, TreeTN,
@@ -39,10 +39,10 @@ fn create_mps_chain_with_sites_all_ones(
     bond_dim: usize,
     sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim))
         .collect();
@@ -64,7 +64,7 @@ fn create_mps_chain_with_sites_all_ones(
         };
 
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
-        let t = TensorDynLen::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
+        let t = IdxTensor::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -83,10 +83,10 @@ fn create_random_mps_chain_with_sites(
     bond_dim: usize,
     sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim))
         .collect();
@@ -102,7 +102,7 @@ fn create_random_mps_chain_with_sites(
         } else {
             vec![bonds[i - 1].clone(), sites[i].clone(), bonds[i].clone()]
         };
-        let t = TensorDynLen::random::<f64, _>(rng, indices)?;
+        let t = IdxTensor::random::<f64, _>(rng, indices)?;
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -117,7 +117,7 @@ fn create_random_mps_chain_with_sites(
 
 /// Create an N-site identity MPO with internal indices (bond dim = 1).
 type IdentityMpoWithMappings = (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 );
@@ -130,7 +130,7 @@ fn create_identity_mpo_chain_with_internal_indices(
 ) -> anyhow::Result<IdentityMpoWithMappings> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // MPO bonds: dim 1
     let bonds: Vec<_> = (0..n.saturating_sub(1))
@@ -180,8 +180,8 @@ fn create_identity_mpo_chain_with_internal_indices(
         for k in 0..phys_dim {
             data[k * phys_dim + k] = 1.0;
         }
-        let base = TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
-            .unwrap();
+        let base =
+            IdxTensor::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data).unwrap();
         let t = if indices.len() == 2 {
             base
         } else {
@@ -190,8 +190,8 @@ fn create_identity_mpo_chain_with_internal_indices(
                 .filter(|idx| idx.dim() == 1)
                 .cloned()
                 .collect();
-            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
-            TensorDynLen::outer_product(&base, &ones)?
+            let ones = IdxTensor::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
+            IdxTensor::outer_product(&base, &ones)?
         };
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();

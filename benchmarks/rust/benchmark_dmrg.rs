@@ -11,7 +11,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use tensor4all_core::krylov::HermitianLanczosOptions;
-use tensor4all_core::{DynIndex, IndexLike, SvdTruncationPolicy, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, SvdTruncationPolicy, IdxTensor};
 use tensor4all_tensorbackend::{lowest_hermitian_eigenpair, Matrix};
 use tensor4all_treetn::{
     compose_exclusive_linear_operators, dmrg, DmrgOptions, IndexMapping, LinearOperator, TreeTN,
@@ -84,7 +84,7 @@ fn edges_for(topology: Topology, n_sites: usize) -> Vec<(usize, usize)> {
 fn make_initial_state(
     topology: Topology,
     n_sites: usize,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>)> {
+) -> anyhow::Result<(TreeTN<IdxTensor, String>, Vec<DynIndex>)> {
     let edges = edges_for(topology, n_sites);
     let sites: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
     let bonds: Vec<_> = (0..edges.len()).map(|_| DynIndex::new_dyn(1)).collect();
@@ -94,7 +94,7 @@ fn make_initial_state(
         incident[b].push((a, bonds[edge_id].clone()));
     }
 
-    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let mut state = TreeTN::<IdxTensor, String>::new();
     let mut graph_nodes = Vec::with_capacity(n_sites);
     for i in 0..n_sites {
         let mut indices = Vec::with_capacity(1 + incident[i].len());
@@ -110,7 +110,7 @@ fn make_initial_state(
         let mut data = vec![0.0; indices.iter().map(DynIndex::dim).product()];
         data[0] = 1.0;
         data[1] = site_one_value;
-        let tensor = TensorDynLen::from_dense(indices, data)?;
+        let tensor = IdxTensor::from_dense(indices, data)?;
         graph_nodes.push(state.add_tensor(node_name(i), tensor)?);
     }
     for (edge_id, &(a, b)) in edges.iter().enumerate() {
@@ -124,7 +124,7 @@ fn local_heisenberg_tensor(
     in_left: DynIndex,
     out_right: DynIndex,
     in_right: DynIndex,
-) -> anyhow::Result<TensorDynLen> {
+) -> anyhow::Result<IdxTensor> {
     let dims = [2, 2, 2, 2];
     let mut data = vec![0.0; dims.iter().product()];
 
@@ -142,7 +142,7 @@ fn local_heisenberg_tensor(
         }
     }
 
-    TensorDynLen::from_dense(vec![out_left, in_left, out_right, in_right], data)
+    IdxTensor::from_dense(vec![out_left, in_left, out_right, in_right], data)
         .map_err(anyhow::Error::from)
 }
 
@@ -152,7 +152,7 @@ fn make_edge_heisenberg_operator(
     state_sites: &[DynIndex],
     op_inputs: &[DynIndex],
     op_outputs: &[DynIndex],
-) -> anyhow::Result<LinearOperator<TensorDynLen, String>> {
+) -> anyhow::Result<LinearOperator<IdxTensor, String>> {
     let left_name = node_name(left);
     let right_name = node_name(right);
     let local = local_heisenberg_tensor(
@@ -213,9 +213,9 @@ fn make_edge_heisenberg_operator(
 
 fn make_heisenberg_operator(
     topology: Topology,
-    state: &TreeTN<TensorDynLen, String>,
+    state: &TreeTN<IdxTensor, String>,
     state_sites: &[DynIndex],
-) -> anyhow::Result<LinearOperator<TensorDynLen, String>> {
+) -> anyhow::Result<LinearOperator<IdxTensor, String>> {
     let n_sites = state_sites.len();
     let edges = edges_for(topology, n_sites);
     let op_inputs: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();

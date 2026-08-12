@@ -1,5 +1,5 @@
 use num_traits::Zero;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 
 fn compact_expected<T: Copy + Zero>(value: T) -> Vec<T> {
     let mut expected = vec![T::zero(); 12];
@@ -12,7 +12,7 @@ fn compact_expected<T: Copy + Zero>(value: T) -> Vec<T> {
 fn mask_index_preserves_values_indices_and_reverse_mode_graph() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
-    let source = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+    let source = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
         .unwrap()
         .enable_grad()
         .unwrap();
@@ -33,7 +33,7 @@ fn mask_index_preserves_values_indices_and_reverse_mode_graph() {
 #[test]
 fn mask_index_rejects_missing_or_out_of_range_indices() {
     let index = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![index.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![index.clone()], vec![1.0_f64, 2.0]).unwrap();
 
     assert!(tensor.mask_index(&DynIndex::new_dyn(2), 0).is_err());
     assert!(tensor.mask_index(&index, 2).is_err());
@@ -43,7 +43,7 @@ fn mask_index_rejects_missing_or_out_of_range_indices() {
 fn mask_index_preserves_compact_diagonal_storage() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
-    let source = TensorDynLen::from_diag(vec![i.clone(), j], vec![3.0_f64, 4.0]).unwrap();
+    let source = IdxTensor::from_diag(vec![i.clone(), j], vec![3.0_f64, 4.0]).unwrap();
 
     let masked = source.mask_index(&i, 1).unwrap();
     let storage = masked.storage().unwrap();
@@ -58,7 +58,7 @@ macro_rules! assert_mask_index_dtype_and_grad {
         #[test]
         fn $name() {
             let index = DynIndex::new_dyn(2);
-            let source = TensorDynLen::from_dense(vec![index.clone()], $values)
+            let source = IdxTensor::from_dense(vec![index.clone()], $values)
                 .unwrap()
                 .enable_grad()
                 .unwrap();
@@ -140,7 +140,7 @@ macro_rules! assert_structured_mask_index_dtype_and_grad {
         fn $name() {
             let i = DynIndex::new_dyn(2);
             let j = DynIndex::new_dyn(2);
-            let source = TensorDynLen::from_diag(vec![i.clone(), j], $values)
+            let source = IdxTensor::from_diag(vec![i.clone(), j], $values)
                 .unwrap()
                 .enable_grad()
                 .unwrap();
@@ -218,7 +218,7 @@ macro_rules! assert_compact_mask_index_dtype_and_grad {
             let site = DynIndex::new_dyn(3);
             let right = DynIndex::new_dyn(2);
             let source =
-                TensorDynLen::from_copy_selector(left.clone(), site.clone(), right, 1, $scale)
+                IdxTensor::from_copy_selector(left.clone(), site.clone(), right, 1, $scale)
                     .unwrap()
                     .enable_grad()
                     .unwrap();
@@ -270,14 +270,14 @@ fn untracked_structured_32_bit_tensors_can_be_consumed_as_dense_parts() {
     let site = DynIndex::new_dyn(3);
     let right = DynIndex::new_dyn(2);
     let f32_tensor =
-        TensorDynLen::from_copy_selector(left.clone(), site.clone(), right.clone(), 1, 2.0_f32)
+        IdxTensor::from_copy_selector(left.clone(), site.clone(), right.clone(), 1, 2.0_f32)
             .unwrap();
     assert!(!f32_tensor.tracks_grad());
     let (indices, values) = f32_tensor.into_dense_col_major_parts::<f32>().unwrap();
     assert_eq!(indices, vec![left, site, right]);
     assert_eq!(values, compact_expected(2.0_f32));
 
-    let c32_tensor = TensorDynLen::from_copy_selector(
+    let c32_tensor = IdxTensor::from_copy_selector(
         DynIndex::new_dyn(2),
         DynIndex::new_dyn(3),
         DynIndex::new_dyn(2),
@@ -300,7 +300,7 @@ fn compact_scale_preserves_large_selector_layout_for_all_supported_dtypes() {
     let bond_dim = 100_000;
     let site = DynIndex::new_dyn(3);
 
-    let f64_tensor = TensorDynLen::from_copy_selector(
+    let f64_tensor = IdxTensor::from_copy_selector(
         DynIndex::new_dyn(bond_dim),
         site.clone(),
         DynIndex::new_dyn(bond_dim),
@@ -317,7 +317,7 @@ fn compact_scale_preserves_large_selector_layout_for_all_supported_dtypes() {
     assert_eq!(f64_storage.payload_len(), bond_dim * 3);
     assert_eq!(f64_storage.scalar_at(&[0, 1]).unwrap().real(), 6.0);
 
-    let tracked = TensorDynLen::from_copy_selector(
+    let tracked = IdxTensor::from_copy_selector(
         DynIndex::new_dyn(32),
         site.clone(),
         DynIndex::new_dyn(32),
@@ -345,7 +345,7 @@ fn compact_scale_preserves_large_selector_layout_for_all_supported_dtypes() {
         32 * 3
     );
 
-    let f32_tensor = TensorDynLen::from_copy_selector(
+    let f32_tensor = IdxTensor::from_copy_selector(
         DynIndex::new_dyn(2),
         site.clone(),
         DynIndex::new_dyn(2),
@@ -359,7 +359,7 @@ fn compact_scale_preserves_large_selector_layout_for_all_supported_dtypes() {
     assert_eq!(f32_scaled.to_vec::<f32>().unwrap()[2], 6.0);
     assert!(f32_scaled.to_vec::<f64>().is_err());
 
-    let diag = TensorDynLen::from_diag(
+    let diag = IdxTensor::from_diag(
         vec![DynIndex::new_dyn(3), DynIndex::new_dyn(3)],
         vec![1.0_f64, 2.0, 3.0],
     )
@@ -381,7 +381,7 @@ fn structured_mask_retains_compact_payload_for_large_copy_selector() {
     let left = DynIndex::new_dyn(bond_dim);
     let site = DynIndex::new_dyn(3);
     let right = DynIndex::new_dyn(bond_dim);
-    let source = TensorDynLen::from_copy_selector(left, site.clone(), right, 1, 2.0_f64).unwrap();
+    let source = IdxTensor::from_copy_selector(left, site.clone(), right, 1, 2.0_f64).unwrap();
 
     let masked = source.mask_index(&site, 1).unwrap();
     let storage = masked.storage().unwrap();
@@ -389,7 +389,7 @@ fn structured_mask_retains_compact_payload_for_large_copy_selector() {
     assert_eq!(storage.payload_dims(), &[bond_dim, 3]);
     assert_eq!(storage.payload_len(), bond_dim * 3);
 
-    let tracked = TensorDynLen::from_copy_selector(
+    let tracked = IdxTensor::from_copy_selector(
         DynIndex::new_dyn(bond_dim),
         site.clone(),
         DynIndex::new_dyn(bond_dim),

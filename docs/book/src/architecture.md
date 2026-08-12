@@ -80,7 +80,7 @@ operation names are unified across crates:
   `tensor4all-simplett`.)
 - **Densification**: `full_tensor` materializes a tensor train/MPO into a flat
   column-major buffer plus shape; `to_dense` materializes a single tensor into
-  a dense `TensorDynLen`. The distinction is intentional (whole-TT vs
+  a dense `IdxTensor`. The distinction is intentional (whole-TT vs
   one-tensor).
 - **Canonicalization**: `treetn` uses `canonicalize` / `canonicalize_mut`;
   `itensorlike` uses `orthogonalize` (ITensors.jl-compatible vocabulary) for
@@ -99,7 +99,7 @@ naming trap that PR 3 resolves:
 | Type | Crate | Representation | Use when |
 |------|-------|----------------|----------|
 | `SimpleTensorTrain<T>` | `tensor4all-simplett` | positional cores (`Tensor3<T>`), no named indices | lightweight create/evaluate/compress |
-| `TensorTrain` | `tensor4all-itensorlike` | `TreeTN<TensorDynLen, usize>` wrapper with orthogonality tracking | ITensors.jl-style interface |
+| `TensorTrain` | `tensor4all-itensorlike` | `TreeTN<IdxTensor, usize>` wrapper with orthogonality tracking | ITensors.jl-style interface |
 
 Rules:
 

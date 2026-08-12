@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tensor4all_core::{
-    DynIndex, IndexLike, LinearizationOrder, TensorContractionLike, TensorDynLen, TensorIndex,
+    DynIndex, IdxTensor, IndexLike, LinearizationOrder, TensorContractionLike, TensorIndex,
 };
 
 #[test]
@@ -8,7 +8,7 @@ fn unfuse_index_column_major_preserves_column_major_layout() {
     let fused = DynIndex::new_dyn(4);
     let left = DynIndex::new_dyn(2);
     let right = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let unfused = tensor
         .unfuse_index(
@@ -18,7 +18,7 @@ fn unfuse_index_column_major_preserves_column_major_layout() {
         )
         .unwrap();
 
-    let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let expected = IdxTensor::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     assert!(unfused.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
@@ -27,7 +27,7 @@ fn unfuse_index_row_major_reorders_fused_axis_meaning() {
     let fused = DynIndex::new_dyn(4);
     let left = DynIndex::new_dyn(2);
     let right = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let unfused = tensor
         .unfuse_index(
@@ -37,14 +37,14 @@ fn unfuse_index_row_major_reorders_fused_axis_meaning() {
         )
         .unwrap();
 
-    let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 3.0, 2.0, 4.0]).unwrap();
+    let expected = IdxTensor::from_dense(vec![left, right], vec![1.0, 3.0, 2.0, 4.0]).unwrap();
     assert!(unfused.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
 fn unfuse_index_rejects_dimension_mismatch() {
     let fused = DynIndex::new_dyn(4);
-    let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let err = tensor
         .unfuse_index(
@@ -66,7 +66,7 @@ fn fuse_indices_column_major_roundtrips_unfuse_index() {
     let k = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(6).unwrap();
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
 
     let fused_tensor = tensor
         .fuse_indices(
@@ -89,7 +89,7 @@ fn fuse_indices_backward_preserves_source_gradient() {
     let j = DynIndex::new_dyn(3);
     let k = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(6).unwrap();
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![i.clone(), j.clone(), k.clone()],
         (0..12).map(|x| x as f64).collect(),
     )
@@ -106,7 +106,7 @@ fn fuse_indices_backward_preserves_source_gradient() {
         .unwrap();
     assert!(fused_tensor.tracks_grad());
 
-    let weights = TensorDynLen::from_dense(
+    let weights = IdxTensor::from_dense(
         vec![fused.clone(), k.clone()],
         (1..=12).map(|x| x as f64).collect(),
     )
@@ -116,20 +116,20 @@ fn fuse_indices_backward_preserves_source_gradient() {
 
     let grad = tensor.grad().unwrap().unwrap();
     let expected =
-        TensorDynLen::from_dense(vec![i, j, k], (1..=12).map(|x| x as f64).collect()).unwrap();
+        IdxTensor::from_dense(vec![i, j, k], (1..=12).map(|x| x as f64).collect()).unwrap();
     assert!(grad.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
 #[test]
-fn fuse_indices_trait_dispatch_on_tensordynlen_uses_old_index_order() {
+fn fuse_indices_trait_dispatch_on_idx_tensor_uses_old_index_order() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let k = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(6).unwrap();
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
 
-    let fused_tensor = <TensorDynLen as TensorContractionLike>::fuse_indices(
+    let fused_tensor = <IdxTensor as TensorContractionLike>::fuse_indices(
         &tensor,
         &[j.clone(), i.clone()],
         fused.clone(),
@@ -154,7 +154,7 @@ fn unfuse_index_backward_preserves_source_gradient() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let k = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![fused.clone(), k.clone()],
         (0..12).map(|x| x as f64).collect(),
     )
@@ -172,14 +172,13 @@ fn unfuse_index_backward_preserves_source_gradient() {
     assert!(unfused.tracks_grad());
 
     let weights =
-        TensorDynLen::from_dense(vec![i, j, k.clone()], (1..=12).map(|x| x as f64).collect())
-            .unwrap();
+        IdxTensor::from_dense(vec![i, j, k.clone()], (1..=12).map(|x| x as f64).collect()).unwrap();
     let loss = unfused.inner_product(&weights).unwrap();
     loss.backward().unwrap();
 
     let grad = tensor.grad().unwrap().unwrap();
     let expected =
-        TensorDynLen::from_dense(vec![fused, k], (1..=12).map(|x| x as f64).collect()).unwrap();
+        IdxTensor::from_dense(vec![fused, k], (1..=12).map(|x| x as f64).collect()).unwrap();
     assert!(grad.isapprox(&expected, 1e-12, 0.0).unwrap());
 }
 
@@ -190,7 +189,7 @@ fn fuse_indices_row_major_roundtrips_unfuse_index() {
     let k = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(6).unwrap();
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
 
     let fused_tensor = tensor
         .fuse_indices(
@@ -215,7 +214,7 @@ fn fuse_indices_preserves_complex_payload_roundtrip() {
     let data: Vec<Complex64> = (0..6)
         .map(|x| Complex64::new(x as f64, -(x as f64)))
         .collect();
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
 
     let roundtrip = tensor
         .fuse_indices(
@@ -238,7 +237,7 @@ fn fuse_indices_supports_non_adjacent_axes() {
     let k = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(4).unwrap();
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
 
     let fused_tensor = tensor
         .fuse_indices(
@@ -261,7 +260,7 @@ fn fuse_indices_supports_non_adjacent_axes() {
 fn fuse_indices_rejects_empty_old_indices() {
     let i = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(2).unwrap();
-    let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
 
     let err = tensor
         .fuse_indices(&[], fused, LinearizationOrder::ColumnMajor)
@@ -278,7 +277,7 @@ fn fuse_indices_rejects_duplicate_old_indices() {
     let j = DynIndex::new_dyn(3);
     let fused = DynIndex::new_link(4).unwrap();
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
     let err = tensor
         .fuse_indices(&[i.clone(), i], fused, LinearizationOrder::ColumnMajor)
@@ -294,7 +293,7 @@ fn fuse_indices_rejects_missing_index() {
     let missing = DynIndex::new_dyn(2);
     let fused = DynIndex::new_link(6).unwrap();
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
     let err = tensor
         .fuse_indices(&[i, missing], fused, LinearizationOrder::ColumnMajor)
@@ -308,7 +307,7 @@ fn fuse_indices_rejects_dimension_mismatch() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let fused = DynIndex::new_link(5).unwrap();
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )
@@ -329,7 +328,7 @@ fn fuse_indices_rejects_same_id_with_wrong_dimension() {
     let j = DynIndex::new_dyn(3);
     let same_id_wrong_dim = DynIndex::new(*i.id(), 3);
     let fused = DynIndex::new_link(9).unwrap();
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )
@@ -353,7 +352,7 @@ fn fuse_indices_rejects_duplicate_result_index() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let err = tensor
         .fuse_indices(&[i], j, LinearizationOrder::ColumnMajor)
@@ -369,7 +368,7 @@ fn fuse_indices_allows_same_id_prime_pair_in_result() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let result = tensor
         .fuse_indices(&[i], j.prime(), LinearizationOrder::ColumnMajor)
@@ -385,7 +384,7 @@ fn unfuse_index_selects_exact_same_id_prime_index() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
     let data: Vec<f64> = (0..16).map(|value| value as f64).collect();
-    let tensor = TensorDynLen::from_dense(vec![fused.clone(), fused_prime.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![fused.clone(), fused_prime.clone()], data).unwrap();
 
     let result = tensor
         .unfuse_index(

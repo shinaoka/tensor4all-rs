@@ -1,7 +1,7 @@
 use crate::error::TreeTNOperationError;
 use anyhow::Result;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorElement};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorElement};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
@@ -39,7 +39,7 @@ use crate::TreeTN;
 /// ```
 pub fn tensor_train_to_treetn<T>(
     tt: &SimpleTensorTrain<T>,
-) -> std::result::Result<(TreeTN<TensorDynLen, usize>, Vec<DynIndex>), TreeTNOperationError>
+) -> std::result::Result<(TreeTN<IdxTensor, usize>, Vec<DynIndex>), TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
 {
@@ -75,7 +75,7 @@ where
 pub fn tensor_train_to_treetn_with_names<T, V>(
     tt: &SimpleTensorTrain<T>,
     node_names: Vec<V>,
-) -> std::result::Result<(TreeTN<TensorDynLen, V>, Vec<DynIndex>), TreeTNOperationError>
+) -> std::result::Result<(TreeTN<IdxTensor, V>, Vec<DynIndex>), TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
     V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -119,7 +119,7 @@ pub fn tensor_train_to_treetn_with_names_and_site_indices<T, V>(
     tt: &SimpleTensorTrain<T>,
     node_names: Vec<V>,
     site_indices: Vec<DynIndex>,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
     V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -128,7 +128,7 @@ where
     Ok(treetn)
 }
 
-/// Convert a linear-chain `TreeTN<TensorDynLen, usize>` back into a simple tensor train.
+/// Convert a linear-chain `TreeTN<IdxTensor, usize>` back into a simple tensor train.
 ///
 /// The TreeTN must use node names `0..n-1`, contain exactly one site index per
 /// node, and have edges only between adjacent node names. This is the inverse of
@@ -170,7 +170,7 @@ where
 /// assert_eq!(roundtrip.full_tensor(), tt.full_tensor());
 /// ```
 pub fn treetn_to_tensor_train<T>(
-    mut treetn: TreeTN<TensorDynLen, usize>,
+    mut treetn: TreeTN<IdxTensor, usize>,
 ) -> std::result::Result<SimpleTensorTrain<T>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone,
@@ -276,7 +276,7 @@ where
     SimpleTensorTrain::new(tensors).map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
 }
 
-/// Insert a one-hot site into a linear-chain `TreeTN<TensorDynLen, usize>`.
+/// Insert a one-hot site into a linear-chain `TreeTN<IdxTensor, usize>`.
 ///
 /// The input and output chains use node names `0..n-1` / `0..n`. `position`
 /// chooses the insertion point:
@@ -334,11 +334,11 @@ where
 /// # }
 /// ```
 pub fn insert_onehot_site_in_treetn_chain<T>(
-    treetn: TreeTN<TensorDynLen, usize>,
+    treetn: TreeTN<IdxTensor, usize>,
     position: usize,
     site_index: DynIndex,
     value: usize,
-) -> std::result::Result<TreeTN<TensorDynLen, usize>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, usize>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
@@ -388,7 +388,7 @@ where
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
 }
 
-/// Fix a site in a linear-chain `TreeTN<TensorDynLen, usize>` and remove it.
+/// Fix a site in a linear-chain `TreeTN<IdxTensor, usize>` and remove it.
 ///
 /// `position` selects the chain site to remove, and `value` selects the local
 /// coordinate kept at that site. The returned chain has one fewer site, node
@@ -439,10 +439,10 @@ where
 /// # }
 /// ```
 pub fn fix_and_remove_site_from_treetn_chain<T>(
-    treetn: TreeTN<TensorDynLen, usize>,
+    treetn: TreeTN<IdxTensor, usize>,
     position: usize,
     value: usize,
-) -> std::result::Result<TreeTN<TensorDynLen, usize>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, usize>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
@@ -474,7 +474,7 @@ where
         .map_err(TreeTNOperationError::from)
 }
 
-/// Contract a site of a linear-chain `TreeTN<TensorDynLen, usize>` with weights and remove it.
+/// Contract a site of a linear-chain `TreeTN<IdxTensor, usize>` with weights and remove it.
 ///
 /// The removed site is summed as `sum_s weights[s] * tensor[..., s, ...]`.
 /// Pass already scaled weights, such as `1/d` averaging weights, when a
@@ -525,10 +525,10 @@ where
 /// # }
 /// ```
 pub fn weighted_remove_site_from_treetn_chain<T>(
-    treetn: TreeTN<TensorDynLen, usize>,
+    treetn: TreeTN<IdxTensor, usize>,
     position: usize,
     weights: &[T],
-) -> std::result::Result<TreeTN<TensorDynLen, usize>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, usize>, TreeTNOperationError>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
@@ -557,10 +557,7 @@ where
         .map_err(TreeTNOperationError::from)
 }
 
-fn chain_site_indices(
-    treetn: &TreeTN<TensorDynLen, usize>,
-    context: &str,
-) -> Result<Vec<DynIndex>> {
+fn chain_site_indices(treetn: &TreeTN<IdxTensor, usize>, context: &str) -> Result<Vec<DynIndex>> {
     let nsites = treetn.node_count();
     let mut node_names = treetn.node_names();
     node_names.sort_unstable();
@@ -620,7 +617,7 @@ fn remove_site_with_reduced_matrix<T>(
     mut site_indices: Vec<DynIndex>,
     position: usize,
     reduced_site: &[T],
-) -> Result<TreeTN<TensorDynLen, usize>>
+) -> Result<TreeTN<IdxTensor, usize>>
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
@@ -710,7 +707,7 @@ fn tensor_train_to_treetn_impl<T, V>(
     tt: &SimpleTensorTrain<T>,
     node_names: Vec<V>,
     site_indices: Option<Vec<DynIndex>>,
-) -> Result<(TreeTN<TensorDynLen, V>, Vec<DynIndex>)>
+) -> Result<(TreeTN<IdxTensor, V>, Vec<DynIndex>)>
 where
     T: TTScalar + TensorElement + Clone,
     V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -765,22 +762,22 @@ where
         let site_tensor = tt.site_tensor(site);
         let tensor = if nsites == 1 {
             let data = single_site_data(site_tensor);
-            TensorDynLen::from_dense(vec![site_indices[site].clone()], data)?
+            IdxTensor::from_dense(vec![site_indices[site].clone()], data)?
         } else if site == 0 {
             let data = left_boundary_data(site_tensor);
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![site_indices[site].clone(), bond_indices[site].clone()],
                 data,
             )?
         } else if site + 1 == nsites {
             let data = right_boundary_data(site_tensor);
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_indices[site - 1].clone(), site_indices[site].clone()],
                 data,
             )?
         } else {
             let data = middle_site_data(site_tensor);
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[site - 1].clone(),
                     site_indices[site].clone(),
@@ -808,7 +805,7 @@ where
 }
 
 fn treetn_site_to_tensor3<T>(
-    tensor: TensorDynLen,
+    tensor: IdxTensor,
     metadata: ChainSiteMetadata,
     site: usize,
 ) -> Result<tensor4all_simplett::Tensor3<T>>

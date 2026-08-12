@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 
 use rand_chacha::rand_core::{RngCore, SeedableRng};
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
-fn build_tn(
-    r: usize,
-    bond_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, HashMap<DynIndex, String>) {
+fn build_tn(r: usize, bond_dim: usize) -> (TreeTN<IdxTensor, String>, HashMap<DynIndex, String>) {
     let n = 2 * r;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let x_inds: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let y_inds: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let bonds: Vec<DynIndex> = (0..n - 1).map(|_| DynIndex::new_dyn(bond_dim)).collect();
@@ -32,7 +29,7 @@ fn build_tn(
         let data: Vec<f64> = (0..size)
             .map(|_| (rng.next_u64() as f64) / (u64::MAX as f64))
             .collect();
-        let t = TensorDynLen::from_dense(indices, data).unwrap();
+        let t = IdxTensor::from_dense(indices, data).unwrap();
         tn.add_tensor(i.to_string(), t).unwrap();
     }
     for (i, bond) in bonds.iter().enumerate() {
@@ -50,7 +47,7 @@ fn build_tn(
 
 /// Frobenius relative error: ||after - before|| / ||before||
 /// Uses sub() to align indices correctly before subtracting.
-fn rel_error(before: &TensorDynLen, after: &TensorDynLen) -> f64 {
+fn rel_error(before: &IdxTensor, after: &IdxTensor) -> f64 {
     let norm_before = before.norm().unwrap();
     if norm_before == 0.0 {
         return 0.0;

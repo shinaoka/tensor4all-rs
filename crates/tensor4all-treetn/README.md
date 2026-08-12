@@ -24,11 +24,11 @@ let s2 = DynIndex::new_dyn(2);
 let b01 = DynIndex::new_dyn(4);
 let b12 = DynIndex::new_dyn(4);
 
-let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
-let t1 = TensorDynLen::from_dense(vec![b01, s1, b12.clone()], vec![1.0; 32])?;
-let t2 = TensorDynLen::from_dense(vec![b12, s2], vec![1.0; 8])?;
+let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
+let t1 = IdxTensor::from_dense(vec![b01, s1, b12.clone()], vec![1.0; 32])?;
+let t2 = IdxTensor::from_dense(vec![b12, s2], vec![1.0; 8])?;
 
-let ttn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2])?;
+let ttn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2])?;
 assert_eq!(ttn.node_count(), 3);
 assert_eq!(ttn.edge_count(), 2);
 

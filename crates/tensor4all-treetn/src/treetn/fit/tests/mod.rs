@@ -1,37 +1,33 @@
 use super::*;
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 
 /// Create a simple 2-node TreeTN: A -- bond -- B
-fn make_two_node_treetn() -> TreeTN<TensorDynLen, String> {
+fn make_two_node_treetn() -> TreeTN<IdxTensor, String> {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     make_two_node_treetn_with_sites(&s0, &s1)
 }
 
-fn make_two_node_treetn_with_sites(s0: &DynIndex, s1: &DynIndex) -> TreeTN<TensorDynLen, String> {
+fn make_two_node_treetn_with_sites(s0: &DynIndex, s1: &DynIndex) -> TreeTN<IdxTensor, String> {
     let bond = DynIndex::new_dyn(3);
 
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
 
-    TreeTN::<TensorDynLen, String>::from_tensors(
-        vec![t0, t1],
-        vec!["A".to_string(), "B".to_string()],
-    )
-    .unwrap()
+    TreeTN::<IdxTensor, String>::from_tensors(vec![t0, t1], vec!["A".to_string(), "B".to_string()])
+        .unwrap()
 }
 
-fn make_contractible_two_node_pair() -> (TreeTN<TensorDynLen, String>, TreeTN<TensorDynLen, String>)
-{
+fn make_contractible_two_node_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     (
@@ -41,7 +37,7 @@ fn make_contractible_two_node_pair() -> (TreeTN<TensorDynLen, String>, TreeTN<Te
 }
 
 fn make_contractible_two_node_pair_with_surviving_sites(
-) -> (TreeTN<TensorDynLen, String>, TreeTN<TensorDynLen, String>) {
+) -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let a0 = DynIndex::new_dyn(2);
@@ -51,14 +47,14 @@ fn make_contractible_two_node_pair_with_surviving_sites(
     let bond_a = DynIndex::new_dyn(2);
     let bond_b = DynIndex::new_dyn(2);
 
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![s0.clone(), a0, bond_a.clone()],
                 (1..=8).map(|value| value as f64 / 8.0).collect(),
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_a, s1.clone(), a1],
                 (1..=8).map(|value| value as f64 / 10.0).collect(),
             )
@@ -67,14 +63,14 @@ fn make_contractible_two_node_pair_with_surviving_sites(
         vec!["A".to_string(), "B".to_string()],
     )
     .unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![s0, b0, bond_b.clone()],
                 (1..=8).map(|value| (value as f64 - 2.0) / 9.0).collect(),
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_b, s1, b1],
                 (1..=8).map(|value| (value as f64 + 1.0) / 11.0).collect(),
             )
@@ -87,10 +83,10 @@ fn make_contractible_two_node_pair_with_surviving_sites(
 }
 
 fn make_fit_initial_c(
-    tn_a: &TreeTN<TensorDynLen, String>,
-    tn_b: &TreeTN<TensorDynLen, String>,
+    tn_a: &TreeTN<IdxTensor, String>,
+    tn_b: &TreeTN<IdxTensor, String>,
     center: &str,
-) -> TreeTN<TensorDynLen, String> {
+) -> TreeTN<IdxTensor, String> {
     tn_a.contract_zipup_preserving_topology_with(
         tn_b,
         &center.to_string(),
@@ -101,25 +97,25 @@ fn make_fit_initial_c(
     .unwrap()
 }
 
-fn make_single_node_treetn() -> TreeTN<TensorDynLen, String> {
+fn make_single_node_treetn() -> TreeTN<IdxTensor, String> {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(3);
-    let t = TensorDynLen::from_dense(vec![s0, s1], vec![1.0; 6]).unwrap();
-    TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap()
+    let t = IdxTensor::from_dense(vec![s0, s1], vec![1.0; 6]).unwrap();
+    TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap()
 }
 
-fn make_three_node_treetn() -> TreeTN<TensorDynLen, String> {
+fn make_three_node_treetn() -> TreeTN<IdxTensor, String> {
     let s0 = DynIndex::new_dyn(2);
     let bond01 = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(2);
     let bond12 = DynIndex::new_dyn(3);
     let s2 = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0, bond01.clone()], vec![1.0; 6]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond01, s1, bond12.clone()], vec![1.0; 18]).unwrap();
-    let t2 = TensorDynLen::from_dense(vec![bond12, s2], vec![1.0; 6]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0, bond01.clone()], vec![1.0; 6]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond01, s1, bond12.clone()], vec![1.0; 18]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![bond12, s2], vec![1.0; 6]).unwrap();
 
-    TreeTN::<TensorDynLen, String>::from_tensors(
+    TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1, t2],
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
     )
@@ -132,24 +128,24 @@ fn make_three_node_treetn() -> TreeTN<TensorDynLen, String> {
 
 #[test]
 fn test_fit_environment_new() {
-    let env = FitEnvironment::<TensorDynLen, String>::new();
+    let env = FitEnvironment::<IdxTensor, String>::new();
     assert!(env.is_empty());
     assert_eq!(env.len(), 0);
 }
 
 #[test]
 fn test_fit_environment_default() {
-    let env = FitEnvironment::<TensorDynLen, String>::default();
+    let env = FitEnvironment::<IdxTensor, String>::default();
     assert!(env.is_empty());
     assert_eq!(env.len(), 0);
 }
 
 #[test]
 fn test_fit_environment_insert_and_get() {
-    let mut env = FitEnvironment::<TensorDynLen, String>::new();
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
+    let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
     env.insert("A".to_string(), "B".to_string(), t.clone());
 
@@ -164,16 +160,16 @@ fn test_fit_environment_insert_and_get() {
 
 #[test]
 fn test_fit_environment_get_nonexistent() {
-    let env = FitEnvironment::<TensorDynLen, String>::new();
+    let env = FitEnvironment::<IdxTensor, String>::new();
     assert!(env.get(&"A".to_string(), &"B".to_string()).is_none());
 }
 
 #[test]
 fn test_fit_environment_clear() {
-    let mut env = FitEnvironment::<TensorDynLen, String>::new();
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
+    let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
     env.insert("A".to_string(), "B".to_string(), t.clone());
     env.insert("B".to_string(), "A".to_string(), t.clone());
@@ -187,11 +183,11 @@ fn test_fit_environment_clear() {
 
 #[test]
 fn test_fit_environment_invalidate() {
-    let mut env = FitEnvironment::<TensorDynLen, String>::new();
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
     let tn = make_two_node_treetn();
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
+    let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
     // Insert environments for both directions
     env.insert("A".to_string(), "B".to_string(), t.clone());
@@ -215,18 +211,18 @@ fn test_fit_environment_invalidate() {
 
 #[test]
 fn test_fit_environment_verify_structural_consistency_empty() {
-    let env = FitEnvironment::<TensorDynLen, String>::new();
+    let env = FitEnvironment::<IdxTensor, String>::new();
     let tn = make_two_node_treetn();
     assert!(env.verify_structural_consistency(&tn).is_ok());
 }
 
 #[test]
 fn test_fit_environment_verify_structural_consistency_valid() {
-    let mut env = FitEnvironment::<TensorDynLen, String>::new();
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
     let tn = make_two_node_treetn();
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
+    let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
     // A is a leaf with only neighbor B. env[(A, B)] is valid alone.
     env.insert("A".to_string(), "B".to_string(), t.clone());
@@ -237,7 +233,7 @@ fn test_fit_environment_verify_structural_consistency_valid() {
 fn test_fit_environment_get_or_compute_caches_leaf_environment() {
     let (tn_a, tn_b) = make_contractible_two_node_pair_with_surviving_sites();
     let tn_c = make_fit_initial_c(&tn_a, &tn_b, "A");
-    let mut env = FitEnvironment::<TensorDynLen, String>::new();
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
 
     let from = "A".to_string();
     let to = "B".to_string();
@@ -252,11 +248,11 @@ fn test_fit_environment_get_or_compute_caches_leaf_environment() {
 
 #[test]
 fn test_fit_environment_verify_structural_consistency_detects_missing_child_env() {
-    let mut env = FitEnvironment::<TensorDynLen, String>::new();
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
     let tn = make_three_node_treetn();
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
+    let t = IdxTensor::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
 
     // B is non-leaf toward A, so env[(C, B)] must also exist.
     env.insert("B".to_string(), "A".to_string(), t);
@@ -354,7 +350,7 @@ fn test_fit_updater_after_step_invalidates_cached_region() {
     let mut updater = FitUpdater::new(tn_a, tn_b, None, None);
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
+    let t = IdxTensor::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
     updater
         .envs
         .insert("A".to_string(), "B".to_string(), t.clone());
@@ -384,47 +380,47 @@ fn test_fit_updater_update_pins_same_id_prime_pair_leg_order() {
     // The primed index appears first in the first contracted tensor, so the
     // unsorted left_inds insertion order is [s', s] (the buggy stable sort
     // preserves it; the full-index sort must pin [s, s']).
-    let a_u = TensorDynLen::from_dense(
+    let a_u = IdxTensor::from_dense(
         vec![s_prime.clone(), bond.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )
     .unwrap();
-    let b_u = TensorDynLen::from_dense(
+    let b_u = IdxTensor::from_dense(
         vec![s.clone(), bond.clone()],
         vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
     )
     .unwrap();
-    let a_v = TensorDynLen::from_dense(
+    let a_v = IdxTensor::from_dense(
         vec![bond.clone(), t_a.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
-    let b_v = TensorDynLen::from_dense(
+    let b_v = IdxTensor::from_dense(
         vec![bond.clone(), t_b.clone()],
         vec![0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
     )
     .unwrap();
 
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![a_u, a_v],
         vec!["A".to_string(), "B".to_string()],
     )
     .unwrap();
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![b_u, b_v],
         vec!["A".to_string(), "B".to_string()],
     )
     .unwrap();
 
     // Full network C: node A's site space holds the same-ID primed pair.
-    let c_a = TensorDynLen::from_dense(
+    let c_a = IdxTensor::from_dense(
         vec![s_prime.clone(), s.clone(), bond.clone()],
         vec![1.0; 12],
     )
     .unwrap();
-    let c_b = TensorDynLen::from_dense(vec![bond.clone(), t_a.clone(), t_b.clone()], vec![1.0; 12])
-        .unwrap();
-    let full_treetn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let c_b =
+        IdxTensor::from_dense(vec![bond.clone(), t_a.clone(), t_b.clone()], vec![1.0; 12]).unwrap();
+    let full_treetn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![c_a, c_b],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -527,19 +523,19 @@ fn test_contract_fit_handles_leaf_site_space_that_contracts_away() {
     let b_ab = DynIndex::new_dyn(2);
     let b_bc = DynIndex::new_dyn(2);
 
-    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
         vec![
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![left.clone(), shared_left.clone(), a_ab.clone()],
                 (1..=8).map(|value| value as f64 / 8.0).collect(),
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![a_ab.clone(), shared_mid.clone(), a_bc.clone()],
                 (1..=8).map(|value| value as f64 / 10.0).collect(),
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![a_bc.clone(), shared_leaf.clone()],
                 vec![0.5, 1.5, -0.5, 2.0],
             )
@@ -549,14 +545,14 @@ fn test_contract_fit_handles_leaf_site_space_that_contracts_away() {
     )
     .unwrap();
 
-    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
         vec![
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![b_ab.clone(), shared_left.clone()],
                 vec![1.0, -0.5, 0.25, 0.75],
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     b_ab.clone(),
                     shared_mid.clone(),
@@ -566,7 +562,7 @@ fn test_contract_fit_handles_leaf_site_space_that_contracts_away() {
                 (1..=16).map(|value| (value as f64 - 3.0) / 7.0).collect(),
             )
             .unwrap(),
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![b_bc.clone(), shared_leaf.clone()],
                 vec![2.0, -1.0, 0.25, 0.75],
             )

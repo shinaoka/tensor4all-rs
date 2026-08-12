@@ -1,6 +1,6 @@
 use super::*;
 use std::collections::HashMap;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 
 #[test]
 fn test_tree_topology_validate() {
@@ -46,7 +46,7 @@ fn test_factorize_tensor_to_treetn_rejects_duplicate_index_assignment() {
     let i0 = DynIndex::new_dyn(2);
     let i1 = DynIndex::new_dyn(2);
     let tensor =
-        TensorDynLen::from_dense(vec![i0.clone(), i1.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+        IdxTensor::from_dense(vec![i0.clone(), i1.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
     let mut nodes: HashMap<String, Vec<DynIndex>> = HashMap::new();
     nodes.insert("node0".to_string(), vec![i0.clone()]);
@@ -68,7 +68,7 @@ fn test_factorize_tensor_to_treetn_preserves_requested_chain_topology_for_nonroo
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![s0.clone(), s1.clone(), s2.clone()],
         vec![10.0, 30.0, 20.0, 40.0, 11.0, 31.0, 21.0, 41.0],
     )
@@ -92,8 +92,7 @@ fn test_factorize_tensor_to_treetn_accepts_full_index_topology_for_same_id_prime
     let i = DynIndex::new_dyn(2);
     let i_prime = i.prime();
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), i_prime.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
+        IdxTensor::from_dense(vec![i.clone(), i_prime.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
     let mut nodes: HashMap<String, Vec<DynIndex>> = HashMap::new();
     nodes.insert("input".to_string(), vec![i.clone()]);

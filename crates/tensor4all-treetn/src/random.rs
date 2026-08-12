@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::tensor::RandomScalar;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 
 /// Specification for link (bond) dimensions.
 ///
@@ -108,7 +108,7 @@ pub fn random_treetn<T, R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, TreeTNOperationError>
+) -> std::result::Result<TreeTN<IdxTensor, V>, TreeTNOperationError>
 where
     T: RandomScalar,
     R: Rng,
@@ -164,7 +164,7 @@ where
         }
 
         // Create random tensor
-        let tensor = TensorDynLen::random::<T, R>(rng, all_indices)?;
+        let tensor = IdxTensor::random::<T, R>(rng, all_indices)?;
 
         tensors.push(tensor);
         node_names.push(node_name);

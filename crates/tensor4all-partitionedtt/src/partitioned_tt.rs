@@ -21,12 +21,12 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 ///
 /// ```
 /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
-/// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+/// use tensor4all_partitionedtt::{DynIndex, IdxTensor};
 /// use tensor4all_core::index::Index;
 ///
 /// fn make_tt(s0: &DynIndex, bond: &DynIndex, s1: &DynIndex) -> TensorTrain {
-///     let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
-///     let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![3.0, 4.0]).unwrap();
+///     let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+///     let t1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![3.0, 4.0]).unwrap();
 ///     TensorTrain::new(vec![t0, t1]).unwrap()
 /// }
 ///
@@ -80,14 +80,14 @@ impl PartitionedTT {
     ///
     /// ```
     /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
-    /// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+    /// use tensor4all_partitionedtt::{DynIndex, IdxTensor};
     /// use tensor4all_core::index::Index;
     ///
     /// let s0 = Index::new_dyn(2);
     /// let bond = Index::new_dyn(1);
     /// let s1 = Index::new_dyn(2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![3.0, 4.0]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![3.0, 4.0]).unwrap();
     /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// // Two disjoint patches: s0=0 and s0=1
@@ -152,14 +152,14 @@ impl PartitionedTT {
     ///
     /// ```
     /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
-    /// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+    /// use tensor4all_partitionedtt::{DynIndex, IdxTensor};
     /// use tensor4all_core::index::Index;
     ///
     /// let s0 = Index::new_dyn(2);
     /// let bond = Index::new_dyn(1);
     /// let s1 = Index::new_dyn(2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![3.0, 4.0]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![3.0, 4.0]).unwrap();
     /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// let proj = Projector::from_pairs([(s0.clone(), 0)]);
@@ -240,14 +240,14 @@ impl PartitionedTT {
     ///
     /// ```
     /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
-    /// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+    /// use tensor4all_partitionedtt::{DynIndex, IdxTensor};
     /// use tensor4all_core::index::Index;
     ///
     /// let s0 = Index::new_dyn(2);
     /// let bond = Index::new_dyn(1);
     /// let s1 = Index::new_dyn(2);
-    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 0.0]).unwrap();
-    /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0]).unwrap();
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 0.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0]).unwrap();
     /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// let proj = Projector::from_pairs([(s0, 0)]);

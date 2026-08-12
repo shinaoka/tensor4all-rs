@@ -8,7 +8,7 @@
 //! # Key Types
 //!
 //! - [`TreeTN`]: The main tree tensor network type, parameterized by tensor and node name types.
-//! - [`DefaultTreeTN`]: A convenient alias for `TreeTN<TensorDynLen, NodeIndex>`.
+//! - [`DefaultTreeTN`]: A convenient alias for `TreeTN<IdxTensor, NodeIndex>`.
 //! - [`NamedGraph`]: A graph wrapper that maps node names to internal graph indices.
 //!
 //! # Features
@@ -56,7 +56,7 @@ pub use gse::{
 };
 pub use treetn::contraction;
 
-// dyn_treetn exports removed - use TreeTN<TensorDynLen, V> directly
+// dyn_treetn exports removed - use TreeTN<IdxTensor, V> directly
 pub use link_index_network::LinkIndexNetwork;
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
@@ -116,9 +116,9 @@ pub use linsolve::{
 };
 
 use petgraph::graph::NodeIndex;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 
-/// Default TreeTN type using TensorDynLen as the tensor type.
+/// Default TreeTN type using IdxTensor as the tensor type.
 ///
 /// This is the most common configuration for TreeTN, equivalent to:
 /// ```
@@ -129,4 +129,4 @@ use tensor4all_core::TensorDynLen;
 /// ```
 ///
 /// Use this when you don't need custom tensor types.
-pub type DefaultTreeTN<V = NodeIndex> = TreeTN<TensorDynLen, V>;
+pub type DefaultTreeTN<V = NodeIndex> = TreeTN<IdxTensor, V>;

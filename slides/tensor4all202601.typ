@@ -187,7 +187,7 @@
     stroke: 0.5pt,
     [*ITensors.jl*], [*tensor4all-rs*],
     [`Index{Int}`], [`Index<Id, NoSymmSpace>`],
-    [`ITensor`], [`TensorDynLen<Id, Symm>`],
+    [`ITensor`], [`IdxTensor<Id, Symm>`],
     [`Dense` / `Diag`], [`Storage::DenseF64` / `DiagF64`],
     [`A * B`], [`a.contract(&b)` or `T::contract(&[a, b])`],
     [`cutoff`], [`rtol` (= √cutoff)],
@@ -305,14 +305,14 @@
     ```rust
     // Contractable index pairs are automatically found and contracted
     let c = T::contract(&[a, b, c])?;
-    // Or using * operator for TensorDynLen
+    // Or using * operator for IdxTensor
     let c = &a * &b;
     ```
   ]
 
   #v(0.5em)
 
-  *Explicit contraction* — on concrete type (TensorDynLen):
+  *Explicit contraction* — on concrete type (IdxTensor):
   #code-block[
     ```rust
     // Contract specific indices i from A with j from B
@@ -329,7 +329,7 @@
 #slide("Type Hierarchy Overview")[
   #text(size: 20pt)[
   ```
-  TensorDynLen (implements TensorLike)
+  IdxTensor (implements TensorLike)
       │
       ├── indices: Vec<DynIndex>     ← Index information
       │
@@ -342,7 +342,7 @@
 
   #v(0.8em)
 
-  - *TensorDynLen*: User-facing tensor type (implements `TensorLike`)
+  - *IdxTensor*: User-facing tensor type (implements `TensorLike`)
   - *TensorData*: Lazy outer product of tensor components
   - *Storage*: Low-level data storage (`mdarray` backend)
   ]

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_quanticstci::{
     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
@@ -47,7 +47,7 @@ pub const DEFAULT_FOURIER_CONFIG: FourierTutorialConfig = FourierTutorialConfig 
 /// QTT construction result returned by the Fourier helper.
 pub type FourierQttOutput = (QuanticsTensorCI2<f64>, Vec<usize>, Vec<f64>);
 /// Transformed Fourier state and the site indices needed for evaluation.
-pub type FourierTransformOutput = (TreeTN<TensorDynLen, usize>, Vec<SiteIndex>);
+pub type FourierTransformOutput = (TreeTN<IdxTensor, usize>, Vec<SiteIndex>);
 
 /// One row in the Fourier sample table.
 #[derive(Debug, Clone)]
@@ -138,7 +138,7 @@ pub fn build_gaussian_qtt(
 ///
 pub fn build_fourier_operator(
     config: &FourierTutorialConfig,
-) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
+) -> Result<LinearOperator<IdxTensor, usize>, Box<dyn Error>> {
     let options = FourierOptions {
         max_bond_dim: Some(config.max_bond_dim),
         tolerance: config.tolerance,
@@ -166,7 +166,7 @@ pub fn global_index_to_quantics_sites(index_1based: usize, bits: usize) -> Vec<u
 ///
 pub fn transform_gaussian(
     qtci: &QuanticsTensorCI2<f64>,
-    operator: &LinearOperator<TensorDynLen, usize>,
+    operator: &LinearOperator<IdxTensor, usize>,
     _config: &FourierTutorialConfig,
 ) -> Result<FourierTransformOutput, Box<dyn Error>> {
     let tt = qtci.tensor_train();
@@ -185,7 +185,7 @@ pub fn transform_gaussian(
 /// /// mismatch or backend failure).
 ///
 pub fn evaluate_tree_point(
-    tn: &TreeTN<TensorDynLen, usize>,
+    tn: &TreeTN<IdxTensor, usize>,
     site_indices: &[SiteIndex],
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
@@ -200,7 +200,7 @@ pub fn evaluate_tree_point(
 /// /// backend failure).
 ///
 pub fn collect_samples(
-    transformed: &TreeTN<TensorDynLen, usize>,
+    transformed: &TreeTN<IdxTensor, usize>,
     site_indices: &[SiteIndex],
     input_grid: &DiscretizedGrid,
     frequency_grid: &DiscretizedGrid,
@@ -255,7 +255,7 @@ pub fn collect_bond_dims_from_profiles(
 /// Print a compact summary for the Gaussian Fourier tutorial.
 pub fn print_summary(
     input_qtci: &QuanticsTensorCI2<f64>,
-    transformed: &TreeTN<TensorDynLen, usize>,
+    transformed: &TreeTN<IdxTensor, usize>,
     ranks: &[usize],
     errors: &[f64],
     samples: &[SamplePoint],

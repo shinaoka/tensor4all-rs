@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 
 use std::collections::HashMap;
-use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen};
+use tensor4all_core::{ColMajorArray, DynIndex, IdxTensor};
 use tensor4all_tcicore::MatrixLuciScalar as Scalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
@@ -31,7 +31,7 @@ pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,
     evaluate: F,
     center_site: Option<usize>,
-) -> TreeTciResult<TreeTN<TensorDynLen, usize>>
+) -> TreeTciResult<TreeTN<IdxTensor, usize>>
 where
     T: FullPivLuScalar + tensor4all_tcicore::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
@@ -108,7 +108,7 @@ where
             );
         }
 
-        tensors.push(TensorDynLen::from_dense(indices, data)?);
+        tensors.push(IdxTensor::from_dense(indices, data)?);
         node_names.push(site);
     }
 

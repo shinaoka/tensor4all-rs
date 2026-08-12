@@ -319,7 +319,7 @@ fn test_fuse_to_y_shape_internal_center_node() {
     //     B(no site)   <-- internal node, only bonds
     //      / \
     // C(site_c) D(site_d)
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let site_a = DynIndex::new_dyn(2);
     let site_c = DynIndex::new_dyn(2);
@@ -329,11 +329,11 @@ fn test_fuse_to_y_shape_internal_center_node() {
     let bond_bd = DynIndex::new_dyn(3);
 
     let tensor_a =
-        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
     // B has NO site index — only bond indices
-    let tensor_b = TensorDynLen::from_dense(
+    let tensor_b = IdxTensor::from_dense(
         vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
         vec![1.0; 27],
     )
@@ -341,11 +341,11 @@ fn test_fuse_to_y_shape_internal_center_node() {
     tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
     let tensor_c =
-        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
     let tensor_d =
-        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
     let n_a = tn.node_index(&"A".to_string()).unwrap();
@@ -548,7 +548,7 @@ Add after the existing Y-shape tests:
         //     B(no site)
         //      / \
         // C(site_c) D(site_d)
-        let mut tn = TreeTN::<TensorDynLen, String>::new();
+        let mut tn = TreeTN::<IdxTensor, String>::new();
         let site_a = DynIndex::new_dyn(2);
         let site_c = DynIndex::new_dyn(2);
         let site_d = DynIndex::new_dyn(2);
@@ -556,17 +556,17 @@ Add after the existing Y-shape tests:
         let bond_bc = DynIndex::new_dyn(3);
         let bond_bd = DynIndex::new_dyn(3);
 
-        let tensor_a = TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6])?;
+        let tensor_a = IdxTensor::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6])?;
         tn.add_tensor("A".to_string(), tensor_a)?;
         // B has no site index
-        let tensor_b = TensorDynLen::from_dense(
+        let tensor_b = IdxTensor::from_dense(
             vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
             vec![1.0; 27],
         )?;
         tn.add_tensor("B".to_string(), tensor_b)?;
-        let tensor_c = TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6])?;
+        let tensor_c = IdxTensor::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6])?;
         tn.add_tensor("C".to_string(), tensor_c)?;
-        let tensor_d = TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6])?;
+        let tensor_d = IdxTensor::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6])?;
         tn.add_tensor("D".to_string(), tensor_d)?;
 
         let n_a = tn.node_index(&"A".to_string()).unwrap();

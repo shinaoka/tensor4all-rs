@@ -6,7 +6,7 @@
 //! - [`TagSet`]: Tag set for metadata (Arc-wrapped for cheap cloning)
 //! - [`Index`]: Generic index type (`Index<Id, Tags>`)
 //! - [`DynIndex`]: Default index type (`Index<DynId, TagSet>`)
-//! - [`TensorDynLen`]: Dense tensor with dynamic rank
+//! - [`IdxTensor`]: Dense tensor with dynamic rank
 //!
 //! Linear algebra operations:
 //! - [`svd::svd`]: Singular Value Decomposition
@@ -17,9 +17,9 @@
 //! These types are suitable for most tensor network applications and provide
 //! a good balance of flexibility and performance.
 
-pub mod index;
 /// Dynamic-length tensor implementation.
-pub mod tensordynlen;
+pub mod idx_tensor;
+pub mod index;
 
 // Contraction
 pub mod contract;
@@ -36,12 +36,11 @@ pub use contract::{
     contract_pair_with_options, contract_with_options, outer_product,
     print_and_reset_contract_profile, reset_contract_profile, tensordot, ContractionOptions,
 };
-pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
-pub use tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len,
-    print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile, unfold_split,
-    TensorDynLen, TensorDynLenError, TensorStorageError,
+pub use idx_tensor::{
+    compute_permutation_from_indices, diag_idx_tensor, print_and_reset_pairwise_contract_profile,
+    reset_pairwise_contract_profile, unfold_split, IdxTensor, IdxTensorError, TensorStorageError,
 };
+pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 
 // Re-export linear algebra functions and types
 pub use direct_sum::direct_sum;

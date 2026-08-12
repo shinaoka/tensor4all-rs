@@ -133,7 +133,7 @@ where
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{square_linsolve, IndexMapping, LinsolveOptions, TreeTN};
 ///
 /// # fn main() -> anyhow::Result<()> {
@@ -143,12 +143,12 @@ where
 /// let b01 = DynIndex::new_dyn(phys_dim);
 ///
 /// // Right-hand side |b>: a two-site state with bond dimension two.
-/// let mut rhs = TreeTN::<TensorDynLen, usize>::new();
-/// let a = TensorDynLen::from_dense(
+/// let mut rhs = TreeTN::<IdxTensor, usize>::new();
+/// let a = IdxTensor::from_dense(
 ///     vec![s0.clone(), b01.clone()],
 ///     vec![1.0_f64, 0.0, 0.0, 2.0],
 /// )?;
-/// let b = TensorDynLen::from_dense(
+/// let b = IdxTensor::from_dense(
 ///     vec![b01.clone(), s1.clone()],
 ///     vec![3.0_f64, 0.0, 0.0, 4.0],
 /// )?;
@@ -166,12 +166,12 @@ where
 /// for i in 0..phys_dim {
 ///     id[i * phys_dim + i] = 1.0;
 /// }
-/// let mut operator = TreeTN::<TensorDynLen, usize>::new();
-/// let t0 = TensorDynLen::from_dense(
+/// let mut operator = TreeTN::<IdxTensor, usize>::new();
+/// let t0 = IdxTensor::from_dense(
 ///     vec![s0_out.clone(), s0_in.clone(), m_bond.clone()],
 ///     id.clone(),
 /// )?;
-/// let t1 = TensorDynLen::from_dense(
+/// let t1 = IdxTensor::from_dense(
 ///     vec![m_bond.clone(), s1_out.clone(), s1_in.clone()],
 ///     id.clone(),
 /// )?;
@@ -187,12 +187,12 @@ where
 ///
 /// // Zero initial guess: not the solution, so the assertions below prove the
 /// // solver actually solves the system.
-/// let mut init = TreeTN::<TensorDynLen, usize>::new();
-/// let iz0 = TensorDynLen::from_dense(
+/// let mut init = TreeTN::<IdxTensor, usize>::new();
+/// let iz0 = IdxTensor::from_dense(
 ///     vec![s0.clone(), b01.clone()],
 ///     vec![0.0_f64, 0.0, 0.0, 0.0],
 /// )?;
-/// let iz1 = TensorDynLen::from_dense(
+/// let iz1 = IdxTensor::from_dense(
 ///     vec![b01.clone(), s1.clone()],
 ///     vec![0.0_f64, 0.0, 0.0, 0.0],
 /// )?;
@@ -457,7 +457,7 @@ where
 /// # Examples
 /// ```
 /// use std::collections::HashMap;
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{
 ///     relative_linear_system_residual, ApplyOptions, IndexMapping, LinearOperator, TreeTN,
 /// };
@@ -465,13 +465,13 @@ where
 /// let site = DynIndex::new_dyn(2);
 /// let s_in = DynIndex::new_dyn(2);
 /// let s_out = DynIndex::new_dyn(2);
-/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 5.0]).unwrap();
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
-/// let mpo_tensor = TensorDynLen::from_dense(
+/// let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 5.0]).unwrap();
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
+/// let mpo_tensor = IdxTensor::from_dense(
 ///     vec![s_out.clone(), s_in.clone()],
 ///     vec![1.0_f64, 0.0, 0.0, 1.0],
 /// ).unwrap();
-/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+/// let mpo = TreeTN::<IdxTensor, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
 /// let mut input_mapping = HashMap::new();
 /// input_mapping.insert(0usize, IndexMapping { true_index: site.clone(), internal_index: s_in });
 /// let mut output_mapping = HashMap::new();

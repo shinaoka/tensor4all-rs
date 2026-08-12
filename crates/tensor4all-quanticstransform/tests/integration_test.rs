@@ -15,7 +15,7 @@ use num_complex::Complex64;
 use num_traits::{One, Zero};
 
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{IdxTensor, IndexLike, TensorIndex};
 use tensor4all_simplett::{
     types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
@@ -37,7 +37,7 @@ type DynIndex = Index<DynId, TagSet>;
 
 fn tensortrain_to_treetn(
     tt: &SimpleTensorTrain<Complex64>,
-) -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
     tensor4all_treetn::tensor_train_to_treetn(tt).expect("MPS to TreeTN conversion failed")
 }
 
@@ -83,7 +83,7 @@ fn create_two_bit_value_qtt(values: [f64; 4]) -> SimpleTensorTrain<Complex64> {
 ///
 /// Returns a vector of length 2^R representing f[x] for x = 0, 1, ..., 2^R - 1.
 fn contract_treetn_to_vector(
-    treetn: &TreeTN<TensorDynLen, usize>,
+    treetn: &TreeTN<IdxTensor, usize>,
     site_indices: &[DynIndex],
 ) -> Vec<Complex64> {
     let r = site_indices.len();
@@ -174,7 +174,7 @@ fn evaluate_mps_all(mps: &SimpleTensorTrain<Complex64>) -> Vec<Complex64> {
 /// * `n_in` - Number of input sites (must equal n_out)
 /// * `n_out` - Number of output sites (must equal n_in)
 fn apply_operator_to_dense_matrix(
-    op: &LinearOperator<TensorDynLen, usize>,
+    op: &LinearOperator<IdxTensor, usize>,
     n_in: usize,
     n_out: usize,
 ) -> Vec<Vec<Complex64>> {
@@ -247,7 +247,7 @@ fn test_difference_kernel_mpo_rejects_open_boundary() {
 /// # Returns
 /// A dim × dim matrix where dim = site_dim^n_sites
 fn contract_operator_to_dense_matrix(
-    op: &LinearOperator<TensorDynLen, usize>,
+    op: &LinearOperator<IdxTensor, usize>,
     n_sites: usize,
     site_dim: usize,
 ) -> Vec<Vec<Complex64>> {
@@ -2438,7 +2438,7 @@ fn test_operator_linearity() {
 /// Contracts the MPO directly to obtain the dense matrix representation.
 /// The operator has `r` sites, each with input/output dimension 2^nvariables.
 fn apply_multivar_operator_to_dense_matrix(
-    op: &LinearOperator<TensorDynLen, usize>,
+    op: &LinearOperator<IdxTensor, usize>,
     r: usize,
     nvariables: usize,
 ) -> Vec<Vec<Complex64>> {

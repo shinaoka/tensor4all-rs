@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{index::DynId, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{
     CanonicalizationOptions, IndexMapping, LinsolveOptions, LocalUpdateStep, LocalUpdater,
     SquareLinsolveUpdater, TreeTN,
@@ -33,13 +33,10 @@ fn unique_dyn_index(used: &mut HashSet<DynId>, dim: usize) -> DynIndex {
 }
 
 /// Create a 1-node "MPO-like" state tensor with two site indices (external, contracted).
-fn one_node_mpo_like_state(
-    external: DynIndex,
-    contracted: DynIndex,
-) -> TreeTN<TensorDynLen, String> {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+fn one_node_mpo_like_state(external: DynIndex, contracted: DynIndex) -> TreeTN<IdxTensor, String> {
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     let nelem = external.dim() * contracted.dim();
-    let t = TensorDynLen::from_dense(vec![external, contracted], vec![1.0; nelem]).unwrap();
+    let t = IdxTensor::from_dense(vec![external, contracted], vec![1.0; nelem]).unwrap();
     tn.add_tensor("site0".to_string(), t).unwrap();
     tn
 }
@@ -51,7 +48,7 @@ fn one_node_identity_operator_with_mappings(
     true_contracted: DynIndex,
     used: &mut HashSet<DynId>,
 ) -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 ) {
@@ -64,9 +61,9 @@ fn one_node_identity_operator_with_mappings(
     for k in 0..phys_dim {
         data[k * phys_dim + k] = 1.0;
     }
-    let t = TensorDynLen::from_dense(vec![s_out_tmp.clone(), s_in_tmp.clone()], data).unwrap();
+    let t = IdxTensor::from_dense(vec![s_out_tmp.clone(), s_in_tmp.clone()], data).unwrap();
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
     mpo.add_tensor("site0".to_string(), t).unwrap();
 
     let mut input_mapping = HashMap::new();

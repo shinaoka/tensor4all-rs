@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
@@ -32,10 +32,10 @@ fn create_n_site_mps(
     n_sites: usize,
     phys_dim: usize,
     bond_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     // Physical indices with tags (for readable debug output)
     let site_indices: Vec<DynIndex> = (0..n_sites)
@@ -56,7 +56,7 @@ fn create_n_site_mps(
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * bond_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
+            IdxTensor::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
                 .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_{n-1}] - identity-like
@@ -64,7 +64,7 @@ fn create_n_site_mps(
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * phys_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
             )
@@ -76,7 +76,7 @@ fn create_n_site_mps(
                 let idx = j * phys_dim * bond_dim + j * bond_dim + j;
                 data[idx] = 1.0;
             }
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     site_indices[i].clone(),
@@ -106,7 +106,7 @@ fn create_random_mps_with_same_sites(
     bond_dim: usize,
     site_indices: &[DynIndex],
     seed: u64,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(site_indices.len() == n_sites, "site index count mismatch");
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
@@ -114,22 +114,22 @@ fn create_random_mps_with_same_sites(
         .map(|_| DynIndex::new_dyn(bond_dim))
         .collect();
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     for i in 0..n_sites {
         let name = format!("site{i}");
         let tensor = if i == 0 {
-            TensorDynLen::random::<f64, _>(
+            IdxTensor::random::<f64, _>(
                 &mut rng,
                 vec![site_indices[i].clone(), bond_indices[i].clone()],
             )
         } else if i == n_sites - 1 {
-            TensorDynLen::random::<f64, _>(
+            IdxTensor::random::<f64, _>(
                 &mut rng,
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
             )
         } else {
-            TensorDynLen::random::<f64, _>(
+            IdxTensor::random::<f64, _>(
                 &mut rng,
                 vec![
                     bond_indices[i - 1].clone(),
@@ -157,11 +157,11 @@ fn create_random_mps_with_same_sites(
 fn create_n_site_mpo_with_internal_indices(
     diag_values: &[f64],
     phys_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
+) -> (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>) {
     let n_sites = diag_values.len();
     assert!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // Internal indices (independent IDs)
     let s_in_tmp: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -178,7 +178,7 @@ fn create_n_site_mpo_with_internal_indices(
         }
 
         let tensor = if i == 0 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -188,7 +188,7 @@ fn create_n_site_mpo_with_internal_indices(
             )
             .unwrap()
         } else if i == n_sites - 1 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -198,7 +198,7 @@ fn create_n_site_mpo_with_internal_indices(
             )
             .unwrap()
         } else {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -302,7 +302,7 @@ fn run_test_case(init_mode: &str, bond_dim: usize) -> anyhow::Result<()> {
     );
 
     // Helper: compute relative residual ||(a0*I + a1*A) x - b|| / ||b|| in full space.
-    let compute_rel_residual = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+    let compute_rel_residual = |x: &TreeTN<IdxTensor, String>| -> anyhow::Result<f64> {
         let linop = LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
         let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
 

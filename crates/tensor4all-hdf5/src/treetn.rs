@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::str::FromStr;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
 use crate::index;
@@ -47,7 +47,7 @@ const NODE_NAME_ATTR: &str = "node_name";
 ///   node_2/
 ///     ...
 /// ```
-pub(crate) fn write_treetn<V>(group: &Group, tn: &TreeTN<TensorDynLen, V>) -> Result<()>
+pub(crate) fn write_treetn<V>(group: &Group, tn: &TreeTN<IdxTensor, V>) -> Result<()>
 where
     V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
 {
@@ -95,7 +95,7 @@ where
 /// reconstructed with [`TreeTN::from_tensors`], which reconnects bond indices
 /// by shared [`Index`](tensor4all_core::Index) identity and validates that
 /// the result is a consistent tree.
-pub(crate) fn read_treetn<V>(group: &Group) -> Result<TreeTN<TensorDynLen, V>>
+pub(crate) fn read_treetn<V>(group: &Group) -> Result<TreeTN<IdxTensor, V>>
 where
     V: FromStr + Ord + Clone + Hash + Eq + Send + Sync + Debug,
     V::Err: Display,

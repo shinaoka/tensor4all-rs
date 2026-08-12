@@ -19,7 +19,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+    DynIndex, IdxTensor, IndexLike, TensorContractionLike, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalForm,
@@ -82,10 +82,10 @@ fn create_identity_mpo_state(
     true_site_indices: &[DynIndex], // external indices (contracted with operator)
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // MPO bonds
     let bonds: Vec<_> = (0..n.saturating_sub(1))
@@ -115,7 +115,7 @@ fn create_identity_mpo_state(
                 base_data[idx] = 1.0;
             }
         }
-        let base = TensorDynLen::from_dense(
+        let base = IdxTensor::from_dense(
             vec![
                 true_site_indices[i].clone(), // external (contracted with operator)
                 s_out_tmp[i].clone(),
@@ -140,8 +140,8 @@ fn create_identity_mpo_state(
                 base
             } else {
                 let bond_size: usize = bond_inds.iter().map(|b| b.dim()).product();
-                let ones = TensorDynLen::from_dense(bond_inds, vec![1.0_f64; bond_size]).unwrap();
-                TensorDynLen::outer_product(&base, &ones)?
+                let ones = IdxTensor::from_dense(bond_inds, vec![1.0_f64; bond_size]).unwrap();
+                IdxTensor::outer_product(&base, &ones)?
             }
         };
 
@@ -169,13 +169,13 @@ fn create_random_mpo_operator(
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
 ) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 )> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     // MPO bonds (deterministic IDs from rng)
     let bonds: Vec<_> = (0..n.saturating_sub(1))
@@ -198,7 +198,7 @@ fn create_random_mpo_operator(
         let node_name = make_node_name(i);
 
         let indices = mpo_node_indices(n, i, &bonds, &s_out_tmp, &s_in_tmp);
-        let t = TensorDynLen::random::<f64, _>(rng, indices)?;
+        let t = IdxTensor::random::<f64, _>(rng, indices)?;
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
         nodes.push(node);
@@ -348,7 +348,7 @@ fn main() -> anyhow::Result<()> {
         .with_gmres_restart_dim(gmres_restart_dim)
         .with_coefficients(a0, a1);
 
-    let compute_rel_residual = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+    let compute_rel_residual = |x: &TreeTN<IdxTensor, String>| -> anyhow::Result<f64> {
         let linop = LinearOperator::new(
             operator_a.clone(),
             a_input_mapping.clone(),
@@ -363,7 +363,7 @@ fn main() -> anyhow::Result<()> {
         // Align indices using b_full as reference (like test_linsolve_mpo_identity.rs)
         let ref_order: Vec<DynIndex> = b_full.external_indices();
 
-        let order_for = |tensor: &TensorDynLen| -> anyhow::Result<Vec<DynIndex>> {
+        let order_for = |tensor: &IdxTensor| -> anyhow::Result<Vec<DynIndex>> {
             let inds: Vec<DynIndex> = tensor.external_indices();
             let by_id: HashMap<DynId, DynIndex> =
                 inds.into_iter().map(|i: DynIndex| (*i.id(), i)).collect();
@@ -440,7 +440,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("Measured runs...");
     let mut times = Vec::with_capacity(n_runs);
-    let mut x_last: Option<TreeTN<TensorDynLen, String>> = None;
+    let mut x_last: Option<TreeTN<IdxTensor, String>> = None;
 
     for run in 1..=n_runs {
         let start = Instant::now();

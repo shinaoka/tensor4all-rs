@@ -1,18 +1,18 @@
 use super::*;
 use crate::site_index_network::SiteIndexNetwork;
 use std::collections::HashSet;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 
-fn make_two_node_chain() -> (TreeTN<TensorDynLen, String>, DynIndex, DynIndex) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+fn make_two_node_chain() -> (TreeTN<IdxTensor, String>, DynIndex, DynIndex) {
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(3);
     let bond = DynIndex::new_dyn(4);
 
     // Make a simple chain A --bond-- B
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 2 * 4]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 4 * 3]).unwrap();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 2 * 4]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 4 * 3]).unwrap();
 
     tn.add_tensor("A".to_string(), t0).unwrap();
     tn.add_tensor("B".to_string(), t1).unwrap();
@@ -94,12 +94,12 @@ fn test_fuse_to_errors_for_unknown_site_index() {
 
 /// Create a 3-node chain: A -- B -- C
 fn make_three_node_chain() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex, // s0
     DynIndex, // s1
     DynIndex, // s2
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
@@ -107,13 +107,13 @@ fn make_three_node_chain() -> (
     let bond_ab = DynIndex::new_dyn(2);
     let bond_bc = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond_ab.clone()], vec![1.0; 2 * 2]).unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond_ab.clone()], vec![1.0; 2 * 2]).unwrap();
+    let t1 = IdxTensor::from_dense(
         vec![bond_ab.clone(), s1.clone(), bond_bc.clone()],
         vec![1.0; 2 * 2 * 2],
     )
     .unwrap();
-    let t2 = TensorDynLen::from_dense(vec![bond_bc.clone(), s2.clone()], vec![1.0; 2 * 3]).unwrap();
+    let t2 = IdxTensor::from_dense(vec![bond_bc.clone(), s2.clone()], vec![1.0; 2 * 3]).unwrap();
 
     tn.add_tensor("A".to_string(), t0).unwrap();
     tn.add_tensor("B".to_string(), t1).unwrap();
@@ -129,7 +129,7 @@ fn make_three_node_chain() -> (
 }
 
 fn make_two_node_groups_of_two() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex,
     DynIndex,
     DynIndex,
@@ -141,15 +141,14 @@ fn make_two_node_groups_of_two() -> (
     let y1 = DynIndex::new_dyn(2);
     let old_bond = DynIndex::new_dyn(2);
 
-    let left = TensorDynLen::from_dense(
+    let left = IdxTensor::from_dense(
         vec![x0.clone(), x1.clone(), old_bond.clone()],
         vec![1.0; 2 * 2 * 2],
     )
     .unwrap();
-    let right =
-        TensorDynLen::from_dense(vec![old_bond, y0.clone(), y1.clone()], vec![1.0; 2 * 2 * 2])
-            .unwrap();
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let right = IdxTensor::from_dense(vec![old_bond, y0.clone(), y1.clone()], vec![1.0; 2 * 2 * 2])
+        .unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![left, right],
         vec!["left".to_string(), "right".to_string()],
     )
@@ -593,7 +592,7 @@ fn test_fuse_identity_mapping() {
 }
 
 fn make_four_site_fused_node() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex,
     DynIndex,
     DynIndex,
@@ -603,12 +602,12 @@ fn make_four_site_fused_node() -> (
     let s_b = DynIndex::new_dyn(2);
     let s_c = DynIndex::new_dyn(2);
     let s_d = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(
+    let t = IdxTensor::from_dense(
         vec![s_a.clone(), s_b.clone(), s_c.clone(), s_d.clone()],
         vec![1.0; 16],
     )
     .unwrap();
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     tn.add_tensor("fused".to_string(), t).unwrap();
     (tn, s_a, s_b, s_c, s_d)
 }
@@ -742,13 +741,13 @@ fn test_split_to_y_shape_across_original_bond() {
 ///   C   D
 /// (site_c) (site_d)
 fn make_y_shape_treetn() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex, // site_a
     DynIndex, // site_b
     DynIndex, // site_c
     DynIndex, // site_d
 ) {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let site_a = DynIndex::new_dyn(2);
     let site_b = DynIndex::new_dyn(2);
@@ -759,10 +758,10 @@ fn make_y_shape_treetn() -> (
     let bond_bd = DynIndex::new_dyn(3);
 
     let tensor_a =
-        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
-    let tensor_b = TensorDynLen::from_dense(
+    let tensor_b = IdxTensor::from_dense(
         vec![
             bond_ab.clone(),
             bond_bc.clone(),
@@ -775,11 +774,11 @@ fn make_y_shape_treetn() -> (
     tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
     let tensor_c =
-        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
     let tensor_d =
-        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
     let n_a = tn.node_index(&"A".to_string()).unwrap();
@@ -894,7 +893,7 @@ fn test_fuse_to_y_shape_internal_center_node() {
     //     B(no site)   <-- internal node, only bonds
     //      / \
     // C(site_c) D(site_d)
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
 
     let site_a = DynIndex::new_dyn(2);
     let site_c = DynIndex::new_dyn(2);
@@ -904,11 +903,11 @@ fn test_fuse_to_y_shape_internal_center_node() {
     let bond_bd = DynIndex::new_dyn(3);
 
     let tensor_a =
-        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
     // B has NO site index -- only bond indices
-    let tensor_b = TensorDynLen::from_dense(
+    let tensor_b = IdxTensor::from_dense(
         vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
         vec![1.0; 27],
     )
@@ -916,11 +915,11 @@ fn test_fuse_to_y_shape_internal_center_node() {
     tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
     let tensor_c =
-        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
     let tensor_d =
-        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
+        IdxTensor::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
     tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
     let n_a = tn.node_index(&"A".to_string()).unwrap();

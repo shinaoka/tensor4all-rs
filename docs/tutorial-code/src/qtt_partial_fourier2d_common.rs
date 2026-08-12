@@ -12,7 +12,7 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_quanticstci::{
     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
@@ -23,7 +23,7 @@ use tensor4all_treetn::{
 
 pub type SiteIndex = Index<DynId, TagSet>;
 pub type PartialFourier2dQttOutput = (QuanticsTensorCI2<f64>, Vec<usize>, Vec<f64>);
-pub type PartialFourier2dTransformOutput = (TreeTN<TensorDynLen, usize>, Vec<SiteIndex>);
+pub type PartialFourier2dTransformOutput = (TreeTN<IdxTensor, usize>, Vec<SiteIndex>);
 
 #[derive(Debug, Clone, Copy)]
 pub struct PartialFourier2dConfig {
@@ -220,7 +220,7 @@ pub fn build_source_qtt(
 ///
 pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
-) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
+) -> Result<LinearOperator<IdxTensor, usize>, Box<dyn Error>> {
     let options = FourierOptions {
         max_bond_dim: Some(config.max_bond_dim),
         tolerance: config.tolerance,
@@ -231,7 +231,7 @@ pub fn build_partial_fourier_operator(
 }
 
 fn single_site_index_from_state(
-    state: &TreeTN<TensorDynLen, usize>,
+    state: &TreeTN<IdxTensor, usize>,
     node: usize,
 ) -> Result<SiteIndex, Box<dyn Error>> {
     let site_space = state
@@ -258,7 +258,7 @@ fn single_site_index_from_state(
 ///
 pub fn transform_x_dimension(
     qtci: &QuanticsTensorCI2<f64>,
-    operator: &LinearOperator<TensorDynLen, usize>,
+    operator: &LinearOperator<IdxTensor, usize>,
 ) -> Result<PartialFourier2dTransformOutput, Box<dyn Error>> {
     let tt = qtci.tensor_train();
     let (state, _state_site_indices) = tensor_train_to_treetn(&tt)?;
@@ -278,7 +278,7 @@ pub fn transform_x_dimension(
 /// /// mismatch or backend failure).
 ///
 pub fn evaluate_tree_point(
-    tn: &TreeTN<TensorDynLen, usize>,
+    tn: &TreeTN<IdxTensor, usize>,
     site_indices: &[SiteIndex],
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
@@ -291,7 +291,7 @@ pub fn evaluate_tree_point(
 /// /// backend failure).
 ///
 pub fn collect_samples(
-    transformed: &TreeTN<TensorDynLen, usize>,
+    transformed: &TreeTN<IdxTensor, usize>,
     site_indices: &[SiteIndex],
     frequency_grid: &DiscretizedGrid,
     config: &PartialFourier2dConfig,
@@ -448,7 +448,7 @@ pub fn write_operator_bond_dims_csv(
 
 pub fn print_summary(
     input_qtci: &QuanticsTensorCI2<f64>,
-    transformed: &TreeTN<TensorDynLen, usize>,
+    transformed: &TreeTN<IdxTensor, usize>,
     ranks: &[usize],
     errors: &[f64],
     samples: &[PartialFourier2dSamplePoint],

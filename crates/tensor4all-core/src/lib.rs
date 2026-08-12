@@ -5,13 +5,13 @@
 //!
 //! - **Index types**: [`DynIndex`], [`Index`], [`DynId`] for tensor indices
 //! - **Tag sets**: [`TagSet`], [`TagSetLike`] for metadata tagging
-//! - **Tensors**: [`TensorDynLen`] for dynamic-rank dense tensors
+//! - **Tensors**: [`IdxTensor`] for dynamic-rank dense tensors
 //! - **Operations**: Contraction, SVD, QR decomposition, factorization
 //!
 //! # Example
 //!
 //! ```
-//! use tensor4all_core::{Index, DynIndex, TensorDynLen};
+//! use tensor4all_core::{Index, DynIndex, IdxTensor};
 //!
 //! // Create indices with dynamic identity
 //! let i = Index::new_dyn(2);
@@ -19,7 +19,7 @@
 //!
 //! // Create a tensor
 //! let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-//! let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+//! let t = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 //! ```
 
 #[cfg(doctest)]
@@ -32,7 +32,7 @@ pub mod col_major_array;
 pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 
 // Common (tags, utilities, scalar)
-/// Dynamic scalar compatibility wrapper built on rank-0 `TensorDynLen`.
+/// Dynamic scalar compatibility wrapper built on rank-0 `IdxTensor`.
 pub mod any_scalar;
 pub mod global_default;
 pub mod index_like;
@@ -77,13 +77,13 @@ pub mod krylov;
 // Block tensor for block matrix GMRES
 pub mod block_tensor;
 
-// Backwards compatibility: re-export defaults::tensordynlen as tensor
-pub use defaults::tensordynlen as tensor;
+// Backwards compatibility: re-export defaults::idx_tensor as tensor
+pub use defaults::idx_tensor as tensor;
 
 pub use any_scalar::{AnyScalar, AnyScalarError};
-pub use defaults::tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, StructuredSelectorError,
-    TensorDynLen, TensorDynLenError, TensorStorageError,
+pub use defaults::idx_tensor::{
+    compute_permutation_from_indices, diag_idx_tensor, unfold_split, IdxTensor, IdxTensorError,
+    StructuredSelectorError, TensorStorageError,
 };
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{
@@ -101,7 +101,7 @@ pub use defaults::contract::{
     outer_product, print_and_reset_contract_profile, reset_contract_profile, tensordot,
     ContractionOptions, PairwiseContractionOptions,
 };
-pub use defaults::tensordynlen::{
+pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
 

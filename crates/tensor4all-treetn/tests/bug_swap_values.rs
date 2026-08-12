@@ -7,14 +7,14 @@
 
 use std::collections::HashMap;
 use tensor4all_core::{
-    common_inds, DynIndex, FactorizeOptions, IndexLike, TensorContractionLike, TensorDynLen,
+    common_inds, DynIndex, FactorizeOptions, IdxTensor, IndexLike, TensorContractionLike,
     TensorFactorizationLike, TensorIndex,
 };
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 /// Build a 2-site MPS from dense data via QR factorization.
-fn make_2site_mps(s1: &DynIndex, s2: &DynIndex, data: &[f64]) -> Vec<TensorDynLen> {
-    let dense = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], data.to_vec()).unwrap();
+fn make_2site_mps(s1: &DynIndex, s2: &DynIndex, data: &[f64]) -> Vec<IdxTensor> {
+    let dense = IdxTensor::from_dense(vec![s1.clone(), s2.clone()], data.to_vec()).unwrap();
     let fr = dense
         .factorize(std::slice::from_ref(s1), &FactorizeOptions::qr())
         .unwrap();
@@ -22,9 +22,9 @@ fn make_2site_mps(s1: &DynIndex, s2: &DynIndex, data: &[f64]) -> Vec<TensorDynLe
 }
 
 /// Concatenate two MPS by adding a dim-1 bond between them.
-fn concatenate(left: &[TensorDynLen], right: &[TensorDynLen]) -> Vec<TensorDynLen> {
+fn concatenate(left: &[IdxTensor], right: &[IdxTensor]) -> Vec<IdxTensor> {
     let bond = DynIndex::new_dyn(1);
-    let ones = TensorDynLen::ones(std::slice::from_ref(&bond)).unwrap();
+    let ones = IdxTensor::ones(std::slice::from_ref(&bond)).unwrap();
     let n_left = left.len();
     let mut tensors = Vec::with_capacity(n_left + right.len());
     for (i, t) in left.iter().enumerate() {
@@ -59,14 +59,13 @@ fn test_swap_preserves_values_nontrivial_data() {
     let tensors = concatenate(&left, &right);
     let node_names: Vec<usize> = (0..tensors.len()).collect();
 
-    let treetn_before: TreeTN<TensorDynLen, usize> =
+    let treetn_before: TreeTN<IdxTensor, usize> =
         TreeTN::from_tensors(tensors.clone(), node_names.clone()).unwrap();
     let dense_before = treetn_before.contract_to_tensor().unwrap();
     let norm_before = dense_before.norm().unwrap();
 
     // Swap sites 1 and 2: [z1=1, z1=2, z2=1, z2=2] → [z1=1, z2=1, z1=2, z2=2]
-    let mut treetn: TreeTN<TensorDynLen, usize> =
-        TreeTN::from_tensors(tensors, node_names).unwrap();
+    let mut treetn: TreeTN<IdxTensor, usize> = TreeTN::from_tensors(tensors, node_names).unwrap();
     let mut target = HashMap::new();
     target.insert(z1_1.clone(), 0usize);
     target.insert(z2_1.clone(), 1usize);
@@ -102,11 +101,11 @@ fn test_canonicalize_preserves_contract_to_tensor() {
     let tensors = concatenate(&left, &right);
     let node_names: Vec<usize> = (0..tensors.len()).collect();
 
-    let treetn_before: TreeTN<TensorDynLen, usize> =
+    let treetn_before: TreeTN<IdxTensor, usize> =
         TreeTN::from_tensors(tensors.clone(), node_names.clone()).unwrap();
     let dense_before = treetn_before.contract_to_tensor().unwrap();
 
-    let mut treetn_after: TreeTN<TensorDynLen, usize> =
+    let mut treetn_after: TreeTN<IdxTensor, usize> =
         TreeTN::from_tensors(tensors, node_names).unwrap();
     use tensor4all_treetn::CanonicalizationOptions;
     treetn_after
@@ -138,8 +137,7 @@ fn test_contract_factorize_roundtrip() {
     let tensors = concatenate(&left, &right);
     let node_names: Vec<usize> = (0..tensors.len()).collect();
 
-    let mut treetn: TreeTN<TensorDynLen, usize> =
-        TreeTN::from_tensors(tensors, node_names).unwrap();
+    let mut treetn: TreeTN<IdxTensor, usize> = TreeTN::from_tensors(tensors, node_names).unwrap();
     use tensor4all_treetn::CanonicalizationOptions;
     treetn
         .canonicalize_mut(std::iter::once(0usize), CanonicalizationOptions::default())
@@ -215,7 +213,7 @@ fn test_manual_sweep_edge_steps() {
         .unwrap();
 
     // Helper: contract all 4 tensors and compare to reference
-    let check_full = |_label: &str, tensors: &[TensorDynLen]| -> f64 {
+    let check_full = |_label: &str, tensors: &[IdxTensor]| -> f64 {
         let full = tensors[3]
             .contract_pair(&tensors[2])
             .unwrap()
@@ -232,7 +230,7 @@ fn test_manual_sweep_edge_steps() {
     };
 
     // Helper: find shared index between two tensors
-    let find_bond = |a: &TensorDynLen, b: &TensorDynLen| -> DynIndex {
+    let find_bond = |a: &IdxTensor, b: &IdxTensor| -> DynIndex {
         let ids: std::collections::HashSet<_> = a
             .external_indices()
             .iter()
@@ -246,7 +244,7 @@ fn test_manual_sweep_edge_steps() {
     };
 
     // Helper: sweep_edge from src to dst
-    let sweep_edge = |t: &mut [TensorDynLen], src: usize, dst: usize| {
+    let sweep_edge = |t: &mut [IdxTensor], src: usize, dst: usize| {
         let bond = find_bond(&t[dst], &t[src]);
         let left_inds: Vec<DynIndex> = t[src]
             .external_indices()
@@ -291,7 +289,7 @@ fn test_qr_roundtrip_tall_matrix() {
     let i3 = DynIndex::new_dyn_with_tag(2, "site_b").unwrap();
 
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    let t = TensorDynLen::from_dense(vec![i1.clone(), i2.clone(), i3.clone()], data).unwrap();
+    let t = IdxTensor::from_dense(vec![i1.clone(), i2.clone(), i3.clone()], data).unwrap();
 
     let fr = t
         .factorize(&[i2.clone(), i3.clone()], &FactorizeOptions::qr())
@@ -315,9 +313,9 @@ fn test_swap_preserves_values_plain_mps() {
 
     let data: Vec<f64> = (1..=16).map(|i| i as f64).collect();
     let indices = vec![s0.clone(), s1.clone(), s2.clone(), s3.clone()];
-    let dense = TensorDynLen::from_dense(indices.clone(), data).unwrap();
+    let dense = IdxTensor::from_dense(indices.clone(), data).unwrap();
 
-    let mut tensors: Vec<TensorDynLen> = Vec::new();
+    let mut tensors: Vec<IdxTensor> = Vec::new();
     let mut remaining = dense;
     for k in 0..3 {
         let mut left_inds = Vec::new();
@@ -336,12 +334,11 @@ fn test_swap_preserves_values_plain_mps() {
 
     let node_names: Vec<usize> = (0..tensors.len()).collect();
 
-    let treetn_before: TreeTN<TensorDynLen, usize> =
+    let treetn_before: TreeTN<IdxTensor, usize> =
         TreeTN::from_tensors(tensors.clone(), node_names.clone()).unwrap();
     let dense_before = treetn_before.contract_to_tensor().unwrap();
 
-    let mut treetn: TreeTN<TensorDynLen, usize> =
-        TreeTN::from_tensors(tensors, node_names).unwrap();
+    let mut treetn: TreeTN<IdxTensor, usize> = TreeTN::from_tensors(tensors, node_names).unwrap();
     let mut target = HashMap::new();
     target.insert(s0.clone(), 0usize);
     target.insert(s2.clone(), 1usize);

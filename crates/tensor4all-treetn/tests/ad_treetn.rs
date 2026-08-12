@@ -1,6 +1,6 @@
 //! Tests for reverse-mode automatic differentiation through TreeTN operations.
 
-use tensor4all_core::{contract, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{contract, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
 fn make_three_site_mps_data() -> (Vec<Vec<DynIndex>>, Vec<Vec<f64>>) {
@@ -29,11 +29,11 @@ fn make_three_site_mps_data() -> (Vec<Vec<DynIndex>>, Vec<Vec<f64>>) {
 fn backward_ad_to_dense_propagates_gradients() {
     let (index_sets, data) = make_three_site_mps_data();
 
-    let tensors: Vec<TensorDynLen> = index_sets
+    let tensors: Vec<IdxTensor> = index_sets
         .iter()
         .zip(&data)
         .map(|(idx, d)| {
-            TensorDynLen::from_dense(idx.clone(), d.clone())
+            IdxTensor::from_dense(idx.clone(), d.clone())
                 .unwrap()
                 .enable_grad()
                 .unwrap()
@@ -44,7 +44,7 @@ fn backward_ad_to_dense_propagates_gradients() {
     let dense = ttn.to_dense().unwrap();
 
     // Contract dense with ones to get scalar = sum(dense)
-    let ones = TensorDynLen::from_dense(
+    let ones = IdxTensor::from_dense(
         dense.indices().to_vec(),
         vec![1.0; dense.indices().iter().map(|i| i.dim()).product::<usize>()],
     )
@@ -64,11 +64,11 @@ fn backward_ad_gradient_matches_finite_diff() {
     let (index_sets, data) = make_three_site_mps_data();
     let eps = 1e-6;
 
-    let tensors: Vec<TensorDynLen> = index_sets
+    let tensors: Vec<IdxTensor> = index_sets
         .iter()
         .zip(&data)
         .map(|(idx, d)| {
-            TensorDynLen::from_dense(idx.clone(), d.clone())
+            IdxTensor::from_dense(idx.clone(), d.clone())
                 .unwrap()
                 .enable_grad()
                 .unwrap()
@@ -78,7 +78,7 @@ fn backward_ad_gradient_matches_finite_diff() {
     let ttn = TreeTN::from_tensors(tensors, vec![0, 1, 2]).unwrap();
     let dense = ttn.to_dense().unwrap();
 
-    let ones = TensorDynLen::from_dense(
+    let ones = IdxTensor::from_dense(
         dense.indices().to_vec(),
         vec![1.0; dense.indices().iter().map(|i| i.dim()).product::<usize>()],
     )
@@ -99,7 +99,7 @@ fn backward_ad_gradient_matches_finite_diff() {
 
     for elem_idx in 0..data[0].len() {
         let make_perturbed_sum = |delta: f64| -> f64 {
-            let tensors: Vec<TensorDynLen> = index_sets
+            let tensors: Vec<IdxTensor> = index_sets
                 .iter()
                 .zip(&data)
                 .enumerate()
@@ -108,7 +108,7 @@ fn backward_ad_gradient_matches_finite_diff() {
                     if i == 0 {
                         d[elem_idx] += delta;
                     }
-                    TensorDynLen::from_dense(idx.clone(), d).unwrap()
+                    IdxTensor::from_dense(idx.clone(), d).unwrap()
                 })
                 .collect();
             let ttn = TreeTN::from_tensors(tensors, vec![0, 1, 2]).unwrap();
@@ -129,11 +129,11 @@ fn backward_ad_gradient_matches_finite_diff() {
 fn backward_accumulates_until_clear_grad_across_treetn_nodes() {
     let (index_sets, data) = make_three_site_mps_data();
 
-    let tensors: Vec<TensorDynLen> = index_sets
+    let tensors: Vec<IdxTensor> = index_sets
         .iter()
         .zip(&data)
         .map(|(idx, d)| {
-            TensorDynLen::from_dense(idx.clone(), d.clone())
+            IdxTensor::from_dense(idx.clone(), d.clone())
                 .unwrap()
                 .enable_grad()
                 .unwrap()
@@ -142,7 +142,7 @@ fn backward_accumulates_until_clear_grad_across_treetn_nodes() {
 
     let ttn = TreeTN::from_tensors(tensors, vec![0, 1, 2]).unwrap();
     let dense = ttn.to_dense().unwrap();
-    let ones = TensorDynLen::from_dense(
+    let ones = IdxTensor::from_dense(
         dense.indices().to_vec(),
         vec![1.0; dense.indices().iter().map(|i| i.dim()).product::<usize>()],
     )

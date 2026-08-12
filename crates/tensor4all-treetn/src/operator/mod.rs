@@ -22,8 +22,8 @@
 //! };
 //!
 //! assert_eq!(mapping.true_index.dim(), mapping.internal_index.dim());
-//! let _apply = apply_linear_operator::<tensor4all_core::TensorDynLen, usize>;
-//! let _compose = compose_exclusive_linear_operators::<tensor4all_core::TensorDynLen, usize>;
+//! let _apply = apply_linear_operator::<tensor4all_core::IdxTensor, usize>;
+//! let _compose = compose_exclusive_linear_operators::<tensor4all_core::IdxTensor, usize>;
 //! ```
 
 mod apply;

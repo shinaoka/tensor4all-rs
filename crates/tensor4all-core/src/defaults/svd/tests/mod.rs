@@ -101,7 +101,7 @@ fn svd_with_max_bond_dim_truncates_native_outputs() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
     let tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 1.0]).unwrap();
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 1.0]).unwrap();
 
     let (u, s, v) = svd_with::<f64>(
         &tensor,
@@ -120,7 +120,7 @@ fn svd_with_max_bond_dim_truncates_native_outputs() {
 fn svd_with_invalid_rtol_is_rejected_before_linalg() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![0.0; 4]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![0.0; 4]).unwrap();
 
     let nan = svd_with::<f64>(
         &tensor,

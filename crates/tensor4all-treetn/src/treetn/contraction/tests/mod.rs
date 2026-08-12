@@ -1,26 +1,26 @@
 use super::*;
 use tensor4all_core::{
-    DynIndex, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorDynLen, TensorIndex,
+    DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
 };
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
-fn make_two_node_treetn() -> (TreeTN<TensorDynLen, String>, DynIndex, DynIndex, DynIndex) {
+fn make_two_node_treetn() -> (TreeTN<IdxTensor, String>, DynIndex, DynIndex, DynIndex) {
     let s0 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -103,7 +103,7 @@ fn test_contraction_options_qr_builder() {
 
 #[test]
 fn test_contract_to_tensor_empty_error() {
-    let tn = TreeTN::<TensorDynLen, String>::new();
+    let tn = TreeTN::<IdxTensor, String>::new();
     let result = tn.contract_to_tensor();
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("empty"));
@@ -113,12 +113,12 @@ fn test_contract_to_tensor_empty_error() {
 fn test_contract_to_tensor_single_node() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(3);
-    let t = TensorDynLen::from_dense(
+    let t = IdxTensor::from_dense(
         vec![s0.clone(), s1.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )
     .unwrap();
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
 
     let result = tn.contract_to_tensor().unwrap();
     assert_eq!(result.external_indices().len(), 2);
@@ -150,12 +150,12 @@ fn test_contract_to_tensor_two_nodes() {
     assert!(ext_ids.contains(s1.id()));
 
     // Verify values against the equivalent high-level tensor contraction.
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), _bond.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![_bond.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
@@ -224,8 +224,8 @@ fn test_contract_naive_topology_mismatch() {
 
     // Create a single-node TN (different topology)
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
-    let tn2 = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["X".to_string()]).unwrap();
+    let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
+    let tn2 = TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["X".to_string()]).unwrap();
 
     let result = tn1.contract_naive(&tn2);
     assert!(result.is_err());
@@ -236,8 +236,8 @@ fn test_contract_zipup_topology_mismatch() {
     let (tn1, _s0, _bond, _s1) = make_two_node_treetn();
 
     let s = DynIndex::new_dyn(2);
-    let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
-    let tn2 = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["X".to_string()]).unwrap();
+    let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
+    let tn2 = TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["X".to_string()]).unwrap();
 
     let result = tn1.contract_zipup(&tn2, &"A".to_string(), None, None);
     assert!(result.is_err());
@@ -264,12 +264,10 @@ fn zipup_parent_bond_filter_keeps_same_id_primed_nonbond_index() {
 #[test]
 fn test_contract_naive_requires_dense_reference_limit() {
     let s = DynIndex::new_dyn(3);
-    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap();
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let err = contract(
         &tn_a,
@@ -284,12 +282,10 @@ fn test_contract_naive_requires_dense_reference_limit() {
 #[test]
 fn test_contract_naive_dense_reference_limit_bounds_materialization() {
     let s = DynIndex::new_dyn(3);
-    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap();
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     let err = contract(
         &tn_a,
@@ -316,8 +312,8 @@ fn test_find_common_indices() {
     let bond = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(4);
 
-    let t_a = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 12]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 12]).unwrap();
 
     let common = find_common_indices(&t_a, &t_b);
     assert_eq!(common.len(), 1);
@@ -329,8 +325,8 @@ fn test_find_common_indices_no_common() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s1.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s1.clone()], vec![1.0, 2.0, 3.0]).unwrap();
 
     let common = find_common_indices(&t_a, &t_b);
     assert_eq!(common.len(), 0);
@@ -342,13 +338,11 @@ fn test_naive_contraction_scalar_result() {
     // Two single-site TreeTNs that share an index → contraction produces a scalar
     let s = DynIndex::new_dyn(3);
 
-    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    let t_b = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 1.0, 1.0]).unwrap();
+    let t_a = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 1.0, 1.0]).unwrap();
 
-    let tn_a =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
-    let tn_b =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     // Naive contraction: inner product = 1+2+3 = 6
     let result =

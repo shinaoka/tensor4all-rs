@@ -15,7 +15,7 @@ use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
     print_and_reset_contract_profile, reset_contract_profile,
-    DynIndex, TensorDynLen, TensorIndex,
+    DynIndex, IdxTensor, TensorIndex,
 };
 use tensor4all_treetn::{IndexMapping, LocalUpdateSweepPlan, ProjectedOperator, TreeTN};
 
@@ -51,8 +51,8 @@ fn create_state_chain(
     spectator_sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
-    let mut tree = TreeTN::<TensorDynLen, String>::new();
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
+    let mut tree = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, state_bond_dim, rng))
         .collect();
@@ -61,7 +61,7 @@ fn create_state_chain(
     for (i, spectator_site) in spectator_sites.iter().enumerate().take(n) {
         let mut indices = chain_node_indices(n, i, &bonds, acted_sites);
         indices.insert(0, spectator_site.clone());
-        let tensor = TensorDynLen::random::<f64, _>(rng, indices)?;
+        let tensor = IdxTensor::random::<f64, _>(rng, indices)?;
         let node = tree.add_tensor(make_node_name(i), tensor)?;
         nodes.push(node);
     }
@@ -82,11 +82,11 @@ fn create_operator_chain(
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
 ) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 )> {
-    let mut tree = TreeTN::<TensorDynLen, String>::new();
+    let mut tree = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, operator_bond_dim, rng))
         .collect();
@@ -117,7 +117,7 @@ fn create_operator_chain(
             ]
         };
         indices.shrink_to_fit();
-        let tensor = TensorDynLen::random::<f64, _>(rng, indices)?;
+        let tensor = IdxTensor::random::<f64, _>(rng, indices)?;
         let name = make_node_name(i);
         let node = tree.add_tensor(name.clone(), tensor)?;
         nodes.push(node);

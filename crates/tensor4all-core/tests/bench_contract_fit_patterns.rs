@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike};
 use tensor4all_tensorbackend::{dense_native_tensor_from_col_major, einsum_native_tensors};
 
 fn make_data(dims: &[usize], offset: usize) -> Vec<f64> {
@@ -45,7 +45,7 @@ fn bench_contract_fit_patterns_vs_native() {
     let env3_b_data = make_data(&env3_b_dims, 11);
     let env3_c_data = make_data(&env3_c_dims, 12);
 
-    let env3_a = TensorDynLen::from_dense(
+    let env3_a = IdxTensor::from_dense(
         vec![
             env3_labels[3].clone(),
             env3_labels[0].clone(),
@@ -54,7 +54,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env3_a_data.clone(),
     )
     .unwrap();
-    let env3_b = TensorDynLen::from_dense(
+    let env3_b = IdxTensor::from_dense(
         vec![
             env3_labels[0].clone(),
             env3_labels[4].clone(),
@@ -64,7 +64,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env3_b_data.clone(),
     )
     .unwrap();
-    let env3_c = TensorDynLen::from_dense(
+    let env3_c = IdxTensor::from_dense(
         vec![
             env3_labels[1].clone(),
             env3_labels[2].clone(),
@@ -90,7 +90,7 @@ fn bench_contract_fit_patterns_vs_native() {
 
     let env4_labels = make_dyn_indices(&[2, 2, 8, 2, 8, 16, 8, 8, 16]);
 
-    let env4_a = TensorDynLen::from_dense(
+    let env4_a = IdxTensor::from_dense(
         vec![
             env4_labels[6].clone(),
             env4_labels[1].clone(),
@@ -100,7 +100,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env4_a_data.clone(),
     )
     .unwrap();
-    let env4_b = TensorDynLen::from_dense(
+    let env4_b = IdxTensor::from_dense(
         vec![
             env4_labels[7].clone(),
             env4_labels[0].clone(),
@@ -110,7 +110,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env4_b_data.clone(),
     )
     .unwrap();
-    let env4_c = TensorDynLen::from_dense(
+    let env4_c = IdxTensor::from_dense(
         vec![
             env4_labels[1].clone(),
             env4_labels[3].clone(),
@@ -120,7 +120,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env4_c_data.clone(),
     )
     .unwrap();
-    let env4_d = TensorDynLen::from_dense(
+    let env4_d = IdxTensor::from_dense(
         vec![
             env4_labels[2].clone(),
             env4_labels[4].clone(),
@@ -149,7 +149,7 @@ fn bench_contract_fit_patterns_vs_native() {
     let env6_e_data = make_data(&env6_e_dims, 34);
     let env6_f_data = make_data(&env6_f_dims, 35);
 
-    let env6_a = TensorDynLen::from_dense(
+    let env6_a = IdxTensor::from_dense(
         vec![
             env6_labels[2].clone(),
             env6_labels[8].clone(),
@@ -159,7 +159,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env6_a_data.clone(),
     )
     .unwrap();
-    let env6_b = TensorDynLen::from_dense(
+    let env6_b = IdxTensor::from_dense(
         vec![
             env6_labels[4].clone(),
             env6_labels[0].clone(),
@@ -169,7 +169,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env6_b_data.clone(),
     )
     .unwrap();
-    let env6_c = TensorDynLen::from_dense(
+    let env6_c = IdxTensor::from_dense(
         vec![
             env6_labels[1].clone(),
             env6_labels[10].clone(),
@@ -179,7 +179,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env6_c_data.clone(),
     )
     .unwrap();
-    let env6_d = TensorDynLen::from_dense(
+    let env6_d = IdxTensor::from_dense(
         vec![
             env6_labels[3].clone(),
             env6_labels[5].clone(),
@@ -189,7 +189,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env6_d_data.clone(),
     )
     .unwrap();
-    let env6_e = TensorDynLen::from_dense(
+    let env6_e = IdxTensor::from_dense(
         vec![
             env6_labels[2].clone(),
             env6_labels[4].clone(),
@@ -198,7 +198,7 @@ fn bench_contract_fit_patterns_vs_native() {
         env6_e_data.clone(),
     )
     .unwrap();
-    let env6_f = TensorDynLen::from_dense(
+    let env6_f = IdxTensor::from_dense(
         vec![
             env6_labels[6].clone(),
             env6_labels[7].clone(),
@@ -215,9 +215,9 @@ fn bench_contract_fit_patterns_vs_native() {
     let env6_e_native = dense_native_tensor_from_col_major(&env6_e_data, &env6_e_dims).unwrap();
     let env6_f_native = dense_native_tensor_from_col_major(&env6_f_data, &env6_f_dims).unwrap();
 
-    eprintln!("\n=== TensorDynLen contract vs native einsum ===");
-    let env3_contract = time_best_of("env3 TensorDynLen::contract", 2_000, || {
-        <TensorDynLen as TensorContractionLike>::contract(&[&env3_a, &env3_b, &env3_c]).unwrap()
+    eprintln!("\n=== IdxTensor contract vs native einsum ===");
+    let env3_contract = time_best_of("env3 IdxTensor::contract", 2_000, || {
+        <IdxTensor as TensorContractionLike>::contract(&[&env3_a, &env3_b, &env3_c]).unwrap()
     });
     let env3_native = time_best_of("env3 native einsum", 2_000, || {
         einsum_native_tensors(
@@ -231,8 +231,8 @@ fn bench_contract_fit_patterns_vs_native() {
         .unwrap()
     });
 
-    let env4_contract = time_best_of("env4 TensorDynLen::contract", 600, || {
-        <TensorDynLen as TensorContractionLike>::contract(&[&env4_a, &env4_b, &env4_c, &env4_d])
+    let env4_contract = time_best_of("env4 IdxTensor::contract", 600, || {
+        <IdxTensor as TensorContractionLike>::contract(&[&env4_a, &env4_b, &env4_c, &env4_d])
             .unwrap()
     });
     let env4_native = time_best_of("env4 native einsum", 600, || {
@@ -247,8 +247,8 @@ fn bench_contract_fit_patterns_vs_native() {
         )
         .unwrap()
     });
-    let env6_contract = time_best_of("env6 TensorDynLen::contract", 400, || {
-        <TensorDynLen as TensorContractionLike>::contract(&[
+    let env6_contract = time_best_of("env6 IdxTensor::contract", 400, || {
+        <IdxTensor as TensorContractionLike>::contract(&[
             &env6_a, &env6_b, &env6_c, &env6_d, &env6_e, &env6_f,
         ])
         .unwrap()
@@ -269,15 +269,15 @@ fn bench_contract_fit_patterns_vs_native() {
     });
 
     eprintln!(
-        "  ratio env3 TensorDynLen/native       = {:.2}x",
+        "  ratio env3 IdxTensor/native       = {:.2}x",
         env3_contract.as_secs_f64() / env3_native.as_secs_f64()
     );
     eprintln!(
-        "  ratio env4 TensorDynLen/native       = {:.2}x",
+        "  ratio env4 IdxTensor/native       = {:.2}x",
         env4_contract.as_secs_f64() / env4_native.as_secs_f64()
     );
     eprintln!(
-        "  ratio env6 TensorDynLen/native       = {:.2}x",
+        "  ratio env6 IdxTensor/native       = {:.2}x",
         env6_contract.as_secs_f64() / env6_native.as_secs_f64()
     );
 }

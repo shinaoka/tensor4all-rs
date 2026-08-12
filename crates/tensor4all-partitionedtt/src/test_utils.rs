@@ -7,7 +7,7 @@
 
 use num_complex::Complex64;
 use tensor4all_core::index::Index;
-use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
+use tensor4all_core::{DynIndex, IdxTensor, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 
 /// Trait for types that can be used as test scalars (f64 or Complex64).
@@ -36,16 +36,16 @@ pub fn make_index(size: usize) -> DynIndex {
 }
 
 /// Create a tensor with incrementing f64 values for the given indices.
-pub fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+pub fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     make_tensor_generic::<f64>(indices)
 }
 
 /// Create a tensor with test data for the given scalar type.
-pub fn make_tensor_generic<T: TestScalar>(indices: Vec<DynIndex>) -> TensorDynLen {
+pub fn make_tensor_generic<T: TestScalar>(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
     let size: usize = dims.iter().product();
     let data = T::make_test_data(size);
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Create shared indices for a 2-site tensor train.

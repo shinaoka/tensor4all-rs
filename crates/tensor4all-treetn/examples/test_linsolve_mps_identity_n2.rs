@@ -9,14 +9,14 @@ use num_complex::Complex64;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{index::DynId, DynIndex, IdxTensor, IndexLike, TensorContractionLike};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
     TreeTN,
 };
 
-type MpoWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+type MpoWithInternalIndices = (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>);
 
 fn make_node_name(i: usize) -> String {
     format!("site{i}")
@@ -37,10 +37,10 @@ fn create_random_mps_chain_with_sites_c64(
     bond_dim: usize,
     sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim))
         .collect();
@@ -57,7 +57,7 @@ fn create_random_mps_chain_with_sites_c64(
             vec![bonds[i - 1].clone(), sites[i].clone(), bonds[i].clone()]
         };
 
-        let t = TensorDynLen::random::<Complex64, _>(rng, indices)?;
+        let t = IdxTensor::random::<Complex64, _>(rng, indices)?;
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -75,10 +75,10 @@ fn create_random_mps_chain_with_sites_real_c64(
     bond_dim: usize,
     sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim))
         .collect();
@@ -101,7 +101,7 @@ fn create_random_mps_chain_with_sites_real_c64(
             let r: f64 = rng.random();
             data.push(num_complex::Complex64::new(r, 0.0));
         }
-        let t = TensorDynLen::from_dense(indices, data).unwrap();
+        let t = IdxTensor::from_dense(indices, data).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -119,10 +119,10 @@ fn create_random_mps_chain_with_sites_imag_c64(
     bond_dim: usize,
     sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
     anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim))
         .collect();
@@ -145,7 +145,7 @@ fn create_random_mps_chain_with_sites_imag_c64(
             let im: f64 = rng.random();
             data.push(num_complex::Complex64::new(0.0, im));
         }
-        let t = TensorDynLen::from_dense(indices, data).unwrap();
+        let t = IdxTensor::from_dense(indices, data).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -163,7 +163,7 @@ fn create_identity_mpo_with_internal_indices(
     used_ids: &mut HashSet<DynId>,
 ) -> anyhow::Result<MpoWithInternalIndices> {
     anyhow::ensure!(n >= 1, "need at least 1 site");
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     let s_in_tmp: Vec<_> = (0..n)
         .map(|_| unique_dyn_index(used_ids, phys_dim))
@@ -182,25 +182,24 @@ fn create_identity_mpo_with_internal_indices(
         for k in 0..phys_dim {
             data[k * phys_dim + k] = 1.0;
         }
-        let base = TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
-            .unwrap();
+        let base =
+            IdxTensor::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data).unwrap();
 
         let tensor = if n == 1 {
             base
         } else if i == 0 {
-            let ones = TensorDynLen::from_dense(vec![bonds[i].clone()], vec![1.0_f64; 1]).unwrap();
-            TensorDynLen::outer_product(&base, &ones)?
+            let ones = IdxTensor::from_dense(vec![bonds[i].clone()], vec![1.0_f64; 1]).unwrap();
+            IdxTensor::outer_product(&base, &ones)?
         } else if i + 1 == n {
-            let ones =
-                TensorDynLen::from_dense(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]).unwrap();
-            TensorDynLen::outer_product(&ones, &base)?
+            let ones = IdxTensor::from_dense(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]).unwrap();
+            IdxTensor::outer_product(&ones, &base)?
         } else {
             let ones_left =
-                TensorDynLen::from_dense(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]).unwrap();
+                IdxTensor::from_dense(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]).unwrap();
             let ones_right =
-                TensorDynLen::from_dense(vec![bonds[i].clone()], vec![1.0_f64; 1]).unwrap();
-            let t = TensorDynLen::outer_product(&ones_left, &base)?;
-            TensorDynLen::outer_product(&t, &ones_right)?
+                IdxTensor::from_dense(vec![bonds[i].clone()], vec![1.0_f64; 1]).unwrap();
+            let t = IdxTensor::outer_product(&ones_left, &base)?;
+            IdxTensor::outer_product(&t, &ones_right)?
         };
 
         mpo.add_tensor(name, tensor)?;
@@ -216,11 +215,11 @@ fn create_identity_mpo_with_internal_indices(
 }
 
 fn compute_residual(
-    op: &TreeTN<TensorDynLen, String>,
+    op: &TreeTN<IdxTensor, String>,
     im: &HashMap<String, IndexMapping<DynIndex>>,
     om: &HashMap<String, IndexMapping<DynIndex>>,
-    x: &TreeTN<TensorDynLen, String>,
-    rhs: &TreeTN<TensorDynLen, String>,
+    x: &TreeTN<IdxTensor, String>,
+    rhs: &TreeTN<IdxTensor, String>,
 ) -> anyhow::Result<(f64, f64)> {
     let linop = LinearOperator::new(op.clone(), im.clone(), om.clone());
     let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;

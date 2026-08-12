@@ -11,7 +11,7 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_quanticstci::{
     quanticscrossinterpolate_discrete, InherentDiscreteGrid, QtciOptions, QuanticsTensorCI2,
     UnfoldingScheme,
@@ -80,7 +80,7 @@ pub type AffineBondDimRow = (
 pub type AffineOperatorBondDimRow = (usize, Option<usize>, Option<usize>, Option<usize>);
 
 /// Result of applying the affine operator to a source QTT.
-pub type AffineTransformOutput = (TreeTN<TensorDynLen, usize>, Vec<SiteIndex>);
+pub type AffineTransformOutput = (TreeTN<IdxTensor, usize>, Vec<SiteIndex>);
 /// Result of building the source QTT.
 pub type AffineQttOutput = (QuanticsTensorCI2<f64>, Vec<usize>, Vec<f64>);
 
@@ -183,7 +183,7 @@ fn boundary_conditions(mode: AffineBoundaryMode) -> Vec<BoundaryCondition> {
 pub fn build_affine_operator(
     config: &AffineTutorialConfig,
     mode: AffineBoundaryMode,
-) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
+) -> Result<LinearOperator<IdxTensor, usize>, Box<dyn Error>> {
     let params = affine_params()?;
     Ok(affine_operator(config.bits, &params, &boundary_conditions(mode))?.transpose())
 }
@@ -195,7 +195,7 @@ pub fn build_affine_operator(
 /// /// mismatch or backend failure).
 ///
 pub fn evaluate_tree_point(
-    tn: &TreeTN<TensorDynLen, usize>,
+    tn: &TreeTN<IdxTensor, usize>,
     site_indices: &[SiteIndex],
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
@@ -211,7 +211,7 @@ pub fn evaluate_tree_point(
 ///
 pub fn apply_affine_operator(
     source: &QuanticsTensorCI2<f64>,
-    operator: &LinearOperator<TensorDynLen, usize>,
+    operator: &LinearOperator<IdxTensor, usize>,
 ) -> Result<AffineTransformOutput, Box<dyn Error>> {
     let tt = source.tensor_train();
     let (state, _site_indices) = tensor_train_to_treetn(&tt)?;
@@ -233,11 +233,11 @@ pub fn apply_affine_operator(
 /// /// backend failure).
 ///
 pub fn collect_samples(
-    periodic: &TreeTN<TensorDynLen, usize>,
+    periodic: &TreeTN<IdxTensor, usize>,
     periodic_site_indices: &[SiteIndex],
-    antiperiodic: &TreeTN<TensorDynLen, usize>,
+    antiperiodic: &TreeTN<IdxTensor, usize>,
     antiperiodic_site_indices: &[SiteIndex],
-    open: &TreeTN<TensorDynLen, usize>,
+    open: &TreeTN<IdxTensor, usize>,
     open_site_indices: &[SiteIndex],
     evaluation_grid: &InherentDiscreteGrid,
     config: &AffineTutorialConfig,
@@ -438,9 +438,9 @@ pub fn write_operator_bond_dims_csv(
 /// Print a compact summary to the terminal used by the binary.
 pub fn print_summary(
     source: &QuanticsTensorCI2<f64>,
-    periodic: &TreeTN<TensorDynLen, usize>,
-    antiperiodic: &TreeTN<TensorDynLen, usize>,
-    open: &TreeTN<TensorDynLen, usize>,
+    periodic: &TreeTN<IdxTensor, usize>,
+    antiperiodic: &TreeTN<IdxTensor, usize>,
+    open: &TreeTN<IdxTensor, usize>,
     samples: &[AffineSamplePoint],
     config: &AffineTutorialConfig,
 ) {

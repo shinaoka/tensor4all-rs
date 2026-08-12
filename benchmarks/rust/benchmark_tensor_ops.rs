@@ -1,4 +1,4 @@
-// Benchmark non-AD TensorDynLen vector-space operations.
+// Benchmark non-AD IdxTensor vector-space operations.
 //
 // Run:
 //   RAYON_NUM_THREADS=1 cargo run -p tensor4all-core --example benchmark_tensor_ops --release
@@ -16,7 +16,7 @@ use anyhow::{bail, Result};
 use num_complex::Complex64;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, IdxTensor};
 
 fn parse_args() -> Result<(usize, Vec<usize>)> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -58,8 +58,8 @@ fn main() -> Result<()> {
     let element_count = dims.iter().product::<usize>();
     let indices = make_indices(&dims);
     let mut rng = StdRng::seed_from_u64(0x5EED_1234);
-    let a = TensorDynLen::random::<Complex64, _>(&mut rng, indices.clone())?;
-    let b = TensorDynLen::random::<Complex64, _>(&mut rng, indices)?;
+    let a = IdxTensor::random::<Complex64, _>(&mut rng, indices.clone())?;
+    let b = IdxTensor::random::<Complex64, _>(&mut rng, indices)?;
     let alpha = AnyScalar::new_complex(0.7, -0.2);
     let beta = AnyScalar::new_complex(-0.3, 0.4);
 
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
         black_box(a.conj().contract_pair(&b)?.sum()?);
     }
 
-    println!("=== TensorDynLen non-AD tensor ops benchmark ===");
+    println!("=== IdxTensor non-AD tensor ops benchmark ===");
     println!(
         "dims={dims:?} elements={element_count} repeats={repeats} dtype=Complex64"
     );

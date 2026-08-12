@@ -5,7 +5,7 @@ fn make_index(dim: usize) -> DynIndex {
     Index::new_dyn(dim)
 }
 
-fn get_f64_data(tensor: &TensorDynLen) -> Vec<f64> {
+fn get_f64_data(tensor: &IdxTensor) -> Vec<f64> {
     tensor.to_vec::<f64>().expect("Expected DenseF64 storage")
 }
 

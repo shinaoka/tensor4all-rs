@@ -1,20 +1,20 @@
 //! SVD decomposition for tensors.
 //!
 //! Provides [`svd`] and [`svd_with`] for computing truncated SVD of
-//! [`TensorDynLen`] values. The tensor is unfolded into a matrix by
+//! [`IdxTensor`] values. The tensor is unfolded into a matrix by
 //! splitting its indices into left and right groups, then the standard
 //! matrix SVD is computed and truncated according to [`SvdOptions`].
 //!
-//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
-use crate::defaults::tensordynlen::unfold_split_inner;
+use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::truncation::{
     validate_svd_truncation_policy, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
     TruncationRule,
 };
-use crate::TensorDynLen;
+use crate::IdxTensor;
 use num_complex::Complex64;
 use std::sync::Mutex;
 use tenferro::DType;
@@ -40,12 +40,12 @@ pub enum SvdError {
 ///
 /// ```
 /// use tensor4all_core::svd::{SvdOptions, svd_with};
-/// use tensor4all_core::{DynIndex, SvdTruncationPolicy, TensorDynLen};
+/// use tensor4all_core::{DynIndex, SvdTruncationPolicy, IdxTensor};
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// let opts = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
 /// let (u, s, v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
@@ -229,7 +229,7 @@ type SvdTruncatedEagerResult = (
 );
 
 fn svd_truncated_inner(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<SvdTruncatedEagerResult, SvdError> {
@@ -293,13 +293,13 @@ fn svd_truncated_inner(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{TensorDynLen, DynIndex, svd};
+/// use tensor4all_core::{IdxTensor, DynIndex, svd};
 ///
 /// // Create a 2x3 matrix (rank-1 outer product: all-ones)
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let data = vec![1.0_f64; 6]; // all-ones 2x3 matrix
-/// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let t = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// let (u, s, v) = svd::<f64>(&t, &[i.clone()]).unwrap();
 ///
@@ -311,9 +311,9 @@ fn svd_truncated_inner(
 /// assert_eq!(s.dims().len(), 2);
 /// ```
 pub fn svd<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
-) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+) -> Result<(IdxTensor, IdxTensor, IdxTensor), SvdError> {
     svd_with::<T>(t, left_inds, &SvdOptions::default())
 }
 
@@ -330,7 +330,7 @@ pub fn svd<T>(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_core::svd::{SvdOptions, svd_with};
 ///
 /// let i = DynIndex::new_dyn(4);
@@ -338,7 +338,7 @@ pub fn svd<T>(
 /// // Rank-1 matrix
 /// let mut data = vec![0.0_f64; 16];
 /// data[0] = 1.0;
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// use tensor4all_core::SvdTruncationPolicy;
 ///
@@ -353,10 +353,10 @@ pub fn svd<T>(
 /// assert!(s.dims()[0] <= 2);
 /// ```
 pub fn svd_with<T>(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &SvdOptions,
-) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+) -> Result<(IdxTensor, IdxTensor, IdxTensor), SvdError> {
     let (u_inner, s_inner, vt_inner, _singular_values, bond_index, left_indices, right_indices) =
         svd_truncated_inner(t, left_inds, options)?;
 
@@ -366,11 +366,10 @@ pub fn svd_with<T>(
     let u_reshaped = u_inner.reshape(&u_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
     })?;
-    let u = TensorDynLen::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
+    let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s =
-        TensorDynLen::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
+    let s = IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
@@ -378,8 +377,7 @@ pub fn svd_with<T>(
     let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
     })?;
-    let vh =
-        TensorDynLen::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
+    let vh = IdxTensor::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
     let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
     let v = vh
         .conj()
@@ -391,9 +389,9 @@ pub fn svd_with<T>(
 
 /// SVD result for factorization, returning `V^H` directly.
 pub(crate) struct SvdFactorizeResult {
-    pub u: TensorDynLen,
-    pub s: TensorDynLen,
-    pub vh: TensorDynLen,
+    pub u: IdxTensor,
+    pub s: IdxTensor,
+    pub vh: IdxTensor,
     pub bond_index: DynIndex,
     pub singular_values: Vec<f64>,
     pub rank: usize,
@@ -401,7 +399,7 @@ pub(crate) struct SvdFactorizeResult {
 
 /// Compute truncated SVD for factorization, returning `V^H` instead of `V`.
 pub(crate) fn svd_for_factorize(
-    t: &TensorDynLen,
+    t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<SvdFactorizeResult, SvdError> {
@@ -415,11 +413,10 @@ pub(crate) fn svd_for_factorize(
     let u_reshaped = u_inner.reshape(&u_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
     })?;
-    let u = TensorDynLen::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
+    let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s =
-        TensorDynLen::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
+    let s = IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
@@ -427,8 +424,7 @@ pub(crate) fn svd_for_factorize(
     let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
     })?;
-    let vh =
-        TensorDynLen::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
+    let vh = IdxTensor::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
 
     Ok(SvdFactorizeResult {
         u,

@@ -1,13 +1,13 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{
-    factorize, outer_product, svd, Canonical, DynIndex, FactorizeOptions, TensorContractionLike,
-    TensorDynLen,
+    factorize, outer_product, svd, Canonical, DynIndex, FactorizeOptions, IdxTensor,
+    TensorContractionLike,
 };
 
-fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>, dims: &[usize]) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>, dims: &[usize]) -> IdxTensor {
     let expected_len: usize = dims.iter().product();
     assert_eq!(data.len(), expected_len);
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 fn col_major_multi_index(mut offset: usize, dims: &[usize]) -> Vec<usize> {
@@ -65,7 +65,7 @@ fn test_contract_nary_pair_matches_binary_contract() {
     );
 
     let binary = t1.contract_pair(&t2).unwrap();
-    let multi = <TensorDynLen as TensorContractionLike>::contract(&[&t1, &t2]).expect("contract");
+    let multi = <IdxTensor as TensorContractionLike>::contract(&[&t1, &t2]).expect("contract");
 
     assert!(
         multi.isapprox(&binary, 1e-12, 0.0).unwrap(),
@@ -99,8 +99,7 @@ fn test_contract_nary_three_matches_sequential_binary_contract() {
     );
 
     let sequential = t0.contract_pair(&t1).unwrap().contract_pair(&t2).unwrap();
-    let multi =
-        <TensorDynLen as TensorContractionLike>::contract(&[&t0, &t1, &t2]).expect("contract");
+    let multi = <IdxTensor as TensorContractionLike>::contract(&[&t0, &t1, &t2]).expect("contract");
 
     assert!(
         multi.isapprox(&sequential, 1e-12, 0.0).unwrap(),
@@ -123,7 +122,7 @@ fn test_contract_nary_pair_matches_binary_contract_for_zero_masked_inputs() {
     let t1 = make_tensor(vec![l01, s1], (1..=6).map(|x| x as f64).collect(), &[3, 2]);
 
     let binary = t0.contract_pair(&t1).unwrap();
-    let multi = <TensorDynLen as TensorContractionLike>::contract(&[&t0, &t1]).expect("contract");
+    let multi = <IdxTensor as TensorContractionLike>::contract(&[&t0, &t1]).expect("contract");
 
     assert!(
         multi.isapprox(&binary, 1e-12, 0.0).unwrap(),
@@ -165,7 +164,7 @@ fn test_zipup_zero_masked_root_nary_matches_sequential_binary_contract() {
     let permuted_leaf = leaf
         .permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()])
         .unwrap();
-    let expected_permuted = TensorDynLen::from_dense(
+    let expected_permuted = IdxTensor::from_dense(
         vec![s0.clone(), s1.clone(), l01.clone(), l12.clone()],
         permute_col_major(&leaf.to_vec::<f64>().unwrap(), &leaf.dims(), &[0, 2, 1, 3]),
     )
@@ -212,7 +211,7 @@ fn test_zipup_zero_masked_root_nary_matches_sequential_binary_contract() {
         .unwrap()
         .contract_pair(&b1)
         .unwrap();
-    let multi = <TensorDynLen as TensorContractionLike>::contract(&[&factorized.right, &a1, &b1])
+    let multi = <IdxTensor as TensorContractionLike>::contract(&[&factorized.right, &a1, &b1])
         .expect("root contract");
 
     assert!(

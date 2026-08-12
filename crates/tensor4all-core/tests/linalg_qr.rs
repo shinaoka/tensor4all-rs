@@ -1,14 +1,14 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{qr, DynIndex};
-use tensor4all_core::{TensorContractionLike, TensorDynLen};
+use tensor4all_core::{IdxTensor, TensorContractionLike};
 
-fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn test_qr_invalid_rank() {
     // Test that QR fails for rank-1 tensors
     let i = Index::new_dyn(2);
 
-    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone()]).unwrap();
+    let tensor = IdxTensor::zeros::<f64>(vec![i.clone()]).unwrap();
 
     let result = qr::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
@@ -115,7 +115,7 @@ fn test_qr_invalid_split() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
+    let tensor = IdxTensor::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
     // Empty left_inds should fail
     let result = qr::<f64>(&tensor, &[]);
@@ -216,7 +216,7 @@ fn test_qr_complex_reconstruction() {
 }
 
 /// Helper: compute ||Q*R - T|| via tensor contraction for any tensor shape.
-fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+fn qr_reconstruction_error_f64(t: &IdxTensor, left_inds: &[DynIndex]) -> f64 {
     let (q, r) = qr::<f64>(t, left_inds).expect("QR should succeed");
     let recon = q.contract_pair(&r).unwrap();
     let neg = recon
@@ -226,7 +226,7 @@ fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 
     diff.norm().unwrap()
 }
 
-fn qr_reconstruction_error_c64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+fn qr_reconstruction_error_c64(t: &IdxTensor, left_inds: &[DynIndex]) -> f64 {
     let (q, r) = qr::<Complex64>(t, left_inds).expect("QR should succeed");
     let recon = q.contract_pair(&r).unwrap();
     let neg = recon

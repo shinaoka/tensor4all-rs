@@ -1,11 +1,11 @@
 use std::error::Error;
-use tensor4all_core::{DynIndex, TensorDynLen, TensorDynLenError};
+use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
 use tensor4all_itensorlike::{TensorTrain, TensorTrainError};
 use tensor4all_treetn::TreeTN;
 
-fn site_tensor(size: usize, data: Vec<f64>) -> TensorDynLen {
+fn site_tensor(size: usize, data: Vec<f64>) -> IdxTensor {
     let site = DynIndex::new_dyn(size);
-    TensorDynLen::from_dense(vec![site], data).unwrap()
+    IdxTensor::from_dense(vec![site], data).unwrap()
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn inner_reports_length_mismatch() {
 
 #[test]
 fn to_dense_preserves_contraction_error_source() {
-    let mut tree = TreeTN::<TensorDynLen, usize>::new();
+    let mut tree = TreeTN::<IdxTensor, usize>::new();
     tree.add_tensor(0, site_tensor(2, vec![1.0, 2.0])).unwrap();
     tree.add_tensor(1, site_tensor(2, vec![3.0, 4.0])).unwrap();
     let tt = TensorTrain::from_treetn(tree).unwrap();
@@ -51,13 +51,13 @@ fn to_dense_preserves_contraction_error_source() {
 
 #[test]
 fn dense_maxabs_preserves_typed_tensor_error_source() {
-    let tt = TensorTrain::new(vec![TensorDynLen::scalar(f64::NAN).unwrap()]).unwrap();
+    let tt = TensorTrain::new(vec![IdxTensor::scalar(f64::NAN).unwrap()]).unwrap();
     let error = tt.dense_maxabs().unwrap_err();
 
     assert!(matches!(
         error,
-        TensorTrainError::TensorDynLen {
-            source: TensorDynLenError::NaNInput {
+        TensorTrainError::IdxTensor {
+            source: IdxTensorError::NaNInput {
                 operation: "maxabs"
             }
         }

@@ -54,14 +54,14 @@ context).
 | ITensors.jl | tensor4all-rs |
 |-------------|---------------|
 | `Index{Int}` | `Index<Id, NoSymmSpace>` |
-| `ITensor` | `TensorDynLen` |
+| `ITensor` | `IdxTensor` |
 | `Dense` | eager dense payload; `Storage` snapshot for `f64`/`Complex64` |
 | `Diag` | compact `Storage` for `f64`/`Complex64`, eager diagonal payload for `f32`/`Complex32` |
 | `A * B` | `a.contract(&b)` |
 
 ## Scalar Types
 
-`TensorDynLen` supports four scalar types:
+`IdxTensor` supports four scalar types:
 
 - `f32` — single-precision real
 - `f64` — double-precision real

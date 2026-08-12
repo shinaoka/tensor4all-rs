@@ -67,14 +67,14 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
-    /// # fn make_chain(site0: DynIndex, site1: DynIndex) -> TreeTN<TensorDynLen, usize> {
+    /// # fn make_chain(site0: DynIndex, site1: DynIndex) -> TreeTN<IdxTensor, usize> {
     /// #     let bond = DynIndex::new_dyn(1);
-    /// #     let t0 = TensorDynLen::from_dense(vec![site0, bond.clone()], vec![1.0, 0.0]).unwrap();
-    /// #     let t1 = TensorDynLen::from_dense(vec![bond, site1], vec![1.0, 0.0]).unwrap();
-    /// #     TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
+    /// #     let t0 = IdxTensor::from_dense(vec![site0, bond.clone()], vec![1.0, 0.0]).unwrap();
+    /// #     let t1 = IdxTensor::from_dense(vec![bond, site1], vec![1.0, 0.0]).unwrap();
+    /// #     TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
     /// # }
     /// let state_a = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     /// let state_b = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
@@ -160,14 +160,14 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
-    /// # fn make_chain(site0: DynIndex, site1: DynIndex) -> TreeTN<TensorDynLen, usize> {
+    /// # fn make_chain(site0: DynIndex, site1: DynIndex) -> TreeTN<IdxTensor, usize> {
     /// #     let bond = DynIndex::new_dyn(1);
-    /// #     let t0 = TensorDynLen::from_dense(vec![site0, bond.clone()], vec![1.0, 0.0]).unwrap();
-    /// #     let t1 = TensorDynLen::from_dense(vec![bond, site1], vec![1.0, 0.0]).unwrap();
-    /// #     TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
+    /// #     let t0 = IdxTensor::from_dense(vec![site0, bond.clone()], vec![1.0, 0.0]).unwrap();
+    /// #     let t1 = IdxTensor::from_dense(vec![bond, site1], vec![1.0, 0.0]).unwrap();
+    /// #     TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
     /// # }
     /// let state_a = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     /// let state_b = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
@@ -326,17 +326,17 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let t = IdxTensor::from_dense(vec![s.clone()], vec![1.0_f64, 2.0]).unwrap();
     /// let tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
     ///
     /// // Adding a single-node network to itself doubles the values
     /// let sum = tn.add(&tn).unwrap();
     /// let dense = sum.to_dense().unwrap();
-    /// let expected = TensorDynLen::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
+    /// let expected = IdxTensor::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
     /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// ```
     pub fn add(&self, other: &Self) -> std::result::Result<Self, TreeTNOperationError>
@@ -479,12 +479,12 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let site = DynIndex::new_dyn(2);
-    /// let a = TensorDynLen::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap();
-    /// let b = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let a = IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let b = IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
     /// let tn_a = TreeTN::<_, usize>::from_tensors(vec![a], vec![0]).unwrap();
     /// let tn_b = TreeTN::<_, usize>::from_tensors(vec![b], vec![0]).unwrap();
     ///
@@ -492,7 +492,7 @@ where
     ///     .axpby(AnyScalar::new_real(2.0), &tn_b, AnyScalar::new_real(-1.0))
     ///     .unwrap();
     /// let dense = result.contract_to_tensor().unwrap();
-    /// let expected = TensorDynLen::from_dense(vec![site], vec![-1.0, 0.0]).unwrap();
+    /// let expected = IdxTensor::from_dense(vec![site], vec![-1.0, 0.0]).unwrap();
     /// assert!(dense.isapprox(&expected, 1.0e-12, 0.0).unwrap());
     /// ```
     pub fn axpby<A, B>(

@@ -5,7 +5,7 @@ HDF5 files. Three storage schemas are supported:
 
 | Type | Schema | Notes |
 |------|--------|-------|
-| [`TensorDynLen`](rustdoc/tensor4all_core/struct.TensorDynLen.html) | `ITensor` | ITensors.jl compatible |
+| [`IdxTensor`](rustdoc/tensor4all_core/struct.IdxTensor.html) | `ITensor` | ITensors.jl compatible |
 | [`TensorTrain`](rustdoc/tensor4all_itensorlike/struct.TensorTrain.html) | `MPS` | ITensorMPS.jl compatible |
 | [`TreeTN`](rustdoc/tensor4all_treetn/struct.TreeTN.html) | `TreeTN` (v1) | tensor4all-rs schema; no ITensorNetworks.jl equivalent exists |
 
@@ -41,7 +41,7 @@ Two design decisions keep the schema minimal:
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_hdf5::{load_treetn, save_treetn};
 use tensor4all_treetn::TreeTN;
 
@@ -52,11 +52,11 @@ let s2 = DynIndex::new_dyn(2);
 let b01 = DynIndex::new_dyn(4);
 let b12 = DynIndex::new_dyn(4);
 
-let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
-let t1 = TensorDynLen::from_dense(vec![b01, s1, b12.clone()], vec![2.0; 32])?;
-let t2 = TensorDynLen::from_dense(vec![b12, s2], vec![3.0; 8])?;
+let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
+let t1 = IdxTensor::from_dense(vec![b01, s1, b12.clone()], vec![2.0; 32])?;
+let t2 = IdxTensor::from_dense(vec![b12, s2], vec![3.0; 8])?;
 
-let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+let tn = TreeTN::<IdxTensor, String>::from_tensors(
     vec![t0, t1, t2],
     vec!["left".to_string(), "center".to_string(), "right".to_string()],
 )?;

@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
-use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, LinearizationOrder};
 use tensor4all_treetn::{SiteIndexNetwork, TreeTN};
 
 #[test]
 fn replace_site_index_with_indices_preserves_dense_tensor_values() {
     let fused = DynIndex::new_dyn(4);
-    let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
     let left = DynIndex::new_dyn(2);
     let right = DynIndex::new_dyn(2);
 
@@ -21,8 +21,7 @@ fn replace_site_index_with_indices_preserves_dense_tensor_values() {
 
     let dense = unfused.contract_to_tensor().unwrap();
     let expected =
-        TensorDynLen::from_dense(vec![left.clone(), right.clone()], vec![1.0, 2.0, 3.0, 4.0])
-            .unwrap();
+        IdxTensor::from_dense(vec![left.clone(), right.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
 
     let (site_indices, _) = unfused.all_site_indices().unwrap();
@@ -41,12 +40,12 @@ fn split_to_preserves_sparse_tensor_with_zero_leading_qr_row() {
 
     let mut data = vec![0.0; 16];
     data[6] = 1.0;
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![out0.clone(), out1.clone(), in0.clone(), in1.clone()],
         data,
     )
     .unwrap();
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
 
     let mut target = SiteIndexNetwork::<usize, DynIndex>::new();
     target

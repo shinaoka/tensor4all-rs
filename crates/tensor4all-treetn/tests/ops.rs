@@ -1,9 +1,7 @@
 //! Tests for TreeTN operations: norm, norm_squared, inner, to_dense, evaluate.
 
 use num_complex::Complex64;
-use tensor4all_core::{
-    AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorIndex,
-};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_treetn::TreeTN;
 
 // ============================================================================
@@ -15,19 +13,19 @@ fn idx(size: usize) -> DynIndex {
     DynIndex::new_dyn(size)
 }
 
-/// Create a TensorDynLen from indices and f64 data.
-fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+/// Create a IdxTensor from indices and f64 data.
+fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn make_complex_tensor(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn make_complex_tensor(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Create a simple 2-node linear TreeTN with named nodes (usize).
 /// Structure: node 0 (phys s0) -- bond -- node 1 (phys s1)
 fn create_two_node_named() -> (
-    TreeTN<TensorDynLen, usize>,
+    TreeTN<IdxTensor, usize>,
     DynIndex, // s0 (physical index at node 0)
     DynIndex, // bond
     DynIndex, // s1 (physical index at node 1)
@@ -46,7 +44,7 @@ fn create_two_node_named() -> (
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     );
 
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
 
     (tn, s0, bond, s1)
 }
@@ -54,7 +52,7 @@ fn create_two_node_named() -> (
 /// Create a 3-node chain TreeTN with named nodes.
 /// Structure: node 0 -- bond01 -- node 1 -- bond12 -- node 2
 fn create_three_node_named() -> (
-    TreeTN<TensorDynLen, usize>,
+    TreeTN<IdxTensor, usize>,
     DynIndex, // s0
     DynIndex, // s1
     DynIndex, // s2
@@ -83,7 +81,7 @@ fn create_three_node_named() -> (
         (0..dims2).map(|i| (i + 1) as f64).collect(),
     );
 
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
 
     (tn, s0, s1, s2)
 }
@@ -96,7 +94,7 @@ fn create_three_node_named() -> (
 fn test_norm_single_node() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![1.0, 2.0, 3.0]);
-    let mut tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+    let mut tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0], vec![0]).unwrap();
 
     let norm = tn.norm().unwrap();
     let expected = (1.0f64 + 4.0 + 9.0).sqrt();
@@ -178,7 +176,7 @@ fn test_inner_different_networks() {
         vec![bond.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     );
-    let tn_a = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0a, t1a], vec![0, 1]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0a, t1a], vec![0, 1]).unwrap();
 
     let t0b = make_tensor(
         vec![s0.clone(), bond.clone()],
@@ -188,7 +186,7 @@ fn test_inner_different_networks() {
         vec![bond.clone(), s1.clone()],
         vec![0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
     );
-    let tn_b = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0b, t1b], vec![0, 1]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0b, t1b], vec![0, 1]).unwrap();
 
     // Compute inner product via TreeTN method
     let inner_val = tn_a.inner(&tn_b).unwrap();
@@ -231,7 +229,7 @@ fn test_inner_three_nodes() {
 fn test_to_dense_single_node() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![1.0, 2.0, 3.0]);
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0.clone()], vec![0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0.clone()], vec![0]).unwrap();
 
     let dense = tn.to_dense().unwrap();
     assert!(
@@ -252,7 +250,7 @@ fn test_to_dense_two_nodes() {
 
 #[test]
 fn test_to_dense_empty() {
-    let tn = TreeTN::<TensorDynLen, usize>::new();
+    let tn = TreeTN::<IdxTensor, usize>::new();
     let result = tn.to_dense();
     assert!(result.is_err());
 }
@@ -265,7 +263,7 @@ fn test_to_dense_empty() {
 fn test_all_site_indices_single_node_returns_indices() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![1.0, 2.0, 3.0]);
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0], vec![0]).unwrap();
 
     let (indices, vertices) = tn.all_site_indices().unwrap();
     assert_eq!(indices.len(), 1);
@@ -312,7 +310,7 @@ fn test_all_site_indices_three_nodes_returns_indices() {
 fn test_evaluate_single_node_with_dense() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0], vec![0]).unwrap();
 
     let (indices, _vertices) = tn.all_site_indices().unwrap();
 
@@ -390,7 +388,7 @@ fn test_evaluate_two_nodes_complex() {
 
     let t0 = make_complex_tensor(vec![s0.clone(), bond.clone()], vec![a[0], a[1]]);
     let t1 = make_complex_tensor(vec![bond.clone(), s1.clone()], vec![b[0], b[1]]);
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
 
     let (indices, _vertices) = tn.all_site_indices().unwrap();
     let pos0 = indices.iter().position(|index| index == &s0).unwrap();
@@ -467,7 +465,7 @@ fn test_evaluate_three_nodes_sugar() {
 
 #[test]
 fn test_evaluate_empty() {
-    let tn = TreeTN::<TensorDynLen, usize>::new();
+    let tn = TreeTN::<IdxTensor, usize>::new();
     let data: [usize; 0] = [];
     let shape = [0, 1];
     let values = ColMajorArrayRef::new(&data, &shape).unwrap();
@@ -542,7 +540,7 @@ fn test_evaluate_rejects_missing_indices() {
 fn test_all_site_indices_single_node() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![1.0, 2.0, 3.0]);
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0], vec![0]).unwrap();
 
     let (indices, vertices) = tn.all_site_indices().unwrap();
     assert_eq!(indices.len(), 1);
@@ -595,7 +593,7 @@ fn test_all_site_indices_has_matching_vertices() {
 fn test_evaluate_single_node_sugar() {
     let s0 = idx(3);
     let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
-    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0], vec![0]).unwrap();
 
     let (indices, _vertices) = tn.all_site_indices().unwrap();
 

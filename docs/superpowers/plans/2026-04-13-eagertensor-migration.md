@@ -2,9 +2,9 @@
 
 > **For Codex:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Migrate tensor4all-rs from the legacy tenferro API to the new split API (`Tensor`, `TypedTensor<T>`, `EagerTensor`) while removing deprecated AD shims, adopting explicit accumulation/reset semantics for eager gradients, and restoring `tensor4all_core::AnyScalar` as a core-owned rank-0 `TensorDynLen` wrapper.
+**Goal:** Migrate tensor4all-rs from the legacy tenferro API to the new split API (`Tensor`, `TypedTensor<T>`, `EagerTensor`) while removing deprecated AD shims, adopting explicit accumulation/reset semantics for eager gradients, and restoring `tensor4all_core::AnyScalar` as a core-owned rank-0 `IdxTensor` wrapper.
 
-**Architecture:** Execute strictly bottom-up by actual crate dependencies: update the workspace pin and tensorbackend first, then migrate tcicore, then migrate tensor4all-core primal operations and public SVD/QR entry points, then reintroduce the renamed AD surface on `TensorDynLen` plus a core-owned `AnyScalar` compatibility wrapper, then migrate simplett's typed-tensor paths and memory-layout handling, and finally sweep higher crates, tests, benches, and FFI invariants.
+**Architecture:** Execute strictly bottom-up by actual crate dependencies: update the workspace pin and tensorbackend first, then migrate tcicore, then migrate tensor4all-core primal operations and public SVD/QR entry points, then reintroduce the renamed AD surface on `IdxTensor` plus a core-owned `AnyScalar` compatibility wrapper, then migrate simplett's typed-tensor paths and memory-layout handling, and finally sweep higher crates, tests, benches, and FFI invariants.
 
 **Tech Stack:** Rust, tenferro, tenferro-tensor, tenferro-einsum, tenferro-algebra, cargo-nextest, mdBook
 
@@ -13,7 +13,7 @@
 - `docs/design/review-eagertensor-migration-v2.md`
 
 **Non-goals:**
-- Preserve deprecated AD method names on `AnyScalar` or `TensorDynLen`.
+- Preserve deprecated AD method names on `AnyScalar` or `IdxTensor`.
 - Keep removed tenferro re-exports such as `print_and_reset_contract_profile` alive via compatibility shims.
 - Perform blind `from_slice -> from_vec` renames without auditing memory order at each call site.
 - Reintroduce seeded backward or implicit gradient clearing semantics that are absent from the target tenferro API.
@@ -63,7 +63,7 @@ Make the following changes in one coherent pass:
 - Verify whether the pinned tenferro API can make `TypedTensor` ops and `EagerTensor` ops share the exact same `CpuBackend` instance.
 - If exact single-instance sharing is supported, implement it and document that invariant.
 - If exact single-instance sharing is not supported, implement paired thread-local execution objects (`with_default_backend`, `default_eager_ctx`) and update the doc comments to avoid claiming a single shared backend instance.
-- Remove AD behavior from backend `AnyScalar` entirely. Delete deprecated methods such as `requires_grad`, `set_requires_grad`, `zero_grad`, `backward_with_seed`, `grad`, and `detach`. The public `tensor4all_core::AnyScalar` compatibility layer is reintroduced later in Task 4 as a core-owned rank-0 `TensorDynLen` wrapper.
+- Remove AD behavior from backend `AnyScalar` entirely. Delete deprecated methods such as `requires_grad`, `set_requires_grad`, `zero_grad`, `backward_with_seed`, `grad`, and `detach`. The public `tensor4all_core::AnyScalar` compatibility layer is reintroduced later in Task 4 as a core-owned rank-0 `IdxTensor` wrapper.
 - Update `tensor_element.rs` for `DType`, `shape()`, `as_slice()`, and explicit column-major `TypedTensor::from_vec(...)` construction.
 - Update `backend.rs` to use `TensorScalar` plus `TypedTensor::{svd, qr}` through `with_default_backend(...)`.
 - Simplify `tenferro_bridge.rs` to the conversion and profiling helpers still needed by downstream crates, and update it to `Tensor::new(...)`, `dtype()`, and `shape()`.
@@ -144,7 +144,7 @@ git commit -m "refactor: migrate tcicore einsum to new tenferro API"
 ## Task 3: Migrate tensor4all-core primal tensor operations and public factorization entry points
 
 **Files:**
-- Modify: `crates/tensor4all-core/src/defaults/tensordynlen.rs`
+- Modify: `crates/tensor4all-core/src/defaults/idx_tensor.rs`
 - Modify: `crates/tensor4all-core/src/defaults/contract.rs`
 - Modify: `crates/tensor4all-core/src/defaults/factorize.rs`
 - Modify: `crates/tensor4all-core/src/defaults/svd.rs`
@@ -159,11 +159,11 @@ Run:
 cargo check -p tensor4all-core --all-targets
 ```
 
-Expected: FAIL around old `ScalarType` dispatch, old `TensorDynLen` internals (`Arc<NativeTensor>`), and the removed pre-migration AD methods.
+Expected: FAIL around old `ScalarType` dispatch, old `IdxTensor` internals (`Arc<NativeTensor>`), and the removed pre-migration AD methods.
 
-- [ ] **Step 2: Change `TensorDynLen` to the new storage model**
+- [ ] **Step 2: Change `IdxTensor` to the new storage model**
 
-In `tensordynlen.rs`:
+In `idx_tensor.rs`:
 
 - Replace `native: Arc<NativeTensor>` with `inner: EagerTensor<CpuBackend>`.
 - Add `axis_classes: Vec<usize>` and initialize it in every constructor and result-building path.
@@ -210,10 +210,10 @@ git commit -m "refactor: migrate core primal tensor ops to EagerTensor"
 
 ---
 
-## Task 4: Add the new TensorDynLen AD surface and restore core AnyScalar compatibility
+## Task 4: Add the new IdxTensor AD surface and restore core AnyScalar compatibility
 
 **Files:**
-- Modify: `crates/tensor4all-core/src/defaults/tensordynlen.rs`
+- Modify: `crates/tensor4all-core/src/defaults/idx_tensor.rs`
 - Create: `crates/tensor4all-core/src/any_scalar.rs`
 - Modify: `crates/tensor4all-core/src/lib.rs`
 - Modify: `crates/tensor4all-core/tests/tensor_native_ad.rs`
@@ -239,7 +239,7 @@ Replace old AD test expectations with the new surface:
 
 - `enable_grad(self) -> Self`
 - `tracks_grad(&self) -> bool`
-- `grad(&self) -> Result<Option<TensorDynLen>>`
+- `grad(&self) -> Result<Option<IdxTensor>>`
 - `clear_grad(&self) -> Result<()>`
 - `backward(&self) -> Result<()>`
 - `detach(&self) -> Self`
@@ -249,7 +249,7 @@ Also add explicit failing tests for:
 - repeated `backward()` accumulation
 - `clear_grad()` resetting the accumulated gradient
 - `tracks_grad()` on tracked vs detached tensors
-- core `AnyScalar` rank-0 conversion and forwarding to `TensorDynLen`
+- core `AnyScalar` rank-0 conversion and forwarding to `IdxTensor`
 - borrow-based named-value arithmetic such as `&x * &y + &x`
 - function APIs that take `&AnyScalar`
 - shared-handle `Clone` behavior for tracked scalars
@@ -266,14 +266,14 @@ Expected: FAIL before implementation.
 
 - [ ] **Step 3: Implement the new AD surface and core-owned AnyScalar without reviving removed APIs**
 
-In `tensordynlen.rs` and the new `any_scalar.rs`:
+In `idx_tensor.rs` and the new `any_scalar.rs`:
 
 - Implement `enable_grad`, `tracks_grad`, `grad`, `clear_grad`, `backward`, and `detach`.
 - Do not reintroduce `zero_grad` or `backward_with_seed`.
 - Preserve `axis_classes` and index metadata across gradient and detach paths.
 - Ensure scalar-loss backward is the only supported public entry point.
 - Preserve tenferro's accumulation semantics instead of clearing gradients implicitly inside the wrapper.
-- Replace the `tensor4all-core` re-export of backend `AnyScalar` with a core-owned wrapper around rank-0 `TensorDynLen`.
+- Replace the `tensor4all-core` re-export of backend `AnyScalar` with a core-owned wrapper around rank-0 `IdxTensor`.
 - Preserve the public type name `tensor4all_core::AnyScalar` plus primal helpers such as `new_real`, `new_complex`, `from_value`, `real`, `imag`, `abs`, `is_real`, `is_complex`, `is_zero`, and arithmetic.
 - Implement the documented borrow-based operator contract for named values. Function APIs should take `&AnyScalar`; the plan does not require owned-variable `x * y + x`.
 - Make `Clone` a shared-handle clone of the same tracked scalar. Do not add a value-returning `close()` API.
@@ -297,7 +297,7 @@ Expected: PASS.
 
 ```bash
 git add crates/tensor4all-core/
-git commit -m "feat: add EagerTensor AD surface for TensorDynLen and AnyScalar"
+git commit -m "feat: add EagerTensor AD surface for IdxTensor and AnyScalar"
 ```
 
 ---
@@ -407,7 +407,7 @@ If the grep reveals additional production files outside the earlier tasks, migra
 Create `crates/tensor4all-core/tests/send_sync.rs` with static assertions for:
 
 - `tenferro::EagerTensor<tenferro::CpuBackend>`
-- `tensor4all_core::defaults::TensorDynLen`
+- `tensor4all_core::defaults::IdxTensor`
 
 If the FFI handle types in `tensor4all-capi` expose a similarly testable public type, add an assertion there too.
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, FactorizeOptions, TensorDynLen};
+use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor};
 use tensor4all_treetn::{
     dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, IndexMapping, LinearOperator, TreeTN,
     TreeTopology,
@@ -17,7 +17,7 @@ fn col_major_offset(coords: &[usize], dims: &[usize]) -> usize {
     offset
 }
 
-fn two_site_state(values: &[f64]) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
+fn two_site_state(values: &[f64]) -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 2]) {
     assert_eq!(values.len(), 4);
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
@@ -27,9 +27,9 @@ fn two_site_state(values: &[f64]) -> (TreeTN<TensorDynLen, &'static str>, [DynIn
     left[col_major_offset(&[0, 0], &[2, 2])] = 1.0;
     left[col_major_offset(&[1, 1], &[2, 2])] = 1.0;
 
-    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], left).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], values.to_vec()).unwrap();
-    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], left).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond.clone(), s1.clone()], values.to_vec()).unwrap();
+    let mut state = TreeTN::<IdxTensor, &'static str>::new();
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();
@@ -39,7 +39,7 @@ fn two_site_state(values: &[f64]) -> (TreeTN<TensorDynLen, &'static str>, [DynIn
 fn diagonal_two_site_operator(
     state_sites: &[DynIndex; 2],
     energies: [f64; 4],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let s0_out = DynIndex::new_dyn(2);
     let s0_in = DynIndex::new_dyn(2);
     let s1_out = DynIndex::new_dyn(2);
@@ -54,7 +54,7 @@ fn diagonal_two_site_operator(
         }
     }
 
-    let dense = TensorDynLen::from_dense(
+    let dense = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), s1_out.clone(), s1_in.clone()],
         data,
     )
@@ -111,24 +111,20 @@ fn diagonal_two_site_operator(
     LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
-fn single_site_state() -> (TreeTN<TensorDynLen, &'static str>, DynIndex) {
+fn single_site_state() -> (TreeTN<IdxTensor, &'static str>, DynIndex) {
     let site = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 0.0]).unwrap();
     let state =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
     (state, site)
 }
 
-fn single_site_identity_operator(
-    state_site: &DynIndex,
-) -> LinearOperator<TensorDynLen, &'static str> {
+fn single_site_identity_operator(state_site: &DynIndex) -> LinearOperator<IdxTensor, &'static str> {
     let out = DynIndex::new_dyn(2);
     let input = DynIndex::new_dyn(2);
     let tensor =
-        TensorDynLen::from_dense(vec![out.clone(), input.clone()], vec![1.0, 0.0, 0.0, 1.0])
-            .unwrap();
-    let mpo =
-        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
+        IdxTensor::from_dense(vec![out.clone(), input.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let mpo = TreeTN::<IdxTensor, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
     LinearOperator::new(
         mpo,
         HashMap::from([(
@@ -151,7 +147,7 @@ fn single_site_identity_operator(
 fn complex_two_site_operator(
     state_sites: &[DynIndex; 2],
     entries: &[(usize, usize, usize, usize, Complex64)],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let s0_out = DynIndex::new_dyn(2);
     let s0_in = DynIndex::new_dyn(2);
     let s1_out = DynIndex::new_dyn(2);
@@ -163,7 +159,7 @@ fn complex_two_site_operator(
         data[col_major_offset(&[out0, in0, out1, in1], &dims)] = value;
     }
 
-    let dense = TensorDynLen::from_dense(
+    let dense = IdxTensor::from_dense(
         vec![s0_out.clone(), s0_in.clone(), s1_out.clone(), s1_in.clone()],
         data,
     )
@@ -224,7 +220,7 @@ fn heisenberg_dense_operator(
     state_sites: &[DynIndex],
     edges: &[(usize, usize)],
     topology_edges: &[(&'static str, &'static str)],
-) -> LinearOperator<TensorDynLen, &'static str> {
+) -> LinearOperator<IdxTensor, &'static str> {
     let n_sites = state_sites.len();
     let outputs: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
     let inputs: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
@@ -266,7 +262,7 @@ fn heisenberg_dense_operator(
         }
     }
 
-    let dense = TensorDynLen::from_dense(indices, data).unwrap();
+    let dense = IdxTensor::from_dense(indices, data).unwrap();
     let topology = TreeTopology::new(
         (0..n_sites)
             .map(|i| (site_name(i), vec![outputs[i].clone(), inputs[i].clone()]))
@@ -317,12 +313,12 @@ fn site_name(i: usize) -> &'static str {
     }
 }
 
-fn three_site_star_plus_state() -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
+fn three_site_star_plus_state() -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 3]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
     let dense =
-        TensorDynLen::from_dense(vec![s0.clone(), s1.clone(), s2.clone()], vec![1.0; 8]).unwrap();
+        IdxTensor::from_dense(vec![s0.clone(), s1.clone(), s2.clone()], vec![1.0; 8]).unwrap();
     let topology = TreeTopology::new(
         HashMap::from([
             ("site0", vec![s0.clone()]),
@@ -341,12 +337,12 @@ fn three_site_star_plus_state() -> (TreeTN<TensorDynLen, &'static str>, [DynInde
     (state, [s0, s1, s2])
 }
 
-fn four_site_star_asymmetric_state() -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 4]) {
+fn four_site_star_asymmetric_state() -> (TreeTN<IdxTensor, &'static str>, [DynIndex; 4]) {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let s2 = DynIndex::new_dyn(2);
     let s3 = DynIndex::new_dyn(2);
-    let dense = TensorDynLen::from_dense(
+    let dense = IdxTensor::from_dense(
         vec![s0.clone(), s1.clone(), s2.clone(), s3.clone()],
         vec![
             0.7, -0.3, 1.1, 0.2, -0.8, 0.5, 0.9, -1.2, 0.4, 1.3, -0.6, 0.1, 1.0, -0.9, 0.3, 0.8,
@@ -372,7 +368,7 @@ fn four_site_star_asymmetric_state() -> (TreeTN<TensorDynLen, &'static str>, [Dy
     (state, [s0, s1, s2, s3])
 }
 
-fn star_sum_z_operator(state_sites: &[DynIndex; 3]) -> LinearOperator<TensorDynLen, &'static str> {
+fn star_sum_z_operator(state_sites: &[DynIndex; 3]) -> LinearOperator<IdxTensor, &'static str> {
     let out0 = DynIndex::new_dyn(2);
     let in0 = DynIndex::new_dyn(2);
     let out1 = DynIndex::new_dyn(2);
@@ -392,7 +388,7 @@ fn star_sum_z_operator(state_sites: &[DynIndex; 3]) -> LinearOperator<TensorDynL
             }
         }
     }
-    let dense = TensorDynLen::from_dense(
+    let dense = IdxTensor::from_dense(
         vec![
             out0.clone(),
             in0.clone(),

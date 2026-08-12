@@ -10,7 +10,7 @@
 use std::time::Instant;
 use rand::rng;
 
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain};
 
 /// Create a random MPO (Matrix Product Operator).
@@ -53,7 +53,7 @@ fn create_random_mpo(
         }
 
         // Create random tensor
-        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices);
+        let tensor = IdxTensor::random::<f64, _>(&mut rng, indices);
         tensors.push(tensor);
     }
 

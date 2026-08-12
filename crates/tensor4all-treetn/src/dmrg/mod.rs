@@ -584,16 +584,16 @@ where
 /// # Examples
 /// ```
 /// use std::collections::HashMap;
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{dmrg, DmrgOptions, IndexMapping, LinearOperator, TreeTN};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let site0 = DynIndex::new_dyn(2);
 /// let site1 = DynIndex::new_dyn(2);
 /// let bond = DynIndex::new_dyn(1);
-/// let left = TensorDynLen::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 1.0])?;
-/// let right = TensorDynLen::from_dense(vec![bond.clone(), site1.clone()], vec![1.0, 1.0])?;
-/// let mut state = TreeTN::<TensorDynLen, usize>::new();
+/// let left = IdxTensor::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 1.0])?;
+/// let right = IdxTensor::from_dense(vec![bond.clone(), site1.clone()], vec![1.0, 1.0])?;
+/// let mut state = TreeTN::<IdxTensor, usize>::new();
 /// let n0 = state.add_tensor(0, left)?;
 /// let n1 = state.add_tensor(1, right)?;
 /// state.connect(n0, &bond, n1, &bond)?;
@@ -606,9 +606,9 @@ where
 /// let mut id = vec![0.0; 4];
 /// id[0] = 1.0;
 /// id[3] = 1.0;
-/// let op0 = TensorDynLen::from_dense(vec![out0.clone(), in0.clone(), op_bond.clone()], id.clone())?;
-/// let op1 = TensorDynLen::from_dense(vec![op_bond.clone(), out1.clone(), in1.clone()], id)?;
-/// let mut mpo = TreeTN::<TensorDynLen, usize>::new();
+/// let op0 = IdxTensor::from_dense(vec![out0.clone(), in0.clone(), op_bond.clone()], id.clone())?;
+/// let op1 = IdxTensor::from_dense(vec![op_bond.clone(), out1.clone(), in1.clone()], id)?;
+/// let mut mpo = TreeTN::<IdxTensor, usize>::new();
 /// let m0 = mpo.add_tensor(0, op0)?;
 /// let m1 = mpo.add_tensor(1, op1)?;
 /// mpo.connect(m0, &op_bond, m1, &op_bond)?;
@@ -737,21 +737,21 @@ where
 ///
 /// # Examples
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{dmrg_with_treetn_operator, DmrgOptions, TreeTN};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let site = DynIndex::new_dyn(2);
-/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
-/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+/// let state_tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0, 0.0])?;
+/// let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![state_tensor], vec![0])?;
 ///
 /// let op_in = DynIndex::new_dyn(2);
 /// let op_out = DynIndex::new_dyn(2);
-/// let op_tensor = TensorDynLen::from_dense(
+/// let op_tensor = IdxTensor::from_dense(
 ///     vec![op_out, op_in],
 ///     vec![1.0, 0.0, 0.0, 2.0],
 /// )?;
-/// let operator = TreeTN::<TensorDynLen, usize>::from_tensors(vec![op_tensor], vec![0])?;
+/// let operator = TreeTN::<IdxTensor, usize>::from_tensors(vec![op_tensor], vec![0])?;
 ///
 /// let err = dmrg_with_treetn_operator(&operator, state, &0, DmrgOptions::default()).unwrap_err();
 /// assert!(matches!(err, tensor4all_treetn::DmrgError::EmptyTwoSiteSweep));

@@ -9,7 +9,7 @@
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain};
 
 const TEST_LENGTH: usize = 4;
@@ -33,7 +33,7 @@ fn create_random_mpo(
         if i < length - 1 {
             indices.push(link_indices[i].clone());
         }
-        let tensor = TensorDynLen::random::<f64, _>(rng, indices).unwrap();
+        let tensor = IdxTensor::random::<f64, _>(rng, indices).unwrap();
         tensors.push(tensor);
     }
     TensorTrain::new(tensors).unwrap()

@@ -2,7 +2,7 @@ use super::*;
 use crate::{t4a_index, t4a_treetn_release, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use num_complex::Complex64;
 use num_rational::Rational64;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_quanticstransform::{
     affine_operator, cumsum_operator, flip_operator, phase_rotation_operator,
     quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
@@ -47,7 +47,7 @@ fn decode_mixed_radix(mut flat: usize, dims: &[usize]) -> Vec<usize> {
 }
 
 fn rust_operator_matrix(
-    op: &LinearOperator<TensorDynLen, usize>,
+    op: &LinearOperator<IdxTensor, usize>,
     out_dims: &[usize],
     in_dims: &[usize],
 ) -> Vec<Complex64> {

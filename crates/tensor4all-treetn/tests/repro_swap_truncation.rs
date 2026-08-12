@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 /// Orthogonal 4x4 Hadamard/2, column-major flat.
@@ -38,7 +38,7 @@ fn hadamard4() -> Vec<f64> {
 /// 4-site chain "0"-"1"-"2"-"3" whose middle cut 01|23 has singular values
 /// (1, 1e-13, 1e-13, 1e-13).
 fn chain_with_tiny_singular_values() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex,
     DynIndex,
     DynIndex,
@@ -64,13 +64,13 @@ fn chain_with_tiny_singular_values() -> (
     let b23 = DynIndex::new_dyn(2);
 
     let t0 =
-        TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
-    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], u).unwrap();
-    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone(), b23.clone()], m).unwrap();
+        IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], u).unwrap();
+    let t2 = IdxTensor::from_dense(vec![b12.clone(), s2.clone(), b23.clone()], m).unwrap();
     let t3 =
-        TensorDynLen::from_dense(vec![b23.clone(), s3.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+        IdxTensor::from_dense(vec![b23.clone(), s3.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     tn.add_tensor("0".to_string(), t0).unwrap();
     tn.add_tensor("1".to_string(), t1).unwrap();
     tn.add_tensor("2".to_string(), t2).unwrap();
@@ -86,7 +86,7 @@ fn chain_with_tiny_singular_values() -> (
 }
 
 /// Largest non-site bond dimension adjacent to `node`.
-fn bond_dim_at(tn: &TreeTN<TensorDynLen, String>, node: &str, sites: &[&DynIndex]) -> usize {
+fn bond_dim_at(tn: &TreeTN<IdxTensor, String>, node: &str, sites: &[&DynIndex]) -> usize {
     let n = tn.node_index(&node.to_string()).unwrap();
     tn.tensor(n)
         .unwrap()
@@ -157,11 +157,11 @@ fn swap_without_transport_must_not_truncate() {
     let sa = DynIndex::new_dyn(2);
     let sb = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(2);
-    let ta = TensorDynLen::from_dense(vec![sa.clone(), bond.clone()], m).unwrap();
+    let ta = IdxTensor::from_dense(vec![sa.clone(), bond.clone()], m).unwrap();
     let tb =
-        TensorDynLen::from_dense(vec![bond.clone(), sb.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+        IdxTensor::from_dense(vec![bond.clone(), sb.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let mut tn = TreeTN::<IdxTensor, String>::new();
     tn.add_tensor("A".to_string(), ta).unwrap();
     tn.add_tensor("B".to_string(), tb).unwrap();
     let na = tn.node_index(&"A".to_string()).unwrap();

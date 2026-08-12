@@ -5,8 +5,8 @@ use std::ffi::c_void;
 #[cfg(test)]
 use tensor4all_core::TensorStorageError;
 use tensor4all_core::{
-    DynIndex, FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, TensorDynLen,
-    ThresholdScale, TruncationRule,
+    DynIndex, FactorizeAlg, IdxTensor, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
+    TruncationRule,
 };
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
 use tensor4all_tensorbackend::StorageKind;
@@ -17,7 +17,7 @@ use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN};
 pub(crate) type InternalIndex = DynIndex;
 
 /// Internal tensor type wrapped by `t4a_tensor`.
-pub(crate) type InternalTensor = TensorDynLen;
+pub(crate) type InternalTensor = IdxTensor;
 
 /// Internal tree tensor network type wrapped by `t4a_treetn`.
 pub(crate) type InternalTreeTN = DefaultTreeTN<usize>;
@@ -82,7 +82,7 @@ pub enum t4a_scalar_kind {
 
 impl t4a_scalar_kind {
     /// Classify a tensor by the scalar family exposed through the C API.
-    pub(crate) fn from_tensor(tensor: &TensorDynLen) -> Self {
+    pub(crate) fn from_tensor(tensor: &IdxTensor) -> Self {
         if tensor.is_complex() {
             Self::C64
         } else {

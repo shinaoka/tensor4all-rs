@@ -8,7 +8,7 @@
 //!
 //! | Rust type | HDF5 schema | Julia equivalent |
 //! |-----------|-------------|------------------|
-//! | [`TensorDynLen`] | `ITensor` | `ITensors.ITensor` |
+//! | [`IdxTensor`] | `ITensor` | `ITensors.ITensor` |
 //! | [`TensorTrain`] | `MPS` | `ITensorMPS.MPS` |
 //! | [`TreeTN`](tensor4all_treetn::TreeTN) | `TreeTN` (tensor4all-rs schema) | — (no ITensorNetworks.jl equivalent) |
 //!
@@ -29,14 +29,14 @@
 //!
 //! ```
 //! use tensor4all_hdf5::{save_itensor, load_itensor, save_mps, load_mps};
-//! use tensor4all_core::{Index, TensorDynLen};
+//! use tensor4all_core::{Index, IdxTensor};
 //! use tensor4all_itensorlike::TensorTrain;
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! // Save and load a single tensor
 //! let i = Index::new_dyn(2);
 //! let j = Index::new_dyn(3);
-//! let tensor = TensorDynLen::from_dense(
+//! let tensor = IdxTensor::from_dense(
 //!     vec![i, j],
 //!     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 //! )?;
@@ -54,8 +54,8 @@
 //! let s0 = Index::new_dyn(2);
 //! let bond = Index::new_dyn(1);
 //! let s1 = Index::new_dyn(2);
-//! let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
-//! let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
+//! let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
+//! let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
 //! let tt = TensorTrain::new(vec![t0, t1])?;
 //!
 //! let mps_path = dir.path().join("mps.h5");
@@ -127,7 +127,7 @@ use backend::File;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::str::FromStr;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_itensorlike::TensorTrain;
 use tensor4all_treetn::TreeTN;
 
@@ -137,7 +137,7 @@ pub use hdf5_rt::sys::{
     init as hdf5_init, is_initialized as hdf5_is_initialized, library_path as hdf5_library_path,
 };
 
-/// Save a [`TensorDynLen`] as an ITensors.jl-compatible `ITensor` in an HDF5 file.
+/// Save a [`IdxTensor`] as an ITensors.jl-compatible `ITensor` in an HDF5 file.
 ///
 /// Creates the file if it does not exist, or overwrites an existing file.
 /// The tensor is stored under a group named `name` within the file.
@@ -156,12 +156,12 @@ pub use hdf5_rt::sys::{
 ///
 /// ```
 /// use tensor4all_hdf5::{save_itensor, load_itensor};
-/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_core::{Index, IdxTensor};
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
-/// let tensor = TensorDynLen::from_dense(
+/// let tensor = IdxTensor::from_dense(
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// )?;
@@ -182,13 +182,13 @@ pub use hdf5_rt::sys::{
 ///
 /// ```
 /// use tensor4all_hdf5::{save_itensor, load_itensor};
-/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_core::{Index, IdxTensor};
 /// use num_complex::Complex64;
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let i = Index::new_dyn(2);
 /// let data = vec![Complex64::new(1.0, 0.5), Complex64::new(2.0, -0.5)];
-/// let tensor = TensorDynLen::from_dense(vec![i], data.clone())?;
+/// let tensor = IdxTensor::from_dense(vec![i], data.clone())?;
 ///
 /// let dir = tempfile::tempdir()?;
 /// let path = dir.path().join("save_itensor_c64.h5");
@@ -203,14 +203,14 @@ pub use hdf5_rt::sys::{
 pub fn save_itensor(
     filepath: &str,
     name: &str,
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
 ) -> std::result::Result<(), Hdf5Error> {
     let file = File::create(filepath)?;
     let group = file.create_group(name)?;
     itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
 }
 
-/// Append a [`TensorDynLen`] as an ITensors.jl-compatible `ITensor` to an HDF5 file.
+/// Append a [`IdxTensor`] as an ITensors.jl-compatible `ITensor` to an HDF5 file.
 ///
 /// Opens `filepath` read/write if it exists, or creates it otherwise, then
 /// writes the tensor under `name`. This is useful for files containing multiple
@@ -224,15 +224,15 @@ pub fn save_itensor(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_hdf5::{append_itensor, load_itensor};
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let dir = tempfile::tempdir()?;
 /// let path = dir.path().join("append_itensor.h5");
 /// let path = path.to_str().unwrap();
-/// let a = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0])?;
-/// let b = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0])?;
+/// let a = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0])?;
+/// let b = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0])?;
 ///
 /// append_itensor(path, "a", &a)?;
 /// append_itensor(path, "b", &b)?;
@@ -244,14 +244,14 @@ pub fn save_itensor(
 pub fn append_itensor(
     filepath: &str,
     name: &str,
-    tensor: &TensorDynLen,
+    tensor: &IdxTensor,
 ) -> std::result::Result<(), Hdf5Error> {
     let file = File::append(filepath)?;
     let group = file.create_group(name)?;
     itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
 }
 
-/// Load a [`TensorDynLen`] from an ITensors.jl-compatible `ITensor` in an HDF5 file.
+/// Load a [`IdxTensor`] from an ITensors.jl-compatible `ITensor` in an HDF5 file.
 ///
 /// Opens the file in read-only mode and reads the tensor from the group named
 /// `name`. Index metadata (id, dimension, prime level, tags) is restored from
@@ -273,12 +273,12 @@ pub fn append_itensor(
 ///
 /// ```
 /// use tensor4all_hdf5::{save_itensor, load_itensor};
-/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_core::{Index, IdxTensor};
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
-/// let tensor = TensorDynLen::from_dense(
+/// let tensor = IdxTensor::from_dense(
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// )?;
@@ -301,7 +301,7 @@ pub fn append_itensor(
 /// # Ok(())
 /// # }
 /// ```
-pub fn load_itensor(filepath: &str, name: &str) -> std::result::Result<TensorDynLen, Hdf5Error> {
+pub fn load_itensor(filepath: &str, name: &str) -> std::result::Result<IdxTensor, Hdf5Error> {
     let file = File::open(filepath)?;
     let group = file.group(name)?;
     itensor::read_itensor(&group).map_err(Hdf5Error::from)
@@ -330,15 +330,15 @@ pub fn load_itensor(filepath: &str, name: &str) -> std::result::Result<TensorDyn
 ///
 /// ```
 /// use tensor4all_hdf5::{save_mps, load_mps};
-/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_core::{Index, IdxTensor};
 /// use tensor4all_itensorlike::TensorTrain;
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let s0 = Index::new_dyn(2);
 /// let bond = Index::new_dyn(1);
 /// let s1 = Index::new_dyn(2);
-/// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
-/// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
+/// let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
+/// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
 /// let tt = TensorTrain::new(vec![t0, t1])?;
 ///
 /// let dir = tempfile::tempdir()?;
@@ -381,7 +381,7 @@ pub fn save_mps(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_hdf5::{append_mps, load_mps};
 /// use tensor4all_itensorlike::TensorTrain;
 ///
@@ -391,8 +391,8 @@ pub fn save_mps(
 /// let path = path.to_str().unwrap();
 /// let s0 = DynIndex::new_dyn(2);
 /// let s1 = DynIndex::new_dyn(2);
-/// let a = TensorTrain::new(vec![TensorDynLen::from_dense(vec![s0], vec![1.0, 2.0])?])?;
-/// let b = TensorTrain::new(vec![TensorDynLen::from_dense(vec![s1], vec![3.0, 4.0])?])?;
+/// let a = TensorTrain::new(vec![IdxTensor::from_dense(vec![s0], vec![1.0, 2.0])?])?;
+/// let b = TensorTrain::new(vec![IdxTensor::from_dense(vec![s1], vec![3.0, 4.0])?])?;
 ///
 /// append_mps(path, "a", &a)?;
 /// append_mps(path, "b", &b)?;
@@ -432,15 +432,15 @@ pub fn append_mps(
 ///
 /// ```
 /// use tensor4all_hdf5::{save_mps, load_mps};
-/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_core::{Index, IdxTensor};
 /// use tensor4all_itensorlike::TensorTrain;
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let s0 = Index::new_dyn(2);
 /// let bond = Index::new_dyn(1);
 /// let s1 = Index::new_dyn(2);
-/// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
-/// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
+/// let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
+/// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
 /// let tt = TensorTrain::new(vec![t0, t1])?;
 ///
 /// let dir = tempfile::tempdir()?;
@@ -492,16 +492,16 @@ pub fn load_mps(filepath: &str, name: &str) -> std::result::Result<TensorTrain, 
 ///
 /// ```
 /// use tensor4all_hdf5::{load_treetn, save_treetn};
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::TreeTN;
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let s0 = DynIndex::new_dyn(2);
 /// let s1 = DynIndex::new_dyn(2);
 /// let b01 = DynIndex::new_dyn(4);
-/// let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
-/// let t1 = TensorDynLen::from_dense(vec![b01, s1], vec![1.0; 8])?;
-/// let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+/// let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0; 8])?;
+/// let t1 = IdxTensor::from_dense(vec![b01, s1], vec![1.0; 8])?;
+/// let tn = TreeTN::<IdxTensor, String>::from_tensors(
 ///     vec![t0, t1],
 ///     vec!["left".to_string(), "right".to_string()],
 /// )?;
@@ -522,7 +522,7 @@ pub fn load_mps(filepath: &str, name: &str) -> std::result::Result<TensorTrain, 
 pub fn save_treetn<V>(
     filepath: &str,
     name: &str,
-    tn: &TreeTN<TensorDynLen, V>,
+    tn: &TreeTN<IdxTensor, V>,
 ) -> std::result::Result<(), Hdf5Error>
 where
     V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
@@ -546,7 +546,7 @@ where
 pub fn append_treetn<V>(
     filepath: &str,
     name: &str,
-    tn: &TreeTN<TensorDynLen, V>,
+    tn: &TreeTN<IdxTensor, V>,
 ) -> std::result::Result<(), Hdf5Error>
 where
     V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
@@ -574,7 +574,7 @@ where
 pub fn load_treetn<V>(
     filepath: &str,
     name: &str,
-) -> std::result::Result<TreeTN<TensorDynLen, V>, Hdf5Error>
+) -> std::result::Result<TreeTN<IdxTensor, V>, Hdf5Error>
 where
     V: FromStr + Ord + Clone + Hash + Eq + Send + Sync + Debug,
     V::Err: std::fmt::Display,

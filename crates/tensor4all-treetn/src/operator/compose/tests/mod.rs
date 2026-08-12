@@ -1,7 +1,7 @@
 use super::*;
 use crate::random::{random_treetn, LinkSpace};
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 
 type DynIndex = Index<DynId, TagSet>;
 
@@ -26,10 +26,10 @@ fn create_chain_site_network(n: usize) -> SiteIndexNetwork<String, DynIndex> {
 
 /// Create a simple LinearOperator from a TreeTN with explicit index mappings.
 fn create_linear_operator_from_treetn(
-    mpo: TreeTN<TensorDynLen, String>,
+    mpo: TreeTN<IdxTensor, String>,
     input_indices: &[(String, DynIndex, DynIndex)], // (node, true_input, internal_input)
     output_indices: &[(String, DynIndex, DynIndex)], // (node, true_output, internal_output)
-) -> LinearOperator<TensorDynLen, String> {
+) -> LinearOperator<IdxTensor, String> {
     let mut input_mapping = HashMap::new();
     let mut output_mapping = HashMap::new();
 
@@ -83,7 +83,7 @@ fn test_are_exclusive_disjoint() {
     let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
     // Test exclusivity
-    let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
+    let result = are_exclusive_operators::<IdxTensor, _, _>(&target, &[&op1, &op2]);
     assert!(result, "Disjoint operators should be exclusive");
 }
 
@@ -112,7 +112,7 @@ fn test_are_exclusive_overlapping() {
     let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
-    let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
+    let result = are_exclusive_operators::<IdxTensor, _, _>(&target, &[&op1, &op2]);
     assert!(!result, "Overlapping operators should not be exclusive");
 }
 
@@ -133,7 +133,7 @@ fn test_are_exclusive_single_node_operators() {
     let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
-    let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
+    let result = are_exclusive_operators::<IdxTensor, _, _>(&target, &[&op1, &op2]);
     assert!(result, "Single-node disjoint operators should be exclusive");
 }
 

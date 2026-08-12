@@ -32,13 +32,13 @@ use thiserror::Error;
 ///
 /// ```
 /// use tensor4all_core::{
-///     factorize, Canonical, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+///     factorize, Canonical, DynIndex, FactorizeOptions, TensorContractionLike, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// // QR with Canonical::Right is not supported
 /// let result = factorize(
@@ -138,13 +138,13 @@ pub enum FactorizeAlg {
 ///
 /// ```
 /// use tensor4all_core::{
-///     factorize, Canonical, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+///     factorize, Canonical, DynIndex, FactorizeOptions, TensorContractionLike, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// // Left canonical: left factor has orthonormal columns
 /// let left_result = factorize(
@@ -203,14 +203,14 @@ pub enum Canonical {
 ///
 /// ```
 /// use tensor4all_core::{
-///     factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen,
+///     factorize, Canonical, DynIndex, FactorizeOptions, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(4);
 /// let j = DynIndex::new_dyn(4);
 /// let mut data = vec![0.0_f64; 16];
 /// data[0] = 1.0;  // rank-1 matrix
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// // SVD with an explicit policy
 /// let opts = FactorizeOptions::svd()
@@ -431,13 +431,13 @@ impl FactorizeOptions {
 ///
 /// ```
 /// use tensor4all_core::{
-///     factorize, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+///     factorize, DynIndex, FactorizeOptions, TensorContractionLike, IdxTensor,
 /// };
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(4);
 /// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// let result = factorize(&tensor, &[i.clone()], &FactorizeOptions::svd()).unwrap();
 ///
@@ -554,10 +554,10 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
     ///
     /// let index = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![index], vec![3.0_f64, 4.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![index], vec![3.0_f64, 4.0])?;
     /// assert!((TensorVectorSpace::norm_squared(&tensor)? - 25.0).abs() < 1e-12);
     /// # Ok(())
     /// # }
@@ -608,10 +608,10 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
     ///
     /// let index = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![index], vec![3.0_f64, 4.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![index], vec![3.0_f64, 4.0])?;
     /// assert!((TensorVectorSpace::norm(&tensor)? - 5.0).abs() < 1e-12);
     /// # Ok(())
     /// # }
@@ -630,10 +630,10 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
     ///
     /// let index = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![index], vec![-3.0_f64, 2.0])?;
+    /// let tensor = IdxTensor::from_dense(vec![index], vec![-3.0_f64, 2.0])?;
     /// assert!((TensorVectorSpace::maxabs(&tensor)? - 3.0).abs() < 1e-12);
     /// # Ok(())
     /// # }
@@ -960,20 +960,20 @@ pub trait TensorConstructionLike: TensorContractionLike {
 /// # Example
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
+/// use tensor4all_core::{DynIndex, TensorContractionLike, IdxTensor};
 ///
-/// fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> anyhow::Result<TensorDynLen> {
-///     Ok(<TensorDynLen as TensorContractionLike>::contract(&[a, b])?)
+/// fn contract_pair(a: &IdxTensor, b: &IdxTensor) -> anyhow::Result<IdxTensor> {
+///     Ok(<IdxTensor as TensorContractionLike>::contract(&[a, b])?)
 /// }
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
-/// let a = TensorDynLen::from_dense(
+/// let a = IdxTensor::from_dense(
 ///     vec![i.clone(), j.clone()],
 ///     vec![1.0, 0.0, 0.0, 1.0],
 /// )?;
-/// let b = TensorDynLen::from_dense(vec![j.clone()], vec![2.0, 3.0])?;
+/// let b = IdxTensor::from_dense(vec![j.clone()], vec![2.0, 3.0])?;
 ///
 /// let result = contract_pair(&a, &b)?;
 /// assert_eq!(result.to_vec::<f64>()?, vec![2.0, 3.0]);
@@ -986,15 +986,15 @@ pub trait TensorConstructionLike: TensorContractionLike {
 /// For mixing different tensor types, define an enum:
 ///
 /// ```
-/// use tensor4all_core::{block_tensor::BlockTensor, DynIndex, TensorDynLen};
+/// use tensor4all_core::{block_tensor::BlockTensor, DynIndex, IdxTensor};
 ///
 /// let i = DynIndex::new_dyn(2);
-/// let dense = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+/// let dense = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
 /// let block = BlockTensor::new(vec![dense.clone()], (1, 1)).unwrap();
 ///
 /// enum TensorNetwork {
-///     Dense(TensorDynLen),
-///     Block(BlockTensor<TensorDynLen>),
+///     Dense(IdxTensor),
+///     Block(BlockTensor<IdxTensor>),
 /// }
 ///
 /// let network = TensorNetwork::Block(block);
@@ -1027,13 +1027,13 @@ impl<T> TensorLike for T where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IndexLike, TensorContractionLike, IdxTensor};
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 ///
-/// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-/// let b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, 5.0]).unwrap();
+/// let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+/// let b = IdxTensor::from_dense(vec![j.clone()], vec![3.0, 4.0, 5.0]).unwrap();
 ///
 /// let result = a.direct_sum(&b, &[(i.clone(), j.clone())]).unwrap();
 ///

@@ -5,7 +5,7 @@
 
 use std::env;
 
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IdxTensor;
 use tensor4all_hdf5::{load_itensor, load_mps};
 use tensor4all_itensorlike::TensorTrain;
 
@@ -34,7 +34,7 @@ fn summarize(name: &str, tt: &TensorTrain) {
 }
 
 fn summarize_raw_tensor(path: &str, name: &str) -> anyhow::Result<()> {
-    let tensor: TensorDynLen = load_itensor(path, name)?;
+    let tensor: IdxTensor = load_itensor(path, name)?;
     println!("{name}.raw_dims = {:?}", tensor.dims());
     println!("{name}.raw_indices = {:?}", tensor.indices());
     Ok(())

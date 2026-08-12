@@ -1,5 +1,5 @@
 use tensor4all_core::{
-    factorize_full_rank, svd, Canonical, FactorizeAlg, Index, TensorContractionLike, TensorDynLen,
+    factorize_full_rank, svd, Canonical, FactorizeAlg, IdxTensor, Index, TensorContractionLike,
 };
 
 fn assert_f64_slice_close(actual: &[f64], expected: &[f64], tol: f64) {
@@ -18,7 +18,7 @@ fn finite_diff_svd_singular_value_sum(data: &[f64], index: usize) -> f64 {
     fn eval(data: &[f64]) -> f64 {
         let i = Index::new_dyn(2);
         let j = Index::new_dyn(2);
-        let tensor = TensorDynLen::from_dense(vec![i.clone(), j], data.to_vec()).unwrap();
+        let tensor = IdxTensor::from_dense(vec![i.clone(), j], data.to_vec()).unwrap();
         let (_u, s, _v) = svd::<f64>(&tensor, &[i]).unwrap();
         s.sum().unwrap().real()
     }
@@ -33,7 +33,7 @@ fn finite_diff_svd_singular_value_sum(data: &[f64], index: usize) -> f64 {
 #[test]
 fn tensor_sum_returns_rank_zero_anyscalar_with_backward() {
     let i = Index::new_dyn(3);
-    let x = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0])
+    let x = IdxTensor::from_dense(vec![i], vec![1.0, 2.0, 3.0])
         .unwrap()
         .enable_grad()
         .unwrap();
@@ -49,7 +49,7 @@ fn tensor_sum_returns_rank_zero_anyscalar_with_backward() {
 
 #[test]
 fn tensor_only_preserves_tracking_for_scalar_tensor() {
-    let x = TensorDynLen::scalar(2.0).unwrap().enable_grad().unwrap();
+    let x = IdxTensor::scalar(2.0).unwrap().enable_grad().unwrap();
 
     let scalar = x.only().unwrap();
     let loss = &scalar * &scalar;
@@ -63,7 +63,7 @@ fn tensor_only_preserves_tracking_for_scalar_tensor() {
 fn factorize_qr_reconstruction_preserves_gradient_to_input() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let x = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64, 0.5, 1.0, 3.0])
+    let x = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64, 0.5, 1.0, 3.0])
         .unwrap()
         .enable_grad()
         .unwrap();
@@ -87,7 +87,7 @@ fn factorize_qr_reconstruction_preserves_gradient_to_input() {
 fn assert_ci_reconstruction_gradient(canonical: Canonical) {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let x = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64, 0.5, 1.0, 3.0])
+    let x = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64, 0.5, 1.0, 3.0])
         .unwrap()
         .enable_grad()
         .unwrap();
@@ -118,7 +118,7 @@ fn svd_singular_value_loss_preserves_gradient_to_input() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
     let data = vec![2.0_f64, 0.5, 1.0, 3.0];
-    let x = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone())
+    let x = IdxTensor::from_dense(vec![i.clone(), j.clone()], data.clone())
         .unwrap()
         .enable_grad()
         .unwrap();

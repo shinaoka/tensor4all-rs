@@ -1,11 +1,11 @@
-use tensor4all_core::{DynIndex, IndexLike, TagSet, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TagSet, TensorIndex};
 
 use crate::treetn::TreeTN;
 use crate::NumberedTagSelectionError;
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> (
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     DynIndex, // s0
     DynIndex, // bond
     DynIndex, // s1
@@ -14,18 +14,18 @@ fn make_two_node_treetn() -> (
     let bond = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(2);
 
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(
+    let t1 = IdxTensor::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
 
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -58,8 +58,8 @@ fn test_num_external_indices_single_node() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let k = DynIndex::new_dyn(4);
-    let t = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], vec![0.0; 24]).unwrap();
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
+    let t = IdxTensor::from_dense(vec![i.clone(), j.clone(), k.clone()], vec![0.0; 24]).unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
     assert_eq!(tn.num_external_indices(), 3);
 }
 
@@ -68,14 +68,14 @@ fn test_external_indices_with_tag_filters_site_indices() {
     let x = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,x").unwrap());
     let y = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,y").unwrap());
     let bond = DynIndex::new_dyn(3);
-    let t0 = TensorDynLen::from_dense(
+    let t0 = IdxTensor::from_dense(
         vec![x.clone(), bond.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     )
     .unwrap();
-    let t1 = TensorDynLen::from_dense(vec![bond, y.clone()], vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-        .unwrap();
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+    let t1 =
+        IdxTensor::from_dense(vec![bond, y.clone()], vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
         vec![t0, t1],
         vec!["A".to_string(), "B".to_string()],
     )
@@ -93,9 +93,9 @@ fn test_external_indices_with_numbered_tag_uses_explicit_range() {
     let k2 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
     let k3 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=3").unwrap());
     let x1 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,x=1").unwrap());
-    let tensor = TensorDynLen::from_dense(vec![x1, k3.clone(), k2.clone()], vec![0.0; 8]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![x1, k3.clone(), k2.clone()], vec![0.0; 8]).unwrap();
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     let indices = tn.external_indices_with_numbered_tag("k", 2, 2).unwrap();
 
@@ -107,9 +107,9 @@ fn test_external_indices_with_numbered_tag_keeps_same_id_tags_distinct() {
     let base = DynIndex::new_dyn(2);
     let k1 = DynIndex::new_with_tags(*base.id(), 2, TagSet::from_str("Qubit,k=1").unwrap());
     let other = DynIndex::new_with_tags(*base.id(), 2, TagSet::from_str("Qubit,other").unwrap());
-    let tensor = TensorDynLen::from_dense(vec![other, k1.clone()], vec![0.0; 4]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![other, k1.clone()], vec![0.0; 4]).unwrap();
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     assert_eq!(tn.external_indices_with_tag("k=1"), vec![k1.clone()]);
     assert_eq!(
@@ -122,9 +122,9 @@ fn test_external_indices_with_numbered_tag_keeps_same_id_tags_distinct() {
 fn test_external_indices_with_numbered_tag_rejects_missing_number() {
     let k2 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
     let k4 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=4").unwrap());
-    let tensor = TensorDynLen::from_dense(vec![k2, k4], vec![0.0; 4]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![k2, k4], vec![0.0; 4]).unwrap();
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     let err = tn
         .external_indices_with_numbered_tag("k", 2, 3)
@@ -140,9 +140,9 @@ fn test_external_indices_with_numbered_tag_rejects_missing_number() {
 fn test_external_indices_with_numbered_tag_rejects_duplicate_number() {
     let k1_left = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
     let k1_right = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
-    let tensor = TensorDynLen::from_dense(vec![k1_left, k1_right], vec![0.0; 4]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![k1_left, k1_right], vec![0.0; 4]).unwrap();
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     let err = tn
         .external_indices_with_numbered_tag("k", 1, 1)
@@ -157,9 +157,9 @@ fn test_external_indices_with_numbered_tag_rejects_duplicate_number() {
 #[test]
 fn test_external_indices_with_numbered_tag_rejects_prefix_with_equals() {
     let k1 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
-    let tensor = TensorDynLen::from_dense(vec![k1], vec![0.0; 2]).unwrap();
+    let tensor = IdxTensor::from_dense(vec![k1], vec![0.0; 2]).unwrap();
     let tn =
-        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
 
     let err = tn
         .external_indices_with_numbered_tag("k=1", 1, 1)
@@ -189,9 +189,9 @@ fn test_replaceind_matches_same_id_prime_pair_site_index_exactly() {
     let i = DynIndex::new_dyn(2);
     let i_prime = i.prime();
     let replacement = i_prime.sim();
-    let t = TensorDynLen::from_dense(vec![i.clone(), i_prime.clone()], vec![1.0, 2.0, 3.0, 4.0])
-        .unwrap();
-    let tn = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
+    let t =
+        IdxTensor::from_dense(vec![i.clone(), i_prime.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
 
     let replaced = tn.replaceind(&i_prime, &replacement).unwrap();
     let site_space = replaced.site_space(&"A".to_string()).unwrap();

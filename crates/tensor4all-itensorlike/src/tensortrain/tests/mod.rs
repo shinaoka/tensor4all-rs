@@ -5,11 +5,11 @@ use std::time::Duration;
 use tensor4all_core::{DynId, Index, LinearizationOrder, TensorContractionLike, TensorVectorSpace};
 
 /// Helper to create a simple tensor for testing
-fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
     let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
     let size: usize = dims.iter().product();
     let data: Vec<f64> = (0..size).map(|i| i as f64).collect();
-    TensorDynLen::from_dense(indices, data).unwrap()
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 /// Helper to create a DynIndex
@@ -75,14 +75,14 @@ fn add_reindexed_like_self_aligns_site_indices_before_addition() {
     let rhs_link = idx(12, 2);
 
     let lhs = TensorTrain::new(vec![
-        TensorDynLen::from_dense(vec![i0.clone(), link.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
-        TensorDynLen::from_dense(vec![link.clone(), i1.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap(),
+        IdxTensor::from_dense(vec![i0.clone(), link.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+        IdxTensor::from_dense(vec![link.clone(), i1.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap(),
     ])
     .unwrap();
     let rhs = TensorTrain::new(vec![
-        TensorDynLen::from_dense(vec![j0.clone(), rhs_link.clone()], vec![2.0, 3.0, 4.0, 5.0])
+        IdxTensor::from_dense(vec![j0.clone(), rhs_link.clone()], vec![2.0, 3.0, 4.0, 5.0])
             .unwrap(),
-        TensorDynLen::from_dense(
+        IdxTensor::from_dense(
             vec![rhs_link.clone(), j1.clone()],
             vec![7.0, 11.0, 13.0, 17.0],
         )
@@ -890,7 +890,7 @@ fn test_tensors_mut_returns_all_sites_in_order() {
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     let replacement =
-        TensorDynLen::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
+        IdxTensor::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
 
     {
         let mut tensors = tt.tensors_mut().unwrap();
@@ -915,7 +915,7 @@ fn test_tensors_mut_checked_returns_all_sites_in_order() {
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     let replacement =
-        TensorDynLen::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
+        IdxTensor::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
 
     {
         let mut tensors = tt.tensors_mut_checked().unwrap();
@@ -1497,8 +1497,8 @@ fn tt_inner_profile_enabled_path_runs() {
         std::env::set_var("T4A_PROFILE_TT_INNER", "1");
     }
     let i = DynIndex::new_dyn(2);
-    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
     let _ = super::contract_pair(&a, &b).unwrap();
     unsafe {
         std::env::remove_var("T4A_PROFILE_TT_INNER");

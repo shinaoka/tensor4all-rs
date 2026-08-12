@@ -18,7 +18,7 @@ use tensor4all_core::{
     index::{DynId, Index},
     krylov::{gmres, GmresOptions},
     print_and_reset_contract_profile, reset_contract_profile,
-    AnyScalar, DynIndex, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorDynLen,
+    AnyScalar, DynIndex, IndexLike, SvdTruncationPolicy, TensorContractionLike, IdxTensor,
     TensorIndex,
 };
 use tensor4all_treetn::{
@@ -58,8 +58,8 @@ fn create_state_chain(
     spectator_sites: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
-    let mut tree = TreeTN::<TensorDynLen, String>::new();
+) -> anyhow::Result<TreeTN<IdxTensor, String>> {
+    let mut tree = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, state_bond_dim, rng))
         .collect();
@@ -68,7 +68,7 @@ fn create_state_chain(
     for (i, spectator_site) in spectator_sites.iter().enumerate().take(n) {
         let mut indices = chain_node_indices(n, i, &bonds, acted_sites);
         indices.insert(0, spectator_site.clone());
-        let tensor = TensorDynLen::random::<f64, _>(rng, indices)?;
+        let tensor = IdxTensor::random::<f64, _>(rng, indices)?;
         let node = tree.add_tensor(make_node_name(i), tensor)?;
         nodes.push(node);
     }
@@ -89,11 +89,11 @@ fn create_operator_chain(
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
 ) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
+    TreeTN<IdxTensor, String>,
     HashMap<String, IndexMapping<DynIndex>>,
     HashMap<String, IndexMapping<DynIndex>>,
 )> {
-    let mut tree = TreeTN::<TensorDynLen, String>::new();
+    let mut tree = TreeTN::<IdxTensor, String>::new();
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, operator_bond_dim, rng))
         .collect();
@@ -122,7 +122,7 @@ fn create_operator_chain(
                 bonds[i].clone(),
             ]
         };
-        let tensor = TensorDynLen::random::<f64, _>(rng, indices)?;
+        let tensor = IdxTensor::random::<f64, _>(rng, indices)?;
         let name = make_node_name(i);
         let node = tree.add_tensor(name.clone(), tensor)?;
         nodes.push(node);
@@ -163,7 +163,7 @@ fn same_index_set(a: &[DynIndex], b: &[DynIndex]) -> bool {
             .all(|ai| b.iter().any(|bi| ai == bi && ai.dim() == bi.dim()))
 }
 
-fn align_rhs_to_init(init: &TensorDynLen, rhs: TensorDynLen) -> anyhow::Result<TensorDynLen> {
+fn align_rhs_to_init(init: &IdxTensor, rhs: IdxTensor) -> anyhow::Result<IdxTensor> {
     let init_indices = init.external_indices();
     let rhs_indices = rhs.external_indices();
     if !same_index_set(&init_indices, &rhs_indices) {
@@ -180,7 +180,7 @@ fn align_rhs_to_init(init: &TensorDynLen, rhs: TensorDynLen) -> anyhow::Result<T
     }
 }
 
-fn max_bond_dim(tree: &TreeTN<TensorDynLen, String>) -> usize {
+fn max_bond_dim(tree: &TreeTN<IdxTensor, String>) -> usize {
     tree.site_index_network()
         .edges()
         .filter_map(|(a, b)| tree.edge_between(&a, &b))
@@ -301,7 +301,7 @@ fn main() -> anyhow::Result<()> {
 
     let gmres_start = Instant::now();
     let gmres_result = gmres(
-        |x: &TensorDynLen| {
+        |x: &IdxTensor| {
             apply_count_ref.set(apply_count_ref.get() + 1);
             let apply_start = Instant::now();
             let hx = projected_operator.borrow_mut().apply(

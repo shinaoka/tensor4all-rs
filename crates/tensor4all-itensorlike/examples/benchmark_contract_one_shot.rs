@@ -2,7 +2,7 @@ use rand::rng;
 use std::time::Instant;
 
 use anyhow::Result;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
 
 fn create_random_mpo(
@@ -24,7 +24,7 @@ fn create_random_mpo(
         if i + 1 < length {
             indices.push(link_indices[i].clone());
         }
-        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices)?;
+        let tensor = IdxTensor::random::<f64, _>(&mut rng, indices)?;
         tensors.push(tensor);
     }
 

@@ -5,7 +5,7 @@ Core tensor library: Index system, dynamic-rank Tensor, contraction, SVD/QR/LU f
 ## Key Types
 
 - `Index` — flexible index with tags and prime levels
-- `TensorDynLen` — dynamic-rank tensor with flexible index types
+- `IdxTensor` — dynamic-rank tensor with flexible index types
 - `Storage` — compact dense/diagonal/structured snapshots for `f64` and
   `Complex64`; `f32` and `Complex32` tensors retain eager authoritative payloads
 - `contract()` / `contract_with_options()` — connected tensor-network contraction
@@ -23,7 +23,7 @@ let j = DynIndex::new_dyn(4);
 
 // Create a dense tensor
 let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data)?;
+let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data)?;
 assert_eq!(tensor.dims(), vec![3, 4]);
 
 // SVD factorization

@@ -1,13 +1,13 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{compute_permutation_from_indices, DynIndex, TensorDynLen};
+use tensor4all_core::{compute_permutation_from_indices, DynIndex, IdxTensor};
 
-fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 fn col_major_multi_index(mut flat: usize, dims: &[usize]) -> Vec<usize> {

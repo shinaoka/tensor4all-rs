@@ -38,8 +38,8 @@ impl From<anyhow::Error> for QuanticsTransformError {
     }
 }
 
-impl From<tensor4all_core::TensorDynLenError> for QuanticsTransformError {
-    fn from(source: tensor4all_core::TensorDynLenError) -> Self {
+impl From<tensor4all_core::IdxTensorError> for QuanticsTransformError {
+    fn from(source: tensor4all_core::IdxTensorError) -> Self {
         Self::Operation {
             source: anyhow::Error::new(source),
         }
@@ -81,7 +81,7 @@ mod tests {
             "root cause"
         );
 
-        let dyn_err = QuanticsTransformError::from(tensor4all_core::TensorDynLenError::NaNInput {
+        let dyn_err = QuanticsTransformError::from(tensor4all_core::IdxTensorError::NaNInput {
             operation: "test",
         });
         assert!(dyn_err

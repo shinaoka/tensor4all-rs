@@ -464,16 +464,16 @@ use tensor4all_core::{Canonical, FactorizeOptions, SvdTruncationPolicy};
 ///
 /// # Usage
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_treetn::{apply_local_update_sweep, LocalUpdateSweepPlan, TreeTN, TruncateUpdater};
 ///
 /// # fn main() -> anyhow::Result<()> {
 /// let s0 = DynIndex::new_dyn(2);
 /// let bond = DynIndex::new_dyn(1);
 /// let s1 = DynIndex::new_dyn(2);
-/// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
-/// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
-/// let mut treetn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1])?;
+/// let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
+/// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
+/// let mut treetn = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1])?;
 /// treetn.canonicalize_mut(std::iter::once(0usize), Default::default())?;
 ///
 /// let plan = LocalUpdateSweepPlan::from_treetn(&treetn, &0usize, 2).unwrap();

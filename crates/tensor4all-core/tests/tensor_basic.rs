@@ -3,7 +3,7 @@ use std::error::Error;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index::DynIndex;
-use tensor4all_core::{AnyScalar, TensorDynLen, TensorElement, TensorStorageError};
+use tensor4all_core::{AnyScalar, IdxTensor, TensorElement, TensorStorageError};
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
 /// Helper to create DenseF64 storage with shape information
@@ -16,12 +16,12 @@ fn make_dense_c64(data: Vec<Complex64>, dims: &[usize]) -> Storage {
     Storage::from_dense_col_major(data, dims).unwrap()
 }
 
-fn make_tensor_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn make_tensor_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
-fn make_tensor_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_dense(indices, data).unwrap()
+fn make_tensor_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
+    IdxTensor::from_dense(indices, data).unwrap()
 }
 
 fn assert_from_diag_dense_constructor_contract<T>(data: Vec<T>)
@@ -30,7 +30,7 @@ where
 {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::from_diag(vec![i, j], data).unwrap();
+    let tensor = IdxTensor::from_diag(vec![i, j], data).unwrap();
     assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(tensor.is_diag());
     assert_eq!(tensor.storage_kind(), StorageKind::Diagonal);
@@ -173,11 +173,11 @@ fn test_cow_storage() {
 }
 
 #[test]
-fn test_tensor_dyn_len_creation() {
+fn test_idx_tensor_creation() {
     let indices = vec![Index::new_dyn(2), Index::new_dyn(3)];
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap());
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, storage).unwrap();
+    let tensor: IdxTensor = IdxTensor::new(indices, storage).unwrap();
     assert_eq!(tensor.indices.len(), 2);
     let dims = tensor.dims();
     assert_eq!(dims.len(), 2);
@@ -200,7 +200,7 @@ fn tensor_from_structured_storage_preserves_compact_payload() {
         .unwrap(),
     );
 
-    let tensor = TensorDynLen::from_storage(vec![i, j, k], Arc::clone(&storage)).unwrap();
+    let tensor = IdxTensor::from_storage(vec![i, j, k], Arc::clone(&storage)).unwrap();
     let snapshot = tensor.storage().unwrap();
 
     assert_eq!(snapshot.storage_kind(), StorageKind::Structured);
@@ -220,7 +220,7 @@ fn copy_selector_is_compact_and_numerically_correct() {
     let site = Index::new_dyn(3);
     let right = Index::new_dyn(2);
 
-    let tensor = TensorDynLen::from_copy_selector(left, site, right, 1, 2.5_f64).unwrap();
+    let tensor = IdxTensor::from_copy_selector(left, site, right, 1, 2.5_f64).unwrap();
 
     assert_eq!(
         tensor.storage().unwrap().storage_kind(),
@@ -236,7 +236,7 @@ fn copy_selector_is_compact_and_numerically_correct() {
 
 #[test]
 fn copy_selector_rejects_payload_and_stride_overflow_before_allocation() {
-    let payload_error = TensorDynLen::from_copy_selector(
+    let payload_error = IdxTensor::from_copy_selector(
         Index::new_dyn(usize::MAX),
         Index::new_dyn(2),
         Index::new_dyn(usize::MAX),
@@ -250,7 +250,7 @@ fn copy_selector_rejects_payload_and_stride_overflow_before_allocation() {
     ));
 
     let oversized_stride = (isize::MAX as usize) + 1;
-    let stride_error = TensorDynLen::from_copy_selector(
+    let stride_error = IdxTensor::from_copy_selector(
         Index::new_dyn(oversized_stride),
         Index::new_dyn(1),
         Index::new_dyn(oversized_stride),
@@ -278,7 +278,7 @@ fn tensor_from_structured_storage_rejects_index_dim_mismatch() {
         .unwrap(),
     );
 
-    let err = TensorDynLen::from_storage(vec![i, j], storage).unwrap_err();
+    let err = IdxTensor::from_storage(vec![i, j], storage).unwrap_err();
     assert!(err.to_string().contains("storage logical dims"));
 }
 
@@ -287,7 +287,7 @@ fn structured_select_indices_preserves_copy_structure_when_possible() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_storage(
+    let tensor = IdxTensor::from_storage(
         vec![i.clone(), j.clone(), k.clone()],
         Arc::new(
             Storage::new_structured(
@@ -326,7 +326,7 @@ fn structured_select_indices_handles_fixed_copy_class() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_storage(
+    let tensor = IdxTensor::from_storage(
         vec![i.clone(), j.clone(), k.clone()],
         Arc::new(
             Storage::new_structured(
@@ -370,7 +370,7 @@ fn same_layout_axpby_preserves_structured_metadata() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(2);
     let make = |offset| {
-        TensorDynLen::from_storage(
+        IdxTensor::from_storage(
             vec![i.clone(), j.clone(), k.clone()],
             Arc::new(
                 Storage::new_structured(
@@ -464,7 +464,7 @@ fn test_tensor_duplicate_indices_new() {
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
 
-    let err = TensorDynLen::new(indices, storage).unwrap_err();
+    let err = IdxTensor::new(indices, storage).unwrap_err();
     assert!(err.to_string().contains("unique"));
 }
 
@@ -475,7 +475,7 @@ fn test_tensor_duplicate_indices_from_indices() {
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
 
-    let err = TensorDynLen::from_indices(indices, storage).unwrap_err();
+    let err = IdxTensor::from_indices(indices, storage).unwrap_err();
     assert!(err.to_string().contains("unique"));
 }
 
@@ -641,7 +641,7 @@ fn test_replace_indices_does_not_reorder_data() {
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(indices, data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(indices, data.clone()).unwrap();
 
     // Create new indices with same dimensions but different IDs
     let new_i = Index::new_dyn(2);
@@ -676,7 +676,7 @@ fn test_replace_indices_with_different_order_does_not_reorder_data() {
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(indices, data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(indices, data.clone()).unwrap();
 
     // Create new indices with same dimensions
     let new_i = Index::new_dyn(2);
@@ -716,7 +716,7 @@ fn test_permuteinds_reorders_data() {
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(indices, data).unwrap();
+    let tensor = IdxTensor::from_dense(indices, data).unwrap();
 
     // Use permuteinds to swap indices: [j, i] instead of [i, j]
     // This should reorder both indices AND data
@@ -750,7 +750,7 @@ fn test_replace_indices_vs_permuteinds_comparison() {
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(indices, data).unwrap();
+    let tensor = IdxTensor::from_dense(indices, data).unwrap();
 
     // Create new indices with same dimensions
     let new_i = Index::new_dyn(2);
@@ -868,7 +868,7 @@ fn test_tensor_conj_c64() {
         Complex64::new(-1.0, 1.0),
         Complex64::new(5.0, 5.0),
     ];
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 
     let conj_tensor = tensor.conj();
 
@@ -890,7 +890,7 @@ fn test_tensor_conj_c64() {
 }
 
 // ============================================================================
-// High-level API tests for TensorDynLen
+// High-level API tests for IdxTensor
 // ============================================================================
 
 #[test]
@@ -898,7 +898,7 @@ fn test_from_dense_f64() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(vec![i, j], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i, j], data.clone()).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
@@ -914,7 +914,7 @@ fn test_from_dense_c64() {
     let data: Vec<Complex64> = (1..=6)
         .map(|x| Complex64::new(x as f64, x as f64))
         .collect();
-    let tensor = TensorDynLen::from_dense(vec![i, j], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i, j], data.clone()).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(!tensor.is_f64());
@@ -928,7 +928,7 @@ fn test_into_dense_col_major_parts_returns_indices_and_values() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
 
     let (indices, values) = tensor.into_dense_col_major_parts::<f64>().unwrap();
 
@@ -940,7 +940,7 @@ fn test_into_dense_col_major_parts_returns_indices_and_values() {
 fn test_into_dense_col_major_parts_materializes_diag_storage() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let tensor = IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0]).unwrap();
 
     let (indices, values) = tensor.into_dense_col_major_parts::<f64>().unwrap();
 
@@ -951,7 +951,7 @@ fn test_into_dense_col_major_parts_materializes_diag_storage() {
 #[test]
 fn test_into_dense_col_major_parts_rejects_ad_tracked_tensor() {
     let i = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0])
+    let tensor = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0])
         .unwrap()
         .enable_grad()
         .unwrap();
@@ -964,11 +964,11 @@ fn test_into_dense_col_major_parts_rejects_ad_tracked_tensor() {
 fn assert_dense_constructor_dims<T>(data: Vec<T>)
 where
     T: TensorElement,
-    TensorDynLen: std::fmt::Debug,
+    IdxTensor: std::fmt::Debug,
 {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_dense(vec![i, j], data).unwrap();
+    let tensor = IdxTensor::from_dense(vec![i, j], data).unwrap();
     assert_eq!(tensor.dims(), vec![2, 2]);
 }
 
@@ -994,7 +994,7 @@ fn test_from_dense_generic_supports_all_supported_element_types() {
 fn test_from_dense_generic_preserves_column_major_input_order() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::from_dense(
+    let tensor = IdxTensor::from_dense(
         vec![i.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     )
@@ -1011,7 +1011,7 @@ fn test_from_dense_generic_preserves_column_major_input_order() {
 fn test_from_dense_generic_rejects_length_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let err = TensorDynLen::from_dense(vec![i, j], vec![1.0_f64, 2.0, 3.0]).unwrap_err();
+    let err = IdxTensor::from_dense(vec![i, j], vec![1.0_f64, 2.0, 3.0]).unwrap_err();
     assert!(
         err.to_string().contains("length"),
         "unexpected error: {err}"
@@ -1038,7 +1038,7 @@ fn test_from_diag_generic_supports_all_supported_element_types() {
 fn test_from_diag_generic_rejects_mismatched_index_dims() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let err = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap_err();
+    let err = IdxTensor::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap_err();
     assert!(
         err.to_string().contains("same dimension"),
         "unexpected error: {err}"
@@ -1049,7 +1049,7 @@ fn test_from_diag_generic_rejects_mismatched_index_dims() {
 fn test_from_diag_generic_rejects_payload_length_mismatch() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
-    let err = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap_err();
+    let err = IdxTensor::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap_err();
     assert!(
         err.to_string().contains("length"),
         "unexpected error: {err}"
@@ -1058,7 +1058,7 @@ fn test_from_diag_generic_rejects_payload_length_mismatch() {
 
 #[test]
 fn test_scalar_f64() {
-    let scalar = TensorDynLen::scalar(42.0).unwrap();
+    let scalar = IdxTensor::scalar(42.0).unwrap();
     assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_f64());
     assert_eq!(scalar.to_vec::<f64>().unwrap(), &[42.0]);
@@ -1067,7 +1067,7 @@ fn test_scalar_f64() {
 #[test]
 fn test_scalar_c64() {
     let z = Complex64::new(1.0, 2.0);
-    let scalar = TensorDynLen::scalar(z).unwrap();
+    let scalar = IdxTensor::scalar(z).unwrap();
     assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_complex());
     assert_eq!(scalar.to_vec::<Complex64>().unwrap(), &[z]);
@@ -1077,7 +1077,7 @@ fn test_scalar_c64() {
 fn test_zeros_f64() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::zeros::<f64>(vec![i, j]).unwrap();
+    let tensor = IdxTensor::zeros::<f64>(vec![i, j]).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
@@ -1089,7 +1089,7 @@ fn test_zeros_f64() {
 fn test_zeros_c64() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::zeros::<num_complex::Complex64>(vec![i, j]).unwrap();
+    let tensor = IdxTensor::zeros::<num_complex::Complex64>(vec![i, j]).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_complex());
@@ -1101,12 +1101,12 @@ fn test_zeros_c64() {
 fn test_as_slice_error_on_wrong_type() {
     let i = Index::new_dyn(2);
     // Create f64 tensor but try to get c64 slice
-    let tensor_f64 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let tensor_f64 = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     assert!(tensor_f64.to_vec::<Complex64>().is_err());
     assert!(tensor_f64.to_vec::<Complex64>().is_err());
 
     // Create c64 tensor but try to get f64 slice
-    let tensor_c64 = TensorDynLen::from_dense(
+    let tensor_c64 = IdxTensor::from_dense(
         vec![i],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     )

@@ -1,5 +1,5 @@
 use super::*;
-use crate::defaults::tensordynlen::TensorDynLen;
+use crate::defaults::idx_tensor::IdxTensor;
 use crate::defaults::DynIndex;
 use crate::tensor_index::TensorIndex;
 use crate::{TensorVectorSpace, TensorVectorSpaceError};
@@ -206,7 +206,7 @@ fn hermitian_lanczos_lowest_eigenpair_complex_pauli_y() {
     ];
 
     let result = hermitian_lanczos_lowest_eigenpair(
-        |x: &TensorDynLen| apply_matrix2_c64(x, &pauli_y),
+        |x: &IdxTensor| apply_matrix2_c64(x, &pauli_y),
         &initial,
         &HermitianLanczosOptions {
             max_iter: 4,
@@ -228,7 +228,7 @@ fn hermitian_lanczos_lowest_eigenpair_rejects_non_hermitian_projection() {
     let non_hermitian = [0.0, 1.0, 0.0, 0.0];
 
     let err = hermitian_lanczos_lowest_eigenpair(
-        |x: &TensorDynLen| apply_matrix2_f64(x, &non_hermitian),
+        |x: &IdxTensor| apply_matrix2_f64(x, &non_hermitian),
         &initial,
         &HermitianLanczosOptions {
             max_iter: 2,
@@ -250,7 +250,7 @@ fn hermitian_krylov_expm_multiply_diagonal_real_time_matches_exact() {
     );
 
     let result = hermitian_krylov_expm_multiply(
-        |x: &TensorDynLen| scale_vector_c64(x, &[1.0, 3.0]),
+        |x: &IdxTensor| scale_vector_c64(x, &[1.0, 3.0]),
         Complex64::new(0.0, -0.25),
         &initial,
         &HermitianKrylovExpmOptions {
@@ -278,7 +278,7 @@ fn hermitian_krylov_expm_multiply_first_step_breakdown_reports_finite_error() {
     );
 
     let result = hermitian_krylov_expm_multiply(
-        |x: &TensorDynLen| scale_vector_c64(x, &[2.0, 2.0]),
+        |x: &IdxTensor| scale_vector_c64(x, &[2.0, 2.0]),
         Complex64::new(0.0, -0.25),
         &initial,
         &HermitianKrylovExpmOptions::default(),
@@ -304,7 +304,7 @@ fn hermitian_krylov_expm_multiply_zero_exponent_returns_input() {
     );
 
     let result = hermitian_krylov_expm_multiply(
-        |_x: &TensorDynLen| panic!("zero exponent must not request a matvec"),
+        |_x: &IdxTensor| panic!("zero exponent must not request a matvec"),
         Complex64::new(0.0, 0.0),
         &initial,
         &HermitianKrylovExpmOptions::default(),
@@ -325,7 +325,7 @@ fn hermitian_krylov_expm_multiply_zero_initial_returns_zero_without_matvecs() {
     let initial = make_vector_c64(vec![Complex64::new(0.0, 0.0); 2], &idx);
 
     let result = hermitian_krylov_expm_multiply(
-        |_x: &TensorDynLen| panic!("zero input must not request a matvec"),
+        |_x: &IdxTensor| panic!("zero input must not request a matvec"),
         Complex64::new(0.0, -0.25),
         &initial,
         &HermitianKrylovExpmOptions::default(),
@@ -346,7 +346,7 @@ fn hermitian_krylov_expm_multiply_real_tensor_promotes_complex_evolution() {
     let initial = make_vector_with_index(vec![1.0, 0.0], &idx);
 
     let result = hermitian_krylov_expm_multiply(
-        |x: &TensorDynLen| apply_matrix2_f64(x, &[0.0, 1.0, 1.0, 0.0]),
+        |x: &IdxTensor| apply_matrix2_f64(x, &[0.0, 1.0, 1.0, 0.0]),
         Complex64::new(0.0, -0.5),
         &initial,
         &HermitianKrylovExpmOptions::default(),
@@ -371,7 +371,7 @@ fn hermitian_krylov_expm_multiply_errors_when_unconverged() {
     );
 
     let err = hermitian_krylov_expm_multiply(
-        |x: &TensorDynLen| scale_vector_c64(x, &[1.0, 2.0, 3.0]),
+        |x: &IdxTensor| scale_vector_c64(x, &[1.0, 2.0, 3.0]),
         Complex64::new(0.0, -1.0),
         &initial,
         &HermitianKrylovExpmOptions {
@@ -411,7 +411,7 @@ fn gmres_absolute_tolerance_and_total_iteration_limit_paths() {
     let idx = DynIndex::new_dyn(2);
     let b = make_vector_with_index(vec![4.0, 9.0], &idx);
     let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { scale_vector_f64(x, &[2.0, 3.0]) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { scale_vector_f64(x, &[2.0, 3.0]) };
     let options = GmresOptions {
         max_iter: 4,
         rtol: 1e-12,
@@ -426,7 +426,7 @@ fn gmres_absolute_tolerance_and_total_iteration_limit_paths() {
     assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-10);
 
     let limited = gmres_with_total_iteration_limit(
-        |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 3.0]),
+        |x: &IdxTensor| scale_vector_f64(x, &[2.0, 3.0]),
         &b,
         &x0,
         &options,
@@ -451,7 +451,7 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
     };
 
     let result = gmres_affine_with_absolute_tolerance(
-        |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 5.0]),
+        |x: &IdxTensor| scale_vector_f64(x, &[2.0, 5.0]),
         &b,
         &x0,
         AnyScalar::new_real(1.0),
@@ -465,7 +465,7 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
     assert!(result.solution.sub(&expected).unwrap().maxabs().unwrap() < 1e-10);
 
     let scaled = gmres_affine(
-        |x: &TensorDynLen| scale_vector_f64(x, &[100.0, 100.0]),
+        |x: &IdxTensor| scale_vector_f64(x, &[100.0, 100.0]),
         &b,
         &x0,
         AnyScalar::new_real(2.0),
@@ -486,7 +486,7 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
     );
 
     let err = gmres_affine(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         &x0,
         AnyScalar::new_real(0.0),
@@ -512,7 +512,7 @@ fn gmres_affine_profile_and_zero_rhs_paths() {
 
     let result = with_gmres_profile_env(|| {
         gmres_affine(
-            |x: &TensorDynLen| Ok(x.clone()),
+            |x: &IdxTensor| Ok(x.clone()),
             &b,
             &x0,
             AnyScalar::new_real(1.0),
@@ -562,7 +562,7 @@ fn gmres_affine_profile_covers_nonconverged_restart_and_final_paths() {
 
     let result = with_gmres_profile_env(|| {
         gmres_affine(
-            |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 5.0]),
+            |x: &IdxTensor| scale_vector_f64(x, &[2.0, 5.0]),
             &b,
             &x0,
             AnyScalar::new_real(0.5),
@@ -586,7 +586,7 @@ fn gmres_affine_profile_covers_scalar_shortcut() {
 
     let result = with_gmres_profile_env(|| {
         gmres_affine(
-            |x: &TensorDynLen| Ok(x.clone()),
+            |x: &IdxTensor| Ok(x.clone()),
             &b,
             &x0,
             AnyScalar::new_real(2.0),
@@ -614,13 +614,13 @@ fn gmres_lucky_breakdown_paths_are_reachable_with_zero_tolerance() {
         check_true_residual: false,
     };
 
-    let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &options).unwrap();
+    let result = gmres(|x: &IdxTensor| Ok(x.clone()), &b, &x0, &options).unwrap();
     assert!(!result.converged);
     assert_eq!(result.iterations, 1);
     assert!(result.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let affine = gmres_affine(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         &x0,
         AnyScalar::new_real(0.0),
@@ -633,11 +633,11 @@ fn gmres_lucky_breakdown_paths_are_reachable_with_zero_tolerance() {
     assert!(affine.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let truncated = gmres_with_truncation(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         &x0,
         &options,
-        |_: &mut TensorDynLen| Ok(()),
+        |_: &mut IdxTensor| Ok(()),
     )
     .unwrap();
     assert!(!truncated.converged);
@@ -658,16 +658,16 @@ fn gmres_convergence_branches_cover_true_residual_and_affine_fast_finish() {
         check_true_residual: true,
     };
 
-    let checked = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &options).unwrap();
+    let checked = gmres(|x: &IdxTensor| Ok(x.clone()), &b, &x0, &options).unwrap();
     assert!(checked.converged);
     assert!(checked.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 
     let truncated = gmres_with_truncation(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         &x0,
         &options,
-        |_: &mut TensorDynLen| Ok(()),
+        |_: &mut IdxTensor| Ok(()),
     )
     .unwrap();
     assert!(truncated.converged);
@@ -678,7 +678,7 @@ fn gmres_convergence_branches_cover_true_residual_and_affine_fast_finish() {
         ..options
     };
     let affine = gmres_affine(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         &x0,
         AnyScalar::new_real(0.0),
@@ -708,7 +708,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
     let calls = Cell::new(0usize);
     let checked = with_gmres_profile_env(|| {
         gmres_affine(
-            |x: &TensorDynLen| {
+            |x: &IdxTensor| {
                 let call = calls.get();
                 calls.set(call + 1);
                 if call == 2 {
@@ -736,7 +736,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
     };
     let lucky = with_gmres_profile_env(|| {
         gmres_affine(
-            |x: &TensorDynLen| Ok(x.clone()),
+            |x: &IdxTensor| Ok(x.clone()),
             &b,
             &x0,
             AnyScalar::new_real(0.0),
@@ -764,7 +764,7 @@ fn gmres_zero_cycle_and_restart_nonzero_update_paths() {
     };
 
     let zero_cycle = gmres_with_total_iteration_limit(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         &x0,
         &zero_cycle_options,
@@ -784,11 +784,11 @@ fn gmres_zero_cycle_and_restart_nonzero_update_paths() {
         verbose: true,
     };
     let restarted = restart_gmres_with_truncation(
-        |x: &TensorDynLen| Ok(x.clone()),
+        |x: &IdxTensor| Ok(x.clone()),
         &b,
         None,
         &restart_options,
-        |_: &mut TensorDynLen| Ok(()),
+        |_: &mut IdxTensor| Ok(()),
     )
     .unwrap();
     assert!(!restarted.converged);
@@ -823,50 +823,50 @@ fn gmres_private_helpers_cover_edge_paths() {
 }
 
 /// Helper to create a 1D tensor (vector) with given data and shared index.
-fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
-    TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
+fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> IdxTensor {
+    IdxTensor::from_dense(vec![idx.clone()], data).unwrap()
 }
 
-fn scale_vector_f64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
+fn scale_vector_f64(x: &IdxTensor, diag: &[f64]) -> Result<IdxTensor> {
     let x_data = x.to_vec::<f64>()?;
     let result_data: Vec<f64> = x_data
         .iter()
         .zip(diag.iter())
         .map(|(&xi, &di)| xi * di)
         .collect();
-    Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+    Ok(IdxTensor::from_dense(x.indices.clone(), result_data).unwrap())
 }
 
-fn scale_vector_c64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
+fn scale_vector_c64(x: &IdxTensor, diag: &[f64]) -> Result<IdxTensor> {
     let x_data = x.to_vec::<Complex64>()?;
     let result_data: Vec<_> = x_data
         .iter()
         .zip(diag.iter())
         .map(|(&xi, &di)| xi * di)
         .collect();
-    Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+    Ok(IdxTensor::from_dense(x.indices.clone(), result_data).unwrap())
 }
 
-fn apply_matrix2_f64(x: &TensorDynLen, a_data: &[f64; 4]) -> Result<TensorDynLen> {
+fn apply_matrix2_f64(x: &IdxTensor, a_data: &[f64; 4]) -> Result<IdxTensor> {
     let x_data = x.to_vec::<f64>()?;
     let result_data = vec![
         a_data[0] * x_data[0] + a_data[1] * x_data[1],
         a_data[2] * x_data[0] + a_data[3] * x_data[1],
     ];
-    Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+    Ok(IdxTensor::from_dense(x.indices.clone(), result_data).unwrap())
 }
 
-fn make_vector_c64(data: Vec<Complex64>, idx: &DynIndex) -> TensorDynLen {
-    TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
+fn make_vector_c64(data: Vec<Complex64>, idx: &DynIndex) -> IdxTensor {
+    IdxTensor::from_dense(vec![idx.clone()], data).unwrap()
 }
 
-fn apply_matrix2_c64(x: &TensorDynLen, a_data: &[Complex64; 4]) -> Result<TensorDynLen> {
+fn apply_matrix2_c64(x: &IdxTensor, a_data: &[Complex64; 4]) -> Result<IdxTensor> {
     let x_data = x.to_vec::<Complex64>()?;
     let result_data = vec![
         a_data[0] * x_data[0] + a_data[1] * x_data[1],
         a_data[2] * x_data[0] + a_data[3] * x_data[1],
     ];
-    Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+    Ok(IdxTensor::from_dense(x.indices.clone(), result_data).unwrap())
 }
 
 #[test]
@@ -963,7 +963,7 @@ fn test_gmres_identity_operator() {
     let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
     // Identity operator: A x = x
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1001,7 +1001,7 @@ fn test_gmres_diagonal_matrix() {
 
     // Diagonal scaling operator
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1051,7 +1051,7 @@ fn test_gmres_complex_nonsymmetric_matrix() {
         Complex64::new(1.5, 1.0),
     ];
     let b = apply_matrix2_c64(&expected_x, &a_data).unwrap();
-    let apply_a = move |x: &TensorDynLen| apply_matrix2_c64(x, &a_data);
+    let apply_a = move |x: &IdxTensor| apply_matrix2_c64(x, &a_data);
     let options = GmresOptions {
         max_iter: 2,
         rtol: 1e-12,
@@ -1084,7 +1084,7 @@ fn test_gmres_with_total_iteration_limit_shortens_final_restart() {
     let x0 = make_vector_with_index(vec![0.0; 6], &idx);
 
     let diag = [1.0, 1.7, 2.3, 3.1, 4.2, 5.6];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
     let options = GmresOptions {
         max_iter: 3,
         rtol: 0.0,
@@ -1105,7 +1105,7 @@ fn test_gmres_with_total_iteration_limit_allows_zero_iterations() {
     let b = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
     let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
     let options = GmresOptions {
         max_iter: 3,
         rtol: 1e-10,
@@ -1135,7 +1135,7 @@ fn test_gmres_nonsymmetric_matrix() {
     // Matrix A = [[2, 1], [0, 3]]
     let a_data = [2.0, 1.0, 0.0, 3.0];
 
-    let apply_a = move |x: &TensorDynLen| apply_matrix2_f64(x, &a_data);
+    let apply_a = move |x: &IdxTensor| apply_matrix2_f64(x, &a_data);
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1172,7 +1172,7 @@ fn test_gmres_with_good_initial_guess() {
     let b = make_vector_with_index(vec![2.0, 4.0, 6.0], &idx);
     let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx); // Already the solution for A=diag(2,2,2)
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> {
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> {
         // A = 2*I
         x.scale(AnyScalar::new_real(2.0))
             .map_err(anyhow::Error::from)
@@ -1193,8 +1193,8 @@ fn test_gmres_with_good_initial_guess() {
 }
 
 /// Helper to create a 1D complex tensor (vector) with given data and shared index.
-fn make_vector_c64_with_index(data: Vec<num_complex::Complex64>, idx: &DynIndex) -> TensorDynLen {
-    TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
+fn make_vector_c64_with_index(data: Vec<num_complex::Complex64>, idx: &DynIndex) -> IdxTensor {
+    IdxTensor::from_dense(vec![idx.clone()], data).unwrap()
 }
 
 #[test]
@@ -1216,7 +1216,7 @@ fn test_gmres_identity_operator_c64() {
     let x0 = make_vector_c64_with_index(vec![Complex64::new(0.0, 0.0); 4], &idx);
 
     // Identity operator: A x = x
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
 
     let options = GmresOptions {
         max_iter: 20,
@@ -1268,14 +1268,14 @@ fn test_gmres_diagonal_c64() {
     let x0 = make_vector_c64_with_index(vec![Complex64::new(0.0, 0.0); 4], &idx);
     let expected = make_vector_c64_with_index(x_true.to_vec(), &idx);
 
-    let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+    let apply_a = move |x: &IdxTensor| -> Result<IdxTensor> {
         let x_data = x.to_vec::<Complex64>()?;
         let result_data: Vec<Complex64> = x_data
             .iter()
             .zip(diag.iter())
             .map(|(&xi, &di)| di * xi)
             .collect();
-        Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+        Ok(IdxTensor::from_dense(x.indices.clone(), result_data).unwrap())
     };
 
     let options = GmresOptions {
@@ -1309,7 +1309,7 @@ fn test_gmres_zero_rhs() {
     let b = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
     let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
 
     let options = GmresOptions::default();
 
@@ -1329,10 +1329,10 @@ fn test_restart_gmres_identity_operator() {
     let idx = DynIndex::new_dyn(3);
     let b = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
 
     // No-op truncation
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = RestartGmresOptions::default();
 
@@ -1365,10 +1365,10 @@ fn test_restart_gmres_diagonal_matrix() {
     let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
     // No-op truncation
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = RestartGmresOptions {
         max_outer_iters: 10,
@@ -1414,9 +1414,9 @@ fn test_restart_gmres_with_initial_guess() {
     let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = RestartGmresOptions::default();
 
@@ -1446,9 +1446,9 @@ fn test_restart_gmres_outer_iterations_tracked() {
     let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     // Use small inner_max_iter to encourage multiple outer iterations
     let options = RestartGmresOptions {
@@ -1482,8 +1482,8 @@ fn test_restart_gmres_zero_rhs() {
     let idx = DynIndex::new_dyn(3);
     let b = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = RestartGmresOptions::default();
 
@@ -1524,10 +1524,10 @@ fn test_gmres_with_truncation_check_true_residual_safe() {
     let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
     // No-op truncation: convergence should work normally with check enabled
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1568,10 +1568,10 @@ fn test_gmres_with_truncation_check_true_residual_consistency() {
 
     // A = diag(1, 2, 3, 4)
     let diag = [1.0, 2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
     // No-op truncation: the solver should converge normally
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     // Without check: converged with Hessenberg residual
     let options_no_check = GmresOptions {
@@ -1626,7 +1626,7 @@ fn test_gmres_verbose_output() {
     let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
 
     let a_data = [2.0, 1.0, 0.0, 3.0];
-    let apply_a = move |x: &TensorDynLen| apply_matrix2_f64(x, &a_data);
+    let apply_a = move |x: &IdxTensor| apply_matrix2_f64(x, &a_data);
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1649,7 +1649,7 @@ fn test_gmres_no_convergence_exhausts_restarts() {
     let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
     // Very few iterations and restarts, tight tolerance
     let options = GmresOptions {
@@ -1676,7 +1676,7 @@ fn test_gmres_lucky_breakdown() {
     let b = make_vector_with_index(vec![10.0], &idx);
     let x0 = make_vector_with_index(vec![0.0], &idx);
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { scale_vector_f64(x, &[5.0]) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { scale_vector_f64(x, &[5.0]) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1708,8 +1708,8 @@ fn test_gmres_with_truncation_zero_rhs() {
     let b = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
     let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
-    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.clone()) };
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1732,8 +1732,8 @@ fn test_gmres_with_truncation_already_converged() {
     let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx); // Exact solution for diag(2,3,4)
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1757,8 +1757,8 @@ fn test_gmres_with_truncation_verbose() {
     let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = GmresOptions {
         max_iter: 10,
@@ -1783,14 +1783,14 @@ fn test_restart_gmres_stagnation_detection() {
     let b = make_vector_with_index(vec![1.0, 1.0, 1.0], &idx);
 
     let diag = [3.0, 7.0, 11.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
     // Truncation that rounds to 1 decimal place - the exact solution [1/3, 1/7, 1/11]
     // gets rounded to [0.3, 0.1, 0.1], preventing convergence below the rounding error.
-    let truncate = |x: &mut TensorDynLen| -> Result<()> {
+    let truncate = |x: &mut IdxTensor| -> Result<()> {
         let data = x.to_vec::<f64>()?;
         let new_data: Vec<f64> = data.iter().map(|&v| (v * 10.0).round() / 10.0).collect();
-        *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
+        *x = IdxTensor::from_dense(x.indices.clone(), new_data).unwrap();
         Ok(())
     };
 
@@ -1816,8 +1816,8 @@ fn test_restart_gmres_exhausts_outer_iters() {
     let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     // Very few iterations and extremely tight tolerance to prevent convergence
     let options = RestartGmresOptions {
@@ -1842,8 +1842,8 @@ fn test_restart_gmres_verbose() {
     let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = RestartGmresOptions {
         max_outer_iters: 10,
@@ -1867,8 +1867,8 @@ fn test_restart_gmres_zero_rhs_with_x0() {
     let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
     let diag = [2.0, 3.0, 4.0];
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
-    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
 
     let options = RestartGmresOptions {
         max_outer_iters: 5,
@@ -1898,12 +1898,12 @@ fn test_restart_gmres_stagnation_verbose() {
     let diag: Vec<f64> = (0..n)
         .map(|i| 10.0_f64.powf(i as f64 * 3.0 / (n as f64 - 1.0)))
         .collect();
-    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let apply_a = move |x: &IdxTensor| scale_vector_f64(x, &diag);
 
-    let truncate = |x: &mut TensorDynLen| -> Result<()> {
+    let truncate = |x: &mut IdxTensor| -> Result<()> {
         let data = x.to_vec::<f64>()?;
         let new_data: Vec<f64> = data.iter().map(|&v| (v * 100.0).round() / 100.0).collect();
-        *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
+        *x = IdxTensor::from_dense(x.indices.clone(), new_data).unwrap();
         Ok(())
     };
 

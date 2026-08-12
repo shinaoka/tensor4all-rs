@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::{
     apply_local_update_sweep, ApplyOptions, CanonicalForm, CanonicalizationOptions, IndexMapping,
     LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater, TreeTN,
     TruncationOptions,
 };
 
-type MpsWithSiteIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>);
-type MpoWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+type MpsWithSiteIndices = (TreeTN<IdxTensor, String>, Vec<DynIndex>);
+type MpoWithInternalIndices = (TreeTN<IdxTensor, String>, Vec<DynIndex>, Vec<DynIndex>);
 
 fn create_n_site_ones_mps(
     n_sites: usize,
@@ -18,7 +18,7 @@ fn create_n_site_ones_mps(
 ) -> anyhow::Result<MpsWithSiteIndices> {
     anyhow::ensure!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
+    let mut mps = TreeTN::<IdxTensor, String>::new();
 
     let site_indices: Vec<DynIndex> = (0..n_sites)
         .map(|i| {
@@ -49,7 +49,7 @@ fn create_n_site_ones_mps(
         };
 
         let nelem: usize = indices.iter().map(|idx| idx.dim).product();
-        let tensor = TensorDynLen::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
+        let tensor = IdxTensor::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
         mps.add_tensor(name, tensor)?;
     }
 
@@ -70,7 +70,7 @@ fn create_identity_chain_mpo_with_internal_indices(
 ) -> anyhow::Result<MpoWithInternalIndices> {
     anyhow::ensure!(n_sites >= 2, "Need at least 2 sites");
 
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let mut mpo = TreeTN::<IdxTensor, String>::new();
 
     let s_in_tmp: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
     let s_out_tmp: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
@@ -85,7 +85,7 @@ fn create_identity_chain_mpo_with_internal_indices(
         }
 
         let tensor = if i == 0 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -95,7 +95,7 @@ fn create_identity_chain_mpo_with_internal_indices(
             )
             .unwrap()
         } else if i == n_sites - 1 {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -105,7 +105,7 @@ fn create_identity_chain_mpo_with_internal_indices(
             )
             .unwrap()
         } else {
-            TensorDynLen::from_dense(
+            IdxTensor::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),

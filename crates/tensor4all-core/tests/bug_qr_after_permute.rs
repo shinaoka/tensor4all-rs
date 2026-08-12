@@ -8,11 +8,11 @@
 
 use num_complex::Complex64;
 use tensor4all_core::{
-    factorize, svd, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+    factorize, svd, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike,
 };
 
 /// Create a [5,2,2,5] tensor with data that triggers the QR bug.
-fn make_buggy_tensor() -> TensorDynLen {
+fn make_buggy_tensor() -> IdxTensor {
     let idx_a = DynIndex::new_dyn_with_tag(5, "a").unwrap();
     let idx_b = DynIndex::new_dyn_with_tag(2, "b").unwrap();
     let idx_c = DynIndex::new_dyn_with_tag(2, "c").unwrap();
@@ -123,10 +123,10 @@ fn make_buggy_tensor() -> TensorDynLen {
         Complex64::new(-1.01688110680129151e0, 8.34913283284349772e-2),
     ];
 
-    TensorDynLen::from_dense(vec![idx_a, idx_b, idx_c, idx_d], data).unwrap()
+    IdxTensor::from_dense(vec![idx_a, idx_b, idx_c, idx_d], data).unwrap()
 }
 
-fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &FactorizeOptions) -> f64 {
+fn reconstruction_error(t: &IdxTensor, left_inds: &[DynIndex], opts: &FactorizeOptions) -> f64 {
     let result = factorize(t, left_inds, opts).unwrap();
     let recon = result.left.contract_pair(&result.right).unwrap();
     let neg = recon
@@ -136,7 +136,7 @@ fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &Factori
     diff.norm().unwrap()
 }
 
-fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+fn svd_reconstruction_error(t: &IdxTensor, left_inds: &[DynIndex]) -> f64 {
     let (u, s, v) = svd::<Complex64>(t, left_inds).unwrap();
     let mut perm = vec![v.indices.len() - 1];
     perm.extend(0..v.indices.len() - 1);
@@ -164,7 +164,7 @@ fn test_qr_reconstruction_regression() {
 
     let matrix_i = DynIndex::new_dyn_with_tag(10, "row").unwrap();
     let matrix_j = DynIndex::new_dyn_with_tag(10, "col").unwrap();
-    let matrix = TensorDynLen::from_dense(
+    let matrix = IdxTensor::from_dense(
         vec![matrix_i.clone(), matrix_j],
         t.to_vec::<Complex64>().unwrap(),
     )

@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_quanticstci::QuanticsTensorCI2;
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops};
 use tensor4all_treetn::TreeTN;
@@ -146,7 +146,7 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 ///
 pub fn print_treetn_summary(
     label: &str,
-    tn: &TreeTN<TensorDynLen, usize>,
+    tn: &TreeTN<IdxTensor, usize>,
 ) -> Result<(), Box<dyn Error>> {
     println!("{label}");
     println!("node_count = {}", tn.node_count());
@@ -162,7 +162,7 @@ pub fn print_treetn_summary(
 }
 
 fn evaluate_tree_point(
-    tn: &TreeTN<TensorDynLen, usize>,
+    tn: &TreeTN<IdxTensor, usize>,
     site_indices: &[DynIndex],
     site_values: &[usize],
 ) -> Result<f64, Box<dyn Error>> {
@@ -186,8 +186,8 @@ fn evaluate_tree_point(
 pub fn collect_samples<F, G>(
     cosh_qtci: &QuanticsTensorCI2<f64>,
     factor_b_qtci: &QuanticsTensorCI2<f64>,
-    product_raw_tn: &TreeTN<TensorDynLen, usize>,
-    product_compressed_tn: &TreeTN<TensorDynLen, usize>,
+    product_raw_tn: &TreeTN<IdxTensor, usize>,
+    product_compressed_tn: &TreeTN<IdxTensor, usize>,
     product_site_indices: &[DynIndex],
     bits: usize,
     npoints: usize,
@@ -245,8 +245,8 @@ where
 pub fn collect_bond_profile(
     cosh_tt: &SimpleTensorTrain<f64>,
     factor_b_tt: &SimpleTensorTrain<f64>,
-    product_raw_tn: &TreeTN<TensorDynLen, usize>,
-    product_compressed_tn: &TreeTN<TensorDynLen, usize>,
+    product_raw_tn: &TreeTN<IdxTensor, usize>,
+    product_compressed_tn: &TreeTN<IdxTensor, usize>,
 ) -> Result<Vec<BondProfileRow>, Box<dyn Error>> {
     let cosh_bonds = cosh_tt.link_dims();
     let factor_b_bonds = factor_b_tt.link_dims();

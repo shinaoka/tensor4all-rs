@@ -37,12 +37,12 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{ColMajorArrayRef, DynIndex, TensorDynLen};
+/// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_treetn::{TreeTN, TreeTNEvaluator};
 ///
 /// let s = DynIndex::new_dyn(3);
-/// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0])?;
-/// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+/// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0])?;
+/// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0])?;
 ///
 /// let evaluator = TreeTNEvaluator::new(&tree, &[s])?;
 /// let values = [0usize, 2usize];
@@ -97,12 +97,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::{TreeTN, TreeTNEvaluator};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
-    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
+    /// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0])?;
     ///
     /// let evaluator = TreeTNEvaluator::new(&tree, &[s])?;
     /// assert_eq!(evaluator.input_count(), 1);
@@ -210,12 +210,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_treetn::{TreeTN, TreeTNEvaluator};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
-    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
+    /// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0])?;
     /// let evaluator = TreeTNEvaluator::new(&tree, &[s])?;
     ///
     /// assert_eq!(evaluator.input_count(), 1);
@@ -249,12 +249,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, TensorDynLen};
+    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
     /// use tensor4all_treetn::{TreeTN, TreeTNEvaluator};
     ///
     /// let s = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![4.0, 9.0])?;
-    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![4.0, 9.0])?;
+    /// let tree = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0])?;
     /// let evaluator = TreeTNEvaluator::new(&tree, &[s])?;
     /// let values = [1usize];
     /// let shape = [1usize, 1usize];
