@@ -34,7 +34,7 @@ let options = QtciOptions::default()
     .with_verbosity(0);
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
-assert!((qtt.evaluate(&[1, 1])? - f(&[-2.0, -2.0])).abs() < 1e-6);
+assert!((qtt.evaluate(&[0, 0])? - f(&[-2.0, -2.0])).abs() < 1e-6);
 # Ok(())
 # }
 ```

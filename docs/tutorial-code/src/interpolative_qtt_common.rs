@@ -183,17 +183,8 @@ fn grid_nd(bits: usize, lower: &[f64], upper: &[f64]) -> Result<DiscretizedGrid,
         .build()?)
 }
 
-fn quantics_to_tt_indices(quantics: &[i64]) -> Result<Vec<usize>, Box<dyn Error>> {
-    let mut indices = Vec::with_capacity(quantics.len());
-    for &value in quantics {
-        if value < 1 {
-            return Err(invalid_interpolative_input(format!(
-                "quantics digit must be one-based and positive, got {value}"
-            )));
-        }
-        indices.push((value - 1) as usize);
-    }
-    Ok(indices)
+fn quantics_to_tt_indices(quantics: &[usize]) -> Result<Vec<usize>, Box<dyn Error>> {
+    Ok(quantics.to_vec())
 }
 
 /// Collect full one-dimensional grid samples for plotting and verification.
@@ -217,8 +208,8 @@ where
     let npoints = 1usize << bits;
     let mut samples = Vec::with_capacity(npoints);
 
-    for index in 1..=npoints {
-        let grid_index = [index as i64];
+    for index in 0..npoints {
+        let grid_index = [index];
         let quantics = grid.grididx_to_quantics(&grid_index)?;
         let tt_indices = quantics_to_tt_indices(&quantics)?;
         let coords = grid.grididx_to_origcoord(&grid_index)?;
@@ -227,7 +218,8 @@ where
         let qtt = tt.evaluate(&tt_indices)?;
         samples.push(InterpolativeQtt1dSample {
             case_name,
-            index,
+            // 1-based display index; grid indices themselves are 0-based.
+            index: index + 1,
             x,
             exact,
             qtt,
@@ -264,17 +256,18 @@ where
     let npoints = 1usize << bits;
     let mut samples = Vec::with_capacity(npoints * npoints);
 
-    for x_index in 1..=npoints {
-        for y_index in 1..=npoints {
-            let grid_index = [x_index as i64, y_index as i64];
+    for x_index in 0..npoints {
+        for y_index in 0..npoints {
+            let grid_index = [x_index, y_index];
             let quantics = grid.grididx_to_quantics(&grid_index)?;
             let tt_indices = quantics_to_tt_indices(&quantics)?;
             let coords = grid.grididx_to_origcoord(&grid_index)?;
             let exact = exact_fn(&coords);
             let qtt = tt.evaluate(&tt_indices)?;
             samples.push(InterpolativeQtt2dSample {
-                x_index,
-                y_index,
+                // 1-based display indices; grid indices themselves are 0-based.
+                x_index: x_index + 1,
+                y_index: y_index + 1,
                 x: coords[0],
                 y: coords[1],
                 exact,

@@ -13,9 +13,9 @@ This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data wit
 
 ## Indexing
 
-- Sites are **0-indexed** in Rust (unlike ITensors.jl, which is 1-indexed).
-- **Exception**: `tensor4all-quanticstci` grid indices are **1-indexed**, following the Julia
-  convention for compatibility with QuanticsTCI.jl.
+- Sites and grid indices are **0-indexed** in Rust (unlike ITensors.jl, which is
+  1-indexed). QuanticsTCI.jl scripts must subtract 1 from grid indices at the
+  call boundary.
 
 ## Truncation Tolerance
 

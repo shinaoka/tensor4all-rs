@@ -144,13 +144,14 @@ where
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
-    // Library callback: the interpolator asks for discrete grid values.
-    let callback = move |idx: &[i64]| -> f64 {
-        let x = (idx[0] as f64 - 1.0) / npoints as f64;
+    // Library callback: the interpolator asks for discrete grid values
+    // (0-based indices).
+    let callback = move |idx: &[usize]| -> f64 {
+        let x = idx[0] as f64 / npoints as f64;
         target_fn(x)
     };
 
-    let initial_pivots = vec![vec![2], vec![(npoints / 2) as i64], vec![npoints as i64]];
+    let initial_pivots = vec![vec![1], vec![npoints / 2 - 1], vec![npoints - 1]];
 
     Ok(quanticscrossinterpolate_discrete(
         &sizes,

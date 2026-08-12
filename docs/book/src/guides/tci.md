@@ -110,7 +110,7 @@ The quantics representation encodes each grid index in binary and arranges the b
 
 - Indexing differs between the two APIs:
   - `crossinterpolate2` (low-level): indices and pivots are 0-indexed (`0..local_dim`)
-  - `quanticscrossinterpolate_discrete` (high-level): grid indices are 1-indexed (`1..=grid_size`), matching the Julia `QuanticsTCI.jl` convention
+  - `quanticscrossinterpolate_discrete` (high-level): grid indices are 0-indexed (`0..grid_size`)
 - Equal dimensions: `quanticscrossinterpolate_discrete` requires all dimensions to have the same number of points.
 - Power-of-2 grid sizes: all grid dimensions must be powers of 2 (4, 8, 16, 32, ...).
 
@@ -127,13 +127,13 @@ The quantics representation encodes each grid index in binary and arranges the b
 
 ### Discrete grid interpolation
 
-Use `quanticscrossinterpolate_discrete` when your function is naturally defined on an integer grid. Indices are passed as `&[i64]` and are 1-indexed.
+Use `quanticscrossinterpolate_discrete` when your function is naturally defined on an integer grid. Indices are passed as `&[usize]` and are 0-indexed.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
 use tensor4all_quanticstci::prelude::*;
 
-let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
 let sizes = vec![16, 16];
 
 let (qtci, ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
@@ -149,9 +149,9 @@ assert!(!ranks.is_empty());
 let value = qtci.evaluate(&[5, 10])?;
 assert!((value - 15.0).abs() < 1e-8);
 
-// Sum of (i + j) for i, j in 1..=16 = 2 * 16 * (16 * 17 / 2) = 4352
+// Sum of (i + j) for i, j in 0..16 = 2 * 16 * (15 * 16 / 2) = 3840
 let total = qtci.sum()?;
-assert!((total - 4352.0).abs() < 1e-6);
+assert!((total - 3840.0).abs() < 1e-6);
 # Ok(())
 # }
 ```
@@ -182,8 +182,8 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate::<f64, _>(
 
 assert!(*errors.last().unwrap() < 1e-8);
 
-// Verify the interpolation at grid point 1 (x = 0.0)
-let value = qtci.evaluate(&[1])?;
+// Verify the interpolation at grid point 0 (x = 0.0)
+let value = qtci.evaluate(&[0])?;
 assert!((value - 0.0).abs() < 1e-10);
 # Ok(())
 # }
@@ -268,7 +268,7 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate::<f64, _>(
 assert!(*errors.last().unwrap() < tol);
 
 // Verify at several grid points across the domain
-for &grid_idx in &[1_i64, 100, 512, 1024] {
+for &grid_idx in &[0usize, 99, 511, 1023] {
     let got = qtci.evaluate(&[grid_idx])?;
     assert!(got.is_finite(), "value at grid index {} should be finite", grid_idx);
 }
@@ -290,7 +290,7 @@ use tensor4all_quanticstci::prelude::*;
 
 // Use 64x64 for a faster doctest (256x256 in practice)
 let sizes = vec![64, 64];
-let f = |idx: &[i64]| {
+let f = |idx: &[usize]| {
     let x = idx[0] as f64;
     let y = idx[1] as f64;
     (x / 24.0).cos() + (y / 17.0).cos() + 0.1 * ((x + y) / 13.0).sin()
@@ -308,7 +308,7 @@ let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
 
 assert!(*errors.last().unwrap() < 1e-8);
 
-for &(i, j) in &[(1_i64, 1_i64), (17, 33), (32, 50), (64, 64)] {
+for &(i, j) in &[(0usize, 0usize), (16, 32), (31, 49), (63, 63)] {
     let exact = (i as f64 / 24.0).cos()
         + (j as f64 / 17.0).cos()
         + 0.1 * (((i + j) as f64) / 13.0).sin();

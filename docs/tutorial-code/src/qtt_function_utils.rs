@@ -23,13 +23,12 @@ pub struct SamplePoint {
     pub abs_error: f64,
 }
 
-/// Convert a 1-based discrete index to a point in the unit interval.
+/// Convert a grid index to a point in the unit interval.
 ///
-/// The quantics interpolation API uses 1-based indexing for the callback.  That
-/// feels Julia-like, but it is different from Rust arrays, so we keep the mapping
-/// in a dedicated helper for clarity.
-pub fn discrete_index_to_unit_interval(index_1based: i64, npoints: usize) -> f64 {
-    (index_1based as f64 - 1.0) / npoints as f64
+/// The quantics interpolation API uses 0-based grid indices, matching Rust
+/// array indexing, so the mapping is the direct ratio `index / npoints`.
+pub fn discrete_index_to_unit_interval(index: i64, npoints: usize) -> f64 {
+    index as f64 / npoints as f64
 }
 
 /// Evaluate the QTT at every grid point and compare it with the analytic target.
@@ -48,13 +47,13 @@ where
 {
     let mut samples = Vec::with_capacity(npoints);
 
-    for i in 1..=npoints {
+    for i in 0..npoints {
         let x = discrete_index_to_unit_interval(i as i64, npoints);
         let exact = exact_fn(x);
-        let qtt = qtci.evaluate(&[i as i64])?;
+        let qtt = qtci.evaluate(&[i])?;
 
         samples.push(SamplePoint {
-            index: i,
+            index: i + 1,
             x,
             exact,
             qtt,

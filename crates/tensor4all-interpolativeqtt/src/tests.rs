@@ -6,8 +6,8 @@ use crate::interval::NInterval;
 
 use super::*;
 
-fn quantics_to_indices(quantics: &[i64]) -> Vec<usize> {
-    quantics.iter().map(|&q| (q - 1) as usize).collect()
+fn quantics_to_indices(quantics: &[usize]) -> Vec<usize> {
+    quantics.to_vec()
 }
 
 fn grid_1d(r: usize, a: f64, b: f64) -> DiscretizedGrid {
@@ -28,19 +28,19 @@ fn grid_nd(r: usize, lower: &[f64], upper: &[f64]) -> DiscretizedGrid {
         .unwrap()
 }
 
-fn for_each_grid_index(ndims: usize, points_per_dim: usize, mut f: impl FnMut(&[i64])) {
-    let mut index = vec![1i64; ndims];
+fn for_each_grid_index(ndims: usize, points_per_dim: usize, mut f: impl FnMut(&[usize])) {
+    let mut index = vec![0usize; ndims];
     loop {
         f(&index);
 
         let mut advanced = false;
         for value in &mut index {
-            if *value < points_per_dim as i64 {
+            if *value + 1 < points_per_dim {
                 *value += 1;
                 advanced = true;
                 break;
             }
-            *value = 1;
+            *value = 0;
         }
         if !advanced {
             break;
@@ -55,8 +55,8 @@ fn assert_tt_matches_grid_1d(
     tol: f64,
 ) {
     let n = 1usize << grid.rs()[0];
-    for i in 1..=n {
-        let grid_idx = [i as i64];
+    for i in 0..n {
+        let grid_idx = [i];
         let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
         let coords = grid.grididx_to_origcoord(&grid_idx).unwrap();
         let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
@@ -393,8 +393,8 @@ fn multiscale_interpolation_one_over_x() {
     let n = 1usize << r;
     let mut diff_norm = 0.0;
     let mut ref_norm = 0.0;
-    for i in 1..=n {
-        let grid_idx = [i as i64];
+    for i in 0..n {
+        let grid_idx = [i];
         let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
         let x = grid.grididx_to_origcoord(&grid_idx).unwrap()[0];
         let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
@@ -513,8 +513,8 @@ fn invert_qtt_round_trip_uncompressed() {
 
     let mut max_err = 0.0_f64;
     for i in 0..(1usize << (r - 1)) {
-        let left_idx = [2 * i as i64 + 1];
-        let right_idx = [2 * i as i64 + 2];
+        let left_idx = [2 * i];
+        let right_idx = [2 * i + 1];
         let left_q = grid.grididx_to_quantics(&left_idx).unwrap();
         let right_q = grid.grididx_to_quantics(&right_idx).unwrap();
         let tt_left = tt.evaluate(&quantics_to_indices(&left_q)).unwrap();
@@ -549,8 +549,8 @@ fn invert_qtt_round_trip_compressed() {
 
     let mut max_err = 0.0_f64;
     for i in 0..(1usize << (r - 1)) {
-        let left_idx = [2 * i as i64 + 1];
-        let right_idx = [2 * i as i64 + 2];
+        let left_idx = [2 * i];
+        let right_idx = [2 * i + 1];
         let left_q = grid.grididx_to_quantics(&left_idx).unwrap();
         let right_q = grid.grididx_to_quantics(&right_idx).unwrap();
         let tt_left = tt.evaluate(&quantics_to_indices(&left_q)).unwrap();

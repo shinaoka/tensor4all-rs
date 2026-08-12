@@ -17,7 +17,7 @@ fn point_from_batch_rejects_out_of_bounds_point() {
 fn grid_evaluation_propagates_coordinate_conversion_failure() {
     let called = std::cell::Cell::new(false);
     let result = evaluate_grid_point(
-        &[3_i64],
+        &[3_usize],
         |_point| anyhow::bail!("synthetic coordinate failure"),
         |_coord| {
             called.set(true);
@@ -32,16 +32,15 @@ fn grid_evaluation_propagates_coordinate_conversion_failure() {
 
 #[test]
 fn grid_evaluation_passes_converted_coordinates_to_callback() {
-    let value =
-        evaluate_grid_point(&[1_i64], |_point| Ok(vec![0.25]), |coord| coord[0] * 4.0).unwrap();
+    let value = evaluate_grid_point(&[0], |_point| Ok(vec![0.25]), |coord| coord[0] * 4.0).unwrap();
     assert_eq!(value, 1.0);
 }
 
 #[test]
 fn test_discrete_simple_function() {
-    // f(i, j) = i + j (grididx are 1-indexed)
+    // f(i, j) = i + j (grididx are 0-indexed)
     // Use 4x4 grid which gives 2 sites with Fused scheme
-    let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     let sizes = vec![4, 4];
 
     // Use Fused to get 2 sites (4x4 = 2 bits, so 2 sites for 2D)
@@ -55,12 +54,12 @@ fn test_discrete_simple_function() {
 
     let (qtci, _ranks, _errors) = result.unwrap();
 
-    // Verify some evaluations (grididx are 1-indexed)
-    let val = qtci.evaluate(&[3, 4]).unwrap();
-    assert_relative_eq!(val, 7.0, epsilon = 1e-8);
+    // Verify some evaluations (grididx are 0-indexed)
+    let val = qtci.evaluate(&[2, 3]).unwrap();
+    assert_relative_eq!(val, 5.0, epsilon = 1e-8);
 
-    let val = qtci.evaluate(&[1, 1]).unwrap();
-    assert_relative_eq!(val, 2.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[0, 0]).unwrap();
+    assert_relative_eq!(val, 0.0, epsilon = 1e-8);
 
     // Rank should be low for this simple function (i + j is rank 2)
     assert!(qtci.rank() <= 3);
@@ -70,7 +69,7 @@ fn test_discrete_simple_function() {
 fn test_discrete_tci_structure() {
     // Test that the QTCI structure (bonds, rank, cache, sum) works correctly.
     // f(i,j) = i + j on a 4x4 grid with Fused scheme.
-    let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     let sizes = vec![4, 4];
 
     let opts = QtciOptions::default()
@@ -99,17 +98,17 @@ fn test_discrete_tci_structure() {
 
     // Verify evaluate() matches f at known-exact points (same block in
     // quantics representation).
-    let val = qtci.evaluate(&[1, 1]).unwrap();
-    assert_relative_eq!(val, 2.0, epsilon = 1e-8);
-    let val = qtci.evaluate(&[3, 4]).unwrap();
-    assert_relative_eq!(val, 7.0, epsilon = 1e-8);
-    let val = qtci.evaluate(&[4, 4]).unwrap();
-    assert_relative_eq!(val, 8.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[0, 0]).unwrap();
+    assert_relative_eq!(val, 0.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[2, 3]).unwrap();
+    assert_relative_eq!(val, 5.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[3, 3]).unwrap();
+    assert_relative_eq!(val, 6.0, epsilon = 1e-8);
 }
 
 #[test]
 fn test_size_validation() {
-    let f = |_idx: &[i64]| 1.0_f64;
+    let f = |_idx: &[usize]| 1.0_f64;
 
     // Non-power of 2 should fail
     let sizes = vec![5, 5];
@@ -127,7 +126,7 @@ fn test_from_arrays_empty_inputs() {
 
 #[test]
 fn discrete_interpolation_rejects_empty_size_without_panicking() {
-    let f = |_point: &[i64]| 1.0_f64;
+    let f = |_point: &[usize]| 1.0_f64;
     let result = quanticscrossinterpolate_discrete::<f64, _>(&[], f, None, QtciOptions::default());
     assert!(result.is_err());
     let error = result.err().unwrap().to_string();
@@ -162,7 +161,7 @@ fn test_options_builder() {
 fn test_discrete_inherent_grid_accessor() {
     // quanticscrossinterpolate_discrete uses from_inherent internally.
     // Verify that inherent_grid() returns Some and discretized_grid() returns None.
-    let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     let sizes = vec![4, 4];
 
     let opts = QtciOptions::default()
@@ -186,17 +185,18 @@ fn test_discrete_inherent_grid_accessor() {
     }
 
     // Verify evaluate() at known-exact points
-    let val = qtci.evaluate(&[1, 1]).unwrap();
-    assert_relative_eq!(val, 2.0, epsilon = 1e-8);
-    let val = qtci.evaluate(&[4, 4]).unwrap();
-    assert_relative_eq!(val, 8.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[0, 0]).unwrap();
+    assert_relative_eq!(val, 0.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[3, 3]).unwrap();
+    assert_relative_eq!(val, 6.0, epsilon = 1e-8);
 }
 
 #[test]
 fn test_discrete_cachedata_origcoord_error() {
     // cachedata_origcoord() should return an error for inherent discrete grids
     // because there are no original continuous coordinates.
-    let f = |idx: &[i64]| idx[0] as f64;
+    // f is non-zero at the default initial pivot (grid index 0).
+    let f = |idx: &[usize]| idx[0] as f64 + 1.0;
     let sizes = vec![4];
 
     let opts = QtciOptions::default()
@@ -216,7 +216,7 @@ fn test_discrete_cachedata_origcoord_error() {
 fn test_discrete_integral_returns_sum() {
     // For inherent discrete grids, integral() should just return the sum.
     // f(i) = 1 for all i, on a grid of size 4 => sum = 4
-    let f = |_idx: &[i64]| 1.0_f64;
+    let f = |_idx: &[usize]| 1.0_f64;
     let sizes = vec![4];
 
     let opts = QtciOptions::default()
@@ -280,9 +280,9 @@ fn test_continuous_grid_interpolation() {
     }
 
     // Verify evaluate() produces finite values at grid endpoints
-    let val = qtci.evaluate(&[1]).unwrap();
+    let val = qtci.evaluate(&[0]).unwrap();
     assert!(val.is_finite());
-    let val = qtci.evaluate(&[8]).unwrap();
+    let val = qtci.evaluate(&[7]).unwrap();
     assert!(val.is_finite());
 }
 
@@ -313,7 +313,7 @@ fn test_continuous_grid_integral() {
 #[test]
 fn test_discrete_with_initial_pivots() {
     // Test that initial pivots are correctly converted and the TCI runs successfully.
-    let f = |idx: &[i64]| (idx[0] * idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] * idx[1]) as f64;
     let sizes = vec![4, 4];
 
     let opts = QtciOptions::default()
@@ -321,8 +321,8 @@ fn test_discrete_with_initial_pivots() {
         .with_nrandominitpivot(3)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
-    // Provide explicit initial pivots (1-indexed grid indices)
-    let pivots = vec![vec![1, 1], vec![2, 3]];
+    // Provide explicit initial pivots (0-indexed grid indices)
+    let pivots = vec![vec![0, 0], vec![1, 2]];
     let result = quanticscrossinterpolate_discrete(&sizes, f, Some(pivots), opts);
     assert!(result.is_ok(), "Error: {:?}", result.err());
 
@@ -339,18 +339,18 @@ fn test_discrete_with_initial_pivots() {
     assert!(!qtci.cachedata().is_empty());
 
     // Verify evaluate() at known-exact points
-    let val = qtci.evaluate(&[1, 1]).unwrap();
-    assert_relative_eq!(val, 1.0, epsilon = 1e-8);
-    let val = qtci.evaluate(&[4, 4]).unwrap();
-    assert_relative_eq!(val, 16.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[0, 0]).unwrap();
+    assert_relative_eq!(val, 0.0, epsilon = 1e-8);
+    let val = qtci.evaluate(&[3, 3]).unwrap();
+    assert_relative_eq!(val, 9.0, epsilon = 1e-8);
 }
 
 #[test]
 fn test_discrete_rejects_invalid_initial_pivot() {
     let result = quanticscrossinterpolate_discrete(
         &[4],
-        |_idx: &[i64]| 1.0_f64,
-        Some(vec![vec![0_i64]]),
+        |_idx: &[usize]| 1.0_f64,
+        Some(vec![vec![4]]),
         QtciOptions::default().with_nrandominitpivot(0),
     );
     let message = match result {
@@ -359,10 +359,10 @@ fn test_discrete_rejects_invalid_initial_pivot() {
     };
 
     assert!(
-        message.contains("initial pivot [0] conversion failed"),
+        message.contains("initial pivot [4] conversion failed"),
         "{message}"
     );
-    assert!(message.contains("Grid index 0"), "{message}");
+    assert!(message.contains("Grid index 4"), "{message}");
 }
 
 #[test]
@@ -404,9 +404,9 @@ fn test_continuous_grid_with_initial_pivots() {
     }
 
     // Verify evaluate() produces finite values
-    let val = qtci.evaluate(&[1]).unwrap();
+    let val = qtci.evaluate(&[0]).unwrap();
     assert!(val.is_finite());
-    let val = qtci.evaluate(&[8]).unwrap();
+    let val = qtci.evaluate(&[7]).unwrap();
     assert!(val.is_finite());
 }
 
@@ -421,7 +421,7 @@ fn test_continuous_grid_rejects_invalid_initial_pivot() {
     let result = quanticscrossinterpolate(
         &grid,
         |_coords: &[f64]| 1.0_f64,
-        Some(vec![vec![0_i64]]),
+        Some(vec![vec![8]]),
         QtciOptions::default().with_nrandominitpivot(0),
     );
     let message = match result {
@@ -430,10 +430,10 @@ fn test_continuous_grid_rejects_invalid_initial_pivot() {
     };
 
     assert!(
-        message.contains("initial pivot [0] conversion failed"),
+        message.contains("initial pivot [8] conversion failed"),
         "{message}"
     );
-    assert!(message.contains("Grid index 0"), "{message}");
+    assert!(message.contains("Grid index 8"), "{message}");
 }
 
 #[test]
@@ -494,15 +494,15 @@ fn test_from_arrays_valid() {
 
     // Verify evaluate() at known-exact points
     // xvals = [0,1,2,3], so grid (1,1) -> (0,0), f=0 and (4,4) -> (3,3), f=6
-    let val = qtci.evaluate(&[1, 1]).unwrap();
+    let val = qtci.evaluate(&[0, 0]).unwrap();
     assert_relative_eq!(val, 0.0, epsilon = 1e-8);
-    let val = qtci.evaluate(&[4, 4]).unwrap();
+    let val = qtci.evaluate(&[3, 3]).unwrap();
     assert_relative_eq!(val, 6.0, epsilon = 1e-8);
 }
 
 #[test]
 fn test_discrete_unequal_dimensions_error() {
-    let f = |_idx: &[i64]| 1.0_f64;
+    let f = |_idx: &[usize]| 1.0_f64;
     // 4 vs 8 => unequal
     let sizes = vec![4, 8];
     let result = quanticscrossinterpolate_discrete(&sizes, f, None, QtciOptions::default());
@@ -534,7 +534,7 @@ fn test_from_arrays_1d() {
 
     // Verify at grid points
     for (i, &x) in xvals.iter().enumerate() {
-        let grid_idx = (i as i64) + 1; // 1-indexed
+        let grid_idx = i; // 0-indexed
         let expected = f_scalar(x);
         let actual = qtci.evaluate(&[grid_idx]).unwrap();
         assert!(

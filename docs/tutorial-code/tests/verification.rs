@@ -51,7 +51,7 @@ fn output_paths_support_default_and_override() {
 #[test]
 fn quantics_index_helpers_keep_expected_order() {
     assert_eq!(
-        qtt_fourier_common::global_index_to_quantics_sites(5, 3),
+        qtt_fourier_common::global_index_to_quantics_sites(4, 3),
         vec![1, 0, 0]
     );
     assert_eq!(
@@ -62,9 +62,9 @@ fn quantics_index_helpers_keep_expected_order() {
         qtt_partial_fourier2d_common::interleaved_site_values(2, 1, 2),
         vec![1, 0, 0, 1]
     );
-    assert!((qtt_function_utils::discrete_index_to_unit_interval(4, 8) - 0.375).abs() < 1e-12);
+    assert!((qtt_function_utils::discrete_index_to_unit_interval(3, 8) - 0.375).abs() < 1e-12);
     assert!(
-        (qtt_elementwise_product_utils::discrete_index_to_unit_interval(4, 8) - 0.375).abs()
+        (qtt_elementwise_product_utils::discrete_index_to_unit_interval(3, 8) - 0.375).abs()
             < 1e-12
     );
 }

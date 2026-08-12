@@ -75,11 +75,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
             + 5.0
     };
     let qf = |point: &[usize]| -> f64 {
-        let quantics = point
-            .iter()
-            .map(|&value| value as i64 + 1)
-            .collect::<Vec<_>>();
-        let coords = grid.quantics_to_origcoord(&quantics).unwrap();
+        let coords = grid.quantics_to_origcoord(point).unwrap();
         f(&coords)
     };
 
@@ -103,13 +99,10 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
     assert!(errors.last().copied().unwrap_or(f64::INFINITY) < 1e-10);
 
     let mut samples = Vec::new();
-    for i in 1..=4 {
-        for j in 1..=4 {
+    for i in 0..4 {
+        for j in 0..4 {
             let quantics = grid.grididx_to_quantics(&[i, j]).unwrap();
-            let point = quantics
-                .iter()
-                .map(|&value| (value - 1) as usize)
-                .collect::<Vec<_>>();
+            let point = quantics.to_vec();
             let got = evaluate_treetn(&tn, &point);
             samples.push((point, got));
         }
@@ -117,11 +110,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
     assert_real_samples_close(
         &samples,
         &|point| {
-            let quantics = point
-                .iter()
-                .map(|&value| value as i64 + 1)
-                .collect::<Vec<_>>();
-            let coords = grid.quantics_to_origcoord(&quantics).unwrap();
+            let coords = grid.quantics_to_origcoord(point).unwrap();
             f(&coords)
         },
         1e-8,
@@ -144,11 +133,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
             + 5.0
     };
     let qf = |point: &[usize]| -> f64 {
-        let quantics = point
-            .iter()
-            .map(|&value| value as i64 + 1)
-            .collect::<Vec<_>>();
-        let coords = grid.quantics_to_origcoord(&quantics).unwrap();
+        let coords = grid.quantics_to_origcoord(point).unwrap();
         f(&coords)
     };
 
@@ -177,9 +162,9 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
     let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         let mut values = Vec::with_capacity(batch.n_points());
         for point_idx in 0..batch.n_points() {
-            let quantics = (0..batch.n_sites())
-                .map(|site| batch.get(site, point_idx).unwrap() as i64 + 1)
-                .collect::<Vec<_>>();
+            let quantics: Vec<usize> = (0..batch.n_sites())
+                .map(|site| batch.get(site, point_idx).unwrap())
+                .collect();
             let coords = grid_clone.quantics_to_origcoord(&quantics).unwrap();
             values.push(f(&coords));
         }
@@ -198,13 +183,10 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
     .unwrap();
 
     let mut samples = Vec::new();
-    for i in 1..=4 {
-        for j in 1..=4 {
+    for i in 0..4 {
+        for j in 0..4 {
             let quantics = grid.grididx_to_quantics(&[i, j]).unwrap();
-            let point = quantics
-                .iter()
-                .map(|&value| (value - 1) as usize)
-                .collect::<Vec<_>>();
+            let point = quantics.to_vec();
             let batch_only = evaluate_treetn(&tn_batch, &point);
             samples.push((point, batch_only));
         }

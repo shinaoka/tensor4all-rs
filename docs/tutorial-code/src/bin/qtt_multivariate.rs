@@ -94,11 +94,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // `quanticscrossinterpolate` receives physical coordinates from the grid.
     let target = |coords: &[f64]| -> f64 { multivariate_target(coords[0], coords[1]) };
-    let npoints = 1_i64 << config.bits;
+    let npoints = 1usize << config.bits;
+    // Grid indices are 0-based.
     let initial_pivots = vec![
-        vec![1, 1],
-        vec![npoints / 2, npoints / 2],
-        vec![npoints, npoints],
+        vec![0, 0],
+        vec![npoints / 2 - 1, npoints / 2 - 1],
+        vec![npoints - 1, npoints - 1],
     ];
 
     // Build two QTT approximations of the same physical function using different layouts.

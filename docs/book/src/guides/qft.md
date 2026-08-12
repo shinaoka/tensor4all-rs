@@ -162,9 +162,9 @@ use tensor4all_treetn::Operator;
 let r = 3;
 let n = 1usize << r; // 8
 
-// f(x, y) = cos(2*pi*(x-1)/N), 1-indexed -- depends only on x
-let f = move |idx: &[i64]| -> f64 {
-    let x = (idx[0] - 1) as f64;
+// f(x, y) = cos(2*pi*x/N), 0-indexed -- depends only on x
+let f = move |idx: &[usize]| -> f64 {
+    let x = idx[0] as f64;
     (2.0 * PI * x / n as f64).cos()
 };
 

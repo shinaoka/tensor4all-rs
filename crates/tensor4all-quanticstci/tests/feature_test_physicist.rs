@@ -28,7 +28,7 @@ const TOL: f64 = 1e-8;
 #[test]
 fn discrete_1d_polynomial() {
     let n: usize = 16; // 2^4
-    let f = |idx: &[i64]| {
+    let f = |idx: &[usize]| {
         let i = idx[0];
         (i * i) as f64
     };
@@ -48,8 +48,8 @@ fn discrete_1d_polynomial() {
         errors.last().unwrap()
     );
 
-    // Evaluate at every grid point (1-indexed)
-    for i in 1..=(n as i64) {
+    // Evaluate at every grid point (0-indexed)
+    for i in 0..n {
         let expected = (i * i) as f64;
         let actual = qtci.evaluate(&[i]).unwrap();
         assert!(
@@ -58,9 +58,8 @@ fn discrete_1d_polynomial() {
         );
     }
 
-    // Sum: sum_{i=1}^{N} i^2 = N*(N+1)*(2N+1)/6
-    let n_i64 = n as i64;
-    let expected_sum = (n_i64 * (n_i64 + 1) * (2 * n_i64 + 1)) as f64 / 6.0;
+    // Sum: sum_{i=0}^{N-1} i^2 = (N-1)*N*(2N-1)/6
+    let expected_sum = ((n - 1) * n * (2 * n - 1)) as f64 / 6.0;
     let actual_sum = qtci.sum().unwrap();
     assert!(
         (actual_sum - expected_sum).abs() < TOL,
@@ -73,7 +72,7 @@ fn discrete_1d_polynomial() {
 #[test]
 fn discrete_2d_product() {
     let n: usize = 16;
-    let f = |idx: &[i64]| (idx[0] * idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] * idx[1]) as f64;
     let sizes = vec![n, n];
 
     let opts = QtciOptions::default()
@@ -90,7 +89,7 @@ fn discrete_2d_product() {
     );
 
     // Spot-check evaluations
-    for &(i, j) in &[(1i64, 1i64), (1, 16), (8, 8), (16, 16)] {
+    for &(i, j) in &[(0usize, 0usize), (0, 15), (7, 7), (15, 15)] {
         let expected = (i * j) as f64;
         let actual = qtci.evaluate(&[i, j]).unwrap();
         assert!(
@@ -99,8 +98,8 @@ fn discrete_2d_product() {
         );
     }
 
-    // Sum: (sum_{i=1}^N i)^2 = [N(N+1)/2]^2
-    let s = (n as f64) * ((n as f64) + 1.0) / 2.0;
+    // Sum: (sum_{i=0}^{N-1} i)^2 = [N(N-1)/2]^2
+    let s = (n as f64) * ((n as f64) - 1.0) / 2.0;
     let expected_sum = s * s;
     let actual_sum = qtci.sum().unwrap();
     assert!(
@@ -115,7 +114,7 @@ fn discrete_2d_product() {
 fn discrete_1d_exponential() {
     let n: usize = 64; // 2^6
     let alpha = 0.1_f64;
-    let f = move |idx: &[i64]| (-alpha * idx[0] as f64).exp();
+    let f = move |idx: &[usize]| (-alpha * idx[0] as f64).exp();
     let sizes = vec![n];
 
     let opts = QtciOptions::default()
@@ -132,7 +131,7 @@ fn discrete_1d_exponential() {
     );
 
     // Evaluate at selected points
-    for i in [1i64, 10, 32, 64] {
+    for i in [0usize, 9, 31, 63] {
         let expected = (-alpha * i as f64).exp();
         let actual = qtci.evaluate(&[i]).unwrap();
         assert!(
@@ -141,9 +140,9 @@ fn discrete_1d_exponential() {
         );
     }
 
-    // Analytical sum: sum_{i=1}^{N} exp(-alpha*i) = exp(-alpha) * (1 - exp(-alpha*N)) / (1 - exp(-alpha))
+    // Analytical sum: sum_{i=0}^{N-1} exp(-alpha*i) = (1 - exp(-alpha*N)) / (1 - exp(-alpha))
     let r = (-alpha).exp();
-    let expected_sum = r * (1.0 - r.powi(n as i32)) / (1.0 - r);
+    let expected_sum = (1.0 - r.powi(n as i32)) / (1.0 - r);
     let actual_sum = qtci.sum().unwrap();
     assert!(
         (actual_sum - expected_sum).abs() < 1e-6,
@@ -156,7 +155,7 @@ fn discrete_1d_exponential() {
 #[test]
 fn discrete_constant_function() {
     let n: usize = 32; // 2^5
-    let f = |_idx: &[i64]| 42.0_f64;
+    let f = |_idx: &[usize]| 42.0_f64;
     let sizes = vec![n];
 
     let opts = QtciOptions::default()
@@ -181,15 +180,15 @@ fn discrete_constant_function() {
 #[test]
 fn discrete_with_explicit_pivots() {
     let n: usize = 16;
-    let f = |idx: &[i64]| (idx[0] + 2 * idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] + 2 * idx[1]) as f64;
     let sizes = vec![n, n];
 
     let opts = QtciOptions::default()
         .with_tolerance(1e-12)
         .with_nrandominitpivot(3);
 
-    // Provide 1-indexed grid pivots
-    let pivots = vec![vec![1, 1], vec![8, 8], vec![16, 16]];
+    // Provide 0-indexed grid pivots
+    let pivots = vec![vec![0, 0], vec![7, 7], vec![15, 15]];
     let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete(&sizes, f, Some(pivots), opts)
         .expect("explicit pivots should work");
 
@@ -199,14 +198,14 @@ fn discrete_with_explicit_pivots() {
         errors.last().unwrap()
     );
 
-    let val = qtci.evaluate(&[5, 10]).unwrap();
-    assert!((val - 25.0).abs() < TOL, "f(5,10) = {val}, expected 25.0");
+    let val = qtci.evaluate(&[4, 9]).unwrap();
+    assert!((val - 22.0).abs() < TOL, "f(4,9) = {val}, expected 22.0");
 }
 
 /// Verify that invalid grid sizes produce errors.
 #[test]
 fn discrete_non_power_of_two_error() {
-    let f = |_idx: &[i64]| 0.0_f64;
+    let f = |_idx: &[usize]| 0.0_f64;
     let result = quanticscrossinterpolate_discrete(&[10], f, None, QtciOptions::default());
     assert!(
         result.is_err(),
@@ -217,7 +216,7 @@ fn discrete_non_power_of_two_error() {
 /// Verify that unequal dimension sizes produce errors.
 #[test]
 fn discrete_unequal_sizes_error() {
-    let f = |_idx: &[i64]| 0.0_f64;
+    let f = |_idx: &[usize]| 0.0_f64;
     let result = quanticscrossinterpolate_discrete(&[8, 16], f, None, QtciOptions::default());
     assert!(
         result.is_err(),
@@ -303,7 +302,7 @@ fn continuous_2d_gaussian() {
     // Need to find the grid index closest to (0,0).
     // Grid goes from -2 to 2 with 64 points, no endpoint.
     // Grid step = 4/64 = 0.0625. Points: -2 + 0.03125, -2 + 0.09375, ...
-    // The midpoint nearest to 0 is around index 32 or 33 (1-indexed).
+    // The midpoint nearest to 0 is around index 31 or 32 (0-indexed).
     // Just check at a few points that the interpolation is reasonable.
     let val_corner = qtci.evaluate(&[1, 1]).unwrap();
     assert!(val_corner.is_finite());
@@ -406,9 +405,9 @@ fn from_arrays_1d_cubic() {
         errors.last().unwrap()
     );
 
-    // Evaluate at several grid points (1-indexed)
-    for i in [1_i64, 32, 64, 65, 128] {
-        let x = xvals[(i - 1) as usize];
+    // Evaluate at several grid points (0-indexed)
+    for i in [0_usize, 31, 63, 64, 127] {
+        let x = xvals[i];
         let expected = x.powi(3);
         let actual = qtci.evaluate(&[i]).unwrap();
         assert!(
@@ -429,9 +428,9 @@ fn from_arrays_2d_linear() {
         .with_tolerance(1e-12)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
-    // Use explicit initial pivot at (2,2) where f(1,1)=2 ≠ 0, avoiding the
-    // flaky failure when random pivots all land on (1,1) where f(0,0)=0.
-    let initial_pivots = vec![vec![2_i64, 2]];
+    // Use explicit initial pivot at (1,1) where f(1,1)=2 ≠ 0, avoiding the
+    // flaky failure when random pivots all land on (0,0) where f(0,0)=0.
+    let initial_pivots = vec![vec![1usize, 1]];
 
     let (qtci, _ranks, _errors) = quanticscrossinterpolate_from_arrays(
         &[xvals.clone(), xvals.clone()],
@@ -442,10 +441,10 @@ fn from_arrays_2d_linear() {
     .expect("from_arrays 2D linear should work");
 
     // Evaluate at all 4x4 = 16 points
-    for i in 1..=4_i64 {
-        for j in 1..=4_i64 {
-            let x = xvals[(i - 1) as usize];
-            let y = xvals[(j - 1) as usize];
+    for i in 0..4 {
+        for j in 0..4 {
+            let x = xvals[i];
+            let y = xvals[j];
             let expected = x + y;
             let actual = qtci.evaluate(&[i, j]).unwrap();
             assert!(
@@ -552,7 +551,7 @@ fn options_builder_all_fields() {
 fn options_max_bond_dim_limits_rank() {
     // Use a function that would normally require higher rank
     let n: usize = 64;
-    let f = |idx: &[i64]| ((idx[0] as f64) * 0.1).sin() * ((idx[1] as f64) * 0.2).cos();
+    let f = |idx: &[usize]| ((idx[0] as f64) * 0.1).sin() * ((idx[1] as f64) * 0.2).cos();
     let sizes = vec![n, n];
 
     let opts = QtciOptions::default()
@@ -580,7 +579,7 @@ fn options_max_bond_dim_limits_rank() {
 #[test]
 fn tensor_train_consistency() {
     let n: usize = 16;
-    let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     let sizes = vec![n, n];
 
     let opts = QtciOptions::default()
@@ -597,10 +596,10 @@ fn tensor_train_consistency() {
     assert!(!qtci_dims.is_empty());
     assert!(qtci.rank() > 0);
 
-    // Verify sum is correct analytically: sum_{i=1}^{N} sum_{j=1}^{N} (i + j)
-    // = N * sum_i + N * sum_j = 2 * N * N*(N+1)/2 = N^2 * (N+1)
+    // Verify sum is correct analytically: sum_{i=0}^{N-1} sum_{j=0}^{N-1} (i + j)
+    // = N * sum_i + N * sum_j = 2 * N * N*(N-1)/2 = N^2 * (N-1)
     let nf = n as f64;
-    let expected_sum = nf * nf * (nf + 1.0);
+    let expected_sum = nf * nf * (nf - 1.0);
     let qtci_sum = qtci.sum().unwrap();
     assert!(
         (qtci_sum - expected_sum).abs() < TOL,
@@ -613,7 +612,7 @@ fn tensor_train_consistency() {
 fn tensor_train_accessor() {
     use tensor4all_quanticstci::AbstractTensorTrain;
 
-    let f = |idx: &[i64]| idx[0] as f64;
+    let f = |idx: &[usize]| idx[0] as f64;
     let sizes = vec![8]; // 2^3
 
     let opts = QtciOptions::default()
@@ -637,7 +636,7 @@ fn tensor_train_accessor() {
 #[test]
 fn unfolding_scheme_comparison() {
     let n: usize = 16;
-    let f = |idx: &[i64]| (idx[0] * idx[0] + idx[1]) as f64;
+    let f = |idx: &[usize]| (idx[0] * idx[0] + idx[1]) as f64;
     let sizes = vec![n, n];
 
     for scheme in [UnfoldingScheme::Interleaved, UnfoldingScheme::Fused] {
@@ -650,17 +649,17 @@ fn unfolding_scheme_comparison() {
             .unwrap_or_else(|e| panic!("scheme {scheme:?} failed: {e}"));
 
         // Check a few evaluations
-        let val = qtci.evaluate(&[3, 5]).unwrap();
-        let expected = (3i64 * 3 + 5) as f64;
+        let val = qtci.evaluate(&[2, 4]).unwrap();
+        let expected = (2usize * 2 + 4) as f64;
         assert!(
             (val - expected).abs() < TOL,
-            "scheme {scheme:?}: f(3,5) = {val}, expected {expected}"
+            "scheme {scheme:?}: f(2,4) = {val}, expected {expected}"
         );
 
         // Sum should be the same regardless of scheme
-        // sum_{i=1}^{N} sum_{j=1}^{N} (i^2 + j) = N * sum(i^2) + N * sum(j)
-        let sum_i2 = (n as f64) * ((n as f64) + 1.0) * (2.0 * (n as f64) + 1.0) / 6.0;
-        let sum_j = (n as f64) * ((n as f64) + 1.0) / 2.0;
+        // sum_{i=0}^{N-1} sum_{j=0}^{N-1} (i^2 + j) = N * sum(i^2) + N * sum(j)
+        let sum_i2 = ((n - 1) as f64) * (n as f64) * (2.0 * (n as f64) - 1.0) / 6.0;
+        let sum_j = (n as f64) * ((n as f64) - 1.0) / 2.0;
         let expected_sum = (n as f64) * sum_i2 + (n as f64) * sum_j;
         let actual_sum = qtci.sum().unwrap();
         assert!(

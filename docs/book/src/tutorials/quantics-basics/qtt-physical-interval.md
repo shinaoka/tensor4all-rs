@@ -31,12 +31,12 @@ let options = QtciOptions::default()
     .with_verbosity(0);
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
-assert!((qtt.evaluate(&[128])? - 4.0).abs() < 1e-8);
+assert!((qtt.evaluate(&[127])? - 4.0).abs() < 1e-8);
 # Ok(())
 # }
 ```
 
-Indices passed to `evaluate` are one-based grid indices. The grid converts them
+Indices passed to `evaluate` are zero-based grid indices. The grid converts them
 to the physical coordinate before the function is sampled. Passing `None` for
 the optional initial-pivot argument keeps the tutorial on the default QTCI
 initialization path.

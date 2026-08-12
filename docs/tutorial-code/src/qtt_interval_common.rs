@@ -86,8 +86,9 @@ where
         .with_verbosity(0);
 
     let f = move |coords: &[f64]| -> f64 { target_fn(coords[0]) };
-    let npoints = 1_i64 << config.bits;
-    let initial_pivots = vec![vec![1], vec![npoints / 2], vec![npoints]];
+    let npoints = 1usize << config.bits;
+    // Grid indices are 0-based.
+    let initial_pivots = vec![vec![0], vec![npoints / 2 - 1], vec![npoints - 1]];
 
     Ok(quanticscrossinterpolate(
         grid,

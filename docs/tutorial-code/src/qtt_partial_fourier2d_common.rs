@@ -104,10 +104,10 @@ pub fn x_site_node_mapping(bits: usize) -> Vec<(usize, usize)> {
     (0..bits).map(|site| (site, 2 * site)).collect()
 }
 
-pub fn global_index_to_quantics_sites(index_1based: usize, bits: usize) -> Vec<usize> {
+pub fn global_index_to_quantics_sites(index: usize, bits: usize) -> Vec<usize> {
     let mut sites = Vec::with_capacity(bits);
     for bit in (0..bits).rev() {
-        sites.push(((index_1based - 1) >> bit) & 1);
+        sites.push((index >> bit) & 1);
     }
     sites
 }
@@ -117,8 +117,8 @@ pub fn interleaved_site_values(
     t_zero_based: usize,
     bits: usize,
 ) -> Vec<usize> {
-    let x_sites = global_index_to_quantics_sites(x_zero_based + 1, bits);
-    let t_sites = global_index_to_quantics_sites(t_zero_based + 1, bits);
+    let x_sites = global_index_to_quantics_sites(x_zero_based, bits);
+    let t_sites = global_index_to_quantics_sites(t_zero_based, bits);
     x_sites
         .into_iter()
         .zip(t_sites)
@@ -186,19 +186,20 @@ pub fn build_source_qtt(
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
-    let npoints = point_count(config) as i64;
+    let npoints = point_count(config);
+    // 0-based grid indices; the first row spans x = 0.
     let x_indices = [
-        npoints / 8,
-        npoints / 4,
-        3 * npoints / 8,
+        npoints / 8 - 1,
+        npoints / 4 - 1,
+        3 * npoints / 8 - 1,
+        npoints / 2 - 2,
         npoints / 2 - 1,
         npoints / 2,
-        npoints / 2 + 1,
-        5 * npoints / 8,
-        3 * npoints / 4,
-        7 * npoints / 8,
+        5 * npoints / 8 - 1,
+        3 * npoints / 4 - 1,
+        7 * npoints / 8 - 1,
     ];
-    let t_indices: Vec<i64> = (1..=npoints).collect();
+    let t_indices: Vec<usize> = (0..npoints).collect();
     let initial_pivots = x_indices
         .iter()
         .flat_map(|&x_index| t_indices.iter().map(move |&t_index| vec![x_index, t_index]))
@@ -314,11 +315,11 @@ pub fn collect_samples(
     for (k_offset, &k) in k_coords.iter().enumerate() {
         let centered_bin = k_offset as isize - (npoints as isize / 2);
         let coefficient_index = centered_bin.rem_euclid(npoints as isize) as usize;
-        let mut k_sites = global_index_to_quantics_sites(coefficient_index + 1, config.bits);
+        let mut k_sites = global_index_to_quantics_sites(coefficient_index, config.bits);
         k_sites.reverse();
 
         for (t_offset, &t) in t_coords.iter().enumerate() {
-            let t_sites = global_index_to_quantics_sites(t_offset + 1, config.bits);
+            let t_sites = global_index_to_quantics_sites(t_offset, config.bits);
             let site_values: Vec<usize> = k_sites
                 .iter()
                 .copied()

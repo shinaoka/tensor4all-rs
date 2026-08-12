@@ -169,7 +169,7 @@ where
 /// * `output_dims` - Shape of the function output (e.g., `&[3]` for 3-vector,
 ///
 ///   `&[2, 2]` for 2x2 matrix)
-/// * `initial_pivots` - Initial pivot grid indices (optional)
+/// * `initial_pivots` - Initial pivot grid indices (0-indexed, optional)
 /// * `options` - TCI options
 ///
 /// # Returns
@@ -216,7 +216,7 @@ pub fn quanticscrossinterpolate_batched<V, F>(
     grid: &DiscretizedGrid,
     f: F,
     output_dims: &[usize],
-    initial_pivots: Option<Vec<Vec<i64>>>,
+    initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where

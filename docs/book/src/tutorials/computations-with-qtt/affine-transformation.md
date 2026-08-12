@@ -29,9 +29,9 @@ use std::f64::consts::PI;
 let bits = 7;
 let n = 1usize << bits;
 let source_grid = [n, n];
-let source_function = move |grid_1based: &[i64]| -> f64 {
-    let u = (grid_1based[0] - 1) as f64;
-    let v = (grid_1based[1] - 1) as f64;
+let source_function = move |grid_idx: &[usize]| -> f64 {
+    let u = grid_idx[0] as f64;
+    let v = grid_idx[1] as f64;
     let n = n as f64;
     (2.0 * PI * u / n).sin()
         + 0.5 * (2.0 * PI * v / n).cos()
