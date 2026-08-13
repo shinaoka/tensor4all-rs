@@ -495,26 +495,50 @@ impl<T: AciScalar> ElementwiseProblem<T> {
 
     /// Inject global pivots into the frame index sets and the solution rank.
     ///
-    /// For each pivot `x` and each bond `b`, the left environment
-    /// `L_j(x[0..b])` is appended as a row to `left_frames[j][b]` and the
-    /// right environment `R_j(x[b+2..])` as a column to `right_frames[j][b+2]`
-    /// for every input `j`, so the next sweep's local block at bond `b`
-    /// samples the point `x`. Because ACI couples the frame sizes to the
+    /// Internal bond `k` (between sites `k - 1` and `k`) is sampled through two
+    /// frames of equal size: `left_frames[j][k]`, whose rows are left
+    /// environments `L_j(x[..k])`, and `right_frames[j][k]`, whose columns are
+    /// right environments `R_j(x[k..])`. A point `x` becomes visible to the
+    /// next sweep's local block at bond `b` once `left_frames[j][b]` holds the
+    /// row for `x[..b]` and `right_frames[j][b + 2]` the column for
+    /// `x[b + 2..]`, so a pivot is injected by growing every internal bond by
+    /// one row and one column. Because ACI couples the frame sizes to the
     /// solution rank (every `local_update` cross-checks them), the solution's
-    /// internal bond dimensions are zero-padded by the same amount and the
-    /// empty prefixes/suffixes (the bond-0 left frame and the site-`n` right
-    /// frame) are skipped. A pivot already fully represented in the frames is
-    /// skipped, and all inputs grow uniformly so `validate_local_shapes` keeps
-    /// holding.
+    /// internal bond dimensions are zero-padded by the same per-bond amount.
     ///
-    /// Returns the number of pivots actually injected (0 when every found
-    /// pivot was already represented in the frames).
+    /// Growth is skipped for a bond that cannot absorb it, so no frame is ever
+    /// padded with a provably linearly dependent row or column:
+    ///
+    /// * **Duplicate.** Both the row and the column of this pivot are already
+    ///   present in every input's frames at that bond.
+    /// * **Index-space saturation.** The bond dimension already equals the
+    ///   number of distinct multi-indices on the shorter side of the cut
+    ///   (`prod(site_dims[..k])` or `prod(site_dims[k..])`). One of the two
+    ///   frames then already enumerates its whole index space, so an appended
+    ///   row (or column) can only repeat one that is there, and the local
+    ///   block at that bond already interpolates exactly.
+    ///
+    /// Without these guards a run can carry bond dimensions above the algebraic
+    /// maximum of the site space (issue #618 observed a transient rank of 1044
+    /// on an eleven-site dimension-four train, whose bound is 1024), which
+    /// costs full-rank sweep work for pivots that carry no information.
+    ///
+    /// Returns the number of pivots that grew at least one bond (0 when every
+    /// found pivot was already represented in the frames, or when no bond could
+    /// absorb it).
     pub(crate) fn add_global_pivots(&mut self, pivots: &[Vec<usize>]) -> Result<usize>
     where
         T: PartialEq,
     {
         let n = self.len();
         let mut new_pivots = 0usize;
+        let mut growth = vec![0usize; n + 1];
+        let bounds = self.algebraic_bond_bounds();
+        let mut dims = vec![0usize; n + 1];
+        for (bond, dim) in self.solution.link_dims().iter().enumerate() {
+            dims[bond + 1] = *dim;
+        }
+
         for pivot in pivots {
             if pivot.len() != n {
                 return Err(AciError::InvalidInitialGuess {
@@ -525,30 +549,37 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                 });
             }
 
-            let mut fully_represented = true;
-            for bond in 0..n.saturating_sub(1) {
+            let mut injected = false;
+            for bond in 1..n {
+                if dims[bond] >= bounds[bond] {
+                    continue;
+                }
+                // The row lives in `left_frames[j][bond]`, which exists for
+                // bonds up to `n - 2`; the column lives in
+                // `right_frames[j][bond]`, which exists from bond 2 on.
+                let needs_row = bond + 1 < n;
+                let needs_col = bond >= 2;
+                let mut duplicate = true;
                 for input in 0..self.n_inputs() {
-                    if bond >= 1 {
+                    if needs_row {
                         let row = left_environment(&self.inputs[input], &pivot[..bond])?;
                         if !frame_has_row(self.left_frames[input][bond].as_ref(), &row)? {
-                            fully_represented = false;
+                            duplicate = false;
                         }
                     }
-                    if bond + 2 < n {
-                        let col = right_environment(&self.inputs[input], &pivot[bond + 2..])?;
-                        if !frame_has_col(self.right_frames[input][bond + 2].as_ref(), &col)? {
-                            fully_represented = false;
+                    if needs_col {
+                        let col = right_environment(&self.inputs[input], &pivot[bond..])?;
+                        if !frame_has_col(self.right_frames[input][bond].as_ref(), &col)? {
+                            duplicate = false;
                         }
                     }
                 }
-            }
-            if fully_represented {
-                continue;
-            }
+                if duplicate {
+                    continue;
+                }
 
-            for bond in 0..n.saturating_sub(1) {
                 for input in 0..self.n_inputs() {
-                    if bond >= 1 {
+                    if needs_row {
                         let row = left_environment(&self.inputs[input], &pivot[..bond])?;
                         append_row(
                             self.left_frames[input][bond].as_mut().ok_or_else(|| {
@@ -561,14 +592,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                             &row,
                         )?;
                     }
-                    if bond + 2 < n {
-                        let col = right_environment(&self.inputs[input], &pivot[bond + 2..])?;
+                    if needs_col {
+                        let col = right_environment(&self.inputs[input], &pivot[bond..])?;
                         append_col(
-                            self.right_frames[input][bond + 2].as_mut().ok_or_else(|| {
+                            self.right_frames[input][bond].as_mut().ok_or_else(|| {
                                 AciError::InvalidInitialGuess {
                                     message: format!(
-                                        "missing right frame at input {input}, bond {}",
-                                        bond + 2
+                                        "missing right frame at input {input}, bond {bond}"
                                     ),
                                 }
                             })?,
@@ -576,27 +606,68 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                         )?;
                     }
                 }
+                growth[bond] += 1;
+                dims[bond] += 1;
+                injected = true;
             }
-            new_pivots += 1;
+
+            if injected {
+                new_pivots += 1;
+            }
         }
         if new_pivots > 0 {
-            self.pad_solution_internal_bonds(new_pivots)?;
+            self.pad_solution_internal_bonds(&growth)?;
         }
         Ok(new_pivots)
     }
 
-    /// Grow every internal bond of the solution by `growth` with zero padding.
+    /// Number of distinct multi-indices on the shorter side of each bond cut.
+    ///
+    /// Entry `k` refers to the bond between sites `k - 1` and `k` and is the
+    /// largest number of linearly independent rows (or columns) its frames can
+    /// hold; entries `0` and `n` are the trivial boundary bonds and are `1`.
+    /// Products are computed with saturating arithmetic, so a site space too
+    /// large to count simply never reports saturation.
+    fn algebraic_bond_bounds(&self) -> Vec<usize> {
+        let n = self.len();
+        let dims: Vec<usize> = (0..n).map(|site| self.solution.site_dim(site)).collect();
+        let mut left_space = vec![1usize; n + 1];
+        for site in 0..n {
+            left_space[site + 1] = left_space[site].saturating_mul(dims[site]);
+        }
+        let mut right_space = vec![1usize; n + 1];
+        for site in (0..n).rev() {
+            right_space[site] = right_space[site + 1].saturating_mul(dims[site]);
+        }
+
+        (0..=n)
+            .map(|bond| left_space[bond].min(right_space[bond]))
+            .collect()
+    }
+
+    /// Grow internal bond `k` of the solution by `growth[k]` with zero padding.
     ///
     /// ACI couples the solution rank to the frame sizes, so injecting pivots
     /// into the frames requires growing the solution's internal bond
-    /// dimensions by the same amount to keep `local_update`'s shape checks
-    /// consistent. The zero-padded entries preserve the current solution
+    /// dimensions by the same per-bond amount to keep `local_update`'s shape
+    /// checks consistent. The zero-padded entries preserve the current solution
     /// values; the following sweep's LU fills them from the new crosses.
-    fn pad_solution_internal_bonds(&mut self, growth: usize) -> Result<()> {
-        if growth == 0 {
+    /// `growth` has `len() + 1` entries; the boundary entries `0` and `n` are
+    /// ignored because those bonds are trivial.
+    fn pad_solution_internal_bonds(&mut self, growth: &[usize]) -> Result<()> {
+        let n = self.len();
+        if growth.iter().all(|&g| g == 0) {
             return Ok(());
         }
-        let n = self.len();
+        if growth.len() != n + 1 {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "bond growth has {} entries, expected {} for {n} sites",
+                    growth.len(),
+                    n + 1
+                ),
+            });
+        }
         let cores = self.solution.site_tensors().to_vec();
         let mut new_cores = Vec::with_capacity(n);
         for (site, core) in cores.iter().enumerate() {
@@ -606,12 +677,12 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let new_left = if site == 0 {
                 left_dim
             } else {
-                left_dim + growth
+                left_dim + growth[site]
             };
             let new_right = if site == n - 1 {
                 right_dim
             } else {
-                right_dim + growth
+                right_dim + growth[site + 1]
             };
             let mut data = vec![T::zero(); new_left * site_dim * new_right];
             for r in 0..right_dim {

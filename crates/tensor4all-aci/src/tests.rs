@@ -504,7 +504,9 @@ fn default_options_are_conservative() {
     assert_eq!(options.min_iters, 2);
     assert_eq!(options.max_bond_dim, None);
     assert!((options.tolerance - 1e-12).abs() < 1e-15);
-    assert!(!options.scale_tolerance);
+    // The tolerance is normalized by the sampled operator magnitude by
+    // default, matching the reference `normalizeerror = true` contract.
+    assert!(options.scale_tolerance);
     assert!(options.initial_guess.is_none());
 }
 
@@ -598,6 +600,129 @@ fn elementwise_problem_initializes_boundary_frames() {
     assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
     assert_eq!(problem.right_frame_shape(0, 3), Some((1, 1)));
     assert_eq!(problem.pivot_errors, vec![0.0, 0.0]);
+}
+
+/// Rank-one train whose left and right environments differ for every prefix,
+/// so an injected pivot is genuinely new information rather than a repeat of a
+/// row the frames already hold: entry `site, index` is `1 + index + seed *
+/// site`.
+fn separable_tt(site_dims: &[usize], seed: f64) -> SimpleTensorTrain<f64> {
+    let cores = site_dims
+        .iter()
+        .enumerate()
+        .map(|(site, &dim)| {
+            let data: Vec<f64> = (0..dim)
+                .map(|index| 1.0 + index as f64 + seed * site as f64)
+                .collect();
+            tensor3_from_data(data, 1, dim, 1).unwrap()
+        })
+        .collect();
+    SimpleTensorTrain::new(cores).unwrap()
+}
+
+/// One forward sweep, after which every left frame exists: `add_global_pivots`
+/// is only ever called from that state.
+fn sweep_forward_once(problem: &mut ElementwiseProblem<f64>, options: &AciOptions<f64>) {
+    let mut op = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+            *value = batch.get(0, point)? * batch.get(1, point)?;
+        }
+        Ok(())
+    };
+    for bond in 0..problem.len() - 1 {
+        problem.local_update(bond, true, options, &mut op).unwrap();
+    }
+}
+
+/// Distinct-multi-index bound of every internal bond: bond `k` cannot carry
+/// more independent rows than there are index tuples on the shorter side of
+/// the cut.
+fn algebraic_bond_bounds(site_dims: &[usize]) -> Vec<usize> {
+    let n = site_dims.len();
+    (1..n)
+        .map(|bond| {
+            let left: usize = site_dims[..bond].iter().product();
+            let right: usize = site_dims[bond..].iter().product();
+            left.min(right)
+        })
+        .collect()
+}
+
+#[test]
+fn global_pivot_injection_stays_within_the_algebraic_bond_bounds() {
+    // Five sites of dimension two: the bounds are [2, 4, 4, 2], so a run that
+    // pads every bond per injected pivot leaves bond dimensions far above the
+    // number of multi-indices that exist there (the transient rank above the
+    // algebraic bound reported in issue #618).
+    let site_dims = [2usize, 2, 2, 2, 2];
+    let a = separable_tt(&site_dims, 0.25);
+    let b = separable_tt(&site_dims, 0.5);
+    let options = AciOptions::default();
+    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone()).unwrap();
+    sweep_forward_once(&mut problem, &options);
+
+    let pivots: Vec<Vec<usize>> = (0..8)
+        .map(|k| (0..site_dims.len()).map(|site| (k >> site) & 1).collect())
+        .collect();
+    let dims_before = problem.solution.link_dims();
+    let shapes_before: Vec<Option<(usize, usize)>> = (1..site_dims.len())
+        .map(|bond| problem.right_frame_shape(0, bond))
+        .collect();
+    problem.add_global_pivots(&pivots).unwrap();
+
+    let bounds = algebraic_bond_bounds(&site_dims);
+    let link_dims = problem.solution.link_dims();
+    assert_eq!(link_dims.len(), bounds.len());
+    for (bond, (&dim, &bound)) in link_dims.iter().zip(&bounds).enumerate() {
+        assert!(
+            dim <= bound,
+            "bond {bond} has dimension {dim} above its algebraic bound {bound}"
+        );
+    }
+    // Some bond did grow: the guard prunes provably redundant growth, it does
+    // not reject every pivot.
+    assert!(link_dims.iter().zip(&dims_before).any(|(&a, &b)| a > b));
+
+    // Frames and solution bonds must grow by the same amount, or the next
+    // local update sees inconsistent shapes. The forward sweep leaves the left
+    // frames (those a local update reads, bonds up to `n - 2`) sized to the
+    // current bond dimensions; the right frames a local update reads (bond 2
+    // and up) are refreshed by the backward sweep, so only their growth is
+    // checked.
+    let n = site_dims.len();
+    for bond in 1..n {
+        let growth = link_dims[bond - 1] - dims_before[bond - 1];
+        if bond + 1 < n {
+            assert_eq!(
+                problem.left_frame_shape(0, bond).map(|(rows, _)| rows),
+                Some(link_dims[bond - 1])
+            );
+        }
+        if bond >= 2 {
+            let cols = problem.right_frame_shape(0, bond).map(|(_, cols)| cols);
+            let cols_before = shapes_before[bond - 1].map(|(_, cols)| cols);
+            assert_eq!(cols, cols_before.map(|before| before + growth));
+        }
+    }
+}
+
+#[test]
+fn global_pivot_injection_skips_pivots_already_represented() {
+    let site_dims = [2usize, 2, 2, 2, 2, 2];
+    let a = separable_tt(&site_dims, 0.25);
+    let b = separable_tt(&site_dims, 0.5);
+    let options = AciOptions::default();
+    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone()).unwrap();
+    sweep_forward_once(&mut problem, &options);
+
+    let pivot = vec![vec![1usize, 0, 1, 0, 1, 0]];
+    assert_eq!(problem.add_global_pivots(&pivot).unwrap(), 1);
+    let after_first = problem.solution.link_dims();
+
+    // The same pivot a second time is a duplicate at every bond, so nothing
+    // grows and the injection count is zero.
+    assert_eq!(problem.add_global_pivots(&pivot).unwrap(), 0);
+    assert_eq!(problem.solution.link_dims(), after_first);
 }
 
 #[test]
