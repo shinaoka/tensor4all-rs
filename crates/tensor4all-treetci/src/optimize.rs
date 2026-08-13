@@ -22,7 +22,7 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 /// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `normalize_error`         | `true`        | Normalize error by maximum sample magnitude          |
-/// | `enable_global_pivots`    | `false`       | Run automatic global pivot search after each sweep   |
+/// | `enable_global_pivots`    | `true`        | Run automatic global pivot search after each sweep   |
 /// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
 /// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
 /// | `tol_margin_global_search`| `10.0`        | Global pivot acceptance margin over `abs_tol`        |
@@ -39,7 +39,7 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 /// assert_eq!(opts.max_iter, 20);
 /// assert_eq!(opts.max_bond_dim, None);
 /// assert!(opts.normalize_error);
-/// assert!(!opts.enable_global_pivots);
+/// assert!(opts.enable_global_pivots);
 ///
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
@@ -95,8 +95,7 @@ pub struct TreeTciOptions {
     /// `|f(idx) - tt(idx)|` is large, injecting the best finds via
     /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots).
     /// This recovers separated features that local pivot updates miss when
-    /// the initial pivots sit in a single basin. Default: `false` (opt-in,
-    /// preserves existing behavior).
+    /// the initial pivots sit in a single basin. Default: `true`.
     pub enable_global_pivots: bool,
 
     /// Number of random starting points for the global pivot search.
@@ -136,7 +135,7 @@ impl Default for TreeTciOptions {
             max_iter: 20,
             max_bond_dim: None,
             normalize_error: true,
-            enable_global_pivots: false,
+            enable_global_pivots: true,
             nsearch: 5,
             max_nglobal_pivot: 5,
             tol_margin_global_search: 10.0,
@@ -323,10 +322,11 @@ where
         // Global pivot search: after each sweep, materialize the current
         // approximation and inject pivots where |f - tt| is large, so
         // separated features that the local pivot updates miss are sampled
-        // in the next sweep. Opt-in; see `TreeTciOptions::enable_global_pivots`.
-        // The search is skipped on the final iteration: a pivot injected after
-        // the last sweep would never be processed by a subsequent sweep, so the
-        // recorded error and termination reason would not reflect it.
+        // in the next sweep. Enabled by default; see
+        // `TreeTciOptions::enable_global_pivots`. The search is skipped on
+        // the final iteration: a pivot injected after the last sweep would
+        // never be processed by a subsequent sweep, so the recorded error
+        // and termination reason would not reflect it.
         if options.enable_global_pivots && _iter + 1 < options.max_iter {
             let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
                 state.max_sample_value

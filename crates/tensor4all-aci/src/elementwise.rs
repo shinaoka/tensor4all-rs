@@ -3,7 +3,7 @@
 use crate::global_guard::find_global_pivots;
 use crate::scalar::AciScalar;
 use crate::validation::{validate_inputs, validate_options};
-use crate::{AciOptions, AciResult, ElementwiseBatch, ElementwiseProblem, Result};
+use crate::{AciOptions, AciResult, AciTermination, ElementwiseBatch, ElementwiseProblem, Result};
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain,
 };
@@ -21,21 +21,23 @@ use tensor4all_simplett::{
 /// normalized value is used.
 ///
 /// When [`AciOptions::enable_global_guard`] is enabled (the default), the
-/// local stopping rule is gated by a global pivot search: before accepting
-/// convergence, the current solution is sampled against the true operator at
-/// global points, and any significantly-wrong points are injected into the
-/// sweep's frames so the next sweep absorbs them. The search only runs at the
-/// moment the local criterion would otherwise stop, so it adds no operator
-/// evaluations during normal sweeps.
+/// local stopping rule is gated by a global pivot search: after every sweep
+/// the current solution is sampled against the true operator at global points
+/// via floating-zone walks, and any significantly-wrong points are injected
+/// into the sweep's frames so the next sweep absorbs them. Convergence is
+/// additionally gated on the search finding nothing for
+/// [`AciOptions::min_iters`] consecutive sweeps (mirroring the Julia
+/// `convergencecriterion`), so a feature the local sweeps cannot see blocks
+/// acceptance instead of being silently lost.
 ///
 /// Sweeping also stops once the solution rank has sat at
 /// [`AciOptions::max_bond_dim`] for [`AciOptions::min_iters`] consecutive
 /// sweeps. At the cap the sweep can no longer add pivots, so the tolerance can
 /// never be met and further sweeps only repeat full-rank work. A run that stops
 /// this way returns normally with a final entry of [`AciResult::errors`] above
-/// [`AciOptions::tolerance`]: under a binding `max_bond_dim` that outcome is by
-/// design, not a failure. Compare the last [`AciResult::ranks`] entry against
-/// `max_bond_dim` to tell a rank-limited run from a converged one.
+/// [`AciOptions::tolerance`] and [`AciResult::termination`] set to
+/// [`AciTermination::RankLimited`]: under a binding `max_bond_dim` that outcome
+/// is by design, not a failure.
 ///
 /// For single-site tensor trains there are no bonds to sweep. In that case the
 /// operator is evaluated once over all site points, and the returned
@@ -116,7 +118,9 @@ where
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
+    let mut nglobal_pivots_history = Vec::new();
     let mut guard_runs = 0usize;
+    let mut termination = AciTermination::MaxIterations;
 
     for iteration in 0..options.max_iters {
         let forward = iteration % 2 == 0;
@@ -140,40 +144,60 @@ where
 
         // Global pivot search guard: the local criterion only sees
         // bond-local samples, so a feature outside the sampled crosses can be
-        // silently lost while the run self-reports convergence. Before
-        // accepting, sample the current solution against the true operator at
-        // global points; if significantly-wrong points exist, inject them and
-        // keep sweeping instead of converging.
+        // silently lost while the run self-reports convergence. After every
+        // sweep, walk random starting points toward large
+        // |op - solution| error and inject any significantly-wrong points;
+        // convergence is gated on the search finding nothing over the
+        // convergence window (see `convergence_criterion_like_julia`). The
+        // search is skipped while the rank already sits at `max_bond_dim`:
+        // the sweep has no headroom to absorb new pivots, so the guard could
+        // only pad the solution beyond the cap it will never be able to
+        // sweep back down.
+        let rank_capped = options
+            .max_bond_dim
+            .is_some_and(|cap| problem.solution.rank() >= cap);
+        if options.enable_global_guard
+            && options.nsearch_global_pivots > 0
+            && options.max_nglobal_pivot > 0
+            && !rank_capped
+        {
+            guard_runs += 1;
+            let seed = options.rng_seed.wrapping_add(guard_runs as u64);
+            let pivots = find_global_pivots(&problem, &mut op, options, seed)?;
+            let _added = problem.add_global_pivots(&pivots)?;
+            nglobal_pivots_history.push(pivots.len());
+        } else {
+            nglobal_pivots_history.push(0);
+        }
+
         if convergence_criterion_like_julia(
             iteration + 1,
             &ranks,
             &errors,
+            &nglobal_pivots_history,
             options.min_iters,
             options.tolerance,
         ) {
-            if !options.enable_global_guard
-                || options.nsearch_global_pivots == 0
-                || options.max_nglobal_pivot == 0
-            {
-                break;
-            }
-            guard_runs += 1;
-            let seed = options.rng_seed.wrapping_add(guard_runs as u64);
-            let pivots = find_global_pivots(&problem, &mut op, options, seed)?;
-            if pivots.is_empty() {
-                break;
-            }
-            let added = problem.add_global_pivots(&pivots)?;
-            if added == 0 {
-                // Every found pivot was already in the frames and the sweeps
-                // could not absorb it (e.g. the bond dimension is capped);
-                // further guard runs cannot help.
-                break;
-            }
+            termination = AciTermination::Converged;
+            break;
         }
 
         if rank_is_saturated(&ranks, options.min_iters, options.max_bond_dim) {
+            termination = AciTermination::RankLimited;
             break;
+        }
+    }
+
+    // A guard injection can leave the solution one injection above
+    // `max_bond_dim` when the loop exits right after (e.g. `max_iters`
+    // expired, or the rank capped below the sweep's headroom). Run one final
+    // forward sweep so the returned tensor train respects the cap; this
+    // mirrors the final cleanup sweep Julia performs after `addglobalpivots`.
+    if let Some(cap) = options.max_bond_dim {
+        if problem.solution.rank() > cap {
+            for bond in 0..problem.len() - 1 {
+                problem.local_update(bond, true, options, &mut op)?;
+            }
         }
     }
 
@@ -181,6 +205,8 @@ where
         tensor_train: problem.solution,
         ranks,
         errors,
+        nglobal_pivots: nglobal_pivots_history,
+        termination,
     })
 }
 
@@ -210,6 +236,8 @@ where
         tensor_train: SimpleTensorTrain::new(vec![core])?,
         ranks: Vec::new(),
         errors: Vec::new(),
+        nglobal_pivots: Vec::new(),
+        termination: AciTermination::Converged,
     })
 }
 
@@ -310,12 +338,14 @@ pub(crate) fn convergence_criterion_like_julia(
     iteration: usize,
     ranks: &[usize],
     errors: &[f64],
+    nglobal_pivots: &[usize],
     min_iters: usize,
     tolerance: f64,
 ) -> bool {
     debug_assert!(iteration > 0);
     debug_assert_eq!(ranks.len(), iteration);
     debug_assert_eq!(errors.len(), iteration);
+    debug_assert_eq!(nglobal_pivots.len(), iteration);
 
     if iteration == 0 || min_iters == 0 {
         return false;
@@ -328,9 +358,20 @@ pub(crate) fn convergence_criterion_like_julia(
     }
 
     let baseline = ranks[iteration - min_iters];
-    !ranks[(iteration - min_iters)..iteration]
+    if ranks[(iteration - min_iters)..iteration]
         .iter()
         .any(|&rank| rank > baseline)
+    {
+        return false;
+    }
+
+    // The global pivot search must have found nothing over the same window:
+    // an iteration that injected pivots has not yet swept them, so its error
+    // estimate is stale with respect to those pivots (Julia's
+    // `convergencecriterion` `nglobalpivots == 0` disjunct).
+    nglobal_pivots[(iteration - min_iters)..iteration]
+        .iter()
+        .all(|&n| n == 0)
 }
 
 /// Reports whether the solution rank has been pinned at `max_bond_dim` long

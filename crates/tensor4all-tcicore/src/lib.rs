@@ -63,6 +63,7 @@
 
 pub mod cached_function;
 pub mod error;
+pub mod floating_zone;
 pub mod indexset;
 mod matrix_luci;
 pub mod matrixaca;
@@ -77,6 +78,7 @@ pub use cached_function::error::CacheKeyError;
 pub use cached_function::index_int::IndexInt;
 pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
+pub use floating_zone::floating_zone_walk;
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,

@@ -4,35 +4,45 @@
 //! feature outside the sampled crosses (e.g. a near-degenerate second peak
 //! far from the initial pivots) is invisible to the stopping rule: the run
 //! self-reports convergence while the feature silently vanishes. This module
-//! implements the same guard as `tensor4all-treetci`'s global pivot search:
-//! before accepting convergence, the current solution is sampled against the
-//! true operator at global points, and any significantly-wrong points are
-//! returned for injection into the ACI frames.
+//! implements the global pivot search guard: before convergence is accepted
+//! the current solution is sampled against the true operator at global
+//! points, and any significantly-wrong points are returned for injection
+//! into the ACI frames.
+//!
+//! The search uses floating-zone walks ([`floating_zone_walk`]), the same
+//! greedy coordinate-descent search as `TensorCrossInterpolation.jl`'s
+//! `_floatingzone` and `tensor4all-tensorci`'s [`floating_zone`]
+//! (tensor4all_tensorci::floating_zone): each random start moves one site
+//! coordinate at a time toward the largest interpolation error. This is a
+//! strict generalization of the single-cross scan (one sweep with no
+//! repeats), so far features that a cross scan can never sample are reachable
+//! when the error landscape has a detectable gradient.
 
 use crate::scalar::AciScalar;
 use crate::{AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
-use tensor4all_tcicore::MatrixLuciScalar;
+use tensor4all_tcicore::{floating_zone_walk, MatrixLuciScalar};
 
 /// Search for global multi-indices where the current solution is wrong.
 ///
-/// Algorithm (mirrors `tensor4all-treetci`'s `find_global_pivots`):
+/// Algorithm:
 ///
 /// 1. Draw `nsearch` random starting points.
-/// 2. For each starting point, sweep every site coordinate over its full
-///    local dimension, keeping the point with the largest interpolation
-///    error `|op(inputs(idx)) - solution(idx)|`.
+/// 2. For each starting point, run a floating-zone walk: repeatedly sweep
+///    every site coordinate, moving each coordinate to the value with the
+///    largest interpolation error `|op(inputs(idx)) - solution(idx)|`, until
+///    the error stops improving or exceeds `abs_tol * tol_margin`.
 /// 3. Keep points whose error exceeds `abs_tol * tol_margin`, where
 ///    `abs_tol` is the configured tolerance (scaled by the maximum sampled
 ///    operator magnitude when `scale_tolerance` is enabled).
 /// 4. Return at most `max_nglobal_pivot` distinct points.
 ///
-/// Input values and the current solution are evaluated at all candidate
-/// points in one batch per tensor train via [`TTCache::evaluate_many`]
-/// (shared prefixes/suffixes are contracted once); the operator is called in
-/// a single [`ElementwiseBatch`].
+/// Input values and the current solution are evaluated per walk step in one
+/// cached batch per tensor train via [`TTCache::evaluate_many`] (shared
+/// prefixes/suffixes are contracted once); the operator is called in a single
+/// [`ElementwiseBatch`] per step.
 pub(crate) fn find_global_pivots<T, F>(
     problem: &ElementwiseProblem<T>,
     op: &mut F,
@@ -55,44 +65,27 @@ where
         .map(|site| problem.solution.site_dim(site))
         .collect();
 
-    // Candidate points: for each random start, sweep each site coordinate
-    // over its full local dimension (same local search as the chain and tree
-    // TCI2 finders; candidates share prefixes/suffixes heavily, which
-    // `TTCache::evaluate_many` exploits).
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut points: Vec<Vec<usize>> = Vec::new();
-    for _ in 0..nsearch {
-        let start: Vec<usize> = site_dims.iter().map(|&d| rng.random_range(0..d)).collect();
-        for site in 0..n_sites {
-            for value in 0..site_dims[site] {
-                let mut point = start.clone();
-                point[site] = value;
-                points.push(point);
-            }
-        }
-    }
-    let n_points = points.len();
+    let starts: Vec<Vec<usize>> = (0..nsearch)
+        .map(|_| site_dims.iter().map(|&d| rng.random_range(0..d)).collect())
+        .collect();
 
-    // Input values at all candidate points: one cached batch per input.
-    let mut input_values = vec![T::zero(); n_inputs * n_points];
+    // Absolute threshold for "significantly wrong": abs_tol * tol_margin.
+    // With scale_tolerance the operator scale is estimated from the random
+    // starting points (the walk is not handed a precomputed candidate set).
+    let mut start_input_values = vec![T::zero(); n_inputs * nsearch];
     for input in 0..n_inputs {
         let mut cache = TTCache::new(&problem.inputs[input]);
-        let values = cache.evaluate_many(&points, None)?;
+        let values = cache.evaluate_many(&starts, None)?;
         for (point, value) in values.into_iter().enumerate() {
-            input_values[input + n_inputs * point] = value;
+            start_input_values[input + n_inputs * point] = value;
         }
     }
+    let start_batch = ElementwiseBatch::new(&start_input_values, n_inputs, nsearch)?;
+    let mut start_op_values = vec![T::zero(); nsearch];
+    op(start_batch, &mut start_op_values)?;
 
-    // Operator output at all candidate points: one batch call.
-    let batch = ElementwiseBatch::new(&input_values, n_inputs, n_points)?;
-    let mut op_values = vec![T::zero(); n_points];
-    op(batch, &mut op_values)?;
-
-    // Current solution at all candidate points: one cached batch.
-    let mut solution_cache = TTCache::new(&problem.solution);
-    let solution_values = solution_cache.evaluate_many(&points, None)?;
-
-    let max_op_abs = op_values
+    let max_op_abs = start_op_values
         .iter()
         .map(|&value| MatrixLuciScalar::abs_val(value))
         .fold(0.0f64, f64::max);
@@ -103,29 +96,39 @@ where
     };
     let threshold = abs_tol * options.tol_margin_global_search;
 
-    // Local search per starting point.
+    // Floating-zone walk per starting point.
     let mut best: Vec<(f64, Vec<usize>)> = Vec::new();
-    let mut point_index = 0usize;
-    for _ in 0..nsearch {
-        let mut start_best: Option<(f64, Vec<usize>)> = None;
-        for &site_dim in &site_dims {
-            for _value in 0..site_dim {
-                let error = MatrixLuciScalar::abs_val(
-                    op_values[point_index] - solution_values[point_index],
-                );
-                if start_best
-                    .as_ref()
-                    .is_none_or(|(best_error, _)| error > *best_error)
-                {
-                    start_best = Some((error, points[point_index].clone()));
+    for start in &starts {
+        let (pivot, error) = floating_zone_walk(
+            &site_dims,
+            start,
+            options.nsweeps_global_search,
+            threshold,
+            |points: &[Vec<usize>]| -> crate::Result<Vec<f64>> {
+                let n_points = points.len();
+                let mut input_values = vec![T::zero(); n_inputs * n_points];
+                for input in 0..n_inputs {
+                    let mut cache = TTCache::new(&problem.inputs[input]);
+                    let values = cache.evaluate_many(points, None)?;
+                    for (point, value) in values.into_iter().enumerate() {
+                        input_values[input + n_inputs * point] = value;
+                    }
                 }
-                point_index += 1;
-            }
-        }
-        if let Some((error, point)) = start_best {
-            if error > threshold {
-                best.push((error, point));
-            }
+                let batch = ElementwiseBatch::new(&input_values, n_inputs, n_points)?;
+                let mut op_values = vec![T::zero(); n_points];
+                op(batch, &mut op_values)?;
+                let mut solution_cache = TTCache::new(&problem.solution);
+                let solution_values = solution_cache.evaluate_many(points, None)?;
+                let errors = (0..n_points)
+                    .map(|point| {
+                        MatrixLuciScalar::abs_val(op_values[point] - solution_values[point])
+                    })
+                    .collect::<Vec<f64>>();
+                Ok(errors)
+            },
+        )?;
+        if error > threshold {
+            best.push((error, pivot));
         }
     }
 

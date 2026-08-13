@@ -7,8 +7,8 @@
 //! large. Found pivots are injected via [`TreeTCI2::add_global_pivots`] so the
 //! next sweep samples regions the local pivot updates missed.
 //!
-//! The search is opt-in (`TreeTciOptions::enable_global_pivots`); the default
-//! optimization loop never materializes the tree.
+//! The search is enabled by default (`TreeTciOptions::enable_global_pivots`)
+//! and runs after every optimization sweep.
 
 use crate::error::Result as TreeTciResult;
 use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};
