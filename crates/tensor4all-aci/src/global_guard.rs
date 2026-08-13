@@ -39,12 +39,15 @@ use tensor4all_tcicore::{floating_zone_walk, MatrixLuciScalar};
 ///    operator magnitude when `scale_tolerance` is enabled).
 /// 4. Return at most `max_nglobal_pivot` distinct points.
 ///
-/// Input values and the current solution are evaluated per walk step in one
-/// cached batch per tensor train via [`TTCache::evaluate_many`] (shared
-/// prefixes/suffixes are contracted once); the operator is called in a single
-/// [`ElementwiseBatch`] per step.
+/// Input values and the current solution are evaluated through [`TTCache`]s
+/// via [`TTCache::evaluate_many`] (shared prefixes/suffixes are contracted
+/// once). The input caches live in [`ElementwiseProblem`] and persist across
+/// sweeps and starting points — the inputs never change for the run — while
+/// the solution cache is created once per invocation (the solution is fixed
+/// for the whole search and only changes when pivots are injected after it
+/// returns). The operator is called in a single [`ElementwiseBatch`] per step.
 pub(crate) fn find_global_pivots<T, F>(
-    problem: &ElementwiseProblem<T>,
+    problem: &mut ElementwiseProblem<T>,
     op: &mut F,
     options: &AciOptions<T>,
     seed: u64,
@@ -75,8 +78,7 @@ where
     // starting points (the walk is not handed a precomputed candidate set).
     let mut start_input_values = vec![T::zero(); n_inputs * nsearch];
     for input in 0..n_inputs {
-        let mut cache = TTCache::new(&problem.inputs[input]);
-        let values = cache.evaluate_many(&starts, None)?;
+        let values = problem.input_caches[input].evaluate_many(&starts, None)?;
         for (point, value) in values.into_iter().enumerate() {
             start_input_values[input + n_inputs * point] = value;
         }
@@ -96,6 +98,12 @@ where
     };
     let threshold = abs_tol * options.tol_margin_global_search;
 
+    // The solution is fixed for the whole guard invocation (pivots are only
+    // injected by the caller after this returns), so one cache per invocation
+    // amortizes the left/right environment contractions across every walk
+    // step of every starting point.
+    let mut solution_cache = TTCache::new(&problem.solution);
+
     // Floating-zone walk per starting point.
     let mut best: Vec<(f64, Vec<usize>)> = Vec::new();
     for start in &starts {
@@ -106,10 +114,26 @@ where
             threshold,
             |points: &[Vec<usize>]| -> crate::Result<Vec<f64>> {
                 let n_points = points.len();
+                // The walk hands us the current pivot with one site varied,
+                // so every candidate shares all coordinates except that site.
+                // Splitting the evaluation at the varying site contracts the
+                // shared side once (and reuses the cached environments across
+                // scans) instead of re-deriving it per candidate; this is
+                // what keeps a walk at O(chi^2 * dim) per site scan rather
+                // than O(n_sites * chi^2) per point.
+                let split = if n_points < 2 {
+                    None
+                } else {
+                    (0..n_sites)
+                        .find(|&site| {
+                            let first = points[0][site];
+                            points[1..].iter().any(|point| point[site] != first)
+                        })
+                        .map(|site| site + 1)
+                };
                 let mut input_values = vec![T::zero(); n_inputs * n_points];
                 for input in 0..n_inputs {
-                    let mut cache = TTCache::new(&problem.inputs[input]);
-                    let values = cache.evaluate_many(points, None)?;
+                    let values = problem.input_caches[input].evaluate_many(points, split)?;
                     for (point, value) in values.into_iter().enumerate() {
                         input_values[input + n_inputs * point] = value;
                     }
@@ -117,8 +141,7 @@ where
                 let batch = ElementwiseBatch::new(&input_values, n_inputs, n_points)?;
                 let mut op_values = vec![T::zero(); n_points];
                 op(batch, &mut op_values)?;
-                let mut solution_cache = TTCache::new(&problem.solution);
-                let solution_values = solution_cache.evaluate_many(points, None)?;
+                let solution_values = solution_cache.evaluate_many(points, split)?;
                 let errors = (0..n_points)
                     .map(|point| {
                         MatrixLuciScalar::abs_val(op_values[point] - solution_values[point])

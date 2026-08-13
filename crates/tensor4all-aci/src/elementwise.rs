@@ -168,7 +168,7 @@ where
         {
             guard_runs += 1;
             let seed = options.rng_seed.wrapping_add(guard_runs as u64);
-            let pivots = find_global_pivots(&problem, &mut op, options, seed)?;
+            let pivots = find_global_pivots(&mut problem, &mut op, options, seed)?;
             let _added = problem.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());
         } else {

@@ -3,7 +3,8 @@ use std::cell::RefCell;
 use crate::scalar::AciScalar;
 use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result};
 use tensor4all_simplett::{
-    tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, Tensor3, Tensor3Ops,
+    tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, Tensor3,
+    Tensor3Ops,
 };
 use tensor4all_tcicore::{
     matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
@@ -28,6 +29,12 @@ pub(crate) struct ElementwiseProblem<T: AciScalar> {
     pub(crate) right_frames: Vec<Vec<Option<Matrix<T>>>>,
     pub(crate) pivot_errors: Vec<f64>,
     pub(crate) pivot_scales: Vec<f64>,
+    /// Persistent evaluation caches for the inputs, one per input.
+    ///
+    /// The inputs never change for the whole run, so the global pivot guard
+    /// reuses these caches across every sweep and starting point instead of
+    /// rebuilding the partial contractions from scratch on every batch.
+    pub(crate) input_caches: Vec<TTCache<T>>,
 }
 
 #[derive(Clone)]
@@ -55,10 +62,14 @@ impl<T: AciScalar> InputCoreMatrices<T> {
 }
 
 impl<T: AciScalar> ElementwiseProblem<T> {
-    pub(crate) fn new(inputs: Vec<SimpleTensorTrain<T>>, options: AciOptions<T>) -> Result<Self> {
+    pub(crate) fn new(inputs: Vec<SimpleTensorTrain<T>>, options: AciOptions<T>) -> Result<Self>
+    where
+        T: EinsumScalar,
+    {
         let solution = initial_guess(&inputs, &options)?;
         let n = solution.len();
         let n_inputs = inputs.len();
+        let input_caches = inputs.iter().map(TTCache::new).collect();
         let input_core_matrices = inputs
             .iter()
             .map(|input| {
@@ -85,6 +96,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             right_frames,
             pivot_errors: vec![0.0; n.saturating_sub(1)],
             pivot_scales: vec![0.0; n.saturating_sub(1)],
+            input_caches,
         };
         problem.initialize_right_frames()?;
         Ok(problem)

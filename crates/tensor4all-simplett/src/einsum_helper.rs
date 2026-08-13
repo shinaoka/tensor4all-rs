@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::traits::TTScalar;
 use tenferro_einsum::Subscripts;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
 use tensor4all_tensorbackend::einsum_native_tensors;
@@ -175,7 +176,7 @@ pub(crate) fn tensor_to_col_major_vec<T: TensorScalar>(tensor: &TypedTensor<T>) 
     tensor.host_data().to_vec()
 }
 
-pub(crate) fn row_vector_times_matrix<T: EinsumScalar>(
+pub(crate) fn row_vector_times_matrix<T: TTScalar + EinsumScalar>(
     vector: &[T],
     matrix: &[T],
     rows: usize,
@@ -202,16 +203,21 @@ pub(crate) fn row_vector_times_matrix<T: EinsumScalar>(
         });
     }
 
-    let vector_tf = typed_tensor_from_col_major_slice(vector, &[rows])?;
-    let matrix_tf = typed_tensor_from_col_major_slice(matrix, &[rows, cols])?;
-
-    Ok(tensor_to_col_major_vec(&einsum_tensors(
-        "l,lr->r",
-        &[&vector_tf, &matrix_tf],
-    )?))
+    // Direct loop: `einsum_tensors` re-traces and re-compiles the graph on
+    // every call (the bridge clears the compile cache for safety), which
+    // costs ~70 us even for a 2x2 product. TTCache's environment recursion
+    // calls this thousands of times per global-pivot guard search, so the
+    // mat-vec is computed inline.
+    Ok((0..cols)
+        .map(|c| {
+            (0..rows)
+                .map(|r| vector[r] * matrix[r + c * rows])
+                .fold(T::zero(), |acc, x| acc + x)
+        })
+        .collect())
 }
 
-pub(crate) fn matrix_times_col_vector<T: EinsumScalar>(
+pub(crate) fn matrix_times_col_vector<T: TTScalar + EinsumScalar>(
     matrix: &[T],
     rows: usize,
     cols: usize,
@@ -237,13 +243,16 @@ pub(crate) fn matrix_times_col_vector<T: EinsumScalar>(
         });
     }
 
-    let matrix_tf = typed_tensor_from_col_major_slice(matrix, &[rows, cols])?;
-    let vector_tf = typed_tensor_from_col_major_slice(vector, &[cols])?;
-
-    Ok(tensor_to_col_major_vec(&einsum_tensors(
-        "lr,r->l",
-        &[&matrix_tf, &vector_tf],
-    )?))
+    // Direct loop, same rationale as `row_vector_times_matrix`: the einsum
+    // dispatch recompiles the graph on every call, which dominates small
+    // environment contractions.
+    Ok((0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| matrix[r + c * rows] * vector[c])
+                .fold(T::zero(), |acc, x| acc + x)
+        })
+        .collect())
 }
 
 /// Scalar types supported by the tenferro-backed einsum helpers used in
