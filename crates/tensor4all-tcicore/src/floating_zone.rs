@@ -41,8 +41,8 @@ use crate::MultiIndex;
 ///
 /// # Errors
 ///
-/// Propagates the error returned by `eval_batch` (e.g. an operator failure
-/// or a tensor-train evaluation failure).
+/// Propagates the error returned by `eval_batch` unchanged — typically an
+/// operation failure or an index mismatch from the underlying evaluator.
 pub fn floating_zone_walk<E, Err>(
     local_dims: &[usize],
     init_p: &MultiIndex,
