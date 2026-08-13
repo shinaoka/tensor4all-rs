@@ -6,8 +6,10 @@
 //! [`floating_zone`] optimization.
 
 use rand::Rng;
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops};
-use tensor4all_tcicore::{MultiIndex, Scalar};
+use tensor4all_simplett::{
+    AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops,
+};
+use tensor4all_tcicore::{floating_zone_walk, MultiIndex, Scalar};
 
 /// Estimate the true interpolation error by searching for worst-case indices.
 ///
@@ -66,7 +68,7 @@ pub fn estimate_true_error<T, F>(
     rng: &mut impl Rng,
 ) -> Vec<(MultiIndex, f64)>
 where
-    T: Scalar + TTScalar,
+    T: Scalar + TTScalar + EinsumScalar,
     F: Fn(&MultiIndex) -> T,
 {
     let site_dims: Vec<usize> = (0..tt.len())
@@ -133,7 +135,7 @@ where
 /// * `tt` -- the tensor train approximation
 /// * `f` -- the exact function
 /// * `local_dims` -- number of values each index can take
-/// * `init_p` -- starting point (`None` defaults to the all-zeros index)
+/// * `init_p` -- starting point (`None` draws a random starting point)
 /// * `early_stop_tol` -- stop early once the error exceeds this value
 ///
 ///   (use `f64::MAX` to search exhaustively)
@@ -149,54 +151,48 @@ pub fn floating_zone<T, F>(
     early_stop_tol: f64,
 ) -> (MultiIndex, f64)
 where
-    T: Scalar + TTScalar,
+    T: Scalar + TTScalar + EinsumScalar,
     F: Fn(&MultiIndex) -> T,
 {
-    let n = local_dims.len();
-
-    let mut pivot = if let Some(p) = init_p {
-        p.clone()
-    } else {
-        vec![0; n]
+    // Julia's `_floatingzone` draws a random starting point when none is
+    // given; match that instead of fixing the all-zeros index.
+    let init_p = match init_p {
+        Some(p) => p.clone(),
+        None => local_dims
+            .iter()
+            .map(|&d| rand::rng().random_range(0..d))
+            .collect(),
     };
 
-    let f_val = f(&pivot);
-    let tt_val = tt.evaluate(&pivot).unwrap_or(T::zero());
-    let diff = f_val - tt_val;
-    let mut max_error = f64::sqrt(Scalar::abs_sq(diff));
+    let max_sweeps = local_dims.len() * 10; // Reasonable upper bound
+    let mut tt_cache = TTCache::new(tt);
+    let (pivot, error) = floating_zone_walk(
+        local_dims,
+        &init_p,
+        max_sweeps,
+        early_stop_tol,
+        |points: &[MultiIndex]| {
+            // Batch-evaluate the tensor train once per site scan; `f` is
+            // evaluated pointwise (no batch API in this signature). A TT
+            // evaluation failure is treated as value zero, matching the
+            // previous point-by-point fallback.
+            let tt_values = tt_cache
+                .evaluate_many(points, None)
+                .unwrap_or_else(|_| vec![T::zero(); points.len()]);
+            let errors = points
+                .iter()
+                .zip(tt_values.iter())
+                .map(|(point, &tt_value)| {
+                    let diff = f(point) - tt_value;
+                    f64::sqrt(Scalar::abs_sq(diff))
+                })
+                .collect::<Vec<f64>>();
+            Ok::<Vec<f64>, std::convert::Infallible>(errors)
+        },
+    )
+    .unwrap_or_else(|never| match never {});
 
-    let max_sweeps = n * 10; // Reasonable upper bound
-    for _ in 0..max_sweeps {
-        let prev_max_error = max_error;
-
-        for ipos in 0..n {
-            // Evaluate all local indices at this position
-            let mut best_local_error = 0.0f64;
-            let mut best_local_idx = pivot[ipos];
-
-            for v in 0..local_dims[ipos] {
-                pivot[ipos] = v;
-                let f_val = f(&pivot);
-                let tt_val = tt.evaluate(&pivot).unwrap_or(T::zero());
-                let diff = f_val - tt_val;
-                let error = f64::sqrt(Scalar::abs_sq(diff));
-                if error > best_local_error {
-                    best_local_error = error;
-                    best_local_idx = v;
-                }
-            }
-
-            pivot[ipos] = best_local_idx;
-            // Keep max_error monotonically non-decreasing
-            max_error = max_error.max(best_local_error);
-        }
-
-        if max_error == prev_max_error || max_error > early_stop_tol {
-            break;
-        }
-    }
-
-    (pivot, max_error)
+    (pivot, error)
 }
 
 #[cfg(test)]

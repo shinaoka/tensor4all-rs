@@ -369,11 +369,13 @@ fn rank_stability_matches_julia_min_iter_window() {
 fn convergence_criterion_matches_julia_algorithm() {
     let ranks = [10, 12, 12];
     let errors = [1.0e-8, 2.0e-11, 3.0e-11];
+    let no_pivots = [0, 0, 0];
 
     assert!(!convergence_criterion_like_julia(
         1,
         &ranks[..1],
         &errors[..1],
+        &no_pivots[..1],
         2,
         1.0e-10
     ));
@@ -381,11 +383,12 @@ fn convergence_criterion_matches_julia_algorithm() {
         2,
         &ranks[..2],
         &errors[..2],
+        &no_pivots[..2],
         2,
         1.0e-10
     ));
     assert!(convergence_criterion_like_julia(
-        3, &ranks, &errors, 2, 1.0e-10
+        3, &ranks, &errors, &no_pivots, 2, 1.0e-10
     ));
 
     let increasing_ranks = [10, 12, 13];
@@ -393,6 +396,39 @@ fn convergence_criterion_matches_julia_algorithm() {
         3,
         &increasing_ranks,
         &errors,
+        &no_pivots,
+        2,
+        1.0e-10
+    ));
+
+    // Julia's `convergencecriterion` also requires the global pivot search
+    // to have found nothing over the trailing window: a sweep that injected
+    // pivots has not yet absorbed them, so its error is stale with respect
+    // to them. A find outside the window no longer blocks convergence.
+    let found_pivots_early = [1, 0, 0];
+    assert!(convergence_criterion_like_julia(
+        3,
+        &ranks,
+        &errors,
+        &found_pivots_early,
+        2,
+        1.0e-10
+    ));
+    let found_pivots_in_window = [0, 1, 0];
+    assert!(!convergence_criterion_like_julia(
+        3,
+        &ranks,
+        &errors,
+        &found_pivots_in_window,
+        2,
+        1.0e-10
+    ));
+    let found_pivots_late = [0, 0, 1];
+    assert!(!convergence_criterion_like_julia(
+        3,
+        &ranks,
+        &errors,
+        &found_pivots_late,
         2,
         1.0e-10
     ));
@@ -1838,6 +1874,7 @@ fn timed_aci_run(
                 iteration + 1,
                 &ranks,
                 &errors,
+                &vec![0; ranks.len()],
                 options.min_iters,
                 options.tolerance,
             )

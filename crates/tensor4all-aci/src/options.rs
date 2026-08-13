@@ -29,6 +29,7 @@ use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 /// assert!(options.enable_global_guard);
 /// assert_eq!(options.nsearch_global_pivots, 5);
 /// assert_eq!(options.max_nglobal_pivot, 5);
+/// assert_eq!(options.nsweeps_global_search, 100);
 /// assert!((options.tol_margin_global_search - 10.0).abs() < 1e-15);
 /// ```
 #[derive(Debug, Clone)]
@@ -92,19 +93,20 @@ pub struct AciOptions<T: TTScalar> {
     /// The local sweep estimates error from bond-local 2-site blocks only, so a
     /// feature outside the sampled crosses (e.g. a near-degenerate second peak
     /// far from the initial pivots) is invisible to the stopping rule. When
-    /// enabled, the optimizer samples the current solution against the true
-    /// operator at global points before accepting convergence and injects any
-    /// significantly-wrong points as pivots. The search runs only at the moment
-    /// the local criterion would otherwise stop, so the default-on guard adds no
-    /// operator evaluations during normal sweeps. Default: `true`.
+    /// enabled, the optimizer runs a global pivot search after every sweep,
+    /// injects any significantly-wrong points as pivots, and only accepts
+    /// convergence when the search has found nothing for [`min_iters`](Self::min_iters)
+    /// consecutive sweeps. Default: `true`.
     pub enable_global_guard: bool,
 
     /// Number of random starting points for the global pivot search guard.
     ///
-    /// Each starting point is locally optimized over all site coordinates.
-    /// Larger values explore the index space more thoroughly at the cost of more
-    /// evaluations. Ignored when `enable_global_guard` is `false`; `0` disables
-    /// the search. Default: `5`.
+    /// Each starting point launches a floating-zone walk (greedy
+    /// coordinate-descent; see [`floating_zone_walk`](tensor4all_tcicore::floating_zone_walk))
+    /// that moves one site coordinate at a time toward the largest
+    /// interpolation error. Larger values explore the index space more
+    /// thoroughly at the cost of more evaluations. Ignored when
+    /// `enable_global_guard` is `false`; `0` disables the search. Default: `5`.
     pub nsearch_global_pivots: usize,
 
     /// Maximum number of global pivots injected per guard run.
@@ -112,6 +114,14 @@ pub struct AciOptions<T: TTScalar> {
     /// Ignored when `enable_global_guard` is `false`; `0` disables the search.
     /// Default: `5`.
     pub max_nglobal_pivot: usize,
+
+    /// Upper bound on coordinate sweeps per floating-zone walk.
+    ///
+    /// A walk stops early once the maximum error stops improving or exceeds
+    /// `abs_tol * tol_margin_global_search`, so this bound rarely binds; it is
+    /// a safety cap for pathological error landscapes. Ignored when
+    /// `enable_global_guard` is `false`; `0` disables the search. Default: `100`.
+    pub nsweeps_global_search: usize,
 
     /// Tolerance margin for the global pivot search guard.
     ///
@@ -137,6 +147,7 @@ impl<T: TTScalar> Default for AciOptions<T> {
             enable_global_guard: true,
             nsearch_global_pivots: 5,
             max_nglobal_pivot: 5,
+            nsweeps_global_search: 100,
             tol_margin_global_search: 10.0,
         }
     }
