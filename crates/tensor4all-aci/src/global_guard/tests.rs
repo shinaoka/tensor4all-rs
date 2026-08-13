@@ -111,7 +111,7 @@ fn find_global_pivots_noop_without_search_budget() {
     // Direct finder check: a zero budget returns nothing without touching
     // the problem.
     let input = two_peak_tt(10);
-    let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
     let options = AciOptions {
         nsearch_global_pivots: 0,
         max_nglobal_pivot: 0,
@@ -121,7 +121,7 @@ fn find_global_pivots_noop_without_search_budget() {
         output.fill(0.0);
         Ok(())
     };
-    let pivots = find_global_pivots(&problem, &mut op, &options, 0).unwrap();
+    let pivots = find_global_pivots(&mut problem, &mut op, &options, 0).unwrap();
     assert!(pivots.is_empty());
 }
 

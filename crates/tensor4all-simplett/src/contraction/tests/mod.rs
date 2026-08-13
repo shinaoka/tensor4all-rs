@@ -195,6 +195,39 @@ fn test_einsum_tensors_reports_backend_error() {
 }
 
 #[test]
+fn test_row_vector_times_matrix_matches_mat_vec() {
+    // Column-major (2 x 3): M[r, c] at r + 2*c.
+    let v = [1.0, -2.0];
+    let m = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let out = row_vector_times_matrix::<f64>(&v, &m, 2, 3).unwrap();
+    // out[c] = v0*m[0,c] + v1*m[1,c]
+    assert_eq!(
+        out,
+        vec![
+            1.0 * 1.0 + (-2.0) * 2.0,
+            1.0 * 3.0 + (-2.0) * 4.0,
+            1.0 * 5.0 + (-2.0) * 6.0
+        ]
+    );
+}
+
+#[test]
+fn test_matrix_times_col_vector_matches_mat_vec() {
+    // Column-major (2 x 3): M[r, c] at r + 2*c.
+    let m = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let v = [1.0, -2.0, 3.0];
+    let out = matrix_times_col_vector::<f64>(&m, 2, 3, &v).unwrap();
+    // out[r] = sum_c M[r,c]*v[c]
+    assert_eq!(
+        out,
+        vec![
+            1.0 * 1.0 + 3.0 * (-2.0) + 5.0 * 3.0,
+            2.0 * 1.0 + 4.0 * (-2.0) + 6.0 * 3.0
+        ]
+    );
+}
+
+#[test]
 fn test_row_vector_times_matrix_reports_shape_error() {
     let err = row_vector_times_matrix::<f64>(&[1.0], &[1.0, 2.0, 3.0, 4.0], 2, 2).unwrap_err();
 
