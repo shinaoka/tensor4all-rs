@@ -54,7 +54,7 @@ pub enum CompressionMethod {
 /// | `method` | `LU` | Decomposition algorithm (see [`CompressionMethod`]) |
 /// | `tolerance` | `1e-12` | Relative truncation threshold per bond |
 /// | `max_bond_dim` | `None` | Hard upper bound on any bond dimension |
-/// | `normalize_error` | `true` | Whether error is measured relative to the norm |
+/// | `normalize_error` | `true` | Whether `tolerance` is relative (`true`) or absolute (`false`) |
 ///
 /// # Choosing `tolerance`
 ///
@@ -88,18 +88,27 @@ pub enum CompressionMethod {
 pub struct CompressionOptions {
     /// Decomposition method (LU, CI, or SVD).
     pub method: CompressionMethod,
-    /// Relative truncation tolerance per bond.
+    /// Truncation tolerance per bond.
     ///
-    /// Singular values (or pivots) smaller than `tolerance * sigma_max` are
-    /// discarded. Smaller values preserve more accuracy but produce larger
-    /// bond dimensions.
+    /// With `normalize_error` (the default), singular values (or pivots)
+    /// smaller than `tolerance * sigma_max` of that bond are discarded, so the
+    /// threshold is relative. With `normalize_error` disabled the same
+    /// tolerance is applied as an absolute threshold. Smaller values preserve
+    /// more accuracy but produce larger bond dimensions.
     pub tolerance: f64,
     /// Hard upper bound on any bond dimension.
     ///
     /// Even if the tolerance would allow a larger rank, the bond dimension
     /// is capped at this value. `None` (default) means no limit.
     pub max_bond_dim: Option<usize>,
-    /// Whether to normalize the truncation error by the tensor norm.
+    /// Whether [`tolerance`](Self::tolerance) is relative to the bond scale.
+    ///
+    /// `true` (the default) discards singular values (or pivots) below
+    /// `tolerance * sigma_max` of that bond. `false` discards those below
+    /// `tolerance` itself, which is what a caller with an absolute error
+    /// budget wants: the bond-wise discarded weight then bounds the elementwise
+    /// error contribution of that bond directly, independent of the tensor
+    /// scale.
     pub normalize_error: bool,
 }
 
@@ -157,6 +166,7 @@ fn factorize<T>(
     matrix: &Matrix<T>,
     method: CompressionMethod,
     tolerance: f64,
+    normalize_error: bool,
     max_bond_dim: Option<usize>,
     left_orthogonal: bool,
 ) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
@@ -170,8 +180,18 @@ where
         + TensorScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
-    let reltol = if tolerance > 0.0 { tolerance } else { 1e-14 };
-    let abstol = 0.0;
+    // `normalize_error` selects the meaning of `tolerance`: a threshold
+    // relative to the largest singular value / pivot of the bond, or an
+    // absolute threshold on the discarded weight. The non-truncating left
+    // sweep passes `tolerance == 0.0` and keeps the relative machine-precision
+    // floor in both modes.
+    let (reltol, abstol) = if tolerance > 0.0 && !normalize_error {
+        (0.0, tolerance)
+    } else if tolerance > 0.0 {
+        (tolerance, 0.0)
+    } else {
+        (1e-14, 0.0)
+    };
 
     let options = RrLUOptions {
         max_bond_dim: max_bond_dim.unwrap_or(usize::MAX),
@@ -195,7 +215,13 @@ where
             let npivots = luci.rank();
             Ok((left, right, npivots))
         }
-        CompressionMethod::SVD => factorize_svd(matrix, tolerance, max_bond_dim, left_orthogonal),
+        CompressionMethod::SVD => factorize_svd(
+            matrix,
+            tolerance,
+            normalize_error,
+            max_bond_dim,
+            left_orthogonal,
+        ),
     }
 }
 
@@ -203,6 +229,7 @@ where
 fn factorize_svd<T>(
     matrix: &Matrix<T>,
     tolerance: f64,
+    normalize_error: bool,
     max_bond_dim: Option<usize>,
     left_orthogonal: bool,
 ) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
@@ -249,12 +276,18 @@ where
     let min_dim = m.min(n);
     let s_max = if !s_data.is_empty() { s_data[0] } else { 0.0 };
 
+    let threshold = if normalize_error {
+        tolerance * s_max
+    } else {
+        tolerance
+    };
+
     let mut rank = 0;
     for &singular_value in s_data.iter().take(min_dim) {
         if max_bond_dim.is_some_and(|cap| rank >= cap) {
             break;
         }
-        if singular_value < tolerance * s_max {
+        if singular_value < threshold {
             break;
         }
         rank += 1;
@@ -353,6 +386,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
                 &mat,
                 options.method,
                 0.0,  // No truncation in left sweep
+                true, // relative machine-precision floor only
                 None, // No max bond dim in left sweep
                 true, // left orthogonal
             )?;
@@ -410,6 +444,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
                 &mat,
                 options.method,
                 options.tolerance,
+                options.normalize_error,
                 options.max_bond_dim,
                 false, // right orthogonal
             )?;

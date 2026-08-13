@@ -206,3 +206,86 @@ fn test_compress_svd_with_truncation_f64() {
 fn test_compress_svd_with_truncation_c64() {
     test_compress_svd_with_truncation_generic::<Complex64>();
 }
+
+/// Two-site train whose bond carries exactly the singular values `1e6` and
+/// `1e-3`, built from orthonormal site vectors so the Schmidt values are the
+/// coefficients themselves.
+fn two_scale_tt<T>() -> SimpleTensorTrain<T>
+where
+    T: TTScalar + Scalar + Default,
+{
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    let left_vectors = [[half, half], [half, -half]];
+    let right_vectors = [[half, half], [half, -half]];
+    let coefficients = [1.0e6, 1.0e-3];
+
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1);
+    for (component, &coefficient) in coefficients.iter().enumerate() {
+        for site in 0..2 {
+            t0.set3(
+                0,
+                site,
+                component,
+                <T as Scalar>::from_f64(coefficient * left_vectors[component][site]),
+            );
+            t1.set3(
+                component,
+                site,
+                0,
+                <T as Scalar>::from_f64(right_vectors[component][site]),
+            );
+        }
+    }
+    SimpleTensorTrain::new(vec![t0, t1]).unwrap()
+}
+
+fn test_normalize_error_selects_relative_or_absolute_threshold_generic<T>()
+where
+    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    f64: From<<T as TensorScalar>::Real>,
+{
+    let tt = two_scale_tt::<T>();
+    assert_eq!(tt.rank(), 2);
+
+    // Relative: the threshold is 1e-6 * 1e6 = 1, so the 1e-3 component goes.
+    let relative = tt
+        .compressed(&CompressionOptions {
+            method: CompressionMethod::SVD,
+            tolerance: 1e-6,
+            max_bond_dim: None,
+            normalize_error: true,
+        })
+        .unwrap();
+    assert_eq!(relative.rank(), 1);
+
+    // Absolute: the threshold is 1e-6 itself, well below 1e-3, so both
+    // components are kept and the train is reproduced.
+    let absolute = tt
+        .compressed(&CompressionOptions {
+            method: CompressionMethod::SVD,
+            tolerance: 1e-6,
+            max_bond_dim: None,
+            normalize_error: false,
+        })
+        .unwrap();
+    assert_eq!(absolute.rank(), 2);
+    for left in 0..2 {
+        for right in 0..2 {
+            let want = tt.evaluate(&[left, right]).unwrap();
+            let got = absolute.evaluate(&[left, right]).unwrap();
+            let deviation = <T as Scalar>::abs_val(got - want);
+            assert!(deviation < 1e-6, "deviation {deviation:.3e} above 1e-6");
+        }
+    }
+}
+
+#[test]
+fn normalize_error_selects_relative_or_absolute_threshold_f64() {
+    test_normalize_error_selects_relative_or_absolute_threshold_generic::<f64>();
+}
+
+#[test]
+fn normalize_error_selects_relative_or_absolute_threshold_c64() {
+    test_normalize_error_selects_relative_or_absolute_threshold_generic::<Complex64>();
+}

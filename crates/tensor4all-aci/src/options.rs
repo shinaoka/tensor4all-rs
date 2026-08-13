@@ -7,7 +7,8 @@ use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 /// Use this type to choose iteration limits, truncation pressure, stopping
 /// tolerance, and an optional initial tensor-train guess. The default values are
 /// conservative: they run at least two sweeps, allow up to twenty sweeps, do not
-/// cap bond dimensions, and use an absolute tolerance of `1e-12`.
+/// cap bond dimensions, and use a tolerance of `1e-12` relative to the sampled
+/// operator-output magnitude (see [`scale_tolerance`](Self::scale_tolerance)).
 ///
 /// Related types: [`AciResult`](crate::AciResult) stores the tensor train and
 /// convergence history produced by an ACI run, while [`ElementwiseBatch`](crate::ElementwiseBatch)
@@ -23,7 +24,7 @@ use tensor4all_simplett::{SimpleTensorTrain, TTScalar};
 /// assert_eq!(options.min_iters, 2);
 /// assert_eq!(options.max_bond_dim, None);
 /// assert!((options.tolerance - 1e-12).abs() < 1e-15);
-/// assert!(!options.scale_tolerance);
+/// assert!(options.scale_tolerance);
 /// assert!(options.initial_guess.is_none());
 /// assert_eq!(options.rng_seed, 0);
 /// assert!(options.enable_global_guard);
@@ -59,19 +60,32 @@ pub struct AciOptions<T: TTScalar> {
     /// Requested stopping tolerance for the ACI residual estimate.
     ///
     /// The default is `1e-12`. When [`scale_tolerance`](Self::scale_tolerance)
-    /// is `false`, this is interpreted as an absolute tolerance. When
-    /// `scale_tolerance` is `true`, the public sweep APIs compare this value to
-    /// the largest per-bond relative metric, obtained by dividing each bond's
-    /// pivot error by that bond's largest sampled operator-output magnitude
-    /// from the completed sweep.
+    /// is `true` (the default), the public sweep APIs compare this value to the
+    /// largest per-bond relative metric, obtained by dividing each bond's pivot
+    /// error by that bond's largest sampled operator-output magnitude from the
+    /// completed sweep. When `scale_tolerance` is `false`, this is interpreted
+    /// as an absolute tolerance on the same pivot errors.
     pub tolerance: f64,
 
     /// Whether to scale [`tolerance`](Self::tolerance) by the output magnitude.
     ///
-    /// The default is `false`, giving absolute tolerance behavior. Set this to
-    /// `true` when outputs have problem-dependent scales and relative stopping
-    /// behavior is more appropriate. When in doubt, keep the default `false`
-    /// for absolute tolerance behavior.
+    /// The default is `true`, giving relative stopping behavior: each bond's
+    /// pivot error is compared against `tolerance` times the largest operator
+    /// output sampled at that bond. This matches the reference contract of
+    /// `TensorCrossInterpolation.jl` (`normalizeerror = true`), where the
+    /// tolerance is normalized by the largest sampled value.
+    ///
+    /// Set this to `false` only when an absolute error budget is genuinely
+    /// wanted, and keep in mind what an absolute budget asks for: a tolerance
+    /// far below the accuracy of the input tensor trains makes the sweep
+    /// interpolate their own approximation error, which is not low rank. The
+    /// pivot count then keeps rising with the number of sites at fixed
+    /// tolerance instead of saturating with the rank of the function (issue
+    /// #618). Scale-blind tolerances are also easy to misjudge: for an operator
+    /// output of magnitude `1e3`, an absolute `1e-12` is a relative `1e-15`,
+    /// close to double-precision rounding noise.
+    ///
+    /// When in doubt, keep the default `true`.
     pub scale_tolerance: bool,
 
     /// Optional tensor train used to initialize interpolation pivots and ranks.
@@ -141,7 +155,7 @@ impl<T: TTScalar> Default for AciOptions<T> {
             min_iters: 2,
             max_bond_dim: None,
             tolerance: 1e-12,
-            scale_tolerance: false,
+            scale_tolerance: true,
             initial_guess: None,
             rng_seed: 0,
             enable_global_guard: true,

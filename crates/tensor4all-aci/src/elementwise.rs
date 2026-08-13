@@ -15,10 +15,15 @@ use tensor4all_simplett::{
 /// [`ElementwiseBatch`] and writes one output value per interpolation point.
 /// Forward and backward sweeps alternate until the configured iteration limit
 /// is reached or the conservative convergence rule accepts the current ranks
-/// and maximum error metric. When [`AciOptions::scale_tolerance`] is enabled,
-/// each bond's pivot error is divided by that bond's largest sampled
-/// operator-output magnitude from the completed sweep, and the largest
-/// normalized value is used.
+/// and maximum error metric. When [`AciOptions::scale_tolerance`] is enabled
+/// (the default), each bond's pivot error is divided by that bond's largest
+/// sampled operator-output magnitude from the completed sweep, and the largest
+/// normalized value is used; otherwise the pivot errors are compared to
+/// [`AciOptions::tolerance`] as an absolute budget. Prefer the normalized
+/// default: an absolute tolerance below the accuracy the inputs themselves
+/// carry makes the sweep interpolate their approximation error, and the pivot
+/// count then rises with the number of sites instead of saturating with the
+/// rank of the function.
 ///
 /// When [`AciOptions::enable_global_guard`] is enabled (the default), the
 /// local stopping rule is gated by a global pivot search: after every sweep
