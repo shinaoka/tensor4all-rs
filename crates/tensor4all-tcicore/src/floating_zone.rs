@@ -38,6 +38,11 @@ use crate::MultiIndex;
 /// The final pivot and the maximum error encountered along the walk. The
 /// returned error may exceed `early_stop_tol`; the caller decides whether
 /// the point is significant.
+///
+/// # Errors
+///
+/// Propagates the error returned by `eval_batch` (e.g. an operator failure
+/// or a tensor-train evaluation failure).
 pub fn floating_zone_walk<E, Err>(
     local_dims: &[usize],
     init_p: &MultiIndex,
@@ -49,7 +54,6 @@ where
     E: FnMut(&[MultiIndex]) -> std::result::Result<Vec<f64>, Err>,
 {
     let n = local_dims.len();
-    debug_assert_eq!(init_p.len(), n);
 
     let mut pivot = init_p.clone();
 
