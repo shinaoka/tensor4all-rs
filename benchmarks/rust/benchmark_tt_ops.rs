@@ -159,12 +159,12 @@ fn deterministic_tensor(indices: Vec<DynIndex>, seed: usize) -> Result<IdxTensor
     IdxTensor::from_dense(indices, data).map_err(anyhow::Error::from)
 }
 
-fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
+fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Result<Tensor> {
     let len = shape.iter().product::<usize>();
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+    Ok(Tensor::C64(TypedTensor::from_vec_col_major(shape, data)?))
 }
 
 fn make_sites(length: usize, phys_dim: usize) -> Vec<DynIndex> {
@@ -200,7 +200,7 @@ fn make_native_mps_t4a_shapes(
     phys_dim: usize,
     chi: usize,
     seed_offset: usize,
-) -> Vec<Tensor> {
+) -> Result<Vec<Tensor>> {
     (0..length)
         .map(|site| {
             let mut shape = Vec::new();
@@ -216,11 +216,12 @@ fn make_native_mps_t4a_shapes(
         .collect()
 }
 
-fn eager_mps_tensors(ctx: &Arc<EagerRuntime>, tensors: Vec<Tensor>) -> Vec<EagerTensor> {
+fn eager_mps_tensors(ctx: &Arc<EagerRuntime>, tensors: Vec<Tensor>) -> Result<Vec<EagerTensor>> {
     tensors
         .into_iter()
         .map(|tensor| EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)))
-        .collect()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)
 }
 
 #[derive(Debug, Clone)]
@@ -255,10 +256,11 @@ impl RawEagerInnerConfigs {
     }
 }
 
-fn maybe_snapshot_output(tensor: &EagerTensor, snapshot_outputs: bool) {
+fn maybe_snapshot_output(tensor: &EagerTensor, snapshot_outputs: bool) -> Result<()> {
     if snapshot_outputs {
-        black_box(tensor.data().clone());
+        black_box(tensor.duplicate_value()?);
     }
+    Ok(())
 }
 
 fn raw_eager_inner_t4a_shapes(
@@ -279,24 +281,25 @@ fn raw_eager_inner_t4a_shapes(
     }
 
     let mut env = bra[0]
-        .dot_general_with_conj(&ket[0], &configs.first_site, true, false)
+        .dot_general_with_conj(&ket[0], configs.first_site.clone(), true, false)
         .context("failed raw eager first-site contraction")?;
-    maybe_snapshot_output(&env, snapshot_outputs);
+    maybe_snapshot_output(&env, snapshot_outputs)?;
 
     for site in 1..bra.len() {
         env = env
-            .dot_general_with_conj(&bra[site], &configs.env_bra, false, true)
+            .dot_general_with_conj(&bra[site], configs.env_bra.clone(), false, true)
             .with_context(|| format!("failed raw eager env-bra contraction at site {site}"))?;
-        maybe_snapshot_output(&env, snapshot_outputs);
+        maybe_snapshot_output(&env, snapshot_outputs)?;
 
         env = env
-            .dot_general_with_conj(&ket[site], &configs.tmp_ket, false, false)
+            .dot_general_with_conj(&ket[site], configs.tmp_ket.clone(), false, false)
             .with_context(|| format!("failed raw eager tmp-ket contraction at site {site}"))?;
-        maybe_snapshot_output(&env, snapshot_outputs);
+        maybe_snapshot_output(&env, snapshot_outputs)?;
     }
 
     let scalar = env
-        .data()
+        .value()
+        .context("failed to read raw eager inner output")?
         .as_slice::<Complex64>()
         .context("raw eager inner output is not Complex64")?
         .first()
@@ -665,15 +668,15 @@ fn main() -> Result<()> {
         let bra = make_mps(&sites, chi, 0)?;
         let ket = make_mps(&sites, chi, opts.length)?;
         let bra_conj = preconjugate_sites(&bra)?;
-        let raw_ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1));
+        let raw_ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
         let raw_bra = eager_mps_tensors(
             &raw_ctx,
-            make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, 0),
-        );
+            make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, 0)?,
+        )?;
         let raw_ket = eager_mps_tensors(
             &raw_ctx,
-            make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, opts.length),
-        );
+            make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, opts.length)?,
+        )?;
         let raw_configs = RawEagerInnerConfigs::new();
         let mps_params = format!("L_{}_chi_{}_d_{}", opts.length, chi, opts.phys_dim);
 

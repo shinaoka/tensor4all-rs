@@ -98,8 +98,16 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
     })?;
     let tensors: Vec<Tensor> = operands
         .iter()
-        .map(|tensor| T::into_tensor(tensor.shape().to_vec(), tensor.host_data().to_vec()))
-        .collect();
+        .map(|tensor| {
+            let tensor = tensor
+                .duplicate()
+                .map_err(|error| EinsumHelperError::Backend {
+                    subscripts: subscripts.to_string(),
+                    message: format!("operand duplication failed: {error}"),
+                })?;
+            Ok(T::typed_tensor_into_tensor(tensor))
+        })
+        .collect::<Result<_>>()?;
     let input_ids = parsed
         .inputs
         .iter()
@@ -123,10 +131,10 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
         }
     })?;
     let actual = result.dtype();
-    T::try_into_typed(result).ok_or_else(|| EinsumHelperError::Backend {
+    T::into_typed(result).map_err(|error| EinsumHelperError::Backend {
         subscripts: subscripts.to_string(),
         message: format!(
-            "dtype mismatch: result has {actual:?}, expected {:?}",
+            "dtype mismatch: result has {actual:?}, expected {:?}: {error}",
             T::dtype()
         ),
     })
@@ -145,10 +153,12 @@ pub(crate) fn typed_tensor_from_col_major_slice<T: TensorScalar>(
         });
     }
 
-    Ok(TypedTensor::from_vec_col_major(
-        shape.to_vec(),
-        data.to_vec(),
-    ))
+    TypedTensor::from_vec_col_major(shape.to_vec(), data.to_vec()).map_err(|error| {
+        EinsumHelperError::Backend {
+            subscripts: "tensor construction".to_string(),
+            message: error.to_string(),
+        }
+    })
 }
 
 pub(crate) fn typed_tensor_reshape<T: TensorScalar>(
@@ -166,14 +176,17 @@ pub(crate) fn typed_tensor_reshape<T: TensorScalar>(
         });
     }
 
-    Ok(TypedTensor::from_vec_col_major(
-        shape.to_vec(),
-        tensor.host_data().to_vec(),
-    ))
+    typed_tensor_from_col_major_slice(&tensor_to_col_major_vec(tensor)?, shape)
 }
 
-pub(crate) fn tensor_to_col_major_vec<T: TensorScalar>(tensor: &TypedTensor<T>) -> Vec<T> {
-    tensor.host_data().to_vec()
+pub(crate) fn tensor_to_col_major_vec<T: TensorScalar>(tensor: &TypedTensor<T>) -> Result<Vec<T>> {
+    tensor
+        .host_data()
+        .map(|data| data.to_vec())
+        .map_err(|error| EinsumHelperError::Backend {
+            subscripts: "tensor host access".to_string(),
+            message: error.to_string(),
+        })
 }
 
 pub(crate) fn row_vector_times_matrix<T: TTScalar + EinsumScalar>(

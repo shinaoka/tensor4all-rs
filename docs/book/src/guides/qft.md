@@ -180,16 +180,18 @@ assert!(*errors.last().unwrap() < 1e-10);
 
 // Convert to TreeTN (6 sites: 0,1,2,3,4,5)
 let tci_state = qtci.tci();
+let grid = qtci.inherent_grid().unwrap().clone();
 let batch_eval = move |batch: tensor4all_treetci::GlobalIndexBatch<'_>|
     -> anyhow::Result<Vec<f64>>
 {
     let mut values = Vec::with_capacity(batch.n_points());
+    let mut quantics = vec![0usize; batch.n_sites()];
     for p in 0..batch.n_points() {
-        let mut x_val = 0usize;
-        for bit in 0..r {
-            x_val |= batch.get(2 * bit, p).unwrap() << bit;
+        for (site, value) in quantics.iter_mut().enumerate() {
+            *value = batch.get(site, p).unwrap();
         }
-        values.push((2.0 * PI * x_val as f64 / n as f64).cos());
+        let grid_idx = grid.quantics_to_grididx(&quantics)?;
+        values.push((2.0 * PI * grid_idx[0] as f64 / n as f64).cos());
     }
     Ok(values)
 };

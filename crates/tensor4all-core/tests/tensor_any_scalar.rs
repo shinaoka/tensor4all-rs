@@ -493,10 +493,13 @@ fn tracked_negative_real_analytic_ops_match_principal_complex_values_and_backwar
     assert!(sqrt.tracks_grad());
     sqrt.backward().unwrap();
     let sqrt_grad: Complex64 = x.grad().unwrap().unwrap().into();
-    assert!(sqrt_grad.re.abs() < 1.0e-12);
-    // Reverse mode uses tenferro's Hermitian real-inner-product convention,
-    // so this is the conjugated analytic derivative.
-    assert!((sqrt_grad.im - 0.25).abs() < 1.0e-12);
+    // The real input's cotangent is the real projection of the complex VJP.
+    assert!(sqrt_grad.norm() < 1.0e-12);
+    x.clear_grad().unwrap();
+
+    sqrt.imag_part().backward().unwrap();
+    let sqrt_imag_grad = x.grad().unwrap().unwrap();
+    assert!((sqrt_imag_grad.real() + 0.25).abs() < 1.0e-12);
     x.clear_grad().unwrap();
 
     let pow = x.powf(0.5);
@@ -506,8 +509,12 @@ fn tracked_negative_real_analytic_ops_match_principal_complex_values_and_backwar
     assert!(pow.tracks_grad());
     pow.backward().unwrap();
     let pow_grad: Complex64 = x.grad().unwrap().unwrap().into();
-    assert!(pow_grad.re.abs() < 1.0e-12);
-    assert!((pow_grad.im - 0.25).abs() < 1.0e-12);
+    assert!(pow_grad.norm() < 1.0e-12);
+    x.clear_grad().unwrap();
+
+    pow.imag_part().backward().unwrap();
+    let pow_imag_grad = x.grad().unwrap().unwrap();
+    assert!((pow_imag_grad.real() + 0.25).abs() < 1.0e-12);
 }
 
 #[test]

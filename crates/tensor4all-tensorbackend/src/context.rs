@@ -12,14 +12,22 @@
 use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::{GraphCompiler, GraphExecutor};
-use tenferro_ad::EagerRuntime;
-use tenferro_cpu::{buffer_pool::BufferPoolStats, CpuBackend, CpuContext};
+use anyhow::anyhow;
+use tenferro::{GraphCompiler, Runtime};
+use tenferro_ad::{AdContext, EagerRuntime};
+use tenferro_cpu::{BufferPoolStats, CpuBackend, CpuContext};
 
 static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
-static DEFAULT_GRAPH_COMPILER: OnceLock<Mutex<GraphCompiler>> = OnceLock::new();
-static DEFAULT_GRAPH_EXECUTOR: OnceLock<Mutex<GraphExecutor<CpuBackend>>> = OnceLock::new();
+
+struct DefaultGraphRuntime {
+    compiler: GraphCompiler,
+    runtime: Runtime,
+    backend: CpuBackend,
+}
+
+static DEFAULT_GRAPH_RUNTIME: OnceLock<std::result::Result<Mutex<DefaultGraphRuntime>, String>> =
+    OnceLock::new();
 /// Error returned when the process-global eager AD runtime cannot be initialized.
 ///
 /// The original backend error is retained as the [`std::error::Error::source`]
@@ -67,29 +75,45 @@ fn default_backend() -> &'static Mutex<CpuBackend> {
     DEFAULT_BACKEND.get_or_init(|| Mutex::new(CpuBackend::from_context(default_cpu_context())))
 }
 
-fn default_graph_compiler() -> &'static Mutex<GraphCompiler> {
-    DEFAULT_GRAPH_COMPILER.get_or_init(|| Mutex::new(GraphCompiler::new()))
+fn build_graph_runtime(backend: &CpuBackend) -> std::result::Result<Runtime, String> {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            tenferro_cpu::runtime_engine_registration(backend).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    builder
+        .install_extension_module(
+            tenferro_einsum::extension_module::<CpuBackend>(
+                tenferro_cpu::runtime_engine_id().map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    builder.build().map_err(|e| e.to_string())
 }
 
-fn default_graph_executor() -> &'static Mutex<GraphExecutor<CpuBackend>> {
-    DEFAULT_GRAPH_EXECUTOR.get_or_init(|| {
-        Mutex::new(GraphExecutor::new(CpuBackend::from_context(
-            default_cpu_context(),
-        )))
-    })
-}
-
-fn lock_default_graph_compiler() -> std::sync::MutexGuard<'static, GraphCompiler> {
-    match default_graph_compiler().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+fn default_graph_runtime() -> anyhow::Result<&'static Mutex<DefaultGraphRuntime>> {
+    match DEFAULT_GRAPH_RUNTIME.get_or_init(|| {
+        let backend = CpuBackend::from_context(default_cpu_context());
+        build_graph_runtime(&backend).map(|runtime| {
+            Mutex::new(DefaultGraphRuntime {
+                compiler: GraphCompiler::new(),
+                runtime,
+                backend,
+            })
+        })
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(anyhow!("failed to initialize graph runtime: {error}")),
     }
 }
 
-fn lock_default_graph_executor() -> std::sync::MutexGuard<'static, GraphExecutor<CpuBackend>> {
-    match default_graph_executor().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+fn lock_default_graph_runtime(
+) -> anyhow::Result<std::sync::MutexGuard<'static, DefaultGraphRuntime>> {
+    match default_graph_runtime()?.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poisoned) => Ok(poisoned.into_inner()),
     }
 }
 
@@ -110,34 +134,49 @@ pub fn with_default_backend<R>(f: impl FnOnce(&mut CpuBackend) -> R) -> R {
 /// This is used for native tensor operations that benefit from tenferro's
 /// persistent execution caches, such as N-ary einsum contraction paths.
 pub(crate) fn with_default_graph_runtime<R>(
-    f: impl FnOnce(&mut GraphCompiler, &mut GraphExecutor<CpuBackend>) -> R,
-) -> R {
-    let mut compiler = lock_default_graph_compiler();
-    let mut executor = lock_default_graph_executor();
-    f(&mut compiler, &mut executor)
+    f: impl FnOnce(&mut GraphCompiler, &Runtime, &mut CpuBackend) -> R,
+) -> anyhow::Result<R> {
+    let mut graph = lock_default_graph_runtime()?;
+    let graph = &mut *graph;
+    let compiler = &mut graph.compiler;
+    let runtime = &graph.runtime;
+    let backend = &mut graph.backend;
+    Ok(f(compiler, runtime, backend))
 }
 
-/// Return retained-buffer statistics for the process-global graph executor.
-pub(crate) fn default_engine_buffer_pool_stats() -> BufferPoolStats {
-    lock_default_graph_executor().backend().buffer_pool_stats()
+/// Return retained-buffer statistics for the process-global graph runtime.
+pub(crate) fn default_engine_buffer_pool_stats() -> anyhow::Result<BufferPoolStats> {
+    let graph = lock_default_graph_runtime()?;
+    graph
+        .backend
+        .buffer_pool_stats()
+        .map_err(|e| anyhow!("failed to read graph buffer-pool statistics: {e}"))
 }
 
-/// Reset retained buffers in the process-global graph executor.
-pub(crate) fn reset_default_engine_buffer_pool() {
-    let mut executor = lock_default_graph_executor();
-    *executor = GraphExecutor::new(CpuBackend::from_context(default_cpu_context()));
+/// Reset retained buffers in the process-global graph runtime.
+pub(crate) fn reset_default_engine_buffer_pool() -> anyhow::Result<()> {
+    let mut graph = lock_default_graph_runtime()?;
+    graph
+        .backend
+        .reset_buffer_pool()
+        .map_err(|e| anyhow!("failed to reset graph buffer pool: {e}"))
 }
 
-/// Drop and recreate the process-global graph compiler/executor.
+/// Drop and recreate the process-global graph compiler/runtime.
 ///
 /// This releases tenferro's retained execution buffers and cached contraction
 /// paths. It is intended for diagnostics and memory-pressure recovery, not for
 /// normal hot loops where the caches are valuable.
-pub(crate) fn reset_default_engine() {
-    let mut compiler = lock_default_graph_compiler();
-    *compiler = GraphCompiler::new();
-    let mut executor = lock_default_graph_executor();
-    *executor = GraphExecutor::new(CpuBackend::from_context(default_cpu_context()));
+pub(crate) fn reset_default_engine() -> anyhow::Result<()> {
+    let mut graph = lock_default_graph_runtime()?;
+    let runtime = build_graph_runtime(&graph.backend)
+        .map_err(|e| anyhow!("failed to reset graph runtime: {e}"))?;
+    graph.compiler = GraphCompiler::new();
+    graph.runtime = runtime;
+    graph
+        .backend
+        .reset_buffer_pool()
+        .map_err(|e| anyhow!("failed to reset graph buffer pool: {e}"))
 }
 
 /// Return the process-global eager context used for reverse-mode AD.
@@ -172,13 +211,26 @@ pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContex
     }
 
     match DEFAULT_EAGER_RUNTIME.get_or_init(|| {
-        tenferro_linalg::register_extension_rule()
-            .map(|_| {
-                EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
-            })
+        let ad_context = AdContext::builder()
+            .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().map_err(
+                |source| EagerContextError::Registration {
+                    source: Arc::new(source),
+                },
+            )?)
             .map_err(|source| EagerContextError::Registration {
                 source: Arc::new(source),
-            })
+            })?
+            .build()
+            .map_err(|source| EagerContextError::Registration {
+                source: Arc::new(source),
+            })?;
+        EagerRuntime::with_cpu_backend_and_ad_context(
+            CpuBackend::from_context(default_cpu_context()),
+            &ad_context,
+        )
+        .map_err(|source| EagerContextError::Registration {
+            source: Arc::new(source),
+        })
     }) {
         Ok(context) => Ok(Arc::clone(context)),
         Err(error) => Err(error.clone()),
@@ -196,6 +248,7 @@ pub(crate) fn with_forced_eager_context_failure<T>(f: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tenferro_cpu::linalg_interop::PoolScalar;
 
     #[test]
     fn eager_context_error_preserves_source_chain() {
@@ -264,11 +317,35 @@ mod tests {
     }
 
     #[test]
+    fn reset_default_engine_releases_retained_backend_buffers() {
+        reset_default_engine_buffer_pool().unwrap();
+        with_default_graph_runtime(|_, _, backend| {
+            backend.with_linalg_pool(|_, pool| {
+                let buffer = <f64 as PoolScalar>::pool_acquire_zeroed(pool, 1024);
+                <f64 as PoolScalar>::pool_release(pool, buffer);
+                Ok(())
+            })
+        })
+        .unwrap()
+        .unwrap();
+
+        let before = default_engine_buffer_pool_stats().unwrap();
+        assert!(
+            before.capacity_bytes > 0,
+            "operation should retain a buffer"
+        );
+        reset_default_engine().unwrap();
+        let after = default_engine_buffer_pool_stats().unwrap();
+        assert_eq!(after.buffers, 0);
+        assert_eq!(after.capacity_bytes, 0);
+    }
+
+    #[test]
     fn default_engine_is_shared_across_threads() {
         let main_threads =
-            with_default_graph_runtime(|_, executor| executor.backend().num_threads());
+            with_default_graph_runtime(|_, _, backend| backend.num_threads()).unwrap();
         let worker_threads = std::thread::spawn(|| {
-            with_default_graph_runtime(|_, executor| executor.backend().num_threads())
+            with_default_graph_runtime(|_, _, backend| backend.num_threads()).unwrap()
         })
         .join()
         .expect("worker thread should complete");

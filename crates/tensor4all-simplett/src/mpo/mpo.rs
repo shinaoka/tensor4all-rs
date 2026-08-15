@@ -353,7 +353,10 @@ impl<T: TTScalar> MPO<T> {
                 |err| MPOError::InvalidOperation {
                     message: format!("Failed to sum first MPO site: {err}"),
                 },
-            )?);
+            )?)
+            .map_err(|err| MPOError::InvalidOperation {
+                message: format!("Failed to read first MPO sum: {err}"),
+            })?;
 
         // Contract with sums of remaining tensors
         for site in 1..self.len() {
@@ -364,7 +367,10 @@ impl<T: TTScalar> MPO<T> {
                         message: format!("Failed to sum MPO site {site}: {err}"),
                     }
                 })?,
-            );
+            )
+            .map_err(|err| MPOError::InvalidOperation {
+                message: format!("Failed to read MPO site {site} sum: {err}"),
+            })?;
             current =
                 row_vector_times_matrix(&current, &site_sum, tensor.left_dim(), tensor.right_dim())
                     .map_err(|err| MPOError::InvalidOperation {

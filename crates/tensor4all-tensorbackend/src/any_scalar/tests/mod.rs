@@ -181,10 +181,15 @@ fn promote_scalar_native_covers_all_scalar_type_pairs() {
 
 #[test]
 fn i64_native_scalar_is_supported_without_public_tensor_element() {
-    let scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![-3_i64]))
-        .expect("i64 native scalar");
-    let zero = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![0_i64]))
-        .expect("i64 zero scalar");
+    let scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![-3_i64])
+            .expect("valid i64 scalar test tensor"),
+    )
+    .expect("i64 native scalar");
+    let zero = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![0_i64]).expect("valid i64 zero test tensor"),
+    )
+    .expect("i64 zero scalar");
 
     assert_eq!(scalar.native.dtype(), DType::I64);
     assert_eq!(scalar.real(), -3.0);
@@ -203,10 +208,15 @@ fn i64_native_scalar_is_supported_without_public_tensor_element() {
 
 #[test]
 fn i32_native_scalar_is_supported_without_public_tensor_element() {
-    let scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![-4_i32]))
-        .expect("i32 native scalar");
-    let zero = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![0_i32]))
-        .expect("i32 zero scalar");
+    let scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![-4_i32])
+            .expect("valid i32 scalar test tensor"),
+    )
+    .expect("i32 native scalar");
+    let zero = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![0_i32]).expect("valid i32 zero test tensor"),
+    )
+    .expect("i32 zero scalar");
 
     assert_eq!(scalar.native.dtype(), DType::I32);
     assert_eq!(scalar.real(), -4.0);
@@ -226,10 +236,16 @@ fn i32_native_scalar_is_supported_without_public_tensor_element() {
 
 #[test]
 fn bool_native_scalar_is_supported_without_public_tensor_element() {
-    let true_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![true]))
-        .expect("bool true scalar");
-    let false_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![false]))
-        .expect("bool false scalar");
+    let true_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![true])
+            .expect("valid bool true scalar test tensor"),
+    )
+    .expect("bool true scalar");
+    let false_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![false])
+            .expect("valid bool false scalar test tensor"),
+    )
+    .expect("bool false scalar");
 
     assert_eq!(true_scalar.native.dtype(), DType::Bool);
     assert_eq!(true_scalar.real(), 1.0);
@@ -256,8 +272,11 @@ fn bool_native_scalar_is_supported_without_public_tensor_element() {
 
 #[test]
 fn promote_i64_native_scalar_covers_supported_targets_and_rejections() {
-    let i64_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![7_i64]))
-        .expect("i64 scalar");
+    let i64_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![7_i64])
+            .expect("valid i64 scalar test tensor"),
+    )
+    .expect("i64 scalar");
 
     let promoted_f32 =
         Scalar::from_native(promote_scalar_native(i64_scalar.as_native(), DType::F32).unwrap())
@@ -302,8 +321,11 @@ fn promote_i64_native_scalar_covers_supported_targets_and_rejections() {
 
 #[test]
 fn promote_i32_native_scalar_covers_supported_targets_and_rejections() {
-    let i32_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![5_i32]))
-        .expect("i32 scalar");
+    let i32_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![5_i32])
+            .expect("valid i32 scalar test tensor"),
+    )
+    .expect("i32 scalar");
 
     let promoted_f32 =
         Scalar::from_native(promote_scalar_native(i32_scalar.as_native(), DType::F32).unwrap())
@@ -354,8 +376,11 @@ fn promote_i32_native_scalar_covers_supported_targets_and_rejections() {
 
 #[test]
 fn promote_bool_native_scalar_covers_supported_targets_and_rejections() {
-    let true_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![true]))
-        .expect("bool scalar");
+    let true_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![true])
+            .expect("valid bool scalar test tensor"),
+    )
+    .expect("bool scalar");
 
     let promoted_f32 =
         Scalar::from_native(promote_scalar_native(true_scalar.as_native(), DType::F32).unwrap())
@@ -410,7 +435,8 @@ fn promote_bool_native_scalar_covers_supported_targets_and_rejections() {
 
 #[test]
 fn promote_scalar_native_rejects_non_scalar_tensor() {
-    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .expect("valid non-scalar test tensor");
 
     let err = promote_scalar_native(&tensor, DType::F64).unwrap_err();
 
@@ -419,8 +445,11 @@ fn promote_scalar_native_rejects_non_scalar_tensor() {
 
 #[test]
 fn i64_native_scalar_participates_in_real_ordering() {
-    let i64_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![3_i64]))
-        .expect("i64 scalar");
+    let i64_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![3_i64])
+            .expect("valid i64 scalar test tensor"),
+    )
+    .expect("i64 scalar");
 
     assert_eq!(
         i64_scalar.partial_cmp(&Scalar::from_value(2.5_f32)),
@@ -432,7 +461,11 @@ fn i64_native_scalar_participates_in_real_ordering() {
     );
     assert_eq!(
         i64_scalar.partial_cmp(
-            &Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![3_i64])).unwrap()
+            &Scalar::from_native(
+                NativeTensor::from_vec_col_major(vec![], vec![3_i64])
+                    .expect("valid comparison scalar test tensor"),
+            )
+            .unwrap()
         ),
         Some(Ordering::Equal)
     );
@@ -440,12 +473,21 @@ fn i64_native_scalar_participates_in_real_ordering() {
 
 #[test]
 fn i32_and_bool_native_scalars_participate_in_real_ordering() {
-    let i32_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![2_i32]))
-        .expect("i32 scalar");
-    let true_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![true]))
-        .expect("bool true scalar");
-    let false_scalar = Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![false]))
-        .expect("bool false scalar");
+    let i32_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![2_i32])
+            .expect("valid i32 scalar test tensor"),
+    )
+    .expect("i32 scalar");
+    let true_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![true])
+            .expect("valid bool true scalar test tensor"),
+    )
+    .expect("bool true scalar");
+    let false_scalar = Scalar::from_native(
+        NativeTensor::from_vec_col_major(vec![], vec![false])
+            .expect("valid bool false scalar test tensor"),
+    )
+    .expect("bool false scalar");
 
     assert_eq!(
         i32_scalar.partial_cmp(&Scalar::from_value(1.5_f32)),
@@ -457,7 +499,11 @@ fn i32_and_bool_native_scalars_participate_in_real_ordering() {
     );
     assert_eq!(
         i32_scalar.partial_cmp(
-            &Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![2_i32])).unwrap()
+            &Scalar::from_native(
+                NativeTensor::from_vec_col_major(vec![], vec![2_i32])
+                    .expect("valid comparison scalar test tensor"),
+            )
+            .unwrap()
         ),
         Some(Ordering::Equal)
     );
@@ -476,19 +522,31 @@ fn i32_and_bool_native_scalars_participate_in_real_ordering() {
     assert_eq!(true_scalar.partial_cmp(&i32_scalar), Some(Ordering::Less));
     assert_eq!(
         true_scalar.partial_cmp(
-            &Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![1_i64])).unwrap()
+            &Scalar::from_native(
+                NativeTensor::from_vec_col_major(vec![], vec![1_i64])
+                    .expect("valid comparison scalar test tensor"),
+            )
+            .unwrap()
         ),
         Some(Ordering::Equal)
     );
     assert_eq!(
         false_scalar.partial_cmp(
-            &Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![0_i32])).unwrap()
+            &Scalar::from_native(
+                NativeTensor::from_vec_col_major(vec![], vec![0_i32])
+                    .expect("valid comparison scalar test tensor"),
+            )
+            .unwrap()
         ),
         Some(Ordering::Equal)
     );
     assert_eq!(
         false_scalar.partial_cmp(
-            &Scalar::from_native(NativeTensor::from_vec_col_major(vec![], vec![false])).unwrap()
+            &Scalar::from_native(
+                NativeTensor::from_vec_col_major(vec![], vec![false])
+                    .expect("valid comparison scalar test tensor"),
+            )
+            .unwrap()
         ),
         Some(Ordering::Equal)
     );

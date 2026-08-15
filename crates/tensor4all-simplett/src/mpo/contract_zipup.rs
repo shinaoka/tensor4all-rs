@@ -79,7 +79,11 @@ where
     // Remainder tensor R[new_link, link_a, link_b], starting as the 1x1x1
     // scalar one.
     let mut remainder: TypedTensor<T> =
-        TypedTensor::from_vec_col_major(vec![1, 1, 1], vec![T::one()]);
+        TypedTensor::from_vec_col_major(vec![1, 1, 1], vec![T::one()]).map_err(|error| {
+            MPOError::InvalidOperation {
+                message: format!("zip-up remainder construction failed: {error}"),
+            }
+        })?;
 
     let mut result_tensors: Vec<Tensor4<T>> = Vec::with_capacity(n);
 

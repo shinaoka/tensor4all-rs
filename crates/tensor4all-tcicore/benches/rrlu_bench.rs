@@ -2,8 +2,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::Tensor;
+use tenferro_linalg::TensorLinalgExt;
+use tenferro_tensor::{BackendSessionHost, Tensor};
 use tensor4all_tcicore::{rrlu_mut, RrLUOptions};
 use tensor4all_tensorbackend::{from_vec2d, with_default_backend, Matrix};
 
@@ -25,7 +25,7 @@ fn random_tenferro_matrix(n: usize, m: usize, seed: u64) -> Tensor {
             data[row + n * col] = rng.random::<f64>();
         }
     }
-    Tensor::from_vec_col_major(vec![n, m], data)
+    Tensor::from_vec_col_major(vec![n, m], data).unwrap()
 }
 
 fn bench_rrlu(c: &mut Criterion) {
@@ -55,7 +55,10 @@ fn bench_rrlu(c: &mut Criterion) {
                 b.iter_batched(
                     || random_tenferro_matrix(n, n, 42),
                     |m| {
-                        with_default_backend(|backend| backend.full_piv_lu(&m)).unwrap();
+                        with_default_backend(|backend| {
+                            backend.with_backend_session(|session| m.full_piv_lu(session))
+                        })
+                        .unwrap();
                     },
                     criterion::BatchSize::SmallInput,
                 );

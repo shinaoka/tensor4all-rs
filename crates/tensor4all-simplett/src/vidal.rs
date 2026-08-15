@@ -50,7 +50,9 @@ where
     Ok(Matrix::from_col_major_vec(
         rows,
         cols,
-        tensor_to_col_major_vec(tensor),
+        tensor_to_col_major_vec(tensor).map_err(|err| TensorTrainError::InvalidOperation {
+            message: format!("Failed to read {op} matrix: {err}"),
+        })?,
     ))
 }
 
@@ -58,7 +60,10 @@ fn typed_real_values_to_f64<R>(tensor: &TypedTensor<R>, op: &'static str) -> Res
 where
     R: TensorScalar + ToPrimitive,
 {
-    let data = tensor_to_col_major_vec(tensor);
+    let data =
+        tensor_to_col_major_vec(tensor).map_err(|err| TensorTrainError::InvalidOperation {
+            message: format!("Failed to read {op} singular values: {err}"),
+        })?;
     data.iter()
         .map(|value| {
             value
@@ -93,9 +98,9 @@ where
         message: format!("Failed to compute Vidal bond SVD: {e}"),
     })?;
 
-    let u = typed_tensor_to_matrix(&decomp.u, "svd.u")?;
-    let vt = typed_tensor_to_matrix(&decomp.vt, "svd.vt")?;
-    let singular_values = typed_real_values_to_f64(&decomp.s, "svd.s")?;
+    let u = typed_tensor_to_matrix(decomp.u(), "svd.u")?;
+    let vt = typed_tensor_to_matrix(decomp.vt(), "svd.vt")?;
+    let singular_values = typed_real_values_to_f64(decomp.s(), "svd.s")?;
     let rank = singular_values.len();
 
     let mut left_scaled = Matrix::zeros(rows, rank);

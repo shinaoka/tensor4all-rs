@@ -38,7 +38,7 @@ use crate::{contract_pair, unfold_split, IdxTensor};
 use anyhow::Result as AnyhowResult;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::eager_tensor::full_piv_lu_solve as eager_full_piv_lu_solve;
+use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
@@ -548,7 +548,7 @@ where
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for MatrixLUCI
-    let a_matrix = native_tensor_to_matrix::<T>(matrix_inner.data(), m, n)?;
+    let a_matrix = eager_tensor_to_matrix::<T>(&matrix_inner, m, n)?;
 
     // Set up LU options for CI
     let left_orthogonal = canonical == Canonical::Left;
@@ -590,7 +590,7 @@ where
             (left, rows_inner)
         }
         Canonical::Right => {
-            let right = eager_full_piv_lu_solve(&pivot_inner, &rows_inner).map_err(|e| {
+            let right = pivot_inner.full_piv_lu_solve(&rows_inner).map_err(|e| {
                 FactorizeError::ComputationError(anyhow::anyhow!(
                     "fixed-pivot CI solve failed: {e}"
                 ))
@@ -635,7 +635,7 @@ where
 fn eager_right_solve(a: &EagerTensor, rhs: &EagerTensor) -> AnyhowResult<EagerTensor> {
     let a_t = a.transpose(&[1, 0])?;
     let rhs_t = rhs.transpose(&[1, 0])?;
-    Ok(eager_full_piv_lu_solve(&a_t, &rhs_t)?.transpose(&[1, 0])?)
+    Ok(a_t.full_piv_lu_solve(&rhs_t)?.transpose(&[1, 0])?)
 }
 
 /// Convert a native rank-2 tensor into a backend [`Matrix`].
@@ -652,9 +652,38 @@ where
             "failed to extract dense matrix entries from native tensor: {e}"
         ))
     })?;
+    matrix_from_col_major_values(data, m, n, "native")
+}
+
+fn eager_tensor_to_matrix<T>(
+    tensor: &EagerTensor,
+    m: usize,
+    n: usize,
+) -> Result<Matrix<T>, FactorizeError>
+where
+    T: TensorElement + MatrixScalar + Copy,
+{
+    let values = tensor
+        .value()
+        .map_err(|source| FactorizeError::ComputationError(anyhow::Error::new(source)))?
+        .as_slice::<T>()
+        .map_err(|source| FactorizeError::ComputationError(anyhow::Error::new(source)))?
+        .to_vec();
+    matrix_from_col_major_values(values, m, n, "eager")
+}
+
+fn matrix_from_col_major_values<T>(
+    data: Vec<T>,
+    m: usize,
+    n: usize,
+    source: &str,
+) -> Result<Matrix<T>, FactorizeError>
+where
+    T: MatrixScalar + Copy,
+{
     if data.len() != m * n {
         return Err(FactorizeError::ComputationError(anyhow::anyhow!(
-            "native matrix materialization produced {} entries for shape ({m}, {n})",
+            "{source} matrix materialization produced {} entries for shape ({m}, {n})",
             data.len()
         )));
     }

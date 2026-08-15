@@ -27,9 +27,10 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
-use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
-use tenferro_einsum::EinsumSubscripts;
-use tensor4all_tensorbackend::{einsum_native_tensors, einsum_native_tensors_owned};
+use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
+use tensor4all_tensorbackend::{
+    einsum_native_tensor_reads, einsum_native_tensors_owned, NativeTensorReadInput,
+};
 
 #[cfg(test)]
 use crate::defaults::DynId;
@@ -503,7 +504,7 @@ fn contract_owned_with_options_impl(
                 .enumerate()
                 .map(|(tensor_idx, tensor)| {
                     Ok((
-                        tensor.as_native()?.clone(),
+                        tensor.as_inner()?.duplicate_value()?,
                         plan.input_ids[tensor_idx].clone(),
                     ))
                 })
@@ -776,14 +777,10 @@ fn execute_contraction_plan(
     has_retained_indices: bool,
 ) -> Result<IdxTensor> {
     let any_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
-    let first_dtype = tensors[0].as_native()?.dtype();
+    let first_dtype = tensors[0].as_inner()?.dtype();
     let same_dtype = tensors
         .iter()
-        .map(|tensor| {
-            tensor
-                .as_native()
-                .map(|native| native.dtype() == first_dtype)
-        })
+        .map(|tensor| Ok(tensor.as_inner()?.dtype() == first_dtype))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .all(|same| same);
@@ -815,13 +812,13 @@ fn execute_contraction_plan(
         return Ok(result);
     }
 
-    if any_grad && same_dtype {
+    if any_grad {
         let operands = tensors
             .iter()
             .map(|tensor| tensor.as_inner())
             .collect::<Result<Vec<_>>>()?;
         let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
-        let result = eager_einsum_ad(&operands, &subscripts)?;
+        let result = operands.as_slice().einsum_subscripts(&subscripts)?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
             result,
@@ -829,14 +826,21 @@ fn execute_contraction_plan(
         );
     }
 
-    let native_operands: Vec<_> = tensors
+    let native_operands = tensors
         .iter()
         .enumerate()
         .map(|(tensor_idx, tensor)| {
-            Ok((tensor.as_native()?, plan.input_ids[tensor_idx].as_slice()))
+            Ok((
+                NativeTensorReadInput::Borrowed(tensor.as_inner()?.tensor_read()),
+                plan.input_ids[tensor_idx].as_slice(),
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
-    let result_native = einsum_native_tensors(&native_operands, &plan.output_ids)?;
+    let operand_refs = native_operands
+        .iter()
+        .map(|(tensor, ids)| (tensor, *ids))
+        .collect::<Vec<_>>();
+    let result_native = einsum_native_tensor_reads(&operand_refs, &plan.output_ids)?;
     IdxTensor::from_native_with_axis_classes(
         plan.result_indices.clone(),
         result_native,

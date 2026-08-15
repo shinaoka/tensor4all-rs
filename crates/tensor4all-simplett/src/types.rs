@@ -185,7 +185,11 @@ pub fn tensor3_from_data<T: TensorScalar>(
         });
     }
     let dims = [left_dim, site_dim, right_dim];
-    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data);
+    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data).map_err(|error| {
+        TensorTrainError::InvalidOperation {
+            message: format!("rank-3 tensor construction failed: {error}"),
+        }
+    })?;
     Ok(Tensor::from_tenferro_unchecked(inner))
 }
 

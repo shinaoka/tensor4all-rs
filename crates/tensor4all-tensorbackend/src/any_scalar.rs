@@ -5,7 +5,7 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
-use tenferro::{DType, Tensor as NativeTensor};
+use tenferro::{DType, Tensor as NativeTensor, TensorScalar};
 
 use crate::storage::{Storage, SumFromStorage};
 use crate::tensor_element::TensorElement;
@@ -125,37 +125,51 @@ fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
     match native.dtype() {
         DType::F32 => native
             .as_slice::<f32>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::F32)
             .ok_or_else(|| anyhow!("failed to read f32 scalar tensor value")),
         DType::F64 => native
             .as_slice::<f64>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::F64)
             .ok_or_else(|| anyhow!("failed to read f64 scalar tensor value")),
         DType::I32 => native
             .as_slice::<i32>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::I32)
             .ok_or_else(|| anyhow!("failed to read i32 scalar tensor value")),
         DType::I64 => native
             .as_slice::<i64>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::I64)
             .ok_or_else(|| anyhow!("failed to read i64 scalar tensor value")),
         DType::Bool => native
             .as_slice::<bool>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::Bool)
             .ok_or_else(|| anyhow!("failed to read bool scalar tensor value")),
         DType::C32 => native
             .as_slice::<Complex32>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::C32)
             .ok_or_else(|| anyhow!("failed to read c32 scalar tensor value")),
         DType::C64 => native
             .as_slice::<Complex64>()
-            .and_then(|values| values.first().copied())
+            .map_err(anyhow::Error::new)?
+            .first()
+            .copied()
             .map(ScalarValue::C64)
             .ok_or_else(|| anyhow!("failed to read c64 scalar tensor value")),
     }
@@ -163,6 +177,13 @@ fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
 
 trait ScalarTensorElement: TensorElement {
     fn scalar_value(value: Self) -> ScalarValue;
+}
+
+fn scalar_native<T: TensorScalar>(value: T) -> NativeTensor {
+    crate::require_invariant(
+        NativeTensor::from_vec_col_major(vec![], vec![value]),
+        "rank-0 scalar construction failed",
+    )
 }
 
 impl ScalarTensorElement for f32 {
@@ -225,9 +246,7 @@ pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Res
         (ScalarValue::F64(value), DType::C64) => Scalar::from_value(Complex64::new(value, 0.0)),
         (ScalarValue::I32(value), DType::F32) => Scalar::from_value(value as f32),
         (ScalarValue::I32(value), DType::F64) => Scalar::from_value(value as f64),
-        (ScalarValue::I32(value), DType::I32) => {
-            return Ok(NativeTensor::from_vec_col_major(vec![], vec![value]));
-        }
+        (ScalarValue::I32(value), DType::I32) => return Ok(scalar_native(value)),
         (ScalarValue::I32(value), DType::I64) => Scalar::from_i64(value as i64),
         (ScalarValue::I32(value), DType::C32) => {
             Scalar::from_value(Complex32::new(value as f32, 0.0))
@@ -255,15 +274,10 @@ pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Res
         }
         (ScalarValue::Bool(value), DType::F64) => Scalar::from_value(if value { 1.0 } else { 0.0 }),
         (ScalarValue::Bool(value), DType::I32) => {
-            return Ok(NativeTensor::from_vec_col_major(
-                vec![],
-                vec![if value { 1 } else { 0 }],
-            ));
+            return Ok(scalar_native(if value { 1 } else { 0 }));
         }
         (ScalarValue::Bool(value), DType::I64) => Scalar::from_i64(if value { 1 } else { 0 }),
-        (ScalarValue::Bool(value), DType::Bool) => {
-            return Ok(NativeTensor::from_vec_col_major(vec![], vec![value]));
-        }
+        (ScalarValue::Bool(value), DType::Bool) => return Ok(scalar_native(value)),
         (ScalarValue::Bool(value), DType::C32) => {
             Scalar::from_value(Complex32::new(if value { 1.0 } else { 0.0 }, 0.0))
         }
@@ -346,21 +360,21 @@ impl Scalar {
 
     fn from_i64(value: i64) -> Self {
         Self {
-            native: NativeTensor::from_vec_col_major(vec![], vec![value]),
+            native: scalar_native(value),
             value: ScalarValue::I64(value),
         }
     }
 
     fn from_i32(value: i32) -> Self {
         Self {
-            native: NativeTensor::from_vec_col_major(vec![], vec![value]),
+            native: scalar_native(value),
             value: ScalarValue::I32(value),
         }
     }
 
     fn from_bool(value: bool) -> Self {
         Self {
-            native: NativeTensor::from_vec_col_major(vec![], vec![value]),
+            native: scalar_native(value),
             value: ScalarValue::Bool(value),
         }
     }
@@ -391,9 +405,8 @@ impl Scalar {
     /// ```
     #[allow(private_bounds)]
     pub fn from_value<T: ScalarTensorElement>(value: T) -> Self {
-        let native = NativeTensor::from_vec_col_major(vec![], vec![value]);
         Self {
-            native,
+            native: scalar_native(value),
             value: T::scalar_value(value),
         }
     }
@@ -1049,9 +1062,14 @@ impl fmt::Debug for Scalar {
 
 impl Clone for Scalar {
     fn clone(&self) -> Self {
-        Self {
-            native: self.native.clone(),
-            value: self.value,
+        match self.value {
+            ScalarValue::F32(value) => Self::from_value(value),
+            ScalarValue::F64(value) => Self::from_value(value),
+            ScalarValue::I32(value) => Self::from_i32(value),
+            ScalarValue::I64(value) => Self::from_i64(value),
+            ScalarValue::Bool(value) => Self::from_bool(value),
+            ScalarValue::C32(value) => Self::from_value(value),
+            ScalarValue::C64(value) => Self::from_value(value),
         }
     }
 }

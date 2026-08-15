@@ -319,26 +319,34 @@ impl AnyScalar {
     }
 
     fn scalar_value_from_tensor(tensor: &IdxTensor) -> Result<ScalarValue> {
-        let native = tensor.as_native()?;
-        match native.dtype() {
-            DType::F32 => native
-                .as_slice::<f32>()
-                .and_then(|values| values.first().copied())
+        let inner = tensor.as_inner()?;
+        match inner.dtype() {
+            DType::F32 => inner
+                .value()?
+                .as_slice::<f32>()?
+                .first()
+                .copied()
                 .map(ScalarValue::F32)
                 .ok_or_else(|| anyhow!("rank-0 f32 scalar tensor is empty")),
-            DType::F64 => native
-                .as_slice::<f64>()
-                .and_then(|values| values.first().copied())
+            DType::F64 => inner
+                .value()?
+                .as_slice::<f64>()?
+                .first()
+                .copied()
                 .map(ScalarValue::F64)
                 .ok_or_else(|| anyhow!("rank-0 f64 scalar tensor is empty")),
-            DType::C32 => native
-                .as_slice::<Complex32>()
-                .and_then(|values| values.first().copied())
+            DType::C32 => inner
+                .value()?
+                .as_slice::<Complex32>()?
+                .first()
+                .copied()
                 .map(ScalarValue::C32)
                 .ok_or_else(|| anyhow!("rank-0 c32 scalar tensor is empty")),
-            DType::C64 => native
-                .as_slice::<Complex64>()
-                .and_then(|values| values.first().copied())
+            DType::C64 => inner
+                .value()?
+                .as_slice::<Complex64>()?
+                .first()
+                .copied()
                 .map(ScalarValue::C64)
                 .ok_or_else(|| anyhow!("rank-0 c64 scalar tensor is empty")),
             dtype => Err(anyhow!("unsupported scalar tensor dtype {dtype:?}")),
@@ -1117,7 +1125,7 @@ impl AnyScalar {
             return Ok(Self::from_real(self.real()));
         }
         if self.is_complex() {
-            Self::from_eager_unary(self, "real_part", |tensor| tensor.convert(DType::F64))
+            Self::from_eager_unary(self, "real_part", |tensor| tensor.cast(DType::F64))
         } else {
             self.try_mul(&Self::new_real(1.0))
         }
@@ -1134,7 +1142,7 @@ impl AnyScalar {
                 Self::from_eager_binary(self, &factor, "imag_part", |value, factor| {
                     value.mul(factor)
                 })?;
-            Self::from_eager_unary(&imaginary, "imag_part", |tensor| tensor.convert(DType::F64))
+            Self::from_eager_unary(&imaginary, "imag_part", |tensor| tensor.cast(DType::F64))
         } else {
             self.try_mul(&Self::new_real(0.0))
         }

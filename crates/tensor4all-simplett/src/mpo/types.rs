@@ -188,7 +188,11 @@ pub fn tensor4_from_data<T: TensorScalar>(
         });
     }
     let dims = [left_dim, site_dim_1, site_dim_2, right_dim];
-    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data);
+    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data).map_err(|error| {
+        MPOError::InvalidOperation {
+            message: format!("rank-4 tensor construction failed: {error}"),
+        }
+    })?;
     Ok(Tensor::from_tenferro_unchecked(inner))
 }
 

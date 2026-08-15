@@ -8,8 +8,7 @@ use crate::global_default::GlobalDefault;
 use crate::IdxTensor;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro::DType;
-use tenferro_linalg::eager_tensor::qr as eager_qr;
-use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
+use tenferro_linalg::EagerTensorLinalgExt;
 use thiserror::Error;
 
 /// Error type for QR operations in tensor4all-linalg.
@@ -256,8 +255,9 @@ pub fn qr_with<T>(
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (mut q_inner, mut r_inner) =
-        eager_qr(&matrix_inner).map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let (mut q_inner, mut r_inner) = matrix_inner
+        .qr()
+        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let r = if options.truncate {
         // Determine rtol to use
@@ -266,16 +266,21 @@ pub fn qr_with<T>(
             return Err(QrError::InvalidRtol(rtol));
         }
 
-        match r_inner.data().dtype() {
+        let value = r_inner
+            .value()
+            .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
+        match r_inner.dtype() {
             DType::F64 => {
-                let values = native_tensor_primal_to_dense_col_major::<f64>(r_inner.data())
-                    .map_err(|e| QrError::ComputationError(e.source))?;
-                compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
+                let values = value
+                    .as_slice::<f64>()
+                    .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
+                compute_retained_rank_qr_from_dense(values, k, n, rtol)?
             }
             DType::C64 => {
-                let values = native_tensor_primal_to_dense_col_major::<Complex64>(r_inner.data())
-                    .map_err(|e| QrError::ComputationError(e.source))?;
-                compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
+                let values = value
+                    .as_slice::<Complex64>()
+                    .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
+                compute_retained_rank_qr_from_dense(values, k, n, rtol)?
             }
             other => {
                 return Err(QrError::ComputationError(anyhow::anyhow!(
