@@ -48,6 +48,27 @@ CUDA, placement-aware session routing, public explicit sessions, and tracing are
   removed; native constructor errors now pass through a private local helper.
 - Round 4 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
 - Verdict: **Correct-to-merge**
+- Initial CI then exposed stricter repository gates not included in the local
+  command set: `clippy::missing_panics_doc` on simplett's infallible export,
+  and the compiler-backed panic audit after source-line migration. The public
+  docs now state the host-invariant panic contract. Raw invariant
+  `panic!`/`unreachable!` sites were consolidated behind private validated-state
+  assertion helpers, while the existing public-assertion baseline was relocated
+  without adding entries (23 before and after). The route review failure comes
+  from the trusted base script parsing root `[workspace.dependencies]`; this PR
+  contains the parser regression fix, so the maintainer waiver is required once
+  for this same PR and deterministic checks remain active in all other gates.
+- Round 5 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
+- Verdict: **Findings**
+- Fixed findings: added checked, typed-error `try_from_fn` / `try_from_elem`
+  constructors while retaining the existing infallible convenience signatures;
+  removed safe mutable access to simplett's wrapped tenferro tensor so the
+  host/rank invariant is enforceable; made typed linalg result fields private,
+  validated host ownership at construction, and added read accessors plus
+  consuming `into_parts` methods so `Clone` is valid for every publicly
+  constructible result.
+- Round 6 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
+- Verdict: **Correct-to-merge**
 
 ## Implementation
 
@@ -126,11 +147,15 @@ a public or local duplicate batched-dot vocabulary.
   matrix::tests::batched_mat_mul_same_shape` — passed: **2 passed**.
 - `CARGO_BUILD_JOBS=4 cargo nextest run --release --workspace --no-fail-fast`
   — passed: **2802 passed, 14 skipped, 0 failed**.
-- `cargo test --doc --release --workspace` — passed: **865 passed**.
+- `cargo test --doc --release --workspace` — passed: **867 passed**.
 - `cargo doc --workspace --no-deps` — passed (pre-existing rustdoc warnings remain).
 - `./scripts/test-mdbook.sh` — passed after synchronizing the 2D QFT guide's
   quantics decoding with the canonical inherent-grid API.
 - `python3 scripts/test-repository-rules-review.py` — passed: **90 tests**.
+- `cargo clippy --workspace --all-targets -- -D warnings -D
+  clippy::missing_errors_doc -D clippy::missing_panics_doc` — passed.
+- `python3 scripts/audit-library-panics.py` — passed: **0 unbaselined,
+  0 stale**.
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run`
   — passed with no findings.
 

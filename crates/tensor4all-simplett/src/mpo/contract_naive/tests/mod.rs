@@ -95,7 +95,7 @@ fn compression_at_a_binding_rank_cap_attains_the_optimal_truncation() {
     let matrix =
         tenferro_tensor::TypedTensor::from_vec_col_major(vec![4, 4], exact_dense.clone()).unwrap();
     let svd = svd_backend(&matrix).unwrap();
-    let sigma = svd.s.host_data().unwrap().to_vec();
+    let sigma = svd.s().host_data().unwrap().to_vec();
     let keep = 2;
     let optimal_error = sigma[keep..].iter().map(|s| s * s).sum::<f64>().sqrt();
     assert!(

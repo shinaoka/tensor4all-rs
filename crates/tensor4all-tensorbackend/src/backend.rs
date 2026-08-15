@@ -22,20 +22,17 @@ use crate::matrix::Matrix;
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
 /// let result = svd_backend(&a)?;
-/// assert_eq!(result.u.shape(), &[2, 2]);
-/// assert_eq!(result.s.shape(), &[2]);
-/// assert_eq!(result.vt.shape(), &[2, 2]);
+/// assert_eq!(result.u().shape(), &[2, 2]);
+/// assert_eq!(result.s().shape(), &[2]);
+/// assert_eq!(result.vt().shape(), &[2, 2]);
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug)]
 pub struct SvdResult<T: TensorScalar> {
-    /// Left singular vectors.
-    pub u: TypedTensor<T>,
-    /// Singular values.
-    pub s: TypedTensor<T::Real>,
-    /// Right singular vectors transposed.
-    pub vt: TypedTensor<T>,
+    u: TypedTensor<T>,
+    s: TypedTensor<T::Real>,
+    vt: TypedTensor<T>,
 }
 
 /// Result of complete-pivoting LU decomposition `P A Q^T = L U`.
@@ -44,22 +41,70 @@ pub struct SvdResult<T: TensorScalar> {
 /// triangular factor for pivot selection.
 #[derive(Debug)]
 pub struct FullPivLuResult<T: TensorScalar> {
-    /// Left permutation matrix.
-    pub p: TypedTensor<T>,
-    /// Lower triangular factor.
-    pub l: TypedTensor<T>,
-    /// Upper triangular factor.
-    pub u: TypedTensor<T>,
-    /// Right permutation matrix.
-    pub q: TypedTensor<T>,
+    p: TypedTensor<T>,
+    l: TypedTensor<T>,
+    u: TypedTensor<T>,
+    q: TypedTensor<T>,
 }
 
 fn clone_linalg_tensor<T: TensorScalar>(tensor: &TypedTensor<T>) -> TypedTensor<T> {
-    // INVARIANT: these result containers own valid tensors returned by the CPU
-    // linalg backend. `Clone` cannot expose tenferro's fallible duplication.
-    tensor
-        .duplicate()
-        .unwrap_or_else(|error| panic!("linalg result duplication failed: {error}"))
+    crate::require_invariant(tensor.duplicate(), "linalg result duplication failed")
+}
+
+impl<T: TensorScalar> SvdResult<T> {
+    /// Borrow the left singular vectors.
+    pub fn u(&self) -> &TypedTensor<T> {
+        &self.u
+    }
+
+    /// Borrow the singular values.
+    pub fn s(&self) -> &TypedTensor<T::Real> {
+        &self.s
+    }
+
+    /// Borrow the transposed right singular vectors.
+    pub fn vt(&self) -> &TypedTensor<T> {
+        &self.vt
+    }
+
+    /// Consume the decomposition into `(U, S, Vt)`.
+    pub fn into_parts(self) -> (TypedTensor<T>, TypedTensor<T::Real>, TypedTensor<T>) {
+        (self.u, self.s, self.vt)
+    }
+}
+
+impl<T: TensorScalar> FullPivLuResult<T> {
+    /// Borrow the left permutation matrix.
+    pub fn p(&self) -> &TypedTensor<T> {
+        &self.p
+    }
+
+    /// Borrow the lower triangular factor.
+    pub fn l(&self) -> &TypedTensor<T> {
+        &self.l
+    }
+
+    /// Borrow the upper triangular factor.
+    pub fn u(&self) -> &TypedTensor<T> {
+        &self.u
+    }
+
+    /// Borrow the right permutation matrix.
+    pub fn q(&self) -> &TypedTensor<T> {
+        &self.q
+    }
+
+    /// Consume the decomposition into `(P, L, U, Q)`.
+    pub fn into_parts(
+        self,
+    ) -> (
+        TypedTensor<T>,
+        TypedTensor<T>,
+        TypedTensor<T>,
+        TypedTensor<T>,
+    ) {
+        (self.p, self.l, self.u, self.q)
+    }
 }
 
 impl<T: TensorScalar> Clone for SvdResult<T> {
@@ -635,11 +680,13 @@ fn matrix_to_typed_tensor<T>(matrix: &Matrix<T>) -> TypedTensor<T>
 where
     T: TensorScalar + Copy,
 {
-    TypedTensor::from_vec_col_major(
-        vec![matrix.nrows(), matrix.ncols()],
-        matrix.as_col_major_slice().to_vec(),
+    crate::require_invariant(
+        TypedTensor::from_vec_col_major(
+            vec![matrix.nrows(), matrix.ncols()],
+            matrix.as_col_major_slice().to_vec(),
+        ),
+        "validated matrix rejected by tenferro",
     )
-    .unwrap_or_else(|error| unreachable!("validated matrix rejected by tenferro: {error}"))
 }
 
 fn typed_tensor_to_matrix<T>(op: &'static str, tensor: TypedTensor<T>) -> Result<Matrix<T>>
@@ -647,6 +694,16 @@ where
     T: TensorScalar + Copy,
 {
     Matrix::try_from_typed_tensor(tensor).map_err(|err| anyhow!("{op}: {err}"))
+}
+
+fn require_host_linalg_tensor<T: TensorScalar>(
+    op: &'static str,
+    tensor: TypedTensor<T>,
+) -> Result<TypedTensor<T>> {
+    tensor
+        .host_data()
+        .map_err(|error| anyhow!("{op}: result must be host-backed: {error}"))?;
+    Ok(tensor)
 }
 
 /// Compute a thin/economy SVD on a typed tensor.
@@ -670,9 +727,9 @@ where
         with_default_backend(|backend| backend.with_backend_session(|session| tensor.svd(session)))
             .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
     Ok(SvdResult {
-        u: convert_for_typed::<T>("svd", u)?,
-        s: convert_for_typed::<T::Real>("svd", s)?,
-        vt: convert_for_typed::<T>("svd", vt)?,
+        u: require_host_linalg_tensor("svd", convert_for_typed::<T>("svd", u)?)?,
+        s: require_host_linalg_tensor("svd", convert_for_typed::<T::Real>("svd", s)?)?,
+        vt: require_host_linalg_tensor("svd", convert_for_typed::<T>("svd", vt)?)?,
     })
 }
 
@@ -938,10 +995,10 @@ where
     })
     .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
     Ok(FullPivLuResult {
-        p: convert_for_typed::<T>("full_piv_lu", p)?,
-        l: convert_for_typed::<T>("full_piv_lu", l)?,
-        u: convert_for_typed::<T>("full_piv_lu", u)?,
-        q: convert_for_typed::<T>("full_piv_lu", q)?,
+        p: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", p)?)?,
+        l: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", l)?)?,
+        u: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", u)?)?,
+        q: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", q)?)?,
     })
 }
 

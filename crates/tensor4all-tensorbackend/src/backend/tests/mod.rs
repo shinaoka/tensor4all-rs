@@ -91,19 +91,19 @@ fn svd_backend_reconstructs_complex_matrix() {
     .expect("valid SVD test input");
 
     let decomp = svd_backend(&input).unwrap();
-    assert_eq!(decomp.u.shape(), &[2, 2]);
-    assert_eq!(decomp.s.shape(), &[2]);
-    assert_eq!(decomp.vt.shape(), &[2, 2]);
+    assert_eq!(decomp.u().shape(), &[2, 2]);
+    assert_eq!(decomp.s().shape(), &[2]);
+    assert_eq!(decomp.vt().shape(), &[2, 2]);
     let cloned = decomp.clone();
-    assert_eq!(cloned.s.shape(), &[2]);
+    assert_eq!(cloned.s().shape(), &[2]);
 
-    let u = row_major_values(&decomp.u);
+    let u = row_major_values(decomp.u());
     let s = decomp
-        .s
+        .s()
         .as_slice()
         .expect("SVD singular values should expose host values")
         .to_vec();
-    let vt = row_major_values(&decomp.vt);
+    let vt = row_major_values(decomp.vt());
     let us = scale_columns_complex(&u, 2, 2, &s);
     let reconstructed = matmul_row_major(&us, 2, 2, &vt, 2);
     let input_values = row_major_values(&input);
@@ -341,12 +341,12 @@ fn full_piv_lu_backend_returns_square_factors() {
 
     let decomp = full_piv_lu_backend(&input).unwrap();
 
-    assert_eq!(decomp.p.shape(), &[2, 2]);
-    assert_eq!(decomp.l.shape(), &[2, 2]);
-    assert_eq!(decomp.u.shape(), &[2, 2]);
-    assert_eq!(decomp.q.shape(), &[2, 2]);
+    assert_eq!(decomp.p().shape(), &[2, 2]);
+    assert_eq!(decomp.l().shape(), &[2, 2]);
+    assert_eq!(decomp.u().shape(), &[2, 2]);
+    assert_eq!(decomp.q().shape(), &[2, 2]);
     let cloned = decomp.clone();
-    assert_eq!(cloned.u.shape(), &[2, 2]);
+    assert_eq!(cloned.u().shape(), &[2, 2]);
 }
 
 #[test]

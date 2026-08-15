@@ -98,9 +98,9 @@ where
         message: format!("Failed to compute Vidal bond SVD: {e}"),
     })?;
 
-    let u = typed_tensor_to_matrix(&decomp.u, "svd.u")?;
-    let vt = typed_tensor_to_matrix(&decomp.vt, "svd.vt")?;
-    let singular_values = typed_real_values_to_f64(&decomp.s, "svd.s")?;
+    let u = typed_tensor_to_matrix(decomp.u(), "svd.u")?;
+    let vt = typed_tensor_to_matrix(decomp.vt(), "svd.vt")?;
+    let singular_values = typed_real_values_to_f64(decomp.s(), "svd.s")?;
     let rank = singular_values.len();
 
     let mut left_scaled = Matrix::zeros(rows, rank);

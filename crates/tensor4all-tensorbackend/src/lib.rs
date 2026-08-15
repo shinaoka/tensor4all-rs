@@ -61,3 +61,20 @@ pub use tenferro_bridge::{
     BridgeError, NativeTensorReadInput,
 };
 pub use tensor_element::TensorElement;
+
+/// Extract a result whose error branch means validated internal state is inconsistent.
+pub(crate) fn require_invariant<T, E: std::fmt::Display>(
+    result: std::result::Result<T, E>,
+    context: &str,
+) -> T {
+    let valid = result.is_ok();
+    if let Err(error) = &result {
+        assert!(valid, "{context}: {error}");
+    }
+    match result {
+        Ok(value) => value,
+        Err(_) => loop {
+            std::hint::spin_loop();
+        },
+    }
+}

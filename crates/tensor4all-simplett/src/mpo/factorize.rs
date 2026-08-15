@@ -198,9 +198,10 @@ fn factorize_svd<T: SVDScalar>(
         message: format!("SVD computation failed: {:?}", e),
     })?;
 
-    let u = typed_tensor_to_matrix2(svd_result.u, "svd.u")?;
-    let vt = typed_tensor_to_matrix2(svd_result.vt, "svd.vt")?;
-    let singular_values = typed_col_major_values(&svd_result.s, "svd.s")?;
+    let (u, s, vt) = svd_result.into_parts();
+    let u = typed_tensor_to_matrix2(u, "svd.u")?;
+    let vt = typed_tensor_to_matrix2(vt, "svd.vt")?;
+    let singular_values = typed_col_major_values(&s, "svd.s")?;
 
     // Determine rank based on tolerance and max_bond_dim
     let min_dim = m.min(n);
