@@ -167,6 +167,14 @@ fn test_contraction_helper_error_formats_context() {
 }
 
 #[test]
+fn test_inner_product_read_error_formats_context() {
+    let err = inner_product_read_error("host data unavailable");
+    assert!(err
+        .to_string()
+        .contains("Failed to read inner_product result: host data unavailable"));
+}
+
+#[test]
 fn test_dot_three_sites() {
     // Test inner_product product with 3 sites to exercise the inner loop more fully
     let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);

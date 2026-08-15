@@ -69,6 +69,25 @@ CUDA, placement-aware session routing, public explicit sessions, and tracing are
   constructible result.
 - Round 6 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
 - Verdict: **Correct-to-merge**
+- The second CI run passed lint, tests, doctests, panic audit, and route review,
+  then found two remaining repository gates: the new fallible constructors had
+  non-specific `# Errors` wording, and coverage fell in the two files that
+  gained invariant/error plumbing. The docs now name
+  `TensorTrainError::InvalidOperation`; focused tests cover both branches of
+  `require_invariant` and the shared inner-product read-error mapper, without
+  changing coverage thresholds.
+- Round 7 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
+- Verdict: **Findings**
+- Fixed finding: non-overflowing but unallocatable shapes could still panic in
+  the new fallible simplett constructors. Both now call `try_reserve_exact`, map
+  capacity failures to `TensorTrainError::InvalidOperation`, and test
+  `[usize::MAX, 1]` without evaluating the element closure.
+- Round 8 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
+- Verdict: **Findings**
+- Fixed finding: the retained infallible constructor docs now list allocation
+  failure and tenferro shape/data rejection in addition to shape overflow.
+- Round 9 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
+- Verdict: **Correct-to-merge**
 
 ## Implementation
 
@@ -146,7 +165,7 @@ a public or local duplicate batched-dot vocabulary.
 - `cargo test --release -p tensor4all-tensorbackend
   matrix::tests::batched_mat_mul_same_shape` — passed: **2 passed**.
 - `CARGO_BUILD_JOBS=4 cargo nextest run --release --workspace --no-fail-fast`
-  — passed: **2802 passed, 14 skipped, 0 failed**.
+  — passed: **2804 passed, 14 skipped, 0 failed**.
 - `cargo test --doc --release --workspace` — passed: **867 passed**.
 - `cargo doc --workspace --no-deps` — passed (pre-existing rustdoc warnings remain).
 - `./scripts/test-mdbook.sh` — passed after synchronizing the 2D QFT guide's
@@ -156,6 +175,7 @@ a public or local duplicate batched-dot vocabulary.
   clippy::missing_errors_doc -D clippy::missing_panics_doc` — passed.
 - `python3 scripts/audit-library-panics.py` — passed: **0 unbaselined,
   0 stale**.
+- `python3 scripts/check-public-error-docs.py` — passed.
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run`
   — passed with no findings.
 

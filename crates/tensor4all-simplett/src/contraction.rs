@@ -20,6 +20,10 @@ fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> Tenso
     }
 }
 
+fn inner_product_read_error(err: impl std::fmt::Display) -> TensorTrainError {
+    contraction_helper_error("Failed to read inner_product result", err)
+}
+
 /// Options for MPO-MPO contraction with on-the-fly compression.
 ///
 /// # Examples
@@ -115,9 +119,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                     contraction_helper_error("Failed to contract first inner_product site", err)
                 })?,
             )
-            .map_err(|err| {
-                contraction_helper_error("Failed to read first inner_product result", err)
-            })?,
+            .map_err(inner_product_read_error)?,
         );
 
         // Contract through remaining sites
@@ -156,12 +158,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                             )
                         })?,
                 )
-                .map_err(|err| {
-                    contraction_helper_error(
-                        &format!("Failed to read inner_product site {i} result"),
-                        err,
-                    )
-                })?,
+                .map_err(inner_product_read_error)?,
             );
         }
 

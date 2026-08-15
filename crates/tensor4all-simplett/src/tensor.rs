@@ -325,8 +325,9 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the shape product overflows or tenferro rejects
-    /// the generated shape and data.
+    /// Returns [`TensorTrainError::InvalidOperation`] when the shape product
+    /// overflows, allocation cannot reserve the required capacity, or tenferro
+    /// rejects the generated shape and data.
     ///
     /// # Examples
     ///
@@ -344,7 +345,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
             .ok_or_else(|| TensorTrainError::InvalidOperation {
                 message: format!("tensor shape product overflows usize: {dims:?}"),
             })?;
-        let mut data = Vec::with_capacity(total);
+        let mut data = Vec::new();
+        data.try_reserve_exact(total)
+            .map_err(|error| TensorTrainError::InvalidOperation {
+                message: format!("cannot allocate tensor shape {dims:?}: {error}"),
+            })?;
 
         for linear in 0..total {
             data.push(f(col_major_index_from_linear(linear, &dims)));
@@ -357,8 +362,9 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Panics
     ///
-    /// Panics if the shape product overflows. Use [`Self::try_from_fn`] when
-    /// dimensions are not already validated.
+    /// Panics if the shape product overflows, allocation fails, or tenferro
+    /// rejects the shape/data pair. Use [`Self::try_from_fn`] when dimensions
+    /// are not already validated.
     pub fn from_fn(dims: [usize; N], f: impl FnMut([usize; N]) -> T) -> Self {
         require_invariant(Self::try_from_fn(dims, f), "invalid tensor shape")
     }
@@ -369,8 +375,9 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the shape product overflows or tenferro rejects
-    /// the generated shape and data.
+    /// Returns [`TensorTrainError::InvalidOperation`] when the shape product
+    /// overflows, allocation cannot reserve the required capacity, or tenferro
+    /// rejects the generated shape and data.
     ///
     /// # Examples
     ///
@@ -388,15 +395,22 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
             .ok_or_else(|| TensorTrainError::InvalidOperation {
                 message: format!("tensor shape product overflows usize: {dims:?}"),
             })?;
-        col_major_data_to_tensor(dims, vec![value; total])
+        let mut data = Vec::new();
+        data.try_reserve_exact(total)
+            .map_err(|error| TensorTrainError::InvalidOperation {
+                message: format!("cannot allocate tensor shape {dims:?}: {error}"),
+            })?;
+        data.resize(total, value);
+        col_major_data_to_tensor(dims, data)
     }
 
     /// Create a tensor filled with `value`.
     ///
     /// # Panics
     ///
-    /// Panics if the shape product overflows. Use [`Self::try_from_elem`] when
-    /// dimensions are not already validated.
+    /// Panics if the shape product overflows, allocation fails, or tenferro
+    /// rejects the shape/data pair. Use [`Self::try_from_elem`] when dimensions
+    /// are not already validated.
     pub fn from_elem(dims: [usize; N], value: T) -> Self {
         require_invariant(Self::try_from_elem(dims, value), "invalid tensor shape")
     }
@@ -432,16 +446,23 @@ mod tests {
     }
 
     #[test]
-    fn fallible_constructors_reject_shape_overflow_before_evaluating_elements() {
+    fn fallible_constructors_reject_invalid_capacity_before_evaluating_elements() {
         let mut called = false;
-        let from_fn = Tensor2::<f64>::try_from_fn([usize::MAX, 2], |_| {
+        let overflow_fn = Tensor2::<f64>::try_from_fn([usize::MAX, 2], |_| {
             called = true;
             0.0
         });
-        let from_elem = Tensor2::try_from_elem([usize::MAX, 2], 0.0_f64);
+        let overflow_elem = Tensor2::try_from_elem([usize::MAX, 2], 0.0_f64);
+        let capacity_fn = Tensor2::<f64>::try_from_fn([usize::MAX, 1], |_| {
+            called = true;
+            0.0
+        });
+        let capacity_elem = Tensor2::try_from_elem([usize::MAX, 1], 0.0_f64);
 
-        assert!(from_fn.is_err());
-        assert!(from_elem.is_err());
+        assert!(overflow_fn.is_err());
+        assert!(overflow_elem.is_err());
+        assert!(capacity_fn.is_err());
+        assert!(capacity_elem.is_err());
         assert!(!called);
     }
 
