@@ -114,7 +114,7 @@ macro_rules! impl_tensor_element {
                 Ok(NativeTensor::from_vec_col_major(
                     dims.to_vec(),
                     data.to_vec(),
-                ))
+                )?)
             }
 
             fn diag_native_tensor_from_col_major(
@@ -127,14 +127,14 @@ macro_rules! impl_tensor_element {
             }
 
             fn scalar_native_tensor(value: Self) -> Result<NativeTensor> {
-                Ok(NativeTensor::from_vec_col_major(vec![], vec![value]))
+                Ok(NativeTensor::from_vec_col_major(vec![], vec![value])?)
             }
 
             fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>> {
                 tensor
                     .as_slice::<Self>()
                     .map(|values| values.to_vec())
-                    .ok_or_else(|| {
+                    .map_err(|_| {
                         anyhow!(
                             "tensor dtype mismatch: expected {}, got {}",
                             tensor_dtype_name($dtype),

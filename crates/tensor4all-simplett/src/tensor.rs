@@ -8,10 +8,9 @@ use std::ops::{Index, IndexMut};
 
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
-use crate::einsum_helper::tensor_to_col_major_vec;
 use crate::error::{Result, TensorTrainError};
 
-/// Rank-N tensor backed by `tenferro_tensor::TypedTensor<T>`.
+/// Rank-N host-backed tensor backed by `tenferro_tensor::TypedTensor<T>`.
 #[derive(Debug)]
 pub struct Tensor<T: TensorScalar, const N: usize> {
     inner: TfTensor<T>,
@@ -61,14 +60,20 @@ fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     dims: [usize; N],
     data: Vec<T>,
 ) -> Tensor<T, N> {
-    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data);
+    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data)
+        .unwrap_or_else(|error| panic!("invalid tensor shape or data: {error}"));
     Tensor::from_tenferro_unchecked(inner)
 }
 
 impl<T: TensorScalar, const N: usize> Clone for Tensor<T, N> {
     fn clone(&self) -> Self {
+        // INVARIANT: constructors validate host accessibility, and mutable inner
+        // access documents that callers must preserve this wrapper invariant.
         Self {
-            inner: self.inner.clone(),
+            inner: self
+                .inner
+                .duplicate()
+                .unwrap_or_else(|error| panic!("host-backed tensor duplication failed: {error}")),
             dims: self.dims,
         }
     }
@@ -92,7 +97,11 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIter<'a, T, N> {
 
         let idx = col_major_index_from_linear(self.next, &self.dims);
         self.next += 1;
-        Some(self.tensor.get(&idx[..]))
+        Some(
+            self.tensor
+                .get(&idx[..])
+                .unwrap_or_else(|error| panic!("tensor index failed: {error}")),
+        )
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -117,7 +126,9 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIterMut<'a, T, N> {
         // Safety: each logical index is visited at most once, so returned
         // mutable references never alias each other.
         let tensor = unsafe { &mut *self.tensor };
-        let elem = tensor.get_mut(&idx[..]);
+        let elem = tensor
+            .get_mut(&idx[..])
+            .unwrap_or_else(|error| panic!("tensor index failed: {error}"));
         let ptr = elem as *mut T;
         Some(unsafe { &mut *ptr })
     }
@@ -137,6 +148,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
             N,
             "tensor rank mismatch: expected rank {N}, got {}",
             tensor.shape().len()
+        );
+        // INVARIANT: crate-private callers construct or receive CPU host tensors.
+        debug_assert!(
+            tensor.host_data().is_ok(),
+            "simplett tensors must remain host-backed"
         );
         let mut dims = [0usize; N];
         for (dim, value) in dims.iter_mut().zip(tensor.shape().iter().copied()) {
@@ -168,9 +184,15 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         &self.dims
     }
 
-    /// Export the tensor as a column-major flat vector.
+    /// Export the host-backed tensor as a column-major flat vector.
     pub fn to_col_major_vec(&self) -> Vec<T> {
-        tensor_to_col_major_vec(&self.inner)
+        // INVARIANT: public and crate-private constructors validate that a
+        // simplett tensor is host-backed, and `as_inner_mut` requires callers
+        // to preserve that invariant.
+        self.inner
+            .host_data()
+            .unwrap_or_else(|error| panic!("host-backed tensor data is unavailable: {error}"))
+            .to_vec()
     }
 
     /// Iterate over all elements in column-major order.
@@ -200,6 +222,10 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     }
 
     /// Mutably borrow the wrapped tenferro tensor.
+    ///
+    /// Callers must preserve this wrapper's host-backed, rank-`N` invariant;
+    /// replace the whole tensor through [`Tensor::from_tenferro`] when those
+    /// properties may change.
     pub fn as_inner_mut(&mut self) -> &mut TfTensor<T> {
         &mut self.inner
     }
@@ -213,7 +239,8 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor rank does not match `N`.
+    /// Returns an error if the tensor rank does not match `N` or its data is
+    /// not host-accessible.
     ///
     /// # Examples
     ///
@@ -221,12 +248,15 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// let tensor = Tensor2::try_from_tenferro(rank_2).unwrap();
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let tensor = Tensor2::try_from_tenferro(rank_2)?;
     /// assert_eq!(tensor.dims(), &[2, 2]);
     ///
-    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
     /// assert!(Tensor3::try_from_tenferro(rank_2).is_err());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn try_from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
         Self::from_tenferro(tensor)
@@ -236,7 +266,8 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the tensor rank does not match `N`.
+    /// Returns an error if the tensor rank does not match `N` or its data is
+    /// not host-accessible.
     ///
     /// # Examples
     ///
@@ -244,12 +275,15 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// let tensor = Tensor2::from_tenferro(rank_2).unwrap();
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let tensor = Tensor2::from_tenferro(rank_2)?;
     /// assert_eq!(tensor.dims(), &[2, 2]);
     ///
-    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
     /// assert!(Tensor3::from_tenferro(rank_2).is_err());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
         if tensor.shape().len() != N {
@@ -260,6 +294,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
                 ),
             });
         }
+        tensor
+            .host_data()
+            .map_err(|error| TensorTrainError::InvalidOperation {
+                message: format!("simplett tensors must be host-backed: {error}"),
+            })?;
         let mut dims = [0usize; N];
         dims.copy_from_slice(tensor.shape());
         Ok(Self {
@@ -293,13 +332,17 @@ impl<T: TensorScalar, const N: usize> Index<[usize; N]> for Tensor<T, N> {
     type Output = T;
 
     fn index(&self, idx: [usize; N]) -> &T {
-        self.inner.get(&idx[..])
+        self.inner
+            .get(&idx[..])
+            .unwrap_or_else(|error| panic!("tensor index failed: {error}"))
     }
 }
 
 impl<T: TensorScalar, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
     fn index_mut(&mut self, idx: [usize; N]) -> &mut T {
-        self.inner.get_mut(&idx[..])
+        self.inner
+            .get_mut(&idx[..])
+            .unwrap_or_else(|error| panic!("tensor index failed: {error}"))
     }
 }
 
@@ -392,8 +435,8 @@ mod tests {
         );
         let inner_again = tensor.clone().into_inner();
         assert_eq!(
-            tensor_to_col_major_vec(&inner_again),
-            &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+            tensor_to_col_major_vec(&inner_again).unwrap(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
         );
     }
 

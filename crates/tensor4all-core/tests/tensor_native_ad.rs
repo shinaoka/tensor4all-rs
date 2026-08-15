@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use tensor4all_core::{
-    contract, contract_with_options, ContractionOptions, IdxTensor, Index, TensorContractionLike,
+    contract, contract_with_options, AnyScalar, ContractionOptions, IdxTensor, Index,
+    TensorContractionLike,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -75,6 +76,40 @@ fn tracked_complex_conjugation_preserves_values_and_gradient_path() {
     assert!(loss.tracks_grad());
     loss.backward().unwrap();
     assert!(x.grad().unwrap().is_some());
+}
+
+#[test]
+fn tracked_complex_axpby_with_real_coefficients_preserves_gradients() {
+    let i = Index::new_dyn(2);
+    let x = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+    let y = IdxTensor::from_dense(
+        vec![i],
+        vec![Complex64::new(5.0, -1.0), Complex64::new(2.0, 3.0)],
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+
+    let combined = x
+        .axpby(AnyScalar::new_real(0.5), &y, AnyScalar::new_real(-0.25))
+        .unwrap();
+    assert!(combined.tracks_grad());
+    combined.sum().unwrap().backward().unwrap();
+
+    assert_eq!(
+        x.grad().unwrap().unwrap().to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(0.5, 0.0); 2]
+    );
+    assert_eq!(
+        y.grad().unwrap().unwrap().to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(-0.25, 0.0); 2]
+    );
 }
 
 #[test]

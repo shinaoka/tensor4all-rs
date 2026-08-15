@@ -1,15 +1,18 @@
 use super::*;
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
+use tenferro::TensorScalar;
 
 fn row_major_values<T>(tensor: &TypedTensor<T>) -> Vec<T>
 where
-    T: Copy,
+    T: TensorScalar + Copy,
 {
     assert_eq!(tensor.shape().len(), 2, "test helper expects a matrix");
     let rows = tensor.shape()[0];
     let cols = tensor.shape()[1];
-    let values = tensor.as_slice();
+    let values = tensor
+        .as_slice()
+        .expect("typed test tensor should expose host values");
     let mut out = Vec::with_capacity(values.len());
     for row in 0..rows {
         for col in 0..cols {
@@ -54,7 +57,8 @@ fn scale_columns_complex(
 
 #[test]
 fn qr_backend_reconstructs_real_matrix() {
-    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+        .expect("valid QR test input");
 
     let (q, r) = qr_backend(&input).unwrap();
     assert_eq!(q.shape(), &[2, 2]);
@@ -83,15 +87,22 @@ fn svd_backend_reconstructs_complex_matrix() {
             Complex64::new(2.0, 1.5),
             Complex64::new(4.0, -2.0),
         ],
-    );
+    )
+    .expect("valid SVD test input");
 
     let decomp = svd_backend(&input).unwrap();
     assert_eq!(decomp.u.shape(), &[2, 2]);
     assert_eq!(decomp.s.shape(), &[2]);
     assert_eq!(decomp.vt.shape(), &[2, 2]);
+    let cloned = decomp.clone();
+    assert_eq!(cloned.s.shape(), &[2]);
 
     let u = row_major_values(&decomp.u);
-    let s = decomp.s.as_slice().to_vec();
+    let s = decomp
+        .s
+        .as_slice()
+        .expect("SVD singular values should expose host values")
+        .to_vec();
     let vt = row_major_values(&decomp.vt);
     let us = scale_columns_complex(&u, 2, 2, &s);
     let reconstructed = matmul_row_major(&us, 2, 2, &vt, 2);
@@ -107,14 +118,19 @@ fn svd_backend_reconstructs_complex_matrix() {
 
 #[test]
 fn solve_backend_solves_real_system() {
-    let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
-    let b = TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]);
+    let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])
+        .expect("valid solve lhs test input");
+    let b = TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0])
+        .expect("valid solve rhs test input");
 
     let x = solve_backend(&a, &b).unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
-    assert!((x.as_slice()[0] - 2.0 / 3.0).abs() < 1.0e-12);
-    assert!((x.as_slice()[1] + 1.0 / 3.0).abs() < 1.0e-12);
+    let x_values = x
+        .as_slice()
+        .expect("solve result should expose host values");
+    assert!((x_values[0] - 2.0 / 3.0).abs() < 1.0e-12);
+    assert!((x_values[1] + 1.0 / 3.0).abs() < 1.0e-12);
 }
 
 #[test]
@@ -293,19 +309,25 @@ fn triangular_solve_matrix_owned_solves_complex64_system() {
 
 #[test]
 fn triangular_solve_backend_solves_typed_tensor_system() {
-    let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
-    let b = TypedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]);
+    let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0])
+        .expect("valid triangular solve lhs test input");
+    let b = TypedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0])
+        .expect("valid triangular solve rhs test input");
 
     let x = triangular_solve_backend(&a, &b, true, true, false, false).unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
-    assert!((x.as_slice()[0] - 1.0).abs() < 1.0e-12);
-    assert!((x.as_slice()[1] - 2.0).abs() < 1.0e-12);
+    let x_values = x
+        .as_slice()
+        .expect("triangular solve result should expose host values");
+    assert!((x_values[0] - 1.0).abs() < 1.0e-12);
+    assert!((x_values[1] - 2.0).abs() < 1.0e-12);
 }
 
 #[test]
 fn try_into_typed_result_reports_dtype_mismatch() {
-    let tensor = Complex64::into_tensor(vec![1], vec![Complex64::new(1.0, 0.0)]);
+    let tensor = Complex64::into_tensor(vec![1], vec![Complex64::new(1.0, 0.0)])
+        .expect("valid dtype-mismatch test tensor");
 
     let err = try_into_typed_result::<f64>("test_op", tensor).unwrap_err();
 
@@ -314,7 +336,8 @@ fn try_into_typed_result_reports_dtype_mismatch() {
 
 #[test]
 fn full_piv_lu_backend_returns_square_factors() {
-    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])
+        .expect("valid LU test input");
 
     let decomp = full_piv_lu_backend(&input).unwrap();
 
@@ -322,6 +345,8 @@ fn full_piv_lu_backend_returns_square_factors() {
     assert_eq!(decomp.l.shape(), &[2, 2]);
     assert_eq!(decomp.u.shape(), &[2, 2]);
     assert_eq!(decomp.q.shape(), &[2, 2]);
+    let cloned = decomp.clone();
+    assert_eq!(cloned.u.shape(), &[2, 2]);
 }
 
 #[test]

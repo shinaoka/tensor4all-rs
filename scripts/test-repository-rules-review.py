@@ -340,6 +340,17 @@ def test_tenferro_dependency_lines_ignores_feature_names() -> None:
     assert found == {8: "tenferro-linalg"}
 
 
+def test_tenferro_dependency_lines_ignores_workspace_declarations() -> None:
+    mod = load_module()
+    manifest = """[workspace.dependencies]
+tenferro-linalg = { git = "https://example.invalid/tenferro", rev = "new-pin" }
+
+[workspace.dependencies.tenferro-tensor]
+workspace = true
+"""
+    assert mod.tenferro_dependency_lines(manifest) == {}
+
+
 def test_tenferro_route_blocks_new_dependency() -> None:
     mod = load_module()
     path = "crates/tensor4all-core/Cargo.toml"

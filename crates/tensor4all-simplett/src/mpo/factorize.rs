@@ -141,14 +141,19 @@ pub fn factorize<T: SVDScalar>(
 // Use the shared matrix2_zeros from the parent module
 use super::matrix2_zeros;
 
-fn matrix2_to_typed_tensor<T>(matrix: &Matrix2<T>) -> TypedTensor<T>
+fn matrix2_to_typed_tensor<T>(matrix: &Matrix2<T>) -> Result<TypedTensor<T>>
 where
     T: TensorScalar,
 {
-    matrix.as_inner().clone()
+    matrix
+        .as_inner()
+        .duplicate()
+        .map_err(|error| MPOError::FactorizationError {
+            message: format!("failed to duplicate factorization input: {error}"),
+        })
 }
 
-fn typed_tensor_to_matrix2<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Matrix2<T>>
+fn typed_tensor_to_matrix2<T>(tensor: TypedTensor<T>, op: &'static str) -> Result<Matrix2<T>>
 where
     T: crate::traits::TTScalar + Default,
 {
@@ -161,15 +166,16 @@ where
         });
     }
 
-    Ok(Matrix2::from_tenferro_unchecked(tensor.clone()))
+    Ok(Matrix2::from_tenferro_unchecked(tensor))
 }
 
 fn typed_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
 where
     T: TensorScalar,
 {
-    let _ = op;
-    Ok(tensor_to_col_major_vec(tensor))
+    tensor_to_col_major_vec(tensor).map_err(|err| MPOError::FactorizationError {
+        message: format!("Failed to read {op} output: {err}"),
+    })
 }
 
 /// Factorize using SVD
@@ -187,13 +193,13 @@ fn factorize_svd<T: SVDScalar>(
     }
 
     // Compute SVD using tensorbackend (tenferro-backed implementation)
-    let a_tensor = matrix2_to_typed_tensor(matrix);
+    let a_tensor = matrix2_to_typed_tensor(matrix)?;
     let svd_result = svd_backend(&a_tensor).map_err(|e| MPOError::FactorizationError {
         message: format!("SVD computation failed: {:?}", e),
     })?;
 
-    let u = typed_tensor_to_matrix2(&svd_result.u, "svd.u")?;
-    let vt = typed_tensor_to_matrix2(&svd_result.vt, "svd.vt")?;
+    let u = typed_tensor_to_matrix2(svd_result.u, "svd.u")?;
+    let vt = typed_tensor_to_matrix2(svd_result.vt, "svd.vt")?;
     let singular_values = typed_col_major_values(&svd_result.s, "svd.s")?;
 
     // Determine rank based on tolerance and max_bond_dim

@@ -23,8 +23,9 @@ use anyhow::{ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
-use tenferro::{Tensor, TensorScalar, TypedTensor};
+use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
 use tenferro_ad::EagerTensor;
+use tenferro_linalg::EagerTensorLinalgExt;
 use tenferro_tensor::BackendSessionHost;
 
 /// A dense 2D matrix in column-major layout.
@@ -66,10 +67,13 @@ fn checked_matrix_len(nrows: usize, ncols: usize) -> Option<usize> {
 /// ```
 /// use tenferro::TypedTensor;
 /// use tensor4all_tensorbackend::Matrix;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
-/// let tensor = TypedTensor::from_vec_col_major(vec![2, 1, 1], vec![1.0_f64, 2.0]);
+/// let tensor = TypedTensor::from_vec_col_major(vec![2, 1, 1], vec![1.0_f64, 2.0])?;
 /// let err = Matrix::try_from_typed_tensor(tensor).unwrap_err();
 /// assert!(err.to_string().contains("rank-2 tensor"));
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum MatrixTensorConversionError {
@@ -300,7 +304,15 @@ impl HermitianEigenScalar for f64 {
         _tolerance: f64,
     ) -> std::result::Result<(Vec<usize>, Vec<f64>), HermitianEigenError> {
         let values = typed_eigh_output::<f64>("eigenvalues", tensor)?;
-        Ok((values.shape().to_vec(), values.as_slice().to_vec()))
+        Ok((
+            values.shape().to_vec(),
+            values
+                .as_slice()
+                .map_err(|source| HermitianEigenError::Backend {
+                    source: Box::new(source),
+                })?
+                .to_vec(),
+        ))
     }
 
     fn to_complex64(value: Self) -> Complex64 {
@@ -326,9 +338,25 @@ impl HermitianEigenScalar for Complex64 {
         tensor: Tensor,
         tolerance: f64,
     ) -> std::result::Result<(Vec<usize>, Vec<f64>), HermitianEigenError> {
+        if tensor.dtype() == DType::F64 {
+            let values = typed_eigh_output::<f64>("eigenvalues", tensor)?;
+            let values_slice =
+                values
+                    .as_slice()
+                    .map_err(|source| HermitianEigenError::Backend {
+                        source: Box::new(source),
+                    })?;
+            return Ok((values.shape().to_vec(), values_slice.to_vec()));
+        }
+
         let values = typed_eigh_output::<Complex64>("eigenvalues", tensor)?;
-        let mut real_values = Vec::with_capacity(values.as_slice().len());
-        for (index, value) in values.as_slice().iter().copied().enumerate() {
+        let values_slice = values
+            .as_slice()
+            .map_err(|source| HermitianEigenError::Backend {
+                source: Box::new(source),
+            })?;
+        let mut real_values = Vec::with_capacity(values_slice.len());
+        for (index, value) in values_slice.iter().copied().enumerate() {
             let imaginary = value.im.abs();
             let allowed = tolerance * value.norm().max(1.0);
             if imaginary > allowed {
@@ -437,18 +465,22 @@ impl<T> Matrix<T> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::Matrix;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///
     /// let m = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
     /// let tensor = m.to_typed_tensor();
     /// assert_eq!(tensor.shape(), &[2, 2]);
-    /// assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    /// assert_eq!(tensor.as_slice()?, &[1.0, 3.0, 2.0, 4.0]);
     /// assert_eq!(m.as_col_major_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn to_typed_tensor(&self) -> TypedTensor<T>
     where
         T: TensorScalar,
     {
         TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data.clone())
+            .unwrap_or_else(|error| unreachable!("validated matrix rejected by tenferro: {error}"))
     }
 
     /// Consume this matrix as a tenferro [`TypedTensor`] without cloning.
@@ -460,17 +492,21 @@ impl<T> Matrix<T> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::Matrix;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///
     /// let m = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
     /// let tensor = m.into_typed_tensor();
     /// assert_eq!(tensor.shape(), &[2, 2]);
-    /// assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    /// assert_eq!(tensor.as_slice()?, &[1.0, 3.0, 2.0, 4.0]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn into_typed_tensor(self) -> TypedTensor<T>
     where
         T: TensorScalar,
     {
         TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data)
+            .unwrap_or_else(|error| unreachable!("validated matrix rejected by tenferro: {error}"))
     }
 
     /// Consume a rank-2 tenferro [`TypedTensor`] as a [`Matrix`].
@@ -490,20 +526,23 @@ impl<T> Matrix<T> {
     /// ```
     /// use tenferro::TypedTensor;
     /// use tensor4all_tensorbackend::Matrix;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-    /// let m = Matrix::try_from_typed_tensor(tensor).unwrap();
+    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    /// let m = Matrix::try_from_typed_tensor(tensor)?;
     /// assert_eq!(m.nrows(), 2);
     /// assert_eq!(m.ncols(), 2);
     /// assert_eq!(m[[0, 1]], 2.0);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn try_from_typed_tensor(
         tensor: TypedTensor<T>,
     ) -> std::result::Result<Self, MatrixTensorConversionError>
     where
-        T: Clone,
+        T: TensorScalar + Clone,
     {
-        let (shape, data) = tensor.try_into_vec_col_major().map_err(|source| {
+        let (shape, data) = tensor.into_vec_col_major().map_err(|source| {
             MatrixTensorConversionError::HostBuffer {
                 message: source.to_string(),
             }
@@ -645,26 +684,53 @@ where
     let matrix = validate_and_symmetrize_hermitian_matrix(matrix, hermitian_tol)?;
 
     let n = matrix.nrows();
-    let input_tensor = T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec());
+    let input_tensor =
+        T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec()).map_err(|source| {
+            HermitianEigenError::Backend {
+                source: Box::new(source),
+            }
+        })?;
     let eager_ctx = crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
         source: Box::new(source),
     })?;
-    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx);
-    let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&input).map_err(|source| {
+    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx).map_err(|source| {
         HermitianEigenError::Backend {
             source: Box::new(source),
         }
     })?;
+    let (values, vectors) = input
+        .eigh()
+        .map_err(|source| HermitianEigenError::Backend {
+            source: Box::new(source),
+        })?;
+    let values = values
+        .to_tensor()
+        .map_err(|source| HermitianEigenError::Backend {
+            source: Box::new(source),
+        })?;
+    let vectors = vectors
+        .to_tensor()
+        .map_err(|source| HermitianEigenError::Backend {
+            source: Box::new(source),
+        })?;
 
-    let (values_shape, eigenvalues) =
-        T::eigenvalues_from_tensor(values.data().clone(), hermitian_tol)?;
+    let (values_shape, eigenvalues) = T::eigenvalues_from_tensor(values, hermitian_tol)?;
     ensure_eigh_shape("eigenvalues", &values_shape, &[n])?;
-    let vectors = typed_eigh_output::<T>("eigenvectors", vectors.data().clone())?;
+    let vectors = typed_eigh_output::<T>("eigenvectors", vectors)?;
     ensure_eigh_shape("eigenvectors", vectors.shape(), &[n, n])?;
 
     Ok(HermitianEigendecomposition {
         eigenvalues,
-        eigenvectors: Matrix::from_col_major_vec(n, n, vectors.as_slice().to_vec()),
+        eigenvectors: Matrix::from_col_major_vec(
+            n,
+            n,
+            vectors
+                .as_slice()
+                .map_err(|source| HermitianEigenError::Backend {
+                    source: Box::new(source),
+                })?
+                .to_vec(),
+        ),
     })
 }
 
@@ -786,7 +852,7 @@ where
     T: TensorScalar,
 {
     let actual = tensor.dtype();
-    T::try_into_typed(tensor).ok_or_else(|| HermitianEigenError::DType {
+    T::into_typed(tensor).map_err(|_| HermitianEigenError::DType {
         output,
         expected: format!("{:?}", T::dtype()),
         actual: format!("{actual:?}"),
@@ -1208,20 +1274,14 @@ where
     T: TensorScalar,
 {
     use crate::with_default_backend;
-    use tenferro::DotGeneralConfig;
+    use tenferro::TensorSessionOpsExt;
 
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
     let c = with_default_backend(|backend| {
-        backend.with_backend_session(|exec| exec.dot_general(&a_tensor, &b_tensor, &config))
+        backend.with_backend_session(|session| a_tensor.matmul(&b_tensor, session))
     })
     .context("matrix multiplication failed")?;
-    let c = T::try_into_typed(c)
-        .ok_or_else(|| anyhow::anyhow!("matrix multiplication returned wrong dtype"))?;
+    let c = T::into_typed(c)
+        .map_err(|error| anyhow::anyhow!("matrix multiplication returned wrong dtype: {error}"))?;
     let result = Matrix::try_from_typed_tensor(c)?;
     ensure!(
         result.nrows() == m && result.ncols() == n,
@@ -1455,27 +1515,26 @@ pub fn batched_mat_mul_same_shape_owned<T>(
 where
     T: tenferro::TensorScalar + Copy,
 {
-    use crate::with_default_backend;
-    use tenferro::DotGeneralConfig;
-
     validate_batched_mat_mul_inputs(batch, m, k, n, a.len(), b.len())?;
 
-    let a_tensor = T::into_tensor(vec![m, k, batch], a);
-    let b_tensor = T::into_tensor(vec![k, n, batch], b);
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![2],
-        rhs_batch_dims: vec![2],
-    };
-    let c = with_default_backend(|backend| {
-        backend.with_backend_session(|exec| exec.dot_general(&a_tensor, &b_tensor, &config))
-    })
+    let a_tensor = T::into_tensor(vec![m, k, batch], a)
+        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+    let b_tensor = T::into_tensor(vec![k, n, batch], b)
+        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+    // TensorSessionOpsExt exposes rank-2 matmul but not arbitrary batched dot.
+    // Keep one backend execution by expressing [m,k,b] × [k,n,b] as einsum.
+    let c = crate::tenferro_bridge::einsum_native_tensors_owned(
+        vec![(a_tensor, vec![0, 1, 2]), (b_tensor, vec![1, 3, 2])],
+        &[0, 3, 2],
+    )
     .context("batched matrix multiplication failed")?;
-    let c = T::try_into_typed(c)
-        .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication returned wrong dtype"))?;
+    let c = T::into_typed(c).map_err(|error| {
+        MatrixMulError::from(anyhow::anyhow!(
+            "batched matrix multiplication returned wrong dtype: {error}"
+        ))
+    })?;
     let (_shape, data) = c
-        .try_into_vec_col_major()
+        .into_vec_col_major()
         .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
     let expected_len = batch
         .checked_mul(m)

@@ -46,24 +46,17 @@ fn test_2d_qft_x_only_interleaved() -> Result<()> {
 
     // Convert to TreeTN
     let tci_state = qtci.tci();
-    let r_copy = r;
-    let f_copy = move |idx: &[usize]| -> f64 {
-        let x = idx[0] as f64;
-        (2.0 * PI * x / (1usize << r_copy) as f64).cos()
-    };
-
+    let grid = qtci.inherent_grid().unwrap().clone();
     let batch_eval = move |batch: tensor4all_treetci::GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         let mut values = Vec::with_capacity(batch.n_points());
+        let mut quantics = vec![0usize; batch.n_sites()];
         for p in 0..batch.n_points() {
-            let mut x_val = 0usize;
-            let mut y_val = 0usize;
-            for bit in 0..r_copy {
-                let x_bit = batch.get(2 * bit, p).unwrap();
-                let y_bit = batch.get(2 * bit + 1, p).unwrap();
-                x_val |= x_bit << bit;
-                y_val |= y_bit << bit;
+            for (site, value) in quantics.iter_mut().enumerate() {
+                *value = batch.get(site, p).unwrap();
             }
-            values.push(f_copy(&[x_val, y_val]));
+            let grid_idx = grid.quantics_to_grididx(&quantics)?;
+            let x = grid_idx[0] as f64;
+            values.push((2.0 * PI * x / n as f64).cos());
         }
         Ok(values)
     };

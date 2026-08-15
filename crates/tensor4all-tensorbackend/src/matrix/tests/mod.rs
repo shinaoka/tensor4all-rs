@@ -328,7 +328,12 @@ fn matrix_to_typed_tensor_preserves_column_major_layout() {
     let tensor = m.to_typed_tensor();
 
     assert_eq!(tensor.shape(), &[2, 2]);
-    assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(
+        tensor
+            .as_slice()
+            .expect("matrix test tensor should expose host values"),
+        &[1.0, 3.0, 2.0, 4.0]
+    );
     assert_eq!(m.as_col_major_slice(), &[1.0, 3.0, 2.0, 4.0]);
 }
 
@@ -339,12 +344,18 @@ fn matrix_into_typed_tensor_consumes_column_major_layout() {
     let tensor = m.into_typed_tensor();
 
     assert_eq!(tensor.shape(), &[2, 2]);
-    assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(
+        tensor
+            .as_slice()
+            .expect("matrix test tensor should expose host values"),
+        &[1.0, 3.0, 2.0, 4.0]
+    );
 }
 
 #[test]
 fn matrix_from_typed_tensor_consumes_column_major_layout() {
-    let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
+    let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])
+        .expect("valid matrix conversion test tensor");
 
     let m = Matrix::try_from_typed_tensor(tensor).unwrap();
 
@@ -356,7 +367,8 @@ fn matrix_from_typed_tensor_consumes_column_major_layout() {
 
 #[test]
 fn matrix_from_typed_tensor_rejects_non_matrix_rank() {
-    let tensor = TypedTensor::from_vec_col_major(vec![2, 1, 1], vec![1.0, 2.0]);
+    let tensor = TypedTensor::from_vec_col_major(vec![2, 1, 1], vec![1.0, 2.0])
+        .expect("valid non-matrix test tensor");
 
     let err = Matrix::try_from_typed_tensor(tensor).unwrap_err();
 

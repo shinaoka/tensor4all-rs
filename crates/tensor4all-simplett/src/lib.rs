@@ -82,8 +82,11 @@ pub use tensortrain::SimpleTensorTrain;
 /// # Examples
 /// ```
 /// use tensor4all_simplett::TypedTensor;
-/// let typed: TypedTensor<f64> = TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-/// assert_eq!(typed.as_slice(), &[1.0, 2.0]);
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let typed: TypedTensor<f64> = TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+/// assert_eq!(typed.as_slice()?, &[1.0, 2.0]);
+/// # Ok(())
+/// # }
 /// ```
 pub use tenferro_tensor::TypedTensor;
 pub use traits::{AbstractTensorTrain, TTScalar};

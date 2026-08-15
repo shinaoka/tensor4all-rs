@@ -9,11 +9,16 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
-use tenferro::{DType, Tensor as NativeTensor, TensorRead, TensorScalar, TensorView, TracedTensor};
-use tenferro_einsum::{
-    ContractionOptimizerOptions, ContractionTree, EinsumOptimize, EinsumSubscripts, Subscripts,
+use tenferro::{
+    program::CoreSemanticOp, DType, GraphCompiler, Runtime, ScopedExecutionOutcome,
+    ScopedReadInputs, Tensor as NativeTensor, TensorRead, TensorScalar, TensorSessionOpsExt,
+    TensorView, TraceContext,
 };
-use tenferro_linalg::LinalgBackend;
+use tenferro_einsum::{
+    ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
+    TraceContextEinsumExt,
+};
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::BackendSessionHost;
 
 use crate::any_scalar::promote_scalar_native;
@@ -42,6 +47,14 @@ impl From<anyhow::Error> for BridgeError {
     }
 }
 
+fn native_tensor_from_vec<T: TensorScalar>(
+    shape: Vec<usize>,
+    values: Vec<T>,
+) -> std::result::Result<NativeTensor, BridgeError> {
+    NativeTensor::from_vec_col_major(shape, values)
+        .map_err(|source| BridgeError::from(anyhow::Error::new(source)))
+}
+
 use crate::context::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
     with_default_backend, with_default_graph_runtime,
@@ -55,6 +68,9 @@ use crate::AnyScalar;
 
 /// Read-only native tensor input that can either borrow external payload data
 /// or own a temporary materialized tensor.
+// Both tenferro handle variants are large; boxing the slightly larger one would
+// add an allocation to the eager einsum path for little enum-size reduction.
+#[allow(clippy::large_enum_variant)]
 pub enum NativeTensorReadInput<'a> {
     /// Borrowed read-only tensor input.
     Borrowed(TensorRead<'a>),
@@ -226,6 +242,15 @@ fn record_native_einsum_profile(
         entry.calls += 1;
         entry.total_time += elapsed;
     });
+}
+
+fn native_slice<'a, T: TensorScalar>(
+    tensor: &'a NativeTensor,
+    label: &'static str,
+) -> Result<&'a [T]> {
+    tensor
+        .as_slice::<T>()
+        .map_err(|error| anyhow!("{label}: {error}"))
 }
 
 fn dtype_size_bytes(dtype: DType) -> usize {
@@ -545,10 +570,14 @@ fn common_dtype(dtypes: &[DType]) -> DType {
 
 fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
     if tensor.dtype() == to {
-        return Ok(tensor.clone());
+        return tensor
+            .duplicate()
+            .map_err(|e| anyhow!("tensor duplication failed: {e}"));
     }
-    with_default_backend(|backend| backend.with_backend_session(|exec| exec.convert(tensor, to)))
-        .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
+    with_default_backend(|backend| {
+        backend.with_backend_session(|session| tensor.convert(to, session))
+    })
+    .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
 }
 
 fn ids_to_subscript(ids: &[u32]) -> Result<String> {
@@ -576,52 +605,67 @@ fn build_einsum_subscripts(operands: &[&[u32]], output_ids: &[u32]) -> Result<St
     ))
 }
 
-fn cached_einsum_native_tensors(
-    inputs: &[&NativeTensor],
+fn compile_native_einsum_program(
+    compiler: &mut GraphCompiler,
+    input_specs: impl IntoIterator<Item = tenferro::program::ProgramInputSpec>,
     subscripts: &EinsumSubscripts,
-) -> Result<NativeTensor> {
-    let placeholders = inputs
-        .iter()
-        .map(|tensor| TracedTensor::input_concrete_shape(tensor.dtype(), tensor.shape()))
-        .collect::<Vec<_>>();
-    let placeholder_refs = placeholders.iter().collect::<Vec<_>>();
-    let bindings = placeholders
-        .iter()
-        .zip(inputs.iter())
-        .map(|(placeholder, tensor)| (placeholder, *tensor))
-        .collect::<Vec<_>>();
-    let input_specs = placeholders
-        .iter()
-        .zip(inputs.iter())
-        .map(|(placeholder, tensor)| (placeholder, tensor.dtype(), tensor.shape()))
-        .collect::<Vec<_>>();
+) -> Result<tenferro::CompiledGraph> {
+    let input_specs = input_specs.into_iter().collect::<Vec<_>>();
+    let target = common_dtype(
+        input_specs
+            .iter()
+            .map(|spec| spec.metadata().dtype())
+            .collect::<Vec<_>>()
+            .as_slice(),
+    );
+    let mut trace = TraceContext::new();
+    let trace_inputs = input_specs
+        .into_iter()
+        .map(|spec| {
+            let dtype = spec.metadata().dtype();
+            let input = trace
+                .input(spec)
+                .map_err(|e| anyhow!("native einsum input tracing failed: {e}"))?;
+            if dtype == target {
+                return Ok(input);
+            }
+            trace
+                .add_op(
+                    CoreSemanticOp::Convert {
+                        from: dtype,
+                        to: target,
+                    },
+                    &[input],
+                )
+                .map_err(|e| anyhow!("native einsum promotion tracing failed: {e}"))?
+                .first()
+                .copied()
+                .ok_or_else(|| anyhow!("native einsum promotion returned no output"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let output = trace
+        .einsum_subscripts(&trace_inputs, subscripts)
+        .map_err(|e| anyhow!("native einsum tracing failed: {e}"))?;
+    let graph = trace
+        .finish(&[output])
+        .map_err(|e| anyhow!("native einsum graph finalization failed: {e}"))?;
+    compiler
+        .compile_traced_graph(&graph)
+        .map_err(|e| anyhow!("native einsum graph compilation failed: {e}"))
+}
 
+fn run_cached_native_einsum(
+    subscripts: &EinsumSubscripts,
+    execute: impl FnOnce(&mut GraphCompiler, &Runtime) -> Result<NativeTensor>,
+) -> Result<NativeTensor> {
     let trace_pool = native_einsum_pool_trace_enabled();
-    let pool_before = trace_pool.then(default_engine_buffer_pool_stats);
-    let result = with_default_graph_runtime(|compiler, executor| {
-        executor
-            .register_extension(tenferro_einsum::register_runtime)
-            .map_err(|e| anyhow!("native einsum runtime registration failed: {e}"))?;
-        let result = tenferro_einsum::einsum_subscripts_with(
-            compiler,
-            &placeholder_refs,
-            subscripts,
-            EinsumOptimize::default(),
-        )
-        .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-        // Native einsum creates fresh placeholder tensors for each call.
-        // tenferro's compiled-program cache retains those placeholder keys, so
-        // reuse can leave the program expecting bindings from a previous call.
-        compiler.clear_compile_cache();
-        let program = compiler
-            .compile_with_input_specs(&result, &input_specs)
-            .map_err(|e| anyhow!("native einsum graph compilation failed: {e}"))?;
-        executor
-            .run_with_inputs(&program, &bindings)
-            .map_err(|e| anyhow!("native einsum failed: {e}"))
-    })?;
+    let pool_before = trace_pool
+        .then(default_engine_buffer_pool_stats)
+        .transpose()?;
+    let result =
+        with_default_graph_runtime(|compiler, runtime, _backend| execute(compiler, runtime))??;
     if trace_pool {
-        let pool_after = default_engine_buffer_pool_stats();
+        let pool_after = default_engine_buffer_pool_stats()?;
         let output_bytes = native_tensor_bytes(&result);
         let retained_threshold = native_einsum_pool_trace_min_retained_bytes();
         if pool_after != pool_before.unwrap_or_default()
@@ -641,14 +685,16 @@ fn cached_einsum_native_tensors(
         }
     }
     if reset_native_einsum_engine_after_call() {
-        let before_reset = trace_pool.then(default_engine_buffer_pool_stats);
-        reset_default_engine();
+        let before_reset = trace_pool
+            .then(default_engine_buffer_pool_stats)
+            .transpose()?;
+        reset_default_engine()?;
         if trace_pool
             && before_reset.unwrap_or_default().capacity_bytes
                 >= native_einsum_pool_trace_min_retained_bytes()
         {
             let before = before_reset.unwrap_or_default();
-            let after = default_engine_buffer_pool_stats();
+            let after = default_engine_buffer_pool_stats()?;
             eprintln!(
                 "native_einsum engine_reset before_buffers={} before_capacity={:.3} MiB after_buffers={} after_capacity={:.3} MiB",
                 before.buffers,
@@ -658,14 +704,16 @@ fn cached_einsum_native_tensors(
             );
         }
     } else if reset_native_einsum_buffer_pool_after_call() {
-        let before_clear = trace_pool.then(default_engine_buffer_pool_stats);
-        reset_default_engine_buffer_pool();
+        let before_clear = trace_pool
+            .then(default_engine_buffer_pool_stats)
+            .transpose()?;
+        reset_default_engine_buffer_pool()?;
         if trace_pool
             && before_clear.unwrap_or_default().capacity_bytes
                 >= native_einsum_pool_trace_min_retained_bytes()
         {
             let before = before_clear.unwrap_or_default();
-            let after = default_engine_buffer_pool_stats();
+            let after = default_engine_buffer_pool_stats()?;
             eprintln!(
                 "native_einsum pool_reset before_buffers={} before_capacity={:.3} MiB after_buffers={} after_capacity={:.3} MiB",
                 before.buffers,
@@ -689,15 +737,73 @@ fn cached_einsum_native_tensors(
     Ok(result)
 }
 
+fn cached_einsum_native_tensors(
+    inputs: &[&NativeTensor],
+    subscripts: &EinsumSubscripts,
+) -> Result<NativeTensor> {
+    run_cached_native_einsum(subscripts, |compiler, runtime| {
+        let program = compile_native_einsum_program(
+            compiler,
+            inputs.iter().map(|tensor| {
+                tenferro::program::ProgramInputSpec::new(
+                    tensor.dtype(),
+                    tensor.shape().iter().copied().map(Into::into),
+                )
+            }),
+            subscripts,
+        )?;
+        let mut outputs = runtime
+            .run_compiled(&program, inputs)
+            .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+        if outputs.len() != 1 {
+            return Err(anyhow!(
+                "native einsum returned {} outputs instead of one",
+                outputs.len()
+            ));
+        }
+        outputs
+            .pop()
+            .ok_or_else(|| anyhow!("native einsum returned no output"))
+    })
+}
+
 fn cached_einsum_native_reads(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<NativeTensor> {
-    let tensors = inputs.iter().map(TensorRead::to_tensor).collect::<Vec<_>>();
-    let tensor_refs = tensors.iter().collect::<Vec<_>>();
+    let views = inputs
+        .iter()
+        .map(|input| input.clone().tensor_view())
+        .collect::<Vec<_>>();
     let einsum_subscripts = EinsumSubscripts::from(subscripts);
-    cached_einsum_native_tensors(&tensor_refs, &einsum_subscripts)
-        .map_err(|e| anyhow!("native read einsum failed: {e}"))
+    run_cached_native_einsum(&einsum_subscripts, |compiler, runtime| {
+        let program = compile_native_einsum_program(
+            compiler,
+            views.iter().map(|tensor| {
+                tenferro::program::ProgramInputSpec::new(
+                    tensor.dtype(),
+                    tensor.shape().iter().copied().map(Into::into),
+                )
+            }),
+            &einsum_subscripts,
+        )?;
+        let outcome = runtime
+            .execute_scoped_read_only(&program, ScopedReadInputs::new(views))
+            .map_err(|rejected| {
+                let (error, _inputs) = rejected.into_parts();
+                anyhow!("native einsum submission rejected: {error}")
+            })?;
+        let bundle = match outcome {
+            ScopedExecutionOutcome::Completed(bundle) => bundle,
+            ScopedExecutionOutcome::RetiredFailed { error, .. } => {
+                return Err(anyhow!("native einsum failed: {error}"));
+            }
+        };
+        bundle
+            .into_owned_output(0)
+            .map_err(|(_, error)| anyhow!("native einsum output extraction failed: {error}"))
+    })
+    .map_err(|e| anyhow!("native read einsum failed: {e}"))
 }
 
 /// Build native einsum ids for a binary contraction.
@@ -835,14 +941,13 @@ pub fn storage_payload_native_read_input(
                     .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
             )));
         }
-        Ok(NativeTensorReadInput::Owned(
-            NativeTensor::from_vec_col_major(
-                storage.payload_dims().to_vec(),
-                storage
-                    .payload_f64_col_major_vec()
-                    .map_err(anyhow::Error::msg)?,
-            ),
-        ))
+        native_tensor_from_vec(
+            storage.payload_dims().to_vec(),
+            storage
+                .payload_f64_col_major_vec()
+                .map_err(anyhow::Error::msg)?,
+        )
+        .map(NativeTensorReadInput::Owned)
     } else if storage.is_c64() {
         if let Some(view) = storage
             .payload_c64_col_major_view_if_contiguous()
@@ -853,14 +958,13 @@ pub fn storage_payload_native_read_input(
                     .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
             )));
         }
-        Ok(NativeTensorReadInput::Owned(
-            NativeTensor::from_vec_col_major(
-                storage.payload_dims().to_vec(),
-                storage
-                    .payload_c64_col_major_vec()
-                    .map_err(anyhow::Error::msg)?,
-            ),
-        ))
+        native_tensor_from_vec(
+            storage.payload_dims().to_vec(),
+            storage
+                .payload_c64_col_major_vec()
+                .map_err(anyhow::Error::msg)?,
+        )
+        .map(NativeTensorReadInput::Owned)
     } else {
         Err(anyhow!("unsupported storage scalar type").into())
     }
@@ -875,9 +979,7 @@ pub fn native_tensor_primal_to_storage(
 ) -> std::result::Result<Storage, BridgeError> {
     match tensor.dtype() {
         DType::F32 => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<f32>()
-                .ok_or_else(|| anyhow!("failed to read f32 native tensor"))?
+            native_slice::<f32>(tensor, "failed to read f32 native tensor")?
                 .iter()
                 .map(|&value| value as f64)
                 .collect::<Vec<_>>(),
@@ -889,10 +991,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::F64 => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<f64>()
-                .ok_or_else(|| anyhow!("failed to read f64 native tensor"))?
-                .to_vec(),
+            native_slice::<f64>(tensor, "failed to read f64 native tensor")?.to_vec(),
             tensor.shape(),
         )
         .map_err(|e| {
@@ -901,9 +1000,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::I32 => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<i32>()
-                .ok_or_else(|| anyhow!("failed to read i32 native tensor"))?
+            native_slice::<i32>(tensor, "failed to read i32 native tensor")?
                 .iter()
                 .map(|&value| value as f64)
                 .collect::<Vec<_>>(),
@@ -915,9 +1012,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::I64 => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<i64>()
-                .ok_or_else(|| anyhow!("failed to read i64 native tensor"))?
+            native_slice::<i64>(tensor, "failed to read i64 native tensor")?
                 .iter()
                 .map(|&value| value as f64)
                 .collect::<Vec<_>>(),
@@ -929,9 +1024,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::Bool => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<bool>()
-                .ok_or_else(|| anyhow!("failed to read bool native tensor"))?
+            native_slice::<bool>(tensor, "failed to read bool native tensor")?
                 .iter()
                 .map(|&value| if value { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>(),
@@ -943,9 +1036,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::C32 => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<Complex32>()
-                .ok_or_else(|| anyhow!("failed to read c32 native tensor"))?
+            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?
                 .iter()
                 .map(|&value| Complex64::new(value.re as f64, value.im as f64))
                 .collect::<Vec<_>>(),
@@ -957,10 +1048,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::C64 => Storage::from_dense_col_major(
-            tensor
-                .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow!("failed to read c64 native tensor"))?
-                .to_vec(),
+            native_slice::<Complex64>(tensor, "failed to read c64 native tensor")?.to_vec(),
             tensor.shape(),
         )
         .map_err(|e| {
@@ -1014,9 +1102,12 @@ pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
 /// ```
 /// use tenferro::Tensor as NativeTensor;
 /// use tensor4all_tensorbackend::native_tensor_primal_to_diag;
-/// let native = NativeTensor::from_vec_col_major(vec![3, 3], vec![1.0_f64, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]);
-/// let diag = native_tensor_primal_to_diag::<f64>(&native).unwrap();
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let native = NativeTensor::from_vec_col_major(vec![3, 3], vec![1.0_f64, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0])?;
+/// let diag = native_tensor_primal_to_diag::<f64>(&native)?;
 /// assert_eq!(diag, vec![1.0, 2.0, 3.0]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn native_tensor_primal_to_diag<T: TensorElement>(
     tensor: &NativeTensor,
@@ -1038,11 +1129,7 @@ pub fn native_tensor_primal_to_diag<T: TensorElement>(
         )
         .into());
     }
-    let promoted = if tensor.dtype() == promote_to {
-        tensor.clone()
-    } else {
-        convert_tensor(tensor, promote_to)?
-    };
+    let promoted = convert_tensor(tensor, promote_to)?;
     <T as TensorElement>::diag_values_from_native_temp(&promoted).map_err(BridgeError::from)
 }
 
@@ -1054,8 +1141,10 @@ pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
 ) -> Result<NativeTensor> {
-    with_default_backend(|backend| tenferro::tensor::reshape(tensor, logical_dims, backend))
-        .map_err(|e| anyhow!("native reshape failed: {e}"))
+    with_default_backend(|backend| {
+        backend.with_backend_session(|session| tensor.reshape(logical_dims, session))
+    })
+    .map_err(|e| anyhow!("native reshape failed: {e}"))
 }
 
 /// Compute a QR decomposition on a native tensor.
@@ -1065,11 +1154,9 @@ pub fn reshape_col_major_native_tensor(
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
 ) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
-    let outputs = with_default_backend(|backend| backend.qr(tensor))
-        .map_err(|e| anyhow!("native QR failed: {e}"))?;
-    let [q, r]: [NativeTensor; 2] = outputs.try_into().map_err(|outputs: Vec<NativeTensor>| {
-        anyhow!("native QR expected 2 outputs, got {}", outputs.len())
-    })?;
+    let (q, r) =
+        with_default_backend(|backend| backend.with_backend_session(|session| tensor.qr(session)))
+            .map_err(|e| anyhow!("native QR failed: {e}"))?;
     Ok((q, r))
 }
 
@@ -1080,12 +1167,9 @@ pub fn qr_native_tensor(
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
-    let outputs = with_default_backend(|backend| backend.svd(tensor))
-        .map_err(|e| anyhow!("native SVD failed: {e}"))?;
-    let [u, s, vt]: [NativeTensor; 3] =
-        outputs.try_into().map_err(|outputs: Vec<NativeTensor>| {
-            anyhow!("native SVD expected 3 outputs, got {}", outputs.len())
-        })?;
+    let (u, s, vt) =
+        with_default_backend(|backend| backend.with_backend_session(|session| tensor.svd(session)))
+            .map_err(|e| anyhow!("native SVD failed: {e}"))?;
     Ok((u, s, vt))
 }
 
@@ -1095,11 +1179,15 @@ pub fn svd_native_tensor(
 /// Returns an error when the native reduction fails (a backend or dtype mismatch failure).
 pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<AnyScalar, BridgeError> {
     let reduced = if tensor.shape().is_empty() {
-        tensor.clone()
+        tensor
+            .duplicate()
+            .map_err(|e| anyhow!("native scalar duplication failed: {e}"))?
     } else {
         let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-        with_default_backend(|backend| tenferro::tensor::reduce_sum(tensor, &axes, backend))
-            .map_err(|e| anyhow!("native sum failed: {e}"))?
+        with_default_backend(|backend| {
+            backend.with_backend_session(|session| tensor.reduce_sum(&axes, session))
+        })
+        .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
     Ok(AnyScalar::from_native(reduced)?)
 }
@@ -1126,68 +1214,48 @@ pub fn scale_native_tensor(
 
     match target {
         DType::F32 => {
-            let factor = scalar
-                .as_slice::<f32>()
-                .and_then(|values| values.first().copied())
+            let factor = native_slice::<f32>(&scalar, "failed to read promoted f32 scalar")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted f32 scalar"))?;
-            let values = tensor
-                .as_slice::<f32>()
-                .ok_or_else(|| anyhow!("failed to read promoted f32 tensor"))?
+            let values = native_slice::<f32>(&tensor, "failed to read promoted f32 tensor")?
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                tensor.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(tensor.shape().to_vec(), values)
         }
         DType::F64 => {
-            let factor = scalar
-                .as_slice::<f64>()
-                .and_then(|values| values.first().copied())
+            let factor = native_slice::<f64>(&scalar, "failed to read promoted f64 scalar")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted f64 scalar"))?;
-            let values = tensor
-                .as_slice::<f64>()
-                .ok_or_else(|| anyhow!("failed to read promoted f64 tensor"))?
+            let values = native_slice::<f64>(&tensor, "failed to read promoted f64 tensor")?
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                tensor.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(tensor.shape().to_vec(), values)
         }
         DType::C32 => {
-            let factor = scalar
-                .as_slice::<Complex32>()
-                .and_then(|values| values.first().copied())
+            let factor = native_slice::<Complex32>(&scalar, "failed to read promoted c32 scalar")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted c32 scalar"))?;
-            let values = tensor
-                .as_slice::<Complex32>()
-                .ok_or_else(|| anyhow!("failed to read promoted c32 tensor"))?
+            let values = native_slice::<Complex32>(&tensor, "failed to read promoted c32 tensor")?
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                tensor.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(tensor.shape().to_vec(), values)
         }
         DType::C64 => {
-            let factor = scalar
-                .as_slice::<Complex64>()
-                .and_then(|values| values.first().copied())
+            let factor = native_slice::<Complex64>(&scalar, "failed to read promoted c64 scalar")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted c64 scalar"))?;
-            let values = tensor
-                .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow!("failed to read promoted c64 tensor"))?
+            let values = native_slice::<Complex64>(&tensor, "failed to read promoted c64 tensor")?
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                tensor.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(tensor.shape().to_vec(), values)
         }
         DType::I32 | DType::I64 | DType::Bool => {
             Err(anyhow!("scale_native_tensor does not support integer/bool tensors").into())
@@ -1226,104 +1294,76 @@ pub fn axpby_native_tensor(
 
     match target {
         DType::F32 => {
-            let a = a
-                .as_slice::<f32>()
-                .and_then(|values| values.first().copied())
+            let a = native_slice::<f32>(&a, "failed to read promoted f32 scalar a")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted f32 scalar a"))?;
-            let b = b
-                .as_slice::<f32>()
-                .and_then(|values| values.first().copied())
+            let b = native_slice::<f32>(&b, "failed to read promoted f32 scalar b")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted f32 scalar b"))?;
-            let lhs_values = lhs
-                .as_slice::<f32>()
-                .ok_or_else(|| anyhow!("failed to read promoted f32 lhs"))?;
-            let rhs_values = rhs
-                .as_slice::<f32>()
-                .ok_or_else(|| anyhow!("failed to read promoted f32 rhs"))?;
+            let lhs_values = native_slice::<f32>(&lhs, "failed to read promoted f32 lhs")?;
+            let rhs_values = native_slice::<f32>(&rhs, "failed to read promoted f32 rhs")?;
             let values = lhs_values
                 .iter()
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                lhs.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(lhs.shape().to_vec(), values)
         }
         DType::F64 => {
-            let a = a
-                .as_slice::<f64>()
-                .and_then(|values| values.first().copied())
+            let a = native_slice::<f64>(&a, "failed to read promoted f64 scalar a")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted f64 scalar a"))?;
-            let b = b
-                .as_slice::<f64>()
-                .and_then(|values| values.first().copied())
+            let b = native_slice::<f64>(&b, "failed to read promoted f64 scalar b")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted f64 scalar b"))?;
-            let lhs_values = lhs
-                .as_slice::<f64>()
-                .ok_or_else(|| anyhow!("failed to read promoted f64 lhs"))?;
-            let rhs_values = rhs
-                .as_slice::<f64>()
-                .ok_or_else(|| anyhow!("failed to read promoted f64 rhs"))?;
+            let lhs_values = native_slice::<f64>(&lhs, "failed to read promoted f64 lhs")?;
+            let rhs_values = native_slice::<f64>(&rhs, "failed to read promoted f64 rhs")?;
             let values = lhs_values
                 .iter()
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                lhs.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(lhs.shape().to_vec(), values)
         }
         DType::C32 => {
-            let a = a
-                .as_slice::<Complex32>()
-                .and_then(|values| values.first().copied())
+            let a = native_slice::<Complex32>(&a, "failed to read promoted c32 scalar a")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted c32 scalar a"))?;
-            let b = b
-                .as_slice::<Complex32>()
-                .and_then(|values| values.first().copied())
+            let b = native_slice::<Complex32>(&b, "failed to read promoted c32 scalar b")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted c32 scalar b"))?;
-            let lhs_values = lhs
-                .as_slice::<Complex32>()
-                .ok_or_else(|| anyhow!("failed to read promoted c32 lhs"))?;
-            let rhs_values = rhs
-                .as_slice::<Complex32>()
-                .ok_or_else(|| anyhow!("failed to read promoted c32 rhs"))?;
+            let lhs_values = native_slice::<Complex32>(&lhs, "failed to read promoted c32 lhs")?;
+            let rhs_values = native_slice::<Complex32>(&rhs, "failed to read promoted c32 rhs")?;
             let values = lhs_values
                 .iter()
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                lhs.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(lhs.shape().to_vec(), values)
         }
         DType::C64 => {
-            let a = a
-                .as_slice::<Complex64>()
-                .and_then(|values| values.first().copied())
+            let a = native_slice::<Complex64>(&a, "failed to read promoted c64 scalar a")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted c64 scalar a"))?;
-            let b = b
-                .as_slice::<Complex64>()
-                .and_then(|values| values.first().copied())
+            let b = native_slice::<Complex64>(&b, "failed to read promoted c64 scalar b")?
+                .first()
+                .copied()
                 .ok_or_else(|| anyhow!("failed to read promoted c64 scalar b"))?;
-            let lhs_values = lhs
-                .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow!("failed to read promoted c64 lhs"))?;
-            let rhs_values = rhs
-                .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow!("failed to read promoted c64 rhs"))?;
+            let lhs_values = native_slice::<Complex64>(&lhs, "failed to read promoted c64 lhs")?;
+            let rhs_values = native_slice::<Complex64>(&rhs, "failed to read promoted c64 rhs")?;
             let values = lhs_values
                 .iter()
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec_col_major(
-                lhs.shape().to_vec(),
-                values,
-            ))
+            native_tensor_from_vec(lhs.shape().to_vec(), values)
         }
         DType::I32 | DType::I64 | DType::Bool => {
             Err(anyhow!("axpby_native_tensor does not support integer/bool tensors").into())
@@ -1354,13 +1394,16 @@ pub fn axpby_native_tensor(
 /// ```
 /// use tensor4all_tensorbackend::einsum_native_tensors_owned;
 /// use tenferro::Tensor as NativeTensor;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
-/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
-/// let result = einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2]).unwrap();
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
+/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])?;
+/// let result = einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2])?;
 ///
 /// assert_eq!(result.shape(), &[2, 2]);
-/// assert_eq!(result.as_slice::<f64>().unwrap(), &[3.0, 3.0, 3.0, 3.0]);
+/// assert_eq!(result.as_slice::<f64>()?, &[3.0, 3.0, 3.0, 3.0]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn einsum_native_tensors_owned(
     operands: Vec<(NativeTensor, Vec<usize>)>,
@@ -1448,13 +1491,16 @@ pub fn einsum_native_tensors_owned(
 /// ```
 /// use tensor4all_tensorbackend::einsum_native_tensors;
 /// use tenferro::Tensor as NativeTensor;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
-/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
-/// let result = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2]).unwrap();
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
+/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])?;
+/// let result = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])?;
 ///
 /// assert_eq!(result.shape(), &[2, 2]);
-/// assert_eq!(result.as_slice::<f64>().unwrap(), &[3.0, 3.0, 3.0, 3.0]);
+/// assert_eq!(result.as_slice::<f64>()?, &[3.0, 3.0, 3.0, 3.0]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn einsum_native_tensors(
     operands: &[(&NativeTensor, &[usize])],
@@ -1513,9 +1559,9 @@ pub fn einsum_native_tensors(
 
 /// Execute a cached einsum over read-only native tensor inputs.
 ///
-/// Backends may consume borrowed host views directly or materialize/upload them
-/// inside their execution session. Mixed dtypes are promoted by materializing
-/// only the operands that require conversion.
+/// Backends consume borrowed host views inside their execution session. Mixed
+/// dtypes are promoted by `Convert` nodes in the compiled einsum graph, so
+/// non-contiguous operands remain borrowed until runtime execution.
 /// # Errors
 ///
 /// Returns an error when the native einsum fails (a shape or dtype mismatch, or a backend failure).
@@ -1528,13 +1574,6 @@ pub fn einsum_native_tensor_reads(
         "native einsum requires at least one operand"
     );
 
-    let target = common_dtype(
-        &operands
-            .iter()
-            .map(|(tensor, _)| tensor.dtype())
-            .collect::<Vec<_>>(),
-    );
-    let mut converted = Vec::with_capacity(operands.len());
     let mut input_ids = Vec::with_capacity(operands.len());
     let mut read_inputs = Vec::with_capacity(operands.len());
 
@@ -1546,23 +1585,7 @@ pub fn einsum_native_tensor_reads(
             tensor.shape()
         );
         input_ids.push(ids.iter().map(|&id| id as u32).collect::<Vec<_>>());
-        if tensor.dtype() == target {
-            converted.push(None);
-        } else {
-            converted.push(Some(convert_tensor(&tensor.as_read().to_tensor(), target)?));
-        }
-    }
-
-    for (tensor, converted) in operands
-        .iter()
-        .map(|(tensor, _)| *tensor)
-        .zip(converted.iter())
-    {
-        if let Some(converted) = converted {
-            read_inputs.push(TensorRead::from_tensor(converted));
-        } else {
-            read_inputs.push(tensor.as_read());
-        }
+        read_inputs.push(tensor.as_read());
     }
 
     let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
@@ -1581,9 +1604,11 @@ pub fn permute_native_tensor(
     tensor: &NativeTensor,
     perm: &[usize],
 ) -> std::result::Result<NativeTensor, BridgeError> {
-    with_default_backend(|backend| tenferro::tensor::transpose(tensor, perm, backend))
-        .map_err(|e| anyhow!("native permute failed: {e}"))
-        .map_err(BridgeError::from)
+    with_default_backend(|backend| {
+        backend.with_backend_session(|session| tensor.transpose(perm, session))
+    })
+    .map_err(|e| anyhow!("native permute failed: {e}"))
+    .map_err(BridgeError::from)
 }
 
 /// Contract two native tensors along matching axes.
@@ -1625,25 +1650,24 @@ pub fn outer_product_native_tensor(
 /// Returns an error when the native conjugation fails (a dtype mismatch or backend failure).
 pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTensor, BridgeError> {
     match tensor.dtype() {
-        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => Ok(tensor.clone()),
-        DType::C32 => Ok(NativeTensor::from_vec_col_major(
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => tensor
+            .duplicate()
+            .map_err(|e| anyhow!("native tensor duplication failed: {e}"))
+            .map_err(BridgeError::from),
+        DType::C32 => native_tensor_from_vec(
             tensor.shape().to_vec(),
-            tensor
-                .as_slice::<Complex32>()
-                .ok_or_else(|| anyhow!("failed to read c32 native tensor"))?
+            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?
                 .iter()
                 .map(|&value| value.conj())
                 .collect::<Vec<_>>(),
-        )),
-        DType::C64 => Ok(NativeTensor::from_vec_col_major(
+        ),
+        DType::C64 => native_tensor_from_vec(
             tensor.shape().to_vec(),
-            tensor
-                .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow!("failed to read c64 native tensor"))?
+            native_slice::<Complex64>(tensor, "failed to read c64 native tensor")?
                 .iter()
                 .map(|&value| value.conj())
                 .collect::<Vec<_>>(),
-        )),
+        ),
     }
 }
 

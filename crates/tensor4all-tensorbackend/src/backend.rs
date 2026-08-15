@@ -5,8 +5,8 @@
 
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
-use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
-use tenferro_linalg::LinalgBackend;
+use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::BackendSessionHost;
 
 use crate::context::with_default_backend;
@@ -19,13 +19,16 @@ use crate::matrix::Matrix;
 /// ```
 /// use tensor4all_tensorbackend::svd_backend;
 /// use tenferro::TypedTensor;
-/// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
-/// let result = svd_backend(&a).unwrap();
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
+/// let result = svd_backend(&a)?;
 /// assert_eq!(result.u.shape(), &[2, 2]);
 /// assert_eq!(result.s.shape(), &[2]);
 /// assert_eq!(result.vt.shape(), &[2, 2]);
+/// # Ok(())
+/// # }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SvdResult<T: TensorScalar> {
     /// Left singular vectors.
     pub u: TypedTensor<T>,
@@ -39,7 +42,7 @@ pub struct SvdResult<T: TensorScalar> {
 /// The parity output from tenferro is intentionally omitted because current
 /// tensor4all callers only need the permutation matrices and the upper
 /// triangular factor for pivot selection.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FullPivLuResult<T: TensorScalar> {
     /// Left permutation matrix.
     pub p: TypedTensor<T>,
@@ -49,6 +52,35 @@ pub struct FullPivLuResult<T: TensorScalar> {
     pub u: TypedTensor<T>,
     /// Right permutation matrix.
     pub q: TypedTensor<T>,
+}
+
+fn clone_linalg_tensor<T: TensorScalar>(tensor: &TypedTensor<T>) -> TypedTensor<T> {
+    // INVARIANT: these result containers own valid tensors returned by the CPU
+    // linalg backend. `Clone` cannot expose tenferro's fallible duplication.
+    tensor
+        .duplicate()
+        .unwrap_or_else(|error| panic!("linalg result duplication failed: {error}"))
+}
+
+impl<T: TensorScalar> Clone for SvdResult<T> {
+    fn clone(&self) -> Self {
+        Self {
+            u: clone_linalg_tensor(&self.u),
+            s: clone_linalg_tensor(&self.s),
+            vt: clone_linalg_tensor(&self.vt),
+        }
+    }
+}
+
+impl<T: TensorScalar> Clone for FullPivLuResult<T> {
+    fn clone(&self) -> Self {
+        Self {
+            p: clone_linalg_tensor(&self.p),
+            l: clone_linalg_tensor(&self.l),
+            u: clone_linalg_tensor(&self.u),
+            q: clone_linalg_tensor(&self.q),
+        }
+    }
 }
 
 /// Result of complete-pivoting LU decomposition on [`Matrix`] values.
@@ -144,19 +176,23 @@ macro_rules! impl_full_piv_lu_scalar {
                 let pivot_tensor = tenferro_tensor::Tensor::from_vec_col_major(
                     vec![pivot_cols, pivot_rows],
                     pivot_t,
-                );
+                )
+                .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
                 let lhs_tensor =
-                    tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
+                    tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t)
+                        .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
                 let solved_t = with_default_backend(|backend| {
-                    backend.full_piv_lu_solve(&pivot_tensor, &lhs_tensor, false)
+                    backend.with_backend_session(|session| {
+                        pivot_tensor.full_piv_lu_solve(&lhs_tensor, session)
+                    })
                 })
                 .map_err(|e| {
                     BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {e}"))
                 })?;
 
-                let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
+                let solved_t_values = solved_t.as_slice::<Self>().map_err(|e| {
                     BackendLinalgError::from(anyhow::anyhow!(
-                        "full_piv_lu_solve returned unexpected dtype"
+                        "full_piv_lu_solve returned unexpected dtype: {e}"
                     ))
                 })?;
                 Ok(transpose_column_major(solved_t_values, lhs_cols, lhs_rows))
@@ -288,8 +324,10 @@ where
 {
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_backend(|backend| backend.solve(&a_tensor, &b_tensor))
-        .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
+    let result = with_default_backend(|backend| {
+        backend.with_backend_session(|session| a_tensor.solve(&b_tensor, session))
+    })
+    .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("solve", result)?;
     typed_tensor_to_matrix("solve", x)
 }
@@ -331,14 +369,16 @@ where
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
     let result = with_default_backend(|backend| {
-        backend.triangular_solve(
-            &a_tensor,
-            &b_tensor,
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-        )
+        backend.with_backend_session(|session| {
+            a_tensor.triangular_solve(
+                &b_tensor,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+                session,
+            )
+        })
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("triangular_solve", result)?;
@@ -562,7 +602,7 @@ impl MatrixTriangularSolveScalar for Complex32 {
 }
 
 fn tensor_scalar_dtype<T: TensorScalar>() -> DType {
-    T::into_tensor(vec![0], Vec::new()).dtype()
+    T::dtype()
 }
 
 fn try_into_typed_result<T: TensorScalar>(
@@ -570,9 +610,9 @@ fn try_into_typed_result<T: TensorScalar>(
     tensor: Tensor,
 ) -> Result<TypedTensor<T>> {
     let actual = tensor.dtype();
-    T::try_into_typed(tensor).ok_or_else(|| {
+    T::into_typed(tensor).map_err(|source| {
         anyhow!(
-            "{op}: dtype mismatch lhs={actual:?} rhs={:?}",
+            "{op}: dtype mismatch lhs={actual:?} rhs={:?}: {source}",
             tensor_scalar_dtype::<T>()
         )
     })
@@ -584,7 +624,7 @@ fn convert_for_typed<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Resul
         tensor
     } else {
         with_default_backend(|backend| {
-            backend.with_backend_session(|exec| exec.convert(&tensor, expected))
+            backend.with_backend_session(|session| tensor.convert(expected, session))
         })
         .map_err(|e| anyhow!("{op}: dtype conversion to {expected:?} failed: {e}"))?
     };
@@ -599,6 +639,7 @@ where
         vec![matrix.nrows(), matrix.ncols()],
         matrix.as_col_major_slice().to_vec(),
     )
+    .unwrap_or_else(|error| unreachable!("validated matrix rejected by tenferro: {error}"))
 }
 
 fn typed_tensor_to_matrix<T>(op: &'static str, tensor: TypedTensor<T>) -> Result<Matrix<T>>
@@ -618,12 +659,16 @@ pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, B
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
-    let outputs = with_default_backend(|backend| backend.svd(&tensor))
-        .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
-    let [u, s, vt]: [Tensor; 3] = outputs.try_into().map_err(|outputs: Vec<Tensor>| {
-        anyhow!("svd: expected 3 outputs, got {}", outputs.len())
-    })?;
+    let tensor = T::into_tensor(
+        a.shape().to_vec(),
+        a.host_data()
+            .map_err(|e| anyhow!("SVD input host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("SVD input tensor construction failed: {e}"))?;
+    let (u, s, vt) =
+        with_default_backend(|backend| backend.with_backend_session(|session| tensor.svd(session)))
+            .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
     Ok(SvdResult {
         u: convert_for_typed::<T>("svd", u)?,
         s: convert_for_typed::<T::Real>("svd", s)?,
@@ -643,12 +688,16 @@ pub fn qr_backend<T>(
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
-    let outputs = with_default_backend(|backend| backend.qr(&tensor))
-        .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
-    let [q, r]: [Tensor; 2] = outputs
-        .try_into()
-        .map_err(|outputs: Vec<Tensor>| anyhow!("qr: expected 2 outputs, got {}", outputs.len()))?;
+    let tensor = T::into_tensor(
+        a.shape().to_vec(),
+        a.host_data()
+            .map_err(|e| anyhow!("QR input host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
+    let (q, r) =
+        with_default_backend(|backend| backend.with_backend_session(|session| tensor.qr(session)))
+            .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((
         convert_for_typed::<T>("qr", q)?,
         convert_for_typed::<T>("qr", r)?,
@@ -667,10 +716,24 @@ pub fn solve_backend<T>(
 where
     T: BackendLinalgScalar,
 {
-    let a_tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
-    let b_tensor = T::into_tensor(b.shape().to_vec(), b.host_data().to_vec());
-    let result = with_default_backend(|backend| backend.solve(&a_tensor, &b_tensor))
-        .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
+    let a_tensor = T::into_tensor(
+        a.shape().to_vec(),
+        a.host_data()
+            .map_err(|e| anyhow!("solve input host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("solve lhs tensor construction failed: {e}"))?;
+    let b_tensor = T::into_tensor(
+        b.shape().to_vec(),
+        b.host_data()
+            .map_err(|e| anyhow!("solve rhs host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("solve rhs tensor construction failed: {e}"))?;
+    let result = with_default_backend(|backend| {
+        backend.with_backend_session(|session| a_tensor.solve(&b_tensor, session))
+    })
+    .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     try_into_typed_result::<T>("solve", result).map_err(BackendLinalgError::from)
 }
 
@@ -694,17 +757,31 @@ pub fn triangular_solve_backend<T>(
 where
     T: BackendLinalgScalar,
 {
-    let a_tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
-    let b_tensor = T::into_tensor(b.shape().to_vec(), b.host_data().to_vec());
+    let a_tensor = T::into_tensor(
+        a.shape().to_vec(),
+        a.host_data()
+            .map_err(|e| anyhow!("triangular solve input host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("triangular solve lhs tensor construction failed: {e}"))?;
+    let b_tensor = T::into_tensor(
+        b.shape().to_vec(),
+        b.host_data()
+            .map_err(|e| anyhow!("triangular solve rhs host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("triangular solve rhs tensor construction failed: {e}"))?;
     let result = with_default_backend(|backend| {
-        backend.triangular_solve(
-            &a_tensor,
-            &b_tensor,
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-        )
+        backend.with_backend_session(|session| {
+            a_tensor.triangular_solve(
+                &b_tensor,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+                session,
+            )
+        })
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
     try_into_typed_result::<T>("triangular_solve", result).map_err(BackendLinalgError::from)
@@ -849,13 +926,17 @@ pub fn full_piv_lu_backend<T>(
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
-    let outputs = with_default_backend(|backend| backend.full_piv_lu(&tensor))
-        .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
-    let [p, l, u, q, _parity]: [Tensor; 5] =
-        outputs.try_into().map_err(|outputs: Vec<Tensor>| {
-            anyhow!("full_piv_lu: expected 5 outputs, got {}", outputs.len())
-        })?;
+    let tensor = T::into_tensor(
+        a.shape().to_vec(),
+        a.host_data()
+            .map_err(|e| anyhow!("LU input host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("LU input tensor construction failed: {e}"))?;
+    let (p, l, u, q, _parity) = with_default_backend(|backend| {
+        backend.with_backend_session(|session| tensor.full_piv_lu(session))
+    })
+    .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
     Ok(FullPivLuResult {
         p: convert_for_typed::<T>("full_piv_lu", p)?,
         l: convert_for_typed::<T>("full_piv_lu", l)?,

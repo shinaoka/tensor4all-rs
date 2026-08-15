@@ -640,9 +640,28 @@ fn global_subspace_expand_preserves_ad_tracking_through_local_density_path() {
     let (state, _) = product_chain_state([[one, zero], [one, zero]]);
     let (reference, _) = product_chain_state([[one, zero], [zero, one]]);
 
+    let state = enable_grad_all(state);
+    let state_parent = state
+        .tensor(state.node_index(&"site0").unwrap())
+        .unwrap()
+        .clone();
+    let state_child = state
+        .tensor(state.node_index(&"site1").unwrap())
+        .unwrap()
+        .clone();
+    let reference = enable_grad_all(reference);
+    let reference_parent = reference
+        .tensor(reference.node_index(&"site0").unwrap())
+        .unwrap()
+        .clone();
+    let reference_child = reference
+        .tensor(reference.node_index(&"site1").unwrap())
+        .unwrap()
+        .clone();
+
     let result = global_subspace_expand_with_references(
-        enable_grad_all(state),
-        vec![enable_grad_all(reference)],
+        state,
+        vec![reference],
         &"site0",
         GseOptions::default().with_density_weight_cutoff(1.0e-14),
     )
@@ -654,14 +673,23 @@ fn global_subspace_expand_preserves_ad_tracking_through_local_density_path() {
         .unwrap()
         .tracks_grad()));
 
-    let loss = result.state.contract_to_tensor().unwrap().sum().unwrap();
-    loss.backward().unwrap();
-    for node in result.state.node_indices() {
-        assert!(
-            result.state.tensor(node).unwrap().grad().unwrap().is_some(),
-            "expanded node {node:?} lost gradient tracking"
-        );
-    }
+    let expanded_child = result
+        .state
+        .tensor(result.state.node_index(&"site1").unwrap())
+        .unwrap();
+    let expanded_edge = result.state.edge_between(&"site0", &"site1").unwrap();
+    let expanded_bond = result.state.bond_index(expanded_edge).unwrap();
+    expanded_child
+        .select_indices(std::slice::from_ref(expanded_bond), &[1])
+        .unwrap()
+        .sum()
+        .unwrap()
+        .backward()
+        .unwrap();
+    assert!(state_child.grad().unwrap().is_some());
+    assert!(reference_child.grad().unwrap().is_some());
+    assert!(state_parent.grad().unwrap().is_some());
+    assert!(reference_parent.grad().unwrap().is_some());
 }
 
 #[test]

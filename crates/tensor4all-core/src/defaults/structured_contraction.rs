@@ -275,10 +275,10 @@ pub(crate) fn normalize_payload_for_roots(
     );
 
     if unique_first_appearance(roots).len() == roots.len() {
-        return Ok((payload.clone(), roots.to_vec()));
+        return Ok((payload.duplicate()?, roots.to_vec()));
     }
 
-    let mut current_payload = payload.clone();
+    let mut current_payload = payload.duplicate()?;
     let mut current_roots = roots.to_vec();
     while let Some((axis_a, axis_b)) = first_duplicate_pair(&current_roots) {
         let mut input_ids: Vec<usize> = (0..current_roots.len()).collect();
@@ -311,7 +311,7 @@ pub(crate) fn normalize_payload_read_for_roots<'a>(
         return Ok((payload, roots.to_vec()));
     }
 
-    let mut current_payload = payload.as_read().to_tensor();
+    let mut current_payload = payload.as_read().tensor_view().duplicate()?;
     let mut current_roots = roots.to_vec();
     while let Some((axis_a, axis_b)) = first_duplicate_pair(&current_roots) {
         let mut input_ids: Vec<usize> = (0..current_roots.len()).collect();
@@ -336,14 +336,14 @@ pub(crate) fn storage_payload_native(storage: &Storage) -> Result<NativeTensor> 
             storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::new)?,
-        ))
+        )?)
     } else if storage.is_c64() {
         Ok(NativeTensor::from_vec_col_major(
             storage.payload_dims().to_vec(),
             storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::new)?,
-        ))
+        )?)
     } else {
         Err(anyhow!("unsupported storage scalar type"))
     }
@@ -365,7 +365,7 @@ pub(crate) fn storage_from_payload_native(
         DType::F64 => {
             let values = payload
                 .as_slice::<f64>()
-                .ok_or_else(|| anyhow!("failed to read f64 payload tensor"))?
+                .map_err(anyhow::Error::new)?
                 .to_vec();
             Storage::new_structured(
                 values,
@@ -377,7 +377,7 @@ pub(crate) fn storage_from_payload_native(
         DType::C64 => {
             let values = payload
                 .as_slice::<Complex64>()
-                .ok_or_else(|| anyhow!("failed to read Complex64 payload tensor"))?
+                .map_err(anyhow::Error::new)?
                 .to_vec();
             Storage::new_structured(
                 values,
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn normalizes_repeated_payload_roots_by_extracting_diagonal() {
         let payload =
-            tenferro::Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+            tenferro::Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
         let (normalized, roots) = normalize_payload_for_roots(&payload, &[0, 0]).unwrap();
 
         assert_eq!(normalized.shape(), &[2]);

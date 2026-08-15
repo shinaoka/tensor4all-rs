@@ -50,7 +50,9 @@ where
     Ok(Matrix::from_col_major_vec(
         rows,
         cols,
-        tensor_to_col_major_vec(tensor),
+        tensor_to_col_major_vec(tensor).map_err(|err| TensorTrainError::InvalidOperation {
+            message: format!("Failed to read {op} matrix: {err}"),
+        })?,
     ))
 }
 
@@ -58,7 +60,10 @@ fn typed_real_values_to_f64<R>(tensor: &TypedTensor<R>, op: &'static str) -> Res
 where
     R: TensorScalar + ToPrimitive,
 {
-    let data = tensor_to_col_major_vec(tensor);
+    let data =
+        tensor_to_col_major_vec(tensor).map_err(|err| TensorTrainError::InvalidOperation {
+            message: format!("Failed to read {op} singular values: {err}"),
+        })?;
     data.iter()
         .map(|value| {
             value

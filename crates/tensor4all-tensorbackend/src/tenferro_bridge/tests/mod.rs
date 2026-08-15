@@ -36,10 +36,16 @@ fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
     })
 }
 
-fn default_graph_runtime_has_einsum_extension_cache_entries() -> bool {
-    crate::context::with_default_graph_runtime(|compiler, _| {
-        compiler.cache_stats().extensions.entries > 0
+fn default_graph_runtime_has_prepared_plan_cache_entries() -> bool {
+    crate::context::with_default_graph_runtime(|_, runtime, _| {
+        runtime
+            .cache_stats()
+            .expect("default runtime should provide cache stats")
+            .prepared_plans
+            .entries
+            > 0
     })
+    .expect("default graph runtime should be available")
 }
 
 struct ProfileGuard;
@@ -252,9 +258,12 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
 
 #[test]
 fn einsum_native_tensors_supports_retained_shared_nary_label() {
-    let a = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 11.0, 13.0]);
-    let b = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let c = NativeTensor::from_vec_col_major(vec![2, 2], vec![11.0_f64, 13.0, 17.0, 19.0]);
+    let a = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 11.0, 13.0])
+        .expect("valid n-ary einsum test tensor a");
+    let b = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .expect("valid n-ary einsum test tensor b");
+    let c = NativeTensor::from_vec_col_major(vec![2, 2], vec![11.0_f64, 13.0, 17.0, 19.0])
+        .expect("valid n-ary einsum test tensor c");
 
     let out = einsum_native_tensors(
         &[(&a, &[0, 1]), (&b, &[0, 2]), (&c, &[0, 3])],
@@ -272,9 +281,10 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
                     let b_offset = b_idx + 2 * j_idx;
                     let c_offset = b_idx + 2 * k_idx;
                     let out_offset = b_idx + 2 * (i_idx + 2 * (j_idx + 3 * k_idx));
-                    expected[out_offset] = a.as_slice::<f64>().unwrap()[a_offset]
-                        * b.as_slice::<f64>().unwrap()[b_offset]
-                        * c.as_slice::<f64>().unwrap()[c_offset];
+                    expected[out_offset] = a.as_slice::<f64>().expect("tensor a host values")
+                        [a_offset]
+                        * b.as_slice::<f64>().expect("tensor b host values")[b_offset]
+                        * c.as_slice::<f64>().expect("tensor c host values")[c_offset];
                 }
             }
         }
@@ -286,10 +296,71 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
 }
 
 #[test]
-fn einsum_native_tensors_populates_process_global_path_cache() {
-    let a = NativeTensor::from_vec_col_major(vec![2, 3, 4], vec![1.0_f64; 24]);
-    let b = NativeTensor::from_vec_col_major(vec![4, 5], vec![2.0_f64; 20]);
-    let c = NativeTensor::from_vec_col_major(vec![3, 2], vec![3.0_f64; 6]);
+fn einsum_native_tensor_reads_accepts_non_contiguous_borrowed_view() {
+    let backing = [1.0_f64, 2.0, 3.0, 4.0];
+    let lhs_view = TensorView::F64(
+        tenferro::TypedTensorView::from_slice(vec![2, 2], vec![2, 1], 0, &backing)
+            .expect("valid non-contiguous lhs view"),
+    );
+    assert!(!lhs_view
+        .is_col_major_contiguous()
+        .expect("view layout should be valid"));
+    let lhs = NativeTensorReadInput::Borrowed(TensorRead::from_view(lhs_view));
+    let rhs_tensor = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])
+        .expect("valid identity rhs");
+    let rhs = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&rhs_tensor));
+
+    let output = einsum_native_tensor_reads(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
+        .expect("borrowed non-contiguous einsum should succeed");
+
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&output).unwrap(),
+        vec![1.0, 3.0, 2.0, 4.0]
+    );
+}
+
+#[test]
+fn einsum_native_tensor_reads_promotes_non_contiguous_borrowed_view() {
+    let backing = [1.0_f64, 2.0, 3.0, 4.0];
+    let lhs_view = TensorView::F64(
+        tenferro::TypedTensorView::from_slice(vec![2, 2], vec![2, 1], 0, &backing)
+            .expect("valid non-contiguous lhs view"),
+    );
+    let lhs = NativeTensorReadInput::Borrowed(TensorRead::from_view(lhs_view));
+    let rhs_tensor = NativeTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .expect("valid complex identity rhs");
+    let rhs = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&rhs_tensor));
+
+    let output = einsum_native_tensor_reads(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
+        .expect("mixed borrowed non-contiguous einsum should succeed");
+
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<Complex64>(&output).unwrap(),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ]
+    );
+}
+
+#[test]
+fn einsum_native_tensors_populates_process_global_prepared_plan_cache() {
+    let a = NativeTensor::from_vec_col_major(vec![2, 3, 4], vec![1.0_f64; 24])
+        .expect("valid cache einsum test tensor a");
+    let b = NativeTensor::from_vec_col_major(vec![4, 5], vec![2.0_f64; 20])
+        .expect("valid cache einsum test tensor b");
+    let c = NativeTensor::from_vec_col_major(vec![3, 2], vec![3.0_f64; 6])
+        .expect("valid cache einsum test tensor c");
 
     let out =
         einsum_native_tensors(&[(&a, &[0, 1, 2]), (&b, &[2, 3]), (&c, &[1, 0])], &[3]).unwrap();
@@ -299,21 +370,20 @@ fn einsum_native_tensors_populates_process_global_path_cache() {
         native_tensor_primal_to_dense_col_major::<f64>(&out).unwrap(),
         vec![144.0; 5]
     );
-    assert!(default_graph_runtime_has_einsum_extension_cache_entries());
+    assert!(default_graph_runtime_has_prepared_plan_cache_entries());
 }
 
 #[test]
 fn einsum_native_tensors_mixed_dtype_records_borrowed_conversion_profile() {
     let _guard = ProfileGuard::enable();
-    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
-    let rhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![5.0_f64, 6.0, 7.0, 8.0, 9.0, 10.0]);
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0])
+        .expect("valid mixed-dtype einsum lhs");
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![5.0_f64, 6.0, 7.0, 8.0, 9.0, 10.0])
+        .expect("valid mixed-dtype einsum rhs");
 
-    let owned = einsum_native_tensors_owned(
-        vec![(lhs.clone(), vec![0, 1]), (rhs.clone(), vec![1, 2])],
-        &[0, 2],
-    )
-    .unwrap();
     let borrowed = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2]).unwrap();
+    let owned =
+        einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2]).unwrap();
 
     assert_eq!(owned.shape(), &[2, 3]);
     assert_eq!(owned.dtype(), DType::F64);
@@ -359,8 +429,10 @@ fn einsum_native_tensors_dense_binary_records_borrowed_profile() {
 
 #[test]
 fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
-    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let input = NativeTensorReadInput::Owned(tensor.clone());
+    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .expect("valid native read-input test tensor");
+    let tensor_bytes = native_tensor_bytes(&tensor);
+    let input = NativeTensorReadInput::Owned(tensor);
     assert_eq!(input.dtype(), DType::F64);
     assert_eq!(input.shape(), &[2]);
     assert_eq!(input.as_read().shape(), &[2]);
@@ -375,7 +447,7 @@ fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
     assert_eq!(dtype_size_bytes(DType::C32), 8);
     assert_eq!(dtype_size_bytes(DType::C64), 16);
     assert_eq!(dtype_size_bytes(DType::I64), 8);
-    assert_eq!(native_tensor_bytes(&tensor), 16);
+    assert_eq!(tensor_bytes, 16);
     assert_eq!(format_label('x' as u32), "x");
     assert_eq!(format_label(0x110000), "1114112");
     assert_eq!(format_labels(&[]), "scalar");
@@ -424,11 +496,13 @@ fn native_einsum_profile_print_and_c32_arithmetic_paths() {
     let lhs = NativeTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 2.0), Complex32::new(-3.0, 0.5)],
-    );
+    )
+    .expect("valid complex32 scale lhs");
     let rhs = NativeTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(0.5, -1.0), Complex32::new(4.0, 2.0)],
-    );
+    )
+    .expect("valid complex32 scale rhs");
 
     let scaled = scale_native_tensor(
         &lhs,
@@ -437,7 +511,9 @@ fn native_einsum_profile_print_and_c32_arithmetic_paths() {
     .unwrap();
     assert_eq!(scaled.dtype(), DType::C32);
     assert_eq!(
-        scaled.as_slice::<Complex32>().unwrap(),
+        scaled
+            .as_slice::<Complex32>()
+            .expect("scaled tensor host values"),
         &[Complex32::new(4.0, 3.0), Complex32::new(-5.5, 4.0)]
     );
 
@@ -450,7 +526,9 @@ fn native_einsum_profile_print_and_c32_arithmetic_paths() {
     .unwrap();
     assert_eq!(combined.dtype(), DType::C32);
     assert_eq!(
-        combined.as_slice::<Complex32>().unwrap(),
+        combined
+            .as_slice::<Complex32>()
+            .expect("combined tensor host values"),
         &[Complex32::new(2.0, 2.5), Complex32::new(-5.0, 4.5)]
     );
 

@@ -1290,11 +1290,14 @@ def dependency_table_of(table: str) -> tuple[str, str | None] | None:
     Returns ``(kind, subtable_name)``. `[dependencies]` yields
     ``("dependencies", None)`` and `[dependencies.tenferro-linalg]` yields
     ``("dependencies", "tenferro-linalg")``, including the
-    `[target.'cfg(...)'.dependencies]` forms.
+    `[target.'cfg(...)'.dependencies]` forms. Workspace dependency declarations
+    are excluded because they do not add a direct crate dependency.
     """
     parts = [part.strip().strip("\"'") for part in table.split(".")]
     for index, part in enumerate(parts):
         if part in TENFERRO_DEP_TABLES:
+            if index > 0 and parts[index - 1] == "workspace":
+                return None
             remainder = parts[index + 1 :]
             return (part, remainder[0] if remainder else None)
     return None

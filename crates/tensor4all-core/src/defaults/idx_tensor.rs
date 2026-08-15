@@ -14,14 +14,13 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tenferro::{DType, DotGeneralConfig, Tensor as NativeTensor};
+use tenferro::{DType, DotGeneralConfig, Tensor as NativeTensor, TensorRead, TensorView};
 use tenferro_ad::EagerTensor;
-use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
-use tenferro_einsum::EinsumSubscripts;
+use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
+use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{
-    axpby_native_tensor, contract_native_tensor, default_eager_ctx,
-    dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
-    native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag, scale_native_tensor,
+    contract_native_tensor, default_eager_ctx, dense_native_tensor_from_col_major,
+    diag_native_tensor_from_col_major, native_tensor_primal_to_diag,
     storage_payload_native_read_input, storage_to_native_tensor, NativeTensorReadInput,
     TensorElement,
 };
@@ -157,8 +156,8 @@ pub fn print_and_reset_pairwise_contract_profile() {
     });
 }
 
-fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
-    let element_size = match native.dtype() {
+fn tensor_profile_bytes(dtype: DType, shape: &[usize]) -> usize {
+    let element_size = match dtype {
         DType::F32 => 4,
         DType::F64 => 8,
         DType::C32 => 8,
@@ -167,7 +166,7 @@ fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
         DType::I64 => 8,
         DType::Bool => 1,
     };
-    native.shape().iter().product::<usize>() * element_size
+    shape.iter().product::<usize>() * element_size
 }
 
 /// Trait for scalar types that can generate random values from a standard
@@ -534,7 +533,7 @@ impl IdxTensorStorage {
     fn payload_dims(&self) -> &[usize] {
         match self {
             Self::Materialized(storage) => storage.payload_dims(),
-            Self::Eager { inner, .. } => inner.data().shape(),
+            Self::Eager { inner, .. } => inner.shape(),
             Self::Compact(payload) => &payload.payload_dims,
             Self::Deferred { source, .. } => source.payload_dims(),
         }
@@ -544,7 +543,7 @@ impl IdxTensorStorage {
         match self {
             Self::Materialized(storage) => storage.payload_strides().to_vec(),
             Self::Eager { inner, .. } => {
-                IdxTensor::col_major_strides(inner.data().shape()).unwrap_or_default()
+                IdxTensor::col_major_strides(inner.shape()).unwrap_or_default()
             }
             Self::Compact(payload) => {
                 IdxTensor::col_major_strides(&payload.payload_dims).unwrap_or_default()
@@ -556,8 +555,8 @@ impl IdxTensorStorage {
     fn is_f64(&self) -> bool {
         match self {
             Self::Materialized(storage) => storage.is_f64(),
-            Self::Eager { inner, .. } => inner.data().dtype() == DType::F64,
-            Self::Compact(payload) => payload.payload.data().dtype() == DType::F64,
+            Self::Eager { inner, .. } => inner.dtype() == DType::F64,
+            Self::Compact(payload) => payload.payload.dtype() == DType::F64,
             Self::Deferred { source, .. } => source.is_f64(),
         }
     }
@@ -565,8 +564,8 @@ impl IdxTensorStorage {
     fn is_c64(&self) -> bool {
         match self {
             Self::Materialized(storage) => storage.is_c64(),
-            Self::Eager { inner, .. } => inner.data().dtype() == DType::C64,
-            Self::Compact(payload) => payload.payload.data().dtype() == DType::C64,
+            Self::Eager { inner, .. } => inner.dtype() == DType::C64,
+            Self::Compact(payload) => payload.payload.dtype() == DType::C64,
             Self::Deferred { source, .. } => source.is_c64(),
         }
     }
@@ -578,8 +577,8 @@ impl IdxTensorStorage {
             } else {
                 DType::F64
             }),
-            Self::Eager { inner, .. } => Some(inner.data().dtype()),
-            Self::Compact(payload) => Some(payload.payload.data().dtype()),
+            Self::Eager { inner, .. } => Some(inner.dtype()),
+            Self::Compact(payload) => Some(payload.payload.dtype()),
             Self::Deferred { source, .. } => source.dtype(),
         }
     }
@@ -587,9 +586,9 @@ impl IdxTensorStorage {
     fn is_complex(&self) -> bool {
         match self {
             Self::Materialized(storage) => storage.is_complex(),
-            Self::Eager { inner, .. } => matches!(inner.data().dtype(), DType::C32 | DType::C64),
+            Self::Eager { inner, .. } => matches!(inner.dtype(), DType::C32 | DType::C64),
             Self::Compact(payload) => {
-                matches!(payload.payload.data().dtype(), DType::C32 | DType::C64)
+                matches!(payload.payload.dtype(), DType::C32 | DType::C64)
             }
             Self::Deferred { source, .. } => source.is_complex(),
         }
@@ -634,6 +633,17 @@ impl IdxTensorStorage {
         }
     }
 
+    fn materialize_eager_payload(inner: &EagerTensor) -> Result<NativeTensor> {
+        let native = inner.duplicate_value()?;
+        if native.is_col_major_contiguous()? {
+            return Ok(native);
+        }
+        let read = inner.tensor_read();
+        Ok(inner.runtime().with_execution_session(|session| {
+            session.to_contiguous_read(TensorRead::from_view(read.tensor_view()))
+        })??)
+    }
+
     fn materialize(
         &self,
         logical_rank: usize,
@@ -644,14 +654,19 @@ impl IdxTensorStorage {
                 inner,
                 axis_classes,
             } => {
-                let dtype = inner.data().dtype();
+                let native = Self::materialize_eager_payload(inner).map_err(|source| {
+                    TensorStorageError::Materialization {
+                        source: Arc::from(source.into_boxed_dyn_error()),
+                    }
+                })?;
+                let dtype = native.dtype();
                 if matches!(dtype, DType::F32 | DType::C32) {
                     return Err(TensorStorageError::UnsupportedDtype {
                         dtype: IdxTensor::dtype_name(dtype),
                     });
                 }
                 IdxTensor::storage_from_native_with_axis_classes(
-                    inner.data(),
+                    &native,
                     axis_classes,
                     logical_rank,
                 )
@@ -661,14 +676,20 @@ impl IdxTensorStorage {
                 })
             }
             Self::Compact(payload) => {
-                let dtype = payload.payload.data().dtype();
+                let native =
+                    Self::materialize_eager_payload(&payload.payload).map_err(|source| {
+                        TensorStorageError::Materialization {
+                            source: Arc::from(source.into_boxed_dyn_error()),
+                        }
+                    })?;
+                let dtype = native.dtype();
                 if matches!(dtype, DType::F32 | DType::C32) {
                     return Err(TensorStorageError::UnsupportedDtype {
                         dtype: IdxTensor::dtype_name(dtype),
                     });
                 }
                 IdxTensor::storage_from_native_with_axis_classes(
-                    payload.payload.data(),
+                    &native,
                     &payload.axis_classes,
                     logical_rank,
                 )
@@ -696,7 +717,7 @@ impl IdxTensorStorage {
                     dense_native_tensor_from_col_major(&values, storage.payload_dims())?
                 };
                 (
-                    EagerTensor::from_tensor_in(native, default_eager_ctx()?),
+                    EagerTensor::from_tensor_in(native, default_eager_ctx()?)?,
                     storage.payload_dims().to_vec(),
                     storage.axis_classes().to_vec(),
                 )
@@ -706,7 +727,7 @@ impl IdxTensorStorage {
                 axis_classes,
             } => (
                 (**inner).clone(),
-                inner.data().shape().to_vec(),
+                inner.shape().to_vec(),
                 axis_classes.clone(),
             ),
             Self::Compact(compact) => (
@@ -717,23 +738,22 @@ impl IdxTensorStorage {
             Self::Deferred { error, .. } => return Err(anyhow::Error::new((**error).clone())),
         };
         let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
-        let target_dtype =
-            IdxTensor::scale_target_dtype(payload.data().dtype(), scalar_inner.data().dtype())?;
-        let payload = if payload.data().dtype() == target_dtype {
+        let target_dtype = IdxTensor::scale_target_dtype(payload.dtype(), scalar_inner.dtype())?;
+        let payload = if payload.dtype() == target_dtype {
             payload
         } else {
-            payload.convert(target_dtype)?
+            payload.cast(target_dtype)?
         };
-        let scalar_inner = if scalar_inner.data().dtype() == target_dtype {
+        let scalar_inner = if scalar_inner.dtype() == target_dtype {
             scalar_inner.clone()
         } else {
-            scalar_inner.convert(target_dtype)?
+            scalar_inner.cast(target_dtype)?
         };
-        let scaled = if payload.data().shape().is_empty() {
+        let scaled = if payload.shape().is_empty() {
             payload.mul(&scalar_inner)?
         } else {
-            let subscripts = IdxTensor::scale_subscripts(payload.data().shape().len())?;
-            eager_einsum_ad(&[&payload, &scalar_inner], &subscripts)?
+            let subscripts = IdxTensor::scale_subscripts(payload.shape().len())?;
+            [&payload, &scalar_inner].einsum_subscripts(&subscripts)?
         };
         match self {
             Self::Eager { .. } => Ok(Self::Eager {
@@ -794,8 +814,8 @@ impl IdxTensorStorage {
                     Ok(AnyScalar::new_complex(value.re, value.im))
                 }
             }
-            Self::Eager { inner, .. } => IdxTensor::native_sum_scalar(inner.data()),
-            Self::Compact(payload) => IdxTensor::native_sum_scalar(payload.payload.data()),
+            Self::Eager { inner, .. } => IdxTensor::native_sum_scalar(inner),
+            Self::Compact(payload) => IdxTensor::native_sum_scalar(&payload.payload),
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
     }
@@ -803,8 +823,8 @@ impl IdxTensorStorage {
     fn nonfinite_flags(&self) -> Result<(bool, bool)> {
         match self {
             Self::Materialized(storage) => Ok(storage.payload_nonfinite_flags()),
-            Self::Eager { inner, .. } => IdxTensor::native_nonfinite_flags(inner.data()),
-            Self::Compact(payload) => IdxTensor::native_nonfinite_flags(payload.payload.data()),
+            Self::Eager { inner, .. } => IdxTensor::native_nonfinite_flags(inner),
+            Self::Compact(payload) => IdxTensor::native_nonfinite_flags(&payload.payload),
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
     }
@@ -816,10 +836,10 @@ impl IdxTensorStorage {
                 .map(Complex64::from)
                 .map_err(anyhow::Error::new),
             Self::Eager { inner, .. } => {
-                IdxTensor::native_complex_payload_value_at(inner.data(), payload_coords)
+                IdxTensor::native_complex_payload_value_at(inner, payload_coords)
             }
             Self::Compact(payload) => {
-                IdxTensor::native_complex_payload_value_at(payload.payload.data(), payload_coords)
+                IdxTensor::native_complex_payload_value_at(&payload.payload, payload_coords)
             }
             Self::Deferred { error, .. } => Err(anyhow::Error::new((**error).clone())),
         }
@@ -996,7 +1016,7 @@ impl IdxTensor {
 
     fn scalar_dtype(&self) -> Result<DType> {
         if let Some(inner) = self.storage.eager() {
-            return Ok(inner.data().dtype());
+            return Ok(inner.dtype());
         }
         if self.storage.is_f64() {
             Ok(DType::F64)
@@ -1337,7 +1357,7 @@ impl IdxTensor {
         Ok(EagerTensor::from_tensor_in(
             storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
             default_eager_ctx()?,
-        ))
+        )?)
     }
 
     fn dense_inner_from_payload(
@@ -1351,10 +1371,10 @@ impl IdxTensor {
             .max()
             .map(|class_id| class_id + 1)
             .unwrap_or(0);
-        if !(payload.data().shape().len() == payload_rank) {
+        if !(payload.shape().len() == payload_rank) {
             return Err(anyhow::anyhow!(
                 "structured payload rank {} does not match axis classes {:?}",
-                payload.data().shape().len(),
+                payload.shape().len(),
                 axis_classes
             ));
         };
@@ -1367,10 +1387,10 @@ impl IdxTensor {
         };
 
         if axis_classes == Self::dense_axis_classes(logical_dims.len()) {
-            if !(payload.data().shape() == logical_dims) {
+            if !(payload.shape() == logical_dims) {
                 return Err(anyhow::anyhow!(
                     "dense payload dims {:?} do not match logical dims {:?}",
-                    payload.data().shape(),
+                    payload.shape(),
                     logical_dims
                 ));
             };
@@ -1389,10 +1409,10 @@ impl IdxTensor {
             };
             dense = dense.embed_diag(first_axis, logical_axis)?;
         }
-        if !(dense.data().shape() == logical_dims) {
+        if !(dense.shape() == logical_dims) {
             return Err(anyhow::anyhow!(
                 "expanded structured payload dims {:?} do not match logical dims {:?}",
-                dense.data().shape(),
+                dense.shape(),
                 logical_dims
             ));
         };
@@ -1512,10 +1532,10 @@ impl IdxTensor {
         payload: &EagerTensor,
         roots: &[usize],
     ) -> Result<(Option<EagerTensor>, Vec<usize>)> {
-        if !(payload.data().shape().len() == roots.len()) {
+        if !(payload.shape().len() == roots.len()) {
             return Err(anyhow::anyhow!(
                 "payload rank {} does not match root label count {}",
-                payload.data().shape().len(),
+                payload.shape().len(),
                 roots.len()
             ));
         };
@@ -1549,10 +1569,10 @@ impl IdxTensor {
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
         Self::validate_indices(&indices)?;
-        if payload_inner.data().shape() != payload_dims {
+        if payload_inner.shape() != payload_dims {
             return Err(anyhow::anyhow!(
                 "structured payload dims {:?} do not match planned payload dims {:?}",
-                payload_inner.data().shape(),
+                payload_inner.shape(),
                 payload_dims
             ));
         }
@@ -1631,10 +1651,10 @@ impl IdxTensor {
             let mut payloads = Vec::with_capacity(operands.len());
             for operand in operands {
                 let payload = operand.compact_payload_inner()?;
-                payloads.push(if payload.data().dtype() == target {
+                payloads.push(if payload.dtype() == target {
                     payload
                 } else {
-                    payload.convert(target)?
+                    payload.cast(target)?
                 });
             }
 
@@ -1651,7 +1671,7 @@ impl IdxTensor {
             let refs = normalized.iter().collect::<Vec<_>>();
             let subscripts =
                 Self::build_payload_einsum_subscripts(&labels, &plan.output_payload_roots)?;
-            let payload = eager_einsum_ad(&refs, &subscripts)?;
+            let payload = refs.as_slice().einsum_subscripts(&subscripts)?;
             return Self::from_structured_payload_inner(
                 result_indices,
                 payload,
@@ -1683,9 +1703,7 @@ impl IdxTensor {
                     .storage
                     .eager()
                     .ok_or_else(|| anyhow::anyhow!("structured operand has no compact payload"))?;
-                inputs.push(NativeTensorReadInput::Borrowed(
-                    tenferro::TensorRead::from_tensor(inner.data()),
-                ));
+                inputs.push(NativeTensorReadInput::Borrowed(inner.tensor_read()));
             }
         }
         let mut normalized = Vec::with_capacity(inputs.len());
@@ -1705,7 +1723,7 @@ impl IdxTensor {
             &refs,
             &plan.output_payload_roots,
         )?;
-        let payload_inner = EagerTensor::from_tensor_in(payload, default_eager_ctx()?);
+        let payload_inner = EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?;
         Self::from_structured_payload_inner(
             result_indices,
             payload_inner,
@@ -1773,7 +1791,7 @@ impl IdxTensor {
                 )),
             }
         } else {
-            storage_from_payload_native(native.clone(), native.shape(), axis_classes.to_vec())
+            storage_from_payload_native(native.duplicate()?, native.shape(), axis_classes.to_vec())
         }
     }
 
@@ -1832,21 +1850,19 @@ impl IdxTensor {
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::F32) {
-            let payload = self
+            let inner = self
                 .storage
                 .eager()
-                .and_then(|inner| inner.data().as_slice::<f32>())
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?
-                .to_vec();
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?;
+            let payload = inner.value()?.as_slice::<f32>()?.to_vec();
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::C32) {
-            let payload = self
+            let inner = self
                 .storage
                 .eager()
-                .and_then(|inner| inner.data().as_slice::<Complex32>())
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?
-                .to_vec();
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?;
+            let payload = inner.value()?.as_slice::<Complex32>()?.to_vec();
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else {
@@ -2086,12 +2102,11 @@ impl IdxTensor {
                 },
             )
         } else if self.storage.dtype() == Some(DType::F32) {
-            let payload = self
+            let inner = self
                 .storage
                 .eager()
-                .and_then(|inner| inner.data().as_slice::<f32>())
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 structured payload"))?
-                .to_vec();
+                .ok_or_else(|| anyhow::anyhow!("failed to read f32 structured payload"))?;
+            let payload = inner.value()?.as_slice::<f32>()?.to_vec();
             let output_indices = kept_indices.clone();
             self.select_structured_indices_typed(
                 payload,
@@ -2101,17 +2116,16 @@ impl IdxTensor {
                 (selected_axes, positions),
                 move |payload, dims, _strides, classes| {
                     let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?);
+                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?)?;
                     Self::from_structured_payload_inner(output_indices, inner, dims, classes)
                 },
             )
         } else if self.storage.dtype() == Some(DType::C32) {
-            let payload = self
+            let inner = self
                 .storage
                 .eager()
-                .and_then(|inner| inner.data().as_slice::<Complex32>())
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 structured payload"))?
-                .to_vec();
+                .ok_or_else(|| anyhow::anyhow!("failed to read c32 structured payload"))?;
+            let payload = inner.value()?.as_slice::<Complex32>()?.to_vec();
             let output_indices = kept_indices.clone();
             self.select_structured_indices_typed(
                 payload,
@@ -2121,7 +2135,7 @@ impl IdxTensor {
                 (selected_axes, positions),
                 move |payload, dims, _strides, classes| {
                     let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?);
+                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?)?;
                     Self::from_structured_payload_inner(output_indices, inner, dims, classes)
                 },
             )
@@ -2199,12 +2213,12 @@ impl IdxTensor {
             .context("IdxTensor materialization failed")?;
             record_pairwise_contract_profile_bytes(
                 "materialize_storage_to_native",
-                native_tensor_profile_bytes(&native),
+                tensor_profile_bytes(native.dtype(), native.shape()),
             );
             let _ = self.eager_cache.set(Arc::new(EagerTensor::from_tensor_in(
                 native,
                 default_eager_ctx()?,
-            )));
+            )?));
         }
         self.eager_cache
             .get()
@@ -2374,9 +2388,9 @@ impl IdxTensor {
         }
 
         let starts_tensor = EagerTensor::from_tensor_in(
-            NativeTensor::from_vec_col_major(vec![rank], starts),
+            NativeTensor::from_vec_col_major(vec![rank], starts).map_err(anyhow::Error::new)?,
             default_eager_ctx()?,
-        );
+        )?;
         let sliced = self
             .try_materialized_inner()?
             .dynamic_slice(&starts_tensor, &slice_sizes)?;
@@ -2757,20 +2771,24 @@ impl IdxTensor {
             .map_err(|error| StructuredSelectorError::InvalidStorage {
                 message: error.to_string(),
             })?;
+        let payload_dtype = payload_native.dtype();
         let payload_inner = EagerTensor::from_tensor_in(
-            payload_native.clone(),
+            payload_native,
             default_eager_ctx().map_err(|error| StructuredSelectorError::InvalidStorage {
                 message: error.to_string(),
             })?,
-        );
+        )
+        .map_err(|error| StructuredSelectorError::InvalidStorage {
+            message: error.to_string(),
+        })?;
         let payload_dims = vec![left.dim, site.dim];
         let indices = vec![left, site, right];
         if !matches!(
-            payload_native.dtype(),
+            payload_dtype,
             DType::F32 | DType::F64 | DType::C32 | DType::C64
         ) {
             return Err(StructuredSelectorError::InvalidStorage {
-                message: format!("unsupported selector dtype {:?}", payload_native.dtype()),
+                message: format!("unsupported selector dtype {:?}", payload_dtype),
             });
         }
         Self::from_structured_payload_inner(indices, payload_inner, payload_dims, vec![0, 1, 0])
@@ -2792,7 +2810,7 @@ impl IdxTensor {
     ) -> Result<Self> {
         Self::from_inner_with_axis_classes(
             indices,
-            EagerTensor::from_tensor_in(native, default_eager_ctx()?),
+            EagerTensor::from_tensor_in(native, default_eager_ctx()?)?,
             axis_classes,
         )
     }
@@ -2875,7 +2893,8 @@ impl IdxTensor {
         };
 
         let input = self.try_materialized_inner()?;
-        let (values, vectors) = tenferro_linalg::eager_tensor::eigh(input)
+        let (values, vectors) = input
+            .eigh()
             .map_err(|source| anyhow::anyhow!("Hermitian eigendecomposition failed: {source}"))?;
 
         let eigenvalue_index = DynIndex::new_dyn(dims[0]);
@@ -2927,7 +2946,7 @@ impl IdxTensor {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_diag_dims(&dims)?;
-        Self::validate_diag_payload_len(payload_inner.data().shape().iter().product(), &dims)?;
+        Self::validate_diag_payload_len(payload_inner.shape().iter().product(), &dims)?;
         let axis_classes = Self::diag_axis_classes(dims.len());
         let diag_inner = payload_inner.embed_diag(0, 1)?;
         Self::from_inner_with_axis_classes(indices, diag_inner, axis_classes)
@@ -2957,10 +2976,10 @@ impl IdxTensor {
         profile_pairwise_contract_section("from_inner_validate_indices", || {
             Self::validate_indices(&indices)
         })?;
-        if dims != inner.data().shape() {
+        if dims != inner.shape() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
-                inner.data().shape(),
+                inner.shape(),
                 dims
             ));
         }
@@ -2973,7 +2992,7 @@ impl IdxTensor {
             IdxTensorStorage::from_eager_dense(inner, indices.len())
         } else {
             let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
-            let payload_dims = payload.data().shape().to_vec();
+            let payload_dims = payload.shape().to_vec();
             IdxTensorStorage::Compact(Arc::new(StructuredPayload {
                 payload: Arc::new(payload),
                 payload_dims,
@@ -2996,11 +3015,6 @@ impl IdxTensor {
         self.storage.axis_classes()
     }
 
-    /// Borrow the native payload.
-    pub(crate) fn as_native(&self) -> Result<&NativeTensor> {
-        Ok(self.try_materialized_inner()?.data())
-    }
-
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     /// # Errors
     /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
@@ -3014,9 +3028,9 @@ impl IdxTensor {
             .storage
             .eager()
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
-            .filter(|inner| inner.data().shape() == self.storage.payload_dims());
+            .filter(|inner| inner.shape() == self.storage.payload_dims());
         let payload = match eager_payload {
-            Some(inner) => inner.data().clone(),
+            Some(inner) => inner.duplicate_value()?,
             None => {
                 let materialized = self.storage.materialize(self.indices.len())?;
                 storage_payload_native(materialized.as_ref())
@@ -3025,7 +3039,10 @@ impl IdxTensor {
         };
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
-        let tracked = Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx()?));
+        let tracked = Arc::new(EagerTensor::requires_grad_in(
+            payload,
+            default_eager_ctx()?,
+        )?);
         let storage = if axis_classes == Self::dense_axis_classes(self.indices.len()) {
             IdxTensorStorage::Eager {
                 inner: tracked,
@@ -3061,47 +3078,43 @@ impl IdxTensor {
     ///
     pub fn grad(&self) -> std::result::Result<Option<Self>, IdxTensorError> {
         if let Some(value) = self.tracked_compact_payload_value() {
-            return value
-                .payload
-                .grad()
-                .map(|grad| {
-                    if self.compact_payload_is_logical_dense(&value.payload_dims) {
-                        return Self::from_native_with_axis_classes(
-                            self.indices.clone(),
-                            grad.as_ref().clone(),
-                            value.axis_classes.clone(),
-                        );
-                    }
-                    if !(grad.as_ref().shape() == value.payload_dims) {
-                        return Err(anyhow::anyhow!(
-                            "gradient payload dims {:?} do not match {:?}",
-                            grad.as_ref().shape(),
-                            value.payload_dims
-                        ));
-                    };
-                    let gradient =
-                        EagerTensor::from_tensor_in(grad.as_ref().clone(), default_eager_ctx()?);
-                    Self::from_structured_payload_inner(
-                        self.indices.clone(),
-                        gradient,
-                        value.payload_dims.clone(),
-                        value.axis_classes.clone(),
-                    )
-                })
-                .transpose()
-                .map_err(IdxTensorError::from);
-        }
-        self.try_materialized_inner()?
-            .grad()
-            .map(|grad| {
-                Self::from_native_with_axis_classes(
+            let Some(gradient) = value.payload.grad()? else {
+                return Ok(None);
+            };
+            let gradient_shape = gradient.shape().to_vec();
+            let gradient_tensor = gradient.to_tensor()?;
+            if self.compact_payload_is_logical_dense(&value.payload_dims) {
+                return Ok(Some(Self::from_native_with_axis_classes(
                     self.indices.clone(),
-                    grad.as_ref().clone(),
-                    self.storage.axis_classes().to_vec(),
+                    gradient_tensor,
+                    value.axis_classes.clone(),
+                )?));
+            }
+            if gradient_shape != value.payload_dims {
+                return Err(anyhow::anyhow!(
+                    "gradient payload dims {:?} do not match {:?}",
+                    gradient_shape,
+                    value.payload_dims
                 )
-            })
-            .transpose()
-            .map_err(IdxTensorError::from)
+                .into());
+            }
+            let gradient = EagerTensor::from_tensor_in(gradient_tensor, default_eager_ctx()?)?;
+            return Ok(Some(Self::from_structured_payload_inner(
+                self.indices.clone(),
+                gradient,
+                value.payload_dims.clone(),
+                value.axis_classes.clone(),
+            )?));
+        }
+
+        let Some(gradient) = self.try_materialized_inner()?.grad()? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::from_native_with_axis_classes(
+            self.indices.clone(),
+            gradient.to_tensor()?,
+            self.storage.axis_classes().to_vec(),
+        )?))
     }
 
     /// Clear the accumulated gradient stored for this tensor.
@@ -3112,13 +3125,13 @@ impl IdxTensor {
     pub fn clear_grad(&self) -> std::result::Result<(), IdxTensorError> {
         self.ensure_storage_ready()?;
         if let Some(value) = self.tracked_compact_payload_value() {
-            value.payload.clear_grad();
+            value.payload.clear_grad()?;
         }
         if let Some(inner) = self.storage.eager() {
-            inner.clear_grad();
+            inner.clear_grad()?;
         }
         if let Some(inner) = self.eager_cache.get() {
-            inner.clear_grad();
+            inner.clear_grad()?;
         }
         Ok(())
     }
@@ -3238,8 +3251,8 @@ impl IdxTensor {
             return AnyScalar::from_tensor(self.clone()).map_err(IdxTensorError::from);
         }
         if let Some(payload) = self.storage.eager().filter(|payload| payload.tracks_grad()) {
-            let axes: Vec<usize> = (0..payload.data().shape().len()).collect();
-            let reduced = payload.reduce_sum(&axes)?;
+            let axes: Vec<usize> = (0..payload.shape().len()).collect();
+            let reduced = payload.reduce_sum(Some(&axes))?;
             return AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?)
                 .map_err(IdxTensorError::from);
         }
@@ -3480,9 +3493,9 @@ impl IdxTensor {
             });
         }
 
-        let self_native = profile_pairwise_contract_section("as_native", || self.as_native())?;
-        let other_native = profile_pairwise_contract_section("as_native", || other.as_native())?;
-        if self_native.dtype() != other_native.dtype() {
+        let self_dtype = self.try_materialized_inner()?.dtype();
+        let other_dtype = other.try_materialized_inner()?.dtype();
+        if self_dtype != other_dtype {
             if options.has_conj() {
                 let lhs = if options.lhs_conj {
                     self.conj()
@@ -3496,8 +3509,10 @@ impl IdxTensor {
                 };
                 return lhs.try_contract_pairwise_default(&rhs);
             }
+            let self_native = self.try_materialized_inner()?.duplicate_value()?;
+            let other_native = other.try_materialized_inner()?.duplicate_value()?;
             let result_native = profile_pairwise_contract_section("native_contract", || {
-                contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)
+                contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)
             })?;
             return profile_pairwise_contract_section("from_native", || {
                 Self::from_native_with_axis_classes(
@@ -3519,13 +3534,13 @@ impl IdxTensor {
                 other.try_materialized_inner()
             })?;
             profile_pairwise_contract_section("dot_general_execute", || {
-                lhs.dot_general_with_conj(rhs, &config, options.lhs_conj, options.rhs_conj)
+                lhs.dot_general_with_conj(rhs, config, options.lhs_conj, options.rhs_conj)
             })
             .map_err(anyhow::Error::from)
         })?;
         record_pairwise_contract_profile_bytes(
             "dot_general_output",
-            native_tensor_profile_bytes(result.data()),
+            tensor_profile_bytes(result.dtype(), result.shape()),
         );
         profile_pairwise_contract_section("from_inner_axis_classes", || {
             Self::from_inner_with_axis_classes(
@@ -3603,11 +3618,13 @@ impl IdxTensor {
             return Self::from_inner(spec.result_indices.into_vec(), result);
         }
 
-        let self_native = self.as_native()?;
-        let other_native = other.as_native()?;
-        if self_native.dtype() != other_native.dtype() {
+        let self_dtype = self.try_materialized_inner()?.dtype();
+        let other_dtype = other.try_materialized_inner()?.dtype();
+        if self_dtype != other_dtype {
+            let self_native = self.try_materialized_inner()?.duplicate_value()?;
+            let other_native = other.try_materialized_inner()?.duplicate_value()?;
             let result_native =
-                contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)?;
+                contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)?;
             return Self::from_native_with_axis_classes(
                 spec.result_indices.into_vec(),
                 result_native,
@@ -3621,13 +3638,11 @@ impl IdxTensor {
             other.indices.len(),
             &spec.axes_b,
         )?;
-        let result = eager_einsum_ad(
-            &[
-                self.try_materialized_inner()?,
-                other.try_materialized_inner()?,
-            ],
-            &subscripts,
-        )
+        let result = [
+            self.try_materialized_inner()?,
+            other.try_materialized_inner()?,
+        ]
+        .einsum_subscripts(&subscripts)
         .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
         Self::from_inner_with_axis_classes(
             spec.result_indices.into_vec(),
@@ -3667,10 +3682,12 @@ impl IdxTensor {
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(other, result_indices, &[], &[]);
         }
-        let self_native = self.as_native()?;
-        let other_native = other.as_native()?;
-        if self_native.dtype() != other_native.dtype() {
-            let result_native = contract_native_tensor(self_native, &[], other_native, &[])?;
+        let self_dtype = self.try_materialized_inner()?.dtype();
+        let other_dtype = other.try_materialized_inner()?.dtype();
+        if self_dtype != other_dtype {
+            let self_native = self.try_materialized_inner()?.duplicate_value()?;
+            let other_native = other.try_materialized_inner()?.duplicate_value()?;
+            let result_native = contract_native_tensor(&self_native, &[], &other_native, &[])?;
             return Self::from_native_with_axis_classes(
                 result_indices,
                 result_native,
@@ -3684,13 +3701,11 @@ impl IdxTensor {
             other.indices.len(),
             &[],
         )?;
-        let result = eager_einsum_ad(
-            &[
-                self.try_materialized_inner()?,
-                other.try_materialized_inner()?,
-            ],
-            &subscripts,
-        )
+        let result = [
+            self.try_materialized_inner()?,
+            other.try_materialized_inner()?,
+        ]
+        .einsum_subscripts(&subscripts)
         .map_err(|e| anyhow::anyhow!("outer_product failed: {e}"))?;
         Self::from_inner_with_axis_classes(result_indices, result, result_axis_classes)
     }
@@ -3931,45 +3946,6 @@ impl IdxTensor {
             return Self::from_storage(self.indices.clone(), Arc::new(combined));
         }
 
-        let self_native = self.as_native()?;
-        let other_native = other_aligned.as_native()?;
-        if self_native.dtype() == other_native.dtype()
-            && matches!(self_native.dtype(), DType::F32 | DType::C32)
-        {
-            let lhs = self.scale(a)?;
-            let rhs = other_aligned.scale(b)?;
-            let combined = lhs
-                .try_materialized_inner()?
-                .add(rhs.try_materialized_inner()?)
-                .map_err(|e| anyhow::anyhow!("tensor addition failed: {e}"))?;
-            return Self::from_inner_with_axis_classes(
-                self.indices.clone(),
-                combined,
-                axis_classes,
-            )
-            .map_err(IdxTensorError::from);
-        }
-
-        let a_native = a.as_tensor()?.as_native()?;
-        let b_native = b.as_tensor()?.as_native()?;
-        if self_native.dtype() != other_native.dtype()
-            || self_native.dtype() != a_native.dtype()
-            || other_native.dtype() != b_native.dtype()
-        {
-            let combined = axpby_native_tensor(
-                self_native,
-                &a.to_backend_scalar(),
-                other_native,
-                &b.to_backend_scalar(),
-            )?;
-            return Self::from_native_with_axis_classes(
-                self.indices.clone(),
-                combined,
-                axis_classes,
-            )
-            .map_err(IdxTensorError::from);
-        }
-
         let lhs = self.scale(a)?;
         let rhs = other_aligned.scale(b)?;
         let combined = lhs
@@ -4017,24 +3993,21 @@ impl IdxTensor {
             });
         }
 
-        let self_native = self.as_native()?;
-        let scalar_native = scalar.as_tensor()?.as_native()?;
-        if matches!(self_native.dtype(), DType::F32 | DType::C32)
-            && self_native.dtype() != scalar_native.dtype()
-        {
-            let target_dtype =
-                Self::scale_target_dtype(self_native.dtype(), scalar_native.dtype())?;
+        let self_dtype = self.try_materialized_inner()?.dtype();
+        let scalar_dtype = scalar.as_tensor()?.try_materialized_inner()?.dtype();
+        if self_dtype != scalar_dtype {
+            let target_dtype = Self::scale_target_dtype(self_dtype, scalar_dtype)?;
             let self_inner = self.try_materialized_inner()?;
-            let self_inner = if self_inner.data().dtype() == target_dtype {
+            let self_inner = if self_inner.dtype() == target_dtype {
                 self_inner.clone()
             } else {
-                self_inner.convert(target_dtype)?
+                self_inner.cast(target_dtype)?
             };
             let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
-            let scalar_inner = if scalar_inner.data().dtype() == target_dtype {
+            let scalar_inner = if scalar_inner.dtype() == target_dtype {
                 scalar_inner.clone()
             } else {
-                scalar_inner.convert(target_dtype)?
+                scalar_inner.cast(target_dtype)?
             };
             let scaled = if self.indices.is_empty() {
                 self_inner
@@ -4042,7 +4015,8 @@ impl IdxTensor {
                     .map_err(|e| anyhow::anyhow!("scalar multiplication failed: {e}"))?
             } else {
                 let subscripts = Self::scale_subscripts(self.indices.len())?;
-                eager_einsum_ad(&[&self_inner, &scalar_inner], &subscripts)
+                [&self_inner, &scalar_inner]
+                    .einsum_subscripts(&subscripts)
                     .map_err(|e| anyhow::anyhow!("tensor scaling failed: {e}"))?
             };
             return Self::from_inner_with_axis_classes(
@@ -4052,29 +4026,17 @@ impl IdxTensor {
             )
             .map_err(IdxTensorError::from);
         }
-        if self_native.dtype() != scalar_native.dtype() {
-            let scaled = scale_native_tensor(self_native, &scalar.to_backend_scalar())?;
-            return Self::from_native_with_axis_classes(
-                self.indices.clone(),
-                scaled,
-                self.storage.axis_classes().to_vec(),
-            )
-            .map_err(IdxTensorError::from);
-        }
-
         let scaled = if self.indices.is_empty() {
             self.try_materialized_inner()?
                 .mul(scalar.as_tensor()?.try_materialized_inner()?)
                 .map_err(|e| anyhow::anyhow!("scalar multiplication failed: {e}"))?
         } else {
             let subscripts = Self::scale_subscripts(self.indices.len())?;
-            eager_einsum_ad(
-                &[
-                    self.try_materialized_inner()?,
-                    scalar.as_tensor()?.try_materialized_inner()?,
-                ],
-                &subscripts,
-            )
+            [
+                self.try_materialized_inner()?,
+                scalar.as_tensor()?.try_materialized_inner()?,
+            ]
+            .einsum_subscripts(&subscripts)
             .map_err(|e| anyhow::anyhow!("tensor scaling failed: {e}"))?
         };
         Self::from_inner_with_axis_classes(
@@ -4608,7 +4570,7 @@ impl IdxTensor {
     }
 
     fn native_complex_payload_value_at(
-        native: &NativeTensor,
+        native: &EagerTensor,
         payload_coords: &[usize],
     ) -> Result<Complex64> {
         if !(payload_coords.len() == native.shape().len()) {
@@ -4618,114 +4580,113 @@ impl IdxTensor {
                 native.shape().len()
             ));
         };
-        let mut offset = 0usize;
-        let mut stride = 1usize;
         for (&coordinate, &dim) in payload_coords.iter().zip(native.shape().iter()) {
-            if !(coordinate < dim) {
+            if coordinate >= dim {
                 return Err(anyhow::anyhow!(
                     "payload coordinate {coordinate} is out of bounds for dim {dim}"
                 ));
-            };
-            offset = offset
-                .checked_add(
-                    coordinate
-                        .checked_mul(stride)
-                        .ok_or_else(|| anyhow::anyhow!("payload offset overflow"))?,
-                )
-                .ok_or_else(|| anyhow::anyhow!("payload offset overflow"))?;
-            stride = stride
-                .checked_mul(dim)
-                .ok_or_else(|| anyhow::anyhow!("payload stride overflow"))?;
+            }
         }
-        match native.dtype() {
-            DType::F32 => native
-                .as_slice::<f32>()
-                .and_then(|values| values.get(offset).copied())
+        let value = native.value()?;
+        match value.as_tensor_view() {
+            TensorView::F32(view) => view
+                .get(payload_coords)
+                .copied()
                 .map(|value| Complex64::new(f64::from(value), 0.0))
                 .ok_or_else(|| anyhow::anyhow!("failed to read f32 payload value")),
-            DType::F64 => native
-                .as_slice::<f64>()
-                .and_then(|values| values.get(offset).copied())
+            TensorView::F64(view) => view
+                .get(payload_coords)
+                .copied()
                 .map(|value| Complex64::new(value, 0.0))
                 .ok_or_else(|| anyhow::anyhow!("failed to read f64 payload value")),
-            DType::C32 => native
-                .as_slice::<Complex32>()
-                .and_then(|values| values.get(offset).copied())
+            TensorView::C32(view) => view
+                .get(payload_coords)
+                .copied()
                 .map(|value| Complex64::new(f64::from(value.re), f64::from(value.im)))
                 .ok_or_else(|| anyhow::anyhow!("failed to read c32 payload value")),
-            DType::C64 => native
-                .as_slice::<Complex64>()
-                .and_then(|values| values.get(offset).copied())
+            TensorView::C64(view) => view
+                .get(payload_coords)
+                .copied()
                 .ok_or_else(|| anyhow::anyhow!("failed to read c64 payload value")),
-            dtype => Err(anyhow::anyhow!("unsupported payload dtype {dtype:?}")),
+            view => Err(anyhow::anyhow!(
+                "unsupported payload dtype {:?}",
+                view.dtype()
+            )),
         }
     }
 
-    fn native_sum_scalar(native: &NativeTensor) -> Result<AnyScalar> {
+    fn native_sum_scalar(native: &EagerTensor) -> Result<AnyScalar> {
+        let value = native.value()?;
         match native.dtype() {
-            DType::F32 => native
-                .as_slice::<f32>()
-                .map(|values| AnyScalar::from_value(values.iter().copied().sum::<f32>()))
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 payload")),
-            DType::F64 => native
-                .as_slice::<f64>()
-                .map(|values| AnyScalar::from_value(values.iter().copied().sum::<f64>()))
-                .ok_or_else(|| anyhow::anyhow!("failed to read f64 payload")),
-            DType::C32 => native
-                .as_slice::<Complex32>()
-                .map(|values| AnyScalar::from_value(values.iter().copied().sum::<Complex32>()))
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 payload")),
-            DType::C64 => native
-                .as_slice::<Complex64>()
-                .map(|values| AnyScalar::from_value(values.iter().copied().sum::<Complex64>()))
-                .ok_or_else(|| anyhow::anyhow!("failed to read c64 payload")),
+            DType::F32 => Ok(AnyScalar::from_value(
+                value.as_slice::<f32>()?.iter().copied().sum::<f32>(),
+            )),
+            DType::F64 => Ok(AnyScalar::from_value(
+                value.as_slice::<f64>()?.iter().copied().sum::<f64>(),
+            )),
+            DType::C32 => Ok(AnyScalar::from_value(
+                value
+                    .as_slice::<Complex32>()?
+                    .iter()
+                    .copied()
+                    .sum::<Complex32>(),
+            )),
+            DType::C64 => Ok(AnyScalar::from_value(
+                value
+                    .as_slice::<Complex64>()?
+                    .iter()
+                    .copied()
+                    .sum::<Complex64>(),
+            )),
             dtype => Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
         }
     }
 
-    fn native_nonfinite_flags(native: &NativeTensor) -> Result<(bool, bool)> {
-        let mut has_nan = false;
-        let mut has_infinity = false;
-        match native.dtype() {
-            DType::F32 => {
-                let values = native
-                    .as_slice::<f32>()
-                    .ok_or_else(|| anyhow::anyhow!("failed to read f32 payload"))?;
-                for &value in values {
-                    has_nan |= value.is_nan();
-                    has_infinity |= value.is_infinite();
-                }
-            }
-            DType::F64 => {
-                let values = native
-                    .as_slice::<f64>()
-                    .ok_or_else(|| anyhow::anyhow!("failed to read f64 payload"))?;
-                for &value in values {
-                    has_nan |= value.is_nan();
-                    has_infinity |= value.is_infinite();
-                }
-            }
-            DType::C32 => {
-                let values = native
-                    .as_slice::<Complex32>()
-                    .ok_or_else(|| anyhow::anyhow!("failed to read c32 payload"))?;
-                for value in values {
-                    has_nan |= value.re.is_nan() || value.im.is_nan();
-                    has_infinity |= value.re.is_infinite() || value.im.is_infinite();
-                }
-            }
-            DType::C64 => {
-                let values = native
-                    .as_slice::<Complex64>()
-                    .ok_or_else(|| anyhow::anyhow!("failed to read c64 payload"))?;
-                for value in values {
-                    has_nan |= value.re.is_nan() || value.im.is_nan();
-                    has_infinity |= value.re.is_infinite() || value.im.is_infinite();
-                }
-            }
-            dtype => return Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
+    fn native_nonfinite_flags_typed<T: TensorElement>(
+        native: &EagerTensor,
+        classify: impl Fn(T) -> (bool, bool),
+    ) -> Result<(bool, bool)> {
+        let value = native.value()?;
+        if let Ok(values) = value.as_slice::<T>() {
+            return Ok(values.iter().copied().map(&classify).fold(
+                (false, false),
+                |(has_nan, has_infinity), (is_nan, is_infinite)| {
+                    (has_nan | is_nan, has_infinity | is_infinite)
+                },
+            ));
         }
-        Ok((has_nan, has_infinity))
+        drop(value);
+        let value = IdxTensorStorage::materialize_eager_payload(native)?;
+        Ok(value.as_slice::<T>()?.iter().copied().map(classify).fold(
+            (false, false),
+            |(has_nan, has_infinity), (is_nan, is_infinite)| {
+                (has_nan | is_nan, has_infinity | is_infinite)
+            },
+        ))
+    }
+
+    fn native_nonfinite_flags(native: &EagerTensor) -> Result<(bool, bool)> {
+        match native.dtype() {
+            DType::F32 => Self::native_nonfinite_flags_typed(native, |value: f32| {
+                (value.is_nan(), value.is_infinite())
+            }),
+            DType::F64 => Self::native_nonfinite_flags_typed(native, |value: f64| {
+                (value.is_nan(), value.is_infinite())
+            }),
+            DType::C32 => Self::native_nonfinite_flags_typed(native, |value: Complex32| {
+                (
+                    value.re.is_nan() || value.im.is_nan(),
+                    value.re.is_infinite() || value.im.is_infinite(),
+                )
+            }),
+            DType::C64 => Self::native_nonfinite_flags_typed(native, |value: Complex64| {
+                (
+                    value.re.is_nan() || value.im.is_nan(),
+                    value.re.is_infinite() || value.im.is_infinite(),
+                )
+            }),
+            dtype => Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
+        }
     }
 
     fn compact_nonfinite_flags(&self) -> Result<(bool, bool)> {
@@ -5262,7 +5223,7 @@ pub fn unfold_split(
         unfold_split_inner(t, left_inds)?;
 
     Ok((
-        matrix_inner.data().clone(),
+        matrix_inner.duplicate_value()?,
         left_len,
         m,
         n,
@@ -6158,7 +6119,11 @@ impl IdxTensor {
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
     pub fn to_vec<T: TensorElement>(&self) -> std::result::Result<Vec<T>, IdxTensorError> {
-        native_tensor_primal_to_dense_col_major(self.as_native()?).map_err(IdxTensorError::from)
+        self.as_inner()?
+            .duplicate_value()?
+            .as_slice::<T>()
+            .map(|values| values.to_vec())
+            .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))
     }
 
     /// Consume the tensor and return its indices with dense column-major values.
@@ -6519,8 +6484,8 @@ mod tests {
 
     #[test]
     fn materialization_error_retains_backend_source() {
-        let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-        let inner = EagerTensor::from_tensor_in(native, default_eager_ctx().unwrap());
+        let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+        let inner = EagerTensor::from_tensor_in(native, default_eager_ctx().unwrap()).unwrap();
         let storage = IdxTensorStorage::Eager {
             inner: Arc::new(inner),
             axis_classes: vec![0, 0],
@@ -6569,8 +6534,8 @@ mod tests {
     #[test]
     fn authoritative_storage_conjugation_failure_is_deferred_without_detaching() {
         let i = DynIndex::new_dyn(2);
-        let native = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-        let inner = EagerTensor::requires_grad_in(native, default_eager_ctx().unwrap());
+        let native = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let inner = EagerTensor::requires_grad_in(native, default_eager_ctx().unwrap()).unwrap();
         let tensor = IdxTensor::from_inner(vec![i], inner).unwrap();
         let source = match &tensor.storage {
             IdxTensorStorage::Eager { inner, .. } => Arc::clone(inner),

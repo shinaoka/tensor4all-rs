@@ -19,7 +19,8 @@ use num_complex::Complex64;
 use std::sync::Mutex;
 use tenferro::DType;
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::eager_tensor::svd as eager_svd;
+use tenferro_linalg::EagerTensorLinalgExt;
+#[cfg(test)]
 use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 use thiserror::Error;
 
@@ -205,6 +206,7 @@ fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
     retained.max(1)
 }
 
+#[cfg(test)]
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
     match tensor.dtype() {
         DType::F64 => native_tensor_primal_to_dense_col_major::<f64>(tensor)
@@ -214,6 +216,25 @@ fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, Sv
             .map_err(|e| SvdError::ComputationError(e.source)),
         other => Err(SvdError::ComputationError(anyhow::anyhow!(
             "native SVD returned unsupported singular-value scalar type {other:?}"
+        ))),
+    }
+}
+
+fn singular_values_from_eager(tensor: &EagerTensor) -> Result<Vec<f64>, SvdError> {
+    let value = tensor
+        .value()
+        .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source)))?;
+    match tensor.dtype() {
+        DType::F64 => value
+            .as_slice::<f64>()
+            .map(|values| values.to_vec())
+            .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source))),
+        DType::C64 => value
+            .as_slice::<Complex64>()
+            .map(|values| values.iter().map(|value| value.re).collect())
+            .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source))),
+        other => Err(SvdError::ComputationError(anyhow::anyhow!(
+            "eager SVD returned unsupported singular-value scalar type {other:?}"
         ))),
     }
 }
@@ -238,9 +259,10 @@ fn svd_truncated_inner(
         .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
-    let (mut u_inner, mut s_inner, mut vt_inner) =
-        eager_svd(&matrix_inner).map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
-    let s_full = singular_values_from_native(s_inner.data())?;
+    let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
+        .svd()
+        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let s_full = singular_values_from_eager(&s_inner)?;
     let mut r = if options.truncate {
         let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
         validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;

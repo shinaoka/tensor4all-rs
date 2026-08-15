@@ -182,7 +182,10 @@ fn test_einsum_tensors_matmul() {
     let b = typed_tensor_from_col_major_slice(&[5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
 
     let c = einsum_tensors("ij,jk->ik", &[&a, &b]).unwrap();
-    assert_eq!(tensor_to_col_major_vec(&c), &[19.0, 43.0, 22.0, 50.0]);
+    assert_eq!(
+        tensor_to_col_major_vec(&c).unwrap(),
+        vec![19.0, 43.0, 22.0, 50.0]
+    );
 }
 
 #[test]

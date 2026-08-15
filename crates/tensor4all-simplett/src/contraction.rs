@@ -114,7 +114,10 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                 &einsum_tensors("asr,ast->rt", &[a0.as_inner(), b0.as_inner()]).map_err(|err| {
                     contraction_helper_error("Failed to contract first inner_product site", err)
                 })?,
-            ),
+            )
+            .map_err(|err| {
+                contraction_helper_error("Failed to read first inner_product result", err)
+            })?,
         );
 
         // Contract through remaining sites
@@ -152,7 +155,13 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
                                 err,
                             )
                         })?,
-                ),
+                )
+                .map_err(|err| {
+                    contraction_helper_error(
+                        &format!("Failed to read inner_product site {i} result"),
+                        err,
+                    )
+                })?,
             );
         }
 
