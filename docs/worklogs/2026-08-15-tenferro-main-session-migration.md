@@ -88,6 +88,13 @@ CUDA, placement-aware session routing, public explicit sessions, and tracing are
   failure and tenferro shape/data rejection in addition to shape overflow.
 - Round 9 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
 - Verdict: **Correct-to-merge**
+- The third CI run passed every gate except coverage generation, where the
+  unrelated `tensor_train_accessor` test randomly selected only the function's
+  zero-valued point and rejected all initial pivots before coverage JSON was
+  produced. Its accessor-only fixture is now strictly positive, removing that
+  random invalid initialization; the focused test passed 50 consecutive runs.
+- Round 10 reviewer: `reviewer-gpt` (GPT-5.6 Sol)
+- Verdict: **Correct-to-merge**
 
 ## Implementation
 

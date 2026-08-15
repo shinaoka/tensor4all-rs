@@ -612,7 +612,7 @@ fn tensor_train_consistency() {
 fn tensor_train_accessor() {
     use tensor4all_quanticstci::AbstractTensorTrain;
 
-    let f = |idx: &[usize]| idx[0] as f64;
+    let f = |idx: &[usize]| idx[0] as f64 + 1.0;
     let sizes = vec![8]; // 2^3
 
     let opts = QtciOptions::default()
