@@ -56,6 +56,22 @@ fn run_case(seed: u64, guard: bool, nsearch: usize) -> SimpleTensorTrain<f64> {
         .tensor_train
 }
 
+/// Same as [`run_case`] but deliberately does NOT override
+/// `nsearch_global_pivots`, so the run exercises whatever the default is.
+/// Changing the default (and breaking recovery at that value) fails this test.
+fn run_case_default_nsearch(seed: u64, guard: bool) -> SimpleTensorTrain<f64> {
+    let input = two_peak_tt(10);
+    let options = AciOptions {
+        rng_seed: seed,
+        enable_global_guard: guard,
+        tolerance: 1e-4,
+        ..AciOptions::default()
+    };
+    elementwise(|xs: &[f64]| xs[0], &[input], &options)
+        .unwrap()
+        .tensor_train
+}
+
 #[test]
 fn global_guard_recovers_missed_near_degenerate_feature() {
     // The two near-degenerate peaks are far apart, so the local sweeps can
@@ -64,8 +80,11 @@ fn global_guard_recovers_missed_near_degenerate_feature() {
     // global pivot search guard finds the missed point, injects it, and the
     // guard-on run captures both peaks.
     let fb = 2.0;
+    // The guard-on arm runs at the DEFAULT search budget (nsearch is not
+    // overridden): a default caller receives `nsearch_global_pivots = 5`, so
+    // the recovery guarantee must hold there, not only at the hand-picked 30.
     let off = run_case(0, false, 5);
-    let on = run_case(0, true, 30);
+    let on = run_case_default_nsearch(0, true);
 
     let err_off = (off.evaluate(&[3; 10]).unwrap() - fb).abs();
     let err_on = (on.evaluate(&[3; 10]).unwrap() - fb).abs();

@@ -229,3 +229,102 @@ fn test_contraction_constant_two_sites() {
     let val = contraction.evaluate(&[(1, 1), (1, 0)]).unwrap();
     assert!((val - 4.0).abs() < 1e-10);
 }
+
+#[test]
+fn test_contraction_evaluate_rejects_out_of_range_values() {
+    // Asymmetric physical dims: mpo_a sites are (2, 3), mpo_b sites are (3, 4)
+    // -> i_k must be < 2, j_k must be < 4.
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
+    let mpo_b = MPO::<f64>::constant(&[(3, 4)], 1.0);
+    let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
+
+    // Valid pair still works.
+    assert!(contraction.evaluate(&[(1, 3)]).is_ok());
+
+    // i out of range.
+    let err = contraction.evaluate(&[(5, 0)]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MPOError::IndexOutOfBounds {
+                site: 0,
+                index: 5,
+                max: 4
+            }
+        ),
+        "got {err:?}"
+    );
+
+    // j out of range.
+    let err = contraction.evaluate(&[(0, 9)]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MPOError::IndexOutOfBounds {
+                site: 0,
+                index: 9,
+                max: 4
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn test_contraction_evaluate_left_rejects_short_slice() {
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
+
+    // indices[..2] on a 1-element slice used to panic.
+    let err = contraction.evaluate_left(2, &[(0, 0)]).unwrap_err();
+    assert!(
+        matches!(err, MPOError::InvalidOperation { .. }),
+        "got {err:?}"
+    );
+
+    // Out-of-range value at a covered site is also rejected.
+    let err = contraction.evaluate_left(2, &[(5, 0), (0, 0)]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MPOError::IndexOutOfBounds {
+                site: 0,
+                index: 5,
+                max: 2
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn test_contraction_evaluate_right_rejects_short_slice() {
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
+
+    // Right evaluation reads indices[n] .. indices[len-1]; a short slice that
+    // used to panic (len - n would under-require) must be a typed error.
+    let err = contraction.evaluate_right(1, &[(0, 0)]).unwrap_err();
+    assert!(
+        matches!(err, MPOError::InvalidOperation { .. }),
+        "got {err:?}"
+    );
+
+    // Out-of-range value at a covered site is also rejected.
+    let err = contraction
+        .evaluate_right(1, &[(0, 0), (5, 5)])
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MPOError::IndexOutOfBounds {
+                site: 1,
+                index: 5,
+                max: 2
+            }
+        ),
+        "got {err:?}"
+    );
+}

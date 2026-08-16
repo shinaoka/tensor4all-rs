@@ -153,6 +153,33 @@ fn dense_native_tensor_from_col_major_f32_roundtrip() {
 }
 
 #[test]
+fn diag_native_tensor_from_col_major_overflow_returns_error() {
+    // diag_len^logical_rank == 2^16^4 == 2^64 wraps to 0 in unchecked
+    // arithmetic; the checked product must surface a typed error instead of
+    // an empty allocation followed by an OOB panic.
+    let data = vec![1.0_f64; 65536];
+    let err = diag_native_tensor_from_col_major(&data, 4).unwrap_err();
+    assert!(err.to_string().contains("overflow"), "{err}");
+}
+
+#[test]
+fn dense_native_tensor_from_col_major_overflow_returns_error() {
+    // Same wrap for the dense constructor's shape product feeding the length
+    // check: dims product overflows before any allocation.
+    let data = vec![1.0_f64; 4];
+    let err = dense_native_tensor_from_col_major(&data, &[65536, 65536, 65536, 65536]).unwrap_err();
+    assert!(err.to_string().contains("overflow"), "{err}");
+}
+
+#[test]
+fn diag_native_tensor_from_col_major_zero_size_is_ok() {
+    // Zero diag length is a valid edge case (empty diagonal tensor).
+    let data: Vec<f64> = vec![];
+    let native = diag_native_tensor_from_col_major(&data, 2).unwrap();
+    assert_eq!(native.shape(), &[0, 0]);
+}
+
+#[test]
 fn diag_native_tensor_from_col_major_c32_promotes_to_c64_values() {
     let data = vec![Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)];
     let native = diag_native_tensor_from_col_major(&data, 2).unwrap();

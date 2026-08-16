@@ -74,6 +74,13 @@ fn tensor_dtype_name(dtype: DType) -> &'static str {
     }
 }
 
+fn checked_product(dims: &[usize]) -> Result<usize> {
+    dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| anyhow::anyhow!("dimension product overflow"))
+    })
+}
+
 fn dense_diagonal_values<T: Copy + Default>(diag: &[T], logical_rank: usize) -> Result<Vec<T>> {
     ensure!(
         logical_rank >= 1,
@@ -81,7 +88,7 @@ fn dense_diagonal_values<T: Copy + Default>(diag: &[T], logical_rank: usize) -> 
     );
     let diag_len = diag.len();
     let dims = vec![diag_len; logical_rank];
-    let total_len = dims.iter().product::<usize>();
+    let total_len = checked_product(&dims)?;
     let mut dense = vec![T::default(); total_len];
     let diagonal_stride = (0..logical_rank)
         .scan(1usize, |stride, _| {
@@ -103,7 +110,7 @@ macro_rules! impl_tensor_element {
                 data: &[Self],
                 dims: &[usize],
             ) -> Result<NativeTensor> {
-                let expected_len: usize = dims.iter().product();
+                let expected_len: usize = checked_product(dims)?;
                 ensure!(
                     data.len() == expected_len,
                     "dense tensor len {} does not match dims {:?} (expected {})",

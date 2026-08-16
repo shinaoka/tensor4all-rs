@@ -27,11 +27,10 @@ fn vh_from_v(v: &IdxTensor) -> IdxTensor {
 }
 
 fn reconstruct_from_svd(u: &IdxTensor, s: &IdxTensor, v: &IdxTensor) -> IdxTensor {
+    // Plain U·S·V^H: S shares `bond` with U and `sim` with V, so no
+    // reindexing is needed (regression for #629).
     let vh = vh_from_v(v);
     let svh = s.contract_pair(&vh).unwrap();
-    let sim_bond = s.indices[1].clone();
-    let bond = v.indices[v.indices.len() - 1].clone();
-    let svh = svh.replaceind(&sim_bond, &bond).unwrap();
     u.contract_pair(&svh).unwrap()
 }
 
@@ -87,12 +86,13 @@ fn test_svd_simple_matrix() {
     assert_eq!(s.indices.len(), 2);
     assert_eq!(v.indices.len(), 2);
 
-    // Check that U and V share the bond index
+    // Check that U and V share the bond index with S
     assert_eq!(u.indices[1].id, s.indices[0].id);
     // S tensor has two indices with same dimension and tags but different IDs (to avoid duplicate IDs)
     assert_eq!(s.indices[0].size(), s.indices[1].size());
     assert_eq!(s.indices[0].tags(), s.indices[1].tags());
-    assert_eq!(s.indices[0].id, v.indices[1].id);
+    // V carries S's `sim` leg, so S and V share the second bond index
+    assert_eq!(s.indices[1].id, v.indices[1].id);
 
     // Check that bond index has "Link" tag
     assert!(u.indices[1].tags().has_tag("Link"));
@@ -195,12 +195,13 @@ fn test_svd_rank3() {
     assert_eq!(v.indices[0].id, j.id);
     assert_eq!(v.indices[1].id, k.id);
 
-    // Check that U and V share the bond index
+    // Check that U and S share the bond index
     assert_eq!(u.indices[1].id, s.indices[0].id);
     // S tensor has two indices with same dimension and tags but different IDs (to avoid duplicate IDs)
     assert_eq!(s.indices[0].size(), s.indices[1].size());
     assert_eq!(s.indices[0].tags(), s.indices[1].tags());
-    assert_eq!(s.indices[0].id, v.indices[2].id);
+    // V carries S's `sim` leg, so S and V share the second bond index
+    assert_eq!(s.indices[1].id, v.indices[2].id);
 
     // Check that bond index has "Link" tag
     assert!(u.indices[1].tags().has_tag("Link"));
