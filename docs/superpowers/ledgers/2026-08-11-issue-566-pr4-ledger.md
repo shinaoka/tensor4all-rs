@@ -62,9 +62,9 @@ Basis: `origin/main` at 69a24e7 (2026-08-02 audit), remediated across PR #589,
 
 30. **Resolve the four semantic traps** — DONE (PR #595: `TreeTN::scale` split into `scale`/`scale_mut`; `evaluate` unsuffixed + `_batched`; `truncate`/`compress` documented; `norm` documented).
 31. **Collapse duplicate types** — DONE (PR #595: simplett positional type renamed `SimpleTensorTrain`; naming resolution documented; no compat aliases).
-32. **Julia-style concatenated names to snake_case** — DONE (PR #595: `link_indices`, `site_indices`, `max_bond_dim`, `full_tensor`, `min_dim`, `replace_indices`, …).
+32. **Julia-style concatenated names to snake_case** — DONE (PR #595: `link_indices`, `site_indices`, `max_bond_dim`, `full_tensor`, `min_dim`, `replace_indices`, …). Residual completed 2026-08 (#616, PR #643): `hasinds`→`has_inds`, `hascommoninds`→`has_common_inds` (core), `isortho`→`is_ortho`, `orthocenter`→`ortho_center` (itensorlike), `maxiter`→`max_iter`, `nrandominitpivot`→`n_random_init_pivot`, `unfoldingscheme`→`unfolding_scheme` (QtciOptions), each with `#[doc(alias)]` on the old name.
 33. **Unify densification / inner-product / canonicalization / options vocabulary** — DONE (PR #595: `inner_product` everywhere; `full_tensor` vs `to_dense` documented; options `max_bond_dim`/`SvdTruncationPolicy` unified; `canonicalize` vs `orthogonalize` documented per stack).
-34. **Remove scalar-suffixed Rust entry points outside capi** — DONE (PR #595: `native_tensor_primal_to_diag<T>`/`dense_col_major<T>` generics; `as_slice_f64/c64` removed; `as_`/`is_` dtype accessors documented as exempt).
+34. **Remove scalar-suffixed Rust entry points outside capi** — DONE (PR #595: `native_tensor_primal_to_diag<T>`/`dense_col_major<T>` generics; `as_slice_f64/c64` removed; `as_`/`is_` dtype accessors documented as exempt). Residual completed 2026-08 (#616, PR #643): `Storage::from_dense_f64_col_major` / `from_dense_c64_col_major` removed in favor of the generic `from_dense_col_major<T>`.
 
 ## Phase 5 — structural decisions
 

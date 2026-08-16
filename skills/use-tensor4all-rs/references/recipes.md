@@ -232,7 +232,7 @@ let mut tt = SimpleTensorTrain::new(vec![t0, t1])?;
 
 let norm_before = tt.norm();
 tt.orthogonalize(1)?;
-assert!(tt.isortho());
+assert!(tt.is_ortho());
 tt.truncate(&TruncateOptions::svd()
     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
     .with_max_bond_dim(2))?;
@@ -325,7 +325,7 @@ use tensor4all_hdf5::{load_mps, save_mps};
 ## Convergence debugging checklist
 
 - `errors.last()` plateaus above `tolerance`: raise `max_bond_dim` (needs higher rank), raise `max_iter` (more sweeps), or pick better initial pivots where `|f|` is large (`opt_first_pivot`).
-- Quantics discrete: all `sizes` equal and powers of 2; raise `nrandominitpivot` (10–20) for multi-feature / high-dim.
+- Quantics discrete: all `sizes` equal and powers of 2; raise `n_random_init_pivot` (10–20) for multi-feature / high-dim.
 - Off-by-one at a boundary: all tensor4all-rs indices are 0-indexed — QuanticsTCI.jl scripts must subtract 1 from grid indices.
 - Tolerance mismatch with Julia: `rtol = sqrt(cutoff)`.
 - Running in a debug build (no `--release`): tensor linalg is orders of magnitude slower — always run TCI/DMRG in release.

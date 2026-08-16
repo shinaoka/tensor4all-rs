@@ -433,13 +433,13 @@ fn test_storage_new_dense_c64() {
 }
 
 #[test]
-fn test_storage_from_dense_f64_col_major_zeros_with_shape() {
+fn test_storage_from_dense_col_major_f64_zeros_with_shape() {
     let s = Storage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap();
     assert_eq!(s.len(), 6);
 }
 
 #[test]
-fn test_storage_from_dense_c64_col_major_zeros_with_shape() {
+fn test_storage_from_dense_col_major_c64_zeros_with_shape() {
     let s = Storage::from_dense_col_major(vec![Complex64::new(0.0, 0.0); 6], &[3, 2]).unwrap();
     assert_eq!(s.len(), 6);
 }

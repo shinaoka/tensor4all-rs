@@ -1252,54 +1252,6 @@ impl Storage {
     /// Create dense f64 storage from column-major logical values.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the data length does not match the logical dimension
-    /// /// product (a shape mismatch).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_tensorbackend::Storage;
-    ///
-    /// let s = Storage::from_dense_f64_col_major(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
-    /// assert!(s.is_f64());
-    /// assert!(s.is_dense());
-    /// ```
-    pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> StorageResult<Self> {
-        Self::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
-        Ok(Self::from_repr(StorageRepr::F64(
-            StructuredStorage::from_dense_col_major(data, logical_dims)?,
-        )))
-    }
-
-    /// Create dense Complex64 storage from column-major logical values.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the data length does not match the logical dimension
-    /// /// product (a shape mismatch).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_tensorbackend::Storage;
-    /// use num_complex::Complex64;
-    ///
-    /// let data = vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)];
-    /// let s = Storage::from_dense_c64_col_major(data, &[2]).unwrap();
-    /// assert!(s.is_c64());
-    /// assert!(s.is_dense());
-    /// ```
-    pub fn from_dense_c64_col_major(
-        data: Vec<Complex64>,
-        logical_dims: &[usize],
-    ) -> StorageResult<Self> {
-        Self::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
-        Ok(Self::from_repr(StorageRepr::C64(
-            StructuredStorage::from_dense_col_major(data, logical_dims)?,
-        )))
-    }
-
     /// Create diagonal f64 storage from column-major diagonal payload values.
     ///
     /// # Errors

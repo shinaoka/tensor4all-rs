@@ -123,7 +123,7 @@ The quantics representation encodes each grid index in binary and arranges the b
 | Grid points given as explicit coordinate arrays | `quanticscrossinterpolate_from_arrays` |
 | Vector/tensor-valued function | `quanticscrossinterpolate_batched` |
 
-**Tip on `nrandominitpivot`**: The `nrandominitpivot` option (default: 5) controls how many random initial pivot points are used to seed the TCI algorithm. For functions with multiple separated features or high-dimensional problems, increase this to 10--20 to improve robustness.
+**Tip on `n_random_init_pivot`**: The `n_random_init_pivot` option (default: 5) controls how many random initial pivot points are used to seed the TCI algorithm. For functions with multiple separated features or high-dimensional problems, increase this to 10--20 to improve robustness.
 
 ### Discrete grid interpolation
 

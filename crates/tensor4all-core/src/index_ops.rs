@@ -404,17 +404,18 @@ pub fn hasind<I: IndexLike>(indices: &[I], index: &I) -> bool {
 /// # Example
 /// ```
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::index_ops::hasinds;
+/// use tensor4all_core::index_ops::has_inds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
 /// let k = Index::new_dyn(4);
 /// let indices = vec![i.clone(), j.clone(), k.clone()];
 ///
-/// assert!(hasinds(&indices, &[i.clone(), j.clone()]));
-/// assert!(!hasinds(&indices, &[i.clone(), Index::new_dyn(5)]));
+/// assert!(has_inds(&indices, &[i.clone(), j.clone()]));
+/// assert!(!has_inds(&indices, &[i.clone(), Index::new_dyn(5)]));
 /// ```
-pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
+#[doc(alias = "hasinds")]
+pub fn has_inds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
     targets
         .iter()
         .all(|target| indices.iter().any(|idx| idx == target))
@@ -434,7 +435,7 @@ pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
 /// # Example
 /// ```
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::index_ops::hascommoninds;
+/// use tensor4all_core::index_ops::has_common_inds;
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -443,10 +444,11 @@ pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
 /// let indices_a = vec![i.clone(), j.clone()];
 /// let indices_b = vec![j.clone(), k.clone()];
 ///
-/// assert!(hascommoninds(&indices_a, &indices_b));
-/// assert!(!hascommoninds(&[i.clone()], &[k.clone()]));
+/// assert!(has_common_inds(&indices_a, &indices_b));
+/// assert!(!has_common_inds(&[i.clone()], &[k.clone()]));
 /// ```
-pub fn hascommoninds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> bool {
+#[doc(alias = "hascommoninds")]
+pub fn has_common_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> bool {
     indices_a
         .iter()
         .any(|idx| indices_b.iter().any(|other| other == idx))

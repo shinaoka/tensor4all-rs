@@ -532,9 +532,9 @@ fn options_builder_all_fields() {
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
     assert_eq!(opts.max_bond_dim, Some(50));
-    assert_eq!(opts.maxiter, 100);
-    assert_eq!(opts.nrandominitpivot, 10);
-    assert_eq!(opts.unfoldingscheme, UnfoldingScheme::Fused);
+    assert_eq!(opts.max_iter, 100);
+    assert_eq!(opts.n_random_init_pivot, 10);
+    assert_eq!(opts.unfolding_scheme, UnfoldingScheme::Fused);
     assert_eq!(opts.verbosity, 2);
     assert_eq!(opts.nsearchglobalpivot, 3);
     assert_eq!(opts.nsearch, 200);

@@ -14,9 +14,9 @@ use tensor4all_treetci::TreeTciOptions;
 /// |---|---|---|---|
 /// | `tolerance` | `1e-8` | `1e-6` .. `1e-12` | Relative convergence threshold |
 /// | `max_bond_dim` | `None` (unlimited) | `50` .. `500` | Cap on bond dimension |
-/// | `maxiter` | `200` | `20` .. `500` | Maximum half-sweep iterations |
-/// | `nrandominitpivot` | `5` | `3` .. `20` | Random initial pivots added |
-/// | `unfoldingscheme` | `Interleaved` | — | How quantics bits are arranged |
+/// | `max_iter` | `200` | `20` .. `500` | Maximum half-sweep iterations |
+/// | `n_random_init_pivot` | `5` | `3` .. `20` | Random initial pivots added |
+/// | `unfolding_scheme` | `Interleaved` | — | How quantics bits are arranged |
 /// | `normalize_error` | `true` | — | Normalize error by max sample value |
 /// | `verbosity` | `0` | `0` .. `2` | Logging verbosity |
 /// | `nsearchglobalpivot` | `5` | `1` .. `20` | Global pivots tested per iteration |
@@ -31,8 +31,8 @@ use tensor4all_treetci::TreeTciOptions;
 /// let opts = QtciOptions::default();
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_bond_dim, None);
-/// assert_eq!(opts.maxiter, 200);
-/// assert_eq!(opts.nrandominitpivot, 5);
+/// assert_eq!(opts.max_iter, 200);
+/// assert_eq!(opts.n_random_init_pivot, 5);
 /// assert_eq!(opts.verbosity, 0);
 /// assert!(opts.normalize_error);
 ///
@@ -46,8 +46,8 @@ use tensor4all_treetci::TreeTciOptions;
 ///
 /// assert!((custom.tolerance - 1e-10).abs() < 1e-18);
 /// assert_eq!(custom.max_bond_dim, Some(50));
-/// assert_eq!(custom.maxiter, 100);
-/// assert_eq!(custom.nrandominitpivot, 10);
+/// assert_eq!(custom.max_iter, 100);
+/// assert_eq!(custom.n_random_init_pivot, 10);
 /// assert_eq!(custom.verbosity, 1);
 /// ```
 #[derive(Debug, Clone)]
@@ -80,7 +80,8 @@ pub struct QtciOptions {
     /// functions that need more sweeps.
     ///
     /// Default: `200`.
-    pub maxiter: usize,
+    #[doc(alias = "maxiter")]
+    pub max_iter: usize,
 
     /// Number of random initial pivots to add.
     ///
@@ -90,7 +91,8 @@ pub struct QtciOptions {
     /// extra initial evaluations. Typical values: `3`--`20`.
     ///
     /// Default: `5`.
-    pub nrandominitpivot: usize,
+    #[doc(alias = "nrandominitpivot")]
+    pub n_random_init_pivot: usize,
 
     /// Unfolding scheme for the quantics tensor train.
     ///
@@ -99,7 +101,8 @@ pub struct QtciOptions {
     /// most applications, `Interleaved` gives better compression.
     ///
     /// Default: [`UnfoldingScheme::Interleaved`].
-    pub unfoldingscheme: UnfoldingScheme,
+    #[doc(alias = "unfoldingscheme")]
+    pub unfolding_scheme: UnfoldingScheme,
 
     /// Whether to normalize the convergence error by the maximum
     /// sampled function value.
@@ -141,9 +144,9 @@ impl Default for QtciOptions {
         Self {
             tolerance: 1e-8,
             max_bond_dim: None,
-            maxiter: 200,
-            nrandominitpivot: 5,
-            unfoldingscheme: UnfoldingScheme::Interleaved,
+            max_iter: 200,
+            n_random_init_pivot: 5,
+            unfolding_scheme: UnfoldingScheme::Interleaved,
             normalize_error: true,
             verbosity: 0,
             nsearchglobalpivot: 5,
@@ -188,10 +191,10 @@ impl QtciOptions {
     /// ```
     /// use tensor4all_quanticstci::QtciOptions;
     /// let opts = QtciOptions::default().with_maxiter(500);
-    /// assert_eq!(opts.maxiter, 500);
+    /// assert_eq!(opts.max_iter, 500);
     /// ```
-    pub fn with_maxiter(mut self, maxiter: usize) -> Self {
-        self.maxiter = maxiter;
+    pub fn with_maxiter(mut self, max_iter: usize) -> Self {
+        self.max_iter = max_iter;
         self
     }
 
@@ -202,10 +205,10 @@ impl QtciOptions {
     /// ```
     /// use tensor4all_quanticstci::QtciOptions;
     /// let opts = QtciOptions::default().with_nrandominitpivot(10);
-    /// assert_eq!(opts.nrandominitpivot, 10);
+    /// assert_eq!(opts.n_random_init_pivot, 10);
     /// ```
     pub fn with_nrandominitpivot(mut self, n: usize) -> Self {
-        self.nrandominitpivot = n;
+        self.n_random_init_pivot = n;
         self
     }
 
@@ -216,10 +219,10 @@ impl QtciOptions {
     /// ```
     /// use tensor4all_quanticstci::{QtciOptions, UnfoldingScheme};
     /// let opts = QtciOptions::default().with_unfoldingscheme(UnfoldingScheme::Fused);
-    /// assert_eq!(opts.unfoldingscheme, UnfoldingScheme::Fused);
+    /// assert_eq!(opts.unfolding_scheme, UnfoldingScheme::Fused);
     /// ```
     pub fn with_unfoldingscheme(mut self, scheme: UnfoldingScheme) -> Self {
-        self.unfoldingscheme = scheme;
+        self.unfolding_scheme = scheme;
         self
     }
 
@@ -283,7 +286,7 @@ impl QtciOptions {
     pub fn to_treetci_options(&self) -> TreeTciOptions {
         TreeTciOptions {
             tolerance: self.tolerance,
-            max_iter: self.maxiter,
+            max_iter: self.max_iter,
             max_bond_dim: self.max_bond_dim,
             normalize_error: self.normalize_error,
             // Global pivot search stays opt-in; the legacy `nsearchglobalpivot`
