@@ -21,6 +21,68 @@ fn dimension_zero_is_rejected() {
 }
 
 #[test]
+fn encoding_is_injective_over_a_small_space() {
+    let dims = [3usize, 4, 2];
+    let indexer = FlatIndexer::try_new(&dims).unwrap();
+    assert_eq!(indexer.width_bits(), 2 + 2 + 1);
+
+    let mut seen = std::collections::HashSet::new();
+    for a in 0..dims[0] {
+        for b in 0..dims[1] {
+            for c in 0..dims[2] {
+                let key = indexer.encode(&[a, b, c]).unwrap();
+                assert!(seen.insert(key), "collision at {a},{b},{c}");
+            }
+        }
+    }
+    assert_eq!(seen.len(), dims[0] * dims[1] * dims[2]);
+}
+
+#[test]
+fn encoding_rejects_bad_input_instead_of_wrapping() {
+    let indexer = FlatIndexer::try_new(&[3, 4]).unwrap();
+    assert!(matches!(
+        indexer.encode(&[0]),
+        Err(IndexKeyError::LengthMismatch {
+            expected: 2,
+            actual: 1
+        })
+    ));
+    assert!(matches!(
+        indexer.encode(&[3, 0]),
+        Err(IndexKeyError::IndexOutOfRange {
+            position: 0,
+            value: 3,
+            dim: 3
+        })
+    ));
+    assert!(matches!(
+        indexer.encode(&[0, 4]),
+        Err(IndexKeyError::IndexOutOfRange {
+            position: 1,
+            value: 4,
+            dim: 4
+        })
+    ));
+}
+
+#[test]
+fn width_selects_u64_then_u128() {
+    let narrow = FlatIndexer::try_new(&[2; 64]).unwrap();
+    assert!(matches!(narrow.encode(&[0; 64]).unwrap(), IndexKey::U64(_)));
+    let wide = FlatIndexer::try_new(&[2; 65]).unwrap();
+    assert!(matches!(wide.encode(&[0; 65]).unwrap(), IndexKey::U128(_)));
+}
+
+#[test]
+fn an_empty_index_space_encodes_to_zero() {
+    let indexer = FlatIndexer::try_new(&[]).unwrap();
+    assert_eq!(indexer.width_bits(), 0);
+    assert!(indexer.is_empty());
+    assert_eq!(indexer.encode(&[]).unwrap(), IndexKey::U64(0));
+}
+
+#[test]
 fn total_bits_sums_and_reports_the_offending_position() {
     assert_eq!(total_bits(&[2, 2, 2]).unwrap(), 3);
     assert_eq!(total_bits(&[4, 3, 1]).unwrap(), 4);
