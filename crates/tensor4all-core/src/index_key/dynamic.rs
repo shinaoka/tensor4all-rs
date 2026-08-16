@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 pub(super) type Limbs = SmallVec<[u64; 2]>;
 
 /// Number of limbs needed to hold `width_bits`.
+#[inline]
 pub(super) fn limb_count(width_bits: u64) -> usize {
     width_bits.div_ceil(64) as usize
 }
@@ -48,6 +49,7 @@ pub(super) fn place_limbs(limbs: &mut Limbs, source: &[u64], width_bits: u64, of
 ///
 /// The caller has checked that `value` is below its local dimension and that
 /// the field fits within `limbs`, so no bits are lost.
+#[inline]
 pub(super) fn place(limbs: &mut Limbs, value: usize, offset: u64) {
     let word = (offset / 64) as usize;
     let shift = (offset % 64) as u32;
