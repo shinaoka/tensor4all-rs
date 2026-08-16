@@ -22,7 +22,7 @@
 - Every public item needs rustdoc with a runnable, asserted `# Examples` block. `ignore` and `no_run` doctest fences are prohibited.
 - No `unwrap()`/`expect()` in library code. Test and bench code may use them.
 - Run `cargo fmt --all` before every commit; `cargo clippy -p tensor4all-core --all-targets -- -D warnings` must be clean.
-- **Build hygiene:** do not run the full workspace suite after every step. Use `cargo test -p tensor4all-core <filter>` while iterating, run the full gate once at Task 7, and `cargo clean` that worktree afterwards. A cold rebuild here costs 10+ minutes because tenferro is fetched and built from git.
+- **Build hygiene:** always `--release`, never debug. The two profiles keep separate artifact sets, so a debug run doubles the footprint for no benefit — and `AGENTS.md` mandates `--release` anyway. Iterate with `cargo test --release -p tensor4all-core <filter>`; run the full gate once at Task 7. The first build is cold (10+ minutes, tenferro is fetched and built from git); every later one is incremental. Keep the artifacts for the whole of #628 and `cargo clean` once at Task 7, rather than cleaning per task and paying the cold cost repeatedly. Run at most one build at a time — concurrent cargo invocations serialize on the lock and just duplicate work.
 
 ## Design decision: bit-packing, not mixed-radix
 
