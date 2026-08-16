@@ -109,6 +109,30 @@ impl Default for FourierOptions {
 }
 
 impl FourierOptions {
+    fn validate(&self) -> std::result::Result<(), QuanticsTransformError> {
+        if self.sign != -1.0 && self.sign != 1.0 {
+            return Err(QuanticsTransformError::InvalidConfiguration {
+                message: "sign must be exactly -1.0 or 1.0".to_string(),
+            });
+        }
+        if !self.tolerance.is_finite() || self.tolerance < 0.0 {
+            return Err(QuanticsTransformError::InvalidConfiguration {
+                message: "tolerance must be finite and nonnegative".to_string(),
+            });
+        }
+        if self.max_bond_dim == Some(0) {
+            return Err(QuanticsTransformError::InvalidConfiguration {
+                message: "max_bond_dim must be positive when specified".to_string(),
+            });
+        }
+        if self.k == 0 {
+            return Err(QuanticsTransformError::InvalidConfiguration {
+                message: "k must be positive".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Create options for forward Fourier transform.
     /// # Errors
     ///
@@ -153,13 +177,15 @@ impl FTCore {
     ///
     /// # Errors
     ///
-    /// Returns an error when the variable count or dimension overflows (an
-    /// /// overflow or invalid-configuration failure).
+    /// Returns [`QuanticsTransformError::InvalidConfiguration`] for invalid
+    /// Fourier options or site counts. It also returns an error when a
+    /// dimension overflows.
     ///
     pub fn new(
         r: usize,
         options: FourierOptions,
     ) -> std::result::Result<Self, QuanticsTransformError> {
+        options.validate()?;
         if r < 2 {
             return Err(QuanticsTransformError::InvalidConfiguration {
                 message: format!("Number of sites must be at least 2, got {r}"),
@@ -232,8 +258,9 @@ impl FTCore {
 /// LinearOperator representing the QFT
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure).
+/// Returns [`QuanticsTransformError::InvalidConfiguration`] for invalid
+/// Fourier options or site counts. It also returns an error when operator
+/// construction or allocation overflows.
 ///
 /// # Examples
 /// ```
@@ -247,8 +274,11 @@ pub fn quantics_fourier_operator(
     r: usize,
     options: FourierOptions,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
+    options.validate()?;
     if r < 2 {
-        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("Number of sites must be at least 2, got {r}"),
+        });
     }
 
     let mpo = quantics_fourier_mpo(r, &options)?;
@@ -261,11 +291,10 @@ pub fn quantics_fourier_operator(
 fn quantics_fourier_mpo(
     r: usize,
     options: &FourierOptions,
-) -> Result<SimpleTensorTrain<Complex64>> {
+) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
+    options.validate()?;
     if r < 2 {
-        return Err(anyhow::anyhow!(
-            "Number of sites must be at least 2, got {r}"
-        ));
+        return Err(anyhow::anyhow!("Number of sites must be at least 2, got {r}").into());
     }
 
     let k = options.k;

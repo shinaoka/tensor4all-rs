@@ -78,8 +78,9 @@ pub type TreeTciRunResult = (
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// also returns an error when the operation fails (a shape or index mismatch,
+/// or a backend failure).
 ///
 pub fn crossinterpolate2<T, F, P>(
     evaluate: F,
@@ -99,6 +100,7 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
+    options.validate()?;
     if !(local_dims.len() == graph.n_sites()) {
         return Err(anyhow::anyhow!(
             "local_dims length {} must match graph site count {}",

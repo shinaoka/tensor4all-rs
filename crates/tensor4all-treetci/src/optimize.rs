@@ -128,6 +128,32 @@ pub struct TreeTciOptions {
     pub seed: Option<u64>,
 }
 
+impl TreeTciOptions {
+    pub(crate) fn validate(&self) -> TreeTciResult<()> {
+        if !self.tolerance.is_finite() || self.tolerance < 0.0 {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "tolerance must be finite and nonnegative".to_string(),
+            });
+        }
+        if self.max_iter == 0 {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "max_iter must be positive".to_string(),
+            });
+        }
+        if self.max_bond_dim == Some(0) {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "max_bond_dim must be positive when specified".to_string(),
+            });
+        }
+        if !self.tol_margin_global_search.is_finite() || self.tol_margin_global_search < 0.0 {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "tol_margin_global_search must be finite and nonnegative".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 impl Default for TreeTciOptions {
     fn default() -> Self {
         Self {
@@ -154,8 +180,9 @@ impl Default for TreeTciOptions {
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// also returns an error when the operation fails (a shape or index mismatch,
+/// or a backend failure).
 ///
 /// # Examples
 ///
@@ -200,6 +227,7 @@ where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    options.validate()?;
     optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
 }
 
@@ -213,8 +241,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// also returns an error when the operation fails (a shape or index mismatch,
+/// or a backend failure).
 ///
 /// # Examples
 ///
@@ -262,18 +291,7 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    if !(options.max_iter > 0) {
-        return Err(anyhow::anyhow!("TreeTCI optimization requires max_iter > 0").into());
-    };
-    if options.max_bond_dim == Some(0) {
-        return Err(anyhow::anyhow!("TreeTCI optimization requires max_bond_dim > 0").into());
-    };
-    if !options.tol_margin_global_search.is_finite() || options.tol_margin_global_search < 0.0 {
-        return Err(anyhow::anyhow!(
-            "TreeTCI optimization requires a finite nonnegative tol_margin_global_search"
-        )
-        .into());
-    };
+    options.validate()?;
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();

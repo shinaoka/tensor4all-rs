@@ -312,8 +312,6 @@ typedef enum t4a_canonical_form {
   T4A_CANONICAL_FORM_CI = 2,
 } t4a_canonical_form;
 
-typedef struct Option_TensorStorageError Option_TensorStorageError;
-
 /**
  * Opaque index type for the C API.
  */
@@ -340,7 +338,6 @@ typedef struct t4a_treetn {
  */
 typedef struct t4a_tensor {
   const void *_private;
-  struct Option_TensorStorageError test_storage_error;
 } t4a_tensor;
 
 /**
@@ -545,6 +542,9 @@ enum t4a_status_code t4a_index_tags(const struct t4a_index *ptr,
  * * `T4A_SUCCESS` - Message written (or length query succeeded).
  * * `T4A_NULL_POINTER` - `out_len` is null.
  * * `T4A_BUFFER_TOO_SMALL` - Buffer too small; `out_len` has the required size.
+ *
+ * An undersized retrieval buffer does not replace the stored diagnostic, so
+ * callers can retry with the reported size and recover the original message.
  */
 enum t4a_status_code t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len);
 

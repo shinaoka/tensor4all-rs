@@ -16,6 +16,12 @@ pub type Result<T> = std::result::Result<T, TreeTciError>;
 /// - Backend failures: the wrapped source chain identifies the failing stage.
 #[derive(Debug, Error)]
 pub enum TreeTciError {
+    /// Invalid optimization configuration.
+    #[error("invalid tree-TCI configuration: {message}")]
+    InvalidConfiguration {
+        /// Description of the invalid option value.
+        message: String,
+    },
     /// The tree graph is invalid (disconnected, missing vertices, or
     /// inconsistent edge structure).
     #[error("invalid tree-TCI graph: {message}")]

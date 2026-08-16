@@ -255,6 +255,9 @@ pub(crate) fn panic_message(info: &(dyn std::any::Any + Send)) -> String {
 /// * `T4A_SUCCESS` - Message written (or length query succeeded).
 /// * `T4A_NULL_POINTER` - `out_len` is null.
 /// * `T4A_BUFFER_TOO_SMALL` - Buffer too small; `out_len` has the required size.
+///
+/// An undersized retrieval buffer does not replace the stored diagnostic, so
+/// callers can retry with the reported size and recover the original message.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_last_error_message(
     buf: *mut u8,
@@ -276,7 +279,7 @@ pub extern "C" fn t4a_last_error_message(
         }
 
         if buf_len < required_len {
-            return err_buffer_too_small("last_error_message", required_len, buf_len);
+            return T4A_BUFFER_TOO_SMALL;
         }
 
         unsafe {

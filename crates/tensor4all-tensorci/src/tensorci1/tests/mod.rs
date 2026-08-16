@@ -359,6 +359,78 @@ fn test_crossinterpolate1_additional_pivots_converges_with_duplicates() {
 }
 
 #[test]
+fn test_crossinterpolate1_rejects_invalid_options_before_callback() {
+    use std::cell::Cell;
+
+    for tolerance in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let calls = Cell::new(0);
+        let options = TCI1Options {
+            tolerance,
+            ..TCI1Options::default()
+        };
+        let error = crossinterpolate1::<f64, _>(
+            |_| {
+                calls.set(calls.get() + 1);
+                1.0
+            },
+            vec![2, 2],
+            vec![0, 0],
+            options,
+        )
+        .unwrap_err();
+        assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+        assert_eq!(calls.get(), 0);
+    }
+
+    for pivot_tolerance in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let options = TCI1Options {
+            pivot_tolerance,
+            ..TCI1Options::default()
+        };
+        let error =
+            crossinterpolate1::<f64, _>(|_| 1.0, vec![2, 2], vec![0, 0], options).unwrap_err();
+        assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    }
+
+    let error = crossinterpolate1::<f64, _>(
+        |_| 1.0,
+        vec![2, 2],
+        vec![0, 0],
+        TCI1Options {
+            max_iter: 0,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+}
+
+#[test]
+fn test_tensorci1_raw_tolerances_validate_before_callback_and_accept_zero() {
+    use std::cell::Cell;
+
+    let calls = Cell::new(0);
+    let f = |idx: &MultiIndex| {
+        calls.set(calls.get() + 1);
+        (idx[0] + idx[1] + 1) as f64
+    };
+    let mut tci = TensorCI1::<f64>::from_function(&f, vec![2, 2], vec![0, 0]).unwrap();
+
+    calls.set(0);
+    let error = tci.add_pivot(0, &f, f64::NAN).unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+
+    calls.set(0);
+    let error = tci.add_global_pivot(&f, vec![1, 1], -1.0).unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+
+    tci.add_pivot(0, &f, 0.0).unwrap();
+    tci.add_global_pivot(&f, vec![1, 1], 0.0).unwrap();
+}
+
+#[test]
 fn test_crossinterpolate1_rejects_invalid_first_pivots() {
     let f = |idx: &MultiIndex| (idx[0] + idx[1] + 1) as f64;
 

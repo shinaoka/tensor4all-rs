@@ -8,6 +8,95 @@ fn two_site_graph() -> TreeTciGraph {
 }
 
 #[test]
+fn optimize_rejects_invalid_options_before_callback() {
+    let invalid_tolerances = [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+    for tolerance in invalid_tolerances {
+        let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let options = TreeTciOptions {
+            tolerance,
+            ..TreeTciOptions::default()
+        };
+        let error = optimize_default(
+            &mut tci,
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(vec![1.0])
+            },
+            &options,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::TreeTciError::InvalidConfiguration { .. }
+        ));
+        assert_eq!(calls.get(), 0);
+    }
+
+    for options in [
+        TreeTciOptions {
+            max_iter: 0,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            max_bond_dim: Some(0),
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            tol_margin_global_search: -1.0,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            tol_margin_global_search: f64::NAN,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            tol_margin_global_search: f64::INFINITY,
+            ..TreeTciOptions::default()
+        },
+        TreeTciOptions {
+            tol_margin_global_search: f64::NEG_INFINITY,
+            ..TreeTciOptions::default()
+        },
+    ] {
+        let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let error = optimize_default(&mut tci, |_| Ok(vec![1.0]), &options).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::TreeTciError::InvalidConfiguration { .. }
+        ));
+    }
+}
+
+#[test]
+fn api_crossinterpolate2_rejects_invalid_options_before_callback() {
+    let calls = std::cell::Cell::new(0);
+    let error = crate::crossinterpolate2::<f64, _, _>(
+        |_| {
+            calls.set(calls.get() + 1);
+            Ok(vec![1.0])
+        },
+        vec![2, 2],
+        two_site_graph(),
+        vec![vec![0, 0]],
+        TreeTciOptions {
+            tolerance: f64::NAN,
+            ..TreeTciOptions::default()
+        },
+        None,
+        &crate::DefaultProposer,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::TreeTciError::InvalidConfiguration { .. }
+    ));
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
 fn optimize_default_converges_on_two_site_identity() {
     let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
