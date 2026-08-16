@@ -5,6 +5,145 @@ use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
+fn test_tci2_rejects_invalid_options_before_callback() {
+    let invalid_tolerances = [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+    for tolerance in invalid_tolerances {
+        let calls = Cell::new(0);
+        let options = TCI2Options {
+            tolerance,
+            ..TCI2Options::default()
+        };
+        let error = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            |_| {
+                calls.set(calls.get() + 1);
+                1.0
+            },
+            None,
+            vec![2, 2],
+            vec![vec![0, 0]],
+            options,
+        )
+        .unwrap_err();
+        assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+        assert_eq!(calls.get(), 0);
+    }
+
+    for margin in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let options = TCI2Options {
+            tol_margin_global_search: margin,
+            ..TCI2Options::default()
+        };
+        let error = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            |_| 1.0,
+            None,
+            vec![2, 2],
+            vec![vec![0, 0]],
+            options,
+        )
+        .unwrap_err();
+        assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    }
+
+    for options in [
+        TCI2Options {
+            max_iter: 0,
+            ..TCI2Options::default()
+        },
+        TCI2Options {
+            ncheck_history: 0,
+            ..TCI2Options::default()
+        },
+        TCI2Options {
+            max_bond_dim: Some(0),
+            ..TCI2Options::default()
+        },
+    ] {
+        let error = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            |_| 1.0,
+            None,
+            vec![2, 2],
+            vec![vec![0, 0]],
+            options,
+        )
+        .unwrap_err();
+        assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    }
+}
+
+#[test]
+fn test_sweep2site_rejects_invalid_options_before_callback() {
+    let mut tci = TensorCI2::<f64>::new(vec![2, 2]).unwrap();
+    let calls = Cell::new(0);
+    let options = TCI2Options {
+        max_iter: 0,
+        ..TCI2Options::default()
+    };
+    type BatchFn = fn(&[MultiIndex]) -> Vec<f64>;
+    let batched: Option<BatchFn> = None;
+    let error = tci
+        .sweep2site(
+            &|_| {
+                calls.set(calls.get() + 1);
+                1.0
+            },
+            &batched,
+            true,
+            &options,
+        )
+        .unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn test_tci2_raw_parameters_validate_before_callback() {
+    let mut tci = TensorCI2::<f64>::new(vec![2, 2]).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let calls = Cell::new(0);
+    let f = |_: &MultiIndex| {
+        calls.set(calls.get() + 1);
+        1.0
+    };
+
+    let error = tci
+        .sweep1site(&f, true, f64::NAN, 0.0, 1, false)
+        .unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+
+    let error = tci.make_canonical(&f, 0.0, -1.0, 1).unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+
+    let error = tci.make_canonical(&f, 0.0, 0.0, 0).unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn test_optimize_with_finder_rejects_invalid_options_before_callback() {
+    let mut tci = TensorCI2::<f64>::new(vec![2, 2]).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let calls = Cell::new(0);
+    let error = optimize_with_finder::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+        tci,
+        |_| {
+            calls.set(calls.get() + 1);
+            1.0
+        },
+        None,
+        TCI2Options {
+            tolerance: f64::INFINITY,
+            ..TCI2Options::default()
+        },
+        DefaultGlobalPivotFinder::new(0, 0, 10.0),
+    )
+    .unwrap_err();
+    assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
 fn test_sweep1site_preserves_accuracy() {
     // Build a TCI2 for f(i,j,k) = (i+1)*(j+1)*(k+1)
     let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1) * (idx[2] + 1)) as f64;

@@ -47,6 +47,9 @@ cbindgen crates/tensor4all-capi \
   --output crates/tensor4all-capi/include/tensor4all_capi.h
 ```
 
+Use `./scripts/check-capi-header.sh` from the repository root to verify the
+pinned cbindgen version, generated-header freshness, and C/C++ compilation.
+
 ## License
 
 MIT License

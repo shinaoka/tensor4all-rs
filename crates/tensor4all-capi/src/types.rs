@@ -113,27 +113,44 @@ impl From<StorageKind> for t4a_storage_kind {
     }
 }
 
+#[derive(Clone)]
+struct InternalTensorHandle {
+    tensor: InternalTensor,
+    #[cfg(test)]
+    test_storage_error: Option<TensorStorageError>,
+}
+
 /// Opaque tensor type for the C API.
 #[repr(C)]
 pub struct t4a_tensor {
     pub(crate) _private: *const c_void,
-    #[cfg(test)]
-    pub(crate) test_storage_error: Option<TensorStorageError>,
 }
 
 impl t4a_tensor {
     /// Create a wrapper from an internal tensor value.
     pub(crate) fn new(tensor: InternalTensor) -> Self {
-        Self {
-            _private: Box::into_raw(Box::new(tensor)) as *const c_void,
+        Self::from_handle(InternalTensorHandle {
+            tensor,
             #[cfg(test)]
             test_storage_error: None,
+        })
+    }
+
+    fn from_handle(handle: InternalTensorHandle) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(handle)) as *const c_void,
         }
+    }
+
+    fn handle(&self) -> &InternalTensorHandle {
+        // SAFETY: `_private` is created from `Box<InternalTensorHandle>` and
+        // remains owned by this wrapper until `Drop` reconstructs that box.
+        unsafe { &*(self._private as *const InternalTensorHandle) }
     }
 
     /// Borrow the wrapped tensor.
     pub(crate) fn inner(&self) -> &InternalTensor {
-        unsafe { &*(self._private as *const InternalTensor) }
+        &self.handle().tensor
     }
 
     #[cfg(test)]
@@ -141,33 +158,31 @@ impl t4a_tensor {
         tensor: InternalTensor,
         error: TensorStorageError,
     ) -> Self {
-        Self {
-            _private: Box::into_raw(Box::new(tensor)) as *const c_void,
+        Self::from_handle(InternalTensorHandle {
+            tensor,
             test_storage_error: Some(error),
-        }
+        })
     }
 
     #[cfg(test)]
     pub(crate) fn test_storage_error(&self) -> Option<TensorStorageError> {
-        self.test_storage_error.clone()
+        self.handle().test_storage_error.clone()
     }
 }
 
 impl Clone for t4a_tensor {
     fn clone(&self) -> Self {
-        #[cfg(test)]
-        if let Some(error) = self.test_storage_error() {
-            return Self::with_test_storage_error(self.inner().clone(), error);
-        }
-        Self::new(self.inner().clone())
+        Self::from_handle(self.handle().clone())
     }
 }
 
 impl Drop for t4a_tensor {
     fn drop(&mut self) {
         if !self._private.is_null() {
+            // SAFETY: `_private` was allocated by `from_handle` and is
+            // reconstructed exactly once when this wrapper is dropped.
             unsafe {
-                let _ = Box::from_raw(self._private as *mut InternalTensor);
+                let _ = Box::from_raw(self._private as *mut InternalTensorHandle);
             }
         }
     }

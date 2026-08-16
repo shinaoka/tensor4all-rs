@@ -88,18 +88,67 @@ fn test_fourier_inverse_sign() {
 }
 
 #[test]
+fn test_fourier_rejects_invalid_options_before_allocation() {
+    for sign in [0.0, 2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let options = FourierOptions {
+            sign,
+            ..FourierOptions::default()
+        };
+        let error = quantics_fourier_operator(usize::MAX, options).unwrap_err();
+        assert!(matches!(
+            error,
+            QuanticsTransformError::InvalidConfiguration { .. }
+        ));
+    }
+
+    for tolerance in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let options = FourierOptions {
+            tolerance,
+            ..FourierOptions::default()
+        };
+        let error = FTCore::new(usize::MAX, options).err().unwrap();
+        assert!(matches!(
+            error,
+            QuanticsTransformError::InvalidConfiguration { .. }
+        ));
+    }
+
+    for options in [
+        FourierOptions {
+            max_bond_dim: Some(0),
+            ..FourierOptions::default()
+        },
+        FourierOptions {
+            k: 0,
+            ..FourierOptions::default()
+        },
+    ] {
+        let error = quantics_fourier_operator(usize::MAX, options).unwrap_err();
+        assert!(matches!(
+            error,
+            QuanticsTransformError::InvalidConfiguration { .. }
+        ));
+    }
+}
+
+#[test]
 fn test_fourier_error_zero_sites() {
-    let options = FourierOptions::default();
-    let result = quantics_fourier_operator(0, options);
-    assert!(result.is_err());
+    let error = quantics_fourier_operator(0, FourierOptions::default()).unwrap_err();
+    assert!(matches!(
+        error,
+        QuanticsTransformError::InvalidConfiguration { .. }
+    ));
 }
 
 #[test]
 fn test_fourier_error_one_site() {
     let options = FourierOptions::default();
-    let result = quantics_fourier_operator(1, options);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
+    let error = quantics_fourier_operator(1, options).unwrap_err();
+    assert!(matches!(
+        &error,
+        QuanticsTransformError::InvalidConfiguration { .. }
+    ));
+    let msg = error.to_string();
     assert!(msg.contains("at least 2"), "unexpected error: {msg}");
 }
 

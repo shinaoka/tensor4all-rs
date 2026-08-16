@@ -4,7 +4,7 @@
 //! more efficient convergence. It supports batch evaluation of function
 //! values through an explicit batch function parameter.
 
-use crate::error::{Result, TCIError};
+use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
 use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
@@ -132,6 +132,19 @@ pub struct TCI2Options {
     ///
     /// Set to `Some(seed)` for deterministic results.
     pub seed: Option<u64>,
+}
+
+impl TCI2Options {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_nonnegative_finite("tolerance", self.tolerance)?;
+        validate_nonnegative_finite("tol_margin_global_search", self.tol_margin_global_search)?;
+        validate_positive("max_iter", self.max_iter)?;
+        validate_positive("ncheck_history", self.ncheck_history)?;
+        if let Some(max_bond_dim) = self.max_bond_dim {
+            validate_positive("max_bond_dim", max_bond_dim)?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for TCI2Options {
@@ -700,8 +713,10 @@ where
     /// suitable for calling from C-API.
     /// # Errors
     ///
-    /// Returns an error when the two-site sweep fails (a shape or index mismatch,
-    /// /// a non-convergence failure, or a backend failure).
+    /// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances,
+    /// iteration/history limits, or an invalid optional bond dimension. It
+    /// also returns an error for a shape or index mismatch, a non-convergence
+    /// failure, or a backend failure.
     ///
     pub fn sweep2site<F, B>(
         &mut self,
@@ -714,6 +729,7 @@ where
         F: Fn(&MultiIndex) -> T,
         B: Fn(&[MultiIndex]) -> Vec<T>,
     {
+        options.validate()?;
         let n = self.len();
         self.invalidate_site_tensors();
         self.flush_pivot_errors();
@@ -813,8 +829,10 @@ where
     /// Port of Julia's `sweep1site!` from `tensorci2.jl`.
     /// # Errors
     ///
-    /// Returns an error when the one-site sweep fails (a shape or index mismatch,
-    /// /// a non-convergence failure, or a backend failure).
+    /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
+    /// tolerances or a zero bond dimension. It also returns an error when the
+    /// one-site sweep fails (a shape or index mismatch, a non-convergence
+    /// failure, or a backend failure).
     ///
     pub fn sweep1site<F>(
         &mut self,
@@ -828,6 +846,9 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
+        validate_nonnegative_finite("rel_tol", rel_tol)?;
+        validate_nonnegative_finite("abs_tol", abs_tol)?;
+        validate_positive("max_bond_dim", max_bond_dim)?;
         self.flush_pivot_errors();
         self.invalidate_site_tensors();
 
@@ -1114,8 +1135,9 @@ where
     /// Port of Julia's `makecanonical!`.
     /// # Errors
     ///
-    /// Returns an error when the canonicalization fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
+    /// tolerances or a zero bond dimension. It also returns an error when the
+    /// canonicalization fails (a shape or index mismatch or a backend failure).
     ///
     pub fn make_canonical<F>(
         &mut self,
@@ -1127,6 +1149,9 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
+        validate_nonnegative_finite("rel_tol", rel_tol)?;
+        validate_nonnegative_finite("abs_tol", abs_tol)?;
+        validate_positive("max_bond_dim", max_bond_dim)?;
         // First half-sweep: exact, no truncation
         self.sweep1site(f, true, 0.0, 0.0, usize::MAX, false)?;
         // Second half-sweep: backward with truncation
@@ -1386,9 +1411,9 @@ fn convergence_criterion(
 ///
 /// # Errors
 ///
-/// Returns [`TCIError::DimensionMismatch`] if `local_dims` has fewer than
-/// 2 elements, or [`TCIError::InvalidPivot`] if all initial pivots
-/// evaluate to zero.
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options,
+/// [`TCIError::DimensionMismatch`] if `local_dims` has fewer than 2 elements,
+/// or [`TCIError::InvalidPivot`] if all initial pivots evaluate to zero.
 ///
 /// # Examples
 ///
@@ -1438,6 +1463,7 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
+    options.validate()?;
     if local_dims.len() < 2 {
         return Err(TCIError::DimensionMismatch {
             message: "local_dims should have at least 2 elements".to_string(),
@@ -1502,8 +1528,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`TCIError::InvalidPivot`] when the input state has no pivots. It
-/// also forwards errors from two-site sweeps, tensor-train conversion, callback
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options or
+/// [`TCIError::InvalidPivot`] when the input state has no pivots. It also
+/// forwards errors from two-site sweeps, tensor-train conversion, callback
 /// length validation, and final one-site cleanup.
 ///
 /// # Examples
@@ -1550,6 +1577,7 @@ where
     B: Fn(&[MultiIndex]) -> Vec<T>,
     G: GlobalPivotFinder,
 {
+    options.validate()?;
     if tci.rank() == 0 {
         return Err(TCIError::InvalidPivot {
             message: "TensorCI2 state must contain at least one pivot before optimization"

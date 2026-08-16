@@ -90,7 +90,10 @@ size_t needed = 0;
 t4a_last_error_message(NULL, 0, &needed);
 ```
 
-followed by a second call with a sufficiently large UTF-8 buffer.
+followed by a second call with a sufficiently large UTF-8 buffer. If a
+retrieval buffer is undersized, `t4a_last_error_message` reports the required
+length without replacing the stored diagnostic, so the caller can retry and
+recover the original message.
 
 ### Panic Safety
 
@@ -205,7 +208,8 @@ cbindgen crates/tensor4all-capi \
 ```
 
 Regenerate the header whenever exported types, enums, constants, or function
-signatures change.
+signatures change. Run `./scripts/check-capi-header.sh` to verify the pinned
+cbindgen version, header freshness, and C/C++ compilability.
 
 ## Module Reference
 

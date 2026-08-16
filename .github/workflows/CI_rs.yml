@@ -116,7 +116,13 @@ jobs:
         with:
           components: clippy
 
+      - name: Install cbindgen
+        run: cargo install cbindgen --version 0.29.2 --locked
+
       - uses: Swatinem/rust-cache@v2
+
+      - name: Check generated C API header
+        run: ./scripts/check-capi-header.sh
 
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py

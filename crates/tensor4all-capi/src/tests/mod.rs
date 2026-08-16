@@ -46,18 +46,40 @@ fn test_last_error_message_roundtrip() {
 }
 
 #[test]
-fn test_last_error_message_buffer_too_small() {
+fn test_last_error_message_buffer_too_small_preserves_message_for_retry() {
     set_last_error("hello");
     let mut out_len: libc::size_t = 0;
-    let mut buf = [0u8; 2]; // too small for "hello\0"
+    let mut short_buf = [0u8; 2]; // too small for "hello\0"
+    let status = t4a_last_error_message(
+        short_buf.as_mut_ptr(),
+        short_buf.len(),
+        &mut out_len as *mut libc::size_t,
+    );
+    assert_eq!(status, T4A_BUFFER_TOO_SMALL);
+    assert_eq!(out_len, 6); // "hello" + null
+
+    let required_len = out_len;
+    let mut buf = vec![0u8; required_len];
     let status = t4a_last_error_message(
         buf.as_mut_ptr(),
         buf.len(),
         &mut out_len as *mut libc::size_t,
     );
-    assert_eq!(status, T4A_BUFFER_TOO_SMALL);
-    assert_eq!(out_len, 6); // "hello" + null
-    assert!(read_last_error().contains("last_error_message buffer too small"));
+    assert_eq!(status, T4A_SUCCESS);
+    assert_eq!(out_len, required_len);
+    assert_eq!(buf, b"hello\0");
+}
+
+#[test]
+fn test_tensor_handle_is_one_pointer_word() {
+    assert_eq!(
+        std::mem::size_of::<t4a_tensor>(),
+        std::mem::size_of::<*const ()>()
+    );
+    assert_eq!(
+        std::mem::align_of::<t4a_tensor>(),
+        std::mem::align_of::<*const ()>()
+    );
 }
 
 #[test]

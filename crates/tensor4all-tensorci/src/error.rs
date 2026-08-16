@@ -5,9 +5,34 @@ use thiserror::Error;
 /// Result type for TCI operations
 pub type Result<T> = std::result::Result<T, TCIError>;
 
+pub(crate) fn validate_nonnegative_finite(name: &str, value: f64) -> Result<()> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(TCIError::InvalidConfiguration {
+            message: format!("{name} must be finite and nonnegative"),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_positive(name: &str, value: usize) -> Result<()> {
+    if value == 0 {
+        return Err(TCIError::InvalidConfiguration {
+            message: format!("{name} must be positive"),
+        });
+    }
+    Ok(())
+}
+
 /// Errors that can occur during tensor cross interpolation operations
 #[derive(Error, Debug)]
 pub enum TCIError {
+    /// Invalid algorithm configuration.
+    #[error("Invalid configuration: {message}")]
+    InvalidConfiguration {
+        /// Description of the invalid option value.
+        message: String,
+    },
+
     /// Dimension mismatch
     #[error("Dimension mismatch: {message}")]
     DimensionMismatch {

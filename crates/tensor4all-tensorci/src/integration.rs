@@ -507,8 +507,9 @@ fn gk_nodes_weights(gk_order: usize) -> Result<(&'static [f64], &'static [f64])>
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// Returns [`TCIError::InvalidConfiguration`] for invalid TCI2 options. It
+/// also returns an error when the contraction or operation fails (a shape or
+/// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -536,6 +537,7 @@ where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&[f64]) -> T,
 {
+    tci_options.validate()?;
     if a.len() != b.len() {
         return Err(TCIError::DimensionMismatch {
             message: format!(
@@ -604,6 +606,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_integrate_rejects_invalid_options_before_callback() {
+        let calls = std::cell::Cell::new(0);
+        let f = |_x: &[f64]| {
+            calls.set(calls.get() + 1);
+            1.0_f64
+        };
+        let error = integrate::<f64, _>(
+            &f,
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+            15,
+            TCI2Options {
+                ncheck_history: 0,
+                ..TCI2Options::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, TCIError::InvalidConfiguration { .. }));
+        assert_eq!(calls.get(), 0);
+    }
 
     #[test]
     fn test_integrate_constant() {

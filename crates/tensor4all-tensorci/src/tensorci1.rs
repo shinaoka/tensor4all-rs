@@ -1,6 +1,6 @@
 //! TensorCI1 - legacy one-site Tensor Cross Interpolation algorithm.
 
-use crate::error::{Result, TCIError};
+use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
 use tensor4all_simplett::{
     tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
@@ -104,6 +104,14 @@ pub struct TCI1Options {
     /// Each pivot must contain one in-range zero-based index per site. The
     /// default is empty. Duplicate pivots are ignored by the index sets.
     pub additional_pivots: Vec<MultiIndex>,
+}
+
+impl TCI1Options {
+    fn validate(&self) -> Result<()> {
+        validate_nonnegative_finite("tolerance", self.tolerance)?;
+        validate_nonnegative_finite("pivot_tolerance", self.pivot_tolerance)?;
+        validate_positive("max_iter", self.max_iter)
+    }
 }
 
 impl Default for TCI1Options {
@@ -503,8 +511,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a [`TCIError`] if `bond` is out of range, a matrix cross
-    /// interpolation update fails, or an internal index set is inconsistent.
+    /// Returns [`TCIError::InvalidConfiguration`] when `tolerance` is negative
+    /// or non-finite. It also returns a [`TCIError`] if `bond` is out of range,
+    /// a matrix cross interpolation update fails, or an internal index set is
+    /// inconsistent.
     ///
     /// # Examples
     ///
@@ -523,6 +533,7 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
+        validate_nonnegative_finite("tolerance", tolerance)?;
         if bond >= self.len().saturating_sub(1) {
             return Err(TCIError::IndexOutOfBounds {
                 message: format!("bond {bond} is outside 0..{}", self.len().saturating_sub(1)),
@@ -568,8 +579,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a [`TCIError`] if `pivot` is malformed or out of range, if a
-    /// pivot update fails, or if index sets become inconsistent.
+    /// Returns [`TCIError::InvalidConfiguration`] when `abstol` is negative or
+    /// non-finite. It also returns a [`TCIError`] if `pivot` is malformed or out
+    /// of range, if a pivot update fails, or if index sets become inconsistent.
     ///
     /// # Examples
     ///
@@ -588,6 +600,7 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
+        validate_nonnegative_finite("abstol", abstol)?;
         validate_first_pivot(&self.local_dims, &pivot)?;
         let exact = f(&pivot);
         let current = self.evaluate(&pivot).unwrap_or_else(|_| T::zero());
@@ -869,8 +882,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns a typed [`TCIError`] for invalid dimensions, invalid pivots,
-/// interpolation failures, or tensor-train conversion failures.
+/// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances or a
+/// zero iteration limit. It also returns typed errors for invalid dimensions,
+/// invalid pivots, interpolation failures, or tensor-train conversion failures.
 ///
 /// # Examples
 ///
@@ -903,6 +917,7 @@ where
     T: Scalar + TTScalar + Default + MatrixLuciScalar + MatrixSolveScalar,
     F: Fn(&MultiIndex) -> T,
 {
+    options.validate()?;
     let mut tci = TensorCI1::from_function(&f, local_dims, first_pivot)?;
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
