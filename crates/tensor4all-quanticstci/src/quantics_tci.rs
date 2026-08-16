@@ -460,7 +460,7 @@ where
 
     // Add random initial pivots (0-indexed for TCI)
     let mut rng = rand::rng();
-    for _ in 0..options.nrandominitpivot {
+    for _ in 0..options.n_random_init_pivot {
         let pivot: Vec<usize> = local_dims.iter().map(|&d| rng.random_range(0..d)).collect();
         qinitialpivots.push(pivot);
     }
@@ -625,7 +625,7 @@ where
     let grid = DiscretizedGrid::builder(&rs)
         .with_lower_bound(&lower)
         .with_upper_bound(&upper)
-        .with_unfolding_scheme(options.unfoldingscheme)
+        .with_unfolding_scheme(options.unfolding_scheme)
         .include_endpoint(true)
         .build()
         .map_err(|e| anyhow!("Failed to build grid: {}", e))?;
@@ -727,7 +727,7 @@ where
     // Build inherent discrete grid - rs is the number of bits per variable
     let rs: Vec<usize> = vec![r; n];
     let grid = InherentDiscreteGrid::builder(&rs)
-        .with_unfolding_scheme(options.unfoldingscheme)
+        .with_unfolding_scheme(options.unfolding_scheme)
         .build()
         .map_err(|e| anyhow!("Failed to build grid: {}", e))?;
 
@@ -784,7 +784,7 @@ where
 
     // Add random initial pivots (0-indexed for TCI)
     let mut rng = rand::rng();
-    for _ in 0..options.nrandominitpivot {
+    for _ in 0..options.n_random_init_pivot {
         let pivot: Vec<usize> = local_dims.iter().map(|&d| rng.random_range(0..d)).collect();
         qinitialpivots.push(pivot);
     }

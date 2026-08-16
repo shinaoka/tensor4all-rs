@@ -133,8 +133,8 @@ Useful fields in this demo:
 
 - `tolerance`: stop once the approximation is accurate enough
 - `max_bond_dim`: upper bound on the bond dimension
-- `nrandominitpivot`: number of random initial pivots
-- `unfoldingscheme`: how the quantics dimensions are arranged
+- `n_random_init_pivot`: number of random initial pivots
+- `unfolding_scheme`: how the quantics dimensions are arranged
 
 ### `evaluate(...)`
 

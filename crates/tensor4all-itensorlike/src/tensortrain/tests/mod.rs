@@ -24,7 +24,7 @@ fn test_empty_tt() {
     assert_eq!(tt.len(), 0);
     assert_eq!(tt.llim(), -1);
     assert_eq!(tt.rlim(), 1);
-    assert!(!tt.isortho());
+    assert!(!tt.is_ortho());
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn test_single_site_tt() {
 
     let tt = TensorTrain::new(vec![tensor]).unwrap();
     assert_eq!(tt.len(), 1);
-    assert!(!tt.isortho());
+    assert!(!tt.is_ortho());
     assert_eq!(tt.bond_dims(), Vec::<usize>::new());
 }
 
@@ -244,8 +244,8 @@ fn test_ortho_tracking() {
     )
     .unwrap();
 
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(0));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(0));
     assert_eq!(tt.canonical_form(), Some(CanonicalForm::Unitary));
 }
 
@@ -265,8 +265,8 @@ fn test_ortho_lims_range() {
     let tt = TensorTrain::with_ortho(vec![t0, t1, t2], 0, 2, None).unwrap();
 
     assert_eq!(tt.ortho_lims(), 1..2);
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(1));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(1));
 }
 
 #[test]
@@ -296,18 +296,18 @@ fn test_orthogonalize_two_site() {
     let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    assert!(!tt.isortho());
+    assert!(!tt.is_ortho());
 
     // Orthogonalize to site 0
     tt.orthogonalize(0).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(0));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(0));
     assert_eq!(tt.canonical_form(), Some(CanonicalForm::Unitary));
 
     // Orthogonalize to site 1
     tt.orthogonalize(1).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(1));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(1));
 }
 
 #[test]
@@ -327,18 +327,18 @@ fn test_orthogonalize_three_site() {
 
     // Orthogonalize to middle site
     tt.orthogonalize(1).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(1));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(1));
 
     // Orthogonalize to left
     tt.orthogonalize(0).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(0));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(0));
 
     // Orthogonalize to right
     tt.orthogonalize(2).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(2));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(2));
 }
 
 #[test]
@@ -353,8 +353,8 @@ fn test_orthogonalize_with_lu() {
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     tt.orthogonalize_with(0, CanonicalForm::LU).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(0));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(0));
     assert_eq!(tt.canonical_form(), Some(CanonicalForm::LU));
 }
 
@@ -370,8 +370,8 @@ fn test_orthogonalize_with_ci() {
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     tt.orthogonalize_with(1, CanonicalForm::CI).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(1));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(1));
     assert_eq!(tt.canonical_form(), Some(CanonicalForm::CI));
 }
 
@@ -780,12 +780,12 @@ fn test_set_llim_updates_canonical_region() {
         Some(CanonicalForm::Unitary),
     )
     .unwrap();
-    assert!(tt2.isortho());
-    assert_eq!(tt2.orthocenter(), Some(0));
+    assert!(tt2.is_ortho());
+    assert_eq!(tt2.ortho_center(), Some(0));
 
     // Setting llim to a value that breaks single-center should clear ortho
     tt2.set_llim(5);
-    assert!(!tt2.isortho());
+    assert!(!tt2.is_ortho());
 }
 
 #[test]
@@ -800,11 +800,11 @@ fn test_set_rlim_updates_canonical_region() {
         Some(CanonicalForm::Unitary),
     )
     .unwrap();
-    assert!(tt.isortho());
+    assert!(tt.is_ortho());
 
     // Setting rlim to a value that breaks single-center should clear ortho
     tt.set_rlim(5);
-    assert!(!tt.isortho());
+    assert!(!tt.is_ortho());
 }
 
 #[test]
@@ -818,12 +818,12 @@ fn test_set_tensor_invalidates_ortho() {
 
     let mut tt =
         TensorTrain::with_ortho(vec![t0, t1], -1, 1, Some(CanonicalForm::Unitary)).unwrap();
-    assert!(tt.isortho());
+    assert!(tt.is_ortho());
 
     // Replace tensor at site 0
     let new_tensor = make_tensor(vec![s0, l01]);
     tt.set_tensor(0, new_tensor).unwrap();
-    assert!(!tt.isortho());
+    assert!(!tt.is_ortho());
 }
 
 #[test]
@@ -1212,13 +1212,13 @@ fn test_set_llim_valid_center() {
     // Start with ortho center at site 1
     let mut tt =
         TensorTrain::with_ortho(vec![t0, t1, t2], 0, 2, Some(CanonicalForm::Unitary)).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(1));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(1));
 
     // set_llim to 0 with current rlim=2 => center should be 1 (0+1)
     tt.set_llim(0);
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(1));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(1));
 }
 
 #[test]
@@ -1236,16 +1236,16 @@ fn test_set_rlim_valid_center() {
     // Start with ortho center at site 0
     let mut tt =
         TensorTrain::with_ortho(vec![t0, t1, t2], -1, 1, Some(CanonicalForm::Unitary)).unwrap();
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(0));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(0));
 
     // set_rlim to 2 with current llim=-1 => llim will be recomputed.
-    // After set_rlim(2): llim from orthocenter is recalculated.
+    // After set_rlim(2): llim from ortho_center is recalculated.
     // Since set_rlim reads current llim first (which is -1), then checks -1+2==2? No, 1!=2.
     // So this clears ortho. Let's set rlim=1 which keeps center at 0.
     tt.set_rlim(1);
-    assert!(tt.isortho());
-    assert_eq!(tt.orthocenter(), Some(0));
+    assert!(tt.is_ortho());
+    assert_eq!(tt.ortho_center(), Some(0));
 }
 
 #[test]
@@ -1485,7 +1485,7 @@ fn test_truncate_with_rtol() {
     let options =
         TruncateOptions::svd().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10));
     tt.truncate(&options).unwrap();
-    assert!(tt.isortho() || tt.len() == 3);
+    assert!(tt.is_ortho() || tt.len() == 3);
 }
 
 #[test]

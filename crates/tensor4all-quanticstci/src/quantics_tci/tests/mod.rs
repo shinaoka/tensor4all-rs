@@ -154,7 +154,7 @@ fn test_options_builder() {
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
     assert_eq!(opts.max_bond_dim, Some(50));
-    assert_eq!(opts.unfoldingscheme, UnfoldingScheme::Fused);
+    assert_eq!(opts.unfolding_scheme, UnfoldingScheme::Fused);
 }
 
 #[test]

@@ -177,8 +177,8 @@ let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
 let norm_before = tt.norm()?;
 tt.orthogonalize(1)?;
 
-assert!(tt.isortho());
-assert_eq!(tt.orthocenter(), Some(1));
+assert!(tt.is_ortho());
+assert_eq!(tt.ortho_center(), Some(1));
 
 // Orthogonalization preserves the tensor train value
 assert!((tt.norm()? - norm_before).abs() < 1e-10);

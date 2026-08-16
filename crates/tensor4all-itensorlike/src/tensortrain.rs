@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tensor4all_core::{
-    common_inds, contract_pair, contract_pair_with_operand_options, hascommoninds, DynIndex,
+    common_inds, contract_pair, contract_pair_with_operand_options, has_common_inds, DynIndex,
     IndexLike, PairwiseContractionOptions,
 };
 use tensor4all_core::{
@@ -384,7 +384,7 @@ impl TensorTrain {
     /// Returns -1 if no sites are left-orthogonal.
     #[inline]
     pub fn llim(&self) -> i32 {
-        match self.orthocenter() {
+        match self.ortho_center() {
             Some(center) => center as i32 - 1,
             None => -1,
         }
@@ -396,7 +396,7 @@ impl TensorTrain {
     /// Returns `len() + 1` if no sites are right-orthogonal.
     #[inline]
     pub fn rlim(&self) -> i32 {
-        match self.orthocenter() {
+        match self.ortho_center() {
             Some(center) => center as i32 + 1,
             None => self.len() as i32 + 1,
         }
@@ -447,7 +447,8 @@ impl TensorTrain {
     ///
     /// Returns true if there is exactly one site that is not guaranteed to be orthogonal.
     #[inline]
-    pub fn isortho(&self) -> bool {
+    #[doc(alias = "isortho")]
+    pub fn is_ortho(&self) -> bool {
         self.treetn.canonical_region().len() == 1
     }
 
@@ -455,7 +456,8 @@ impl TensorTrain {
     ///
     /// Returns `Some(site)` if the tensor train has a single orthogonality center,
     /// `None` otherwise.
-    pub fn orthocenter(&self) -> Option<usize> {
+    #[doc(alias = "orthocenter")]
+    pub fn ortho_center(&self) -> Option<usize> {
         let region = self.treetn.canonical_region();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
@@ -950,7 +952,7 @@ impl TensorTrain {
                 let left = self.treetn.tensor(l);
                 let right = self.treetn.tensor(r);
                 match (left, right) {
-                    (Some(l), Some(r)) => hascommoninds(l.indices(), r.indices()),
+                    (Some(l), Some(r)) => has_common_inds(l.indices(), r.indices()),
                     _ => false,
                 }
             }
@@ -1077,12 +1079,12 @@ impl TensorTrain {
     /// ).unwrap();
     ///
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    /// assert!(!tt.isortho());
+    /// assert!(!tt.is_ortho());
     ///
     /// // Orthogonalize to site 0
     /// tt.orthogonalize(0).unwrap();
-    /// assert!(tt.isortho());
-    /// assert_eq!(tt.orthocenter(), Some(0));
+    /// assert!(tt.is_ortho());
+    /// assert_eq!(tt.ortho_center(), Some(0));
     /// ```
     pub fn orthogonalize(&mut self, site: usize) -> Result<()> {
         self.orthogonalize_with(site, CanonicalForm::Unitary)

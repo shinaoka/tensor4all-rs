@@ -1,6 +1,6 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::{
-    common_ind_positions, common_inds, hascommoninds, hasind, hasinds, noncommon_inds,
+    common_ind_positions, common_inds, has_common_inds, has_inds, hasind, noncommon_inds,
     replace_indices, replace_indices_mut, union_inds, unique_inds, ReplaceIndsError,
 };
 use tensor4all_core::{DynId, IndexLike, TagSet};
@@ -150,7 +150,7 @@ fn test_hasind() {
 }
 
 #[test]
-fn test_hasinds() {
+fn test_has_inds() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -158,14 +158,14 @@ fn test_hasinds() {
 
     let indices = vec![i.clone(), j.clone(), k.clone()];
 
-    assert!(hasinds(&indices, &[i.clone(), j.clone()]));
-    assert!(hasinds(&indices, &[i.clone(), j.clone(), k.clone()]));
-    assert!(!hasinds(&indices, &[i.clone(), l.clone()]));
-    assert!(!hasinds(&indices, std::slice::from_ref(&l)));
+    assert!(has_inds(&indices, &[i.clone(), j.clone()]));
+    assert!(has_inds(&indices, &[i.clone(), j.clone(), k.clone()]));
+    assert!(!has_inds(&indices, &[i.clone(), l.clone()]));
+    assert!(!has_inds(&indices, std::slice::from_ref(&l)));
 }
 
 #[test]
-fn test_hascommoninds() {
+fn test_has_common_inds() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -175,8 +175,8 @@ fn test_hascommoninds() {
     let indices_b = vec![j.clone(), k.clone()];
     let indices_c = vec![k.clone(), l.clone()];
 
-    assert!(hascommoninds(&indices_a, &indices_b)); // j is common
-    assert!(!hascommoninds(&indices_a, &indices_c)); // no common
+    assert!(has_common_inds(&indices_a, &indices_b)); // j is common
+    assert!(!has_common_inds(&indices_a, &indices_c)); // no common
 }
 
 #[test]
@@ -193,8 +193,8 @@ fn test_common_inds_integration() {
     assert_eq!(common.len(), 1);
     assert_eq!(common[0].id, j.id);
 
-    // Verify hascommoninds matches
-    assert!(hascommoninds(&indices_a, &indices_b));
+    // Verify has_common_inds matches
+    assert!(has_common_inds(&indices_a, &indices_b));
 }
 
 #[test]
@@ -206,8 +206,8 @@ fn test_index_ops_distinguish_same_id_prime_pair() {
 
     assert!(hasind(&indices, &i));
     assert!(hasind(&indices, &i_prime));
-    assert!(hasinds(&indices, &[i.clone(), i_prime.clone()]));
-    assert!(!hascommoninds(
+    assert!(has_inds(&indices, &[i.clone(), i_prime.clone()]));
+    assert!(!has_common_inds(
         std::slice::from_ref(&i),
         std::slice::from_ref(&i_prime)
     ));

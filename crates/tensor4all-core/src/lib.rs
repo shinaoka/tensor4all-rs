@@ -88,7 +88,7 @@ pub use index_like::{sort_indices_deterministic, ConjState, IndexLike};
 /// Index operations (replacement, set operations, contraction preparation).
 pub mod index_ops;
 pub use index_ops::{
-    check_unique_indices, common_ind_positions, common_inds, hascommoninds, hasind, hasinds,
+    check_unique_indices, common_ind_positions, common_inds, has_common_inds, has_inds, hasind,
     noncommon_inds, replace_indices, replace_indices_mut, union_inds, unique_inds,
     ReplaceIndsError,
 };

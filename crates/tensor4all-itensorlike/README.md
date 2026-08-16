@@ -51,7 +51,7 @@ tt.truncate(&TruncateOptions::svd()
     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
     .with_max_bond_dim(2))?;
 
-assert!(tt.isortho());
+assert!(tt.is_ortho());
 assert_eq!(s1.dim(), 2);
 let norm = tt.norm()?;
 assert!(norm.is_finite());

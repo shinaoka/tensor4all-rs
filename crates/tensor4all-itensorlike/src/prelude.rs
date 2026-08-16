@@ -15,7 +15,7 @@
 //! tt.truncate(&TruncateOptions::svd()
 //!     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
 //!     .with_max_bond_dim(2))?;
-//! assert!(tt.isortho());
+//! assert!(tt.is_ortho());
 //! # Ok(())
 //! # }
 //! ```
