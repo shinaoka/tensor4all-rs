@@ -63,7 +63,7 @@ relationship; the role is stated only on the first row.
 | `tensor4all-treetn` | | [ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl) | Derived (Apache-2.0): TDVP sweep plans (`src/tdvp/plan.rs`) |
 | `tensor4all-treetn` | | [NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl) | Inspired (named graph wrapper) |
 | `tensor4all-treetn` | | KrylovKit.jl | Compatible (linear/eigen solver conventions) |
-| `tensor4all-tcicore` | rrLU / MatrixLUCI / cross-interpolation infrastructure | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
+| `tensor4all-core` (TCI substrate, ex-`tensor4all-tcicore`) | rrLU / MatrixLUCI / cross-interpolation infrastructure | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
 | `tensor4all-tensorci` | Tensor cross interpolation (TCI1/TCI2) | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
 | `tensor4all-treetci` | Tree tensor cross interpolation | [TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl) | Port |
 | `tensor4all-quanticstci` | Quantics TCI function interpolation | [QuanticsTCI.jl](https://github.com/tensor4all/QuanticsTCI.jl) | Port |
@@ -87,7 +87,7 @@ list is best-effort; corrections and additions are welcome.
 | DMRG | `treetn` | S. R. White, [Phys. Rev. Lett. 69, 2863 (1992)](https://doi.org/10.1103/PhysRevLett.69.2863); [Phys. Rev. B 48, 10345 (1993)](https://doi.org/10.1103/PhysRevB.48.10345) |
 | TDVP | `treetn` | J. Haegeman et al., [Phys. Rev. Lett. 107, 070601 (2011)](https://doi.org/10.1103/PhysRevLett.107.070601); [Phys. Rev. B 94, 165116 (2016)](https://doi.org/10.1103/PhysRevB.94.165116) |
 | Global subspace expansion (GSE) | `treetn` | M. Yang and S. R. White, [Phys. Rev. B 102, 094315 (2020)](https://doi.org/10.1103/PhysRevB.102.094315) |
-| Tensor cross interpolation / TT-cross | `tcicore`, `tensorci`, `treetci` | I. Oseledets and E. Tyrtyshnikov, [Linear Algebra Appl. 432, 70 (2010)](https://doi.org/10.1016/j.laa.2009.07.024); Y. Núñez Fernández et al., [Phys. Rev. X 12, 041018 (2022)](https://doi.org/10.1103/PhysRevX.12.041018); [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104) |
+| Tensor cross interpolation / TT-cross | `core` (TCI substrate), `tensorci`, `treetci` | I. Oseledets and E. Tyrtyshnikov, [Linear Algebra Appl. 432, 70 (2010)](https://doi.org/10.1016/j.laa.2009.07.024); Y. Núñez Fernández et al., [Phys. Rev. X 12, 041018 (2022)](https://doi.org/10.1103/PhysRevX.12.041018); [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104) |
 | Quantics representation | `quanticstci`, `quanticstransform` | I. Oseledets, [SIAM J. Matrix Anal. Appl. 31, 2130 (2010)](https://doi.org/10.1137/090757861); B. Khoromskij, [Constr. Approx. 34, 257 (2011)](https://doi.org/10.1007/s00365-011-9131-1) |
 | Quantics tensor cross interpolation (QTCI) | `quanticstci` | M. K. Ritter, Y. Núñez Fernández, M. Wallerberger, J. von Delft, H. Shinaoka, X. Waintal, "Quantics Tensor Cross Interpolation for High-Resolution, Parsimonious Representations of Multivariate Functions in Physics and Beyond", [Phys. Rev. Lett. 132, 056501 (2024)](https://doi.org/10.1103/PhysRevLett.132.056501) |
 | Affine transformations on quantics TT | `quanticstransform` | S. Rohshap, M. K. Ritter, H. Shinaoka, J. von Delft, M. Wallerberger, A. Kauch, [Phys. Rev. Research 7, 023087 (2025)](https://doi.org/10.1103/PhysRevResearch.7.023087), Appendix B |

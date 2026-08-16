@@ -13,7 +13,6 @@ publish = false
 [dependencies]
 tensor4all-core = { path = "../../crates/tensor4all-core" }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
-tensor4all-tcicore = { path = "../../crates/tensor4all-tcicore" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }

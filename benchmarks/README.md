@@ -147,7 +147,7 @@ DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 T4A_MATRIX_LUCI_REPEATS=20 T4A_MATRIX_LUCI_SIZES=16,32,64 \
-cargo test --release -p tensor4all-tcicore \
+cargo test --release -p tensor4all-core \
   --no-default-features --features tenferro-system-blas \
   matrix_luci_hilbert_timing -- --ignored --nocapture
 ```
@@ -159,7 +159,7 @@ env \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
-cargo run --release -p tensor4all-tcicore --example benchmark_matrix_lu
+cargo run --release -p tensor4all-core --example benchmark_matrix_lu
 ```
 
 MatrixLU itself does not call BLAS, so no system-BLAS feature is required for
@@ -332,7 +332,7 @@ test runs by using the ignored Rust test and the standalone Julia script.
 The MatrixLU standalone Hilbert benchmarks isolate `rrlu_mut` and `rrlu`
 without MatrixLUCI factor wrappers. The Rust source of truth is
 `benchmarks/rust/benchmark_matrix_lu.rs`, included by
-`tensor4all-tcicore/examples/benchmark_matrix_lu.rs`; the Julia counterpart is
+`tensor4all-core/examples/benchmark_matrix_lu.rs`; the Julia counterpart is
 `benchmarks/julia/benchmark_matrix_lu.jl`.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as

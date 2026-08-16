@@ -63,7 +63,7 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
 - `opt_first_pivot::<T, F>(&f, &local_dims, &start, n_iters) -> MultiIndex` — local search for a large-`|f|` pivot.
 - `TensorCI2::to_tensor_train() -> Result<SimpleTensorTrain>`. Convergence: check `result.termination == TCI2Termination::Converged` (bond-error, global-pivot history, and rank stability all met). `MaxBondDimension` / `MaxIterations` are stops, **not** convergence — treat them as "not done".
 
-## tensor4all-tcicore — caching + multi-index plumbing
+## tensor4all-core — caching + multi-index plumbing (TCI substrate, ex-tensor4all-tcicore)
 
 Home of `CachedFunction` and `MultiIndex`. Prefer the higher-level crates; reach for this one only for those two types. `MultiIndex` is re-exported from `tensor4all-partitionedtt`, so you need a direct dep only for `CachedFunction`.
 
@@ -140,7 +140,7 @@ Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 
 ## tensor4all-partitionedtt — subdomain patches + adaptive TCI
 
-Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than depending on `tensor4all-tcicore`.
+Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than reaching into core internals.
 
 - `Projector` — maps site `DynIndex` → fixed coordinate, defining a subdomain.
   - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])`.

@@ -103,7 +103,7 @@ pub enum AciError {
 
     /// Error propagated from matrix cross interpolation.
     #[error("Matrix CI error: {0}")]
-    MatrixCI(#[from] tensor4all_tcicore::MatrixCIError),
+    MatrixCI(#[from] tensor4all_core::MatrixCIError),
 
     /// Error propagated from tensor-train construction or manipulation.
     #[error("Tensor train error: {0}")]

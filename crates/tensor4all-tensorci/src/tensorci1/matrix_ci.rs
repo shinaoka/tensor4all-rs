@@ -1,5 +1,5 @@
 use crate::error::{Result, TCIError};
-use tensor4all_tcicore::Scalar;
+use tensor4all_core::Scalar;
 #[cfg(test)]
 use tensor4all_tensorbackend::{solve_matrix, transpose};
 use tensor4all_tensorbackend::{Matrix, MatrixSolveScalar};

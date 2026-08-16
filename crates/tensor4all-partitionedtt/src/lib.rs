@@ -31,7 +31,7 @@ pub use projector::Projector;
 pub use subdomain_tt::SubDomainTT;
 
 // Re-export commonly used types from dependencies
+pub use tensor4all_core::MultiIndex;
 pub use tensor4all_core::{DynIndex, IdxTensor};
 pub use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
-pub use tensor4all_tcicore::MultiIndex;
 pub use tensor4all_tensorci::TCI2Options;

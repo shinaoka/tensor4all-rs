@@ -24,7 +24,6 @@ tenferro-provider-inject = [
 
 [dependencies]
 thiserror.workspace = true
-tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 

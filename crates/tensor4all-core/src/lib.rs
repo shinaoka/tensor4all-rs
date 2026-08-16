@@ -43,7 +43,37 @@ pub mod smallstring;
 pub mod tagset;
 pub mod truncation;
 
-pub use scalar::CommonScalar;
+// TCI substrate absorbed from tensor4all-tcicore (dissolved, #639): matrix
+// cross interpolation (LU/LUCI/ACA), common scalar trait, floating-zone
+// pivot search, caching, and index sets.
+pub mod cached_function;
+pub mod error;
+pub mod floating_zone;
+pub mod indexset;
+mod matrix_luci;
+pub mod matrixaca;
+pub mod matrixlu;
+pub mod matrixluci;
+pub mod traits;
+
+pub use self::matrixluci::Scalar as MatrixLuciScalar;
+pub use cached_function::cache_key::CacheKey;
+pub use cached_function::error::CacheKeyError;
+pub use cached_function::index_int::IndexInt;
+pub use cached_function::CachedFunction;
+pub use error::{MatrixCIError, Result};
+pub use floating_zone::floating_zone_walk;
+pub use indexset::{IndexSet, LocalIndex, MultiIndex};
+pub use matrix_luci::{
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
+    matrix_luci_factors_from_matrix_owned, MatrixLUCI, MatrixLuciFactors,
+};
+pub use matrixaca::MatrixACA;
+pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
+pub use scalar::Scalar;
+pub use traits::AbstractMatrixCI;
+
+pub use scalar::Scalar as CommonScalar;
 
 // Default concrete type implementations (index, tensor, linalg, etc.)
 pub mod defaults;

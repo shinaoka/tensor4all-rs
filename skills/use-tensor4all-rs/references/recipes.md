@@ -110,7 +110,7 @@ For a manual integral on a uniform half-open `[x_min, x_max)`:
 ## Cache expensive evaluations
 
 ```rust
-use tensor4all_tcicore::CachedFunction;
+use tensor4all_core::CachedFunction;
 use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
 
 let r = 8;

@@ -1,11 +1,11 @@
 //! TensorCI1 - legacy one-site Tensor Cross Interpolation algorithm.
 
 use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
+use tensor4all_core::{
+    AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
+};
 use tensor4all_simplett::{
     tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
-};
-use tensor4all_tcicore::{
-    AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
 };
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScalar};
 

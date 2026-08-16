@@ -11,12 +11,10 @@ repository.workspace = true
 default = ["tenferro-cpu-faer"]
 tenferro-cpu-faer = [
     "tensor4all-simplett/tenferro-cpu-faer",
-    "tensor4all-tcicore/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
     "tensor4all-simplett/tenferro-provider-inject",
-    "tensor4all-tcicore/tenferro-provider-inject",
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
@@ -26,7 +24,7 @@ num-traits.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
-tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 

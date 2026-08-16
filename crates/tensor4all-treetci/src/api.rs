@@ -94,7 +94,7 @@ pub fn crossinterpolate2<T, F, P>(
 where
     T: FullPivLuScalar
         + CommonScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,

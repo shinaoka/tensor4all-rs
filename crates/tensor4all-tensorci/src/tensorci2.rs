@@ -9,11 +9,11 @@ use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivo
 use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
-use tensor4all_tcicore::{
+use tensor4all_core::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex,
     RrLUOptions, Scalar,
 };
+use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
@@ -521,7 +521,7 @@ where
     /// ```
     /// use tensor4all_simplett::AbstractTensorTrain;
     /// use tensor4all_tensorci::TensorCI2;
-    /// use tensor4all_tcicore::MultiIndex;
+    /// use tensor4all_core::MultiIndex;
     ///
     /// let f = |idx: &MultiIndex| (idx[0] + idx[1] + 1) as f64;
     /// let tci = TensorCI2::from_index_sets(

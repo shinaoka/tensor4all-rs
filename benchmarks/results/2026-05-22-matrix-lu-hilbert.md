@@ -22,7 +22,7 @@ env \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
-cargo run --release -p tensor4all-tcicore --example benchmark_matrix_lu
+cargo run --release -p tensor4all-core --example benchmark_matrix_lu
 ```
 
 Julia:
@@ -57,6 +57,6 @@ Julia's standalone rrLU is usually faster, especially at smaller sizes. This is
 not identical to the ACI local MatrixLUCI bucket because the local matrices and
 factor-wrapper work differ; use this benchmark to track rrLU-specific changes.
 
-TODO: make the `tensor4all-tcicore` dev-dependency backend features easier to
+TODO: make the `tensor4all-core` dev-dependency backend features easier to
 select so examples can also be built with `--no-default-features --features
 tenferro-system-blas` without pulling in `tensor4all-tensorci/tenferro-cpu-faer`.

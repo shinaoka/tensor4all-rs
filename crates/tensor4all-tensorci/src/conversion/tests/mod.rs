@@ -1,7 +1,7 @@
 use crate::{crossinterpolate2, TCI2Options, TensorCI2, TensorCI2FromTensorTrainOptions};
 use num_complex::Complex64;
+use tensor4all_core::MultiIndex;
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
-use tensor4all_tcicore::MultiIndex;
 
 #[test]
 fn test_tensorci2_from_tensor_train_preserves_values() {

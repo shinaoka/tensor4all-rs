@@ -3,7 +3,7 @@ use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 use tensor4all_core::ColMajorArray;
-use tensor4all_tcicore::RrLUOptions;
+use tensor4all_core::RrLUOptions;
 
 fn no_truncation_options() -> RrLUOptions {
     RrLUOptions {

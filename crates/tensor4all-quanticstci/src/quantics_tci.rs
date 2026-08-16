@@ -397,7 +397,7 @@ where
         + Clone
         + 'static
         + tensor4all_core::TensorElement
-        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(&[f64]) -> V + 'static,
@@ -485,7 +485,7 @@ where
     let init_vals = batch_eval(init_batch)?;
     tci.max_sample_value = init_vals
         .iter()
-        .map(|v| <V as tensor4all_tcicore::MatrixLuciScalar>::abs_val(*v))
+        .map(|v| <V as tensor4all_core::MatrixLuciScalar>::abs_val(*v))
         .fold(0.0f64, f64::max);
     if tci.max_sample_value <= 0.0 {
         return Err(QuanticsTCIError::InvalidConfiguration {
@@ -568,7 +568,7 @@ where
         + Clone
         + 'static
         + tensor4all_core::TensorElement
-        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(&[f64]) -> V + 'static,
@@ -693,7 +693,7 @@ where
         + Clone
         + 'static
         + tensor4all_core::TensorElement
-        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(&[usize]) -> V + 'static,
@@ -809,7 +809,7 @@ where
     let init_vals = batch_eval(init_batch)?;
     tci.max_sample_value = init_vals
         .iter()
-        .map(|v| <V as tensor4all_tcicore::MatrixLuciScalar>::abs_val(*v))
+        .map(|v| <V as tensor4all_core::MatrixLuciScalar>::abs_val(*v))
         .fold(0.0f64, f64::max);
     if tci.max_sample_value <= 0.0 {
         return Err(QuanticsTCIError::InvalidConfiguration {

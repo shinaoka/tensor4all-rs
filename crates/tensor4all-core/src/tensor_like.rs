@@ -100,7 +100,7 @@ pub enum FactorizeError {
     MatrixCIError(
         /// The underlying matrix CI error
         #[from]
-        tensor4all_tcicore::MatrixCIError,
+        crate::MatrixCIError,
     ),
 }
 

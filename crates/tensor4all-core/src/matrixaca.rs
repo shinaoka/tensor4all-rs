@@ -55,7 +55,7 @@ fn append_row<T: Scalar>(m: &Matrix<T>, row: &[T]) -> Matrix<T> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+/// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
@@ -96,7 +96,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     ///
     /// let aca = MatrixACA::<f64>::new(3, 4);
     /// assert_eq!(aca.nrows(), 3);
@@ -126,7 +126,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -171,7 +171,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_core::MatrixACA;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -189,7 +189,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_core::MatrixACA;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -207,7 +207,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_core::MatrixACA;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -225,7 +225,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_core::MatrixACA;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 3.0]]);
@@ -301,7 +301,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_core::MatrixACA;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -336,7 +336,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_core::MatrixACA;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -381,7 +381,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -411,7 +411,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
@@ -483,7 +483,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -533,7 +533,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);

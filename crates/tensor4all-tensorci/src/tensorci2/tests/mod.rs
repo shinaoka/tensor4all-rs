@@ -1171,7 +1171,7 @@ fn test_custom_global_pivot_finder() {
             rng: &mut impl Rng,
         ) -> Vec<MultiIndex>
         where
-            T: tensor4all_tcicore::Scalar + tensor4all_simplett::TTScalar,
+            T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
             (0..self.npivots)
@@ -1286,7 +1286,7 @@ fn test_optimize_with_finder_invokes_custom_finder() {
             _rng: &mut impl Rng,
         ) -> Vec<MultiIndex>
         where
-            T: tensor4all_tcicore::Scalar + tensor4all_simplett::TTScalar,
+            T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
             self.calls.set(self.calls.get() + 1);

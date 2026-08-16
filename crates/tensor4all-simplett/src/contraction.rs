@@ -11,7 +11,7 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use tensor4all_tcicore::Scalar;
+use tensor4all_core::Scalar;
 use tensor4all_tensorbackend::Matrix;
 
 fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> TensorTrainError {

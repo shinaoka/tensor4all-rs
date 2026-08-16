@@ -4,7 +4,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::{BackendSessionHost, Tensor};
-use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
+use tensor4all_core::{matrix_luci_factors_from_matrix, RrLUOptions};
 use tensor4all_tensorbackend::{with_default_backend, Matrix};
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {

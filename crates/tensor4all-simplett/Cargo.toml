@@ -16,19 +16,16 @@ default = ["backend-tenferro", "tenferro-cpu-faer"]
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
-    "tensor4all-tcicore/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
     "tenferro-einsum/cpu-faer",
 ]
 tenferro-system-blas = [
     "tensor4all-core/tenferro-system-blas",
-    "tensor4all-tcicore/tenferro-system-blas",
     "tensor4all-tensorbackend/tenferro-system-blas",
     "tenferro-einsum/cpu-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
-    "tensor4all-tcicore/tenferro-provider-inject",
     "tensor4all-tensorbackend/tenferro-provider-inject",
     "tenferro-einsum/cpu-blas",
 ]
@@ -40,7 +37,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 bnum.workspace = true
-tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tenferro-einsum.workspace = true

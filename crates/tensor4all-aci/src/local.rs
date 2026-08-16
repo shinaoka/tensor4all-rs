@@ -375,8 +375,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
     fn record_output_scale(&self, values: &[T]) {
         let mut max_output_abs = self.max_output_abs.borrow_mut();
         for &value in values {
-            *max_output_abs =
-                max_output_abs.max(tensor4all_tcicore::MatrixLuciScalar::abs_val(value));
+            *max_output_abs = max_output_abs.max(tensor4all_core::MatrixLuciScalar::abs_val(value));
         }
     }
 }

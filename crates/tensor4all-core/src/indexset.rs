@@ -17,7 +17,7 @@ use std::hash::Hash;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::IndexSet;
+/// use tensor4all_core::IndexSet;
 ///
 /// let mut set: IndexSet<String> = IndexSet::new();
 /// set.push("alpha".to_string());
@@ -50,7 +50,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set: IndexSet<usize> = IndexSet::new();
     /// assert!(set.is_empty());
@@ -70,7 +70,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10usize, 20, 10, 30]);
     /// assert_eq!(set.len(), 3);
@@ -96,7 +96,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10, 20, 30]);
     /// assert_eq!(set.get(0), Some(&10));
@@ -112,7 +112,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10, 20, 30]);
     /// assert_eq!(set.pos(&20), Some(1));
@@ -129,7 +129,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10, 20, 30]);
     /// assert_eq!(set.positions(&[30, 10]), Some(vec![2, 0]));
@@ -146,7 +146,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let mut set = IndexSet::new();
     /// set.push(10);
@@ -170,7 +170,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10, 20]);
     /// assert!(set.contains(&10));
@@ -195,7 +195,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10, 20, 30]);
     /// let collected: Vec<_> = set.iter().copied().collect();
@@ -210,7 +210,7 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::IndexSet;
+    /// use tensor4all_core::IndexSet;
     ///
     /// let set = IndexSet::from_vec(vec![10, 20, 30]);
     /// assert_eq!(set.values(), &[10, 20, 30]);

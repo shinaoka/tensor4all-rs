@@ -13,7 +13,7 @@ lineages and are not being unified:
 - a **network stack** (`core`, `tensorbackend`, `treetn`, `itensorlike`,
   `hdf5`): named indices, `max_rank` / `rtol` / `SvdTruncationPolicy`, builder
   options, and `anyhow` in places;
-- a **TCI stack** (`tcicore`, `tensorci`, `treetci`, `quanticstci`, `aci`,
+- a **TCI stack** (core TCI substrate, `tensorci`, `treetci`, `quanticstci`, `aci`,
   `simplett`, `interpolativeqtt`): positional indices,
   `tolerance` / `max_bond_dim`, pub-field options, typed errors.
 
