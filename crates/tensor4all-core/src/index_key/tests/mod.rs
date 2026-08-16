@@ -176,6 +176,85 @@ fn every_single_bit_position_is_distinct_across_limbs() {
 }
 
 #[test]
+fn composition_matches_encoding_the_concatenated_multi_index() {
+    let local = FlatIndexer::try_new(&[3, 2]).unwrap();
+    let child = FlatIndexer::try_new(&[4, 5]).unwrap();
+    let whole = FlatIndexer::try_new(&[3, 2, 4, 5]).unwrap();
+
+    for a in 0..3 {
+        for b in 0..2 {
+            for c in 0..4 {
+                for d in 0..5 {
+                    let mut builder = KeyBuilder::with_capacity_bits(whole.width_bits()).unwrap();
+                    builder
+                        .push(&local.encode(&[a, b]).unwrap(), local.width_bits())
+                        .unwrap();
+                    builder
+                        .push(&child.encode(&[c, d]).unwrap(), child.width_bits())
+                        .unwrap();
+                    assert_eq!(
+                        builder.finish(),
+                        whole.encode(&[a, b, c, d]).unwrap(),
+                        "composition disagreed at {a},{b},{c},{d}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn composition_is_injective_across_the_limb_boundary() {
+    let child = FlatIndexer::try_new(&[2; 40]).unwrap();
+    let zero = child.encode(&vec![0usize; 40]).unwrap();
+    let one = {
+        let mut v = vec![0usize; 40];
+        v[0] = 1;
+        child.encode(&v).unwrap()
+    };
+
+    let mut first = KeyBuilder::with_capacity_bits(80).unwrap();
+    first.push(&zero, 40).unwrap();
+    first.push(&one, 40).unwrap();
+
+    let mut second = KeyBuilder::with_capacity_bits(80).unwrap();
+    second.push(&one, 40).unwrap();
+    second.push(&zero, 40).unwrap();
+
+    assert_ne!(first.finish(), second.finish());
+}
+
+#[test]
+fn composition_spans_the_fixed_to_dynamic_boundary() {
+    let part = FlatIndexer::try_new(&[2; 600]).unwrap();
+    let whole = FlatIndexer::try_new(&[2; 1200]).unwrap();
+    let mut low = vec![0usize; 600];
+    low[0] = 1;
+    let mut high = vec![0usize; 600];
+    high[599] = 1;
+
+    let mut builder = KeyBuilder::with_capacity_bits(1200).unwrap();
+    builder.push(&part.encode(&low).unwrap(), 600).unwrap();
+    builder.push(&part.encode(&high).unwrap(), 600).unwrap();
+
+    let mut expected = vec![0usize; 1200];
+    expected[0] = 1;
+    expected[1199] = 1;
+    assert_eq!(builder.finish(), whole.encode(&expected).unwrap());
+}
+
+#[test]
+fn pushing_past_the_declared_capacity_is_an_error() {
+    let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
+    let mut builder = KeyBuilder::with_capacity_bits(2).unwrap();
+    builder.push(&indexer.encode(&[1, 1]).unwrap(), 2).unwrap();
+    assert!(matches!(
+        builder.push(&indexer.encode(&[1, 1]).unwrap(), 2),
+        Err(IndexKeyError::WidthOverflow { .. })
+    ));
+}
+
+#[test]
 fn an_empty_index_space_encodes_to_zero() {
     let indexer = FlatIndexer::try_new(&[]).unwrap();
     assert_eq!(indexer.width_bits(), 0);

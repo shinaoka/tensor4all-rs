@@ -286,5 +286,168 @@ impl FlatIndexer {
     }
 }
 
+/// Assembles one key by appending sub-keys at successive bit offsets.
+///
+/// This is the composition operation a tree needs: a node's key is its own
+/// local key followed by each child's key, so
+/// `key(node) = local ++ key(c1) ++ key(c2) ++ ...`. Appending at a known bit
+/// offset costs one pass over the pushed key's limbs, so composing a tree is
+/// linear in total width rather than quadratic as a multiply-based mixed-radix
+/// composition would be.
+///
+/// The result equals what [`FlatIndexer::encode`] produces for the
+/// concatenated multi-index, so a composed key and a directly encoded one are
+/// interchangeable as map keys.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index_key::{FlatIndexer, KeyBuilder};
+/// let local = FlatIndexer::try_new(&[3, 2]).unwrap();
+/// let child = FlatIndexer::try_new(&[4]).unwrap();
+/// let whole = FlatIndexer::try_new(&[3, 2, 4]).unwrap();
+///
+/// let mut builder = KeyBuilder::with_capacity_bits(whole.width_bits()).unwrap();
+/// builder.push(&local.encode(&[2, 1]).unwrap(), local.width_bits()).unwrap();
+/// builder.push(&child.encode(&[3]).unwrap(), child.width_bits()).unwrap();
+///
+/// assert_eq!(builder.finish(), whole.encode(&[2, 1, 3]).unwrap());
+/// ```
+#[derive(Debug, Clone)]
+pub struct KeyBuilder {
+    limbs: dynamic::Limbs,
+    offset: u64,
+    capacity_bits: u64,
+}
+
+impl KeyBuilder {
+    /// Creates a builder able to hold `width_bits` of appended sub-keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IndexKeyError::WidthOverflow`] when the width cannot be
+    /// allocated on this platform.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::index_key::KeyBuilder;
+    /// assert!(KeyBuilder::with_capacity_bits(0).is_ok());
+    /// assert!(KeyBuilder::with_capacity_bits(4096).is_ok());
+    /// ```
+    pub fn with_capacity_bits(width_bits: u64) -> Result<Self, IndexKeyError> {
+        usize::try_from(width_bits.div_ceil(64)).map_err(|_| IndexKeyError::WidthOverflow {
+            requested_bits: width_bits,
+        })?;
+        Ok(Self {
+            limbs: dynamic::zeroed(width_bits),
+            offset: 0,
+            capacity_bits: width_bits,
+        })
+    }
+
+    /// Total bits appended so far.
+    pub fn width_bits(&self) -> u64 {
+        self.offset
+    }
+
+    /// Appends `key`, which occupies `key_width_bits`, at the current offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IndexKeyError::WidthOverflow`] when the append would exceed
+    /// the declared capacity, rather than truncating the key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::index_key::{FlatIndexer, KeyBuilder};
+    /// let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
+    /// let key = indexer.encode(&[1, 1]).unwrap();
+    /// let mut builder = KeyBuilder::with_capacity_bits(2).unwrap();
+    /// assert!(builder.push(&key, 2).is_ok());
+    /// assert!(builder.push(&key, 2).is_err());
+    /// ```
+    pub fn push(&mut self, key: &IndexKey, key_width_bits: u64) -> Result<(), IndexKeyError> {
+        let end = self
+            .offset
+            .checked_add(key_width_bits)
+            .ok_or(IndexKeyError::WidthOverflow {
+                requested_bits: u64::MAX,
+            })?;
+        if end > self.capacity_bits {
+            return Err(IndexKeyError::WidthOverflow {
+                requested_bits: end,
+            });
+        }
+        let offset = self.offset;
+        match key {
+            IndexKey::U64(value) => {
+                dynamic::place_limbs(&mut self.limbs, &[*value], key_width_bits, offset);
+            }
+            IndexKey::U128(value) => {
+                let source = [*value as u64, (*value >> 64) as u64];
+                dynamic::place_limbs(&mut self.limbs, &source, key_width_bits, offset);
+            }
+            IndexKey::U256(value) => {
+                dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
+            }
+            IndexKey::U512(value) => {
+                dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
+            }
+            IndexKey::U1024(value) => {
+                dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
+            }
+            IndexKey::Limbs(value) => {
+                dynamic::place_limbs(&mut self.limbs, value, key_width_bits, offset);
+            }
+        }
+        self.offset = end;
+        Ok(())
+    }
+
+    /// Narrows the accumulated limbs to the smallest arm holding the capacity.
+    ///
+    /// Narrowing is what makes a composed key compare equal to the same value
+    /// produced by [`FlatIndexer::encode`], which also picks its arm from the
+    /// declared width.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::index_key::{IndexKey, KeyBuilder};
+    /// let builder = KeyBuilder::with_capacity_bits(8).unwrap();
+    /// assert_eq!(builder.finish(), IndexKey::U64(0));
+    /// ```
+    pub fn finish(self) -> IndexKey {
+        fn digit(limbs: &[u64], position: usize) -> u64 {
+            limbs.get(position).copied().unwrap_or(0)
+        }
+        fn digits<const N: usize>(limbs: &[u64]) -> [u64; N] {
+            let mut out = [0u64; N];
+            for (position, slot) in out.iter_mut().enumerate() {
+                *slot = digit(limbs, position);
+            }
+            out
+        }
+        match self.capacity_bits {
+            0..=64 => IndexKey::U64(digit(&self.limbs, 0)),
+            65..=128 => IndexKey::U128(
+                u128::from(digit(&self.limbs, 0)) | (u128::from(digit(&self.limbs, 1)) << 64),
+            ),
+            129..=256 => IndexKey::U256(Box::new(bnum::types::U256::from_digits(digits::<4>(
+                &self.limbs,
+            )))),
+            257..=512 => IndexKey::U512(Box::new(bnum::types::U512::from_digits(digits::<8>(
+                &self.limbs,
+            )))),
+            513..=1024 => IndexKey::U1024(Box::new(bnum::types::U1024::from_digits(digits::<16>(
+                &self.limbs,
+            )))),
+            _ => IndexKey::Limbs(self.limbs),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
