@@ -31,4 +31,3 @@ Runs batched elementwise ACI over tensor-train inputs. This function approximate
 ### `pub fn elementwise(op: F, inputs: & [SimpleTensorTrain < T >], options: & AciOptions < T >) -> Result < AciResult < T > >`
 
 Runs scalar elementwise ACI over tensor-train inputs. This convenience wrapper evaluates `op` once per interpolation point. The callback receives one value from each input tensor train in input order and
-

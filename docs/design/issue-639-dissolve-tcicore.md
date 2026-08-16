@@ -133,12 +133,17 @@ Additional files to update (luna-verified):
   explicit exclusions: `.worktrees/` (foreign worktrees), generated
   `docs/book/book/` (mdbook build artifacts), and the deliberately-kept
   historical records (`docs/plans/2026-03-27-tcicore-extraction-*`,
-  `docs/design/*` that document the pre-dissolution state).
+  `docs/design/*`, and the 18 `docs/superpowers/` + `docs/worklogs/` docs,
+  which are now marked with a Superseded #639 note).
 
 ## Review verdicts
 
 - Design (pre-implementation), luna: NEEDS-FIX (round 1: deps/downstream/panics
   baseline/additional files/matrix_luci mirror; round 2: tensorci row) → all
   findings fixed per luna's prescriptions → design approved.
-- Diff (post-implementation), luna: TBD.
-- Diff (post-implementation), luna: TBD.
+- Diff (post-implementation), luna: NEEDS-FIX (round 1: orphaned
+  boundary-checker comment, stale superpowers/worklogs references, generated
+  aci.md trailing blank) → all three fixed → re-approved.
+- Diff (post-implementation), luna: NEEDS-FIX (round 1: orphaned
+  boundary-checker comment, stale superpowers/worklogs references, generated
+  aci.md trailing blank) → all three fixed → re-approved.

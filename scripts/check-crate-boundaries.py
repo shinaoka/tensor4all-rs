@@ -39,7 +39,6 @@ TENSORBACKEND = "tensor4all-tensorbackend"
 #   Tensor/TypedTensor/TensorScalar) and einsum subscripts used by MPO/TT
 #   construction; routing every tensor op through tensorbackend would create a
 #   circular dependency.
-#   scalar traits (a marker trait only, no backend calls).
 # - tensor4all-treetci: tenferro-linalg LinalgBackend + tenferro-tensor for
 #   materializing TreeTN site tensors during cross-interpolation assembly.
 # Tuples are exact: adding a dependency to the tuple, or keeping the tuple when
