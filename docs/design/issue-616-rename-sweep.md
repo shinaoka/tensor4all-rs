@@ -79,5 +79,10 @@ matches the tree.
 
 ## Review verdicts
 
-- Design (pre-implementation), luna: TBD.
-- Diff (post-implementation), luna: TBD.
+- Design (pre-implementation), luna: NEEDS-FIX (missed call sites:
+  itensorlike tensortrain.rs hascommoninds import/use, options.rs builder
+  internals + to_treetci_options, Rust-facing docs, Julia examples out of
+  scope) → fixed → approved.
+- Diff (post-implementation), luna: NEEDS-FIX (crates.md backticks,
+  with_maxiter param name, test comment, historical-plan name reference)
+  → fixed → re-approved.
