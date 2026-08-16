@@ -205,9 +205,11 @@ pub fn save_itensor(
     name: &str,
     tensor: &IdxTensor,
 ) -> std::result::Result<(), Hdf5Error> {
-    let file = File::create(filepath)?;
-    let group = file.create_group(name)?;
-    itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::create(filepath)?;
+        let group = file.create_group(name)?;
+        itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
+    })
 }
 
 /// Append a [`IdxTensor`] as an ITensors.jl-compatible `ITensor` to an HDF5 file.
@@ -246,9 +248,11 @@ pub fn append_itensor(
     name: &str,
     tensor: &IdxTensor,
 ) -> std::result::Result<(), Hdf5Error> {
-    let file = File::append(filepath)?;
-    let group = file.create_group(name)?;
-    itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::append(filepath)?;
+        let group = file.create_group(name)?;
+        itensor::write_itensor(&group, tensor).map_err(Hdf5Error::from)
+    })
 }
 
 /// Load a [`IdxTensor`] from an ITensors.jl-compatible `ITensor` in an HDF5 file.
@@ -302,9 +306,11 @@ pub fn append_itensor(
 /// # }
 /// ```
 pub fn load_itensor(filepath: &str, name: &str) -> std::result::Result<IdxTensor, Hdf5Error> {
-    let file = File::open(filepath)?;
-    let group = file.group(name)?;
-    itensor::read_itensor(&group).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::open(filepath)?;
+        let group = file.group(name)?;
+        itensor::read_itensor(&group).map_err(Hdf5Error::from)
+    })
 }
 
 /// Save a [`TensorTrain`] as an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
@@ -361,9 +367,11 @@ pub fn save_mps(
     name: &str,
     tt: &TensorTrain,
 ) -> std::result::Result<(), Hdf5Error> {
-    let file = File::create(filepath)?;
-    let group = file.create_group(name)?;
-    mps::write_mps(&group, tt).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::create(filepath)?;
+        let group = file.create_group(name)?;
+        mps::write_mps(&group, tt).map_err(Hdf5Error::from)
+    })
 }
 
 /// Append a [`TensorTrain`] as an ITensorMPS.jl-compatible `MPS` to an HDF5 file.
@@ -406,9 +414,11 @@ pub fn append_mps(
     name: &str,
     tt: &TensorTrain,
 ) -> std::result::Result<(), Hdf5Error> {
-    let file = File::append(filepath)?;
-    let group = file.create_group(name)?;
-    mps::write_mps(&group, tt).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::append(filepath)?;
+        let group = file.create_group(name)?;
+        mps::write_mps(&group, tt).map_err(Hdf5Error::from)
+    })
 }
 
 /// Load a [`TensorTrain`] from an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
@@ -462,9 +472,11 @@ pub fn append_mps(
 /// # }
 /// ```
 pub fn load_mps(filepath: &str, name: &str) -> std::result::Result<TensorTrain, Hdf5Error> {
-    let file = File::open(filepath)?;
-    let group = file.group(name)?;
-    mps::read_mps(&group).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::open(filepath)?;
+        let group = file.group(name)?;
+        mps::read_mps(&group).map_err(Hdf5Error::from)
+    })
 }
 
 /// Save a [`TreeTN`] as a tensor4all-rs `TreeTN` in an HDF5 file.
@@ -527,9 +539,11 @@ pub fn save_treetn<V>(
 where
     V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
 {
-    let file = File::create(filepath)?;
-    let group = file.create_group(name)?;
-    treetn::write_treetn(&group, tn).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::create(filepath)?;
+        let group = file.create_group(name)?;
+        treetn::write_treetn(&group, tn).map_err(Hdf5Error::from)
+    })
 }
 
 /// Append a [`TreeTN`] to an HDF5 file.
@@ -551,9 +565,11 @@ pub fn append_treetn<V>(
 where
     V: ToString + Clone + Hash + Eq + Send + Sync + Debug,
 {
-    let file = File::append(filepath)?;
-    let group = file.create_group(name)?;
-    treetn::write_treetn(&group, tn).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::append(filepath)?;
+        let group = file.create_group(name)?;
+        treetn::write_treetn(&group, tn).map_err(Hdf5Error::from)
+    })
 }
 
 /// Load a [`TreeTN`] from a tensor4all-rs `TreeTN` in an HDF5 file.
@@ -579,7 +595,9 @@ where
     V: FromStr + Ord + Clone + Hash + Eq + Send + Sync + Debug,
     V::Err: std::fmt::Display,
 {
-    let file = File::open(filepath)?;
-    let group = file.group(name)?;
-    treetn::read_treetn(&group).map_err(Hdf5Error::from)
+    backend::hdf5_sync(|| {
+        let file = File::open(filepath)?;
+        let group = file.group(name)?;
+        treetn::read_treetn(&group).map_err(Hdf5Error::from)
+    })
 }

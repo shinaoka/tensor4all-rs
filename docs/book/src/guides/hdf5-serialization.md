@@ -83,3 +83,25 @@ assert_eq!(loaded.node_names(), vec!["left".to_string(), "center".to_string(), "
   TreeTN representation.
 - **General trees**: `save_treetn` / `load_treetn` is the only option — no
   upstream ITensorNetworks.jl format exists.
+
+## Thread safety
+
+The HDF5 C library is not thread-safe, and `tensor4all-hdf5` serializes every
+public `save_*` / `append_*` / `load_*` call through one process-wide lock
+(the hdf5 binding's reentrant mutex), so the crate is **safe to call
+concurrently by construction** — including on distinct files. The lock covers
+the whole operation (open, write/read, close), not individual HDF5 calls.
+
+In addition, the crate disables HDF5's OS file locking by setting
+`HDF5_USE_FILE_LOCKING=FALSE` once, before the first HDF5 call, unless you
+already set that variable (your value wins). This is needed because a writer's
+exclusive OS file lock can outlive `H5Fclose`, so a serialized reopen of the
+*same* path can otherwise still fail with `errno = 35` (EAGAIN). The
+environment variable is process-global: it also affects any other HDF5 usage
+in the process. If you need cross-process write protection, set
+`HDF5_USE_FILE_LOCKING` yourself (e.g. `TRUE`) — but then concurrent
+same-path open-after-close within one process may fail again, so coordinate
+access to shared paths.
+
+Direct use of the re-exported low-level HDF5 passthroughs (hdf5-rt's
+`hdf5_init` etc.) bypasses the crate's lock and is outside this guarantee.
