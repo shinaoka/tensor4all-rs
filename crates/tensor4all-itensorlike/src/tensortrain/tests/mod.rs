@@ -1240,7 +1240,7 @@ fn test_set_rlim_valid_center() {
     assert_eq!(tt.ortho_center(), Some(0));
 
     // set_rlim to 2 with current llim=-1 => llim will be recomputed.
-    // After set_rlim(2): llim from orthocenter is recalculated.
+    // After set_rlim(2): llim from ortho_center is recalculated.
     // Since set_rlim reads current llim first (which is -1), then checks -1+2==2? No, 1!=2.
     // So this clears ortho. Let's set rlim=1 which keeps center at 0.
     tt.set_rlim(1);

@@ -44,7 +44,7 @@ Named `DynIndex` objects; orthogonality-center tracking; multiple canonical form
 - `SimpleTensorTrain::new(vec![t0, t1, ...])` from `IdxTensor` cores.
 - `.orthogonalize(site)`, `.orthogonalize_with(site, CanonicalForm::...)` (LU / CI forms).
 - `.truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol)).with_max_bond_dim(n))`.
-- `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, .is_ortho(), .ortho_center(), `.max_bond_dim()`.
+- `.inner(&other)` — `<self|other>`, conjugates left operand. `.norm()`, `.is_ortho()`, `.ortho_center()`, `.max_bond_dim()`.
 - `TruncateOptions`, `CanonicalForm`. `ContractOptions` / `LinsolveOptions` with `with_nsweeps(n)` (= `with_nhalfsweeps(2*n)`).
 - Build indices with `DynIndex::new_dyn(dim)` (site) and `DynIndex::new_bond(dim)?` (bond). `from_dense` data is column-major.
 

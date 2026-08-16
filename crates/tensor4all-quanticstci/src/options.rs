@@ -193,8 +193,8 @@ impl QtciOptions {
     /// let opts = QtciOptions::default().with_maxiter(500);
     /// assert_eq!(opts.max_iter, 500);
     /// ```
-    pub fn with_maxiter(mut self, max_iter: usize) -> Self {
-        self.max_iter = max_iter;
+    pub fn with_maxiter(mut self, maxiter: usize) -> Self {
+        self.max_iter = maxiter;
         self
     }
 

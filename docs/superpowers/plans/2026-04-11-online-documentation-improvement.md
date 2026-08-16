@@ -317,7 +317,7 @@ When working on each crate's mdBook guide, add the following missing content:
 - ITensorLike column-major convention explanation
 
 **tci.md** (tensor4all-tensorci, tensor4all-quanticstci):
-- Parameter selection: `tolerance`, `max_bond_dim`, `nrandominitpivot` guidance
+- Parameter selection: `tolerance`, `max_bond_dim`, `n_random_init_pivot` guidance
 - Convergence diagnostics: how to read the errors vector, detect stalled convergence
 - `quanticscrossinterpolate` vs `quanticscrossinterpolate_discrete` selection criteria
 - Index convention highlight: 0-indexed (low-level) vs 1-indexed (quantics grid)
