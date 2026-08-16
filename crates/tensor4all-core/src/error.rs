@@ -1,4 +1,4 @@
-//! Error types for tensor4all-tcicore.
+//! Error types for tensor4all-core.
 //!
 //! [`MatrixCIError`] enumerates errors that can occur during matrix cross
 //! interpolation operations. All public API functions return
@@ -11,7 +11,7 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::MatrixCIError;
+/// use tensor4all_core::MatrixCIError;
 ///
 /// let err = MatrixCIError::DimensionMismatch {
 ///     expected_rows: 3,

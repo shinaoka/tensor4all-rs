@@ -6,7 +6,6 @@ members = [
     "crates/tensor4all-treetn",
     "crates/tensor4all-itensorlike",
     "crates/tensor4all-quanticstransform",
-    "crates/tensor4all-tcicore",
     "crates/tensor4all-simplett",
     "crates/tensor4all-partitionedtt",
     "crates/tensor4all-tensorci",

@@ -49,9 +49,9 @@ HUNK_HEADER = re.compile(
 )
 
 # Only tensorbackend may depend on tenferro directly (Dense Layout And Linear
-# Algebra). #566 Phase 3 records the existing violations in core, tcicore,
-# simplett, and treetci, so this check is delta-scoped: it rejects new
-# dependency lines, not the backlog. dev-dependencies are out of scope --
+# Algebra). #566 Phase 3 records the existing violations in core, simplett,
+# and treetci, so this check is delta-scoped: it rejects new dependency
+# lines, not the backlog. dev-dependencies are out of scope --
 # the rule is about the runtime route, and test code may reach for tenferro
 # fixtures directly.
 TENFERRO_ROUTE_CRATE = "tensor4all-tensorbackend"
@@ -203,7 +203,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(
-            r"tensor4all-(?:tcicore|tensorci|treetci|quanticstci|aci"
+            r"tensor4all-(?:tensorci|treetci|quanticstci|aci"
             r"|interpolativeqtt|quanticstransform)|crossinterpolate|pivot"
         ),
         frozenset(

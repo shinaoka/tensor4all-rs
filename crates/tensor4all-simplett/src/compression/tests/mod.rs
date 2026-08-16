@@ -6,7 +6,7 @@ use tenferro_tensor::TensorScalar;
 
 fn test_compress_constant_generic<T>()
 where
-    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: TTScalar + Scalar + Default + tensor4all_core::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
@@ -23,7 +23,7 @@ where
 
 fn test_compress_preserves_values_generic<T>()
 where
-    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: TTScalar + Scalar + Default + tensor4all_core::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a simple tensor train
@@ -67,7 +67,7 @@ where
 
 fn test_compress_with_max_bond_dim_generic<T>()
 where
-    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: TTScalar + Scalar + Default + tensor4all_core::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a tensor train with higher bond dimension
@@ -136,7 +136,7 @@ fn test_compress_with_max_bond_dim_c64() {
 
 fn test_compress_svd_constant_generic<T>()
 where
-    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: TTScalar + Scalar + Default + tensor4all_core::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
@@ -155,7 +155,7 @@ where
 
 fn test_compress_svd_with_truncation_generic<T>()
 where
-    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: TTScalar + Scalar + Default + tensor4all_core::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a rank-3 TT and compress with SVD to max_bond_dim=2
@@ -242,7 +242,7 @@ where
 
 fn test_normalize_error_selects_relative_or_absolute_threshold_generic<T>()
 where
-    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: TTScalar + Scalar + Default + tensor4all_core::MatrixLuciScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = two_scale_tt::<T>();

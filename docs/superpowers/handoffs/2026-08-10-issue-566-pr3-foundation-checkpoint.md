@@ -1,3 +1,7 @@
+> [!NOTE] Superseded (2026-08, #639)
+> `tensor4all-tcicore` was dissolved into `tensor4all-core`; the crate no
+> longer exists. References below describe the pre-dissolution state.
+
 # Issue #566 PR 3 (typed errors) — foundation checkpoint
 
 **Status:** PR 3 の基礎スライス（設計 step 1: trait 層の typed 化）が完了・

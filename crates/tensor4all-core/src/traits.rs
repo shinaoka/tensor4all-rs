@@ -17,7 +17,7 @@ use tensor4all_tensorbackend::{submatrix, Matrix};
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+/// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
@@ -46,7 +46,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
@@ -60,7 +60,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0, 3.0]]);
@@ -74,7 +74,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -89,7 +89,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -107,7 +107,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -125,7 +125,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     ///
     /// let aca = MatrixACA::<f64>::new(2, 2);
     /// assert!(aca.is_empty());
@@ -139,7 +139,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -154,7 +154,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
@@ -176,7 +176,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -197,7 +197,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -218,7 +218,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -243,7 +243,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
@@ -265,7 +265,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
@@ -287,7 +287,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
@@ -328,7 +328,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
@@ -362,7 +362,7 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixACA};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![

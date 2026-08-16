@@ -4,8 +4,7 @@
 Fixture manifests must cover: the tensorbackend normal tenferro route passes;
 a new feature crate with a normal tenferro dependency fails; a renamed
 ``package = "tenferro-*"`` dependency fails; a dev-only tenferro dependency is
-allowed; an acyclic dev graph passes; the tcicore -> tensorci (dev) ->
-tcicore (normal) cycle fails with the full path; a stale exception tuple
+allowed; an acyclic dev graph passes; a dev cycle fails with the full path; a stale exception tuple
 fails.
 """
 
@@ -153,15 +152,16 @@ tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
         result = run_check(root)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_tcicore_tensorci_dev_cycle_fails_with_full_path(self) -> None:
-        # The exact cycle the checker exists to reject: tcicore dev-depends on
-        # tensorci while tensorci normal-depends on tcicore.
+    def test_dev_cycle_fails_with_full_path(self) -> None:
+        # The exact cycle the checker exists to reject: alpha dev-depends on
+        # beta while beta normal-depends on alpha (generic fixture, not tied
+        # to any specific crate).
         root = write_fixture(
             {
                 "crates/tensor4all-tensorbackend/Cargo.toml": TENSORBACKEND_MANIFEST,
-                "crates/tensor4all-tcicore/Cargo.toml": """\
+                "crates/tensor4all-alpha/Cargo.toml": """\
 [package]
-name = "tensor4all-tcicore"
+name = "tensor4all-alpha"
 version = "0.1.0"
 edition = "2021"
 
@@ -169,23 +169,23 @@ edition = "2021"
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
 
 [dev-dependencies]
-tensor4all-tensorci = { path = "../tensor4all-tensorci" }
+tensor4all-beta = { path = "../tensor4all-beta" }
 """,
-                "crates/tensor4all-tensorci/Cargo.toml": """\
+                "crates/tensor4all-beta/Cargo.toml": """\
 [package]
-name = "tensor4all-tensorci"
+name = "tensor4all-beta"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tensor4all-tcicore = { path = "../tensor4all-tcicore" }
+tensor4all-alpha = { path = "../tensor4all-alpha" }
 """,
             }
         )
         result = run_check(root)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("tensor4all-tcicore -> tensor4all-tensorci(dev)", result.stderr)
-        self.assertIn("tensor4all-tensorci -> tensor4all-tcicore(normal)", result.stderr)
+        self.assertIn("tensor4all-alpha -> tensor4all-beta(dev)", result.stderr)
+        self.assertIn("tensor4all-beta -> tensor4all-alpha(normal)", result.stderr)
 
     def test_dev_cycle_survives_coexisting_pure_normal_cycle(self) -> None:
         # A pure-normal cycle must not suppress a dev-containing cycle with

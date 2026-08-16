@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use tensor4all_tcicore::{rrlu, rrlu_mut, RrLUOptions};
+use tensor4all_core::{rrlu, rrlu_mut, RrLUOptions};
 use tensor4all_tensorbackend::Matrix;
 
 #[derive(Clone, Copy, Default)]

@@ -16,20 +16,17 @@ default = ["tenferro-cpu-faer"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-simplett/tenferro-cpu-faer",
-    "tensor4all-tcicore/tenferro-cpu-faer",
     "tensor4all-treetci/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-simplett/tenferro-provider-inject",
-    "tensor4all-tcicore/tenferro-provider-inject",
     "tensor4all-treetci/tenferro-provider-inject",
     "tensor4all-treetn/tenferro-provider-inject",
 ]
 
 [dependencies]
-tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
 tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }

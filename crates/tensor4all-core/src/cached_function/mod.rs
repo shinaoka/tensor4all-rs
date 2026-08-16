@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use tensor4all_tcicore::CachedFunction;
+//! use tensor4all_core::CachedFunction;
 //!
 //! let cf = CachedFunction::new(
 //!     |idx: &[usize]| idx[0] + idx[1],
@@ -366,7 +366,7 @@ type BatchFunc<I, V> = dyn Fn(&[Vec<I>]) -> Vec<V> + Send + Sync;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::CachedFunction;
+/// use tensor4all_core::CachedFunction;
 ///
 /// // Cache a 2-site function with local dimensions [3, 4]
 /// let cf = CachedFunction::new(
@@ -419,7 +419,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] + idx[1], &[2, 3]).unwrap();
     /// assert_eq!(cf.eval(&[1, 2]), 3);
@@ -452,7 +452,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::with_batch(
     ///     |idx: &[usize]| idx[0] * 10 + idx[1],
@@ -494,7 +494,7 @@ where
     ///
     /// ```
     /// use bnum::types::U2048;
-    /// use tensor4all_tcicore::{CacheKey, CachedFunction};
+    /// use tensor4all_core::{CacheKey, CachedFunction};
     ///
     /// #[derive(Clone, Hash, PartialEq, Eq)]
     /// struct U2048Key(U2048);
@@ -556,7 +556,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// // Use u128 key type with batch support
     /// let cf = CachedFunction::with_key_type_and_batch::<u128, _>(
@@ -596,7 +596,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] * idx[1], &[5, 5]).unwrap();
     /// assert_eq!(cf.eval(&[3, 4]), 12);
@@ -628,7 +628,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] + 1, &[4]).unwrap();
     /// assert_eq!(cf.eval_no_cache(&[2]), 3);
@@ -646,7 +646,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] * 2 + idx[1], &[2, 2]).unwrap();
     /// let results = cf.eval_batch(&[vec![0, 0], vec![0, 1], vec![1, 0]]);
@@ -697,7 +697,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| 0, &[3, 4, 5]).unwrap();
     /// assert_eq!(cf.local_dims(), &[3, 4, 5]);
@@ -711,7 +711,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| 0, &[2, 3]).unwrap();
     /// assert_eq!(cf.num_sites(), 2);
@@ -725,7 +725,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// cf.eval(&[0]);
@@ -742,7 +742,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// cf.eval(&[0]);
@@ -759,7 +759,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// cf.eval(&[0]);
@@ -779,7 +779,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// assert_eq!(cf.cache_hit_ratio(), 0.0); // no calls yet
@@ -802,7 +802,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// cf.eval(&[2]);
@@ -819,7 +819,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// assert_eq!(cf.cache_size(), 0);
@@ -838,7 +838,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// assert!(!cf.is_cached(&[1]));
@@ -858,7 +858,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::CachedFunction;
+    /// use tensor4all_core::CachedFunction;
     ///
     /// // Small index space uses u64
     /// let cf = CachedFunction::new(|idx: &[usize]| 0, &[2, 3]).unwrap();

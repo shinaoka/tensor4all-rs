@@ -14,7 +14,7 @@
 //! | [`crossinterpolate2`] | TCI2 (two-site) | [`TensorCI2`] | **Primary, actively maintained** |
 //! | [`crossinterpolate1`] | TCI1 (one-site) | [`TensorCI1`] | Legacy parity with TensorCrossInterpolation.jl |
 //!
-//! `TCI2` uses [`MatrixLUCI`](tensor4all_tcicore::MatrixLUCI) for pivot
+//! `TCI2` uses [`MatrixLUCI`](tensor4all_core::MatrixLUCI) for pivot
 //! updates and supports batch evaluation, global pivot search, and two pivot
 //! search strategies ([`PivotSearchStrategy::Full`] and
 //! [`PivotSearchStrategy::Rook`]).
@@ -52,8 +52,8 @@
 //!
 //! # Related crates
 //!
-//! - [`tensor4all_tcicore`] -- low-level matrix CI primitives and
-//!   [`CachedFunction`](tensor4all_tcicore::CachedFunction)
+//! - [`tensor4all_core`] -- low-level matrix CI primitives and
+//!   [`CachedFunction`](tensor4all_core::CachedFunction)
 //! - [`tensor4all_simplett`] -- the [`SimpleTensorTrain`](tensor4all_simplett::SimpleTensorTrain)
 //!   data structure produced by TCI
 //! - `tensor4all-quanticstci` -- higher-level quantics TCI on discrete

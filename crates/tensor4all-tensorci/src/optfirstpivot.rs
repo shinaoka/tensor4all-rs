@@ -4,8 +4,8 @@
 //! [`opt_first_pivot`] performs a greedy local search starting from a
 //! user-supplied guess.
 
+use tensor4all_core::{MultiIndex, Scalar};
 use tensor4all_simplett::TTScalar;
-use tensor4all_tcicore::{MultiIndex, Scalar};
 
 /// Optimize the initial pivot by greedy coordinate-wise search.
 ///

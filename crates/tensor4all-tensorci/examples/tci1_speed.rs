@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use tensor4all_tcicore::MultiIndex;
+use tensor4all_core::MultiIndex;
 use tensor4all_tensorci::{crossinterpolate1, TCI1Options};
 
 #[derive(Debug, Clone)]

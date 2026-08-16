@@ -1,3 +1,7 @@
+> [!NOTE] Superseded (2026-08, #639)
+> `tensor4all-tcicore` was dissolved into `tensor4all-core`; the crate no
+> longer exists. References below describe the pre-dissolution state.
+
 # Online Documentation Improvement Design
 
 **Date:** 2026-04-11

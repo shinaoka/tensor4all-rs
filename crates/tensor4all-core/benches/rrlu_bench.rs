@@ -4,7 +4,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::{BackendSessionHost, Tensor};
-use tensor4all_tcicore::{rrlu_mut, RrLUOptions};
+use tensor4all_core::{rrlu_mut, RrLUOptions};
 use tensor4all_tensorbackend::{from_vec2d, with_default_backend, Matrix};
 
 /// Generate a random f64 backend matrix.

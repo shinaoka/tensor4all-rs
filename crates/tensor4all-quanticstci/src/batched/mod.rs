@@ -226,7 +226,7 @@ where
         + Clone
         + 'static
         + TensorElement
-        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
 {

@@ -1,3 +1,7 @@
+> [!NOTE] Superseded (2026-08, #639)
+> `tensor4all-tcicore` was dissolved into `tensor4all-core`; the crate no
+> longer exists. References below describe the pre-dissolution state.
+
 # Work Log — 2026-08-12 treetci branching-node candidate handling (gw-rs#8)
 
 Session summary: root-caused the branching-topology slowdown reported in

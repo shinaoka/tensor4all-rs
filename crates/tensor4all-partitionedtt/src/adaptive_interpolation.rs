@@ -10,9 +10,9 @@ use std::collections::{HashSet, VecDeque};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{DynIndex, IdxTensor, TensorElement};
+use tensor4all_core::{MatrixLuciScalar, MultiIndex, Scalar};
 use tensor4all_itensorlike::TensorTrain;
 use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
-use tensor4all_tcicore::{MatrixLuciScalar, MultiIndex, Scalar};
 use tensor4all_tensorbackend::StorageScalar;
 use tensor4all_tensorci::{
     crossinterpolate2, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,

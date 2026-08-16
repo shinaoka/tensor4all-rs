@@ -6,8 +6,8 @@ use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tenferro_tensor::TensorScalar;
-use tensor4all_tcicore::Scalar;
-use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use tensor4all_core::Scalar;
+use tensor4all_core::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 use tensor4all_tensorbackend::{mat_mul, BackendLinalgScalar, Matrix};
 
 /// Matrix decomposition method used during TT compression.
@@ -173,7 +173,7 @@ fn factorize<T>(
 where
     T: TTScalar
         + Scalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + tensor4all_core::MatrixLuciScalar
         + Default
         + Copy
         + BackendLinalgScalar
@@ -374,7 +374,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// ```
     pub fn compress(&mut self, options: &CompressionOptions) -> Result<()>
     where
-        T: tensor4all_tcicore::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
+        T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
         let n = self.len();
@@ -530,7 +530,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// ```
     pub fn compressed(&self, options: &CompressionOptions) -> Result<Self>
     where
-        T: tensor4all_tcicore::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
+        T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
         let mut result = self.clone();

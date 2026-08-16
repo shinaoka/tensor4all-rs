@@ -35,11 +35,11 @@
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, IdxTensor};
+use crate::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use anyhow::Result as AnyhowResult;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
 use tenferro_linalg::EagerTensorLinalgExt;
-use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
 use crate::defaults::svd::svd_for_factorize;
@@ -377,7 +377,7 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + crate::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -401,7 +401,7 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + crate::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -421,7 +421,7 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + crate::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -488,7 +488,7 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + crate::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -512,7 +512,7 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + crate::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -521,13 +521,13 @@ where
 
 // CI-factorization default seam.
 //
-// The default LU/CI factorization implementations in this module consume
-// tensor4all-tcicore's foundational matrix-CI seam (rrlu, MatrixLUCI,
-// MatrixLuciScalar) below the algorithm layer. tensor4all-tcicore has no
-// dependency on tensor4all-core, so the direction core -> tcicore is
-// high-to-low and acyclic: the crate-boundary script rejects any reverse or
-// dev-dependency cycle. IdxTensor data is unfolded into a column-major
-// eager matrix at this boundary, and fixed-pivot CI factors are rebuilt from
+// The default LU/CI factorization implementations in this module consume the
+// TCI substrate (rrlu, MatrixLUCI, MatrixLuciScalar) that was absorbed from
+// tensor4all-tcicore when that crate was dissolved into tensor4all-core
+// (#639); the substrate now lives in this crate and the inverted
+// core -> tcicore dependency no longer exists. IdxTensor data is unfolded
+// into a column-major eager matrix at this boundary, and fixed-pivot CI
+// factors are rebuilt from
 // that primal value.
 fn factorize_ci_with_options<T>(
     t: &IdxTensor,
@@ -542,7 +542,7 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tcicore::MatrixLuciScalar
+        + crate::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {

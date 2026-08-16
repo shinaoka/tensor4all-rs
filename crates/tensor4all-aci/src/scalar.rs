@@ -47,15 +47,12 @@ mod private {
 /// ```
 #[allow(private_bounds)]
 pub trait AciScalar:
-    tensor4all_simplett::TTScalar + tensor4all_tcicore::MatrixLuciScalar + Copy + private::Sealed
+    tensor4all_simplett::TTScalar + tensor4all_core::MatrixLuciScalar + Copy + private::Sealed
 {
 }
 
 impl<T> AciScalar for T where
-    T: tensor4all_simplett::TTScalar
-        + tensor4all_tcicore::MatrixLuciScalar
-        + Copy
-        + private::Sealed
+    T: tensor4all_simplett::TTScalar + tensor4all_core::MatrixLuciScalar + Copy + private::Sealed
 {
 }
 

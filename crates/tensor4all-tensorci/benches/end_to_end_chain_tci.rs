@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tensor4all_tcicore::MultiIndex;
+use tensor4all_core::MultiIndex;
 use tensor4all_tensorci::{crossinterpolate2, PivotSearchStrategy, TCI2Options};
 
 fn chain_value(idx: &MultiIndex) -> f64 {

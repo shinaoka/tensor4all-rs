@@ -6,11 +6,10 @@ Rules enforced here:
 1. Normal ``tenferro-*`` dependencies are allowed only in
    ``tensor4all-tensorbackend`` (the single sanctioned tenferro route),
    plus exact temporary exception tuples for the current core, simplett,
-   tcicore, and treetci dependencies. A new tuple, an unsanctioned crate,
+   and treetci dependencies. A new tuple, an unsanctioned crate,
    a dependency beyond a crate's tuple, or a stale tuple all fail.
 2. Dev-dependency cycles are rejected with the full cycle path, e.g.
-   ``tcicore`` dev-depends on ``tensorci`` while ``tensorci`` depends on
-   ``tcicore``.
+   a dev-depends on ``tensorci`` while ``tensorci`` depends on ``a``.
 
 Dev-dependencies on tenferro-* are permitted (test fixtures). The Cargo.toml
 parser is stdlib-only (tomllib requires Python 3.11, while CI's runner python3
@@ -40,8 +39,6 @@ TENSORBACKEND = "tensor4all-tensorbackend"
 #   Tensor/TypedTensor/TensorScalar) and einsum subscripts used by MPO/TT
 #   construction; routing every tensor op through tensorbackend would create a
 #   circular dependency.
-# - tensor4all-tcicore: tenferro-tensor TensorScalar bound on the CI factor
-#   scalar traits (a marker trait only, no backend calls).
 # - tensor4all-treetci: tenferro-linalg LinalgBackend + tenferro-tensor for
 #   materializing TreeTN site tensors during cross-interpolation assembly.
 # Tuples are exact: adding a dependency to the tuple, or keeping the tuple when
@@ -51,7 +48,6 @@ TENFERRO_EXCEPTIONS: dict[str, frozenset[str]] = {
         {"tenferro-ad", "tenferro-einsum", "tenferro-linalg", "tenferro-tensor"}
     ),
     "tensor4all-simplett": frozenset({"tenferro-einsum", "tenferro-tensor"}),
-    "tensor4all-tcicore": frozenset({"tenferro-einsum", "tenferro-tensor"}),
     "tensor4all-treetci": frozenset({"tenferro-linalg", "tenferro-tensor"}),
 }
 

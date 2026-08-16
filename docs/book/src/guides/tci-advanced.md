@@ -100,7 +100,7 @@ assert_eq!(pivot, vec![3, 3]); // f(3,3) = 49.0 is the maximum
 Wrap expensive evaluations with `CachedFunction` to avoid redundant calls. The cache is shared across all TCI sweeps.
 
 ```rust
-use tensor4all_tcicore::CachedFunction;
+use tensor4all_core::CachedFunction;
 use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
 

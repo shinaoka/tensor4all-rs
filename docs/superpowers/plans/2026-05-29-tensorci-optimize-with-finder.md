@@ -1,3 +1,7 @@
+> [!NOTE] Superseded (2026-08, #639)
+> `tensor4all-tcicore` was dissolved into `tensor4all-core`; the crate no
+> longer exists. References below describe the pre-dissolution state.
+
 # TensorCI Optimize With Finder Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

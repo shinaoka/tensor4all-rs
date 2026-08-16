@@ -6,10 +6,10 @@
 //! [`floating_zone`] optimization.
 
 use rand::Rng;
+use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
 use tensor4all_simplett::{
     AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops,
 };
-use tensor4all_tcicore::{floating_zone_walk, MultiIndex, Scalar};
 
 /// Estimate the true interpolation error by searching for worst-case indices.
 ///

@@ -22,8 +22,8 @@ use crate::scalar::AciScalar;
 use crate::{AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use tensor4all_core::{floating_zone_walk, MatrixLuciScalar};
 use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
-use tensor4all_tcicore::{floating_zone_walk, MatrixLuciScalar};
 
 /// Search for global multi-indices where the current solution is wrong.
 ///

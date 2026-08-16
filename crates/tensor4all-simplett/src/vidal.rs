@@ -14,8 +14,8 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use num_complex::ComplexFloat;
 use num_traits::ToPrimitive;
 use tenferro_tensor::{TensorScalar, TypedTensor};
-use tensor4all_tcicore::Scalar;
-use tensor4all_tcicore::{rrlu, RrLUOptions};
+use tensor4all_core::Scalar;
+use tensor4all_core::{rrlu, RrLUOptions};
 use tensor4all_tensorbackend::{mat_mul, svd_backend, BackendLinalgScalar, Matrix};
 
 /// Compute QR decomposition

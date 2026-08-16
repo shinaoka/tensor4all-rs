@@ -2,12 +2,12 @@ use std::cell::RefCell;
 
 use crate::scalar::AciScalar;
 use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result};
+use tensor4all_core::{
+    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
+};
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, Tensor3,
     Tensor3Ops,
-};
-use tensor4all_tcicore::{
-    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
 };
 use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
 

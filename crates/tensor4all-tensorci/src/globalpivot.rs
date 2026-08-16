@@ -7,8 +7,8 @@
 //! optimization.
 
 use rand::Rng;
+use tensor4all_core::{MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
-use tensor4all_tcicore::{MultiIndex, Scalar};
 
 /// Snapshot of the current TCI state, passed to [`GlobalPivotFinder`].
 pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {

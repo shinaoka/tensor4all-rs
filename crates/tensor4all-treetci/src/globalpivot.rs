@@ -15,8 +15,8 @@ use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};
 use anyhow::Result;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef};
-use tensor4all_tcicore::MatrixLuciScalar as Scalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
 
 /// Search for multi-indices where the current approximation error is large.

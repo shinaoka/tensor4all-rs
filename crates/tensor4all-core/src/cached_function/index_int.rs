@@ -11,7 +11,7 @@
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{IndexInt, CachedFunction};
+/// use tensor4all_core::{IndexInt, CachedFunction};
 ///
 /// // Using u8 indices for quantics (local_dim = 2)
 /// let cf = CachedFunction::new(

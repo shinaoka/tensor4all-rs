@@ -2,10 +2,10 @@ use crate::{
     assemble::MultiIndex, batch::GlobalIndexBatch, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
-use tensor4all_core::{ColMajorArray, CommonScalar};
-use tensor4all_tcicore::{
+use tensor4all_core::{
     matrix_luci_factors_from_matrix, MatrixLuciFactors, MatrixLuciScalar as Scalar, RrLUOptions,
 };
+use tensor4all_core::{ColMajorArray, CommonScalar};
 use tensor4all_tensorbackend::Matrix;
 
 #[cfg(test)]

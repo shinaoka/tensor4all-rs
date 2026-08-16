@@ -11,8 +11,8 @@
 
 use crate::error::{Result, TCIError};
 use crate::tensorci2::{crossinterpolate2, TCI2Options};
+use tensor4all_core::{MatrixLuciScalar, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar};
-use tensor4all_tcicore::{MatrixLuciScalar, MultiIndex, Scalar};
 
 /// Gauss-Kronrod 15-point rule: nodes on [-1, 1]
 const GK15_NODES: [f64; 15] = [

@@ -9,7 +9,7 @@
 //!
 //! ```
 //! use bnum::types::U2048;
-//! use tensor4all_tcicore::{CacheKey, CachedFunction};
+//! use tensor4all_core::{CacheKey, CachedFunction};
 //!
 //! #[derive(Clone, Hash, PartialEq, Eq)]
 //! struct U2048Key(U2048);

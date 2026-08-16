@@ -20,13 +20,11 @@ facade, and each crate can be used on its own.
               |                                                |
    tensor4all-treetn  (TreeTN)                    tensor4all-simplett (SimpleTensorTrain)
               |                                                |
-   tensor4all-itensorlike (TensorTrain)           tensor4all-tcicore  (CI, LUCI, rrLU)
+   tensor4all-itensorlike (TensorTrain)           tensor4all-tensorci (TCI1/TCI2)
               |                                                |
-   tensor4all-partitionedtt                        tensor4all-tensorci (TCI1/TCI2)
+   tensor4all-partitionedtt                        tensor4all-quanticstci
               |                                                |
-   tensor4all-treetci                              tensor4all-quanticstci
-                                                               |
-                                                tensor4all-quanticstransform
+   tensor4all-treetci                              tensor4all-quanticstransform
 
    tensor4all-capi  (C FFI for language bindings; depends on both stacks)
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
@@ -67,7 +65,8 @@ transform layer, and MPS conversion belongs in the bridge.
   semantics are wanted).
 - **Numerical-core features** (cross interpolation, factorizations, quantics
   kernels) target the **simplett stack** by default
-  (`tensor4all-simplett`, `tensor4all-tcicore`, `tensor4all-tensorci`).
+  (`tensor4all-simplett`, `tensor4all-tensorci`; the former
+  `tensor4all-tcicore` was dissolved into `tensor4all-core`, #639).
 - A feature that must serve both stacks is implemented in the target stack
   and exposed through `treetn::simplett_bridge`; it is not duplicated in both.
 
@@ -134,7 +133,6 @@ Rules:
 | Crate | Description |
 |-------|-------------|
 | **simplett** | Lightweight positional tensor train (`SimpleTensorTrain`) for numerical computation. |
-| **tcicore** | *Internal.* Matrix CI, LUCI/rrLU algorithms, and cached function evaluation. Users do not need to depend on this crate directly. |
 | **tensorci** | Tensor Cross Interpolation. Contains TCI2 (primary algorithm) and TCI1 (legacy). |
 | **quanticstci** | High-level Quantics TCI. Interpolates functions on discrete or continuous grids in the quantics format. |
 
@@ -186,7 +184,8 @@ so every fallible or panicking public function documents its failure modes.
 
 ## Internal crates
 
-`tensor4all-tensorbackend` and `tensor4all-tcicore` are implementation
-details. They are not part of the public API surface and you should not depend
-on them directly in application code. Their interfaces may change without
-notice.
+`tensor4all-tensorbackend` is an implementation detail. The former
+`tensor4all-tcicore` crate was dissolved into `tensor4all-core` (#639): the
+matrix CI / LUCI / rrLU algorithms, `CachedFunction`, and `MultiIndex` now
+live in core. These are still not part of the application-facing public API
+surface and their interfaces may change without notice.

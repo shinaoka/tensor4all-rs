@@ -116,7 +116,7 @@ pub struct AciOptions<T: TTScalar> {
     /// Number of random starting points for the global pivot search guard.
     ///
     /// Each starting point launches a floating-zone walk (greedy
-    /// coordinate-descent; see [`floating_zone_walk`](tensor4all_tcicore::floating_zone_walk))
+    /// coordinate-descent; see [`floating_zone_walk`](tensor4all_core::floating_zone_walk))
     /// that moves one site coordinate at a time toward the largest
     /// interpolation error. Larger values explore the index space more
     /// thoroughly at the cost of more evaluations. Ignored when

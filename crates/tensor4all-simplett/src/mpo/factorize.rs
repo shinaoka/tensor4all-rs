@@ -132,7 +132,7 @@ pub fn factorize<T: SVDScalar>(
         FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
         FactorizeMethod::LU | FactorizeMethod::CI => {
             // For LU/CI, fall back to SVD for now
-            // Full LU/CI support requires tensor4all_tcicore::Scalar trait
+            // Full LU/CI support requires tensor4all_core::Scalar trait
             factorize_svd(matrix, options)
         }
     }
@@ -314,7 +314,7 @@ fn factorize_rsvd<T: SVDScalar>(
 
 /// Factorize using LU decomposition
 ///
-/// This function requires the tensor4all_tcicore::Scalar trait.
+/// This function requires the tensor4all_core::Scalar trait.
 /// Use this directly when you need LU-based factorization.
 ///
 /// [`FactorizeOptions::tolerance`] is passed as `RrLUOptions::rel_tol` with
@@ -330,9 +330,9 @@ pub fn factorize_lu<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + tensor4all_tcicore::Scalar + tensor4all_tcicore::MatrixLuciScalar,
+    T: SVDScalar + tensor4all_core::Scalar + tensor4all_core::MatrixLuciScalar,
 {
-    use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+    use tensor4all_core::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
     use tensor4all_tensorbackend::Matrix;
 
     let m = matrix.dim(0);
@@ -387,7 +387,7 @@ where
 
 /// Factorize using Cross Interpolation
 ///
-/// This function requires the tensor4all_tcicore::Scalar trait.
+/// This function requires the tensor4all_core::Scalar trait.
 /// Use this directly when you need CI-based factorization.
 /// # Errors
 ///
@@ -399,7 +399,7 @@ pub fn factorize_ci<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + tensor4all_tcicore::Scalar + tensor4all_tcicore::MatrixLuciScalar,
+    T: SVDScalar + tensor4all_core::Scalar + tensor4all_core::MatrixLuciScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     // CI uses the same LUCI implementation as LU

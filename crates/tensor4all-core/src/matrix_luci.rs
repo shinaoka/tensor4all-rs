@@ -23,7 +23,7 @@ use tensor4all_tensorbackend::{mat_mul_owned, submatrix, triangular_solve_matrix
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+/// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
@@ -69,7 +69,7 @@ pub struct MatrixLUCI<T: Scalar + crate::MatrixLuciScalar> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrix_luci_factors_from_matrix;
+/// use tensor4all_core::matrix_luci_factors_from_matrix;
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
@@ -351,7 +351,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrix_luci_factors_from_matrix;
+/// use tensor4all_core::matrix_luci_factors_from_matrix;
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
@@ -420,8 +420,8 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrix_luci_factors_from_blocks;
-/// use tensor4all_tcicore::RrLUOptions;
+/// use tensor4all_core::matrix_luci_factors_from_blocks;
+/// use tensor4all_core::RrLUOptions;
 ///
 /// let factors = matrix_luci_factors_from_blocks(
 ///     2,
@@ -466,7 +466,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
@@ -497,7 +497,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![
@@ -523,7 +523,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_core::{AbstractMatrixCI, MatrixLUCI};
     /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -548,7 +548,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixLUCI;
+    /// use tensor4all_core::MatrixLUCI;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -569,7 +569,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::MatrixLUCI;
+    /// use tensor4all_core::MatrixLUCI;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);

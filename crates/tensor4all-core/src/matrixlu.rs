@@ -14,7 +14,7 @@
 //! # Examples
 //!
 //! ```
-//! use tensor4all_tcicore::matrixlu::rrlu;
+//! use tensor4all_core::matrixlu::rrlu;
 //! use tensor4all_tensorbackend::from_vec2d;
 //!
 //! let m = from_vec2d(vec![
@@ -39,7 +39,7 @@ use tensor4all_tensorbackend::{transpose, Matrix};
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrixlu::rrlu;
+/// use tensor4all_core::matrixlu::rrlu;
 /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
 ///
 /// let m = from_vec2d(vec![
@@ -92,7 +92,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::RrLU;
+    /// use tensor4all_core::RrLU;
     ///
     /// let lu = RrLU::<f64>::new(3, 4, true);
     /// assert_eq!(lu.nrows(), 3);
@@ -117,7 +117,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
@@ -133,7 +133,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
@@ -149,7 +149,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -165,7 +165,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -186,7 +186,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -206,7 +206,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_core::{matrixlu::rrlu, RrLUOptions};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -224,7 +224,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_core::{matrixlu::rrlu, RrLUOptions};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -242,7 +242,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -279,7 +279,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -319,7 +319,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -345,7 +345,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -369,7 +369,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -386,7 +386,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_core::matrixlu::rrlu;
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -414,7 +414,7 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_core::{matrixlu::rrlu, RrLUOptions};
     /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
@@ -672,7 +672,7 @@ fn extract_lu_from_factorized<T: Scalar>(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::RrLUOptions;
+/// use tensor4all_core::RrLUOptions;
 ///
 /// // Default: rel_tol = 1e-14, no absolute tolerance, no rank limit
 /// let opts = RrLUOptions::default();
@@ -722,7 +722,7 @@ impl Default for RrLUOptions {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{matrixlu::rrlu_mut, RrLUOptions};
+/// use tensor4all_core::{matrixlu::rrlu_mut, RrLUOptions};
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let mut m = from_vec2d(vec![
@@ -832,7 +832,7 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrixlu::rrlu;
+/// use tensor4all_core::matrixlu::rrlu;
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
@@ -858,7 +858,7 @@ pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Rr
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrixlu::cols_to_l_matrix;
+/// use tensor4all_core::matrixlu::cols_to_l_matrix;
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// // Upper-triangular P (2x2)
@@ -910,7 +910,7 @@ pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::matrixlu::rows_to_u_matrix;
+/// use tensor4all_core::matrixlu::rows_to_u_matrix;
 /// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// // Lower-triangular P (2x2)

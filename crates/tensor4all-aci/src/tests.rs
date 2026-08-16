@@ -16,10 +16,10 @@ use crate::{
 use num_complex::Complex64;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
+use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
-use tensor4all_tcicore::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
 use tensor4all_tensorbackend::Matrix;
 
 fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> SimpleTensorTrain<f64> {

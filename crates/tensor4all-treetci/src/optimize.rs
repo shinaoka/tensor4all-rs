@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::Result;
 use tensor4all_core::CommonScalar;
-use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
+use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
 
 /// MVP optimization options for TreeTCI.
