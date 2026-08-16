@@ -1069,3 +1069,45 @@ fn test_treetn_missing_child_group_error() {
 
     std::fs::remove_file(&path).ok();
 }
+
+/// Regression for #606: the HDF5 C library is not thread-safe and its OS
+/// file locks can outlive H5Fclose, so concurrent crate calls used to fail
+/// intermittently with `H5Fopen(): unable to lock file, errno = 35`.
+/// The crate now serializes every public call through one process-wide lock
+/// and disables HDF5 file locking, so this must not happen.
+#[test]
+fn concurrent_save_load_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+
+    let thread_count = 4;
+    let iterations = 5;
+    let handles: Vec<_> = (0..thread_count)
+        .map(|t| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for i in 0..iterations {
+                    let file = path.join(format!("thread{t}_iter{i}.h5"));
+                    let file = file.to_str().unwrap();
+                    let data: Vec<f64> = (0..4).map(|k| (t * 100 + i * 10 + k) as f64).collect();
+                    let tensor = IdxTensor::from_dense(
+                        vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)],
+                        data.clone(),
+                    )
+                    .unwrap();
+
+                    // save then immediately load the SAME path: the
+                    // errno-35 window that serialization alone did not cover.
+                    save_itensor(file, "t", &tensor).unwrap();
+                    let loaded = load_itensor(file, "t").unwrap();
+                    let roundtrip = loaded.to_vec::<f64>().unwrap();
+                    assert_eq!(roundtrip, data, "thread {t} iteration {i} roundtrip");
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
