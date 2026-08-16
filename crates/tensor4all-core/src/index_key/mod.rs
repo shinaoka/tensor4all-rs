@@ -123,6 +123,12 @@ pub enum IndexKey {
     U64(u64),
     /// Keys up to 128 bits.
     U128(u128),
+    /// Keys up to 256 bits.
+    U256(Box<bnum::types::U256>),
+    /// Keys up to 512 bits.
+    U512(Box<bnum::types::U512>),
+    /// Keys up to 1024 bits.
+    U1024(Box<bnum::types::U1024>),
 }
 
 /// Encodes multi-indices over fixed local dimensions as [`IndexKey`] values.
@@ -180,7 +186,7 @@ impl FlatIndexer {
                         requested_bits: u64::MAX,
                     })?;
         }
-        if width_bits > 128 {
+        if width_bits > 1024 {
             return Err(IndexKeyError::WidthOverflow {
                 requested_bits: width_bits,
             });
@@ -226,18 +232,27 @@ impl FlatIndexer {
     /// ```
     pub fn encode(&self, idx: &[usize]) -> Result<IndexKey, IndexKeyError> {
         self.check(idx)?;
-        if self.width_bits <= 64 {
-            let mut key = 0u64;
-            for (&value, &offset) in idx.iter().zip(&self.offsets) {
-                key = fixed::place_u64(key, value, offset);
-            }
-            Ok(IndexKey::U64(key))
-        } else {
-            let mut key = 0u128;
-            for (&value, &offset) in idx.iter().zip(&self.offsets) {
-                key = fixed::place_u128(key, value, offset);
-            }
-            Ok(IndexKey::U128(key))
+        macro_rules! pack {
+            ($zero:expr, $place:path, $arm:expr) => {{
+                let mut key = $zero;
+                for (&value, &offset) in idx.iter().zip(&self.offsets) {
+                    key = $place(key, value, offset);
+                }
+                Ok($arm(key))
+            }};
+        }
+        match self.width_bits {
+            0..=64 => pack!(0u64, fixed::place_u64, IndexKey::U64),
+            65..=128 => pack!(0u128, fixed::place_u128, IndexKey::U128),
+            129..=256 => pack!(bnum::types::U256::ZERO, fixed::place_u256, |k| {
+                IndexKey::U256(Box::new(k))
+            }),
+            257..=512 => pack!(bnum::types::U512::ZERO, fixed::place_u512, |k| {
+                IndexKey::U512(Box::new(k))
+            }),
+            _ => pack!(bnum::types::U1024::ZERO, fixed::place_u1024, |k| {
+                IndexKey::U1024(Box::new(k))
+            }),
         }
     }
 

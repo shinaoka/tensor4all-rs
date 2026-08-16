@@ -75,6 +75,52 @@ fn width_selects_u64_then_u128() {
 }
 
 #[test]
+fn wide_arms_are_selected_by_width() {
+    for (bits, want_u256, want_u512, want_u1024) in [
+        (129usize, true, false, false),
+        (257, false, true, false),
+        (513, false, false, true),
+    ] {
+        let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
+        let key = indexer.encode(&vec![0usize; bits]).unwrap();
+        assert_eq!(matches!(key, IndexKey::U256(_)), want_u256, "{bits} bits");
+        assert_eq!(matches!(key, IndexKey::U512(_)), want_u512, "{bits} bits");
+        assert_eq!(matches!(key, IndexKey::U1024(_)), want_u1024, "{bits} bits");
+    }
+}
+
+/// #628: "the exact layout should not inflate every fixed-width key merely
+/// because the enum has a large inline variant".
+///
+/// 32 bytes is the floor while `U128(u128)` is inline: `u128` forces 16-byte
+/// alignment, so the enum rounds up to 32 once a discriminant is added. The
+/// bound therefore checks what it is meant to check — an inlined `U1024` would
+/// make this 128 bytes on its own, and boxing the wide arms is what keeps a
+/// `u64` key from paying for them.
+#[test]
+fn the_key_enum_stays_small() {
+    assert!(
+        std::mem::size_of::<IndexKey>() <= 32,
+        "IndexKey is {} bytes; wide arms must be boxed",
+        std::mem::size_of::<IndexKey>()
+    );
+}
+
+#[test]
+fn wide_encoding_is_injective_on_the_high_bits() {
+    let bits = 300usize;
+    let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
+    let mut low = vec![0usize; bits];
+    low[0] = 1;
+    let mut high = vec![0usize; bits];
+    high[bits - 1] = 1;
+    assert_ne!(
+        indexer.encode(&low).unwrap(),
+        indexer.encode(&high).unwrap()
+    );
+}
+
+#[test]
 fn an_empty_index_space_encodes_to_zero() {
     let indexer = FlatIndexer::try_new(&[]).unwrap();
     assert_eq!(indexer.width_bits(), 0);
