@@ -127,4 +127,5 @@ case and a dispatch-level case with scan_work > 64 forcing the hashed path.
 
 - Design (pre-implementation), luna: NEEDS-FIX → fixed (#638 right length
   check) → re-approved per findings; all other sections APPROVED.
-- Diff (post-implementation), luna: TBD (record verdict here).
+- Diff (post-implementation), luna: APPROVED — Correct-to-merge (commit
+  7decf945, base origin/main).
