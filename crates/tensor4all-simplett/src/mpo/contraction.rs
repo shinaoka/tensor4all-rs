@@ -152,6 +152,28 @@ where
         self.right_cache.clear();
     }
 
+    /// Validate that caller-supplied index pairs lie within the site physical
+    /// dims before any tensor indexing: `i_k` indexes s1 of MPO A, `j_k`
+    /// indexes s2 of MPO B (the same semantics as [`MPO::evaluate`](super::mpo::MPO::evaluate)).
+    fn validate_indices(
+        &self,
+        indices: &[(usize, usize)],
+        sites: std::ops::Range<usize>,
+    ) -> Result<()> {
+        for site in sites {
+            let (i_k, j_k) = indices[site];
+            let (s1_a, _s2_a, _s1_b, s2_b) = self.site_dims[site];
+            if i_k >= s1_a || j_k >= s2_b {
+                return Err(MPOError::IndexOutOfBounds {
+                    site,
+                    index: i_k.max(j_k),
+                    max: s1_a.max(s2_b),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate the contraction at a specific set of indices
     ///
     /// indices should be [(i1, j1), (i2, j2), ...] where:
@@ -172,6 +194,8 @@ where
         if self.is_empty() {
             return Err(MPOError::Empty);
         }
+
+        self.validate_indices(indices, 0..self.len())?;
 
         // Contract from left to right
         let first_a = self.mpo_a.site_tensor(0);
@@ -248,6 +272,13 @@ where
             return Ok(env);
         }
 
+        if indices.len() < n {
+            return Err(MPOError::InvalidOperation {
+                message: format!("Expected at least {} index pairs, got {}", n, indices.len()),
+            });
+        }
+        self.validate_indices(indices, 0..n)?;
+
         // Check cache
         let key: Vec<(usize, usize)> = indices[..n].to_vec();
         if let Some(cached) = self.left_cache.get(&key) {
@@ -303,6 +334,19 @@ where
             env[[0, 0]] = T::one();
             return Ok(env);
         }
+
+        // The recursion reads absolute positions indices[n] .. indices[len-1],
+        // so the slice must cover every site of the MPO.
+        if indices.len() < len {
+            return Err(MPOError::InvalidOperation {
+                message: format!(
+                    "Expected at least {} index pairs, got {}",
+                    len,
+                    indices.len()
+                ),
+            });
+        }
+        self.validate_indices(indices, n..len)?;
 
         // Check cache
         let key: Vec<(usize, usize)> = indices[n..].to_vec();

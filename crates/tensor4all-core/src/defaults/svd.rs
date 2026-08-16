@@ -390,10 +390,15 @@ pub fn svd_with<T>(
     })?;
     let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
-    let s_indices = vec![bond_index.clone(), bond_index.sim()];
+    // S carries a fresh `sim` leg (ITensors convention S: [l, l'], V: l');
+    // the SAME sim instance is shared with V^H so the returned triple
+    // reconstructs under plain contraction:
+    // U [left..., bond] · S [bond, sim] · V^H [sim, right...].
+    let sim_bond_index = bond_index.sim();
+    let s_indices = vec![bond_index.clone(), sim_bond_index.clone()];
     let s = IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
-    let mut vh_indices = vec![bond_index.clone()];
+    let mut vh_indices = vec![sim_bond_index];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
     let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {

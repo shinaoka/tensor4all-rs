@@ -262,6 +262,10 @@ fn factorize_svd_with_options(
     let bond_index = result.bond_index;
     let singular_values = result.singular_values;
     let rank = result.rank;
+    // Internal SVD plumbing: svd_for_factorize keeps the legacy convention
+    // (vh shares the original `bond` leg), so S's leftover `sim` leg is
+    // renamed back to `bond` after each contraction. The public svd_with API
+    // instead returns V with the `sim` leg and needs no compensation.
     let sim_bond_index = s.indices[1].clone();
 
     match canonical {
