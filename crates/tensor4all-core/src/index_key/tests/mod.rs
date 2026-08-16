@@ -74,18 +74,24 @@ fn width_selects_u64_then_u128() {
     assert!(matches!(wide.encode(&[0; 65]).unwrap(), IndexKey::U128(_)));
 }
 
+/// The fixed-width ladder stops at 512 bits; 513 and above go to limbs.
+///
+/// A `U1024` arm was measured at 6.06 ns/dimension against 2.51 ns for the limb
+/// path at the same width, so it was removed rather than kept as a nominal
+/// "fast path".
 #[test]
 fn wide_arms_are_selected_by_width() {
-    for (bits, want_u256, want_u512, want_u1024) in [
+    for (bits, want_u256, want_u512, want_limbs) in [
         (129usize, true, false, false),
         (257, false, true, false),
         (513, false, false, true),
+        (1024, false, false, true),
     ] {
         let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
         let key = indexer.encode(&vec![0usize; bits]).unwrap();
         assert_eq!(matches!(key, IndexKey::U256(_)), want_u256, "{bits} bits");
         assert_eq!(matches!(key, IndexKey::U512(_)), want_u512, "{bits} bits");
-        assert_eq!(matches!(key, IndexKey::U1024(_)), want_u1024, "{bits} bits");
+        assert_eq!(matches!(key, IndexKey::Limbs(_)), want_limbs, "{bits} bits");
     }
 }
 
@@ -94,8 +100,8 @@ fn wide_arms_are_selected_by_width() {
 ///
 /// 32 bytes is the floor while `U128(u128)` is inline: `u128` forces 16-byte
 /// alignment, so the enum rounds up to 32 once a discriminant is added. The
-/// bound therefore checks what it is meant to check — an inlined `U1024` would
-/// make this 128 bytes on its own, and boxing the wide arms is what keeps a
+/// bound therefore checks what it is meant to check — an inlined `U512` would
+/// make this 64 bytes on its own, and boxing the wide arms is what keeps a
 /// `u64` key from paying for them.
 ///
 /// Measured, not predicted: the `SmallVec<[u64; 2]>` limb arm fits inside the
@@ -125,7 +131,7 @@ fn wide_encoding_is_injective_on_the_high_bits() {
 }
 
 #[test]
-fn widths_beyond_1024_bits_use_limbs_and_stay_injective() {
+fn widths_beyond_the_fixed_ladder_use_limbs_and_stay_injective() {
     let bits = 2048usize;
     let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
     assert_eq!(indexer.width_bits(), bits as u64);

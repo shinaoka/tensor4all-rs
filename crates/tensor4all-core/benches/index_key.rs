@@ -12,7 +12,10 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use tensor4all_core::index_key::{FlatIndexer, IndexKey, KeyBuilder};
 
 /// Target widths in bits, straddling every fixed/dynamic boundary.
-const WIDTHS: [u64; 8] = [64, 128, 256, 512, 1024, 1025, 2048, 4096];
+///
+/// The ladder now ends at `U512`, so 512/513 is the crossing to watch; 1024 and
+/// 1025 are kept because #628 named them and they show the limb path's scaling.
+const WIDTHS: [u64; 9] = [64, 128, 256, 512, 513, 1024, 1025, 2048, 4096];
 
 /// Entries inserted into the maps under test.
 const ENTRIES: usize = 1024;

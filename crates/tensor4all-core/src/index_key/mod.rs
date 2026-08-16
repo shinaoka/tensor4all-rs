@@ -5,8 +5,18 @@
 //! `ceil(log2(d_i))` bits at a fixed offset, so encoding is shift-and-OR with
 //! no multiplication, and two multi-indices collide only if they are equal.
 //!
-//! Widths up to 1024 bits use fixed-width fast paths; wider index spaces fall
+//! Widths up to 512 bits use fixed-width fast paths; wider index spaces fall
 //! back to a limb-backed representation with the same semantics.
+//!
+//! The ladder stops at 512 bits because that is where a fixed-width bignum
+//! stops paying. Measured per-dimension encode cost is 2.12 ns at `U256` and
+//! 2.86 ns at `U512` against 2.52–2.71 ns for limbs, while a `U1024` arm cost
+//! 6.02 ns — 2.3x the limb path at the same width. A generic shift over
+//! sixteen digits touches every digit for each component, whereas a limb write
+//! touches the one or two the component actually spans.
+//!
+//! These figures only hold with the placement helpers inlined; see `fixed` for
+//! why that attribute is load-bearing.
 
 use thiserror::Error;
 
@@ -128,9 +138,7 @@ pub enum IndexKey {
     U256(Box<bnum::types::U256>),
     /// Keys up to 512 bits.
     U512(Box<bnum::types::U512>),
-    /// Keys up to 1024 bits.
-    U1024(Box<bnum::types::U1024>),
-    /// Keys wider than 1024 bits, as little-endian 64-bit limbs.
+    /// Keys wider than 512 bits, as little-endian 64-bit limbs.
     Limbs(dynamic::Limbs),
 }
 
@@ -251,9 +259,6 @@ impl FlatIndexer {
             }),
             257..=512 => pack!(bnum::types::U512::ZERO, fixed::place_u512, |k| {
                 IndexKey::U512(Box::new(k))
-            }),
-            513..=1024 => pack!(bnum::types::U1024::ZERO, fixed::place_u1024, |k| {
-                IndexKey::U1024(Box::new(k))
             }),
             _ => {
                 let mut limbs = dynamic::zeroed(self.width_bits);
@@ -395,9 +400,6 @@ impl KeyBuilder {
             IndexKey::U512(value) => {
                 dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
             }
-            IndexKey::U1024(value) => {
-                dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
-            }
             IndexKey::Limbs(value) => {
                 dynamic::place_limbs(&mut self.limbs, value, key_width_bits, offset);
             }
@@ -439,9 +441,6 @@ impl KeyBuilder {
                 &self.limbs,
             )))),
             257..=512 => IndexKey::U512(Box::new(bnum::types::U512::from_digits(digits::<8>(
-                &self.limbs,
-            )))),
-            513..=1024 => IndexKey::U1024(Box::new(bnum::types::U1024::from_digits(digits::<16>(
                 &self.limbs,
             )))),
             _ => IndexKey::Limbs(self.limbs),
