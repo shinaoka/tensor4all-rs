@@ -10,6 +10,7 @@
 
 use thiserror::Error;
 
+mod dynamic;
 mod fixed;
 
 /// Failures from index-key construction and encoding.
@@ -129,6 +130,8 @@ pub enum IndexKey {
     U512(Box<bnum::types::U512>),
     /// Keys up to 1024 bits.
     U1024(Box<bnum::types::U1024>),
+    /// Keys wider than 1024 bits, as little-endian 64-bit limbs.
+    Limbs(dynamic::Limbs),
 }
 
 /// Encodes multi-indices over fixed local dimensions as [`IndexKey`] values.
@@ -149,7 +152,7 @@ pub enum IndexKey {
 #[derive(Debug, Clone)]
 pub struct FlatIndexer {
     dims: Vec<usize>,
-    offsets: Vec<u32>,
+    offsets: Vec<u64>,
     width_bits: u64,
 }
 
@@ -175,21 +178,13 @@ impl FlatIndexer {
         for (position, &dim) in local_dims.iter().enumerate() {
             let bits =
                 dimension_bits(dim).map_err(|_| IndexKeyError::ZeroDimension { position })?;
-            let offset = u32::try_from(width_bits).map_err(|_| IndexKeyError::WidthOverflow {
-                requested_bits: width_bits,
-            })?;
-            offsets.push(offset);
+            offsets.push(width_bits);
             width_bits =
                 width_bits
                     .checked_add(u64::from(bits))
                     .ok_or(IndexKeyError::WidthOverflow {
                         requested_bits: u64::MAX,
                     })?;
-        }
-        if width_bits > 1024 {
-            return Err(IndexKeyError::WidthOverflow {
-                requested_bits: width_bits,
-            });
         }
         Ok(Self {
             dims: local_dims.to_vec(),
@@ -236,6 +231,13 @@ impl FlatIndexer {
             ($zero:expr, $place:path, $arm:expr) => {{
                 let mut key = $zero;
                 for (&value, &offset) in idx.iter().zip(&self.offsets) {
+                    // Offsets are below the arm's width here, so this cannot
+                    // truncate; the conversion is checked rather than cast so
+                    // that a future width change cannot silently wrap.
+                    let offset =
+                        u32::try_from(offset).map_err(|_| IndexKeyError::WidthOverflow {
+                            requested_bits: self.width_bits,
+                        })?;
                     key = $place(key, value, offset);
                 }
                 Ok($arm(key))
@@ -250,9 +252,16 @@ impl FlatIndexer {
             257..=512 => pack!(bnum::types::U512::ZERO, fixed::place_u512, |k| {
                 IndexKey::U512(Box::new(k))
             }),
-            _ => pack!(bnum::types::U1024::ZERO, fixed::place_u1024, |k| {
+            513..=1024 => pack!(bnum::types::U1024::ZERO, fixed::place_u1024, |k| {
                 IndexKey::U1024(Box::new(k))
             }),
+            _ => {
+                let mut limbs = dynamic::zeroed(self.width_bits);
+                for (&value, &offset) in idx.iter().zip(&self.offsets) {
+                    dynamic::place(&mut limbs, value, offset);
+                }
+                Ok(IndexKey::Limbs(limbs))
+            }
         }
     }
 

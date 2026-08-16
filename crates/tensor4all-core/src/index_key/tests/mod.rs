@@ -97,6 +97,10 @@ fn wide_arms_are_selected_by_width() {
 /// bound therefore checks what it is meant to check — an inlined `U1024` would
 /// make this 128 bytes on its own, and boxing the wide arms is what keeps a
 /// `u64` key from paying for them.
+///
+/// Measured, not predicted: the `SmallVec<[u64; 2]>` limb arm fits inside the
+/// space `u128`'s alignment already reserved, so it did not move this bound.
+/// If a future arm does move it, box that arm rather than raising the number.
 #[test]
 fn the_key_enum_stays_small() {
     assert!(
@@ -118,6 +122,57 @@ fn wide_encoding_is_injective_on_the_high_bits() {
         indexer.encode(&low).unwrap(),
         indexer.encode(&high).unwrap()
     );
+}
+
+#[test]
+fn widths_beyond_1024_bits_use_limbs_and_stay_injective() {
+    let bits = 2048usize;
+    let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
+    assert_eq!(indexer.width_bits(), bits as u64);
+
+    let zero = indexer.encode(&vec![0usize; bits]).unwrap();
+    assert!(matches!(zero, IndexKey::Limbs(_)));
+
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(zero);
+    for position in [0usize, 63, 64, 65, 1023, 1024, 1025, 2047] {
+        let mut idx = vec![0usize; bits];
+        idx[position] = 1;
+        let key = indexer.encode(&idx).unwrap();
+        assert!(
+            seen.insert(key),
+            "collision with a single bit set at {position}"
+        );
+    }
+}
+
+#[test]
+fn a_value_straddling_a_limb_boundary_round_trips() {
+    // A radix-64 dimension needs 6 bits, so packing 40 of them puts several
+    // values across a 64-bit limb boundary.
+    let dims = vec![64usize; 40];
+    let indexer = FlatIndexer::try_new(&dims).unwrap();
+    let mut a = vec![0usize; 40];
+    let mut b = vec![0usize; 40];
+    a[10] = 63;
+    b[10] = 62;
+    assert_ne!(indexer.encode(&a).unwrap(), indexer.encode(&b).unwrap());
+}
+
+#[test]
+fn every_single_bit_position_is_distinct_across_limbs() {
+    let bits = 1500usize;
+    let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    for position in 0..bits {
+        let mut idx = vec![0usize; bits];
+        idx[position] = 1;
+        assert!(
+            seen.insert(indexer.encode(&idx).unwrap()),
+            "collision at bit {position}"
+        );
+    }
+    assert_eq!(seen.len(), bits);
 }
 
 #[test]
