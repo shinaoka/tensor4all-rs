@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed. The pre-implementation review gate is pending.
+Proposed and revised after the 2026-08-17 readiness comment on tracking issue
+[#648](https://github.com/tensor4all/tensor4all-rs/issues/648). The formal
+cross-model pre-implementation review gate is still pending.
 
 ## Goal
 
@@ -40,8 +42,25 @@ Use these public names:
 - `PatchingOptions`
 - `PatchSplitStrategy`
 
-`Projector` remains full-index-based and is copied without changing its identity
-semantics. Do not add aliases for the old TT names in the new crate.
+`Projector` remains full-index-based. Do not add aliases for the old TT names in
+the new crate.
+
+## Prerequisites
+
+1. Resolve [#634](https://github.com/tensor4all/tensor4all-rs/issues/634) in the
+   deprecated crate before copying `Projector`. The corrected implementation
+   must use one canonical entry ordering consistent with `DynIndex::Eq` and
+   `DynIndex::Hash` (currently ID, tags, and prime level) for both projector
+   hashing and deterministic comparison. Equal projectors must hash identically
+   regardless of insertion order or `HashMap` seed, and the deterministic
+   comparator may return `Equal` only for fully equal projectors. The fix also
+   supplies fallible coordinate validation and transactional partition mutation;
+   the new crate copies that validated implementation rather than the buggy
+   `origin/main` version.
+2. Track the typed TreeTCI termination result as a separate, independently
+   mergeable `tensor4all-treetci` issue and land it before implementing adaptive
+   interpolation here. Add its issue number to this document and #648 once it
+   exists. The required termination contract is specified below.
 
 ## Subdomain model
 
@@ -62,6 +81,12 @@ The public API provides TreeTN-specific vocabulary:
 - `node_count`, `is_empty`, `all_indices`, `site_index_network`,
 - `max_bond_dim`, `project`, `norm`, `norm_squared`, `truncate`, `contract`, and
   `inner`.
+
+`norm` and `norm_squared` take `&mut self`, canonicalize the stored TreeTN to the
+stored center, and delegate to the corresponding TreeTN method. This makes the
+canonicalization mutation and cost explicit and avoids a hidden whole-network
+clone. `PartitionedTreeTN::norm` likewise takes `&mut self`; `inner` remains
+non-mutating.
 
 Projection retains every site index and masks non-selected coordinates with
 `IdxTensor::mask_index`. Rebuild the TreeTN from its local tensors after masking
@@ -131,11 +156,17 @@ full network. Zero-active and one-active patches use exact rank-one TreeTNs.
 Sampled-zero detection remains an explicit finite-sampling policy.
 
 Adaptive acceptance must distinguish convergence from max-iteration and
-rank-cap termination. Extend `tensor4all-treetci` with a typed termination value
-in its optimization/run result and use that value here; do not infer convergence
-from only the last error sample. A patch is accepted only for `Converged` with
-an accepted error at or below tolerance. Rejected patches split on the first
-remaining full index in `patch_order`.
+rank-cap termination. The prerequisite TreeTCI issue replaces the bare result
+tuple with a typed run result carrying `Converged`, `MaxBondDim`, or
+`MaxIterations`; this crate must not infer termination from only the last error
+sample. When convergence and rank saturation become true in the same iteration,
+`Converged` takes precedence if the complete convergence criterion is satisfied;
+otherwise the result is `MaxBondDim`. Exhausting the iteration budget without
+either condition yields `MaxIterations`.
+
+A patch is accepted only for `Converged` with an accepted error at or below
+tolerance. Rejected patches split on the first remaining full index in
+`patch_order`.
 
 The initial port does not recycle internal TreeTCI pivots between parent and
 child patches because the TreeTCI public result does not expose a stable global
@@ -149,9 +180,10 @@ TreeTN methods above. `ExactParameterGain` counts local tensor payload sizes by
 iterating nodes; products and sums use checked arithmetic. Split candidates are
 full external indices and remain independent of tree traversal order.
 
-Volume-proportional truncation keeps the existing absolute squared-tail budget
-semantics. TreeTN `TruncationOptions` and `SvdTruncationPolicy` replace
-itensorlike options.
+Volume-proportional truncation keeps the absolute squared-tail budget semantics
+established by closed issue
+[#554](https://github.com/tensor4all/tensor4all-rs/issues/554). TreeTN
+`TruncationOptions` and `SvdTruncationPolicy` replace itensorlike options.
 
 ## Errors
 
@@ -190,6 +222,9 @@ Minimum focused matrix:
 - multiple external indices on one general TreeTN node;
 - fixed indices at leaves and internal vertices;
 - same-ID indices differing by prime level or tags;
+- equal projectors hashing identically across insertion orders and map seeds;
+- projector comparator equality if and only if full projector equality;
+- same-ID/different-metadata projectors used successfully as `HashMap` keys;
 - invalid center, topology, projector index, coordinate, and options;
 - transactional insert/append failures;
 - strict addition, contraction, truncation, and deterministic `to_treetn`;
@@ -218,4 +253,9 @@ impact attestation in the worklog/PR body.
 
 ## Review record
 
-Pending.
+- 2026-08-17 issue readiness comment: conditional approval after making #634 an
+  explicit prerequisite, splitting the TreeTCI termination API into its own
+  issue, fixing norm receiver semantics, and adding cross-links. These changes
+  are recorded above.
+- Formal cross-model reviewer and verdict: pending. The issue comment does not
+  by itself clear the repository's delegated-implementation review gate.
