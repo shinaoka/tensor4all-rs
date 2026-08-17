@@ -97,10 +97,13 @@ where
     let ndims = lower.len();
     let basis = get_chebyshev_grid(polynomial_degree)?;
     let site_dim = site_dim(ndims)?;
-    let basis_dim = pow_usize(polynomial_degree + 1, ndims)?;
+    let basis_order = polynomial_degree
+        .checked_add(1)
+        .ok_or_else(|| invalid_argument("polynomial basis order overflows usize"))?;
+    let basis_dim = pow_usize(basis_order, ndims)?;
     let mut cores = Vec::with_capacity(num_bits);
 
-    cores.push(left_core_nd(&f, lower, upper, &basis, site_dim, basis_dim));
+    cores.push(left_core_nd(&f, lower, upper, &basis, site_dim, basis_dim)?);
 
     let center_1d = interpolation_tensor(&basis)?;
     let center = direct_product_core_tensors(&vec![center_1d; ndims])?;
@@ -430,10 +433,13 @@ where
     let ndims = lower.len();
     let basis = get_chebyshev_grid(polynomial_degree)?;
     let site_dim = site_dim(ndims)?;
-    let basis_dim = pow_usize(polynomial_degree + 1, ndims)?;
+    let basis_order = polynomial_degree
+        .checked_add(1)
+        .ok_or_else(|| invalid_argument("polynomial basis order overflows usize"))?;
+    let basis_dim = pow_usize(basis_order, ndims)?;
     let mut cores = Vec::with_capacity(num_bits);
 
-    cores.push(left_core_nd(&f, lower, upper, &basis, site_dim, basis_dim));
+    cores.push(left_core_nd(&f, lower, upper, &basis, site_dim, basis_dim)?);
 
     let center_1d = angular_local_lagrange(&basis, window_radius)?;
     let center = direct_product_core_tensors(&vec![center_1d; ndims])?;
@@ -542,7 +548,7 @@ where
     F: Fn(f64) -> f64,
 {
     let values = eval_interval_1d(f, interval, basis);
-    let test_points = dense_test_points(basis.len());
+    let test_points = dense_test_points(basis.len())?;
     let mut max_error = 0.0_f64;
 
     for t in test_points {
@@ -600,8 +606,8 @@ where
     let ndims = interval.ndims();
     let basis_len = basis.len();
     let basis_dim = pow_usize(basis_len, ndims)?;
-    let values = eval_interval_nd(f, interval, basis, basis_dim);
-    let test_points = dense_test_points(basis_len);
+    let values = eval_interval_nd(f, interval, basis, basis_dim)?;
+    let test_points = dense_test_points(basis_len)?;
     let test_dims = vec![test_points.len(); ndims];
     let lengths = interval.lengths();
     let mut max_error = 0.0_f64;
@@ -614,7 +620,7 @@ where
 
         let mut interp_value = 0.0;
         for alpha_index in MultiIndexIter::new(&vec![basis_len; ndims]) {
-            let alpha_flat = flatten_index(&alpha_index, basis_len);
+            let alpha_flat = flatten_index(&alpha_index, basis_len)?;
             let mut basis_value = 1.0;
             for d in 0..ndims {
                 basis_value *= basis.evaluate(alpha_index[d], ts[d])?;
@@ -702,14 +708,26 @@ fn pow_usize(base: usize, exp: usize) -> Result<usize> {
     Ok(result)
 }
 
-fn flatten_index(index: &[usize], base: usize) -> usize {
+pub(crate) fn checked_dim_add(lhs: usize, rhs: usize, description: &str) -> Result<usize> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| invalid_argument(format!("{description} overflows usize")))
+}
+
+pub(crate) fn flatten_index(index: &[usize], base: usize) -> Result<usize> {
     let mut flat = 0usize;
     let mut stride = 1usize;
     for &value in index {
-        flat += value * stride;
-        stride *= base;
+        let term = value
+            .checked_mul(stride)
+            .ok_or_else(|| invalid_argument("flat index offset overflows usize"))?;
+        flat = flat
+            .checked_add(term)
+            .ok_or_else(|| invalid_argument("flat index offset overflows usize"))?;
+        stride = stride
+            .checked_mul(base)
+            .ok_or_else(|| invalid_argument("flat index stride overflows usize"))?;
     }
-    flat
+    Ok(flat)
 }
 
 fn decode_index(mut flat: usize, base: usize, ndims: usize) -> Vec<usize> {
@@ -728,36 +746,43 @@ fn left_core_nd<F>(
     basis: &LagrangePolynomials,
     site_dim: usize,
     basis_dim: usize,
-) -> Tensor3<f64>
+) -> Result<Tensor3<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
     let ndims = lower.len();
     let basis_len = basis.len();
-    Tensor3::from_fn([1, site_dim, basis_dim], |[_, site, beta_flat]| {
-        let sigmas = decode_index(site, 2, ndims);
-        let betas = decode_index(beta_flat, basis_len, ndims);
-        let coords: Vec<_> = (0..ndims)
-            .map(|d| {
-                let local = (sigmas[d] as f64 + basis.grid()[betas[d]]) / 2.0;
-                lower[d] + (upper[d] - lower[d]) * local
-            })
-            .collect();
-        f(&coords)
-    })
+    Ok(Tensor3::try_from_fn(
+        [1, site_dim, basis_dim],
+        |[_, site, beta_flat]| {
+            let sigmas = decode_index(site, 2, ndims);
+            let betas = decode_index(beta_flat, basis_len, ndims);
+            let coords: Vec<_> = (0..ndims)
+                .map(|d| {
+                    let local = (sigmas[d] as f64 + basis.grid()[betas[d]]) / 2.0;
+                    lower[d] + (upper[d] - lower[d]) * local
+                })
+                .collect();
+            f(&coords)
+        },
+    )?)
 }
 
 fn right_core_1d(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
     let basis_len = basis.len();
-    let mut data = Vec::with_capacity(basis_len * 2);
+    let data_len = basis_len
+        .checked_mul(2)
+        .ok_or_else(|| invalid_argument("right interpolation core size overflows usize"))?;
+    let mut data = Vec::with_capacity(data_len);
     for alpha in 0..basis_len {
         for sigma in 0..2 {
             data.push(basis.evaluate(alpha, sigma as f64 / 2.0)?);
         }
     }
-    Ok(Tensor3::from_fn([basis_len, 2, 1], |[alpha, sigma, _]| {
-        data[alpha * 2 + sigma]
-    }))
+    Ok(Tensor3::try_from_fn(
+        [basis_len, 2, 1],
+        |[alpha, sigma, _]| data[alpha * 2 + sigma],
+    )?)
 }
 
 fn compress_train(
@@ -793,7 +818,7 @@ fn eval_interval_nd<F>(
     interval: &NInterval,
     basis: &LagrangePolynomials,
     basis_dim: usize,
-) -> Vec<f64>
+) -> Result<Vec<f64>>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -801,13 +826,13 @@ where
     let lengths = interval.lengths();
     let mut values = vec![0.0; basis_dim];
     for alpha_index in MultiIndexIter::new(&vec![basis.len(); ndims]) {
-        let alpha_flat = flatten_index(&alpha_index, basis.len());
+        let alpha_flat = flatten_index(&alpha_index, basis.len())?;
         let coords: Vec<_> = (0..ndims)
             .map(|d| interval.start()[d] + lengths[d] * basis.grid()[alpha_index[d]])
             .collect();
         values[alpha_flat] = f(&coords);
     }
-    values
+    Ok(values)
 }
 
 fn build_refined_qtt<F, S>(
@@ -835,7 +860,7 @@ where
     let mut first_safe_values = Vec::new();
     for (site, interval) in domain.split()?.into_iter().enumerate() {
         if is_safe(&interval, 0) {
-            let values = eval_interval_nd(f, &interval, basis, basis_dim);
+            let values = eval_interval_nd(f, &interval, basis, basis_dim)?;
             first_safe_values.push((site, values));
         } else {
             let next = first_unsafe.len();
@@ -844,7 +869,12 @@ where
         }
     }
 
-    let mut first = Tensor3::from_elem([1, site_dim, basis_dim + first_unsafe.len()], 0.0);
+    let first_right_dim = checked_dim_add(
+        basis_dim,
+        first_unsafe.len(),
+        "first refined core right dimension",
+    )?;
+    let mut first = Tensor3::try_from_elem([1, site_dim, first_right_dim], 0.0)?;
     for (site, values) in first_safe_values {
         for (beta, value) in values.into_iter().enumerate() {
             first[[0, site, beta]] = value;
@@ -864,7 +894,7 @@ where
         for (interval_index, interval) in intervals.iter().enumerate() {
             for (site, subinterval) in interval.split()?.into_iter().enumerate() {
                 if is_safe(&subinterval, level) {
-                    let values = eval_interval_nd(f, &subinterval, basis, basis_dim);
+                    let values = eval_interval_nd(f, &subinterval, basis, basis_dim)?;
                     safe_values.push((interval_index, site, values));
                 } else {
                     let next = next_intervals.len();
@@ -874,10 +904,13 @@ where
             }
         }
 
-        let mut core = Tensor3::from_elem(
-            [basis_dim + qell, site_dim, basis_dim + next_intervals.len()],
-            0.0,
-        );
+        let core_left_dim = checked_dim_add(basis_dim, qell, "refined core left dimension")?;
+        let core_right_dim = checked_dim_add(
+            basis_dim,
+            next_intervals.len(),
+            "refined core right dimension",
+        )?;
+        let mut core = Tensor3::try_from_elem([core_left_dim, site_dim, core_right_dim], 0.0)?;
         copy_core(&center, &mut core, 0, 0);
 
         for (interval_index, site, values) in safe_values {
@@ -942,7 +975,8 @@ where
 {
     let right_1d = right_core_1d(basis)?;
     let right = direct_product_core_tensors(&vec![right_1d; ndims])?;
-    let mut last = Tensor3::from_elem([basis_dim + intervals.len(), site_dim, 1], 0.0);
+    let last_left_dim = checked_dim_add(basis_dim, intervals.len(), "last core left dimension")?;
+    let mut last = Tensor3::try_from_elem([last_left_dim, site_dim, 1], 0.0)?;
     copy_core(&right, &mut last, 0, 0);
 
     for (interval_index, interval) in intervals.iter().enumerate() {
@@ -1069,7 +1103,11 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
     })?;
 
     for core in cores.iter().take(k_out).skip(1) {
-        let mut next = Matrix::zeros(current.nrows() * core.site_dim(), core.right_dim());
+        let next_rows = current
+            .nrows()
+            .checked_mul(core.site_dim())
+            .ok_or_else(|| invalid_argument("inverse QTT matrix row count overflows usize"))?;
+        let mut next = Matrix::zeros(next_rows, core.right_dim());
         for row in 0..current.nrows() {
             for site in 0..core.site_dim() {
                 for right in 0..core.right_dim() {
@@ -1138,11 +1176,17 @@ fn apply_stage2(
     Ok(coarse)
 }
 
-fn dense_test_points(basis_len: usize) -> Vec<f64> {
-    let denominator = (2 * basis_len - 1) as f64;
-    (0..2 * basis_len)
+pub(crate) fn dense_test_points(basis_len: usize) -> Result<Vec<f64>> {
+    let doubled = basis_len
+        .checked_mul(2)
+        .ok_or_else(|| invalid_argument("dense test-point count overflows usize"))?;
+    let denominator = doubled
+        .checked_sub(1)
+        .ok_or_else(|| invalid_argument("dense test-point denominator underflows usize"))?
+        as f64;
+    Ok((0..doubled)
         .map(|i| 0.5 * (1.0 - ((i as f64) * std::f64::consts::PI / denominator).cos()))
-        .collect()
+        .collect())
 }
 
 struct MultiIndexIter {

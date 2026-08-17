@@ -2,6 +2,7 @@ use approx::assert_relative_eq;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
 
+use crate::interpolation::{checked_dim_add, dense_test_points, flatten_index};
 use crate::interval::NInterval;
 
 use super::*;
@@ -637,4 +638,11 @@ fn validation_errors() {
     assert!(interpolate_single_scale(|x| x, 0.0, 1.0, 1, 4, &opts).is_err());
     assert!(interpolate_single_scale_nd(|x| x[0], &[0.0], &[1.0, 2.0], 3, 4, &opts).is_err());
     assert!(interpolate_single_scale_sparse(|x| x, 0.0, 1.0, 3, 3, 2, &opts).is_err());
+}
+
+#[test]
+fn interpolation_size_helpers_reject_overflow() {
+    assert!(checked_dim_add(usize::MAX, 1, "test").is_err());
+    assert!(flatten_index(&[usize::MAX, usize::MAX], 2).is_err());
+    assert!(dense_test_points(usize::MAX).is_err());
 }
