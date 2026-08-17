@@ -1187,7 +1187,7 @@ impl IdxTensor {
         axes_a: &[usize],
         rhs_axis_classes: &[usize],
         axes_b: &[usize],
-    ) -> Vec<usize> {
+    ) -> Result<Vec<usize>> {
         debug_assert_eq!(axes_a.len(), axes_b.len());
 
         fn find(parent: &mut [usize], value: usize) -> usize {
@@ -1205,26 +1205,31 @@ impl IdxTensor {
             }
         }
 
-        let lhs_payload_rank = lhs_axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0);
-        let rhs_payload_rank = rhs_axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0);
+        let lhs_payload_rank = match lhs_axis_classes.iter().copied().max() {
+            Some(value) => value
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("left payload rank overflows usize"))?,
+            None => 0,
+        };
+        let rhs_payload_rank = match rhs_axis_classes.iter().copied().max() {
+            Some(value) => value
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("right payload rank overflows usize"))?,
+            None => 0,
+        };
         let rhs_offset = lhs_payload_rank;
-        let mut parent: Vec<usize> = (0..lhs_payload_rank + rhs_payload_rank).collect();
+        let parent_len = lhs_payload_rank
+            .checked_add(rhs_payload_rank)
+            .ok_or_else(|| anyhow::anyhow!("payload rank sum overflows usize"))?;
+        let mut parent: Vec<usize> = (0..parent_len).collect();
 
         for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
             union(
                 &mut parent,
                 lhs_axis_classes[lhs_axis],
-                rhs_offset + rhs_axis_classes[rhs_axis],
+                rhs_offset
+                    .checked_add(rhs_axis_classes[rhs_axis])
+                    .ok_or_else(|| anyhow::anyhow!("rhs axis-class offset overflows usize"))?,
             );
         }
 
@@ -1254,7 +1259,10 @@ impl IdxTensor {
         }
         for (axis, &class_id) in rhs_axis_classes.iter().enumerate() {
             if !rhs_contracted[axis] {
-                let root = find(&mut parent, rhs_offset + class_id);
+                let rhs_class = rhs_offset
+                    .checked_add(class_id)
+                    .ok_or_else(|| anyhow::anyhow!("rhs axis-class offset overflows usize"))?;
+                let root = find(&mut parent, rhs_class);
                 let class = *root_to_class.entry(root).or_insert_with(|| {
                     let value = next_class;
                     next_class += 1;
@@ -1264,7 +1272,7 @@ impl IdxTensor {
             }
         }
 
-        axis_classes
+        Ok(axis_classes)
     }
 
     fn scale_subscripts(rank: usize) -> Result<EinsumSubscripts> {
@@ -3455,7 +3463,7 @@ impl IdxTensor {
                 other.storage.axis_classes(),
                 &spec.axes_b,
             )
-        });
+        })?;
 
         if profile_pairwise_contract_section("structured_check", || {
             self.should_use_structured_payload_contract(other)
@@ -3616,7 +3624,7 @@ impl IdxTensor {
             &spec.axes_a,
             other.storage.axis_classes(),
             &spec.axes_b,
-        );
+        )?;
 
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(
@@ -3695,7 +3703,7 @@ impl IdxTensor {
             &[],
             other.storage.axis_classes(),
             &[],
-        );
+        )?;
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(other, result_indices, &[], &[]);
         }
