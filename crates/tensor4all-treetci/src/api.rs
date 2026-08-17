@@ -121,7 +121,13 @@ where
 
     // Initialize max_sample_value via batch evaluate
     let n_sites = tci.local_dims.len();
-    let flat: Vec<usize> = pivots.iter().flat_map(|p| p.iter().copied()).collect();
+    let flat_len = n_sites
+        .checked_mul(pivots.len())
+        .ok_or_else(|| anyhow::anyhow!("initial pivot batch size overflowed usize"))?;
+    let mut flat = Vec::with_capacity(flat_len);
+    for pivot in &pivots {
+        flat.extend_from_slice(pivot);
+    }
     let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
     let init_vals = evaluate(batch)?;
     if init_vals.len() != pivots.len() {

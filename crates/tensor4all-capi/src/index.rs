@@ -347,6 +347,11 @@ pub extern "C" fn t4a_index_tags(
                 return T4A_INVALID_ARGUMENT;
             }
         };
+        if required_len > isize::MAX as usize {
+            let message = "index tags output byte span exceeds isize::MAX";
+            set_last_error(message);
+            return T4A_INVALID_ARGUMENT;
+        }
         *out_len = required_len;
 
         if buf.is_null() {

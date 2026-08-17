@@ -225,6 +225,13 @@ fn test_with_site_dims_mismatch_length() {
 }
 
 #[test]
+fn test_with_site_dims_rejects_empty_site_dimensions() {
+    let tt = SimpleTensorTrain::<f64>::constant(&[1], 1.0);
+    let error = TTCache::with_site_dims(&tt, vec![Vec::new()]).unwrap_err();
+    assert!(error.to_string().contains("at least one dimension"));
+}
+
+#[test]
 fn test_with_site_dims_mismatch_product() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     // Product doesn't match site dim

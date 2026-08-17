@@ -293,6 +293,11 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Validate that site_dims products match tensor site dimensions
         for (i, (tensor, dims)) in tt.site_tensors().iter().zip(site_dims.iter()).enumerate() {
+            if dims.is_empty() {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: format!("site_dims at site {i} must contain at least one dimension"),
+                });
+            }
             let expected = dims
                 .iter()
                 .try_fold(1usize, |acc, &dim| acc.checked_mul(dim));
