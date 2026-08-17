@@ -297,11 +297,11 @@ where
             tci.j_set[site] = IndexSet::from_vec(vec![first_pivot[site + 1..].to_vec()]);
         }
         for site in 0..n {
-            tci.pi_i_set[site] = tci.build_pi_i_set(site);
-            tci.pi_j_set[site] = tci.build_pi_j_set(site);
+            tci.pi_i_set[site] = tci.build_pi_i_set(site)?;
+            tci.pi_j_set[site] = tci.build_pi_j_set(site)?;
         }
         for bond in 0..n - 1 {
-            let pi = tci.build_pi(bond, f);
+            let pi = tci.build_pi(bond, f)?;
             tci.pi[bond] = pi;
         }
 
@@ -618,7 +618,7 @@ where
                 self.update_site_tensor_from_matrix(bond + 1, cross.pivot_rows())?;
                 self.pivot_matrices[bond] = cross.pivot_matrix();
                 if bond + 1 < self.len() - 1 {
-                    self.refresh_pi_rows(bond + 1, f);
+                    self.refresh_pi_rows(bond + 1, f)?;
                 }
             }
         }
@@ -633,7 +633,7 @@ where
                 self.update_site_tensor_from_matrix(bond, cross.pivot_cols())?;
                 self.pivot_matrices[bond] = cross.pivot_matrix();
                 if bond > 0 {
-                    self.refresh_pi_cols(bond - 1, f);
+                    self.refresh_pi_cols(bond - 1, f)?;
                 }
             }
         }
@@ -645,8 +645,14 @@ where
         Ok(())
     }
 
-    fn build_pi_i_set(&self, site: usize) -> IndexSet<MultiIndex> {
-        let mut values = Vec::with_capacity(self.i_set[site].len() * self.local_dims[site]);
+    fn build_pi_i_set(&self, site: usize) -> Result<IndexSet<MultiIndex>> {
+        let capacity = self.i_set[site]
+            .len()
+            .checked_mul(self.local_dims[site])
+            .ok_or_else(|| TCIError::InvalidOperation {
+                message: "TensorCI1 PiIset size overflowed usize".to_string(),
+            })?;
+        let mut values = Vec::with_capacity(capacity);
         for i_multi in self.i_set[site].values() {
             for local in 0..self.local_dims[site] {
                 let mut value = i_multi.clone();
@@ -654,11 +660,16 @@ where
                 values.push(value);
             }
         }
-        IndexSet::from_vec(values)
+        Ok(IndexSet::from_vec(values))
     }
 
-    fn build_pi_j_set(&self, site: usize) -> IndexSet<MultiIndex> {
-        let mut values = Vec::with_capacity(self.local_dims[site] * self.j_set[site].len());
+    fn build_pi_j_set(&self, site: usize) -> Result<IndexSet<MultiIndex>> {
+        let capacity = self.local_dims[site]
+            .checked_mul(self.j_set[site].len())
+            .ok_or_else(|| TCIError::InvalidOperation {
+                message: "TensorCI1 PiJset size overflowed usize".to_string(),
+            })?;
+        let mut values = Vec::with_capacity(capacity);
         for local in 0..self.local_dims[site] {
             for j_multi in self.j_set[site].values() {
                 let mut value = vec![local];
@@ -666,16 +677,20 @@ where
                 values.push(value);
             }
         }
-        IndexSet::from_vec(values)
+        Ok(IndexSet::from_vec(values))
     }
 
-    fn build_pi<F>(&mut self, bond: usize, f: &F) -> Matrix<T>
+    fn build_pi<F>(&mut self, bond: usize, f: &F) -> Result<Matrix<T>>
     where
         F: Fn(&MultiIndex) -> T,
     {
         let rows = self.pi_i_set[bond].values().to_vec();
         let cols = self.pi_j_set[bond + 1].values().to_vec();
-        let mut pi = Matrix::zeros(rows.len(), cols.len());
+        let mut pi = Matrix::try_zeros(rows.len(), cols.len()).map_err(|error| {
+            TCIError::InvalidOperation {
+                message: format!("TensorCI1 candidate matrix construction failed: {error}"),
+            }
+        })?;
         for (i, i_multi) in rows.iter().enumerate() {
             for (j, j_multi) in cols.iter().enumerate() {
                 let mut index = i_multi.clone();
@@ -685,7 +700,7 @@ where
                 pi[[i, j]] = value;
             }
         }
-        pi
+        Ok(pi)
     }
 
     fn position_in_pi_i(&self, site: usize, index: &MultiIndex) -> Result<usize> {
@@ -708,9 +723,21 @@ where
         let left_dim = self.i_set[site].len();
         let site_dim = self.local_dims[site];
         let right_dim = self.j_set[site].len();
+        let left_rows =
+            left_dim
+                .checked_mul(site_dim)
+                .ok_or_else(|| TCIError::InvalidOperation {
+                    message: "TensorCI1 site row count overflowed usize".to_string(),
+                })?;
+        let right_cols =
+            site_dim
+                .checked_mul(right_dim)
+                .ok_or_else(|| TCIError::InvalidOperation {
+                    message: "TensorCI1 site column count overflowed usize".to_string(),
+                })?;
         let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
 
-        if matrix.nrows() == left_dim * site_dim && matrix.ncols() == right_dim {
+        if matrix.nrows() == left_rows && matrix.ncols() == right_dim {
             for left in 0..left_dim {
                 for local in 0..site_dim {
                     for right in 0..right_dim {
@@ -718,7 +745,7 @@ where
                     }
                 }
             }
-        } else if matrix.nrows() == left_dim && matrix.ncols() == site_dim * right_dim {
+        } else if matrix.nrows() == left_dim && matrix.ncols() == right_cols {
             for left in 0..left_dim {
                 for local in 0..site_dim {
                     for right in 0..right_dim {
@@ -818,7 +845,7 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
-        self.refresh_pi_rows(bond, f);
+        self.refresh_pi_rows(bond, f)?;
         self.rebuild_aca(bond)
     }
 
@@ -826,24 +853,26 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
-        self.refresh_pi_cols(bond, f);
+        self.refresh_pi_cols(bond, f)?;
         self.rebuild_aca(bond)
     }
 
-    fn refresh_pi_rows<F>(&mut self, bond: usize, f: &F)
+    fn refresh_pi_rows<F>(&mut self, bond: usize, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
     {
-        self.pi_i_set[bond] = self.build_pi_i_set(bond);
-        self.pi[bond] = self.build_pi(bond, f);
+        self.pi_i_set[bond] = self.build_pi_i_set(bond)?;
+        self.pi[bond] = self.build_pi(bond, f)?;
+        Ok(())
     }
 
-    fn refresh_pi_cols<F>(&mut self, bond: usize, f: &F)
+    fn refresh_pi_cols<F>(&mut self, bond: usize, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
     {
-        self.pi_j_set[bond + 1] = self.build_pi_j_set(bond + 1);
-        self.pi[bond] = self.build_pi(bond, f);
+        self.pi_j_set[bond + 1] = self.build_pi_j_set(bond + 1)?;
+        self.pi[bond] = self.build_pi(bond, f)?;
+        Ok(())
     }
 
     fn rebuild_aca(&mut self, bond: usize) -> Result<()> {
