@@ -1791,11 +1791,16 @@ where
     }
 
     let factors = if context.options.pivot_search == PivotSearchStrategy::Full {
+        let matrix_len = i_combined
+            .len()
+            .checked_mul(j_combined.len())
+            .ok_or_else(|| TCIError::InvalidOperation {
+                message: "TensorCI candidate matrix size overflowed usize".to_string(),
+            })?;
         let mut pi = Matrix::zeros(i_combined.len(), j_combined.len());
 
         if let Some(ref batch_fn) = context.batched_f {
-            let mut all_indices: Vec<MultiIndex> =
-                Vec::with_capacity(i_combined.len() * j_combined.len());
+            let mut all_indices: Vec<MultiIndex> = Vec::with_capacity(matrix_len);
             for i_multi in &i_combined {
                 for j_multi in &j_combined {
                     let mut full_idx = i_multi.clone();
