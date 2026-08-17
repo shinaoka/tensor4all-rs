@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn offset_from_strides_rejects_overflow() {
+    assert_eq!(
+        offset_from_strides(&[usize::MAX, usize::MAX], &[1, isize::MAX]),
+        None
+    );
+}
+
 /// Helper to extract f64 data from storage
 fn extract_f64(storage: &Storage) -> Vec<f64> {
     match storage.repr() {

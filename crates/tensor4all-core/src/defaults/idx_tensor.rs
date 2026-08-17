@@ -166,7 +166,11 @@ fn tensor_profile_bytes(dtype: DType, shape: &[usize]) -> usize {
         DType::I64 => 8,
         DType::Bool => 1,
     };
-    shape.iter().product::<usize>() * element_size
+    shape
+        .iter()
+        .try_fold(1usize, |bytes, &dim| bytes.checked_mul(dim))
+        .and_then(|elements| elements.checked_mul(element_size))
+        .unwrap_or(usize::MAX)
 }
 
 /// Trait for scalar types that can generate random values from a standard
