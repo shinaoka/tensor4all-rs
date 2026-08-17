@@ -123,7 +123,7 @@ let cf = CachedFunction::new(
     },
     &local_dims,
 )?;
-let cached_f = |idx: &Vec<usize>| cf.eval(idx);
+let cached_f = |idx: &Vec<usize>| cf.eval(idx).unwrap();
 let _result = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     cached_f, None, local_dims, vec![vec![0; r]],
     TCI2Options { tolerance: 1e-12, seed: Some(42), ..Default::default() },
