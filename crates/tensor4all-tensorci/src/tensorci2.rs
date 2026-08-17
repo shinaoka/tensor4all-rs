@@ -666,6 +666,7 @@ where
     /// /// out-of-bounds failure).
     ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
+        // Validate the complete batch before mutating any index set.
         for pivot in pivots {
             if pivot.len() != self.len() {
                 return Err(TCIError::DimensionMismatch {
@@ -686,7 +687,9 @@ where
                     });
                 }
             }
+        }
 
+        for pivot in pivots {
             // Add to I and J sets
             for p in 0..self.len() {
                 let i_indices: MultiIndex = pivot[0..p].to_vec();
