@@ -292,9 +292,14 @@ fn pivot_set(
         let incoming = ijset
             .get(in_key)
             .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", in_key))?;
-        let mut next = Vec::new();
+        let incoming_cols = ncols_2d(incoming)?;
+        let next_capacity = pivots
+            .len()
+            .checked_mul(incoming_cols)
+            .ok_or_else(|| anyhow::anyhow!("pivot-set candidate count overflowed usize"))?;
+        let mut next = Vec::with_capacity(next_capacity);
         for base in &pivots {
-            for j in 0..ncols_2d(incoming)? {
+            for j in 0..incoming_cols {
                 let index = column_2d(incoming, j)?;
                 ensure!(
                     index.len() == in_key.as_slice().len(),
