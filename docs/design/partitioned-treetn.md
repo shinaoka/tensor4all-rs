@@ -2,28 +2,30 @@
 
 ## Status
 
-Proposed and revised after the 2026-08-17 readiness comment on tracking issue
+Proposed and revised after maintainer decisions on tracking issue
 [#648](https://github.com/tensor4all/tensor4all-rs/issues/648). The formal
-cross-model pre-implementation review gate is still pending.
+cross-model pre-implementation review gate is pending.
 
 ## Goal
 
 Add `tensor4all-partitionedtreetn`, a TreeTN-native successor to
 `tensor4all-partitionedtt`. Keep the TT crate available but deprecated during a
-migration window. The new crate must support branched tree topologies rather
-than wrapping a linear chain in a TreeTN facade.
+migration window. The new crate supports arbitrary named tree topologies,
+including branched trees and multiple external site indices per node.
+
+Adaptive interpolation is not part of this crate or this migration task.
 
 ## Compatibility window
 
 `tensor4all-partitionedtt` remains buildable and behavior-frozen while users
-migrate. Mark the crate deprecated with a crate-level Rust deprecation attribute
-and point its README and crate docs to `tensor4all-partitionedtreetn`. Only
-correctness and security fixes should land in the deprecated crate.
+migrate. Its README and crate docs point to `tensor4all-partitionedtreetn` and
+mark it deprecated. Do not add a crate-level `#![deprecated]` attribute or
+compiler warning. Only correctness and security fixes should land in the old
+crate.
 
-The provisional removal date is **2026-12-31**, and removal must also wait until
-the new crate passes the migrated TT tests plus the TreeTN-specific test matrix
-below. The date can be extended explicitly, but the old crate must not become a
-permanent compatibility layer.
+No fixed removal date is declared. Removing the old crate requires a separate
+maintainer decision after the successor reaches parity and downstream users
+have migrated.
 
 ## Scope and source layout
 
@@ -38,204 +40,220 @@ Use these public names:
 - `SubDomainTreeTN<V = usize>`
 - `PartitionedTreeTN<V = usize>`
 - `PartitionedTreeTNError`
-- `AdaptiveInterpolateOptions`
+- `Projector`
 - `PatchingOptions`
 - `PatchSplitStrategy`
 
-`Projector` remains full-index-based. Do not add aliases for the old TT names in
-the new crate.
+Both partition types are generic only over the node-name type `V` and store
+`TreeTN<IdxTensor, V>`. Making the tensor type generic is out of scope because
+projection depends on `IdxTensor::mask_index` and the TT predecessor also uses
+the dynamic `IdxTensor` boundary.
 
-## Prerequisites
+Do not add aliases for the old TT names in the new crate.
 
-1. Resolve [#634](https://github.com/tensor4all/tensor4all-rs/issues/634) in the
-   deprecated crate before copying `Projector`. The corrected implementation
-   must use one canonical entry ordering consistent with `DynIndex::Eq` and
-   `DynIndex::Hash` (currently ID, tags, and prime level) for both projector
-   hashing and deterministic comparison. Equal projectors must hash identically
-   regardless of insertion order or `HashMap` seed, and the deterministic
-   comparator may return `Equal` only for fully equal projectors. The fix also
-   supplies fallible coordinate validation and transactional partition mutation;
-   the new crate copies that validated implementation rather than the buggy
-   `origin/main` version.
-2. Track the typed TreeTCI termination result as a separate, independently
-   mergeable `tensor4all-treetci` issue and land it before implementing adaptive
-   interpolation here. Add its issue number to this document and #648 once it
-   exists. The required termination contract is specified below.
+## Prerequisite
+
+Resolve [#634](https://github.com/tensor4all/tensor4all-rs/issues/634) in the
+deprecated crate before copying `Projector`. The corrected implementation must
+use one canonical entry ordering consistent with `DynIndex::Eq` and
+`DynIndex::Hash` (currently ID, tags, and prime level) for both projector
+hashing and deterministic comparison. Equal projectors must hash identically
+regardless of insertion order or `HashMap` seed, and the deterministic
+comparator may return `Equal` only for fully equal projectors.
+
+The #634 fix also supplies fallible coordinate validation and transactional
+partition mutation. The new crate copies that validated implementation rather
+than the buggy `origin/main` version.
 
 ## Subdomain model
 
 `SubDomainTreeTN<V>` stores:
 
 - `TreeTN<IdxTensor, V>` data,
-- a `Projector`,
-- one validated canonical/truncation center `V`, and
+- a `Projector`, and
 - the internal absolute squared truncation budget used by adaptive patching.
 
-The center is explicit state rather than a hidden minimum-node policy. The
-constructor validates that the center exists and that every projected full
-index is an external site index with an in-bounds coordinate.
+It does not store a canonical or truncation center. A center is operation policy,
+not part of the represented partition. Operations that require one accept an
+explicit `&V`, following the underlying TreeTN API.
 
-The public API provides TreeTN-specific vocabulary:
+Construction is fallible and eagerly applies the projector. The stored TreeTN
+retains every full site index, but values outside the projected coordinates are
+masked to zero with `IdxTensor::mask_index`. Rebuild the TreeTN from its local
+tensors after masking so stale canonical and orthogonality metadata cannot
+survive tensor changes. This is local tensor work only and must not materialize
+the full network.
 
-- `from_treetn`, `data`, `into_data`, `center`,
+This eager invariant is authoritative: `data()` always returns an already
+projected TreeTN. Norms, inner products, truncation budgets, contraction, and
+summation operate directly on that representation and must not apply a second
+lazy projection. `project` applies only newly requested compatible restrictions
+and returns another eagerly masked value.
+
+The public API follows the TT predecessor where tree topology does not require
+an extra choice:
+
+- `from_treetn`, `data`, `into_data`,
 - `node_count`, `is_empty`, `all_indices`, `site_index_network`,
 - `max_bond_dim`, `project`, `norm`, `norm_squared`, `truncate`, `contract`, and
   `inner`.
 
-`norm` and `norm_squared` take `&mut self`, canonicalize the stored TreeTN to the
-stored center, and delegate to the corresponding TreeTN method. This makes the
-canonicalization mutation and cost explicit and avoids a hidden whole-network
-clone. `PartitionedTreeTN::norm` likewise takes `&mut self`; `inner` remains
-non-mutating.
-
-Projection retains every site index and masks non-selected coordinates with
-`IdxTensor::mask_index`. Rebuild the TreeTN from its local tensors after masking
-so stale canonical and orthogonality metadata cannot survive tensor changes.
-This is local tensor work only; it must not materialize the full network.
+`norm` and `norm_squared` keep `&self` receiver semantics for parity with the TT
+crate. They clone the TreeTN wrapper and canonicalize the clone internally;
+rustdoc must state this cost. `truncate` and `contract` take an explicit center
+because arbitrary trees have no TT-like rightmost site.
 
 ## Partition invariant
 
-A `PartitionedTreeTN<V>` is a map from mutually disjoint projectors to
-subdomains. In addition to projector disjointness, all subdomains in one value
-must have:
+A `PartitionedTreeTN<V>` is a map from mutually disjoint projectors to eagerly
+masked subdomains. All subdomains in one value must have:
 
 - exactly the same named tree topology,
 - exactly the same full site-index set at each node, and
-- the same stored center.
+- one homogeneous `IdxTensor` dtype across every node and patch.
 
-Constructor, insertion, and append operations validate these invariants before
-mutation. Projectors continue to use full index equality, including prime level
-and tags.
+Same topology and dimensions with different site-index identities are not
+enough; automatic reindexing is prohibited because `Projector` keys use full
+indices. Mixed `f64`/`Complex64` partitions are rejected before no-op shortcuts
+or TreeTN algebra.
 
-`to_treetn` deterministically sums projected patches with TreeTN direct-sum
-addition. It is the replacement for `to_tensor_train`.
+Constructor, insertion, and append operations validate all invariants before
+mutation. Failure leaves the original partition unchanged.
 
-## TreeTN operations
+`to_treetn` deterministically sums the already projected patches with strict
+TreeTN direct-sum addition. It is the replacement for `to_tensor_train`.
 
-Use `tensor4all-treetn` public operations directly:
+## Addition and contraction
 
-- strict `TreeTN::add` for patch addition,
-- `TreeTN::truncate_mut([center], TruncationOptions)` for truncation,
-- `tensor4all_treetn::contraction::contract` for contraction,
-- `TreeTN::inner` for inner products, and
-- `TreeTN::link_dims` for the maximum bond dimension.
+Patch-wise addition preserves the TT predecessor's restricted contract:
 
-Contraction first applies each patch projector, contracts at the stored center,
-and keeps projector entries only for surviving external indices. Pairwise
-results with the same output projector are combined by strict TreeTN addition
-and truncated with the contraction SVD policy and rank cap.
+- identical projector keys may be added;
+- a patch absent from one operand is treated as zero; and
+- different overlapping projector layouts are rejected rather than refined.
+
+Matching patches use strict `TreeTN::add` and are truncated at the caller's
+explicit center. Addition requires exact named topology, site-index assignment,
+and dtype compatibility.
+
+Contraction likewise requires the two partitions to use the same named topology
+in v1; it does not call `restructure_to` or a mismatched-topology dense fallback.
+For each compatible projector pair it:
+
+1. contracts the already masked TreeTNs with
+   `tensor4all_treetn::contraction::contract` at the explicit center;
+2. keeps projector entries only for surviving external full indices; and
+3. combines duplicate output projectors with strict TreeTN addition and the
+   requested truncation policy.
+
+`SubDomainTreeTN::inner` uses the eagerly masked stored data directly. No
+projector-compatible region may be inferred or lazily remasked during inner
+product evaluation.
 
 No production path may call `to_dense`, `contract_to_tensor`, or a dense
-reference contraction unless the caller explicitly selected and bounded the
+reference contraction unless the caller explicitly selected and bounded a
 TreeTN dense-reference method.
 
-## Adaptive TreeTCI
+## Adaptive patching
 
-The new `adaptiveinterpolate` uses `tensor4all-treetci`, not
-`tensor4all-tensorci` or a TT-to-TreeTN conversion.
+The TreeTN-general patch algebra remains in this crate:
 
-Its topology input is a `TreeTciGraph`; ordered `site_indices[i]` belongs to
-TreeTCI vertex `i`. The first implementation supports exactly one external site
-index per TreeTCI vertex. General `PartitionedTreeTN` storage and algebra may
-still hold multiple external indices per node.
+- `add_with_patching`,
+- `truncate_adaptive`,
+- `contract_adaptive`,
+- `PatchingOptions`, and
+- `PatchSplitStrategy`.
 
-For a projected patch, keep the full TreeTCI graph and replace each fixed
-vertex's local dimension by one. The batch evaluator maps that local zero back
-to the fixed full-domain coordinate. This preserves connectivity even when
-removing fixed vertices would split a branched tree.
+Each operation requiring truncation or contraction accepts an explicit center.
+Split candidates are full external indices and remain independent of tree
+traversal order. Multiple external indices on one node are supported.
 
-After TreeTCI materialization:
-
-- active generated site indices are relabeled to the caller's full indices;
-- a dimension-one fixed site is locally contracted with a one-hot bridge to the
-  caller's full-dimensional index; and
-- the TreeTN is rebuilt from the resulting local tensors.
-
-The one-hot bridge is bounded by one site dimension and does not materialize a
-full network. Zero-active and one-active patches use exact rank-one TreeTNs.
-Sampled-zero detection remains an explicit finite-sampling policy.
-
-Adaptive acceptance must distinguish convergence from max-iteration and
-rank-cap termination. The prerequisite TreeTCI issue replaces the bare result
-tuple with a typed run result carrying `Converged`, `MaxBondDim`, or
-`MaxIterations`; this crate must not infer termination from only the last error
-sample. When convergence and rank saturation become true in the same iteration,
-`Converged` takes precedence if the complete convergence criterion is satisfied;
-otherwise the result is `MaxBondDim`. Exhausting the iteration budget without
-either condition yields `MaxIterations`.
-
-A patch is accepted only for `Converged` with an accepted error at or below
-tolerance. Rejected patches split on the first remaining full index in
-`patch_order`.
-
-The initial port does not recycle internal TreeTCI pivots between parent and
-child patches because the TreeTCI public result does not expose a stable global
-pivot set. The deprecated TT crate retains that optional behavior. Add TreeTCI
-pivot recycling only after a dedicated public pivot-provenance contract exists.
-
-## Patching
-
-Copy adaptive patching into the new crate and replace TT operations with the
-TreeTN methods above. `ExactParameterGain` counts local tensor payload sizes by
-iterating nodes; products and sums use checked arithmetic. Split candidates are
-full external indices and remain independent of tree traversal order.
+`ExactParameterGain` preserves the TT predecessor's meaning: after forming and
+budget-truncating each candidate's children, count the checked sum of each local
+tensor's logical element count (the product of its dimensions). Do not use
+backend payload length, storage bytes, structured-storage compression, or AD
+state as the metric.
 
 Volume-proportional truncation keeps the absolute squared-tail budget semantics
 established by closed issue
 [#554](https://github.com/tensor4all/tensor4all-rs/issues/554). TreeTN
 `TruncationOptions` and `SvdTruncationPolicy` replace itensorlike options.
 
+## Adaptive interpolation ownership
+
+`adaptiveinterpolate`, `AdaptiveInterpolateOptions`, TreeTCI termination changes,
+pivot recycling, sampled-zero inference, and TreeTCI checked-arithmetic work are
+out of scope. The new crate does not depend on `tensor4all-treetci`.
+
+The existing unmerged branch
+`feat/treetci-adaptive-patching@85df576` remains a separate TreeTCI work item.
+This migration neither reimplements it nor decides its public result type,
+zero-detection policy, or merge disposition.
+
 ## Errors
 
 Use a crate-local `thiserror` enum. Preserve typed sources from
-`TreeTNOperationError`, `TreeTciError`, tensor storage, and tensor construction.
-Validation errors for topology, center, projector indices, coordinates, and
-options remain structured where callers need their payloads. Every public
-`Result` API documents concrete failure conditions.
+`TreeTNOperationError`, tensor storage, and tensor construction. Validation
+errors for topology, dtype, center, projector indices, coordinates, and options
+remain structured where callers need their payloads. Every public `Result` API
+documents concrete failure conditions.
 
 ## Dependencies and provenance
 
-The new crate depends on `tensor4all-core`, `tensor4all-tensorbackend`,
-`tensor4all-treetn`, and `tensor4all-treetci`; it does not depend on
-`tensor4all-itensorlike`, `tensor4all-simplett`, or `tensor4all-tensorci`.
-Provider features propagate through all direct tensor4all dependencies.
+The new crate depends on `tensor4all-core`, `tensor4all-tensorbackend`, and
+`tensor4all-treetn`. It does not depend on `tensor4all-itensorlike`,
+`tensor4all-simplett`, `tensor4all-tensorci`, or `tensor4all-treetci`. Provider
+features propagate through all direct tensor4all dependencies.
 
-Copied adaptive partition logic remains derived from TCIAlgorithms.jl. Copy the
-existing derivation notices and `LICENSE-TCIALGORITHMS-MIT`, and update the
-repository provenance/citation policy after maintainer confirmation. Do not
-rewrite historical worklogs merely to change the crate name.
+Preserve and document the partition representation's relationship to
+[PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) and the
+scientific credit for “Adaptive Patching for Tensor Train Computations.” Because
+`adaptive_interpolation.rs` is not copied, the new crate does not claim a code
+derivation from TCIAlgorithms.jl and does not copy
+`LICENSE-TCIALGORITHMS-MIT`. The deprecated TT crate retains its existing
+TCIAlgorithms derivation notice and license.
 
 ## Documentation surface
 
 Update the workspace crate list, architecture guide, design index, `llms.txt`,
-usage skill references, coverage thresholds, and the live adaptive interpolation
-design. Add a crate README included by crate docs and runnable asserted rustdoc
-examples for every public item. The old README and crate docs must state the
-migration target and removal window.
+usage skill references, provenance policy, and live partitioned-tensor guides.
+Add the new crate to coverage enforcement; do not lower coverage thresholds
+without separate approval.
+
+Add a crate README included by crate docs and runnable asserted rustdoc examples
+for public types, traits, and functions. Document public fields and enum variants
+without requiring repetitive standalone examples for each field or variant. The
+old README and crate docs state the migration target but no fixed removal date.
 
 ## Verification
 
 Minimum focused matrix:
 
-- `f64` and `Complex64`;
+- `f64` and `Complex64` homogeneous partitions;
+- mixed-dtype rejection before construction, append, addition, contraction, and
+  summation, with no mutation on failure;
 - one node, chain, and branched tree;
-- multiple external indices on one general TreeTN node;
+- multiple external indices on one TreeTN node;
 - fixed indices at leaves and internal vertices;
+- eager masking tests where unprojected values are much larger than projected
+  values, covering norm, inner, truncation budgets, contraction, and summation;
 - same-ID indices differing by prime level or tags;
 - equal projectors hashing identically across insertion orders and map seeds;
 - projector comparator equality if and only if full projector equality;
 - same-ID/different-metadata projectors used successfully as `HashMap` keys;
 - invalid center, topology, projector index, coordinate, and options;
-- transactional insert/append failures;
-- strict addition, contraction, truncation, and deterministic `to_treetn`;
-- TreeTCI adaptive interpolation with zero, one, and several active sites;
-- convergence, rank-cap, and max-iteration split paths;
-- checked volume and parameter-count overflow;
-- a long cheap TreeTN regression that would fail under accidental full dense
-  materialization;
+- transactional construction, insertion, and append failures;
+- identical-layout addition plus rejection of different overlapping layouts;
+- strict same-topology contraction and deterministic `to_treetn`;
+- explicit-center truncate, contract, and patching paths, including invalid
+  centers;
+- logical parameter-count tests using structured masked tensors;
+- checked volume and logical parameter-count overflow;
+- a safe long cheap TreeTN regression that fails quickly under accidental full
+  dense materialization without intentionally exhausting CI memory;
 - small dense references materialized once and compared as whole tensors;
-- default CPU and `tenferro-provider-inject` feature builds;
-- release doctests and mdBook tests.
+- default CPU build and
+  `--no-default-features --features tenferro-provider-inject` build;
+- workspace clippy, release doctests, and mdBook tests.
 
 Run the repository's focused crate checks during development, then the complete
 pre-PR format, clippy, release workspace tests, rustdoc, mdBook, API dump, and
@@ -244,18 +262,32 @@ impact attestation in the worklog/PR body.
 
 ## Deferred work
 
-- TreeTCI pivot recycling with a stable public pivot-provenance API.
-- Adaptive interpolation with multiple logical site indices on one TreeTCI
-  vertex.
-- Removing `tensor4all-partitionedtt` before the compatibility window closes.
+- Adaptive interpolation and the disposition of
+  `feat/treetci-adaptive-patching`.
+- Common-refinement addition for different overlapping projector layouts.
+- Contraction between different named topologies.
+- Generic tensor storage beyond `IdxTensor`.
+- Removing `tensor4all-partitionedtt` after a separate maintainer decision.
 - Extracting shared projector code; deletion of the old crate is the preferred
   deduplication step.
 
 ## Review record
 
-- 2026-08-17 issue readiness comment: conditional approval after making #634 an
-  explicit prerequisite, splitting the TreeTCI termination API into its own
-  issue, fixing norm receiver semantics, and adding cross-links. These changes
-  are recorded above.
-- Formal cross-model reviewer and verdict: pending. The issue comment does not
-  by itself clear the repository's delegated-implementation review gate.
+Maintainer decisions recorded in this revision:
+
+- adaptive interpolation is excluded; TreeTN-general adaptive patching remains;
+- subdomain construction eagerly masks stored data;
+- center is not stored and is passed explicitly to operations that require it;
+- addition rejects different overlapping projector layouts;
+- `ExactParameterGain` counts logical tensor elements;
+- deprecation is documentation-only with no fixed removal date;
+- node names are generic, tensor storage is `IdxTensor`, dtype is homogeneous,
+  and multiple site indices per node are supported;
+- patch topology/site identities are exact, and contraction requires matching
+  named topology; and
+- provenance includes PartitionedMPSs.jl and the adaptive patching paper, but not
+  TCIAlgorithms-derived code or license.
+
+The 2026-08-17 issue reviews informed these decisions but do not by themselves
+clear the repository's delegated-implementation gate. Formal cross-model
+reviewer and verdict: pending.
