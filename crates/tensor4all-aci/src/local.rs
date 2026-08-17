@@ -239,7 +239,11 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             let cache = self.cache.borrow();
             for (col_position, &col) in cols.iter().enumerate() {
                 for (row_position, &row) in rows.iter().enumerate() {
-                    let point = row_position + rows.len() * col_position;
+                    let point = checked_local_add(
+                        row_position,
+                        checked_local_mul(rows.len(), col_position, "local point offset")?,
+                        "local point offset",
+                    )?;
                     let key = self.entry_key(row, col)?;
                     point_keys.push(key);
                     if let Some(&value) = cache.get(&key) {
@@ -266,8 +270,9 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         let mut input_values = vec![T::zero(); input_value_count];
         for (point, (&row, &col)) in missing_rows.iter().zip(&missing_cols).enumerate() {
             for input in 0..n_inputs {
-                input_values[input + n_inputs * point] =
-                    self.input_factors[input].value(row, col)?;
+                let offset = checked_local_mul(n_inputs, point, "local input offset")?;
+                let index = checked_local_add(input, offset, "local input offset")?;
+                input_values[index] = self.input_factors[input].value(row, col)?;
             }
         }
 
@@ -331,9 +336,15 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
                 )
                 .map_err(|err| local_factor_error("batched local input materialization", err))?;
                 for input in 0..n_inputs {
-                    let offset = input * n_points;
+                    let offset = checked_local_mul(input, n_points, "local batched input offset")?;
                     for point in 0..n_points {
-                        input_values[input + n_inputs * point] = values[offset + point];
+                        let input_offset =
+                            checked_local_mul(n_inputs, point, "local input offset")?;
+                        let input_index =
+                            checked_local_add(input, input_offset, "local input offset")?;
+                        let value_index =
+                            checked_local_add(offset, point, "local batched value offset")?;
+                        input_values[input_index] = values[value_index];
                     }
                 }
                 return Ok(input_values);
@@ -342,8 +353,18 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
 
         for input in 0..n_inputs {
             let values = self.input_factors[input].materialize_values()?;
-            for point in 0..n_points {
-                input_values[input + n_inputs * point] = values[point];
+            if values.len() != n_points {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "local factor materialization returned {} values, expected {n_points}",
+                        values.len()
+                    ),
+                });
+            }
+            for (point, &value) in values.iter().enumerate() {
+                let input_offset = checked_local_mul(n_inputs, point, "local input offset")?;
+                let input_index = checked_local_add(input, input_offset, "local input offset")?;
+                input_values[input_index] = value;
             }
         }
         Ok(input_values)
@@ -594,9 +615,14 @@ fn build_left_factors<T: AciScalar>(
             )
             .map_err(|err| local_factor_error("batched left factor matmul", err))?;
             let item_len = checked_mul(shared.left_rows, left_cols, "ACI left factor item")?;
-            return Ok((0..n_inputs)
-                .map(|input| values[input * item_len..(input + 1) * item_len].to_vec())
-                .collect());
+            let factors = (0..n_inputs)
+                .map(|input| {
+                    let start = checked_mul(input, item_len, "ACI left factor offset")?;
+                    let end = checked_local_add(start, item_len, "ACI left factor end")?;
+                    Ok(values[start..end].to_vec())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(factors);
         }
     }
 
@@ -647,9 +673,14 @@ fn build_right_factors<T: AciScalar>(
             )
             .map_err(|err| local_factor_error("batched right factor matmul", err))?;
             let item_len = checked_mul(right_rows, shared.right_cols, "ACI right factor item")?;
-            return Ok((0..n_inputs)
-                .map(|input| values[input * item_len..(input + 1) * item_len].to_vec())
-                .collect());
+            let factors = (0..n_inputs)
+                .map(|input| {
+                    let start = checked_mul(input, item_len, "ACI right factor offset")?;
+                    let end = checked_local_add(start, item_len, "ACI right factor end")?;
+                    Ok(values[start..end].to_vec())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(factors);
         }
     }
 
