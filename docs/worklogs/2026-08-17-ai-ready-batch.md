@@ -34,8 +34,9 @@ After the initial batch, the branch additionally checked:
 - ACI frame products, padded-core dimensions, local batch sizes, flat offsets, and reshape boundaries;
 - itensorlike dense inner-product/norm products and saturating `LinsolveOptions` sweep construction;
 - interpolative QTT basis, fused-core, dense-test-point, flat-index, inverse-matrix, and adaptive-core dimensions;
-- TensorCI1 candidate matrices, Pi-set capacities, refresh propagation, and site reshape dimensions.
+- TensorCI1 candidate matrices, Pi-set capacities, refresh propagation, conversion reshapes, and site dimensions;
+- SimpleTT cache site-dimension products and a new fallible `try_tensor3_zeros` constructor for external shape input.
 
-Current focused release evidence: tensor4all-core 789 tests (2 skipped), tensor4all-aci 90 tests (1 skipped), tensor4all-itensorlike 154 tests (5 skipped), tensor4all-interpolativeqtt 27 tests, tensor4all-tensorci 79 tests; all passed. Strict workspace clippy also passed.
+Current focused release evidence: tensor4all-core 789 tests (2 skipped), tensor4all-aci 90 tests (1 skipped), tensor4all-itensorlike 154 tests (5 skipped), tensor4all-interpolativeqtt 27 tests, tensor4all-simplett 252 tests, tensor4all-tensorci 79 tests; all passed. Strict workspace clippy also passed.
 
 A stale guide callback was corrected (`CachedFunction::eval` now unwraps its documented valid-input result), and a probabilistically flaky interior-coordinate test now uses a nonzero-at-origin affine function while retaining its coordinate assertions. The full repository rules script and changed-file error-doc validation pass. Latest full release nextest passes with 2,852 tests and 14 skips; latest rustdoc passes with 861 doctests; coverage passes 215/215 files; formatting, strict clippy, API inventory, repository-rules review, panic audit, crate-boundary audit, and mdBook all pass. A fresh issue-by-issue acceptance audit and the remaining cited raw-arithmetic sweep for every #544/#543 path are still required before marking the goal complete or closing issues.
