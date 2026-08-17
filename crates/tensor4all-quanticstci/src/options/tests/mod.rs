@@ -8,8 +8,6 @@ fn test_default_options() {
     assert_eq!(opts.max_iter, 200);
     assert_eq!(opts.n_random_init_pivot, 5);
     assert_eq!(opts.unfolding_scheme, UnfoldingScheme::Interleaved);
-    assert_eq!(opts.nsearchglobalpivot, 5);
-    assert_eq!(opts.nsearch, 100);
 }
 
 #[test]
@@ -17,15 +15,11 @@ fn test_builder_pattern() {
     let opts = QtciOptions::default()
         .with_tolerance(1e-6)
         .with_max_bond_dim(100)
-        .with_maxiter(50)
-        .with_nsearchglobalpivot(10)
-        .with_nsearch(200);
+        .with_maxiter(50);
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
     assert_eq!(opts.max_bond_dim, Some(100));
     assert_eq!(opts.max_iter, 50);
-    assert_eq!(opts.nsearchglobalpivot, 10);
-    assert_eq!(opts.nsearch, 200);
 }
 
 #[test]

@@ -2354,6 +2354,12 @@ impl IdxTensor {
             .map(|&axis| self.indices[axis].dim())
             .collect::<Vec<_>>();
 
+        if matches!(
+            self.storage.storage_kind(),
+            StorageKind::Diagonal | StorageKind::Structured
+        ) {
+            self.ensure_shape_packing_preserves_ad("select_indices")?;
+        }
         if self.storage.storage_kind() == StorageKind::Diagonal {
             return self
                 .select_diag_indices(kept_indices, kept_dims, positions)

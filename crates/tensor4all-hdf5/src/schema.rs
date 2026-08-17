@@ -47,7 +47,7 @@ pub(crate) fn read_type_version(group: &Group) -> Result<(String, i64)> {
 ///
 /// Returns the version number on success, or an error if:
 /// - The type doesn't match `expected_type`
-/// - The version exceeds `max_version`
+/// - The version is negative or exceeds `max_version`
 pub(crate) fn require_type_version(
     group: &Group,
     expected_type: &str,
@@ -62,7 +62,7 @@ pub(crate) fn require_type_version(
             type_str
         );
     }
-    if version > max_version {
+    if version < 0 || version > max_version {
         bail!(
             "Unsupported {} version {} (max supported: {})",
             expected_type,

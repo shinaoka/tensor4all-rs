@@ -1121,7 +1121,7 @@ fn test_global_search_oscillatory() {
 
     // Estimate true error
     let mut rng = rand::rng();
-    let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng);
+    let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng).unwrap();
 
     // Verify errors are sorted in descending order
     for i in 0..pivot_errors.len().saturating_sub(1) {

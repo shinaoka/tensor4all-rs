@@ -603,7 +603,7 @@ where
         validate_nonnegative_finite("abstol", abstol)?;
         validate_first_pivot(&self.local_dims, &pivot)?;
         let exact = f(&pivot);
-        let current = self.evaluate(&pivot).unwrap_or_else(|_| T::zero());
+        let current = self.evaluate(&pivot)?;
         if Scalar::abs_sq(exact - current).sqrt() < abstol {
             return Ok(());
         }

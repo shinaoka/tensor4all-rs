@@ -177,7 +177,12 @@ pub fn tensor3_from_data<T: TensorScalar>(
     site_dim: usize,
     right_dim: usize,
 ) -> Result<Tensor3<T>> {
-    let expected = left_dim * site_dim * right_dim;
+    let expected = left_dim
+        .checked_mul(site_dim)
+        .and_then(|value| value.checked_mul(right_dim))
+        .ok_or_else(|| TensorTrainError::InvalidOperation {
+            message: "rank-3 tensor shape product overflowed usize".to_string(),
+        })?;
     if data.len() != expected {
         return Err(TensorTrainError::DataLengthMismatch {
             expected,

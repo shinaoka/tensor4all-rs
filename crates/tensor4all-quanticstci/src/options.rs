@@ -19,8 +19,6 @@ use tensor4all_treetci::TreeTciOptions;
 /// | `unfolding_scheme` | `Interleaved` | — | How quantics bits are arranged |
 /// | `normalize_error` | `true` | — | Normalize error by max sample value |
 /// | `verbosity` | `0` | `0` .. `2` | Logging verbosity |
-/// | `nsearchglobalpivot` | `5` | `1` .. `20` | Global pivots tested per iteration |
-/// | `nsearch` | `100` | `10` .. `1000` | Random candidates for global pivot search |
 ///
 /// # Examples
 ///
@@ -118,25 +116,6 @@ pub struct QtciOptions {
     ///
     /// Default: `0`.
     pub verbosity: usize,
-
-    /// Number of global pivot candidates to accept per iteration.
-    ///
-    /// Each iteration searches for up to this many new global pivots
-    /// to improve the approximation. Increasing this can help
-    /// difficult functions but costs more evaluations.
-    ///
-    /// Default: `5`.
-    pub nsearchglobalpivot: usize,
-
-    /// Number of random candidates sampled when searching for global
-    /// pivots.
-    ///
-    /// Controls how thoroughly the index space is explored for global
-    /// pivot candidates. Increase to `500`--`1000` for high-dimensional
-    /// problems.
-    ///
-    /// Default: `100`.
-    pub nsearch: usize,
 }
 
 impl Default for QtciOptions {
@@ -149,8 +128,6 @@ impl Default for QtciOptions {
             unfolding_scheme: UnfoldingScheme::Interleaved,
             normalize_error: true,
             verbosity: 0,
-            nsearchglobalpivot: 5,
-            nsearch: 100,
         }
     }
 }
@@ -240,34 +217,6 @@ impl QtciOptions {
         self
     }
 
-    /// Set the number of global pivot candidates to accept per iteration.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_quanticstci::QtciOptions;
-    /// let opts = QtciOptions::default().with_nsearchglobalpivot(10);
-    /// assert_eq!(opts.nsearchglobalpivot, 10);
-    /// ```
-    pub fn with_nsearchglobalpivot(mut self, n: usize) -> Self {
-        self.nsearchglobalpivot = n;
-        self
-    }
-
-    /// Set the number of random candidates for global pivot search.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_quanticstci::QtciOptions;
-    /// let opts = QtciOptions::default().with_nsearch(500);
-    /// assert_eq!(opts.nsearch, 500);
-    /// ```
-    pub fn with_nsearch(mut self, n: usize) -> Self {
-        self.nsearch = n;
-        self
-    }
-
     /// Convert to [`TreeTciOptions`] for the underlying algorithm.
     ///
     /// # Examples
@@ -289,11 +238,9 @@ impl QtciOptions {
             max_iter: self.max_iter,
             max_bond_dim: self.max_bond_dim,
             normalize_error: self.normalize_error,
-            // Global pivot search stays opt-in; the legacy `nsearchglobalpivot`
-            // and `nsearch` fields are not wired through yet.
             enable_global_pivots: false,
-            nsearch: self.nsearch,
-            max_nglobal_pivot: self.nsearchglobalpivot,
+            nsearch: 0,
+            max_nglobal_pivot: 0,
             tol_margin_global_search: 10.0,
             seed: None,
         }

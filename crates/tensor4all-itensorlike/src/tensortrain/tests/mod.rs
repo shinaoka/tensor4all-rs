@@ -227,6 +227,41 @@ fn test_from_treetn_preserves_site_tensor_index_order() {
 }
 
 #[test]
+fn from_treetn_rejects_branched_and_disconnected_topologies() {
+    let center_site = idx(10, 2);
+    let left_site = idx(11, 2);
+    let right_site = idx(12, 2);
+    let third_site = idx(13, 2);
+    let left_bond = idx(14, 1);
+    let right_bond = idx(15, 1);
+    let third_bond = idx(16, 1);
+    let center = make_tensor(vec![
+        center_site,
+        left_bond.clone(),
+        right_bond.clone(),
+        third_bond.clone(),
+    ]);
+    let left = make_tensor(vec![left_bond, left_site]);
+    let right = make_tensor(vec![right_bond, right_site]);
+    let third = make_tensor(vec![third_bond, third_site]);
+    let branched = tensor4all_treetn::TreeTN::from_tensors(
+        vec![center, left, right, third],
+        vec![0usize, 1usize, 2usize, 3usize],
+    )
+    .unwrap();
+    assert!(TensorTrain::from_treetn(branched).is_err());
+
+    let mut disconnected = tensor4all_treetn::TreeTN::new();
+    disconnected
+        .add_tensor(0usize, make_tensor(vec![idx(20, 2)]))
+        .unwrap();
+    disconnected
+        .add_tensor(1usize, make_tensor(vec![idx(21, 2)]))
+        .unwrap();
+    assert!(TensorTrain::from_treetn(disconnected).is_err());
+}
+
+#[test]
 fn test_ortho_tracking() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);

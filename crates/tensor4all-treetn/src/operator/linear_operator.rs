@@ -26,6 +26,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
+use tensor4all_core::sort_indices_deterministic;
 use tensor4all_core::DynIndex;
 use tensor4all_core::IdxTensor;
 use tensor4all_core::IndexLike;
@@ -240,9 +241,12 @@ where
                     // one for input (s_in_tmp) and one for output (s_out_tmp)
                     // Both should have the same dimension as the state's site index.
 
-                    if state_indices.len() * 2 != mpo_indices.len() {
+                    if state_indices.is_empty() && mpo_indices.is_empty() {
+                        continue;
+                    }
+                    if state_indices.len() != 1 || mpo_indices.len() != 2 {
                         return Err(anyhow::anyhow!(
-                            "Node {:?}: MPO should have 2x site indices. State has {}, MPO has {}",
+                            "Node {:?}: automatic MPO mapping requires exactly one state site index and two MPO site indices; found {} and {}",
                             node,
                             state_indices.len(),
                             mpo_indices.len()
@@ -250,43 +254,40 @@ where
                         .into());
                     }
 
-                    // For each state site index, find matching MPO indices by dimension
-                    for state_idx in state_indices {
-                        let dim = state_idx.dim();
-
-                        // Find MPO indices with matching dimension
-                        let matching_mpo: Vec<_> =
-                            mpo_indices.iter().filter(|idx| idx.dim() == dim).collect();
-
-                        if matching_mpo.len() < 2 {
-                            return Err(anyhow::anyhow!(
-                                "Node {:?}: Not enough MPO indices with dimension {}. Found {}",
-                                node,
-                                dim,
-                                matching_mpo.len()
-                            )
-                            .into());
-                        }
-
-                        // Convention: first matching is s_in_tmp, second is s_out_tmp
-                        // (This depends on how the MPO was constructed)
-                        input_mapping
-                            .entry(node.clone())
-                            .or_insert_with(Vec::new)
-                            .push(IndexMapping {
-                                true_index: state_idx.clone(),
-                                internal_index: matching_mpo[0].clone(),
-                            });
-
-                        // For output, use the same true index (space(x) = space(b))
-                        output_mapping
-                            .entry(node.clone())
-                            .or_insert_with(Vec::new)
-                            .push(IndexMapping {
-                                true_index: state_idx.clone(),
-                                internal_index: matching_mpo[1].clone(),
-                            });
+                    let state_idx = state_indices.iter().next().ok_or_else(|| {
+                        anyhow::anyhow!("Node {:?}: state site index is missing", node)
+                    })?;
+                    let dim = state_idx.dim();
+                    let mut matching_mpo: Vec<_> = mpo_indices
+                        .iter()
+                        .filter(|idx| idx.dim() == dim)
+                        .cloned()
+                        .collect();
+                    if matching_mpo.len() != 2 {
+                        return Err(anyhow::anyhow!(
+                            "Node {:?}: automatic MPO mapping is ambiguous for dimension {}. Found {} matching MPO indices",
+                            node,
+                            dim,
+                            matching_mpo.len()
+                        )
+                        .into());
                     }
+                    sort_indices_deterministic(&mut matching_mpo);
+
+                    input_mapping
+                        .entry(node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(IndexMapping {
+                            true_index: state_idx.clone(),
+                            internal_index: matching_mpo[0].clone(),
+                        });
+                    output_mapping
+                        .entry(node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(IndexMapping {
+                            true_index: state_idx.clone(),
+                            internal_index: matching_mpo[1].clone(),
+                        });
                 }
                 (None, None) => {
                     // No site indices for this node, OK

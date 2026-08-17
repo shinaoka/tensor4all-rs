@@ -226,7 +226,7 @@ fn validate_inventory(expected: &BTreeSet<String>, output: &Path) -> Result<()> 
 
     if &actual != expected {
         let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
-        let extra = actual.difference(&expected).cloned().collect::<Vec<_>>();
+        let extra = actual.difference(expected).cloned().collect::<Vec<_>>();
         bail!("API inventory mismatch; missing: {missing:?}; extra: {extra:?}");
     }
     Ok(())

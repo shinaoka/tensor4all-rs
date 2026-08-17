@@ -211,6 +211,24 @@ fn test_batched_tci_matrix_valued() {
 }
 
 #[test]
+fn batched_tci_rejects_short_callback_results() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let result = quanticscrossinterpolate_batched::<f64, _>(
+        &grid,
+        |_| vec![1.0],
+        &[2],
+        None,
+        QtciOptions::default(),
+    );
+    let error = result.err().unwrap();
+    assert!(error.to_string().contains("expected at least 2"));
+}
+
+#[test]
 fn test_batched_tci_caching_reduces_evaluations() {
     // Verify that the shared cache reduces function evaluations.
     // Use Arc<Mutex<usize>> counter to track how many times f is actually called.

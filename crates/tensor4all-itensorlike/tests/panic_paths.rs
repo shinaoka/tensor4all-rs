@@ -35,18 +35,14 @@ fn inner_reports_length_mismatch() {
 }
 
 #[test]
-fn to_dense_preserves_contraction_error_source() {
+fn from_treetn_rejects_disconnected_topology() {
     let mut tree = TreeTN::<IdxTensor, usize>::new();
     tree.add_tensor(0, site_tensor(2, vec![1.0, 2.0])).unwrap();
     tree.add_tensor(1, site_tensor(2, vec![3.0, 4.0])).unwrap();
-    let tt = TensorTrain::from_treetn(tree).unwrap();
 
-    let error = tt.to_dense().unwrap_err();
-    assert!(matches!(
-        error,
-        TensorTrainError::OperationErrorSource { .. }
-    ));
-    assert!(error.source().is_some());
+    let error = TensorTrain::from_treetn(tree).unwrap_err();
+    assert!(matches!(error, TensorTrainError::InvalidStructure { .. }));
+    assert!(error.to_string().contains("linear-chain"));
 }
 
 #[test]

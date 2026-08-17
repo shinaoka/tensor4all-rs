@@ -192,11 +192,22 @@ fn query_then_fill_copy<T: Copy>(
     Ok(())
 }
 
+fn checked_ptr_span<T>(len: usize, what: &str) -> CapiResult<()> {
+    if len > (isize::MAX as usize) / std::mem::size_of::<T>() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{what} byte span overflows isize"),
+        ));
+    }
+    Ok(())
+}
+
 fn collect_indices(
     index_ptrs: *const *const t4a_index,
     n_indices: usize,
     what: &str,
 ) -> CapiResult<Vec<InternalIndex>> {
+    checked_ptr_span::<*const t4a_index>(n_indices, what)?;
     if n_indices == 0 {
         return Ok(Vec::new());
     }
@@ -231,6 +242,7 @@ fn collect_positions(
     len: usize,
     what: &str,
 ) -> CapiResult<Vec<usize>> {
+    checked_ptr_span::<libc::size_t>(len, what)?;
     if len == 0 {
         return Ok(Vec::new());
     }
@@ -262,6 +274,10 @@ fn write_evaluation_results(
     out_re: *mut libc::c_double,
     out_im: *mut libc::c_double,
 ) -> CapiResult<()> {
+    checked_ptr_span::<libc::c_double>(results.len(), "out_re")?;
+    if !out_im.is_null() {
+        checked_ptr_span::<libc::c_double>(results.len(), "out_im")?;
+    }
     if out_re.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, "out_re is null"));
     }
@@ -1372,6 +1388,7 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
                 "t4a_treetn_evaluator_evaluate value array size overflowed size_t",
             )
         })?;
+        checked_ptr_span::<libc::size_t>(n_values, "values_col_major")?;
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
         let values = ColMajorArrayRef::new(values_slice, &shape)
@@ -1434,6 +1451,7 @@ pub extern "C" fn t4a_treetn_evaluate(
                 "t4a_treetn_evaluate value array size overflowed size_t",
             )
         })?;
+        checked_ptr_span::<libc::size_t>(n_values, "values_col_major")?;
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
         let values = ColMajorArrayRef::new(values_slice, &shape)

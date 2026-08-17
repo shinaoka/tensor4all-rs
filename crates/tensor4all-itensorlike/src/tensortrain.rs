@@ -330,6 +330,11 @@ impl TensorTrain {
     /// # }
     /// ```
     pub fn from_treetn(treetn: TreeTN<IdxTensor, usize>) -> Result<Self> {
+        treetn
+            .validate_linear_chain()
+            .map_err(|error| TensorTrainError::InvalidStructure {
+                message: format!("TensorTrain requires a linear-chain TreeTN: {error}"),
+            })?;
         Self::from_inner(treetn, None)
     }
 
@@ -1133,9 +1138,6 @@ impl TensorTrain {
     ///
     /// This delegates to the TreeTN's truncate_mut method, which performs a
     /// two-site sweep with Euler tour traversal for optimal truncation.
-    ///
-    /// Note: The `site_range` option in `TruncateOptions` is currently ignored
-    /// as the underlying TreeTN truncation operates on the full network.
     ///
     /// # Errors
     ///

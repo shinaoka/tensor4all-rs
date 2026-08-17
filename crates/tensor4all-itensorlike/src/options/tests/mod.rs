@@ -36,12 +36,10 @@ fn test_truncate_options_builder() {
         .with_discarded_tail_sum();
     let opts = TruncateOptions::svd()
         .with_svd_policy(policy)
-        .with_max_bond_dim(50)
-        .with_site_range(0..5);
+        .with_max_bond_dim(50);
 
     assert_eq!(opts.svd_policy(), Some(policy));
     assert_eq!(opts.max_bond_dim(), Some(50));
-    assert_eq!(opts.site_range(), Some(0..5));
 }
 
 #[test]
@@ -49,7 +47,6 @@ fn test_truncate_options_default() {
     let opts = TruncateOptions::default();
     assert_eq!(opts.svd_policy(), None);
     assert_eq!(opts.max_bond_dim(), None);
-    assert_eq!(opts.site_range(), None);
 }
 
 #[test]
