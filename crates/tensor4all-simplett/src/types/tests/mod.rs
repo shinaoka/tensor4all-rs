@@ -17,6 +17,12 @@ fn test_tensor3_zeros() {
 }
 
 #[test]
+fn test_try_tensor3_zeros_rejects_shape_overflow() {
+    let error = try_tensor3_zeros::<f64>(usize::MAX, 2, 1).unwrap_err();
+    assert!(error.to_string().contains("overflows usize"));
+}
+
+#[test]
 fn test_tensor3_from_data() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let t = tensor3_from_data(data, 2, 3, 4).unwrap();

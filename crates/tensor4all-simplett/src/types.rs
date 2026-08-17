@@ -135,6 +135,11 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
 
 /// Create a zero-filled rank-3 tensor with shape `(left_dim, site_dim, right_dim)`.
 ///
+/// # Panics
+///
+/// Panics when the shape overflows `usize` or allocation fails. Use
+/// [`try_tensor3_zeros`] when dimensions come from external or untrusted input.
+///
 /// # Examples
 ///
 /// ```
@@ -152,6 +157,29 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
     right_dim: usize,
 ) -> Tensor3<T> {
     Tensor::from_elem([left_dim, site_dim, right_dim], T::default())
+}
+
+/// Fallibly create a zero-filled rank-3 tensor.
+///
+/// # Errors
+///
+/// Returns [`TensorTrainError::InvalidOperation`] when the shape product
+/// overflows `usize`, allocation fails, or the backend rejects the shape.
+///
+/// # Examples
+/// ```
+/// use tensor4all_simplett::{try_tensor3_zeros, Tensor3Ops};
+///
+/// let t = try_tensor3_zeros::<f64>(2, 3, 4)?;
+/// assert_eq!((t.left_dim(), t.site_dim(), t.right_dim()), (2, 3, 4));
+/// # Ok::<(), tensor4all_simplett::TensorTrainError>(())
+/// ```
+pub fn try_tensor3_zeros<T: Clone + Default + TensorScalar>(
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Result<Tensor3<T>> {
+    Tensor::try_from_elem([left_dim, site_dim, right_dim], T::default())
 }
 
 /// Create a rank-3 tensor from flat data in **column-major** order.
