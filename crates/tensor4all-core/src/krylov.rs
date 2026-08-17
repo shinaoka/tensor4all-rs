@@ -536,7 +536,7 @@ where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
 {
-    validate_hermitian_lanczos_options(options)?;
+    let basis_capacity = validate_hermitian_lanczos_options(options)?;
     initial.validate()?;
 
     let initial_norm = initial.norm()?;
@@ -546,7 +546,7 @@ where
         }));
     }
 
-    let mut basis = Vec::with_capacity(options.max_iter + 1);
+    let mut basis = Vec::with_capacity(basis_capacity);
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
     let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
     let mut last_ritz: Option<HermitianRitzState> = None;
@@ -579,7 +579,7 @@ where
         h_cols.push(h_col);
 
         let subspace_dim = j + 1;
-        let projected = projected_matrix_from_columns(&h_cols, subspace_dim);
+        let projected = projected_matrix_from_columns(&h_cols, subspace_dim)?;
         let ritz =
             lowest_hermitian_eigenpair(&projected, options.hermitian_tol).map_err(|err| {
                 anyhow::Error::new(KrylovError::NonHermitian {
@@ -809,7 +809,9 @@ where
         });
     }
 
-    let mut basis = Vec::with_capacity(options.max_iter + 1);
+    let basis_capacity =
+        checked_krylov_capacity(options.max_iter, "hermitian_krylov_expm_multiply")?;
+    let mut basis = Vec::with_capacity(basis_capacity);
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
     let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
     let mut last_coefficients: Option<Vec<Complex64>> = None;
@@ -844,7 +846,7 @@ where
         h_cols.push(h_col);
 
         let subspace_dim = j + 1;
-        let projected = projected_matrix_from_columns(&h_cols, subspace_dim);
+        let projected = projected_matrix_from_columns(&h_cols, subspace_dim)?;
         let coefficients =
             hermitian_exponential_first_column(&projected, exponent, options.hermitian_tol)
                 .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
@@ -941,8 +943,9 @@ where
 /// # Returns
 /// A `GmresResult` containing the solution and convergence information.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
+/// Returns an error when the options have an overflowing capacity (a
+/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
@@ -973,8 +976,9 @@ where
 /// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
 /// relative residual tolerance and is preferred for scale-independent solves.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
+/// Returns an error when the options have an overflowing capacity (a
+/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
@@ -1198,7 +1202,8 @@ where
         }
 
         let cycle_max_iter = options.max_iter;
-        let mut v_basis: Vec<T> = Vec::with_capacity(cycle_max_iter + 1);
+        let mut v_basis: Vec<T> =
+            Vec::with_capacity(checked_krylov_capacity(cycle_max_iter, "gmres")?);
         let started = Instant::now();
         v_basis.push(r.scale(AnyScalar::new_real(1.0 / r_norm))?);
         if profile_enabled {
@@ -1490,8 +1495,9 @@ where
 /// `max_total_iter` caps the total number of Arnoldi steps across all restart
 /// cycles; the final cycle is shortened when necessary.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
+/// Returns an error when the options have an overflowing capacity (a
+/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
@@ -1531,6 +1537,8 @@ where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
 {
+    checked_krylov_capacity(options.max_iter, "gmres")?;
+
     // Validate structural consistency of inputs
     b.validate()?;
     x0.validate()?;
@@ -1592,7 +1600,8 @@ where
         }
 
         // Arnoldi process with modified Gram-Schmidt
-        let mut v_basis: Vec<T> = Vec::with_capacity(cycle_max_iter + 1);
+        let mut v_basis: Vec<T> =
+            Vec::with_capacity(checked_krylov_capacity(cycle_max_iter, "gmres")?);
         let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
 
         // v_0 = r / ||r||
@@ -1784,8 +1793,9 @@ where
 /// and after the final solution update. This helps control the bond dimension
 /// growth that would otherwise occur in MPS/MPO representations.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
+/// Returns an error when the options have an overflowing capacity (a
+/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
@@ -1838,6 +1848,8 @@ where
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
+    checked_krylov_capacity(options.max_iter, "gmres_with_truncation")?;
+
     // Validate structural consistency of inputs
     b.validate()?;
     x0.validate()?;
@@ -1882,7 +1894,10 @@ where
             });
         }
 
-        let mut v_basis: Vec<T> = Vec::with_capacity(options.max_iter + 1);
+        let mut v_basis: Vec<T> = Vec::with_capacity(checked_krylov_capacity(
+            options.max_iter,
+            "gmres_with_truncation",
+        )?);
         let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
 
         let mut v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
@@ -2282,8 +2297,9 @@ pub struct RestartGmresResult<T> {
 /// # Returns
 /// A `RestartGmresResult` containing the solution and convergence information.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
+/// Returns an error when the options have an overflowing capacity (a
+/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
@@ -2372,7 +2388,12 @@ where
     let inner_options = GmresOptions {
         max_iter: options.inner_max_iter,
         rtol: options.inner_rtol.unwrap_or(0.1), // Solve loosely by default
-        max_restarts: options.inner_max_restarts + 1, // +1 because max_restarts=0 means 1 cycle
+        max_restarts: options.inner_max_restarts.checked_add(1).ok_or_else(|| {
+            anyhow::Error::new(KrylovError::InvalidOptions {
+                solver: "restart_gmres_with_truncation",
+                reason: "inner_max_restarts + 1 overflows usize".to_string(),
+            })
+        })?, // +1 because max_restarts=0 means 1 cycle
         verbose: options.verbose,
         check_true_residual: true, // Always check in restart context to avoid false convergence
     };
@@ -2476,13 +2497,15 @@ where
     })
 }
 
-fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Result<()> {
+fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Result<usize> {
     if options.max_iter == 0 {
         return Err(anyhow::Error::new(KrylovError::InvalidOptions {
             solver: "hermitian_lanczos_lowest_eigenpair",
             reason: "max_iter must be greater than zero".to_string(),
         }));
     }
+    let basis_capacity =
+        checked_krylov_capacity(options.max_iter, "hermitian_lanczos_lowest_eigenpair")?;
     anyhow::ensure!(
         options.rtol.is_finite() && options.rtol >= 0.0,
         "hermitian_lanczos_lowest_eigenpair: rtol must be finite and non-negative"
@@ -2499,10 +2522,11 @@ fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Resu
         options.hermitian_tol.is_finite() && options.hermitian_tol >= 0.0,
         "hermitian_lanczos_lowest_eigenpair: hermitian_tol must be finite and non-negative"
     );
-    Ok(())
+    Ok(basis_capacity)
 }
 
 fn validate_hermitian_krylov_expm_options(options: &HermitianKrylovExpmOptions) -> Result<()> {
+    checked_krylov_capacity(options.max_iter, "hermitian_krylov_expm_multiply")?;
     anyhow::ensure!(
         options.max_iter > 0,
         "hermitian_krylov_expm_multiply: max_iter must be greater than zero"
@@ -2526,8 +2550,14 @@ fn validate_hermitian_krylov_expm_options(options: &HermitianKrylovExpmOptions) 
     Ok(())
 }
 
-fn projected_matrix_from_columns(h_cols: &[Vec<Complex64>], dim: usize) -> Matrix<Complex64> {
-    let mut data = vec![Complex64::new(0.0, 0.0); dim * dim];
+fn projected_matrix_from_columns(
+    h_cols: &[Vec<Complex64>],
+    dim: usize,
+) -> Result<Matrix<Complex64>> {
+    let matrix_len = dim.checked_mul(dim).ok_or_else(|| {
+        anyhow::anyhow!("Krylov projected matrix shape ({dim}, {dim}) overflows usize")
+    })?;
+    let mut data = vec![Complex64::new(0.0, 0.0); matrix_len];
     for col in 0..dim {
         for row in 0..dim {
             if let Some(value) = h_cols.get(col).and_then(|h_col| h_col.get(row)) {
@@ -2535,7 +2565,16 @@ fn projected_matrix_from_columns(h_cols: &[Vec<Complex64>], dim: usize) -> Matri
             }
         }
     }
-    Matrix::from_col_major_vec(dim, dim, data)
+    Ok(Matrix::from_col_major_vec(dim, dim, data))
+}
+
+fn checked_krylov_capacity(max_iter: usize, solver: &'static str) -> Result<usize> {
+    max_iter.checked_add(1).ok_or_else(|| {
+        anyhow::Error::new(KrylovError::InvalidOptions {
+            solver,
+            reason: "max_iter + 1 overflows usize".to_string(),
+        })
+    })
 }
 
 fn any_scalar_to_complex(value: &AnyScalar) -> Complex64 {
