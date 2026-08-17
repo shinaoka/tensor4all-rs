@@ -203,6 +203,7 @@ fn copy_plain_slice<T: Copy>(
     if buf.is_null() {
         return Ok(());
     }
+    validate_raw_slice_len::<T>(name, values.len())?;
     if buf_len < values.len() {
         return Err(capi_error(
             T4A_BUFFER_TOO_SMALL,
@@ -238,6 +239,13 @@ fn copy_c64_interleaved(
     if buf_interleaved.is_null() {
         return Ok(());
     }
+    let raw_capacity = n_complex.checked_mul(2).ok_or_else(|| {
+        capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name} output byte length overflows usize"),
+        )
+    })?;
+    validate_raw_slice_len::<f64>(name, raw_capacity)?;
     if n_complex < values.len() {
         return Err(capi_error(
             T4A_BUFFER_TOO_SMALL,
@@ -293,6 +301,7 @@ fn read_tensor_refs<'a>(
         return Err(capi_error(T4A_NULL_POINTER, "tensors is null"));
     }
 
+    validate_raw_slice_len::<*const t4a_tensor>("tensor pointer array", n_tensors)?;
     let mut refs = Vec::with_capacity(n_tensors);
     for i in 0..n_tensors {
         let tensor = unsafe { *tensors.add(i) };
@@ -372,6 +381,10 @@ pub extern "C" fn t4a_tensor_dims(
             return err_buffer_too_small("tensor dims", dims.len(), buf_len);
         }
 
+        if let Err((code, message)) = validate_raw_slice_len::<usize>("tensor dims", dims.len()) {
+            set_last_error(&message);
+            return code;
+        }
         std::ptr::copy_nonoverlapping(dims.as_ptr(), buf, dims.len());
         T4A_SUCCESS
     }));
@@ -405,6 +418,12 @@ pub extern "C" fn t4a_tensor_indices(
             return err_buffer_too_small("tensor indices", indices.len(), buf_len);
         }
 
+        if let Err((code, message)) =
+            validate_raw_slice_len::<*mut t4a_index>("tensor indices", indices.len())
+        {
+            set_last_error(&message);
+            return code;
+        }
         for (i, index) in indices.iter().enumerate() {
             *buf.add(i) = Box::into_raw(Box::new(t4a_index::new(index.clone())));
         }
