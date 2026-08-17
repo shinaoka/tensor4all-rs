@@ -134,7 +134,9 @@ where
     };
 
     let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate)?;
-    let rows = state.local_dims[site] * product_pivot_dims(state, in_keys)?;
+    let rows = state.local_dims[site]
+        .checked_mul(product_pivot_dims(state, in_keys)?)
+        .ok_or_else(|| anyhow::anyhow!("materialized site row count overflowed usize"))?;
     let cols = product_pivot_dims(state, out_keys)?;
 
     let site_side_key = site_side_key(state, site, parent_edge)?;
@@ -167,7 +169,10 @@ where
         .iter()
         .all(|value| Scalar::abs_val(*value) < f64::EPSILON)
     {
-        return Ok(vec![T::zero(); rows * cols]);
+        let len = rows
+            .checked_mul(cols)
+            .ok_or_else(|| anyhow::anyhow!("materialized zero site size overflowed usize"))?;
+        return Ok(vec![T::zero(); len]);
     }
 
     T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
@@ -197,7 +202,9 @@ fn product_pivot_dims<T>(state: &TreeTCI2<T>, keys: &[SubtreeKey]) -> Result<usi
             .get(key)
             .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))
             .and_then(ncols_2d)?;
-        product = product.saturating_mul(dim.max(1));
+        product = product
+            .checked_mul(dim.max(1))
+            .ok_or_else(|| anyhow::anyhow!("pivot dimension product overflowed usize"))?;
     }
     Ok(product)
 }
@@ -216,8 +223,12 @@ where
     let in_combos = cartesian_entries(&state.ijset, in_keys)?;
     let out_combos = cartesian_entries(&state.ijset, out_keys)?;
     let central_combos = central_assignments(&state.local_dims, central_sites);
-    let mut points =
-        Vec::with_capacity(in_combos.len() * out_combos.len() * central_combos.len().max(1));
+    let point_count = in_combos
+        .len()
+        .checked_mul(out_combos.len())
+        .and_then(|count| count.checked_mul(central_combos.len().max(1)))
+        .ok_or_else(|| anyhow::anyhow!("materialization point count overflowed usize"))?;
+    let mut points = Vec::with_capacity(point_count);
 
     for out_combo in &out_combos {
         for in_combo in &in_combos {

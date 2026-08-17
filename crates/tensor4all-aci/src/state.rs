@@ -44,20 +44,24 @@ struct InputCoreMatrices<T> {
 }
 
 impl<T: AciScalar> InputCoreMatrices<T> {
-    fn from_core(core: &Tensor3<T>) -> Self {
+    fn from_core(core: &Tensor3<T>) -> Result<Self> {
+        let right_cols = core
+            .site_dim()
+            .checked_mul(core.right_dim())
+            .ok_or_else(|| crate::error::AciError::InvalidOptions {
+                message: "ACI core right matrix shape overflowed usize".to_string(),
+            })?;
+        let left_rows = core
+            .left_dim()
+            .checked_mul(core.site_dim())
+            .ok_or_else(|| crate::error::AciError::InvalidOptions {
+                message: "ACI core left matrix shape overflowed usize".to_string(),
+            })?;
         let data = core.to_col_major_vec();
-        Self {
-            left_grouped: Matrix::from_col_major_vec(
-                core.left_dim(),
-                core.site_dim() * core.right_dim(),
-                data.clone(),
-            ),
-            right_grouped: Matrix::from_col_major_vec(
-                core.left_dim() * core.site_dim(),
-                core.right_dim(),
-                data,
-            ),
-        }
+        Ok(Self {
+            left_grouped: Matrix::from_col_major_vec(core.left_dim(), right_cols, data.clone()),
+            right_grouped: Matrix::from_col_major_vec(left_rows, core.right_dim(), data),
+        })
     }
 }
 
@@ -70,16 +74,17 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let n = solution.len();
         let n_inputs = inputs.len();
         let input_caches = inputs.iter().map(TTCache::new).collect();
-        let input_core_matrices = inputs
+        let input_core_matrices: Result<Vec<Vec<_>>> = inputs
             .iter()
             .map(|input| {
                 input
                     .site_tensors()
                     .iter()
                     .map(InputCoreMatrices::from_core)
-                    .collect()
+                    .collect::<Result<Vec<_>>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>>>();
+        let input_core_matrices = input_core_matrices?;
         let mut left_frames = vec![vec![None; n + 1]; n_inputs];
         let mut right_frames = vec![vec![None; n + 1]; n_inputs];
 

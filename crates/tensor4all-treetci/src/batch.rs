@@ -57,11 +57,14 @@ impl<'a> GlobalIndexBatch<'a> {
     /// assert!(GlobalIndexBatch::new(&data, 3, 2).is_err());
     /// ```
     pub fn new(data: &'a [usize], n_sites: usize, n_points: usize) -> TreeTciResult<Self> {
-        if !(data.len() == n_sites * n_points) {
+        let expected = n_sites
+            .checked_mul(n_points)
+            .ok_or_else(|| anyhow::anyhow!("global index batch shape product overflowed usize"))?;
+        if data.len() != expected {
             return Err(anyhow::anyhow!(
                 "global index batch has length {}, expected {}",
                 data.len(),
-                n_sites * n_points
+                expected
             )
             .into());
         };

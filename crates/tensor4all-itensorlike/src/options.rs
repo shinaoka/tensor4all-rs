@@ -203,9 +203,10 @@ impl ContractOptions {
 
     /// Set number of full sweeps.
     ///
-    /// A full sweep is two half-sweeps.
+    /// A full sweep is two half-sweeps. Values that would overflow the
+    /// half-sweep counter saturate at `usize::MAX`.
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nhalfsweeps = nsweeps * 2;
+        self.nhalfsweeps = nsweeps.saturating_mul(2);
         self
     }
 
@@ -357,9 +358,10 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set number of full sweeps.
+    /// Set number of full sweeps. Values that would overflow the
+    /// half-sweep counter saturate at `usize::MAX`.
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nhalfsweeps = nsweeps * 2;
+        self.nhalfsweeps = nsweeps.saturating_mul(2);
         self
     }
 

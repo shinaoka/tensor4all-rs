@@ -328,7 +328,11 @@ fn chebyshev_lobatto_barycentric_weights(degree: usize) -> Vec<f64> {
 /// ```
 pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
     let n = basis.len();
-    let mut data = Vec::with_capacity(n * 2 * n);
+    let data_len = n
+        .checked_mul(2)
+        .and_then(|value| value.checked_mul(n))
+        .ok_or_else(|| invalid_argument("interpolation core size overflowed usize"))?;
+    let mut data = Vec::with_capacity(data_len);
     for alpha in 0..n {
         for sigma in 0..2 {
             for beta in 0..n {

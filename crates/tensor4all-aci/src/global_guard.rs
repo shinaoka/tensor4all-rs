@@ -19,7 +19,7 @@
 //! when the error landscape has a detectable gradient.
 
 use crate::scalar::AciScalar;
-use crate::{AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
+use crate::{AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{floating_zone_walk, MatrixLuciScalar};
@@ -76,7 +76,13 @@ where
     // Absolute threshold for "significantly wrong": abs_tol * tol_margin.
     // With scale_tolerance the operator scale is estimated from the random
     // starting points (the walk is not handed a precomputed candidate set).
-    let mut start_input_values = vec![T::zero(); n_inputs * nsearch];
+    let start_input_len =
+        n_inputs
+            .checked_mul(nsearch)
+            .ok_or_else(|| AciError::InvalidOptions {
+                message: "global-search starting batch size overflowed usize".to_string(),
+            })?;
+    let mut start_input_values = vec![T::zero(); start_input_len];
     for input in 0..n_inputs {
         let values = problem.input_caches[input].evaluate_many(&starts, None)?;
         for (point, value) in values.into_iter().enumerate() {
@@ -131,7 +137,13 @@ where
                         })
                         .map(|site| site + 1)
                 };
-                let mut input_values = vec![T::zero(); n_inputs * n_points];
+                let input_len =
+                    n_inputs
+                        .checked_mul(n_points)
+                        .ok_or_else(|| AciError::InvalidOptions {
+                            message: "global-search batch size overflowed usize".to_string(),
+                        })?;
+                let mut input_values = vec![T::zero(); input_len];
                 for input in 0..n_inputs {
                     let values = problem.input_caches[input].evaluate_many(points, split)?;
                     for (point, value) in values.into_iter().enumerate() {

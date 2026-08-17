@@ -3,7 +3,9 @@
 use crate::global_guard::find_global_pivots;
 use crate::scalar::AciScalar;
 use crate::validation::{validate_inputs, validate_options};
-use crate::{AciOptions, AciResult, AciTermination, ElementwiseBatch, ElementwiseProblem, Result};
+use crate::{
+    AciError, AciOptions, AciResult, AciTermination, ElementwiseBatch, ElementwiseProblem, Result,
+};
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain,
 };
@@ -225,7 +227,13 @@ where
 {
     let n_inputs = inputs.len();
     let n_points = inputs[0].site_dim(0);
-    let mut input_values = vec![T::zero(); n_inputs * n_points];
+    let input_values_len =
+        n_inputs
+            .checked_mul(n_points)
+            .ok_or_else(|| AciError::InvalidOptions {
+                message: "one-site batched input size overflowed usize".to_string(),
+            })?;
+    let mut input_values = vec![T::zero(); input_values_len];
     for point in 0..n_points {
         for input in 0..n_inputs {
             input_values[input + n_inputs * point] = inputs[input].evaluate(&[point])?;

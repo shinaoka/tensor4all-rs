@@ -75,17 +75,17 @@ fn test_cached_function_basic() {
     let local_dims = vec![2, 3, 4];
     let cf = CachedFunction::new(|idx: &[usize]| idx.iter().sum::<usize>(), &local_dims).unwrap();
 
-    assert_eq!(cf.eval(&[0, 1, 2]), 3);
+    assert_eq!(cf.eval(&[0, 1, 2]).unwrap(), 3);
     assert_eq!(cf.num_evals(), 1);
     assert_eq!(cf.num_cache_hits(), 0);
 
     // Second call should use cache
-    assert_eq!(cf.eval(&[0, 1, 2]), 3);
+    assert_eq!(cf.eval(&[0, 1, 2]).unwrap(), 3);
     assert_eq!(cf.num_evals(), 1);
     assert_eq!(cf.num_cache_hits(), 1);
 
     // Different index
-    assert_eq!(cf.eval(&[1, 2, 3]), 6);
+    assert_eq!(cf.eval(&[1, 2, 3]).unwrap(), 6);
     assert_eq!(cf.num_evals(), 2);
     assert_eq!(cf.num_cache_hits(), 1);
 }
@@ -162,11 +162,11 @@ fn test_custom_key_type_u2048() {
 
     let idx_zeros = vec![0usize; 1025];
     let idx_ones = vec![1usize; 1025];
-    assert_eq!(cf.eval(&idx_zeros), 0.0);
-    assert_eq!(cf.eval(&idx_ones), 0.0);
+    assert_eq!(cf.eval(&idx_zeros).unwrap(), 0.0);
+    assert_eq!(cf.eval(&idx_ones).unwrap(), 0.0);
     assert_eq!(cf.num_evals(), 2);
 
-    assert_eq!(cf.eval(&idx_zeros), 0.0);
+    assert_eq!(cf.eval(&idx_zeros).unwrap(), 0.0);
     assert_eq!(cf.num_cache_hits(), 1);
 }
 
@@ -175,11 +175,11 @@ fn test_eval_batch_no_batch_func() {
     let local_dims = vec![2, 3];
     let cf = CachedFunction::new(|idx: &[usize]| idx[0] * 10 + idx[1], &local_dims).unwrap();
 
-    cf.eval(&[0, 1]);
+    cf.eval(&[0, 1]).unwrap();
     assert_eq!(cf.num_evals(), 1);
 
     let indices = vec![vec![0, 1], vec![1, 2], vec![0, 0]];
-    let results = cf.eval_batch(&indices);
+    let results = cf.eval_batch(&indices).unwrap();
     assert_eq!(results, vec![1, 12, 0]);
     assert_eq!(cf.num_evals(), 3);
     assert_eq!(cf.num_cache_hits(), 1);
@@ -194,10 +194,10 @@ fn test_eval_batch_with_batch_func() {
     };
     let cf = CachedFunction::with_batch(single_f, batch_f, &local_dims).unwrap();
 
-    cf.eval(&[1, 0]);
+    cf.eval(&[1, 0]).unwrap();
 
     let indices = vec![vec![1, 0], vec![0, 2], vec![1, 1]];
-    let results = cf.eval_batch(&indices);
+    let results = cf.eval_batch(&indices).unwrap();
     assert_eq!(results, vec![10, 2, 11]);
     assert_eq!(cf.num_cache_hits(), 1);
     assert_eq!(cf.num_evals(), 3);
@@ -207,8 +207,42 @@ fn test_eval_batch_with_batch_func() {
 fn test_eval_batch_empty() {
     let local_dims = vec![2, 3];
     let cf = CachedFunction::new(|idx: &[usize]| idx[0], &local_dims).unwrap();
-    let results = cf.eval_batch(&[]);
+    let results = cf.eval_batch(&[]).unwrap();
     assert!(results.is_empty());
+}
+
+#[test]
+fn eval_rejects_wrong_rank_and_out_of_range_indices() {
+    let cf = CachedFunction::new(|idx: &[usize]| idx.iter().sum::<usize>(), &[2, 3]).unwrap();
+
+    assert!(matches!(
+        cf.eval(&[1]),
+        Err(error::CacheKeyError::InvalidIndexLength { .. })
+    ));
+    assert!(matches!(
+        cf.eval(&[1, 3]),
+        Err(error::CacheKeyError::IndexOutOfBounds { axis: 1, .. })
+    ));
+}
+
+#[test]
+fn eval_batch_rejects_short_callback_without_cache_mutation() {
+    let cf = CachedFunction::with_batch(
+        |idx: &[usize]| idx[0],
+        |_indices: &[Vec<usize>]| vec![7],
+        &[2],
+    )
+    .unwrap();
+
+    let error = cf.eval_batch(&[vec![0], vec![1]]).unwrap_err();
+    assert!(matches!(
+        error,
+        error::CacheKeyError::BatchResultLength {
+            expected: 2,
+            got: 1
+        }
+    ));
+    assert_eq!(cf.cache_size(), 0);
 }
 
 #[test]
@@ -223,7 +257,7 @@ fn test_thread_safety() {
             thread::spawn(move || {
                 for i in 0..10 {
                     let idx = vec![(t * 2 + i) % 10, (t + i) % 10];
-                    let val = cf.eval(&idx);
+                    let val = cf.eval(&idx).unwrap();
                     assert_eq!(val, idx[0] * 100 + idx[1]);
                 }
             })
@@ -248,7 +282,7 @@ fn test_thread_safety_batch() {
             let cf = Arc::clone(&cf);
             thread::spawn(move || {
                 let indices: Vec<Vec<usize>> = (0..5).map(|i| vec![(t + i) % 5, i % 5]).collect();
-                let results = cf.eval_batch(&indices);
+                let results = cf.eval_batch(&indices).unwrap();
                 for (i, idx) in indices.iter().enumerate() {
                     assert_eq!(results[i], idx[0] + idx[1]);
                 }
@@ -271,8 +305,8 @@ fn test_index_int_u8_cached_function() {
     .unwrap();
     assert_eq!(cf.key_type(), "u64");
 
-    assert_eq!(cf.eval(&[0u8, 1, 0, 1, 0, 1, 0, 1]), 4);
-    assert_eq!(cf.eval(&[0u8, 1, 0, 1, 0, 1, 0, 1]), 4);
+    assert_eq!(cf.eval(&[0u8, 1, 0, 1, 0, 1, 0, 1]).unwrap(), 4);
+    assert_eq!(cf.eval(&[0u8, 1, 0, 1, 0, 1, 0, 1]).unwrap(), 4);
     assert_eq!(cf.num_evals(), 1);
     assert_eq!(cf.num_cache_hits(), 1);
 }
@@ -281,8 +315,8 @@ fn test_index_int_u8_cached_function() {
 fn test_cached_function_clear() {
     let local_dims = vec![10, 10];
     let cf = CachedFunction::new(|idx: &[usize]| idx[0] + idx[1], &local_dims).unwrap();
-    cf.eval(&[1, 2]);
-    cf.eval(&[3, 4]);
+    cf.eval(&[1, 2]).unwrap();
+    cf.eval(&[3, 4]).unwrap();
     assert_eq!(cf.cache_size(), 2);
 
     cf.clear_cache();
@@ -305,13 +339,13 @@ fn test_u128_cache_operations() {
     assert_eq!(cf.key_type(), "u128");
 
     let idx = vec![0; 100];
-    assert_eq!(cf.eval(&idx), 0);
+    assert_eq!(cf.eval(&idx).unwrap(), 0);
     assert_eq!(cf.num_evals(), 1);
     assert!(!cf.is_cached(&vec![1; 100]));
     assert!(cf.is_cached(&idx));
 
     // Cache hit
-    assert_eq!(cf.eval(&idx), 0);
+    assert_eq!(cf.eval(&idx).unwrap(), 0);
     assert_eq!(cf.num_cache_hits(), 1);
     assert_eq!(cf.cache_size(), 1);
 
@@ -326,14 +360,14 @@ fn test_eval_no_cache_and_stats() {
     let cf = CachedFunction::new(|idx: &[usize]| idx[0] * 10 + idx[1], &local_dims).unwrap();
 
     // eval_no_cache does not populate cache or affect stats
-    assert_eq!(cf.eval_no_cache(&[1, 2]), 12);
+    assert_eq!(cf.eval_no_cache(&[1, 2]).unwrap(), 12);
     assert_eq!(cf.num_evals(), 0);
     assert_eq!(cf.total_calls(), 0);
     assert_eq!(cf.cache_hit_ratio(), 0.0);
 
     // Now eval to populate cache
-    cf.eval(&[1, 2]);
-    cf.eval(&[1, 2]); // cache hit
+    cf.eval(&[1, 2]).unwrap();
+    cf.eval(&[1, 2]).unwrap(); // cache hit
     assert_eq!(cf.total_calls(), 2);
     assert_eq!(cf.cache_hit_ratio(), 0.5);
     assert!(cf.is_cached(&[1, 2]));
