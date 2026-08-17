@@ -1649,3 +1649,9 @@ fn site_indices_empty_tt_returns_empty() {
     let tt = TensorTrain::new(vec![]).unwrap();
     assert!(tt.site_indices().is_empty());
 }
+
+#[test]
+fn norm_environment_shape_overflow_is_reported() {
+    assert!(TensorTrain::checked_norm_square(usize::MAX).is_err());
+    assert!(TensorTrain::checked_norm_square(0).is_err());
+}

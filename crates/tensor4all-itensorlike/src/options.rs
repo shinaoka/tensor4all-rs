@@ -333,9 +333,12 @@ impl Default for LinsolveOptions {
 
 impl LinsolveOptions {
     /// Create options with the specified number of full sweeps.
+    ///
+    /// Values that would overflow the half-sweep counter saturate at
+    /// `usize::MAX`.
     pub fn new(nsweeps: usize) -> Self {
         Self {
-            nhalfsweeps: nsweeps * 2,
+            nhalfsweeps: nsweeps.saturating_mul(2),
             ..Default::default()
         }
     }

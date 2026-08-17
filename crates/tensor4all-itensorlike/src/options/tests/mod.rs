@@ -124,6 +124,12 @@ fn test_linsolve_options_new() {
 }
 
 #[test]
+fn test_linsolve_options_new_saturates_sweep_count_overflow() {
+    let opts = LinsolveOptions::new(usize::MAX);
+    assert_eq!(opts.nhalfsweeps(), usize::MAX);
+}
+
+#[test]
 fn test_linsolve_options_builder() {
     let policy = SvdTruncationPolicy::new(1e-10)
         .with_squared_values()
