@@ -385,9 +385,11 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     U: LocalUpdater<T, V>,
 {
+    let mut staged = treetn.clone();
+
     for step in plan.iter() {
         // Validate: canonical_region must be a single node within the step's nodes
-        let canonical_region = treetn.canonical_region();
+        let canonical_region = staged.canonical_region();
         if canonical_region.is_empty() {
             return Err(TreeTNOperationError::from(
                 anyhow::anyhow!("TreeTN is not canonicalized: canonical_region is empty")
@@ -421,26 +423,27 @@ where
         }
 
         updater
-            .before_step(step, treetn)
+            .before_step(step, &staged)
             .context("apply_local_update_sweep: LocalUpdater::before_step failed")?;
 
         // Extract subtree for the nodes in this step
-        let subtree = treetn.extract_subtree(&step.nodes)?;
+        let subtree = staged.extract_subtree(&step.nodes)?;
 
         // Apply the update
-        let updated_subtree = updater.update(subtree, step, treetn)?;
+        let updated_subtree = updater.update(subtree, step, &staged)?;
 
         // Replace the subtree back
-        treetn.replace_subtree(&step.nodes, &updated_subtree)?;
+        staged.replace_subtree(&step.nodes, &updated_subtree)?;
 
         // Update canonical center
-        treetn.set_canonical_region([step.new_center.clone()])?;
+        staged.set_canonical_region([step.new_center.clone()])?;
 
         updater
-            .after_step(step, treetn)
+            .after_step(step, &staged)
             .context("apply_local_update_sweep: LocalUpdater::after_step failed")?;
     }
 
+    *treetn = staged;
     Ok(())
 }
 

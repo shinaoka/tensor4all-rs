@@ -1,3 +1,4 @@
+use crate::batch::checked_batch_len;
 use crate::error::Result as TreeTciResult;
 use crate::{
     materialize::to_treetn, optimize_with_proposer, GlobalIndexBatch, MultiIndex,
@@ -121,9 +122,21 @@ where
 
     // Initialize max_sample_value via batch evaluate
     let n_sites = tci.local_dims.len();
-    let flat: Vec<usize> = pivots.iter().flat_map(|p| p.iter().copied()).collect();
+    let flat_len = checked_batch_len(n_sites, pivots.len())?;
+    let mut flat = Vec::with_capacity(flat_len);
+    for pivot in &pivots {
+        flat.extend_from_slice(pivot);
+    }
     let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
     let init_vals = evaluate(batch)?;
+    if init_vals.len() != pivots.len() {
+        return Err(anyhow::anyhow!(
+            "initial evaluator returned {} values for {} pivots",
+            init_vals.len(),
+            pivots.len()
+        )
+        .into());
+    }
     tci.max_sample_value = init_vals
         .iter()
         .map(|v| CommonScalar::abs_val(*v))

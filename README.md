@@ -12,6 +12,7 @@ Related project: [tenferro-rs](https://github.com/tensor4all/tenferro-rs) provid
 - **Tensor Cross Interpolation**: TCI2 primary algorithm plus legacy TCI1 compatibility for efficient high-dimensional function approximation
 - **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
 - **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
+- **Partitioned TreeTNs**: Eagerly masked subdomains and volume-budgeted adaptive patching
 - **C API**: Minimal Julia-facing FFI surface for indices, structured tensors, TreeTN, and quantics materialization
 
 ## Quick Start
@@ -58,7 +59,8 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-treetci](crates/tensor4all-treetci/) | Tree-structured cross interpolation |
-| [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned tensor trains and adaptive TCI interpolation |
+| [tensor4all-partitionedtreetn](crates/tensor4all-partitionedtreetn/) | Partitioned TreeTNs with eager masking and adaptive patching |
+| [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | **Deprecated:** partitioned tensor trains and adaptive TCI interpolation during migration |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 

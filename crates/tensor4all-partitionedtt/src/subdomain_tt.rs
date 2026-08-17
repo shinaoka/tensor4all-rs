@@ -28,8 +28,8 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 /// let t1 = IdxTensor::from_dense(vec![bond.clone(), site1.clone()], vec![3.0, 4.0]).unwrap();
 /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 ///
-/// let projector = Projector::from_pairs([(site0.clone(), 1)]);
-/// let subdomain_tt = SubDomainTT::new(tt, projector);
+/// let projector = Projector::from_pairs([(site0.clone(), 1)]).unwrap();
+/// let subdomain_tt = SubDomainTT::new(tt, projector).unwrap();
 ///
 /// assert_eq!(subdomain_tt.len(), 2);
 /// assert_eq!(subdomain_tt.projector().get(&site0), Some(1));
@@ -46,18 +46,25 @@ pub struct SubDomainTT {
 }
 
 impl SubDomainTT {
-    /// Create a new SubDomainTT from a tensor train and projector.
+    /// Create a new `SubDomainTT` from a tensor train and projector.
     ///
-    /// The projector is trimmed to only include indices that exist in the tensor train.
-    pub fn new(data: TensorTrain, projector: Projector) -> Self {
-        // Trim projector to only include valid indices
-        let all_indices = Self::collect_all_indices(&data);
-        let trimmed_projector = projector.filter_indices(&all_indices);
-        Self {
+    /// Projector indices must match tensor-train site indices by full identity
+    /// (`id`, canonical tags, and prime level). Coordinates are zero-based and
+    /// are checked against the matched tensor-train dimensions. The projector
+    /// is stored unchanged after validation; no entries are filtered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::ProjectorIndexNotFound`] for an absent
+    /// full identity or [`PartitionedTTError::ProjectorCoordinateOutOfBounds`]
+    /// when a coordinate is outside the matched tensor-train dimension.
+    pub fn new(data: TensorTrain, projector: Projector) -> Result<Self> {
+        Self::validate_projector_against_data(&data, &projector)?;
+        Ok(Self {
             data,
-            projector: trimmed_projector,
+            projector,
             budget_squared: None,
-        }
+        })
     }
 
     /// Create a SubDomainTT from a tensor train with an empty projector.
@@ -82,11 +89,6 @@ impl SubDomainTT {
     /// Get a reference to the underlying tensor train.
     pub fn data(&self) -> &TensorTrain {
         &self.data
-    }
-
-    /// Get a mutable reference to the underlying tensor train.
-    pub fn data_mut(&mut self) -> &mut TensorTrain {
-        &mut self.data
     }
 
     /// Get a reference to the projector.
@@ -159,7 +161,7 @@ impl SubDomainTT {
     /// let tensor = IdxTensor::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
     /// let subdomain = SubDomainTT::from_tt(TensorTrain::new(vec![tensor]).unwrap());
     /// let projected = subdomain
-    ///     .project(&Projector::from_pairs([(site.clone(), 1)]))
+    ///     .project(&Projector::from_pairs([(site.clone(), 1)]).unwrap())
     ///     .unwrap()
     ///     .unwrap();
     ///
@@ -178,6 +180,7 @@ impl SubDomainTT {
             .projector
             .intersection(projector)
             .ok_or(PartitionedTTError::ProjectorConflict)?;
+        self.validate_projector(&merged_projector)?;
         let projected_data = self.project_tensor_data(projector)?;
 
         Ok(Some(Self {
@@ -187,19 +190,28 @@ impl SubDomainTT {
         }))
     }
 
+    pub(crate) fn validate_invariants(&self) -> Result<()> {
+        self.validate_projector(&self.projector)
+    }
+
     fn validate_projector(&self, projector: &Projector) -> Result<()> {
-        let all_indices: HashSet<_> = self.all_indices().into_iter().collect();
+        Self::validate_projector_against_data(&self.data, projector)
+    }
+
+    fn validate_projector_against_data(data: &TensorTrain, projector: &Projector) -> Result<()> {
+        let all_indices = Self::collect_all_indices(data);
         for (index, &value) in projector.iter() {
-            if !all_indices.contains(index) {
+            let matched = all_indices.iter().find(|candidate| *candidate == index);
+            let Some(matched) = matched else {
                 return Err(PartitionedTTError::ProjectorIndexNotFound {
                     index: index.clone(),
                 });
-            }
-            if value >= index.dim {
+            };
+            if value >= matched.dim {
                 return Err(PartitionedTTError::ProjectorCoordinateOutOfBounds {
                     index: index.clone(),
                     value,
-                    dim: index.dim,
+                    dim: matched.dim,
                 });
             }
         }
@@ -350,7 +362,7 @@ impl SubDomainTT {
             .map_err(|source| PartitionedTTError::TensorTrain { source })?;
 
         // Create result with the new projector
-        let result = Self::new(contracted_data, proj_after);
+        let result = Self::new(contracted_data, proj_after)?;
 
         Ok(Some(result))
     }
@@ -390,7 +402,7 @@ impl SubDomainTT {
             }
         }
 
-        Ok((Projector::from_pairs(proj_data), external))
+        Ok((Projector::from_pairs(proj_data)?, external))
     }
 
     /// Inner product with another SubDomainTT.

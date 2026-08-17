@@ -17,6 +17,12 @@ fn test_tensor3_zeros() {
 }
 
 #[test]
+fn test_try_tensor3_zeros_rejects_shape_overflow() {
+    let error = try_tensor3_zeros::<f64>(usize::MAX, 2, 1).unwrap_err();
+    assert!(error.to_string().contains("overflows usize"));
+}
+
+#[test]
 fn test_tensor3_from_data() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let t = tensor3_from_data(data, 2, 3, 4).unwrap();
@@ -73,6 +79,11 @@ fn test_slice_site() {
 
     let slice_zero = t.slice_site(0);
     assert!(slice_zero.iter().all(|&v| v == 0.0));
+
+    let fallible_slice = t.try_slice_site(1).unwrap();
+    assert_eq!(fallible_slice, slice);
+    let error = t.try_slice_site(3).unwrap_err();
+    assert!(matches!(error, TensorTrainError::IndexOutOfBounds { .. }));
 }
 
 #[test]
@@ -92,6 +103,12 @@ fn test_as_left_matrix() {
     assert_eq!(mat[2], 4.0);
     assert_eq!(mat[5], 5.0);
     assert_eq!(mat[6], 6.0);
+
+    let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_left_matrix().unwrap();
+    assert_eq!(
+        (fallible_mat, fallible_rows, fallible_cols),
+        (mat, rows, cols)
+    );
 }
 
 #[test]
@@ -109,4 +126,10 @@ fn test_as_right_matrix() {
     assert_eq!(mat[1], 1.0);
     assert_eq!(mat[22], 22.0);
     assert_eq!(mat[23], 23.0);
+
+    let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_right_matrix().unwrap();
+    assert_eq!(
+        (fallible_mat, fallible_rows, fallible_cols),
+        (mat, rows, cols)
+    );
 }

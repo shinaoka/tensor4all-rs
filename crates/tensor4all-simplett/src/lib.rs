@@ -90,5 +90,8 @@ pub use tensortrain::SimpleTensorTrain;
 /// ```
 pub use tenferro_tensor::TypedTensor;
 pub use traits::{AbstractTensorTrain, TTScalar};
-pub use types::{tensor3_from_data, tensor3_zeros, LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
+pub use types::{
+    tensor3_from_data, tensor3_zeros, try_tensor3_zeros, LocalIndex, MultiIndex, Tensor3,
+    Tensor3Ops,
+};
 pub use vidal::{DiagMatrix, InverseTensorTrain, VidalTensorTrain};

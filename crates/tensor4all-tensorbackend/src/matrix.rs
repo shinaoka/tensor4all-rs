@@ -124,6 +124,22 @@ pub enum MatrixShapeError {
         /// Actual number of entries in `row`.
         actual: usize,
     },
+    /// The matrix element count overflowed `usize`.
+    #[error("matrix shape {nrows}x{ncols} overflows usize")]
+    ShapeOverflow {
+        /// Number of rows.
+        nrows: usize,
+        /// Number of columns.
+        ncols: usize,
+    },
+    /// The flat data length did not match the matrix shape.
+    #[error("matrix data has length {actual}, expected {expected}")]
+    DataLengthMismatch {
+        /// Number of supplied elements.
+        actual: usize,
+        /// Number of elements implied by the shape.
+        expected: usize,
+    },
 }
 
 /// Error returned by matrix multiplication entry points.
@@ -377,6 +393,29 @@ impl HermitianEigenScalar for Complex64 {
 }
 
 impl<T> Matrix<T> {
+    /// Fallibly create a matrix from column-major data after checked shape validation.
+    ///
+    /// # Errors
+    /// Returns [`MatrixShapeError::ShapeOverflow`] when the shape exceeds
+    /// `usize`, or [`MatrixShapeError::DataLengthMismatch`] when the payload
+    /// length does not match the shape.
+    pub fn try_from_col_major_vec(
+        nrows: usize,
+        ncols: usize,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, MatrixShapeError> {
+        let expected = nrows
+            .checked_mul(ncols)
+            .ok_or(MatrixShapeError::ShapeOverflow { nrows, ncols })?;
+        if data.len() != expected {
+            return Err(MatrixShapeError::DataLengthMismatch {
+                actual: data.len(),
+                expected,
+            });
+        }
+        Ok(Self { nrows, ncols, data })
+    }
+
     /// Create a matrix from raw column-major data.
     ///
     /// # Panics
@@ -910,6 +949,18 @@ impl<T: Clone> Matrix<T> {
 }
 
 impl<T: Clone + Zero> Matrix<T> {
+    /// Fallibly create a zero-filled matrix after checked shape validation.
+    ///
+    /// # Errors
+    /// Returns [`MatrixShapeError::ShapeOverflow`] when the shape exceeds
+    /// `usize`.
+    pub fn try_zeros(nrows: usize, ncols: usize) -> std::result::Result<Self, MatrixShapeError> {
+        let len = nrows
+            .checked_mul(ncols)
+            .ok_or(MatrixShapeError::ShapeOverflow { nrows, ncols })?;
+        Self::try_from_col_major_vec(nrows, ncols, vec![T::zero(); len])
+    }
+
     /// Create a zeros matrix
     ///
     /// # Panics

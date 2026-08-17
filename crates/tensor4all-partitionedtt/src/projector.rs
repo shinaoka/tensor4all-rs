@@ -3,8 +3,11 @@
 //! A projector maps tensor indices (DynIndex) to fixed values, defining a subdomain
 //! where specific indices are fixed to particular values.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
-use tensor4all_core::DynIndex;
+
+use crate::error::{PartitionedTTError, Result};
+use tensor4all_core::{DynIndex, TagSetLike};
 
 /// A projector maps tensor indices to fixed integer values.
 ///
@@ -21,7 +24,7 @@ use tensor4all_core::DynIndex;
 /// let idx1 = Index::new_dyn(3);
 ///
 /// // Create a projector that fixes idx0 to value 1
-/// let p = Projector::from_pairs([(idx0.clone(), 1)]);
+/// let p = Projector::from_pairs([(idx0.clone(), 1)]).unwrap();
 ///
 /// assert!(p.is_projected_at(&idx0));
 /// assert!(!p.is_projected_at(&idx1));
@@ -41,11 +44,22 @@ impl Projector {
         }
     }
 
-    /// Create a projector from pairs of (index, projected_value)
-    pub fn from_pairs(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Self {
-        Self {
-            data: pairs.into_iter().collect(),
+    /// Create a projector from `(index, projected_value)` pairs.
+    ///
+    /// Coordinates are zero-based and must be smaller than their index
+    /// dimension. If an identity appears more than once, the last validated
+    /// pair replaces the earlier key and value together.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] when a
+    /// coordinate is not in `0..index.dim()`.
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Result<Self> {
+        let mut projector = Self::new();
+        for (index, value) in pairs {
+            projector.insert(index, value)?;
         }
+        Ok(projector)
     }
 
     /// Check if an index is projected
@@ -78,9 +92,28 @@ impl Projector {
         self.data.iter()
     }
 
-    /// Insert or update a projection
-    pub fn insert(&mut self, index: DynIndex, value: usize) {
+    /// Insert or update a projection.
+    ///
+    /// `value` is a zero-based coordinate and must be smaller than
+    /// `index.dim()`. An update whose index is equal by full projector
+    /// identity replaces the stored key and coordinate together.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] and
+    /// leaves this projector unchanged when `value >= index.dim()`.
+    pub fn insert(&mut self, index: DynIndex, value: usize) -> Result<()> {
+        if value >= index.dim {
+            let dim = index.dim;
+            return Err(PartitionedTTError::ProjectorCoordinateOutOfBounds { index, value, dim });
+        }
+
+        // HashMap::insert keeps the old key when an equal key already exists.
+        // Remove first so the stored identity and coordinate are replaced as a
+        // pair, including when only the dimension differs.
+        self.data.remove(&index);
         self.data.insert(index, value);
+        Ok(())
     }
 
     /// Remove a projection
@@ -189,6 +222,49 @@ impl Projector {
                 .collect(),
         }
     }
+
+    /// Return entries in the canonical identity and coordinate order.
+    pub(crate) fn canonical_entries(&self) -> Vec<(&DynIndex, usize)> {
+        let mut entries: Vec<_> = self
+            .data
+            .iter()
+            .map(|(index, &value)| (index, value))
+            .collect();
+        entries.sort_by(canonical_entry_cmp);
+        entries
+    }
+
+    /// Compare projectors by a deterministic total order compatible with Eq.
+    pub(crate) fn canonical_cmp(&self, other: &Self) -> Ordering {
+        let left = self.canonical_entries();
+        let right = other.canonical_entries();
+        match left.len().cmp(&right.len()) {
+            Ordering::Equal => {}
+            order => return order,
+        }
+
+        for (left_entry, right_entry) in left.iter().zip(&right) {
+            match canonical_entry_cmp(left_entry, right_entry) {
+                Ordering::Equal => {}
+                order => return order,
+            }
+        }
+        Ordering::Equal
+    }
+}
+
+fn canonical_entry_cmp(
+    (left_index, left_value): &(&DynIndex, usize),
+    (right_index, right_value): &(&DynIndex, usize),
+) -> Ordering {
+    canonical_index_cmp(left_index, right_index).then_with(|| left_value.cmp(right_value))
+}
+
+fn canonical_index_cmp(left: &DynIndex, right: &DynIndex) -> Ordering {
+    left.id
+        .cmp(&right.id)
+        .then_with(|| left.tags.iter().cmp(right.tags.iter()))
+        .then_with(|| left.plev.cmp(&right.plev))
 }
 
 impl PartialEq for Projector {
@@ -201,12 +277,10 @@ impl Eq for Projector {}
 
 impl std::hash::Hash for Projector {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Sort entries by index ID for consistent hashing
-        let mut entries: Vec<_> = self.data.iter().collect();
-        entries.sort_by_key(|(k, _)| k.id);
-        for (k, v) in entries {
-            k.hash(state);
-            v.hash(state);
+        self.data.len().hash(state);
+        for (index, value) in self.canonical_entries() {
+            index.hash(state);
+            value.hash(state);
         }
     }
 }
@@ -222,12 +296,6 @@ impl PartialOrd for Projector {
         } else {
             None
         }
-    }
-}
-
-impl FromIterator<(DynIndex, usize)> for Projector {
-    fn from_iter<I: IntoIterator<Item = (DynIndex, usize)>>(iter: I) -> Self {
-        Self::from_pairs(iter)
     }
 }
 

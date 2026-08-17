@@ -78,17 +78,29 @@ where
     let n_left_sites = left_key.as_slice().len();
     let n_right_sites = right_key.as_slice().len();
 
-    let left_data: Vec<usize> = row_indices
-        .iter()
-        .flat_map(|&row| left_candidates[row].iter().copied())
-        .collect();
+    let left_len = n_left_sites
+        .checked_mul(row_indices.len())
+        .ok_or_else(|| anyhow::anyhow!("selected left pivot data size overflowed usize"))?;
+    let mut left_data = Vec::with_capacity(left_len);
+    for &row in &row_indices {
+        let candidate = left_candidates
+            .get(row)
+            .ok_or_else(|| anyhow::anyhow!("selected left pivot row {row} is out of bounds"))?;
+        left_data.extend_from_slice(candidate);
+    }
     let left_arr = ColMajorArray::new(left_data, vec![n_left_sites, row_indices.len()])?;
     state.ijset.insert(left_key.clone(), left_arr);
 
-    let right_data: Vec<usize> = col_indices
-        .iter()
-        .flat_map(|&col| right_candidates[col].iter().copied())
-        .collect();
+    let right_len = n_right_sites
+        .checked_mul(col_indices.len())
+        .ok_or_else(|| anyhow::anyhow!("selected right pivot data size overflowed usize"))?;
+    let mut right_data = Vec::with_capacity(right_len);
+    for &col in &col_indices {
+        let candidate = right_candidates
+            .get(col)
+            .ok_or_else(|| anyhow::anyhow!("selected right pivot column {col} is out of bounds"))?;
+        right_data.extend_from_slice(candidate);
+    }
     let right_arr = ColMajorArray::new(right_data, vec![n_right_sites, col_indices.len()])?;
     state.ijset.insert(right_key.clone(), right_arr);
 

@@ -20,9 +20,9 @@
 //!     &[3, 4],
 //! ).unwrap();
 //!
-//! assert_eq!(cf.eval(&[1, 2]), 3);
+//! assert_eq!(cf.eval(&[1, 2]).unwrap(), 3);
 //! assert_eq!(cf.num_evals(), 1);
-//! assert_eq!(cf.eval(&[1, 2]), 3);
+//! assert_eq!(cf.eval(&[1, 2]).unwrap(), 3);
 //! assert_eq!(cf.num_cache_hits(), 1);
 //! ```
 
@@ -375,17 +375,17 @@ type BatchFunc<I, V> = dyn Fn(&[Vec<I>]) -> Vec<V> + Send + Sync;
 /// ).unwrap();
 ///
 /// // First call evaluates and caches
-/// let v00 = cf.eval(&[0, 0]);
+/// let v00 = cf.eval(&[0, 0]).unwrap();
 /// assert_eq!(v00, 0.0);
 /// assert_eq!(cf.num_evals(), 1);
 /// assert_eq!(cf.num_cache_hits(), 0);
 ///
 /// // Second call uses cache
-/// let v00_again = cf.eval(&[0, 0]);
+/// let v00_again = cf.eval(&[0, 0]).unwrap();
 /// assert_eq!(v00_again, 0.0);
 /// assert_eq!(cf.num_cache_hits(), 1);
 ///
-/// let v12 = cf.eval(&[1, 2]);
+/// let v12 = cf.eval(&[1, 2]).unwrap();
 /// assert_eq!(v12, 6.0); // 1*4 + 2
 /// ```
 pub struct CachedFunction<V, F, I = usize>
@@ -422,7 +422,7 @@ where
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] + idx[1], &[2, 3]).unwrap();
-    /// assert_eq!(cf.eval(&[1, 2]), 3);
+    /// assert_eq!(cf.eval(&[1, 2]).unwrap(), 3);
     /// assert_eq!(cf.num_sites(), 2);
     /// assert_eq!(cf.local_dims(), &[2, 3]);
     /// ```
@@ -460,7 +460,7 @@ where
     ///     &[3, 4],
     /// ).unwrap();
     ///
-    /// let results = cf.eval_batch(&[vec![0, 1], vec![2, 3]]);
+    /// let results = cf.eval_batch(&[vec![0, 1], vec![2, 3]]).unwrap();
     /// assert_eq!(results, vec![1, 23]);
     /// assert_eq!(cf.num_evals(), 2);
     /// ```
@@ -524,7 +524,7 @@ where
     /// ).unwrap();
     /// let zeros = vec![0usize; 1025];
     ///
-    /// assert_eq!(cf.eval(&zeros), 0);
+    /// assert_eq!(cf.eval(&zeros).unwrap(), 0);
     /// assert_eq!(cf.key_type(), "custom");
     /// ```
     pub fn with_key_type<K: CacheKey>(
@@ -565,7 +565,7 @@ where
     ///     &[2, 3, 4],
     /// ).unwrap();
     ///
-    /// let results = cf.eval_batch(&[vec![0, 0, 0], vec![1, 2, 3]]);
+    /// let results = cf.eval_batch(&[vec![0, 0, 0], vec![1, 2, 3]]).unwrap();
     /// assert_eq!(results, vec![0, 6]);
     /// ```
     pub fn with_key_type_and_batch<K: CacheKey, B>(
@@ -593,30 +593,35 @@ where
     /// the result is cached. Subsequent calls with the same index return the
     /// cached value. This method is thread-safe.
     ///
+    /// # Errors
+    /// Returns [`error::CacheKeyError::InvalidIndexLength`] for a wrong-rank index or
+    /// [`error::CacheKeyError::IndexOutOfBounds`] for an invalid coordinate.
+    ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] * idx[1], &[5, 5]).unwrap();
-    /// assert_eq!(cf.eval(&[3, 4]), 12);
+    /// assert_eq!(cf.eval(&[3, 4]).unwrap(), 12);
     /// assert_eq!(cf.num_evals(), 1);
     ///
     /// // Cache hit
-    /// assert_eq!(cf.eval(&[3, 4]), 12);
+    /// assert_eq!(cf.eval(&[3, 4]).unwrap(), 12);
     /// assert_eq!(cf.num_evals(), 1);
     /// assert_eq!(cf.num_cache_hits(), 1);
     /// ```
-    pub fn eval(&self, idx: &[I]) -> V {
+    pub fn eval(&self, idx: &[I]) -> Result<V, error::CacheKeyError> {
+        self.validate_index(idx)?;
         if let Some(value) = self.cache.get(idx) {
             self.num_cache_hits.fetch_add(1, Ordering::Relaxed);
-            return value;
+            return Ok(value);
         }
 
         self.num_evals.fetch_add(1, Ordering::Relaxed);
         let value = (self.func)(idx);
         self.cache.insert(idx, value.clone());
-        value
+        Ok(value)
     }
 
     /// Evaluate bypassing the cache.
@@ -625,23 +630,33 @@ where
     /// evaluation counters are not updated. Useful for verification or
     /// when the caller intentionally wants a fresh evaluation.
     ///
+    /// # Errors
+    /// Returns [`error::CacheKeyError::InvalidIndexLength`] for a wrong-rank index or
+    /// [`error::CacheKeyError::IndexOutOfBounds`] for an invalid coordinate.
+    ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] + 1, &[4]).unwrap();
-    /// assert_eq!(cf.eval_no_cache(&[2]), 3);
+    /// assert_eq!(cf.eval_no_cache(&[2]).unwrap(), 3);
     /// assert_eq!(cf.cache_size(), 0);
     /// assert_eq!(cf.num_evals(), 0);
     /// ```
-    pub fn eval_no_cache(&self, idx: &[I]) -> V {
-        (self.func)(idx)
+    pub fn eval_no_cache(&self, idx: &[I]) -> Result<V, error::CacheKeyError> {
+        self.validate_index(idx)?;
+        Ok((self.func)(idx))
     }
 
     /// Evaluate at multiple indices. Uses batch function for cache misses if available.
     ///
     /// Returns results in the same order as the input indices.
+    ///
+    /// # Errors
+    /// Returns an index validation error for malformed coordinates or
+    /// [`error::CacheKeyError::BatchResultLength`] when a batch callback returns the
+    /// wrong number of values.
     ///
     /// # Examples
     ///
@@ -649,12 +664,15 @@ where
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] * 2 + idx[1], &[2, 2]).unwrap();
-    /// let results = cf.eval_batch(&[vec![0, 0], vec![0, 1], vec![1, 0]]);
+    /// let results = cf.eval_batch(&[vec![0, 0], vec![0, 1], vec![1, 0]]).unwrap();
     /// assert_eq!(results, vec![0, 1, 2]);
     /// ```
-    pub fn eval_batch(&self, indices: &[Vec<I>]) -> Vec<V> {
+    pub fn eval_batch(&self, indices: &[Vec<I>]) -> Result<Vec<V>, error::CacheKeyError> {
         if indices.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
+        }
+        for index in indices {
+            self.validate_index(index)?;
         }
 
         let mut results: Vec<Option<V>> = Vec::with_capacity(indices.len());
@@ -673,7 +691,7 @@ where
         }
 
         if miss_indices.is_empty() {
-            return results.into_iter().flatten().collect();
+            return Ok(results.into_iter().flatten().collect());
         }
 
         self.num_evals
@@ -683,13 +701,39 @@ where
         } else {
             miss_indices.iter().map(|idx| (self.func)(idx)).collect()
         };
+        if miss_values.len() != miss_indices.len() {
+            return Err(error::CacheKeyError::BatchResultLength {
+                expected: miss_indices.len(),
+                got: miss_values.len(),
+            });
+        }
 
         for (i, pos) in miss_positions.iter().enumerate() {
             self.cache.insert(&miss_indices[i], miss_values[i].clone());
             results[*pos] = Some(miss_values[i].clone());
         }
 
-        results.into_iter().flatten().collect()
+        Ok(results.into_iter().flatten().collect())
+    }
+
+    fn validate_index(&self, idx: &[I]) -> std::result::Result<(), error::CacheKeyError> {
+        if idx.len() != self.local_dims.len() {
+            return Err(error::CacheKeyError::InvalidIndexLength {
+                expected: self.local_dims.len(),
+                got: idx.len(),
+            });
+        }
+        for (axis, (&value, &dim)) in idx.iter().zip(&self.local_dims).enumerate() {
+            let value = value.to_usize();
+            if value >= dim {
+                return Err(error::CacheKeyError::IndexOutOfBounds {
+                    axis,
+                    index: value,
+                    dim,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Get the local dimensions.
@@ -728,9 +772,9 @@ where
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
-    /// cf.eval(&[0]);
-    /// cf.eval(&[1]);
-    /// cf.eval(&[0]); // cache hit, not a new eval
+    /// cf.eval(&[0]).unwrap();
+    /// cf.eval(&[1]).unwrap();
+    /// cf.eval(&[0]).unwrap(); // cache hit, not a new eval
     /// assert_eq!(cf.num_evals(), 2);
     /// ```
     pub fn num_evals(&self) -> usize {
@@ -745,9 +789,9 @@ where
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
-    /// cf.eval(&[0]);
+    /// cf.eval(&[0]).unwrap();
     /// assert_eq!(cf.num_cache_hits(), 0);
-    /// cf.eval(&[0]);
+    /// cf.eval(&[0]).unwrap();
     /// assert_eq!(cf.num_cache_hits(), 1);
     /// ```
     pub fn num_cache_hits(&self) -> usize {
@@ -762,9 +806,9 @@ where
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
-    /// cf.eval(&[0]);
-    /// cf.eval(&[1]);
-    /// cf.eval(&[0]); // cache hit
+    /// cf.eval(&[0]).unwrap();
+    /// cf.eval(&[1]).unwrap();
+    /// cf.eval(&[0]).unwrap(); // cache hit
     /// assert_eq!(cf.total_calls(), 3);
     /// assert_eq!(cf.total_calls(), cf.num_evals() + cf.num_cache_hits());
     /// ```
@@ -784,8 +828,8 @@ where
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// assert_eq!(cf.cache_hit_ratio(), 0.0); // no calls yet
     ///
-    /// cf.eval(&[0]);
-    /// cf.eval(&[0]); // cache hit
+    /// cf.eval(&[0]).unwrap();
+    /// cf.eval(&[0]).unwrap(); // cache hit
     /// assert!((cf.cache_hit_ratio() - 0.5).abs() < 1e-10);
     /// ```
     pub fn cache_hit_ratio(&self) -> f64 {
@@ -805,7 +849,7 @@ where
     /// use tensor4all_core::CachedFunction;
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
-    /// cf.eval(&[2]);
+    /// cf.eval(&[2]).unwrap();
     /// assert_eq!(cf.cache_size(), 1);
     /// cf.clear_cache();
     /// assert_eq!(cf.cache_size(), 0);
@@ -823,10 +867,10 @@ where
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// assert_eq!(cf.cache_size(), 0);
-    /// cf.eval(&[0]);
-    /// cf.eval(&[1]);
+    /// cf.eval(&[0]).unwrap();
+    /// cf.eval(&[1]).unwrap();
     /// assert_eq!(cf.cache_size(), 2);
-    /// cf.eval(&[0]); // cache hit, no new entry
+    /// cf.eval(&[0]).unwrap(); // cache hit, no new entry
     /// assert_eq!(cf.cache_size(), 2);
     /// ```
     pub fn cache_size(&self) -> usize {
@@ -842,7 +886,7 @@ where
     ///
     /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
     /// assert!(!cf.is_cached(&[1]));
-    /// cf.eval(&[1]);
+    /// cf.eval(&[1]).unwrap();
     /// assert!(cf.is_cached(&[1]));
     /// ```
     pub fn is_cached(&self, idx: &[I]) -> bool {

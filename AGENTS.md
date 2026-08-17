@@ -32,10 +32,14 @@ Then read `README.md` and `REPOSITORY_RULES.md` before starting work.
 ### API Reference (Check First)
 
 ```bash
-cargo run -p api-dump --release -- . -o docs/api
+cargo run -p xtask --release -- api-dump
 ```
 
-Read `docs/api/*.md` before source files. Only read source when API doc is insufficient.
+This generates a complete, temporary inventory under `target/api-dump/` and
+verifies that every public crate under `crates/` appears exactly once. The
+output is ignored and must never be committed or edited manually. Read the
+relevant `target/api-dump/*.md` file before source files; only read source when
+that API inventory is insufficient.
 
 ## Context-Efficient Exploration
 

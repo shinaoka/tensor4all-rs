@@ -42,6 +42,16 @@ pub fn linsolve(
             message: "Cannot linsolve with empty tensor trains".to_string(),
         });
     }
+    if operator.len() != rhs.len() || operator.len() != init.len() {
+        return Err(TensorTrainError::InvalidStructure {
+            message: format!(
+                "operator, rhs, and init must have equal lengths; got {}, {}, {}",
+                operator.len(),
+                rhs.len(),
+                init.len()
+            ),
+        });
+    }
 
     if !options.nhalfsweeps().is_multiple_of(2) {
         return Err(TensorTrainError::OperationError {

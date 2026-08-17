@@ -11,6 +11,13 @@ use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mu
 type LocalOperator<'a, T> =
     dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;
 
+fn checked_mul(lhs: usize, rhs: usize, what: &str) -> Result<usize> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(|| AciError::InvalidOptions {
+            message: format!("{what} overflowed usize"),
+        })
+}
+
 #[cfg(test)]
 fn local_setup_batching_enabled() -> bool {
     std::env::var("T4A_ACI_DISABLE_BATCHED_LOCAL_SETUP").as_deref() != Ok("1")
@@ -91,8 +98,8 @@ impl<T: AciScalar> LocalInputFactors<T> {
         let mut value = T::zero();
         for middle in 0..self.middle_dim {
             value = value
-                + self.left_values[self.left_offset(left_pivot, site_left, middle)]
-                    * self.right_values[self.right_offset(middle, site_right, right_pivot)];
+                + self.left_values[self.left_offset(left_pivot, site_left, middle)?]
+                    * self.right_values[self.right_offset(middle, site_right, right_pivot)?];
         }
         Ok(value)
     }
@@ -107,12 +114,30 @@ impl<T: AciScalar> LocalInputFactors<T> {
         Ok(product.into_col_major_vec())
     }
 
-    fn left_offset(&self, left_pivot: usize, site_left: usize, middle: usize) -> usize {
-        left_pivot + self.left_rows * (site_left + self.site_dim_left * middle)
+    fn left_offset(&self, left_pivot: usize, site_left: usize, middle: usize) -> Result<usize> {
+        let site_offset = checked_local_add(
+            site_left,
+            checked_local_mul(self.site_dim_left, middle, "left factor site offset")?,
+            "left factor site offset",
+        )?;
+        checked_local_add(
+            left_pivot,
+            checked_local_mul(self.left_rows, site_offset, "left factor offset")?,
+            "left factor offset",
+        )
     }
 
-    fn right_offset(&self, middle: usize, site_right: usize, right_pivot: usize) -> usize {
-        middle + self.middle_dim * (site_right + self.site_dim_right * right_pivot)
+    fn right_offset(&self, middle: usize, site_right: usize, right_pivot: usize) -> Result<usize> {
+        let site_offset = checked_local_add(
+            site_right,
+            checked_local_mul(self.site_dim_right, right_pivot, "right factor site offset")?,
+            "right factor site offset",
+        )?;
+        checked_local_add(
+            middle,
+            checked_local_mul(self.middle_dim, site_offset, "right factor offset")?,
+            "right factor offset",
+        )
     }
 }
 
@@ -214,7 +239,11 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             let cache = self.cache.borrow();
             for (col_position, &col) in cols.iter().enumerate() {
                 for (row_position, &row) in rows.iter().enumerate() {
-                    let point = row_position + rows.len() * col_position;
+                    let point = checked_local_add(
+                        row_position,
+                        checked_local_mul(rows.len(), col_position, "local point offset")?,
+                        "local point offset",
+                    )?;
                     let key = self.entry_key(row, col)?;
                     point_keys.push(key);
                     if let Some(&value) = cache.get(&key) {
@@ -241,8 +270,9 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         let mut input_values = vec![T::zero(); input_value_count];
         for (point, (&row, &col)) in missing_rows.iter().zip(&missing_cols).enumerate() {
             for input in 0..n_inputs {
-                input_values[input + n_inputs * point] =
-                    self.input_factors[input].value(row, col)?;
+                let offset = checked_local_mul(n_inputs, point, "local input offset")?;
+                let index = checked_local_add(input, offset, "local input offset")?;
+                input_values[index] = self.input_factors[input].value(row, col)?;
             }
         }
 
@@ -280,8 +310,18 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
 
         if local_materialize_batching_enabled() {
             if let Some(middle_dim) = self.shared_middle_dim() {
-                let mut left_batch = Vec::with_capacity(n_inputs * self.nrows * middle_dim);
-                let mut right_batch = Vec::with_capacity(n_inputs * middle_dim * self.ncols);
+                let left_batch_len = checked_local_mul(
+                    checked_local_mul(n_inputs, self.nrows, "local left batch input count")?,
+                    middle_dim,
+                    "local left batch size",
+                )?;
+                let right_batch_len = checked_local_mul(
+                    checked_local_mul(n_inputs, middle_dim, "local right batch input count")?,
+                    self.ncols,
+                    "local right batch size",
+                )?;
+                let mut left_batch = Vec::with_capacity(left_batch_len);
+                let mut right_batch = Vec::with_capacity(right_batch_len);
                 for factors in &self.input_factors {
                     left_batch.extend_from_slice(&factors.left_values);
                     right_batch.extend_from_slice(&factors.right_values);
@@ -296,9 +336,15 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
                 )
                 .map_err(|err| local_factor_error("batched local input materialization", err))?;
                 for input in 0..n_inputs {
-                    let offset = input * n_points;
+                    let offset = checked_local_mul(input, n_points, "local batched input offset")?;
                     for point in 0..n_points {
-                        input_values[input + n_inputs * point] = values[offset + point];
+                        let input_offset =
+                            checked_local_mul(n_inputs, point, "local input offset")?;
+                        let input_index =
+                            checked_local_add(input, input_offset, "local input offset")?;
+                        let value_index =
+                            checked_local_add(offset, point, "local batched value offset")?;
+                        input_values[input_index] = values[value_index];
                     }
                 }
                 return Ok(input_values);
@@ -307,8 +353,18 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
 
         for input in 0..n_inputs {
             let values = self.input_factors[input].materialize_values()?;
-            for point in 0..n_points {
-                input_values[input + n_inputs * point] = values[point];
+            if values.len() != n_points {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "local factor materialization returned {} values, expected {n_points}",
+                        values.len()
+                    ),
+                });
+            }
+            for (point, &value) in values.iter().enumerate() {
+                let input_offset = checked_local_mul(n_inputs, point, "local input offset")?;
+                let input_index = checked_local_add(input, input_offset, "local input offset")?;
+                input_values[input_index] = value;
             }
         }
         Ok(input_values)
@@ -525,10 +581,20 @@ fn build_left_factors<T: AciScalar>(
     if local_setup_batching_enabled() {
         if let Some(shared) = shared_input_factor_dims(dims) {
             let n_inputs = dims.len();
-            let left_cols = shared.site_dim_left * shared.middle_dim;
-            let mut frame_batch =
-                Vec::with_capacity(n_inputs * shared.left_rows * shared.input_left_dim);
-            let mut core_batch = Vec::with_capacity(n_inputs * shared.input_left_dim * left_cols);
+            let left_cols =
+                checked_mul(shared.site_dim_left, shared.middle_dim, "ACI left columns")?;
+            let frame_batch_len = checked_mul(
+                checked_mul(n_inputs, shared.left_rows, "ACI left frame batch")?,
+                shared.input_left_dim,
+                "ACI left frame batch",
+            )?;
+            let core_batch_len = checked_mul(
+                checked_mul(n_inputs, shared.input_left_dim, "ACI left core batch")?,
+                left_cols,
+                "ACI left core batch",
+            )?;
+            let mut frame_batch = Vec::with_capacity(frame_batch_len);
+            let mut core_batch = Vec::with_capacity(core_batch_len);
             for input in 0..n_inputs {
                 frame_batch.extend_from_slice(
                     local_left_frame(problem, input, bond)?.as_col_major_slice(),
@@ -548,10 +614,15 @@ fn build_left_factors<T: AciScalar>(
                 core_batch,
             )
             .map_err(|err| local_factor_error("batched left factor matmul", err))?;
-            let item_len = shared.left_rows * left_cols;
-            return Ok((0..n_inputs)
-                .map(|input| values[input * item_len..(input + 1) * item_len].to_vec())
-                .collect());
+            let item_len = checked_mul(shared.left_rows, left_cols, "ACI left factor item")?;
+            let factors = (0..n_inputs)
+                .map(|input| {
+                    let start = checked_mul(input, item_len, "ACI left factor offset")?;
+                    let end = checked_local_add(start, item_len, "ACI left factor end")?;
+                    Ok(values[start..end].to_vec())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(factors);
         }
     }
 
@@ -568,10 +639,20 @@ fn build_right_factors<T: AciScalar>(
     if local_setup_batching_enabled() {
         if let Some(shared) = shared_input_factor_dims(dims) {
             let n_inputs = dims.len();
-            let right_rows = shared.middle_dim * shared.site_dim_right;
-            let mut core_batch = Vec::with_capacity(n_inputs * right_rows * shared.input_right_dim);
-            let mut frame_batch =
-                Vec::with_capacity(n_inputs * shared.input_right_dim * shared.right_cols);
+            let right_rows =
+                checked_mul(shared.middle_dim, shared.site_dim_right, "ACI right rows")?;
+            let core_batch_len = checked_mul(
+                checked_mul(n_inputs, right_rows, "ACI right core batch")?,
+                shared.input_right_dim,
+                "ACI right core batch",
+            )?;
+            let frame_batch_len = checked_mul(
+                checked_mul(n_inputs, shared.input_right_dim, "ACI right frame batch")?,
+                shared.right_cols,
+                "ACI right frame batch",
+            )?;
+            let mut core_batch = Vec::with_capacity(core_batch_len);
+            let mut frame_batch = Vec::with_capacity(frame_batch_len);
             for input in 0..n_inputs {
                 core_batch.extend_from_slice(
                     problem
@@ -591,10 +672,15 @@ fn build_right_factors<T: AciScalar>(
                 frame_batch,
             )
             .map_err(|err| local_factor_error("batched right factor matmul", err))?;
-            let item_len = right_rows * shared.right_cols;
-            return Ok((0..n_inputs)
-                .map(|input| values[input * item_len..(input + 1) * item_len].to_vec())
-                .collect());
+            let item_len = checked_mul(right_rows, shared.right_cols, "ACI right factor item")?;
+            let factors = (0..n_inputs)
+                .map(|input| {
+                    let start = checked_mul(input, item_len, "ACI right factor offset")?;
+                    let end = checked_local_add(start, item_len, "ACI right factor end")?;
+                    Ok(values[start..end].to_vec())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(factors);
         }
     }
 
@@ -696,6 +782,13 @@ fn validate_indices(kind: &'static str, indices: &[usize], len: usize) -> Result
 
 fn checked_local_mul(lhs: usize, rhs: usize, description: &str) -> Result<usize> {
     lhs.checked_mul(rhs)
+        .ok_or_else(|| AciError::InvalidInitialGuess {
+            message: format!("{description} overflows usize"),
+        })
+}
+
+fn checked_local_add(lhs: usize, rhs: usize, description: &str) -> Result<usize> {
+    lhs.checked_add(rhs)
         .ok_or_else(|| AciError::InvalidInitialGuess {
             message: format!("{description} overflows usize"),
         })

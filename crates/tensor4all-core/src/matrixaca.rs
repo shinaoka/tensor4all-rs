@@ -137,6 +137,14 @@ impl<T: Scalar> MatrixACA<T> {
     /// ```
     pub fn from_matrix_with_pivot(a: &Matrix<T>, first_pivot: (usize, usize)) -> Result<Self> {
         let (i, j) = first_pivot;
+        if i >= a.nrows() || j >= a.ncols() {
+            return Err(MatrixCIError::IndexOutOfBounds {
+                row: i,
+                col: j,
+                nrows: a.nrows(),
+                ncols: a.ncols(),
+            });
+        }
         let pivot_val = a[[i, j]];
 
         if pivot_val.abs_sq() < f64::EPSILON * f64::EPSILON {
@@ -240,15 +248,14 @@ impl<T: Scalar> MatrixACA<T> {
     }
 
     /// Compute u_k(x) for all x (the k-th column of U after adding a new pivot column)
-    fn compute_uk(&self, a: &Matrix<T>) -> Result<Vec<T>> {
+    fn compute_uk(&self, a: &Matrix<T>, yk: usize) -> Result<Vec<T>> {
         let k = self.col_indices.len();
-        let yk = self.col_indices[k - 1];
 
         // result = A[:, yk]
         let mut result: Vec<T> = matrix_col(a, yk);
 
         // Subtract contribution from previous pivots
-        for l in 0..(k - 1) {
+        for l in 0..k {
             let xl = self.row_indices[l];
             let v_l_yk = self.v[[l, yk]];
             let u_xl_l = self.u[[xl, l]];
@@ -266,15 +273,14 @@ impl<T: Scalar> MatrixACA<T> {
     }
 
     /// Compute v_k(y) for all y (the k-th row of V after adding a new pivot row)
-    fn compute_vk(&self, a: &Matrix<T>) -> Result<Vec<T>> {
+    fn compute_vk(&self, a: &Matrix<T>, xk: usize) -> Result<Vec<T>> {
         let k = self.row_indices.len();
-        let xk = self.row_indices[k - 1];
 
         // result = A[xk, :]
         let mut result: Vec<T> = matrix_row(a, xk);
 
         // Subtract contribution from previous pivots
-        for l in 0..(k - 1) {
+        for l in 0..k {
             let xl = self.row_indices[l];
             let u_xk_l = self.u[[xk, l]];
             let u_xl_l = self.u[[xl, l]];
@@ -310,6 +316,14 @@ impl<T: Scalar> MatrixACA<T> {
     /// assert_eq!(aca.u().ncols(), 1);
     /// ```
     pub fn add_pivot_col(&mut self, a: &Matrix<T>, col_index: usize) -> Result<()> {
+        if a.nrows() != self.nrows() || a.ncols() != self.ncols() {
+            return Err(MatrixCIError::DimensionMismatch {
+                expected_rows: self.nrows(),
+                expected_cols: self.ncols(),
+                actual_rows: a.nrows(),
+                actual_cols: a.ncols(),
+            });
+        }
         if col_index >= self.ncols() {
             return Err(MatrixCIError::IndexOutOfBounds {
                 row: 0,
@@ -319,8 +333,8 @@ impl<T: Scalar> MatrixACA<T> {
             });
         }
 
+        let uk = self.compute_uk(a, col_index)?;
         self.col_indices.push(col_index);
-        let uk = self.compute_uk(a)?;
         self.u = append_col(&self.u, &uk);
 
         Ok(())
@@ -347,6 +361,14 @@ impl<T: Scalar> MatrixACA<T> {
     /// assert_eq!(aca.v().nrows(), 1);
     /// ```
     pub fn add_pivot_row(&mut self, a: &Matrix<T>, row_index: usize) -> Result<()> {
+        if a.nrows() != self.nrows() || a.ncols() != self.ncols() {
+            return Err(MatrixCIError::DimensionMismatch {
+                expected_rows: self.nrows(),
+                expected_cols: self.ncols(),
+                actual_rows: a.nrows(),
+                actual_cols: a.ncols(),
+            });
+        }
         if row_index >= self.nrows() {
             return Err(MatrixCIError::IndexOutOfBounds {
                 row: row_index,
@@ -356,17 +378,18 @@ impl<T: Scalar> MatrixACA<T> {
             });
         }
 
-        self.row_indices.push(row_index);
-        let vk = self.compute_vk(a)?;
-        self.v = append_row(&self.v, &vk);
+        let vk = self.compute_vk(a, row_index)?;
 
-        // Update alpha
+        // Compute alpha before mutating any state.
         let xk = row_index;
         let u_xk_last = self.u[[xk, self.u.ncols() - 1]];
         if u_xk_last.abs_sq() < f64::EPSILON * f64::EPSILON {
             return Err(MatrixCIError::SingularMatrix);
         }
-        self.alpha.push(T::one() / u_xk_last);
+        let alpha = T::one() / u_xk_last;
+        self.row_indices.push(row_index);
+        self.v = append_row(&self.v, &vk);
+        self.alpha.push(alpha);
 
         Ok(())
     }
@@ -396,8 +419,10 @@ impl<T: Scalar> MatrixACA<T> {
     /// }
     /// ```
     pub fn add_pivot(&mut self, a: &Matrix<T>, pivot: (usize, usize)) -> Result<()> {
-        self.add_pivot_col(a, pivot.1)?;
-        self.add_pivot_row(a, pivot.0)?;
+        let mut staged = self.clone();
+        staged.add_pivot_col(a, pivot.1)?;
+        staged.add_pivot_row(a, pivot.0)?;
+        *self = staged;
         Ok(())
     }
 
@@ -426,6 +451,21 @@ impl<T: Scalar> MatrixACA<T> {
     /// assert_eq!(aca.rank(), 1);
     /// ```
     pub fn add_best_pivot(&mut self, a: &Matrix<T>) -> Result<(usize, usize)> {
+        let mut staged = self.clone();
+        let pivot = staged.add_best_pivot_inner(a)?;
+        *self = staged;
+        Ok(pivot)
+    }
+
+    fn add_best_pivot_inner(&mut self, a: &Matrix<T>) -> Result<(usize, usize)> {
+        if a.nrows() != self.nrows() || a.ncols() != self.ncols() {
+            return Err(MatrixCIError::DimensionMismatch {
+                expected_rows: self.nrows(),
+                expected_cols: self.ncols(),
+                actual_rows: a.nrows(),
+                actual_cols: a.ncols(),
+            });
+        }
         if self.is_empty() {
             // Find global maximum
             let (i, j, _) = submatrix_argmax(a, 0..self.nrows(), 0..self.ncols());
@@ -480,6 +520,10 @@ impl<T: Scalar> MatrixACA<T> {
     /// Updates the column indices and V matrix according to the given
     /// permutation and new pivot row data.
     ///
+    /// # Errors
+    /// Returns [`MatrixCIError::InvalidArgument`] when the pivot-row shape or
+    /// permutation is incompatible with the current approximation.
+    ///
     /// # Examples
     ///
     /// ```
@@ -490,10 +534,37 @@ impl<T: Scalar> MatrixACA<T> {
     /// let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
     /// // Identity permutation keeps columns the same
     /// let pivot_rows = from_vec2d(vec![vec![1.0_f64, 2.0]]);
-    /// aca.set_cols(&pivot_rows, &[0, 1]);
+    /// aca.set_cols(&pivot_rows, &[0, 1]).unwrap();
     /// assert_eq!(aca.col_indices(), &[0]);
     /// ```
-    pub fn set_cols(&mut self, new_pivot_rows: &Matrix<T>, permutation: &[usize]) {
+    pub fn set_cols(&mut self, new_pivot_rows: &Matrix<T>, permutation: &[usize]) -> Result<()> {
+        let mut sorted_permutation = permutation.to_vec();
+        sorted_permutation.sort_unstable();
+        if new_pivot_rows.nrows() != self.v.nrows()
+            || permutation.len() != self.v.ncols()
+            || new_pivot_rows.ncols() < permutation.len()
+            || sorted_permutation
+                .windows(2)
+                .any(|window| window[0] == window[1])
+            || permutation
+                .iter()
+                .any(|&index| index >= new_pivot_rows.ncols())
+            || self
+                .col_indices
+                .iter()
+                .any(|&index| index >= permutation.len())
+        {
+            return Err(MatrixCIError::InvalidArgument {
+                message: "set_cols received incompatible pivot rows or permutation".to_string(),
+            });
+        }
+        let mut staged = self.clone();
+        staged.set_cols_inner(new_pivot_rows, permutation);
+        *self = staged;
+        Ok(())
+    }
+
+    fn set_cols_inner(&mut self, new_pivot_rows: &Matrix<T>, permutation: &[usize]) {
         // Permute column indices
         self.col_indices = self.col_indices.iter().map(|&c| permutation[c]).collect();
 
@@ -530,6 +601,10 @@ impl<T: Scalar> MatrixACA<T> {
     /// Updates the row indices and U matrix according to the given
     /// permutation and new pivot column data.
     ///
+    /// # Errors
+    /// Returns [`MatrixCIError::InvalidArgument`] when the pivot-column shape or
+    /// permutation is incompatible with the current approximation.
+    ///
     /// # Examples
     ///
     /// ```
@@ -540,10 +615,37 @@ impl<T: Scalar> MatrixACA<T> {
     /// let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
     /// // Identity permutation keeps rows the same
     /// let pivot_cols = from_vec2d(vec![vec![1.0_f64], vec![3.0]]);
-    /// aca.set_rows(&pivot_cols, &[0, 1]);
+    /// aca.set_rows(&pivot_cols, &[0, 1]).unwrap();
     /// assert_eq!(aca.row_indices(), &[0]);
     /// ```
-    pub fn set_rows(&mut self, new_pivot_cols: &Matrix<T>, permutation: &[usize]) {
+    pub fn set_rows(&mut self, new_pivot_cols: &Matrix<T>, permutation: &[usize]) -> Result<()> {
+        let mut sorted_permutation = permutation.to_vec();
+        sorted_permutation.sort_unstable();
+        if new_pivot_cols.ncols() != self.u.ncols()
+            || permutation.len() != self.u.nrows()
+            || new_pivot_cols.nrows() < permutation.len()
+            || sorted_permutation
+                .windows(2)
+                .any(|window| window[0] == window[1])
+            || permutation
+                .iter()
+                .any(|&index| index >= new_pivot_cols.nrows())
+            || self
+                .row_indices
+                .iter()
+                .any(|&index| index >= permutation.len())
+        {
+            return Err(MatrixCIError::InvalidArgument {
+                message: "set_rows received incompatible pivot columns or permutation".to_string(),
+            });
+        }
+        let mut staged = self.clone();
+        staged.set_rows_inner(new_pivot_cols, permutation);
+        *self = staged;
+        Ok(())
+    }
+
+    fn set_rows_inner(&mut self, new_pivot_cols: &Matrix<T>, permutation: &[usize]) {
         // Permute row indices
         self.row_indices = self.row_indices.iter().map(|&r| permutation[r]).collect();
 

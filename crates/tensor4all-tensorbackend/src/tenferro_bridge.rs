@@ -207,9 +207,20 @@ pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
     FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(enabled));
 }
 
+fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
+    labels
+        .iter()
+        .copied()
+        .map(|label| {
+            u32::try_from(label)
+                .map_err(|_| anyhow!("native einsum label {label} exceeds the supported u32 range"))
+        })
+        .collect()
+}
+
 fn native_einsum_signature(
     path: NativeEinsumPath,
-    operands: &[(&NativeTensor, &[usize])],
+    operands: &[(&NativeTensor, &[u32])],
     output_ids: &[u32],
 ) -> NativeEinsumSignature {
     NativeEinsumSignature {
@@ -218,7 +229,7 @@ fn native_einsum_signature(
             .iter()
             .map(|(tensor, ids)| NativeOperandSignature {
                 shape: tensor.shape().to_vec(),
-                ids: ids.iter().map(|&id| id as u32).collect(),
+                ids: ids.to_vec(),
                 dtype: tensor.dtype(),
             })
             .collect(),
@@ -228,7 +239,7 @@ fn native_einsum_signature(
 
 fn record_native_einsum_profile(
     path: NativeEinsumPath,
-    operands: &[(&NativeTensor, &[usize])],
+    operands: &[(&NativeTensor, &[u32])],
     output_ids: &[u32],
     elapsed: Duration,
 ) {
@@ -441,7 +452,7 @@ fn native_einsum_balanced_plan_report(
 
 fn maybe_trace_native_einsum_path(
     path: NativeEinsumPath,
-    operands: &[(&NativeTensor, &[usize])],
+    operands: &[(&NativeTensor, &[u32])],
     output_ids: &[u32],
 ) {
     if !native_einsum_path_trace_enabled() {
@@ -1421,6 +1432,7 @@ pub fn einsum_native_tensors_owned(
             .collect::<Vec<_>>(),
     );
 
+    let output_ids_u32 = checked_native_einsum_labels(output_ids)?;
     let mut converted = Vec::with_capacity(operands.len());
     let mut input_ids = Vec::with_capacity(operands.len());
     for (tensor, ids) in operands {
@@ -1430,27 +1442,23 @@ pub fn einsum_native_tensors_owned(
             ids,
             tensor.shape()
         );
+        let checked_ids = checked_native_einsum_labels(&ids)?;
         let tensor = if tensor.dtype() == target {
             tensor
         } else {
             convert_tensor(&tensor, target)?
         };
-        input_ids.push(ids.into_iter().map(|id| id as u32).collect::<Vec<_>>());
+        input_ids.push(checked_ids);
         converted.push(tensor);
     }
 
     let input_slices = input_ids.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
     let subscripts = EinsumSubscripts::new(&input_slices, &output_ids_u32);
 
     let input_refs = converted.iter().collect::<Vec<_>>();
-    let trace_ids = input_ids
-        .iter()
-        .map(|ids| ids.iter().map(|&id| id as usize).collect::<Vec<_>>())
-        .collect::<Vec<_>>();
     let trace_operands = input_refs
         .iter()
-        .zip(trace_ids.iter())
+        .zip(input_ids.iter())
         .map(|(tensor, ids)| (*tensor, ids.as_slice()))
         .collect::<Vec<_>>();
     maybe_trace_native_einsum_path(NativeEinsumPath::Owned, &trace_operands, &output_ids_u32);
@@ -1517,6 +1525,7 @@ pub fn einsum_native_tensors(
             .map(|(tensor, _)| tensor.dtype())
             .collect::<Vec<_>>(),
     );
+    let output_ids_u32 = checked_native_einsum_labels(output_ids)?;
     let mut converted = Vec::with_capacity(operands.len());
     let mut input_ids = Vec::with_capacity(operands.len());
     let mut has_conversions = false;
@@ -1529,7 +1538,7 @@ pub fn einsum_native_tensors(
             ids,
             tensor.shape()
         );
-        input_ids.push(ids.iter().map(|&id| id as u32).collect::<Vec<_>>());
+        input_ids.push(checked_native_einsum_labels(ids)?);
         if tensor.dtype() == target {
             converted.push(None);
         } else {
@@ -1539,7 +1548,6 @@ pub fn einsum_native_tensors(
     }
 
     let input_slices = input_ids.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
     let subscripts = EinsumSubscripts::new(&input_slices, &output_ids_u32);
     let input_refs = operands
         .iter()
@@ -1551,9 +1559,19 @@ pub fn einsum_native_tensors(
     } else {
         NativeEinsumPath::Borrowed
     };
-    maybe_trace_native_einsum_path(trace_path, operands, &output_ids_u32);
+    let trace_operands = input_refs
+        .iter()
+        .zip(input_ids.iter())
+        .map(|(tensor, ids)| (*tensor, ids.as_slice()))
+        .collect::<Vec<_>>();
+    maybe_trace_native_einsum_path(trace_path, &trace_operands, &output_ids_u32);
     let result = cached_einsum_native_tensors(&input_refs, &subscripts)?;
-    record_native_einsum_profile(trace_path, operands, &output_ids_u32, started.elapsed());
+    record_native_einsum_profile(
+        trace_path,
+        &trace_operands,
+        &output_ids_u32,
+        started.elapsed(),
+    );
     Ok(result)
 }
 
@@ -1574,6 +1592,7 @@ pub fn einsum_native_tensor_reads(
         "native einsum requires at least one operand"
     );
 
+    let output_ids_u32 = checked_native_einsum_labels(output_ids)?;
     let mut input_ids = Vec::with_capacity(operands.len());
     let mut read_inputs = Vec::with_capacity(operands.len());
 
@@ -1584,11 +1603,10 @@ pub fn einsum_native_tensor_reads(
             ids,
             tensor.shape()
         );
-        input_ids.push(ids.iter().map(|&id| id as u32).collect::<Vec<_>>());
+        input_ids.push(checked_native_einsum_labels(ids)?);
         read_inputs.push(tensor.as_read());
     }
 
-    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
     let subscripts = Subscripts {
         inputs: input_ids,
         output: output_ids_u32,

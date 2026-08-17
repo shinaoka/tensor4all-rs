@@ -87,6 +87,39 @@ fn stack_along_new_index_rejects_tracked_compact_storage() {
 }
 
 #[test]
+fn select_indices_rejects_tracked_compact_storage() {
+    let source = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let diag = IdxTensor::from_diag(vec![source.clone(), j], vec![1.0_f64, 2.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+
+    let err = diag.select_indices(&[source], &[0]).unwrap_err();
+    assert!(err.to_string().contains("structured AD"));
+}
+
+#[test]
+fn direct_sum_rejects_tracked_inputs_before_detaching() {
+    use tensor4all_core::TensorContractionLike;
+
+    let a_index = DynIndex::new_dyn(2);
+    let b_index = DynIndex::new_dyn(2);
+    let common_a = DynIndex::new_dyn(2);
+    let common_b = DynIndex::new_dyn(2);
+    let a = IdxTensor::from_dense(vec![a_index, common_a], vec![1.0_f64; 4])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let b = IdxTensor::from_dense(vec![b_index, common_b], vec![2.0_f64; 4]).unwrap();
+
+    let err = a
+        .direct_sum(&b, &[(a.indices()[1].clone(), b.indices()[1].clone())])
+        .unwrap_err();
+    assert!(err.to_string().contains("tracked"));
+}
+
+#[test]
 fn index_select_rejects_tracked_compact_storage() {
     let source = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);

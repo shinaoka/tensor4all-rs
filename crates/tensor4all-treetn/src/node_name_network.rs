@@ -230,13 +230,6 @@ where
         self.graph.graph()
     }
 
-    /// Get a mutable reference to the internal graph.
-    ///
-    /// **Warning**: Directly modifying the internal graph can break the node-name-to-index mapping.
-    pub fn graph_mut(&mut self) -> &mut StableGraph<(), (), Undirected> {
-        self.graph.graph_mut()
-    }
-
     /// Perform a post-order DFS traversal starting from the given root node.
     ///
     /// Returns node names in post-order (children before parents, leaves first).

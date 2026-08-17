@@ -91,12 +91,17 @@ impl<T: TensorLike> BlockTensor<T> {
         shape: (usize, usize),
     ) -> std::result::Result<Self, TensorVectorSpaceError> {
         let (rows, cols) = shape;
-        if rows * cols != blocks.len() {
+        let expected = rows.checked_mul(cols).ok_or_else(|| {
+            TensorVectorSpaceError::from(anyhow::anyhow!(
+                "Block count shape ({rows}, {cols}) overflows usize"
+            ))
+        })?;
+        if expected != blocks.len() {
             return Err(TensorVectorSpaceError::from(anyhow::anyhow!(
                 "Block count mismatch: shape ({}, {}) requires {} blocks, but got {}",
                 rows,
                 cols,
-                rows * cols,
+                expected,
                 blocks.len()
             )));
         }

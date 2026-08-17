@@ -331,6 +331,28 @@ fn test_from_mpo_and_state() {
 }
 
 #[test]
+fn from_mpo_and_state_rejects_multi_site_auto_mapping() {
+    let state_sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let state_tensor = IdxTensor::from_dense(state_sites.to_vec(), vec![1.0_f64; 4]).unwrap();
+    let state =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+            .unwrap();
+
+    let mpo_sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let mpo_tensor = IdxTensor::from_dense(mpo_sites.to_vec(), vec![0.0_f64; 16]).unwrap();
+    let mpo =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()]).unwrap();
+
+    let error = LinearOperator::from_mpo_and_state(mpo, &state).unwrap_err();
+    assert!(error.to_string().contains("exactly one state site index"));
+}
+
+#[test]
 fn test_from_mpo_and_state_mismatched_site_count() {
     // MPO with 3 site indices but state with 1 -> 2*1 != 3
     let s = DynIndex::new_dyn(2);

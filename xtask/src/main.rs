@@ -2,8 +2,9 @@
 //!
 //! Usage: `cargo xtask <command>`
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -25,6 +26,8 @@ enum Commands {
     },
     /// Run all CI checks (fmt, clippy, test, doc)
     Ci,
+    /// Generate and verify the complete public-crate API inventory
+    ApiDump,
 }
 
 fn main() -> Result<()> {
@@ -33,6 +36,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Doc { open } => cmd_doc(open),
         Commands::Ci => cmd_ci(),
+        Commands::ApiDump => cmd_api_dump(),
     }
 }
 
@@ -103,8 +107,127 @@ fn run_cargo(dir: &Path, args: &[&str]) -> Result<()> {
         .status()
         .with_context(|| format!("Failed to run cargo {}", args.join(" ")))?;
 
-    if !status.success() {
-        anyhow::bail!("cargo {} failed", args.join(" "));
+    require_success(status.success(), &format!("cargo {}", args.join(" ")))
+}
+
+fn require_success(success: bool, command: &str) -> Result<()> {
+    if !success {
+        bail!("{command} failed");
+    }
+    Ok(())
+}
+
+fn cmd_api_dump() -> Result<()> {
+    let root = project_root();
+    let output = root.join("target/api-dump");
+
+    if output.exists() {
+        fs::remove_dir_all(&output).context("failed to clear target/api-dump")?;
+    }
+    fs::create_dir_all(&output).context("failed to create target/api-dump")?;
+
+    let output_arg = output.to_string_lossy().into_owned();
+    run_cargo(
+        root,
+        &[
+            "run",
+            "-p",
+            "api-dump",
+            "--release",
+            "--",
+            ".",
+            "-o",
+            &output_arg,
+        ],
+    )?;
+
+    validate_api_inventory(root, &output)
+        .with_context(|| format!("invalid generated API inventory at {}", output.display()))?;
+    println!("✅ Complete API inventory verified at {}", output.display());
+    Ok(())
+}
+
+fn expected_api_files(root: &Path) -> Result<BTreeSet<String>> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(root)
+        .output()
+        .context("failed to run cargo metadata")?;
+    require_success(
+        output.status.success(),
+        "cargo metadata --no-deps --format-version 1",
+    )?;
+
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("cargo metadata returned invalid JSON")?;
+    let packages = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .context("cargo metadata omitted packages")?;
+    let crates_dir = root.join("crates");
+    let mut public_crates = Vec::new();
+
+    for package in packages {
+        let manifest = package
+            .get("manifest_path")
+            .and_then(serde_json::Value::as_str)
+            .map(Path::new)
+            .context("workspace package omitted manifest_path")?;
+        if manifest.parent().and_then(Path::parent) != Some(crates_dir.as_path()) {
+            continue;
+        }
+        let name = package
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .context("workspace package omitted name")?;
+        public_crates.push(name);
+    }
+
+    if public_crates.is_empty() {
+        bail!("workspace metadata contains no public crates under crates/");
+    }
+    api_file_names(public_crates)
+}
+
+fn api_file_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<BTreeSet<String>> {
+    let mut expected = BTreeSet::new();
+    for name in names {
+        let file_name = format!("{}.md", name.replace('-', "_"));
+        if !expected.insert(file_name.clone()) {
+            bail!("multiple public crates map to API file {file_name}");
+        }
+    }
+    Ok(expected)
+}
+
+fn validate_api_inventory(root: &Path, output: &Path) -> Result<()> {
+    let expected = expected_api_files(root)?;
+    validate_inventory(&expected, output)
+}
+
+fn validate_inventory(expected: &BTreeSet<String>, output: &Path) -> Result<()> {
+    let actual = fs::read_dir(output)
+        .with_context(|| format!("failed to read {}", output.display()))?
+        .map(|entry| {
+            let path = entry?.path();
+            if !path.is_file() {
+                bail!("unexpected directory in API inventory: {}", path.display());
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("API inventory contains a non-UTF-8 filename")?;
+            if !name.ends_with(".md") {
+                bail!("unexpected API inventory artifact: {name}");
+            }
+            Ok(name.to_string())
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+
+    if &actual != expected {
+        let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+        let extra = actual.difference(expected).cloned().collect::<Vec<_>>();
+        bail!("API inventory mismatch; missing: {missing:?}; extra: {extra:?}");
     }
     Ok(())
 }
@@ -244,4 +367,53 @@ fn generate_doc_index(root: &Path) -> Result<()> {
 
     fs::write(doc_dir.join("index.html"), html)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{api_file_names, require_success, validate_inventory};
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_inventory() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before the Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("tensor4all-api-dump-{suffix}"));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn command_failures_are_reported() {
+        let error = require_success(false, "test command").unwrap_err();
+        assert!(error.to_string().contains("test command failed"));
+    }
+
+    #[test]
+    fn successful_commands_are_accepted() {
+        require_success(true, "test command").unwrap();
+    }
+
+    #[test]
+    fn inventory_requires_every_expected_file_and_rejects_stale_files() {
+        let output = temp_inventory();
+        fs::write(output.join("present.md"), "# present").unwrap();
+        fs::write(output.join("stale.md"), "# stale").unwrap();
+        let expected = BTreeSet::from(["present.md".to_string(), "missing.md".to_string()]);
+
+        let error = validate_inventory(&expected, &output).unwrap_err();
+        assert!(error.to_string().contains("missing.md"));
+        assert!(error.to_string().contains("stale.md"));
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    #[test]
+    fn inventory_rejects_duplicate_public_crate_filenames() {
+        let error = api_file_names(["tensor4all-a", "tensor4all_a"]).unwrap_err();
+        assert!(error.to_string().contains("tensor4all_a.md"));
+    }
 }

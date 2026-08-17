@@ -225,10 +225,31 @@ fn test_with_site_dims_mismatch_length() {
 }
 
 #[test]
+fn test_with_site_dims_rejects_empty_site_dimensions() {
+    let tt = SimpleTensorTrain::<f64>::constant(&[1], 1.0);
+    let error = TTCache::with_site_dims(&tt, vec![Vec::new()]).unwrap_err();
+    assert!(error.to_string().contains("at least one dimension"));
+}
+
+#[test]
 fn test_with_site_dims_mismatch_product() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     // Product doesn't match site dim
     assert!(TTCache::with_site_dims(&tt, vec![vec![3], vec![3]]).is_err());
+}
+
+#[test]
+fn test_with_site_dims_rejects_product_overflow() {
+    let tt = SimpleTensorTrain::<f64>::constant(&[2], 1.0);
+    let error = TTCache::with_site_dims(&tt, vec![vec![usize::MAX, 2]]).unwrap_err();
+    assert!(error.to_string().contains("overflows usize"));
+}
+
+#[test]
+fn flat_indexer_rejects_key_spaces_over_1024_bits() {
+    let result = FlatIndexer::new(&vec![2; 1025]);
+    let error = result.err().expect("key width must be rejected");
+    assert!(error.to_string().contains("1024-bit key limit"));
 }
 
 #[test]
@@ -248,7 +269,7 @@ fn find_split_heuristic() {
         vec![1, 1, 0, 0],
     ];
 
-    let split = cache.find_split_heuristic(&indices);
+    let split = cache.find_split_heuristic(&indices).unwrap();
     assert_eq!(split, 1);
 
     // Indices where split=3 is optimal:
@@ -262,6 +283,6 @@ fn find_split_heuristic() {
         vec![0, 0, 1, 1],
     ];
 
-    let split2 = cache.find_split_heuristic(&indices2);
+    let split2 = cache.find_split_heuristic(&indices2).unwrap();
     assert_eq!(split2, 3);
 }

@@ -217,15 +217,17 @@ pub fn replace_indices_mut<I: IndexLike>(
         replacement_map.insert(old.clone(), new);
     }
 
-    // Apply replacements in-place
-    for idx in indices.iter_mut() {
+    // Stage the replacements so every validation completes before the caller's
+    // slice is modified.
+    let mut result = indices.to_vec();
+    for idx in &mut result {
         if let Some(new_idx) = replacement_map.get(idx) {
             *idx = (*new_idx).clone();
         }
     }
 
-    // Check for duplicates in result indices
-    check_unique_indices(indices)?;
+    check_unique_indices(&result)?;
+    indices.clone_from_slice(&result);
     Ok(())
 }
 

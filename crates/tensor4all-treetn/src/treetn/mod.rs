@@ -1355,7 +1355,7 @@ where
     }
 
     /// Get a mutable reference to the site index network.
-    pub fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, T::Index> {
+    pub(crate) fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, T::Index> {
         &mut self.site_index_network
     }
 
@@ -1364,12 +1364,74 @@ where
         self.site_index_network.site_space(node_name)
     }
 
-    /// Get a mutable reference to the site space (physical indices) for a node.
-    pub fn site_space_mut(
-        &mut self,
-        node_name: &V,
-    ) -> Option<&mut std::collections::HashSet<T::Index>> {
-        self.site_index_network.site_space_mut(node_name)
+    /// Validate that this network has a connected, simple linear-chain topology.
+    ///
+    /// A one-node network is valid; larger networks must have exactly two
+    /// degree-one endpoints and all other nodes degree two. Every edge must
+    /// carry one bond index and the existing TreeTN consistency checks must pass.
+    ///
+    /// # Errors
+    /// Returns [`TreeTNOperationError`] for disconnected, branched, cyclic,
+    /// multi-edge, or internally inconsistent networks.
+    pub fn validate_linear_chain(&self) -> std::result::Result<(), TreeTNOperationError>
+    where
+        <T::Index as IndexLike>::Id: Ord,
+        V: Ord,
+    {
+        self.verify_internal_consistency()?;
+
+        let graph = self.graph.graph();
+        let node_count = graph.node_count();
+        if node_count == 0 {
+            return Ok(());
+        }
+        let start = graph
+            .node_indices()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("TreeTN has no start node"))?;
+        let mut dfs = Dfs::new(graph, start);
+        let mut visited = 0;
+        while dfs.next(graph).is_some() {
+            visited += 1;
+        }
+        if visited != node_count {
+            return Err(anyhow::anyhow!("TreeTN is disconnected").into());
+        }
+        if graph.edge_count() != node_count - 1 {
+            return Err(anyhow::anyhow!(
+                "TreeTN linear chain requires {} edges, found {}",
+                node_count - 1,
+                graph.edge_count()
+            )
+            .into());
+        }
+
+        let mut endpoints = 0;
+        for node in graph.node_indices() {
+            match graph.neighbors_undirected(node).count() {
+                1 => endpoints += 1,
+                2 if node_count > 2 => {}
+                0 if node_count == 1 => {}
+                degree => {
+                    return Err(anyhow::anyhow!(
+                        "TreeTN linear chain node has invalid degree {degree}"
+                    )
+                    .into());
+                }
+            }
+        }
+        if node_count > 1 && endpoints != 2 {
+            return Err(anyhow::anyhow!(
+                "TreeTN linear chain requires two endpoints, found {endpoints}"
+            )
+            .into());
+        }
+        for edge in graph.edge_indices() {
+            if self.bond_index(edge).is_none() {
+                return Err(anyhow::anyhow!("TreeTN edge is missing its bond index").into());
+            }
+        }
+        Ok(())
     }
 
     /// Check if two TreeTNs share equivalent site index network structure.

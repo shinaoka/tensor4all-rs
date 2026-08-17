@@ -180,7 +180,13 @@ pub fn tensor4_from_data<T: TensorScalar>(
     site_dim_2: usize,
     right_dim: usize,
 ) -> Result<Tensor4<T>> {
-    let expected = left_dim * site_dim_1 * site_dim_2 * right_dim;
+    let expected = left_dim
+        .checked_mul(site_dim_1)
+        .and_then(|value| value.checked_mul(site_dim_2))
+        .and_then(|value| value.checked_mul(right_dim))
+        .ok_or_else(|| MPOError::InvalidOperation {
+            message: "rank-4 tensor shape product overflowed usize".to_string(),
+        })?;
     if data.len() != expected {
         return Err(MPOError::DataLengthMismatch {
             expected,

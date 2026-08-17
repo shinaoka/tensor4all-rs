@@ -15,10 +15,14 @@ use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 
 /// Compute total bits needed for index space
 fn compute_total_bits(local_dims: &[usize]) -> u32 {
-    local_dims
-        .iter()
-        .map(|&d| if d <= 1 { 0 } else { (d as u64).ilog2() + 1 })
-        .sum()
+    local_dims.iter().fold(0u32, |bits, &dim| {
+        let dim_bits = if dim <= 1 {
+            0
+        } else {
+            (dim as u64).ilog2().saturating_add(1)
+        };
+        bits.saturating_add(dim_bits)
+    })
 }
 
 /// Index key types for different bit widths
@@ -87,11 +91,18 @@ macro_rules! flat_index_bnum {
 }
 
 impl FlatIndexer {
-    /// Create a new indexer, automatically selecting the key type
-    fn new(local_dims: &[usize]) -> Self {
+    /// Create a new indexer, automatically selecting a lossless key type.
+    fn new(local_dims: &[usize]) -> Result<Self> {
         let total_bits = compute_total_bits(local_dims);
+        if total_bits > 1024 {
+            return Err(TensorTrainError::InvalidOperation {
+                message: format!(
+                    "cache index space requires {total_bits} bits, exceeding the 1024-bit key limit"
+                ),
+            });
+        }
 
-        if total_bits <= 64 {
+        let indexer = if total_bits <= 64 {
             Self::U64 {
                 coeffs: compute_coeffs_primitive!(local_dims, u64),
             }
@@ -111,7 +122,8 @@ impl FlatIndexer {
             Self::U1024 {
                 coeffs: compute_coeffs_bnum!(local_dims, U1024),
             }
-        }
+        };
+        Ok(indexer)
     }
 
     /// Compute flat index key from multi-index
@@ -139,17 +151,17 @@ struct IndexMapper {
 }
 
 impl IndexMapper {
-    fn new(left_dims: &[usize], right_dims: &[usize], capacity: usize) -> Self {
-        Self {
-            left_indexer: FlatIndexer::new(left_dims),
-            right_indexer: FlatIndexer::new(right_dims),
+    fn new(left_dims: &[usize], right_dims: &[usize], capacity: usize) -> Result<Self> {
+        Ok(Self {
+            left_indexer: FlatIndexer::new(left_dims)?,
+            right_indexer: FlatIndexer::new(right_dims)?,
             left_key_to_id: HashMap::new(),
             right_key_to_id: HashMap::new(),
             idx_to_left: Vec::with_capacity(capacity),
             idx_to_right: Vec::with_capacity(capacity),
             left_first_idx: Vec::new(),
             right_first_idx: Vec::new(),
-        }
+        })
     }
 
     fn add_index(&mut self, i: usize, left_part: &[usize], right_part: &[usize]) {
@@ -188,11 +200,11 @@ struct UniqueCounter {
 }
 
 impl UniqueCounter {
-    fn new(local_dims: &[usize], capacity: usize) -> Self {
-        Self {
-            indexer: FlatIndexer::new(local_dims),
+    fn new(local_dims: &[usize], capacity: usize) -> Result<Self> {
+        Ok(Self {
+            indexer: FlatIndexer::new(local_dims)?,
             keys: HashSet::with_capacity(capacity),
-        }
+        })
     }
 
     fn insert(&mut self, idx: &[usize]) {
@@ -281,7 +293,19 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Validate that site_dims products match tensor site dimensions
         for (i, (tensor, dims)) in tt.site_tensors().iter().zip(site_dims.iter()).enumerate() {
-            let expected: usize = dims.iter().product();
+            if dims.is_empty() {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: format!("site_dims at site {i} must contain at least one dimension"),
+                });
+            }
+            let expected = dims
+                .iter()
+                .try_fold(1usize, |acc, &dim| acc.checked_mul(dim));
+            let Some(expected) = expected else {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: format!("site_dims product overflows usize at site {i}"),
+                });
+            };
             if expected != tensor.site_dim() {
                 return Err(TensorTrainError::InvalidOperation {
                     message: format!(
@@ -345,15 +369,28 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     }
 
     /// Convert multi-index to flat index for a site
-    fn multi_to_flat(&self, site: usize, indices: &[LocalIndex]) -> LocalIndex {
+    fn multi_to_flat(&self, site: usize, indices: &[LocalIndex]) -> Result<LocalIndex> {
         let dims = &self.site_dims[site];
-        let mut flat = 0;
-        let mut stride = 1;
+        let mut flat = 0usize;
+        let mut stride = 1usize;
         for (i, &idx) in indices.iter().rev().enumerate() {
-            flat += idx * stride;
-            stride *= dims[dims.len() - 1 - i];
+            let term =
+                idx.checked_mul(stride)
+                    .ok_or_else(|| TensorTrainError::InvalidOperation {
+                        message: format!("flat index offset overflowed at site {site}"),
+                    })?;
+            flat = flat
+                .checked_add(term)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: format!("flat index offset overflowed at site {site}"),
+                })?;
+            stride = stride
+                .checked_mul(dims[dims.len() - 1 - i])
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: format!("flat index stride overflowed at site {site}"),
+                })?;
         }
-        flat
+        Ok(flat)
     }
 
     fn flat_site_dim(&self, site: usize) -> Result<usize> {
@@ -416,13 +453,13 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Compute recursively
         let result = if ell == 1 {
             // First site: just extract the slice
-            let flat_idx = self.multi_to_flat(0, &indices[0..1]);
+            let flat_idx = self.multi_to_flat(0, &indices[0..1])?;
             let tensor = &self.tensors[0];
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: left[0..ell-1] * tensor[ell-1][:, idx, :]
             let left = self.evaluate_left(&indices[0..ell - 1])?;
-            let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell]);
+            let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell])?;
             let tensor = &self.tensors[ell - 1];
             let slice = tensor.slice_site(flat_idx);
             row_vector_times_matrix(&left, &slice, tensor.left_dim(), tensor.right_dim()).map_err(
@@ -473,13 +510,13 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Compute recursively
         let result = if ell == 1 {
             // Last site: just extract the slice
-            let flat_idx = self.multi_to_flat(n - 1, &indices[0..1]);
+            let flat_idx = self.multi_to_flat(n - 1, &indices[0..1])?;
             let tensor = &self.tensors[n - 1];
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: tensor[start][:, idx, :] * right[1..]
             let right = self.evaluate_right(&indices[1..])?;
-            let flat_idx = self.multi_to_flat(start, &indices[0..1]);
+            let flat_idx = self.multi_to_flat(start, &indices[0..1])?;
             let tensor = &self.tensors[start];
             let slice = tensor.slice_site(flat_idx);
             matrix_times_col_vector(&slice, tensor.left_dim(), tensor.right_dim(), &right).map_err(
@@ -580,7 +617,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Determine split position
         let split = match split {
             Some(s) => s,
-            None => self.find_split_heuristic(indices),
+            None => self.find_split_heuristic(indices)?,
         };
 
         if split == 0 || split > n {
@@ -596,7 +633,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Build index mapper with appropriate key type for each half
         let mut mapper =
-            IndexMapper::new(&local_dims[..split], &local_dims[split..], indices.len());
+            IndexMapper::new(&local_dims[..split], &local_dims[split..], indices.len())?;
 
         for (i, idx) in indices.iter().enumerate() {
             mapper.add_index(i, &idx[..split], &idx[split..]);
@@ -650,44 +687,56 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     ///
     /// Samples at 1/4, 1/2, 3/4 positions and returns the one with
     /// minimum total unique left + right parts.
-    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> usize {
+    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> Result<usize> {
         let n = self.len();
         if n <= 1 {
-            return n.max(1);
+            return Ok(n.max(1));
         }
 
-        let local_dims: Vec<usize> = self.site_dims.iter().map(|d| d.iter().product()).collect();
+        let local_dims: Vec<usize> = self
+            .site_dims
+            .iter()
+            .map(|dims| {
+                dims.iter()
+                    .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| TensorTrainError::InvalidOperation {
+                message: "cache heuristic site-dimension product overflowed usize".to_string(),
+            })?;
 
         // Helper to compute cost at a split position
-        let compute_cost = |split: usize| -> usize {
+        let compute_cost = |split: usize| -> Result<usize> {
             if split == 0 || split >= n {
-                return usize::MAX;
+                return Ok(usize::MAX);
             }
 
-            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len());
-            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len());
+            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len())?;
+            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len())?;
 
             for idx in indices {
                 left_counter.insert(&idx[..split]);
                 right_counter.insert(&idx[split..]);
             }
 
-            left_counter.len() + right_counter.len()
+            Ok(left_counter.len().saturating_add(right_counter.len()))
         };
 
         // 3-point sampling: 1/4, 1/2, 3/4 positions
-        let candidates = [n / 4, n / 2, 3 * n / 4];
-        let costs: Vec<(usize, usize)> = candidates
+        let candidates = [n / 4, n / 2, n.saturating_mul(3) / 4];
+        let costs: Result<Vec<(usize, usize)>> = candidates
             .iter()
             .filter(|&&p| p >= 1 && p < n)
-            .map(|&p| (p, compute_cost(p)))
+            .map(|&p| Ok((p, compute_cost(p)?)))
             .collect();
 
-        costs
+        costs?
             .into_iter()
             .min_by_key(|&(_, c)| c)
             .map(|(p, _)| p)
-            .unwrap_or(n / 2)
+            .ok_or_else(|| TensorTrainError::InvalidOperation {
+                message: "cache heuristic could not choose a valid split".to_string(),
+            })
     }
 }
 

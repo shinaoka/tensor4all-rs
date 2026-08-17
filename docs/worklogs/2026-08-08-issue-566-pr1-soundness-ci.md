@@ -259,3 +259,19 @@ repository-rules checks, and release coverage 207/207 (CI-owned gate; local
 attestation recorded here). Note: the coverage measurement was performed once
 locally to confirm the CI switch; the CI coverage job is the authoritative
 gate going forward.
+
+## PR 2 merge (2026-08-10)
+
+PR #590 merged to main as `a6a51de`. CI was fully green before auto-merge:
+Lint, Maintenance scripts (all five self-tests + incremental public-error-doc
++ crate-boundary + coverage-checker gates), Test (nextest release), Doctests,
+Coverage (release-mode llvm-cov, 207/207 with the tutorial-code CI-variance
+pin at 74), and the review-bot gate (deterministic-only; the
+`rules-review:no-llm` label was used for this PR because main's review-bot
+still ran the old LLM workflow until this merge). Post-merge verification:
+`origin/main` carries the deterministic `review_bot.yml` (no DEEPSEEK refs),
+the release coverage command, and the completed rationale clusters.
+
+Remaining #566 work: PR 3 (typed errors/layering), PR 4 (API vocabulary),
+PR 5 (performance + closure), and the shared-rules prerequisite
+(tensor4all-agent-rules#6).

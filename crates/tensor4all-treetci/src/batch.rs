@@ -1,5 +1,12 @@
 use crate::error::Result as TreeTciResult;
 
+pub(crate) fn checked_batch_len(n_sites: usize, n_points: usize) -> TreeTciResult<usize> {
+    n_sites
+        .checked_mul(n_points)
+        .ok_or_else(|| anyhow::anyhow!("global index batch shape product overflowed usize"))
+        .map_err(Into::into)
+}
+
 /// Borrowed view of a global site-order batch.
 ///
 /// The data is stored in column-major layout with shape `(n_sites, n_points)`.
@@ -57,11 +64,12 @@ impl<'a> GlobalIndexBatch<'a> {
     /// assert!(GlobalIndexBatch::new(&data, 3, 2).is_err());
     /// ```
     pub fn new(data: &'a [usize], n_sites: usize, n_points: usize) -> TreeTciResult<Self> {
-        if !(data.len() == n_sites * n_points) {
+        let expected = checked_batch_len(n_sites, n_points)?;
+        if data.len() != expected {
             return Err(anyhow::anyhow!(
                 "global index batch has length {}, expected {}",
                 data.len(),
-                n_sites * n_points
+                expected
             )
             .into());
         };
@@ -185,5 +193,20 @@ impl OwnedGlobalIndexBatch {
     /// ```
     pub fn into_vec(self) -> Vec<usize> {
         self.data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_batch_len;
+
+    #[test]
+    fn checked_batch_len_accepts_valid_shape() {
+        assert_eq!(checked_batch_len(2, 3).unwrap(), 6);
+    }
+
+    #[test]
+    fn checked_batch_len_rejects_overflow() {
+        assert!(checked_batch_len(usize::MAX, 2).is_err());
     }
 }

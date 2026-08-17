@@ -13,6 +13,7 @@
   - [Quantics Transform](guides/quantics.md)
   - [Quantum Fourier Transform](guides/qft.md)
   - [Tree Tensor Networks](guides/tree-tn.md)
+  - [Partitioned TreeTNs](guides/partitioned-treetn.md)
   - [HDF5 Serialization](guides/hdf5-serialization.md)
 - [Tutorials]()
   - [Quantics Basics]()

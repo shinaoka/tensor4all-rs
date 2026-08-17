@@ -40,7 +40,7 @@ fn test_mpo_empty_and_single_site_constructors() {
     assert!(empty.is_empty());
     assert_eq!(empty.link_dims(), Vec::<usize>::new());
     assert_eq!(empty.rank(), 1);
-    assert_eq!(empty.full_tensor(), (Vec::new(), Vec::new()));
+    assert_eq!(empty.full_tensor().unwrap(), (Vec::new(), Vec::new()));
     assert_eq!(empty.sum().unwrap(), 0.0);
     assert!(empty
         .evaluate(&[])
@@ -115,7 +115,7 @@ fn test_mpo_evaluate_reports_invalid_indices() {
 #[test]
 fn test_mpo_full_tensor_zero_dimension_returns_shape() {
     let mpo = MPO::<f64>::zeros(&[(0, 2)]);
-    let (data, shape) = mpo.full_tensor();
+    let (data, shape) = mpo.full_tensor().unwrap();
     assert!(data.is_empty());
     assert_eq!(shape, vec![0, 2]);
 }
@@ -148,7 +148,7 @@ fn test_mpo_link_dims() {
 #[test]
 fn test_mpo_full_tensor() {
     let mpo = MPO::<f64>::constant(&[(2, 2)], 5.0);
-    let (data, shape) = mpo.full_tensor();
+    let (data, shape) = mpo.full_tensor().unwrap();
 
     assert_eq!(shape, vec![2, 2]);
     assert_eq!(data.len(), 4);
@@ -170,7 +170,7 @@ fn test_mpo_full_tensor_matches_evaluate() {
     tensor.set4(0, 1, 2, 0, 6.0);
 
     let mpo = MPO::new(vec![tensor]).unwrap();
-    let (data, shape) = mpo.full_tensor();
+    let (data, shape) = mpo.full_tensor().unwrap();
 
     assert_eq!(shape, vec![2, 3]);
     for i in 0..2 {

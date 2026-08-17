@@ -267,7 +267,7 @@ where
     ///
     /// **Warning**: Directly modifying the internal graph can break the node-name-to-index mapping.
     /// Use the provided methods instead.
-    pub fn graph_mut(&mut self) -> &mut StableGraph<NodeData, EdgeData, Ty> {
+    pub(crate) fn graph_mut(&mut self) -> &mut StableGraph<NodeData, EdgeData, Ty> {
         &mut self.graph
     }
 

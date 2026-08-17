@@ -1,7 +1,7 @@
 # tensor4all-rs crate reference
 
 Per-crate key types and entry points. Pull the crate you landed on in step 2 of `SKILL.md`.
-Signatures are abbreviated; confirm exact shapes in `docs/api/` or rustdoc before relying on them.
+Signatures are abbreviated; confirm exact shapes in `target/api-dump/` or rustdoc before relying on them.
 All `tensor4all_*` crate names map to `tensor4all-<name>` packages.
 
 ## tensor4all-core — foundation
@@ -138,19 +138,45 @@ Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 
 - `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
 
-## tensor4all-partitionedtt — subdomain patches + adaptive TCI
+## tensor4all-partitionedtreetn — named TreeTN subdomains + adaptive patching
+
+Use this crate for new partitioned work on named TreeTNs. It stores eagerly
+masked `TreeTN<IdxTensor, V>` patches, supports branched topologies and multiple
+site indices per node, and does not implement adaptive interpolation.
+
+- `Projector` — maps full `DynIndex` identities to zero-based coordinates.
+- `SubDomainTreeTN<V>` — eagerly masked TreeTN plus its projector.
+- `PartitionedTreeTN<V>` — homogeneous, pairwise-disjoint patches.
+- `PatchingOptions { rtol, max_bond_dim, patch_order, split_strategy }`.
+- `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
+  checked logical local tensor element counts after child truncation.
+- `add_with_patching(patches, &center, &options)` — split over-cap patches.
+- `truncate_adaptive(&partition, &center, rtol, max_bond_dim)` — assign
+  volume-proportional absolute squared-tail budgets and drop patches below them.
+- `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
+  contract and retruncate against the corrected output norm.
+
+All truncating and contracting operations require an explicit existing node name
+as `center`. No production path re-applies eager projectors or materializes a
+full network densely.
+
+## tensor4all-partitionedtt — legacy subdomain patches + adaptive TCI
+
+This crate is deprecated during migration. Use `tensor4all-partitionedtreetn`
+for new named TreeTN work. It remains buildable and receives correctness and
+security fixes only; no removal date is set.
 
 Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than reaching into core internals.
 
 - `Projector` — maps site `DynIndex` → fixed coordinate, defining a subdomain.
-  - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])`.
-  - `.get(&idx) -> Option<usize>`, `.is_projected_at(&idx)`, `.insert(idx, value)`, `.projected_indices()`, `.len()`, `.is_empty()`.
+  - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])?`.
+  - `.get(&idx) -> Option<usize>`, `.is_projected_at(&idx)`, `.insert(idx, value)?`, `.projected_indices()`, `.len()`, `.is_empty()`.
 - `SubDomainTT` — an itensorlike `TensorTrain` plus its `Projector`.
-  - `SubDomainTT::new(tt, projector)`, `SubDomainTT::from_tt(tt)` (empty projector).
-  - `.data()`, `.data_mut()`, `.projector()`, `.max_bond_dim()`, `.into_data()`, `.all_indices()`.
-- `PartitionedTT` — collection of mutually disjoint `SubDomainTT`s (disjointness validated at construction).
-  - `PartitionedTT::from_subdomains(vec)?`, `::from_subdomain(one)`, `::new()`.
-  - `.len()`, `.is_empty()`, `.projectors()`, `.iter()`, `.values()`, `.values_mut()`, `.contains(&projector)`.
+  - `SubDomainTT::new(tt, projector)?`, `SubDomainTT::from_tt(tt)` (empty projector).
+  - `.data()`, `.projector()`, `.max_bond_dim()`, `.into_data()`, `.all_indices()`.
+- `PartitionedTT` — collection of mutually disjoint `SubDomainTT`s (disjointness validated at construction and insertion).
+  - `PartitionedTT::from_subdomains(vec)?`, `::from_subdomain(one)?`, `::new()`.
+  - `.len()`, `.is_empty()`, `.projectors()`, `.iter()`, `.values()`, `.contains(&projector)`.
   - `.to_tensor_train() -> Result<SimpleTensorTrain>` — recombine all patches into one TT (drops the partition structure).
   - `.contract(&other, &ContractOptions)?` (also free `contract` / `proj_contract`).
 - Adaptive patching — bond-cap-driven splitting plus volume-proportional truncation:

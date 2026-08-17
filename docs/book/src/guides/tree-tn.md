@@ -1,5 +1,8 @@
 # Tree Tensor Networks
 
+For eager subdomain decomposition and volume-budgeted adaptive patching on
+named TreeTNs, continue to the [Partitioned TreeTNs guide](partitioned-treetn.md).
+
 The `tensor4all-treetn` crate provides a generic tree tensor network (`TreeTN`) that supports
 arbitrary tree topologies — not just linear chains. This guide covers construction, canonicalization,
 common operations, and the sweep-counting convention used by iterative algorithms.
