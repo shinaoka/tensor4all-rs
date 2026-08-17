@@ -90,6 +90,13 @@ pub enum MPOError {
         message: String,
     },
 
+    /// Operation is not implemented by this backend.
+    #[error("Unsupported operation: {message}")]
+    Unsupported {
+        /// Description of the unsupported operation.
+        message: String,
+    },
+
     /// Invalid operation
     #[error("Invalid operation: {message}")]
     InvalidOperation {
