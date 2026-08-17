@@ -25,6 +25,16 @@ Implemented a first integrated batch for the open AI-ready audit issues on `ai-r
 - `./scripts/test-mdbook.sh` passed.
 - `cargo run -p xtask --release -- api-dump` passed and verified 14 public crate inventory files.
 
-## Remaining audit work
+## Follow-up #544 slices
+
+After the initial batch, the branch additionally checked:
+
+- core factorization matrix lengths and Krylov capacities/projected matrices, with typed invalid-option errors and overflow regressions;
+- ACI frame products, padded-core dimensions, local batch sizes, flat offsets, and reshape boundaries;
+- itensorlike dense inner-product/norm products and saturating `LinsolveOptions` sweep construction;
+- interpolative QTT basis, fused-core, dense-test-point, flat-index, inverse-matrix, and adaptive-core dimensions;
+- TensorCI1 candidate matrices, Pi-set capacities, refresh propagation, and site reshape dimensions.
+
+Current focused release evidence: tensor4all-core 788 tests (2 skipped), tensor4all-aci 90 tests (1 skipped), tensor4all-itensorlike 154 tests (5 skipped), tensor4all-interpolativeqtt 27 tests, tensor4all-tensorci 79 tests; all passed. Strict workspace clippy also passed.
 
 The branch still needs a fresh issue-by-issue acceptance audit, the remaining cited raw-arithmetic sweep for every #544/#543 path, AD reverse-gradient/unsupported-path coverage for #545, and the final repository-rules/CI audit. The full repository rules script currently also traverses pre-existing `.worktrees/` material; changed-file error-doc validation passes. Full release nextest now passes with 2,842 tests and 14 skips; core nextest passes with 784 tests and 2 skips. Coverage, formatting, clippy, API inventory, final `cargo doc --workspace --no-deps`, and mdBook have passed. A subsequent core rustdoc test rerun was blocked by repeated linker `SIGBUS` resource failures after 220 doctests; the final workspace doc build, code-only check, core nextest, and changed-file error-doc audit pass. Do not mark the goal complete or close issues until those requirements have fresh evidence.
