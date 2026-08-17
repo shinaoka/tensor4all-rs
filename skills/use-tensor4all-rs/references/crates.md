@@ -1,7 +1,7 @@
 # tensor4all-rs crate reference
 
 Per-crate key types and entry points. Pull the crate you landed on in step 2 of `SKILL.md`.
-Signatures are abbreviated; confirm exact shapes in `docs/api/` or rustdoc before relying on them.
+Signatures are abbreviated; confirm exact shapes in `target/api-dump/` or rustdoc before relying on them.
 All `tensor4all_*` crate names map to `tensor4all-<name>` packages.
 
 ## tensor4all-core — foundation
