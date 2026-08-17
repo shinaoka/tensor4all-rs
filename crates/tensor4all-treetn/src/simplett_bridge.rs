@@ -167,7 +167,7 @@ where
 ///
 /// assert_eq!(roundtrip.site_dims(), tt.site_dims());
 /// assert_eq!(roundtrip.link_dims(), tt.link_dims());
-/// assert_eq!(roundtrip.full_tensor(), tt.full_tensor());
+/// assert_eq!(roundtrip.full_tensor().unwrap(), tt.full_tensor().unwrap());
 /// ```
 pub fn treetn_to_tensor_train<T>(
     mut treetn: TreeTN<IdxTensor, usize>,

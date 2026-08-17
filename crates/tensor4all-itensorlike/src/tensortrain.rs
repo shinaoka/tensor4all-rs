@@ -1504,7 +1504,13 @@ impl TensorTrain {
                     None => return Ok(None),
                 }
             };
-            let total_size: usize = tensor.dims().iter().product();
+            let Some(total_size) = tensor
+                .dims()
+                .iter()
+                .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+            else {
+                return Ok(None);
+            };
             let boundary_size = match left_dim.checked_mul(right_dim) {
                 Some(size) => size,
                 None => return Ok(None),

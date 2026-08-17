@@ -11,6 +11,13 @@ use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mu
 type LocalOperator<'a, T> =
     dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;
 
+fn checked_mul(lhs: usize, rhs: usize, what: &str) -> Result<usize> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(|| AciError::InvalidOptions {
+            message: format!("{what} overflowed usize"),
+        })
+}
+
 #[cfg(test)]
 fn local_setup_batching_enabled() -> bool {
     std::env::var("T4A_ACI_DISABLE_BATCHED_LOCAL_SETUP").as_deref() != Ok("1")
@@ -525,10 +532,20 @@ fn build_left_factors<T: AciScalar>(
     if local_setup_batching_enabled() {
         if let Some(shared) = shared_input_factor_dims(dims) {
             let n_inputs = dims.len();
-            let left_cols = shared.site_dim_left * shared.middle_dim;
-            let mut frame_batch =
-                Vec::with_capacity(n_inputs * shared.left_rows * shared.input_left_dim);
-            let mut core_batch = Vec::with_capacity(n_inputs * shared.input_left_dim * left_cols);
+            let left_cols =
+                checked_mul(shared.site_dim_left, shared.middle_dim, "ACI left columns")?;
+            let frame_batch_len = checked_mul(
+                checked_mul(n_inputs, shared.left_rows, "ACI left frame batch")?,
+                shared.input_left_dim,
+                "ACI left frame batch",
+            )?;
+            let core_batch_len = checked_mul(
+                checked_mul(n_inputs, shared.input_left_dim, "ACI left core batch")?,
+                left_cols,
+                "ACI left core batch",
+            )?;
+            let mut frame_batch = Vec::with_capacity(frame_batch_len);
+            let mut core_batch = Vec::with_capacity(core_batch_len);
             for input in 0..n_inputs {
                 frame_batch.extend_from_slice(
                     local_left_frame(problem, input, bond)?.as_col_major_slice(),
@@ -548,7 +565,7 @@ fn build_left_factors<T: AciScalar>(
                 core_batch,
             )
             .map_err(|err| local_factor_error("batched left factor matmul", err))?;
-            let item_len = shared.left_rows * left_cols;
+            let item_len = checked_mul(shared.left_rows, left_cols, "ACI left factor item")?;
             return Ok((0..n_inputs)
                 .map(|input| values[input * item_len..(input + 1) * item_len].to_vec())
                 .collect());
@@ -568,10 +585,20 @@ fn build_right_factors<T: AciScalar>(
     if local_setup_batching_enabled() {
         if let Some(shared) = shared_input_factor_dims(dims) {
             let n_inputs = dims.len();
-            let right_rows = shared.middle_dim * shared.site_dim_right;
-            let mut core_batch = Vec::with_capacity(n_inputs * right_rows * shared.input_right_dim);
-            let mut frame_batch =
-                Vec::with_capacity(n_inputs * shared.input_right_dim * shared.right_cols);
+            let right_rows =
+                checked_mul(shared.middle_dim, shared.site_dim_right, "ACI right rows")?;
+            let core_batch_len = checked_mul(
+                checked_mul(n_inputs, right_rows, "ACI right core batch")?,
+                shared.input_right_dim,
+                "ACI right core batch",
+            )?;
+            let frame_batch_len = checked_mul(
+                checked_mul(n_inputs, shared.input_right_dim, "ACI right frame batch")?,
+                shared.right_cols,
+                "ACI right frame batch",
+            )?;
+            let mut core_batch = Vec::with_capacity(core_batch_len);
+            let mut frame_batch = Vec::with_capacity(frame_batch_len);
             for input in 0..n_inputs {
                 core_batch.extend_from_slice(
                     problem
@@ -591,7 +618,7 @@ fn build_right_factors<T: AciScalar>(
                 frame_batch,
             )
             .map_err(|err| local_factor_error("batched right factor matmul", err))?;
-            let item_len = right_rows * shared.right_cols;
+            let item_len = checked_mul(right_rows, shared.right_cols, "ACI right factor item")?;
             return Ok((0..n_inputs)
                 .map(|input| values[input * item_len..(input + 1) * item_len].to_vec())
                 .collect());
