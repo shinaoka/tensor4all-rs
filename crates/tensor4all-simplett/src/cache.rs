@@ -352,15 +352,28 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     }
 
     /// Convert multi-index to flat index for a site
-    fn multi_to_flat(&self, site: usize, indices: &[LocalIndex]) -> LocalIndex {
+    fn multi_to_flat(&self, site: usize, indices: &[LocalIndex]) -> Result<LocalIndex> {
         let dims = &self.site_dims[site];
-        let mut flat = 0;
-        let mut stride = 1;
+        let mut flat = 0usize;
+        let mut stride = 1usize;
         for (i, &idx) in indices.iter().rev().enumerate() {
-            flat += idx * stride;
-            stride *= dims[dims.len() - 1 - i];
+            let term =
+                idx.checked_mul(stride)
+                    .ok_or_else(|| TensorTrainError::InvalidOperation {
+                        message: format!("flat index offset overflowed at site {site}"),
+                    })?;
+            flat = flat
+                .checked_add(term)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: format!("flat index offset overflowed at site {site}"),
+                })?;
+            stride = stride
+                .checked_mul(dims[dims.len() - 1 - i])
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: format!("flat index stride overflowed at site {site}"),
+                })?;
         }
-        flat
+        Ok(flat)
     }
 
     fn flat_site_dim(&self, site: usize) -> Result<usize> {
@@ -423,13 +436,13 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Compute recursively
         let result = if ell == 1 {
             // First site: just extract the slice
-            let flat_idx = self.multi_to_flat(0, &indices[0..1]);
+            let flat_idx = self.multi_to_flat(0, &indices[0..1])?;
             let tensor = &self.tensors[0];
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: left[0..ell-1] * tensor[ell-1][:, idx, :]
             let left = self.evaluate_left(&indices[0..ell - 1])?;
-            let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell]);
+            let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell])?;
             let tensor = &self.tensors[ell - 1];
             let slice = tensor.slice_site(flat_idx);
             row_vector_times_matrix(&left, &slice, tensor.left_dim(), tensor.right_dim()).map_err(
@@ -480,13 +493,13 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Compute recursively
         let result = if ell == 1 {
             // Last site: just extract the slice
-            let flat_idx = self.multi_to_flat(n - 1, &indices[0..1]);
+            let flat_idx = self.multi_to_flat(n - 1, &indices[0..1])?;
             let tensor = &self.tensors[n - 1];
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: tensor[start][:, idx, :] * right[1..]
             let right = self.evaluate_right(&indices[1..])?;
-            let flat_idx = self.multi_to_flat(start, &indices[0..1]);
+            let flat_idx = self.multi_to_flat(start, &indices[0..1])?;
             let tensor = &self.tensors[start];
             let slice = tensor.slice_site(flat_idx);
             matrix_times_col_vector(&slice, tensor.left_dim(), tensor.right_dim(), &right).map_err(
@@ -679,11 +692,11 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
                 right_counter.insert(&idx[split..]);
             }
 
-            left_counter.len() + right_counter.len()
+            left_counter.len().saturating_add(right_counter.len())
         };
 
         // 3-point sampling: 1/4, 1/2, 3/4 positions
-        let candidates = [n / 4, n / 2, 3 * n / 4];
+        let candidates = [n / 4, n / 2, n.saturating_mul(3) / 4];
         let costs: Vec<(usize, usize)> = candidates
             .iter()
             .filter(|&&p| p >= 1 && p < n)
