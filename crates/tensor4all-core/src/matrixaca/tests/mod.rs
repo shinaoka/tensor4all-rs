@@ -42,6 +42,15 @@ fn test_matrixaca_add_pivot() {
 }
 
 #[test]
+fn matrixaca_rejects_out_of_range_initial_pivot() {
+    let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    assert!(matches!(
+        MatrixACA::from_matrix_with_pivot(&m, (2, 0)),
+        Err(MatrixCIError::IndexOutOfBounds { .. })
+    ));
+}
+
+#[test]
 fn test_matrixaca_zero_pivot_returns_error() {
     let m = from_vec2d(vec![vec![0.0, 1.0], vec![1.0, 1.0]]);
     // Pivot at (0,0) which is 0.0 should fail
@@ -66,8 +75,12 @@ fn test_matrixaca_add_pivot_row_zero_diagonal() {
     ]);
     let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
     // Adding pivot at (1,1) where value is 0 should fail during add_pivot_row
+    let before = aca.clone();
     let result = aca.add_pivot(&m, (1, 1));
     assert!(result.is_err());
+    assert_eq!(aca.rank(), before.rank());
+    assert_eq!(aca.row_indices(), before.row_indices());
+    assert_eq!(aca.col_indices(), before.col_indices());
 }
 
 #[test]
@@ -152,14 +165,14 @@ fn test_matrixaca_set_rows_and_cols_permute_and_fill_new_entries() {
     let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
 
     let new_pivot_rows = from_vec2d(vec![vec![10.0_f64, 20.0, 30.0]]);
-    aca.set_cols(&new_pivot_rows, &[1, 0]);
+    aca.set_cols(&new_pivot_rows, &[1, 0]).unwrap();
 
     assert_eq!(aca.col_indices(), &[1]);
     assert_eq!(aca.v().ncols(), 3);
     assert_eq!(aca.v()[[0, 2]], 30.0);
 
     let new_pivot_cols = from_vec2d(vec![vec![10.0_f64], vec![20.0], vec![30.0]]);
-    aca.set_rows(&new_pivot_cols, &[1, 0]);
+    aca.set_rows(&new_pivot_cols, &[1, 0]).unwrap();
 
     assert_eq!(aca.row_indices(), &[1]);
     assert_eq!(aca.u().nrows(), 3);

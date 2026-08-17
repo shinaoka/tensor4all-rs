@@ -11,6 +11,8 @@ use tensor4all_simplett::{
     AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops,
 };
 
+use crate::error::{Result, TCIError};
+
 /// Estimate the true interpolation error by searching for worst-case indices.
 ///
 /// Launches [`floating_zone`] from `nsearch` random starting points (or
@@ -33,7 +35,7 @@ use tensor4all_simplett::{
 /// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
 /// let mut rng = rand::rng();
 ///
-/// let errors = estimate_true_error(&tt, &f, 10, None, &mut rng);
+/// let errors = estimate_true_error(&tt, &f, 10, None, &mut rng).unwrap();
 ///
 /// // Results are sorted by descending error
 /// for w in errors.windows(2) {
@@ -60,13 +62,18 @@ use tensor4all_simplett::{
 ///
 /// `Vec<(MultiIndex, f64)>` sorted by descending error, with duplicate
 /// pivots removed.
+///
+/// # Errors
+/// Returns [`TCIError::InvalidConfiguration`] for an invalid site dimension,
+/// [`TCIError::InvalidPivot`] for an invalid starting point, or
+/// [`TCIError::TensorTrainError`] when tensor-train evaluation fails.
 pub fn estimate_true_error<T, F>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
     nsearch: usize,
     initial_points: Option<Vec<MultiIndex>>,
     rng: &mut impl Rng,
-) -> Vec<(MultiIndex, f64)>
+) -> Result<Vec<(MultiIndex, f64)>>
 where
     T: Scalar + TTScalar + EinsumScalar,
     F: Fn(&MultiIndex) -> T,
@@ -74,6 +81,11 @@ where
     let site_dims: Vec<usize> = (0..tt.len())
         .map(|i| tt.site_tensor(i).site_dim())
         .collect();
+    if site_dims.contains(&0) {
+        return Err(TCIError::InvalidConfiguration {
+            message: "tensor train contains a zero-dimensional site".to_string(),
+        });
+    }
 
     let points = if let Some(pts) = initial_points {
         pts
@@ -91,7 +103,7 @@ where
     let mut pivot_errors: Vec<(MultiIndex, f64)> = points
         .into_iter()
         .map(|init_p| floating_zone(tt, f, &site_dims, Some(&init_p), f64::MAX))
-        .collect();
+        .collect::<Result<_>>()?;
 
     // Sort by descending error
     pivot_errors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -99,7 +111,7 @@ where
     // Remove duplicates (same pivot)
     pivot_errors.dedup_by(|a, b| a.0 == b.0);
 
-    pivot_errors
+    Ok(pivot_errors)
 }
 
 /// Local search for the multi-index with the largest interpolation error.
@@ -123,7 +135,7 @@ where
 /// let local_dims = vec![4, 4];
 ///
 /// // Search from (2, 2) without early stopping
-/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX);
+/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX).unwrap();
 ///
 /// // Should find maximum error at (3, 3): |3*3 - 0| = 9
 /// assert_eq!(pivot, vec![3, 3]);
@@ -143,28 +155,61 @@ where
 /// # Returns
 ///
 /// `(pivot, max_error)` -- the best multi-index found and its error.
+///
+/// # Errors
+/// Returns [`TCIError::InvalidConfiguration`] for invalid dimensions,
+/// [`TCIError::InvalidPivot`] for invalid coordinates, or
+/// [`TCIError::TensorTrainError`] when tensor-train evaluation fails.
 pub fn floating_zone<T, F>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
     local_dims: &[usize],
     init_p: Option<&MultiIndex>,
     early_stop_tol: f64,
-) -> (MultiIndex, f64)
+) -> Result<(MultiIndex, f64)>
 where
     T: Scalar + TTScalar + EinsumScalar,
     F: Fn(&MultiIndex) -> T,
 {
+    if local_dims.len() != tt.len() {
+        return Err(TCIError::InvalidConfiguration {
+            message: format!(
+                "local_dims length {} does not match tensor train length {}",
+                local_dims.len(),
+                tt.len()
+            ),
+        });
+    }
+    if local_dims.contains(&0) {
+        return Err(TCIError::InvalidConfiguration {
+            message: "local_dims must contain only positive dimensions".to_string(),
+        });
+    }
+
     // Julia's `_floatingzone` draws a random starting point when none is
     // given; match that instead of fixing the all-zeros index.
     let init_p = match init_p {
-        Some(p) => p.clone(),
+        Some(p) => {
+            if p.len() != local_dims.len() || p.iter().zip(local_dims).any(|(&i, &d)| i >= d) {
+                return Err(TCIError::InvalidPivot {
+                    message: format!("initial pivot {p:?} does not fit local_dims {local_dims:?}"),
+                });
+            }
+            p.clone()
+        }
         None => local_dims
             .iter()
             .map(|&d| rand::rng().random_range(0..d))
             .collect(),
     };
 
-    let max_sweeps = local_dims.len() * 10; // Reasonable upper bound
+    let max_sweeps =
+        local_dims
+            .len()
+            .checked_mul(10)
+            .ok_or_else(|| TCIError::InvalidConfiguration {
+                message: "local_dims sweep count overflowed usize".to_string(),
+            })?;
     let mut tt_cache = TTCache::new(tt);
     let (pivot, error) = floating_zone_walk(
         local_dims,
@@ -173,12 +218,10 @@ where
         early_stop_tol,
         |points: &[MultiIndex]| {
             // Batch-evaluate the tensor train once per site scan; `f` is
-            // evaluated pointwise (no batch API in this signature). A TT
-            // evaluation failure is treated as value zero, matching the
-            // previous point-by-point fallback.
+            // evaluated pointwise (no batch API in this signature).
             let tt_values = tt_cache
                 .evaluate_many(points, None)
-                .unwrap_or_else(|_| vec![T::zero(); points.len()]);
+                .map_err(TCIError::TensorTrainError)?;
             let errors = points
                 .iter()
                 .zip(tt_values.iter())
@@ -187,12 +230,11 @@ where
                     f64::sqrt(Scalar::abs_sq(diff))
                 })
                 .collect::<Vec<f64>>();
-            Ok::<Vec<f64>, std::convert::Infallible>(errors)
+            Ok::<Vec<f64>, TCIError>(errors)
         },
-    )
-    .unwrap_or_else(|never| match never {});
+    )?;
 
-    (pivot, error)
+    Ok((pivot, error))
 }
 
 #[cfg(test)]
@@ -222,7 +264,8 @@ mod tests {
 
         // Start from (1, 1) so initial error is not zero: |1*1 - 1| = 0
         // Actually start from (2, 2) so initial error is |4 - 1| = 3
-        let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX);
+        let (pivot, error) =
+            floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX).unwrap();
 
         // Error should be > 0 since tt=1 but f(i,j)=i*j varies
         // The maximum error should be at (3,3): |9-1|=8
@@ -245,7 +288,7 @@ mod tests {
         let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
         let mut rng = rand::rng();
 
-        let errors = estimate_true_error(&tt, &f, 10, None, &mut rng);
+        let errors = estimate_true_error(&tt, &f, 10, None, &mut rng).unwrap();
 
         // Verify sorted in descending order
         for i in 0..errors.len().saturating_sub(1) {

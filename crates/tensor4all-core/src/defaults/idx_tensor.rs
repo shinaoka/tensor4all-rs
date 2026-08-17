@@ -166,7 +166,11 @@ fn tensor_profile_bytes(dtype: DType, shape: &[usize]) -> usize {
         DType::I64 => 8,
         DType::Bool => 1,
     };
-    shape.iter().product::<usize>() * element_size
+    shape
+        .iter()
+        .try_fold(1usize, |bytes, &dim| bytes.checked_mul(dim))
+        .and_then(|elements| elements.checked_mul(element_size))
+        .unwrap_or(usize::MAX)
 }
 
 /// Trait for scalar types that can generate random values from a standard
@@ -1076,6 +1080,21 @@ impl IdxTensor {
         axis_classes.len() >= 2 && axis_classes.iter().all(|&class_id| class_id == 0)
     }
 
+    fn validate_axis_classes(axis_classes: &[usize], rank: usize) -> Result<()> {
+        if axis_classes.len() != rank {
+            return Err(anyhow::anyhow!(
+                "axis-class rank {} does not match tensor rank {rank}",
+                axis_classes.len()
+            ));
+        }
+        if Self::canonicalize_axis_classes(axis_classes) != axis_classes {
+            return Err(anyhow::anyhow!(
+                "axis classes must be canonical first-occurrence labels: {axis_classes:?}"
+            ));
+        }
+        Ok(())
+    }
+
     fn einsum_subscripts_from_usize_ids(
         inputs: &[Vec<usize>],
         output: &[usize],
@@ -1183,7 +1202,7 @@ impl IdxTensor {
         axes_a: &[usize],
         rhs_axis_classes: &[usize],
         axes_b: &[usize],
-    ) -> Vec<usize> {
+    ) -> Result<Vec<usize>> {
         debug_assert_eq!(axes_a.len(), axes_b.len());
 
         fn find(parent: &mut [usize], value: usize) -> usize {
@@ -1201,26 +1220,31 @@ impl IdxTensor {
             }
         }
 
-        let lhs_payload_rank = lhs_axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0);
-        let rhs_payload_rank = rhs_axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0);
+        let lhs_payload_rank = match lhs_axis_classes.iter().copied().max() {
+            Some(value) => value
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("left payload rank overflows usize"))?,
+            None => 0,
+        };
+        let rhs_payload_rank = match rhs_axis_classes.iter().copied().max() {
+            Some(value) => value
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("right payload rank overflows usize"))?,
+            None => 0,
+        };
         let rhs_offset = lhs_payload_rank;
-        let mut parent: Vec<usize> = (0..lhs_payload_rank + rhs_payload_rank).collect();
+        let parent_len = lhs_payload_rank
+            .checked_add(rhs_payload_rank)
+            .ok_or_else(|| anyhow::anyhow!("payload rank sum overflows usize"))?;
+        let mut parent: Vec<usize> = (0..parent_len).collect();
 
         for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
             union(
                 &mut parent,
                 lhs_axis_classes[lhs_axis],
-                rhs_offset + rhs_axis_classes[rhs_axis],
+                rhs_offset
+                    .checked_add(rhs_axis_classes[rhs_axis])
+                    .ok_or_else(|| anyhow::anyhow!("rhs axis-class offset overflows usize"))?,
             );
         }
 
@@ -1250,7 +1274,10 @@ impl IdxTensor {
         }
         for (axis, &class_id) in rhs_axis_classes.iter().enumerate() {
             if !rhs_contracted[axis] {
-                let root = find(&mut parent, rhs_offset + class_id);
+                let rhs_class = rhs_offset
+                    .checked_add(class_id)
+                    .ok_or_else(|| anyhow::anyhow!("rhs axis-class offset overflows usize"))?;
+                let root = find(&mut parent, rhs_class);
                 let class = *root_to_class.entry(root).or_insert_with(|| {
                     let value = next_class;
                     next_class += 1;
@@ -1260,7 +1287,7 @@ impl IdxTensor {
             }
         }
 
-        axis_classes
+        Ok(axis_classes)
     }
 
     fn scale_subscripts(rank: usize) -> Result<EinsumSubscripts> {
@@ -1365,12 +1392,12 @@ impl IdxTensor {
         axis_classes: &[usize],
         logical_dims: &[usize],
     ) -> Result<EagerTensor> {
-        let payload_rank = axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|class_id| class_id + 1)
-            .unwrap_or(0);
+        let payload_rank = match axis_classes.iter().copied().max() {
+            Some(class_id) => class_id
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("structured payload class rank overflows usize"))?,
+            None => 0,
+        };
         if !(payload.shape().len() == payload_rank) {
             return Err(anyhow::anyhow!(
                 "structured payload rank {} does not match axis classes {:?}",
@@ -1799,34 +1826,41 @@ impl IdxTensor {
         payload: Vec<T>,
         kept_dims: &[usize],
         selected_positions: &[usize],
-    ) -> Vec<T> {
-        let output_len = kept_dims.iter().product::<usize>();
+    ) -> Result<Vec<T>> {
+        let output_len = checked_product(kept_dims)?;
         let mut data = vec![T::zero(); output_len];
         if output_len == 0 {
-            return data;
+            return Ok(data);
         }
 
         let Some((&first_position, rest)) = selected_positions.split_first() else {
-            return data;
+            return Ok(data);
         };
         if rest.iter().any(|&position| position != first_position) {
-            return data;
+            return Ok(data);
         }
 
         let value = payload[first_position];
         if kept_dims.is_empty() {
             data[0] = value;
-            return data;
+            return Ok(data);
         }
 
         let mut offset = 0usize;
         let mut stride = 1usize;
         for &dim in kept_dims {
-            offset += first_position * stride;
-            stride *= dim;
+            let term = first_position
+                .checked_mul(stride)
+                .ok_or_else(|| anyhow::anyhow!("diagonal selection offset overflow"))?;
+            offset = offset
+                .checked_add(term)
+                .ok_or_else(|| anyhow::anyhow!("diagonal selection offset overflow"))?;
+            stride = stride
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow::anyhow!("diagonal selection stride overflow"))?;
         }
         data[offset] = value;
-        data
+        Ok(data)
     }
 
     fn select_diag_indices(
@@ -1840,14 +1874,14 @@ impl IdxTensor {
             let payload = storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.is_c64() {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::F32) {
             let inner = self
@@ -1855,7 +1889,7 @@ impl IdxTensor {
                 .eager()
                 .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?;
             let payload = inner.value()?.as_slice::<f32>()?.to_vec();
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::C32) {
             let inner = self
@@ -1863,7 +1897,7 @@ impl IdxTensor {
                 .eager()
                 .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?;
             let payload = inner.value()?.as_slice::<Complex32>()?.to_vec();
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else {
             Err(anyhow::anyhow!("unsupported diagonal storage scalar type"))
@@ -2354,6 +2388,12 @@ impl IdxTensor {
             .map(|&axis| self.indices[axis].dim())
             .collect::<Vec<_>>();
 
+        if matches!(
+            self.storage.storage_kind(),
+            StorageKind::Diagonal | StorageKind::Structured
+        ) {
+            self.ensure_shape_packing_preserves_ad("select_indices")?;
+        }
         if self.storage.storage_kind() == StorageKind::Diagonal {
             return self
                 .select_diag_indices(kept_indices, kept_dims, positions)
@@ -2946,7 +2986,8 @@ impl IdxTensor {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_diag_dims(&dims)?;
-        Self::validate_diag_payload_len(payload_inner.shape().iter().product(), &dims)?;
+        let payload_len = checked_product(payload_inner.shape())?;
+        Self::validate_diag_payload_len(payload_len, &dims)?;
         let axis_classes = Self::diag_axis_classes(dims.len());
         let diag_inner = payload_inner.embed_diag(0, 1)?;
         Self::from_inner_with_axis_classes(indices, diag_inner, axis_classes)
@@ -2976,6 +3017,7 @@ impl IdxTensor {
         profile_pairwise_contract_section("from_inner_validate_indices", || {
             Self::validate_indices(&indices)
         })?;
+        Self::validate_axis_classes(&axis_classes, indices.len())?;
         if dims != inner.shape() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
@@ -3301,19 +3343,19 @@ impl IdxTensor {
     /// This is the main permutation method that takes the desired new indices
     /// and automatically computes the corresponding permutation of dimensions
     /// and data. The new indices must be a permutation of the original indices
-    /// (matched by ID).
+    /// (matched by full index identity).
     ///
     /// # Arguments
     /// * `new_indices` - The desired new indices order. Must be a permutation
     ///
-    ///   of `self.indices` (matched by ID).
+    ///   of `self.indices` (matched by full index identity).
     ///
     /// # Errors
     /// Returns an error when `new_order` does not contain exactly the tensor's
     /// indices (an index-set mismatch or a missing-index failure).
     /// # Panics
-    /// Panics if `new_indices.len() != self.indices.len()`, if any index ID
-    /// doesn't match, or if there are duplicate indices.
+    /// Panics if `new_indices.len() != self.indices.len()`, if any full index
+    /// identity doesn't match, or if there are duplicate indices.
     ///
     /// # Example
     /// ```
@@ -3334,7 +3376,7 @@ impl IdxTensor {
         &self,
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, IdxTensorError> {
-        // Compute permutation by matching IDs
+        // Compute permutation by full index equality
         let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
         if perm.iter().copied().eq(0..perm.len()) {
             return Ok(Self {
@@ -3438,7 +3480,7 @@ impl IdxTensor {
                 other.storage.axis_classes(),
                 &spec.axes_b,
             )
-        });
+        })?;
 
         if profile_pairwise_contract_section("structured_check", || {
             self.should_use_structured_payload_contract(other)
@@ -3599,7 +3641,7 @@ impl IdxTensor {
             &spec.axes_a,
             other.storage.axis_classes(),
             &spec.axes_b,
-        );
+        )?;
 
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(
@@ -3678,7 +3720,7 @@ impl IdxTensor {
             &[],
             other.storage.axis_classes(),
             &[],
-        );
+        )?;
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(other, result_indices, &[], &[]);
         }
@@ -3759,8 +3801,9 @@ impl IdxTensor {
 impl IdxTensor {
     /// Add two tensors element-wise.
     ///
-    /// The tensors must have the same index set (matched by ID). If the indices
-    /// are in a different order, the other tensor will be permuted to match `self`.
+    /// The tensors must have the same full index set (including tags and prime
+    /// levels). If the indices are in a different order, the other tensor will
+    /// be permuted to match `self`.
     ///
     /// # Arguments
     /// * `other` - The tensor to add
@@ -3852,8 +3895,8 @@ impl IdxTensor {
 
     /// Compute a linear combination: `a * self + b * other`.
     ///
-    /// Both tensors must have the same set of indices (matched by ID).
-    /// If indices are in a different order, `other` is automatically permuted
+    /// Both tensors must have the same full set of indices (including tags and
+    /// prime levels). If indices are in a different order, `other` is automatically permuted
     /// to match `self`.
     ///
     /// # Errors
@@ -5286,8 +5329,8 @@ pub(crate) fn unfold_split_inner(
 
     // Compute matrix dimensions
     let unfolded_dims = unfolded.dims();
-    let m: usize = unfolded_dims[..left_len].iter().product();
-    let n: usize = unfolded_dims[left_len..].iter().product();
+    let m = checked_product(&unfolded_dims[..left_len])?;
+    let n = checked_product(&unfolded_dims[left_len..])?;
 
     let matrix_tensor = unfolded.try_materialized_inner()?.reshape(&[m, n])?;
 
@@ -5808,7 +5851,7 @@ impl IdxTensor {
 
     /// Replace multiple tensor indices with one fused index using an exact local reshape.
     ///
-    /// The indices in `old_indices` identify the axes to fuse by ID and also
+    /// The full indices in `old_indices` identify the axes to fuse and also
     /// define the coordinate order used inside `new_index`. The new fused index
     /// is inserted at the earliest axis position among the fused axes; all
     /// other axes keep their original relative order. Use
@@ -5819,9 +5862,9 @@ impl IdxTensor {
     /// # Arguments
     /// * `old_indices` - Non-empty list of existing tensor indices to replace.
     ///
-    ///   Each index is matched by ID, must appear exactly once in the tensor,
-    ///   must have the same dimension as the matched tensor axis, and must not
-    ///   be duplicated in this list.
+    ///   Each index is matched by full identity, must appear exactly once in
+    ///   the tensor, must have the same dimension as the matched tensor axis,
+    ///   and must not be duplicated in this list.
     /// * `new_index` - Replacement index whose dimension must equal the product
     ///
     ///   of the dimensions in `old_indices`.
@@ -6085,7 +6128,7 @@ impl IdxTensor {
         indices: Vec<DynIndex>,
     ) -> std::result::Result<Self, IdxTensorError> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let size: usize = dims.iter().product();
+        let size = checked_product(&dims)?;
         Self::from_dense(indices, vec![T::zero(); size])
     }
 }
@@ -6392,7 +6435,12 @@ fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
                 dim
             ));
         };
-        linear += index * stride;
+        let term = index
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow::anyhow!("linear offset overflow"))?;
+        linear = linear
+            .checked_add(term)
+            .ok_or_else(|| anyhow::anyhow!("linear offset overflow"))?;
         stride = stride
             .checked_mul(dim)
             .ok_or_else(|| anyhow::anyhow!("stride overflow"))?;
@@ -6621,5 +6669,13 @@ mod tests {
         );
         assert!(!conjugated.tracks_grad());
         assert!(conjugated.detach().is_err());
+    }
+
+    #[test]
+    fn encode_col_major_linear_rejects_offset_overflow() {
+        let error =
+            encode_col_major_linear(&[usize::MAX - 1, usize::MAX - 1], &[usize::MAX, usize::MAX])
+                .unwrap_err();
+        assert!(error.to_string().contains("linear offset overflow"));
     }
 }

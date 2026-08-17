@@ -146,6 +146,49 @@ fn test_from_arrays_empty_dimension() {
 }
 
 #[test]
+fn from_arrays_uses_interior_coordinates() {
+    let xvals = vec![vec![0.0, 0.5, 2.0, 5.0]];
+    let options = QtciOptions::default()
+        .with_tolerance(1e-10)
+        .with_nrandominitpivot(2)
+        .with_unfoldingscheme(UnfoldingScheme::Fused);
+    let (qtci, _, _) = quanticscrossinterpolate_from_arrays::<f64, _>(
+        &xvals,
+        |coords| coords[0] + 1.0,
+        None,
+        options,
+    )
+    .unwrap();
+
+    assert_relative_eq!(qtci.evaluate(&[1]).unwrap(), 1.5, epsilon = 1e-8);
+    assert_relative_eq!(qtci.evaluate(&[2]).unwrap(), 3.0, epsilon = 1e-8);
+}
+
+#[test]
+fn from_arrays_rejects_invalid_coordinates() {
+    let options = QtciOptions::default();
+    let nan = quanticscrossinterpolate_from_arrays::<f64, _>(
+        &[vec![0.0, f64::NAN, 1.0, 2.0]],
+        |_| 1.0,
+        None,
+        options.clone(),
+    )
+    .err()
+    .unwrap();
+    assert!(nan.to_string().contains("finite"));
+
+    let duplicate = quanticscrossinterpolate_from_arrays::<f64, _>(
+        &[vec![0.0, 1.0, 1.0, 2.0]],
+        |_| 1.0,
+        None,
+        options,
+    )
+    .err()
+    .unwrap();
+    assert!(duplicate.to_string().contains("strictly increasing"));
+}
+
+#[test]
 fn test_options_builder() {
     let opts = QtciOptions::default()
         .with_tolerance(1e-6)
@@ -461,7 +504,7 @@ fn test_from_arrays_unequal_dimensions() {
 #[test]
 fn test_from_arrays_valid() {
     let f = |coords: &[f64]| coords[0] + coords[1];
-    let xvals = vec![vec![0.0, 1.0, 2.0, 3.0], vec![0.0, 1.0, 2.0, 3.0]];
+    let xvals = vec![vec![0.0, 0.5, 2.0, 3.0], vec![0.0, 1.0, 2.0, 4.0]];
 
     let opts = QtciOptions::default()
         .with_tolerance(1e-10)
@@ -472,32 +515,25 @@ fn test_from_arrays_valid() {
     assert!(result.is_ok(), "Error: {:?}", result.err());
 
     let (qtci, _ranks, _errors) = result.unwrap();
-    assert!(qtci.discretized_grid().is_some());
+    assert!(qtci.inherent_grid().is_some());
+    assert!(qtci.cachedata_origcoord().is_err());
     assert!(qtci.rank() > 0);
 
-    // Verify cached function values via cachedata_origcoord.
-    // Each cached point should store f(x,y) = x + y correctly.
-    let origcoord_data = qtci.cachedata_origcoord().unwrap();
-    assert!(!origcoord_data.is_empty());
-    for (coord, val) in &origcoord_data {
-        assert_eq!(coord.len(), 2);
-        let expected = coord[0] + coord[1];
-        assert!(
-            (val - expected).abs() < 1e-10,
-            "cached f({},{}) = {}, expected {}",
-            coord[0],
-            coord[1],
-            val,
-            expected
-        );
+    // Every cached point uses the supplied grid coordinates.
+    let grid = qtci.inherent_grid().unwrap();
+    let cache = qtci.cachedata();
+    assert!(!cache.is_empty());
+    for (quantics, val) in cache {
+        let indices = grid.quantics_to_grididx(quantics).unwrap();
+        let expected = xvals[0][indices[0]] + xvals[1][indices[1]];
+        assert!((val - expected).abs() < 1e-10);
     }
 
-    // Verify evaluate() at known-exact points
-    // xvals = [0,1,2,3], so grid (1,1) -> (0,0), f=0 and (4,4) -> (3,3), f=6
+    // Verify evaluate() at known-exact points.
     let val = qtci.evaluate(&[0, 0]).unwrap();
     assert_relative_eq!(val, 0.0, epsilon = 1e-8);
     let val = qtci.evaluate(&[3, 3]).unwrap();
-    assert_relative_eq!(val, 6.0, epsilon = 1e-8);
+    assert_relative_eq!(val, 7.0, epsilon = 1e-8);
 }
 
 #[test]

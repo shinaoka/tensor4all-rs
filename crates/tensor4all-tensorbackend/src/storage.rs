@@ -193,12 +193,15 @@ fn col_major_multi_index(mut linear: usize, dims: &[usize]) -> Vec<usize> {
     index
 }
 
-fn offset_from_strides(index: &[usize], strides: &[isize]) -> usize {
+fn offset_from_strides(index: &[usize], strides: &[isize]) -> Option<usize> {
     index
         .iter()
         .zip(strides.iter())
-        .map(|(&value, &stride)| value * usize::try_from(stride).unwrap_or(usize::MAX))
-        .sum()
+        .try_fold(0usize, |offset, (&value, &stride)| {
+            let stride = usize::try_from(stride).ok()?;
+            let term = value.checked_mul(stride)?;
+            offset.checked_add(term)
+        })
 }
 
 /// Structured tensor snapshot storage.
@@ -587,13 +590,15 @@ impl<T: Clone> StructuredStorage<T> {
             return self.data.clone();
         }
 
-        (0..payload_len)
-            .map(|linear| {
-                let index = col_major_multi_index(linear, &self.payload_dims);
-                let offset = offset_from_strides(&index, &self.strides);
-                self.data[offset].clone()
-            })
-            .collect()
+        let mut output = Vec::with_capacity(payload_len);
+        for linear in 0..payload_len {
+            let index = col_major_multi_index(linear, &self.payload_dims);
+            let Some(offset) = offset_from_strides(&index, &self.strides) else {
+                return Vec::new();
+            };
+            output.push(self.data[offset].clone());
+        }
+        output
     }
 
     /// Returns a copy of the storage with logical axes permuted.
@@ -778,7 +783,9 @@ impl<T: Copy + Default> StructuredStorage<T> {
             .unwrap_or(0);
         let mut payload_index = vec![0usize; self.payload_dims.len()];
         for _ in 0..payload_len {
-            let offset = offset_from_strides(&payload_index, &self.strides);
+            let Some(offset) = offset_from_strides(&payload_index, &self.strides) else {
+                return;
+            };
             f(self.data[offset]);
             let mut carry = true;
             for (coordinate, &dim) in payload_index.iter_mut().zip(self.payload_dims.iter()) {

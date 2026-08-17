@@ -150,13 +150,8 @@ where
         self.site_spaces.get(node_name)
     }
 
-    /// Get a mutable reference to the site space for a node.
-    ///
-    /// **Warning**: Direct modification of site space via this method does NOT
-    /// update the reverse lookup (`index_to_node`). Use `add_site_index()`,
-    /// `remove_site_index()`, or `replace_site_index()` for modifications
-    /// that maintain consistency.
-    pub fn site_space_mut(&mut self, node_name: &NodeName) -> Option<&mut HashSet<I>> {
+    /// Get a mutable reference to the site space for internal topology updates.
+    pub(crate) fn site_space_mut(&mut self, node_name: &NodeName) -> Option<&mut HashSet<I>> {
         self.site_spaces.get_mut(node_name)
     }
 
@@ -397,13 +392,6 @@ where
     /// Get a reference to the internal graph.
     pub fn graph(&self) -> &StableGraph<(), (), Undirected> {
         self.topology.graph()
-    }
-
-    /// Get a mutable reference to the internal graph.
-    ///
-    /// **Warning**: Directly modifying the internal graph can break consistency.
-    pub fn graph_mut(&mut self) -> &mut StableGraph<(), (), Undirected> {
-        self.topology.graph_mut()
     }
 
     /// Check if two SiteIndexNetworks share equivalent site index structure.

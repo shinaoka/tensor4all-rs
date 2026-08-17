@@ -10,8 +10,8 @@ where
     T: SVDScalar + EinsumScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
-    let (a, shape_a) = before.full_tensor();
-    let (b, shape_b) = after.full_tensor();
+    let (a, shape_a) = before.full_tensor().unwrap();
+    let (b, shape_b) = after.full_tensor().unwrap();
     assert_eq!(shape_a, shape_b);
     let max_diff = a
         .iter()

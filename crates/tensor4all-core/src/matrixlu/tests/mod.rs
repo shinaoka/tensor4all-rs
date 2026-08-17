@@ -11,6 +11,20 @@ fn identity(n: usize) -> Matrix<f64> {
 }
 
 #[test]
+fn triangular_helpers_validate_shapes_and_pivots() {
+    let p = from_vec2d(vec![vec![1.0_f64, 0.0], vec![0.0, 0.0]]);
+    let mut columns = from_vec2d(vec![vec![1.0_f64], vec![2.0]]);
+    assert!(cols_to_l_matrix(&mut columns, &p, true).is_err());
+
+    let p = from_vec2d(vec![vec![1.0_f64, 0.0], vec![0.0, 1.0]]);
+    let mut too_narrow = from_vec2d(vec![vec![1.0_f64], vec![2.0]]);
+    assert!(cols_to_l_matrix(&mut too_narrow, &p, true).is_err());
+
+    let mut rows = from_vec2d(vec![vec![1.0_f64, 2.0]]);
+    assert!(rows_to_u_matrix(&mut rows, &p, true).is_err());
+}
+
+#[test]
 fn test_rrlu_identity() {
     let m = identity(3);
     let lu = rrlu(&m, None).unwrap();

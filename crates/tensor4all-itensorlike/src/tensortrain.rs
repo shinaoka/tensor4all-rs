@@ -330,6 +330,11 @@ impl TensorTrain {
     /// # }
     /// ```
     pub fn from_treetn(treetn: TreeTN<IdxTensor, usize>) -> Result<Self> {
+        treetn
+            .validate_linear_chain()
+            .map_err(|error| TensorTrainError::InvalidStructure {
+                message: format!("TensorTrain requires a linear-chain TreeTN: {error}"),
+            })?;
         Self::from_inner(treetn, None)
     }
 
@@ -1134,9 +1139,6 @@ impl TensorTrain {
     /// This delegates to the TreeTN's truncate_mut method, which performs a
     /// two-site sweep with Euler tour traversal for optimal truncation.
     ///
-    /// Note: The `site_range` option in `TruncateOptions` is currently ignored
-    /// as the underlying TreeTN truncation operates on the full network.
-    ///
     /// # Errors
     ///
     /// Returns an error when truncation fails (a backend or SVD failure).
@@ -1349,10 +1351,17 @@ impl TensorTrain {
         // Result should be a scalar (0-dimensional tensor)
         let dims =
             profile_tt_inner_section(profile_enabled, &mut profile.final_dims, || env.dims());
-        let total_size: usize = if dims.is_empty() {
+        let total_size = if dims.is_empty() {
             1
         } else {
-            dims.iter().product()
+            dims.iter().try_fold(1usize, |acc, &dim| {
+                acc.checked_mul(dim)
+                    .ok_or_else(|| TensorTrainError::InvalidStructure {
+                        message: format!(
+                            "inner-product scalar shape overflows usize: dims={dims:?}"
+                        ),
+                    })
+            })?
         };
         if total_size != 1 {
             return Err(TensorTrainError::InvalidStructure {
@@ -1470,10 +1479,10 @@ impl TensorTrain {
         normalized.normalize_site_tensor_orders()?;
 
         if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized)? {
-            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)));
+            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)?));
         }
         if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized)? {
-            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)));
+            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)?));
         }
 
         Ok(None)
@@ -1502,7 +1511,13 @@ impl TensorTrain {
                     None => return Ok(None),
                 }
             };
-            let total_size: usize = tensor.dims().iter().product();
+            let Some(total_size) = tensor
+                .dims()
+                .iter()
+                .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+            else {
+                return Ok(None);
+            };
             let boundary_size = match left_dim.checked_mul(right_dim) {
                 Some(size) => size,
                 None => return Ok(None),
@@ -1533,13 +1548,15 @@ impl TensorTrain {
         Ok(Some(sites))
     }
 
-    fn norm_squared_from_packed_sites<T: NormAccumScalar>(sites: &[PackedSiteTensor<T>]) -> f64 {
+    fn norm_squared_from_packed_sites<T: NormAccumScalar>(
+        sites: &[PackedSiteTensor<T>],
+    ) -> Result<f64> {
         if sites.is_empty() {
-            return 0.0;
+            return Ok(0.0);
         }
 
         let first = &sites[0];
-        let mut current = vec![T::zero(); first.right_dim * first.right_dim];
+        let mut current = vec![T::zero(); Self::checked_norm_square(first.right_dim)?];
 
         for physical in 0..first.physical_dim {
             for right in 0..first.right_dim {
@@ -1552,7 +1569,7 @@ impl TensorTrain {
         }
 
         for site in &sites[1..] {
-            let mut next = vec![T::zero(); site.right_dim * site.right_dim];
+            let mut next = vec![T::zero(); Self::checked_norm_square(site.right_dim)?];
 
             for left in 0..site.left_dim {
                 for left_conj in 0..site.left_dim {
@@ -1575,7 +1592,19 @@ impl TensorTrain {
             current = next;
         }
 
-        current[0].into_nonnegative_real()
+        Ok(current[0].into_nonnegative_real())
+    }
+
+    fn checked_norm_square(dim: usize) -> Result<usize> {
+        if dim == 0 {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "norm environment cannot have a zero dimension".to_string(),
+            });
+        }
+        dim.checked_mul(dim)
+            .ok_or_else(|| TensorTrainError::InvalidStructure {
+                message: format!("norm environment shape ({dim}, {dim}) overflows usize"),
+            })
     }
 
     /// Convert the tensor train to a single dense tensor.

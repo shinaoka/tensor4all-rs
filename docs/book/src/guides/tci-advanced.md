@@ -118,7 +118,7 @@ let cf = CachedFunction::new(
     &local_dims,
 ).unwrap();
 
-let cached_f = |idx: &Vec<usize>| cf.eval(idx);
+let cached_f = |idx: &Vec<usize>| cf.eval(idx).unwrap();
 let tensor4all_tensorci::TCI2OptimizationResult { tci: tci_cached, ranks: _ranks, errors: _errors, .. } = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     cached_f,
     None,

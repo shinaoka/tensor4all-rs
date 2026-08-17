@@ -76,6 +76,8 @@ pub use crate::tensor_like::{
 /// Returns `FactorizeError` if:
 /// - The storage type is not supported (only DenseF64 and DenseC64)
 /// - QR is used with `Canonical::Right`
+/// - LU or CI is requested for a tracked tensor (those paths do not yet
+///   preserve reverse-mode AD metadata)
 /// - The underlying algorithm fails
 pub fn factorize(
     t: &IdxTensor,
@@ -87,6 +89,11 @@ pub fn factorize(
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() && matches!(options.alg, FactorizeAlg::LU | FactorizeAlg::CI) {
+        return Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization do not support tracked tensors yet",
         ));
     }
 
@@ -118,9 +125,9 @@ pub fn factorize(
 /// roundoff, with no tolerance-based or maximum-rank truncation applied.
 ///
 /// # Errors
-/// Returns [`FactorizeError`] if the storage type is unsupported, the canonical
-/// direction is unsupported for the selected algorithm, or the underlying
-/// decomposition fails.
+/// Returns [`FactorizeError`] if the storage type is unsupported, LU or CI is
+/// requested for a tracked tensor, the canonical direction is unsupported for
+/// the selected algorithm, or the underlying decomposition fails.
 ///
 /// # Examples
 ///
@@ -155,6 +162,11 @@ pub fn factorize_full_rank(
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() && matches!(alg, FactorizeAlg::LU | FactorizeAlg::CI) {
+        return Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization do not support tracked tensors yet",
         ));
     }
 
@@ -454,14 +466,14 @@ where
         .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
     // Convert L matrix back to tensor
-    let l_vec = matrix_to_vec(&l_matrix);
+    let l_vec = matrix_to_vec(&l_matrix)?;
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
     let left = IdxTensor::from_dense(l_indices, l_vec)
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     // Convert U matrix back to tensor
-    let u_vec = matrix_to_vec(&u_matrix);
+    let u_vec = matrix_to_vec(&u_matrix)?;
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let right = IdxTensor::from_dense(r_indices, u_vec)
@@ -685,7 +697,8 @@ fn matrix_from_col_major_values<T>(
 where
     T: MatrixScalar + Copy,
 {
-    if data.len() != m * n {
+    let expected_len = checked_matrix_len(m, n, source)?;
+    if data.len() != expected_len {
         return Err(FactorizeError::ComputationError(anyhow::anyhow!(
             "{source} matrix materialization produced {} entries for shape ({m}, {n})",
             data.len()
@@ -702,19 +715,28 @@ where
 }
 
 /// Convert Matrix to Vec for storage.
-fn matrix_to_vec<T>(matrix: &Matrix<T>) -> Vec<T>
+fn matrix_to_vec<T>(matrix: &Matrix<T>) -> Result<Vec<T>, FactorizeError>
 where
     T: Clone,
 {
     let m = matrix.nrows();
     let n = matrix.ncols();
-    let mut vec = Vec::with_capacity(m * n);
+    let len = checked_matrix_len(m, n, "factorize output")?;
+    let mut vec = Vec::with_capacity(len);
     for j in 0..n {
         for i in 0..m {
             vec.push(matrix[[i, j]].clone());
         }
     }
-    vec
+    Ok(vec)
+}
+
+fn checked_matrix_len(m: usize, n: usize, source: &str) -> Result<usize, FactorizeError> {
+    m.checked_mul(n).ok_or_else(|| {
+        FactorizeError::ComputationError(anyhow::anyhow!(
+            "{source} matrix shape ({m}, {n}) overflows usize"
+        ))
+    })
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use syn::{
@@ -71,10 +71,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Collect crate paths
     let crate_paths: Vec<PathBuf> = if let Some(ws) = &cargo.workspace {
         if let Some(members) = &ws.members {
-            members
+            let crates_dir = workspace_path.join("crates");
+            let paths = members
                 .iter()
                 .flat_map(|pattern| expand_glob(&workspace_path, pattern))
-                .collect()
+                .filter(|path| path.parent() == Some(crates_dir.as_path()))
+                .collect::<BTreeSet<_>>();
+            paths.into_iter().collect()
         } else {
             vec![workspace_path.clone()]
         }
@@ -87,9 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&args.output)?;
 
     for crate_path in crate_paths {
-        if let Err(e) = process_crate(&crate_path, &args.output) {
-            eprintln!("Warning: Failed to process {:?}: {}", crate_path, e);
-        }
+        process_crate(&crate_path, &args.output)?;
     }
 
     println!("API documentation written to {:?}", args.output);

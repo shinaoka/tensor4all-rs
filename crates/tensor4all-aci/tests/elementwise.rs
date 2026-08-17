@@ -15,7 +15,7 @@ fn exact_options() -> AciOptions<f64> {
 }
 
 fn assert_dense_close(actual: &SimpleTensorTrain<f64>, expected_shape: &[usize], expected: &[f64]) {
-    let (actual_data, actual_shape) = actual.full_tensor();
+    let (actual_data, actual_shape) = actual.full_tensor().unwrap();
     assert_eq!(actual_shape, expected_shape);
     assert_eq!(actual_data.len(), expected.len());
     for (actual_value, expected_value) in actual_data.iter().zip(expected) {
@@ -31,8 +31,8 @@ fn dense_oracle2<F>(
 where
     F: FnMut(f64, f64) -> f64,
 {
-    let (left_data, left_shape) = left.full_tensor();
-    let (right_data, right_shape) = right.full_tensor();
+    let (left_data, left_shape) = left.full_tensor().unwrap();
+    let (right_data, right_shape) = right.full_tensor().unwrap();
     assert_eq!(left_shape, right_shape);
     left_data
         .into_iter()

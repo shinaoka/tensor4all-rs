@@ -855,6 +855,11 @@ pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Rr
 /// system defined by `p`. The matrix `c` must have at least `p.nrows()`
 /// columns.
 ///
+/// # Errors
+/// Returns [`MatrixCIError::InvalidArgument`] when `p` is not square or
+/// `c` has too few columns, and [`MatrixCIError::SingularMatrix`] for a zero
+/// diagonal pivot.
+///
 /// # Examples
 ///
 /// ```
@@ -872,14 +877,33 @@ pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Rr
 ///     vec![6.0, 9.0],
 ///     vec![8.0, 7.0],
 /// ]);
-/// cols_to_l_matrix(&mut c, &p, true);
+/// cols_to_l_matrix(&mut c, &p, true).unwrap();
 /// // After processing: c[:,0] was divided by p[0,0]=2
 /// assert!((c[[0, 0]] - 2.0).abs() < 1e-10);
 /// assert!((c[[1, 0]] - 3.0).abs() < 1e-10);
 /// assert!((c[[2, 0]] - 4.0).abs() < 1e-10);
 /// ```
-pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_orthogonal: bool) {
+pub fn cols_to_l_matrix<T: Scalar>(
+    c: &mut Matrix<T>,
+    p: &Matrix<T>,
+    _left_orthogonal: bool,
+) -> Result<()> {
+    if p.nrows() != p.ncols() || c.ncols() < p.nrows() {
+        return Err(MatrixCIError::InvalidArgument {
+            message: format!(
+                "cols_to_l_matrix requires square p and c.ncols() >= p.nrows(), got p=({}, {}), c.ncols()={}",
+                p.nrows(),
+                p.ncols(),
+                c.ncols()
+            ),
+        });
+    }
     let n = p.nrows();
+    for k in 0..n {
+        if p[[k, k]].abs_val() == 0.0 {
+            return Err(MatrixCIError::SingularMatrix);
+        }
+    }
 
     for k in 0..n {
         let pivot = p[[k, k]];
@@ -899,6 +923,7 @@ pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
             }
         }
     }
+    Ok(())
 }
 
 /// Convert R matrix to solve X * U = B given pivot matrix P
@@ -906,6 +931,11 @@ pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
 /// Modifies `r` in place so that the rows satisfy the triangular
 /// system defined by `p`. The matrix `r` must have at least `p.nrows()`
 /// rows.
+///
+/// # Errors
+/// Returns [`MatrixCIError::InvalidArgument`] when `p` is not square or
+/// `r` has too few rows, and [`MatrixCIError::SingularMatrix`] for a zero
+/// diagonal pivot.
 ///
 /// # Examples
 ///
@@ -923,14 +953,33 @@ pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
 ///     vec![4.0_f64, 6.0, 8.0],
 ///     vec![5.0, 9.0, 7.0],
 /// ]);
-/// rows_to_u_matrix(&mut r, &p, true);
+/// rows_to_u_matrix(&mut r, &p, true).unwrap();
 /// // After processing: r[0,:] was divided by p[0,0]=2
 /// assert!((r[[0, 0]] - 2.0).abs() < 1e-10);
 /// assert!((r[[0, 1]] - 3.0).abs() < 1e-10);
 /// assert!((r[[0, 2]] - 4.0).abs() < 1e-10);
 /// ```
-pub fn rows_to_u_matrix<T: Scalar>(r: &mut Matrix<T>, p: &Matrix<T>, _left_orthogonal: bool) {
+pub fn rows_to_u_matrix<T: Scalar>(
+    r: &mut Matrix<T>,
+    p: &Matrix<T>,
+    _left_orthogonal: bool,
+) -> Result<()> {
+    if p.nrows() != p.ncols() || r.nrows() < p.nrows() {
+        return Err(MatrixCIError::InvalidArgument {
+            message: format!(
+                "rows_to_u_matrix requires square p and r.nrows() >= p.nrows(), got p=({}, {}), r.nrows()={}",
+                p.nrows(),
+                p.ncols(),
+                r.nrows()
+            ),
+        });
+    }
     let n = p.nrows();
+    for k in 0..n {
+        if p[[k, k]].abs_val() == 0.0 {
+            return Err(MatrixCIError::SingularMatrix);
+        }
+    }
 
     for k in 0..n {
         let pivot = p[[k, k]];
@@ -950,6 +999,7 @@ pub fn rows_to_u_matrix<T: Scalar>(r: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -109,8 +109,14 @@ where
 
     // Candidate points: for each random start, each site coordinate swept
     // over its full local dimension (same local search as the chain finder).
+    let candidate_count = (0..n_sites)
+        .try_fold(0usize, |count, site| {
+            count.checked_add(state.local_dims[site])
+        })
+        .and_then(|per_start| per_start.checked_mul(nsearch))
+        .ok_or_else(|| anyhow::anyhow!("global-pivot candidate count overflowed usize"))?;
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut points: Vec<MultiIndex> = Vec::new();
+    let mut points: Vec<MultiIndex> = Vec::with_capacity(candidate_count);
     for _ in 0..nsearch {
         let start: MultiIndex = (0..n_sites)
             .map(|site| rng.random_range(0..state.local_dims[site]))
@@ -125,7 +131,13 @@ where
     }
 
     // Evaluate the function at all candidates in one batch.
-    let flat: Vec<usize> = points.iter().flat_map(|p| p.iter().copied()).collect();
+    let flat_len = n_sites
+        .checked_mul(points.len())
+        .ok_or_else(|| anyhow::anyhow!("global-pivot flat batch size overflowed usize"))?;
+    let mut flat = Vec::with_capacity(flat_len);
+    for point in &points {
+        flat.extend_from_slice(point);
+    }
     let f_values = evaluate(GlobalIndexBatch::new(&flat, n_sites, points.len())?)?;
     if f_values.len() != points.len() {
         return Err(anyhow::anyhow!(

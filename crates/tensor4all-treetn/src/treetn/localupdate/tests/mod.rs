@@ -505,6 +505,55 @@ fn test_apply_local_update_sweep_preserves_structure() {
     tn.verify_internal_consistency().unwrap();
 }
 
+struct FailOnSecondStep {
+    calls: usize,
+}
+
+impl LocalUpdater<IdxTensor, String> for FailOnSecondStep {
+    fn before_step(
+        &mut self,
+        _step: &LocalUpdateStep<String>,
+        _full_treetn_before: &TreeTN<IdxTensor, String>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        self.calls += 1;
+        if self.calls == 2 {
+            return Err(anyhow::anyhow!("synthetic second-step failure").into());
+        }
+        Ok(())
+    }
+
+    fn update(
+        &mut self,
+        subtree: TreeTN<IdxTensor, String>,
+        _step: &LocalUpdateStep<String>,
+        _full_treetn: &TreeTN<IdxTensor, String>,
+    ) -> std::result::Result<TreeTN<IdxTensor, String>, TreeTNOperationError> {
+        Ok(subtree)
+    }
+}
+
+#[test]
+fn test_apply_local_update_sweep_is_transactional_on_late_error() {
+    use crate::CanonicalizationOptions;
+
+    let mut tn = create_chain_treetn()
+        .canonicalize(["A".to_string()], CanonicalizationOptions::default())
+        .unwrap();
+    let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"A".to_string(), 2).unwrap();
+    let before_center = tn.canonical_region().clone();
+    let node = tn.node_index(&"A".to_string()).unwrap();
+    let before_values = tn.tensor(node).unwrap().to_vec::<f64>().unwrap();
+
+    let mut updater = FailOnSecondStep { calls: 0 };
+    let error = apply_local_update_sweep(&mut tn, &plan, &mut updater).unwrap_err();
+    assert!(format!("{error:?}").contains("second-step failure"));
+    assert_eq!(tn.canonical_region(), &before_center);
+    assert_eq!(
+        tn.tensor(node).unwrap().to_vec::<f64>().unwrap(),
+        before_values
+    );
+}
+
 #[test]
 fn test_apply_local_update_sweep_requires_canonicalization() {
     // Test that apply_local_update_sweep fails when TreeTN is not canonicalized

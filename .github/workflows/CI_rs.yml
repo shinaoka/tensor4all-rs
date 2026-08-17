@@ -124,6 +124,9 @@ jobs:
       - name: Check generated C API header
         run: ./scripts/check-capi-header.sh
 
+      - name: Generate and verify public API inventory
+        run: cargo run -p xtask --release -- api-dump
+
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 

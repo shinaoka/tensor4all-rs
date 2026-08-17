@@ -421,20 +421,29 @@ impl<T: TTScalar> MPO<T> {
     /// along with the shape (alternating site_dim_1, site_dim_2 dimensions).
     ///
     /// Warning: This can be very large for high-dimensional operators!
-    pub fn full_tensor(&self) -> (Vec<T>, Vec<usize>)
+    ///
+    /// # Errors
+    /// Returns [`MPOError::InvalidOperation`] when the dense element count
+    /// overflows or an evaluation fails.
+    pub fn full_tensor(&self) -> Result<(Vec<T>, Vec<usize>)>
     where
         T: EinsumScalar,
     {
         if self.is_empty() {
-            return (Vec::new(), Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         let site_dims = self.site_dims();
         let shape: Vec<usize> = site_dims.iter().flat_map(|&(d1, d2)| [d1, d2]).collect();
-        let total_size: usize = shape.iter().product();
+        let total_size = shape.iter().try_fold(1usize, |acc, &dim| {
+            acc.checked_mul(dim)
+                .ok_or_else(|| MPOError::InvalidOperation {
+                    message: "full tensor element count overflowed usize".to_string(),
+                })
+        })?;
 
         if total_size == 0 {
-            return (Vec::new(), shape);
+            return Ok((Vec::new(), shape));
         }
 
         // Build full tensor by iterating over all indices
@@ -443,11 +452,7 @@ impl<T: TTScalar> MPO<T> {
 
         loop {
             // Evaluate at current indices
-            if let Ok(val) = self.evaluate(&indices) {
-                result.push(val);
-            } else {
-                result.push(T::zero());
-            }
+            result.push(self.evaluate(&indices)?);
 
             // Increment indices in column-major order, leftmost index fastest.
             let mut carry = true;
@@ -467,7 +472,7 @@ impl<T: TTScalar> MPO<T> {
             }
         }
 
-        (result, shape)
+        Ok((result, shape))
     }
 }
 

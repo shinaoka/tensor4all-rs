@@ -236,7 +236,12 @@ where
             message: "output_dims must not be empty".to_string(),
         });
     }
-    let n_components: usize = output_dims.iter().product();
+    let n_components = output_dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| QuanticsTCIError::InvalidConfiguration {
+                message: format!("product of output_dims overflowed usize: {output_dims:?}"),
+            })
+    })?;
     if n_components == 0 {
         return Err(QuanticsTCIError::InvalidConfiguration {
             message: format!("product of output_dims must be positive, got 0 from {output_dims:?}"),
@@ -246,6 +251,7 @@ where
     // Shared cache: maps coordinate bits to function output vector.
     // We use f64::to_bits() for exact hashing of floating-point coordinates.
     let cache: Arc<Mutex<HashMap<Vec<u64>, Vec<V>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let callback_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     // Wrap f in Arc so it can be shared across component closures.
     type BatchFn<V> = dyn Fn(&[f64]) -> Vec<V>;
@@ -258,6 +264,7 @@ where
 
     for comp in 0..n_components {
         let cache_clone = cache.clone();
+        let callback_error_clone = callback_error.clone();
         let f_clone = f_arc.clone();
 
         // Create a scalar wrapper for this component.
@@ -268,13 +275,37 @@ where
             {
                 let guard = cache_clone.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(values) = guard.get(&key) {
-                    return values[comp];
+                    if let Some(&value) = values.get(comp) {
+                        return value;
+                    }
+                    let mut error = callback_error_clone
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *error = Some(format!(
+                        "callback returned {} components, expected at least {}",
+                        values.len(),
+                        comp + 1
+                    ));
+                    return V::default();
                 }
             }
 
             // Evaluate and cache.
             let values = f_clone(coords);
-            let result = values[comp];
+            let result = match values.get(comp).copied() {
+                Some(value) => value,
+                None => {
+                    let mut error = callback_error_clone
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *error = Some(format!(
+                        "callback returned {} components, expected at least {}",
+                        values.len(),
+                        comp + 1
+                    ));
+                    V::default()
+                }
+            };
             {
                 let mut guard = cache_clone.lock().unwrap_or_else(|e| e.into_inner());
                 guard.insert(key, values);
@@ -282,8 +313,16 @@ where
             result
         };
 
-        let (qtci, ranks, errors) =
-            quanticscrossinterpolate(grid, scalar_f, initial_pivots.clone(), options.clone())?;
+        let interpolation =
+            quanticscrossinterpolate(grid, scalar_f, initial_pivots.clone(), options.clone());
+        if let Some(message) = callback_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            return Err(QuanticsTCIError::InvalidConfiguration { message });
+        }
+        let (qtci, ranks, errors) = interpolation?;
 
         component_tts.push(qtci.tensor_train());
         all_ranks.push(ranks);

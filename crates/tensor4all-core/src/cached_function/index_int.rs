@@ -18,7 +18,7 @@
 ///     |idx: &[u8]| idx.iter().map(|&x| x as usize).sum::<usize>(),
 ///     &[2, 2, 2],
 /// ).unwrap();
-/// assert_eq!(cf.eval(&[1u8, 0, 1]), 2);
+/// assert_eq!(cf.eval(&[1u8, 0, 1]).unwrap(), 2);
 /// ```
 pub trait IndexInt: Copy + Send + Sync + 'static {
     /// Convert this index element to `usize`.

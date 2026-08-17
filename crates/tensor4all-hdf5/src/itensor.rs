@@ -83,9 +83,14 @@ pub(crate) fn read_itensor(group: &Group) -> Result<IdxTensor> {
     // Read storage
     let storage_group = group.group("storage")?;
     let storage_type_str = crate::compat::read_string_attr_by_name(&storage_group, "type")?;
+    let expected_len = indices.iter().try_fold(1usize, |acc, index| {
+        acc.checked_mul(index.dim)
+            .ok_or_else(|| anyhow::anyhow!("ITensor element count overflowed usize"))
+    })?;
 
-    if storage_type_str.contains("Dense{Float64}") {
+    if storage_type_str == "Dense{Float64}" {
         let data_ds = storage_group.dataset("data")?;
+        validate_dense_dataset_length(&data_ds, expected_len)?;
         let col_major_data: Vec<f64> = data_ds
             .as_reader()
             .read_1d()
@@ -93,8 +98,9 @@ pub(crate) fn read_itensor(group: &Group) -> Result<IdxTensor> {
             .to_vec();
         IdxTensor::from_dense(indices, col_major_data)
             .context("Failed to build f64 IdxTensor from HDF5 data")
-    } else if storage_type_str.contains("Dense{ComplexF64}") {
+    } else if storage_type_str == "Dense{ComplexF64}" {
         let data_ds = storage_group.dataset("data")?;
+        validate_dense_dataset_length(&data_ds, expected_len)?;
         // Read as native HDF5 compound type (Complex64)
         let col_major_data: Vec<Complex64> = data_ds
             .as_reader()
@@ -109,4 +115,17 @@ pub(crate) fn read_itensor(group: &Group) -> Result<IdxTensor> {
             storage_type_str
         );
     }
+}
+
+fn validate_dense_dataset_length(
+    dataset: &crate::backend::Dataset,
+    expected_len: usize,
+) -> Result<()> {
+    let shape = dataset.shape();
+    if shape.len() != 1 || shape[0] != expected_len {
+        bail!(
+            "Dense ITensor data must be a one-dimensional dataset of length {expected_len}, got shape {shape:?}"
+        );
+    }
+    Ok(())
 }
