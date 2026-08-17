@@ -63,7 +63,9 @@ pub trait Tensor3Ops<T: Clone + Default> {
     ///
     /// # Errors
     ///
-    /// Returns an error for an out-of-range site or an overflowing shape.
+    /// Returns [`TensorTrainError::IndexOutOfBounds`] when `s >= site_dim()`.
+    /// Returns [`TensorTrainError::InvalidOperation`] when the slice shape
+    /// product overflows `usize`.
     fn try_slice_site(&self, s: usize) -> Result<Vec<T>>;
 
     /// Reshape to a `(left_dim * site_dim, right_dim)` matrix.
@@ -78,7 +80,8 @@ pub trait Tensor3Ops<T: Clone + Default> {
     ///
     /// # Errors
     ///
-    /// Returns an error when a shape product overflows.
+    /// Returns [`TensorTrainError::InvalidOperation`] when either
+    /// `left_dim * site_dim` or the resulting matrix size overflows `usize`.
     fn try_as_left_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
 
     /// Reshape to a `(left_dim, site_dim * right_dim)` matrix.
@@ -93,7 +96,8 @@ pub trait Tensor3Ops<T: Clone + Default> {
     ///
     /// # Errors
     ///
-    /// Returns an error when a shape product overflows.
+    /// Returns [`TensorTrainError::InvalidOperation`] when either
+    /// `site_dim * right_dim` or the resulting matrix size overflows `usize`.
     fn try_as_right_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
 }
 
