@@ -150,7 +150,13 @@ where
 {
     let n = tt.len();
     let mut index_set = vec![vec![Vec::new()]];
-    let mut pivot_errors = vec![0.0; tt.rank() + 1];
+    let pivot_error_len = tt
+        .rank()
+        .checked_add(1)
+        .ok_or_else(|| TCIError::InvalidOperation {
+            message: "TensorCI2 conversion pivot-error length overflowed usize".to_string(),
+        })?;
+    let mut pivot_errors = vec![0.0; pivot_error_len];
     let mut spectator_indices = spectator_indices;
 
     for step in 0..n - 1 {
@@ -227,7 +233,7 @@ where
         let base_indices = index_set.last().ok_or_else(|| TCIError::InvalidOperation {
             message: "TensorCI2 conversion index set is unexpectedly empty".to_string(),
         })?;
-        let candidates = kronecker_append(base_indices, current_shape.1);
+        let candidates = kronecker_append(base_indices, current_shape.1)?;
         index_set.push(select_multi_indices(&candidates, &factors.row_indices)?);
         if let Some(spectators) = spectator_indices {
             spectators[site] = select_multi_indices(&spectators[site], &factors.col_indices)?;
@@ -245,7 +251,7 @@ where
         let base_indices = index_set.last().ok_or_else(|| TCIError::InvalidOperation {
             message: "TensorCI2 conversion index set is unexpectedly empty".to_string(),
         })?;
-        let candidates = kronecker_prepend(current_shape.1, base_indices);
+        let candidates = kronecker_prepend(current_shape.1, base_indices)?;
         index_set.push(select_multi_indices(&candidates, &factors.col_indices)?);
         if let Some(spectators) = spectator_indices {
             spectators[site] = select_multi_indices(&spectators[site], &factors.row_indices)?;
@@ -345,8 +351,15 @@ where
     (tensor.left_dim(), tensor.site_dim(), tensor.right_dim())
 }
 
-fn kronecker_append(indices: &[MultiIndex], local_dim: usize) -> Vec<MultiIndex> {
-    let mut result = Vec::with_capacity(indices.len() * local_dim);
+fn kronecker_append(indices: &[MultiIndex], local_dim: usize) -> Result<Vec<MultiIndex>> {
+    let capacity =
+        indices
+            .len()
+            .checked_mul(local_dim)
+            .ok_or_else(|| TCIError::InvalidOperation {
+                message: "TensorCI2 conversion candidate count overflowed usize".to_string(),
+            })?;
+    let mut result = Vec::with_capacity(capacity);
     for index in indices {
         for local in 0..local_dim {
             let mut next = index.clone();
@@ -354,20 +367,27 @@ fn kronecker_append(indices: &[MultiIndex], local_dim: usize) -> Vec<MultiIndex>
             result.push(next);
         }
     }
-    result
+    Ok(result)
 }
 
-fn kronecker_prepend(local_dim: usize, indices: &[MultiIndex]) -> Vec<MultiIndex> {
-    let mut result = Vec::with_capacity(indices.len() * local_dim);
+fn kronecker_prepend(local_dim: usize, indices: &[MultiIndex]) -> Result<Vec<MultiIndex>> {
+    let capacity =
+        indices
+            .len()
+            .checked_mul(local_dim)
+            .ok_or_else(|| TCIError::InvalidOperation {
+                message: "TensorCI2 conversion candidate count overflowed usize".to_string(),
+            })?;
+    let mut result = Vec::with_capacity(capacity);
     for local in 0..local_dim {
         for index in indices {
-            let mut next = Vec::with_capacity(index.len() + 1);
+            let mut next = Vec::new();
             next.push(local);
             next.extend(index.iter().copied());
             result.push(next);
         }
     }
-    result
+    Ok(result)
 }
 
 fn select_multi_indices(indices: &[MultiIndex], positions: &[usize]) -> Result<Vec<MultiIndex>> {
