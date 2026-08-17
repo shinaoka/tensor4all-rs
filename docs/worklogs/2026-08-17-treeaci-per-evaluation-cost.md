@@ -180,6 +180,73 @@ a coordinate scan, since only the messages on the path from the varying site to
 the centre are recontracted), reduce the unit price, then re-measure and decide
 on the cache with numbers rather than in advance.
 
+## Follow-up: where the rest of the cost is
+
+The registered measurement establishes that the cost is per call rather than per
+element. It does not say what the call is spending on. That was answered
+afterwards by counting, with temporary instrumentation in a local tenferro build
+at the pinned revision `b5a106be`. These counts are exact rather than sampled, so
+they need no repetition policy; the timings beside them are the per-primitive
+figures measured the same way as above.
+
+One `evaluate_batched` on a chain performs **three tensor constructions per
+node** and exactly as many backend session opens, and **zero**
+`EagerTensor::new_result` calls -- the primitive operations do not produce
+results through the eager result path.
+
+Decomposing one directed message, about 174 us at bond 2:
+
+| | us | share | layer |
+|---|---:|---:|---|
+| backend session opens (4 x 5.59) | 22 | 13% | tenferro |
+| rest of `EagerTensor` construction | 27 | 15% | tenferro-ad |
+| einsum path inside `contract_with_options` | 66 | 38% | core into tenferro-einsum |
+| `slice` / `stack` / `gather` dispatch | 52 | 30% | core into tenferro |
+| arithmetic | ~0 | ~0% | |
+
+`contract_with_options` on two operands measures 78.4 us, of which one session
+and one tensor construction account for about 12; the remaining 66 is the einsum
+path. The tensors hold 8 to 16 elements.
+
+The primitives themselves, on a three-index tensor of 8 elements:
+`select_indices` 35.9 us, `stack_along_new_index` 21.9 us, `index_select`
+30.5 us, `contract_with_options` 85.6 us. For contrast, `to_vec` on the same
+tensor is 1.1 us and `clone` is 0.3 us, and `tenferro::Tensor::from_vec_col_major`
+is 0.54 us.
+
+### Upstream
+
+The session-open share is filed as tenferro-rs#1704. Entering a backend session
+costs 5.59 us with an empty closure, and `EagerTensor::new_leaf` pays it for
+every leaf because it makes the tensor contiguous through the session.
+tenferro-rs#1667 reported the same floor at 11-13 us for op dispatch and is
+closed; the floor is now 5.59, so that work halved it without removing it, and
+leaf construction paying it was outside that issue's framing.
+
+Fixing tenferro-rs#1704 completely would take the roughly 80x gap to roughly
+70x. It is worth doing and it is not the answer.
+
+### What this implies
+
+No single fix closes this. The cost is four generic tensor operations per
+message, each 20-80 us on tensors whose arithmetic is nanoseconds, spread across
+four layers. The one intervention that addresses the whole table is the approach
+#621 took on the train side: stop going through generic tensor operations in
+this pipeline, and have `compute_stacked_message` slice, stack, gather and
+contract on flat column-major buffers directly. That removes the first four rows
+at once and adds no public API, being internal to `cached_evaluator.rs`. It is a
+substantial rewrite and it puts a specialised path in treetn, so it is an
+architectural decision rather than a review fix.
+
+### A correction recorded
+
+An earlier reading of this path attributed the cost to a global metadata
+registry lock taken on every tensor construction. That was read from the wrong
+revision -- an older cargo checkout rather than the pinned one -- and is wrong:
+at `b5a106be` that registry write is removed, with a source comment calling it
+vestigial. The mechanism is the execution session, not the registry. The error
+was caught by measuring inside the pinned tenferro rather than only reading it.
+
 ## Discarded first attempt
 
 An earlier version of this measurement used hand-rolled timers under
