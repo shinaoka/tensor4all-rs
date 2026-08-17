@@ -76,6 +76,8 @@ pub use crate::tensor_like::{
 /// Returns `FactorizeError` if:
 /// - The storage type is not supported (only DenseF64 and DenseC64)
 /// - QR is used with `Canonical::Right`
+/// - LU or CI is requested for a tracked tensor (those paths do not yet
+///   preserve reverse-mode AD metadata)
 /// - The underlying algorithm fails
 pub fn factorize(
     t: &IdxTensor,
@@ -87,6 +89,11 @@ pub fn factorize(
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() && matches!(options.alg, FactorizeAlg::LU | FactorizeAlg::CI) {
+        return Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization do not support tracked tensors yet",
         ));
     }
 
@@ -118,9 +125,9 @@ pub fn factorize(
 /// roundoff, with no tolerance-based or maximum-rank truncation applied.
 ///
 /// # Errors
-/// Returns [`FactorizeError`] if the storage type is unsupported, the canonical
-/// direction is unsupported for the selected algorithm, or the underlying
-/// decomposition fails.
+/// Returns [`FactorizeError`] if the storage type is unsupported, LU or CI is
+/// requested for a tracked tensor, the canonical direction is unsupported for
+/// the selected algorithm, or the underlying decomposition fails.
 ///
 /// # Examples
 ///
@@ -155,6 +162,11 @@ pub fn factorize_full_rank(
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() && matches!(alg, FactorizeAlg::LU | FactorizeAlg::CI) {
+        return Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization do not support tracked tensors yet",
         ));
     }
 
