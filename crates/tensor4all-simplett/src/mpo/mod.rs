@@ -14,7 +14,8 @@
 //!
 //! - [`fn@contract_naive`]: Naive contraction (exact but memory-intensive)
 //! - [`fn@contract_zipup`]: Zip-up contraction with on-the-fly compression
-//! - [`fn@contract_fit`]: Variational fitting algorithm
+//! - [`fn@contract_fit`]: Reserved variational fitting API (currently
+//!   unsupported)
 //!
 //! # Example
 //!
