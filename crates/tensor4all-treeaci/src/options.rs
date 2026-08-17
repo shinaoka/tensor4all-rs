@@ -61,7 +61,18 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Maximum elements in any prepared or output node core. Default: `2^24`.
     pub max_core_elements: usize,
     /// Maximum elements in one cached directed frame. Default: `2^24`.
+    ///
+    /// This bounds a single frame. The frame cache retains one frame per input
+    /// per directed edge, so [`Self::max_frame_bytes`] is what bounds the
+    /// cache as a whole.
     pub max_frame_elements: usize,
+    /// Maximum logical bytes retained by the directed-frame cache, across every
+    /// input and every directed edge. Default: 256 MiB.
+    ///
+    /// Checked before each frame allocation, so an over-budget run is refused
+    /// rather than reaching the ceiling and then reporting it. Counts the
+    /// cache's owned payload, not allocator or process overhead.
+    pub max_frame_bytes: usize,
     /// Maximum logical bytes retained by immutable component samples. Default: 256 MiB.
     pub max_sample_arena_bytes: usize,
     /// Maximum estimated temporary working storage. Default: 512 MiB.
@@ -91,6 +102,7 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
             max_local_matrix_elements: 1 << 24,
             max_core_elements: 1 << 24,
             max_frame_elements: 1 << 24,
+            max_frame_bytes: 256 << 20,
             max_sample_arena_bytes: 256 << 20,
             max_working_bytes: 512 << 20,
             traversal_strategy: TreeAciTraversalStrategy::default(),

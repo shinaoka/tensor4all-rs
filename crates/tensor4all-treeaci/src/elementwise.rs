@@ -128,6 +128,8 @@ where
             evaluated_points,
             sample_arena_records: state.sample_arena.record_count(),
             sample_arena_retained_bytes: state.sample_arena.retained_bytes(),
+            frame_records: state.input_frames.records(),
+            frame_retained_bytes: state.input_frames.retained_bytes(),
             candidate_set_sizes: state
                 .problem
                 .directed_edges

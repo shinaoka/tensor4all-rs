@@ -39,6 +39,7 @@ pub(crate) struct PreparedTreeProblem<V> {
     pub(crate) is_path: bool,
     pub(crate) max_sample_arena_bytes: usize,
     pub(crate) max_frame_elements: usize,
+    pub(crate) max_frame_bytes: usize,
     pub(crate) max_core_elements: usize,
     pub(crate) max_working_bytes: usize,
 }
@@ -242,6 +243,7 @@ pub(crate) fn prepare_problem<V: TreeAciNode>(
         is_path: degrees.into_iter().all(|degree| degree <= 2),
         max_sample_arena_bytes: options.max_sample_arena_bytes,
         max_frame_elements: options.max_frame_elements,
+        max_frame_bytes: options.max_frame_bytes,
         max_core_elements: options.max_core_elements,
         max_working_bytes: options.max_working_bytes,
     })
@@ -281,6 +283,7 @@ fn validate_options<V: TreeAciNode>(options: &TreeAciOptions<V>) -> Result<()> {
         ),
         ("max_core_elements", options.max_core_elements),
         ("max_frame_elements", options.max_frame_elements),
+        ("max_frame_bytes", options.max_frame_bytes),
         ("max_sample_arena_bytes", options.max_sample_arena_bytes),
         ("max_working_bytes", options.max_working_bytes),
     ] {

@@ -52,11 +52,44 @@ core and frame elements, arena retention, and working bytes. Low maximum degree
 does not remove this requirement, but it keeps the rank exponent bounded in the
 intended workloads.
 
+## Caches
+
+TreeACI owns two caches. Neither outlives one `tree_elementwise` call, which is
+why neither exposes a clear method: the run boundary is the release point, and
+a caller holds no handle that could accumulate across runs. A cache that does
+outlive a call -- a cross-call directed-message cache on `TreeTNCachedEvaluator`,
+for instance -- would need a real clear path as well as the bounds below.
+
+| | sample arena | directed-frame cache |
+|---|---|---|
+| owner | `TreeAciState` | `TreeAciState` |
+| lifetime | one run | one run, rebuilt on pivot injection |
+| contents | immutable component-sample records and their deduplication keys | one exact component contraction per input per directed edge |
+| aggregate bound | `max_sample_arena_bytes`, 256 MiB | `max_frame_bytes`, 256 MiB |
+| per-entry bound | -- | `max_frame_elements`, `2^24` |
+| accounting | `sample_arena_records`, `sample_arena_retained_bytes` | `frame_records`, `frame_retained_bytes` |
+
+Both aggregate bounds are checked before each allocation rather than after a
+batch of them, so an over-budget run is refused instead of first reaching the
+peak it was configured to avoid. Retained bytes are each cache's own payload
+accounting -- the elements it holds times the scalar width -- not an allocator
+or process measurement.
+
+The per-entry and aggregate frame bounds are independent and neither implies the
+other: the cache keeps one frame per input per directed edge, so a per-frame
+ceiling sized to admit one frame still admits all of them.
+
+Both caches report through `TreeAciDiagnostics`, which is the aggregate stats
+surface for the run: a caller sizing either bound reads both from one place, in
+the same units.
+
 The crate now exposes experimental native TreeTN elementwise and simultaneous
 n-way Hadamard entry points. Persistent cross-scan guard caching and train-path
 performance parity are not complete, so it is not yet a drop-in train ACI
 replacement.
 
-The full mathematical derivation and staged implementation plan are maintained
-in `/Users/lingruicheng/treeaci/` during development. This document records only
-the durable repository architecture.
+This document records the durable repository architecture. The staged
+implementation history, including the edge-order experiment and its verdict,
+is in `docs/superpowers/plans/2026-08-14-treeaci-next-phase.md` and the
+accompanying spec; the invariants those phases established are stated above
+rather than left to the plan.

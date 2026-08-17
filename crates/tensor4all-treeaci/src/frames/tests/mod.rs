@@ -136,3 +136,70 @@ fn frames_remain_addressable_after_active_set_replacement() {
 
     assert_eq!(frames.frame_values(0, 0, old_id).unwrap(), vec![1.0, 10.0]);
 }
+
+/// The frame cache is bounded in aggregate, not only per frame.
+///
+/// `max_frame_elements` bounds one directed frame, but the cache retains one
+/// per input per directed edge, so the retained total used to grow as
+/// `inputs * directed_edges * max_frame_elements` with no ceiling a caller
+/// could see or set. `max_frame_bytes` bounds the whole cache, and the check
+/// runs before each allocation rather than after the fact.
+#[test]
+fn the_frame_cache_is_bounded_in_aggregate() {
+    let input = two_node_tree::<f64>();
+    let seeds = [vec![0, 0], vec![1, 1]];
+
+    let generous =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&generous, &seeds).unwrap();
+    let frames =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &generous, &arena)
+            .unwrap();
+
+    // One edge means two directed frames, each two samples by a bond of two:
+    // 2 * (2 * 2) * 8 = 64 bytes.
+    assert_eq!(frames.records(), 2);
+    assert_eq!(frames.retained_bytes(), 64);
+
+    let tight = prepare_problem(
+        std::slice::from_ref(&input),
+        &TreeAciOptions {
+            max_frame_bytes: 63,
+            ..TreeAciOptions::default()
+        },
+    )
+    .unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&tight, &seeds).unwrap();
+    let error = InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &tight, &arena)
+        .expect_err("a 63-byte ceiling must refuse a 64-byte frame cache");
+    assert!(
+        matches!(
+            error,
+            crate::TreeAciError::ResourceLimit {
+                resource: "frame bytes",
+                limit: 63,
+                ..
+            }
+        ),
+        "unexpected error: {error}"
+    );
+
+    // The two bounds are independent: a per-frame ceiling sized exactly to one
+    // frame still admits every frame, which is why it cannot stand in for the
+    // aggregate.
+    let per_frame_only = prepare_problem(
+        std::slice::from_ref(&input),
+        &TreeAciOptions {
+            max_frame_elements: 4,
+            ..TreeAciOptions::default()
+        },
+    )
+    .unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&per_frame_only, &seeds).unwrap();
+    assert!(InputFrameStore::<f64>::from_samples(
+        std::slice::from_ref(&input),
+        &per_frame_only,
+        &arena
+    )
+    .is_ok());
+}

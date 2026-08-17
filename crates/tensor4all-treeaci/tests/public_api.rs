@@ -48,6 +48,8 @@ fn result_value_types_preserve_history_and_diagnostics() {
         evaluated_points: 21,
         sample_arena_records: 8,
         sample_arena_retained_bytes: 1024,
+        frame_records: 6,
+        frame_retained_bytes: 512,
         candidate_set_sizes: vec![(0usize, 1usize, 3), (1usize, 0usize, 3)],
     };
     let result = TreeAciResult {
@@ -62,6 +64,10 @@ fn result_value_types_preserve_history_and_diagnostics() {
     assert_eq!(result.max_ranks, vec![2, 3]);
     assert_eq!(result.diagnostics.evaluated_points, 21);
     assert_eq!(result.diagnostics.sample_arena_records, 8);
+    // Both caches report through one diagnostics struct, which is the
+    // aggregate stats surface a caller sizing either bound reads.
+    assert_eq!(result.diagnostics.frame_records, 6);
+    assert_eq!(result.diagnostics.frame_retained_bytes, 512);
     assert_eq!(
         result.diagnostics.candidate_set_sizes,
         vec![(0usize, 1usize, 3), (1usize, 0usize, 3)]

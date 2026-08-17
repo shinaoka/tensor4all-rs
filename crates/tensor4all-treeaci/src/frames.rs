@@ -4,6 +4,8 @@
 // remains crate-private while that engine is staged.
 #![allow(dead_code)]
 
+use std::mem::size_of;
+
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
@@ -26,6 +28,13 @@ pub(crate) struct DirectedFrame<T> {
 pub(crate) struct InputFrameStore<T> {
     pub(crate) frames: Vec<Vec<DirectedFrame<T>>>,
     cores: Vec<Vec<PreparedCore<T>>>,
+    /// Number of retained directed frames, across every input and edge.
+    records: usize,
+    /// Logical payload bytes retained by those frames.
+    ///
+    /// The cache's own accounting, not an allocator or process measurement:
+    /// `sample_count * bond_dim * size_of::<T>()` summed over what is retained.
+    retained_bytes: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +53,13 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     ) -> Result<Self> {
         let mut all_inputs = Vec::with_capacity(inputs.len());
         let mut all_cores = Vec::with_capacity(inputs.len());
+        // `max_frame_elements` bounds one frame; this cache keeps one per input
+        // per directed edge, so without an aggregate the retained total grows as
+        // inputs x directed_edges x that per-frame ceiling. Accumulated and
+        // checked before each allocation, so an over-budget run is refused
+        // rather than reaching the ceiling first.
+        let mut retained_bytes = 0usize;
+        let mut records = 0usize;
         for input in inputs {
             let cores = prepare_cores::<T, V>(input, problem)?;
             let mut builder = FrameBuilder {
@@ -88,6 +104,28 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                         limit: problem.max_frame_elements,
                     });
                 }
+                let frame_bytes =
+                    elements
+                        .checked_mul(size_of::<T>())
+                        .ok_or(TreeAciError::SizeOverflow {
+                            context: "directed frame bytes",
+                        })?;
+                retained_bytes =
+                    retained_bytes
+                        .checked_add(frame_bytes)
+                        .ok_or(TreeAciError::SizeOverflow {
+                            context: "retained frame bytes",
+                        })?;
+                if retained_bytes > problem.max_frame_bytes {
+                    return Err(TreeAciError::ResourceLimit {
+                        resource: "frame bytes",
+                        requested: retained_bytes,
+                        limit: problem.max_frame_bytes,
+                    });
+                }
+                records = records.checked_add(1).ok_or(TreeAciError::SizeOverflow {
+                    context: "retained frame count",
+                })?;
                 let mut data = vec![T::default(); elements];
                 for (sample, values) in samples.into_iter().enumerate() {
                     let values = values.ok_or(TreeAciError::InternalInvariant {
@@ -115,7 +153,19 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         Ok(Self {
             frames: all_inputs,
             cores: all_cores,
+            records,
+            retained_bytes,
         })
+    }
+
+    /// Number of retained directed frames.
+    pub(crate) fn records(&self) -> usize {
+        self.records
+    }
+
+    /// Logical payload bytes retained by this cache.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.retained_bytes
     }
 
     pub(crate) fn frame_values(

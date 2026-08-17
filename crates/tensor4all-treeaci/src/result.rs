@@ -51,6 +51,16 @@ pub struct TreeAciDiagnostics<V> {
     pub sample_arena_records: usize,
     /// Logical bytes retained by component records and their deduplication keys.
     pub sample_arena_retained_bytes: usize,
+    /// Number of directed frames retained by the frame cache at termination.
+    pub frame_records: usize,
+    /// Logical bytes retained by those frames.
+    ///
+    /// Together with the `sample_arena_*` fields this is the aggregate cache
+    /// report for a run: both caches TreeACI owns are accounted here in the
+    /// same units, so a caller sizing `max_frame_bytes` or
+    /// `max_sample_arena_bytes` reads both from one place. Both figures are the
+    /// caches' own payload accounting, not allocator or process measurements.
+    pub frame_retained_bytes: usize,
     /// Candidate component samples retained per directed cut, as
     /// `(from, to, len)`.
     ///

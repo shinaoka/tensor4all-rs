@@ -94,6 +94,9 @@ where
             evaluated_points,
             sample_arena_records: 0,
             sample_arena_retained_bytes: 0,
+            // The exact path builds no samples and no frames.
+            frame_records: 0,
+            frame_retained_bytes: 0,
             // A single-node tree has no cuts, so there are no candidate sets.
             candidate_set_sizes: Vec::new(),
         },
