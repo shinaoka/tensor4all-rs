@@ -52,13 +52,49 @@ pub trait Tensor3Ops<T: Clone + Default> {
 
     /// Extract the `(left_dim, right_dim)` matrix for a fixed site index `s`
     /// as a flat column-major vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `s` is out of bounds or the result shape overflows. Use
+    /// [`Tensor3Ops::try_slice_site`] for external dimensions.
     fn slice_site(&self, s: usize) -> Vec<T>;
 
+    /// Fallibly extract the `(left_dim, right_dim)` matrix for site `s`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an out-of-range site or an overflowing shape.
+    fn try_slice_site(&self, s: usize) -> Result<Vec<T>>;
+
     /// Reshape to a `(left_dim * site_dim, right_dim)` matrix.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the result shape overflows. Use
+    /// [`Tensor3Ops::try_as_left_matrix`] for external dimensions.
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize);
 
+    /// Fallibly reshape to a `(left_dim * site_dim, right_dim)` matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a shape product overflows.
+    fn try_as_left_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
+
     /// Reshape to a `(left_dim, site_dim * right_dim)` matrix.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the result shape overflows. Use
+    /// [`Tensor3Ops::try_as_right_matrix`] for external dimensions.
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize);
+
+    /// Fallibly reshape to a `(left_dim, site_dim * right_dim)` matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a shape product overflows.
+    fn try_as_right_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
 }
 
 impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
@@ -87,24 +123,56 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
     }
 
     fn slice_site(&self, s: usize) -> Vec<T> {
+        self.try_slice_site(s)
+            .unwrap_or_else(|error| panic!("failed to slice site: {error}"))
+    }
+
+    fn try_slice_site(&self, s: usize) -> Result<Vec<T>> {
+        if s >= self.site_dim() {
+            return Err(TensorTrainError::IndexOutOfBounds {
+                site: 1,
+                index: s,
+                max: self.site_dim(),
+            });
+        }
         let left_dim = self.left_dim();
         let right_dim = self.right_dim();
-        let mut result = Vec::with_capacity(left_dim * right_dim);
+        let len =
+            left_dim
+                .checked_mul(right_dim)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: "site slice shape product overflowed usize".to_string(),
+                })?;
+        let mut result = Vec::with_capacity(len);
         for r in 0..right_dim {
             for l in 0..left_dim {
                 result.push(self[[l, s, r]]);
             }
         }
-        result
+        Ok(result)
     }
 
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize) {
+        self.try_as_left_matrix()
+            .unwrap_or_else(|error| panic!("failed to reshape as left matrix: {error}"))
+    }
+
+    fn try_as_left_matrix(&self) -> Result<(Vec<T>, usize, usize)> {
         let left_dim = self.left_dim();
         let site_dim = self.site_dim();
         let right_dim = self.right_dim();
-        let rows = left_dim * site_dim;
-        let cols = right_dim;
-        let mut result = Vec::with_capacity(rows * cols);
+        let rows =
+            left_dim
+                .checked_mul(site_dim)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: "left matrix row count overflowed usize".to_string(),
+                })?;
+        let len =
+            rows.checked_mul(right_dim)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: "left matrix size overflowed usize".to_string(),
+                })?;
+        let mut result = Vec::with_capacity(len);
         for r in 0..right_dim {
             for l in 0..left_dim {
                 for s in 0..site_dim {
@@ -112,16 +180,30 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
                 }
             }
         }
-        (result, rows, cols)
+        Ok((result, rows, right_dim))
     }
 
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize) {
+        self.try_as_right_matrix()
+            .unwrap_or_else(|error| panic!("failed to reshape as right matrix: {error}"))
+    }
+
+    fn try_as_right_matrix(&self) -> Result<(Vec<T>, usize, usize)> {
         let left_dim = self.left_dim();
         let site_dim = self.site_dim();
         let right_dim = self.right_dim();
-        let rows = left_dim;
-        let cols = site_dim * right_dim;
-        let mut result = Vec::with_capacity(rows * cols);
+        let cols =
+            site_dim
+                .checked_mul(right_dim)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: "right matrix column count overflowed usize".to_string(),
+                })?;
+        let len = left_dim
+            .checked_mul(cols)
+            .ok_or_else(|| TensorTrainError::InvalidOperation {
+                message: "right matrix size overflowed usize".to_string(),
+            })?;
+        let mut result = Vec::with_capacity(len);
         for s in 0..site_dim {
             for r in 0..right_dim {
                 for l in 0..left_dim {
@@ -129,7 +211,7 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
                 }
             }
         }
-        (result, rows, cols)
+        Ok((result, left_dim, cols))
     }
 }
 
