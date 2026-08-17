@@ -138,7 +138,33 @@ Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 
 - `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
 
-## tensor4all-partitionedtt — subdomain patches + adaptive TCI
+## tensor4all-partitionedtreetn — named TreeTN subdomains + adaptive patching
+
+Use this crate for new partitioned work on named TreeTNs. It stores eagerly
+masked `TreeTN<IdxTensor, V>` patches, supports branched topologies and multiple
+site indices per node, and does not implement adaptive interpolation.
+
+- `Projector` — maps full `DynIndex` identities to zero-based coordinates.
+- `SubDomainTreeTN<V>` — eagerly masked TreeTN plus its projector.
+- `PartitionedTreeTN<V>` — homogeneous, pairwise-disjoint patches.
+- `PatchingOptions { rtol, max_bond_dim, patch_order, split_strategy }`.
+- `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
+  checked logical local tensor element counts after child truncation.
+- `add_with_patching(patches, &center, &options)` — split over-cap patches.
+- `truncate_adaptive(&partition, &center, rtol, max_bond_dim)` — assign
+  volume-proportional absolute squared-tail budgets and drop patches below them.
+- `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
+  contract and retruncate against the corrected output norm.
+
+All truncating and contracting operations require an explicit existing node name
+as `center`. No production path re-applies eager projectors or materializes a
+full network densely.
+
+## tensor4all-partitionedtt — legacy subdomain patches + adaptive TCI
+
+This crate is deprecated during migration. Use `tensor4all-partitionedtreetn`
+for new named TreeTN work. It remains buildable and receives correctness and
+security fixes only; no removal date is set.
 
 Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than reaching into core internals.
 
