@@ -111,25 +111,13 @@ pub fn total_bits(local_dims: &[usize]) -> Result<u64, IndexKeyError> {
     Ok(sum)
 }
 
-/// A bit-packed multi-index key.
+/// The storage arm holding a key's bits.
 ///
-/// Arms wider than 128 bits are boxed so that a narrow key does not pay the
-/// footprint of the widest arm.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_core::index_key::{FlatIndexer, IndexKey};
-/// let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
-/// assert_eq!(indexer.encode(&[1, 0]).unwrap(), IndexKey::U64(1));
-/// assert_eq!(indexer.encode(&[0, 1]).unwrap(), IndexKey::U64(2));
-/// assert_ne!(
-///     indexer.encode(&[1, 0]).unwrap(),
-///     indexer.encode(&[0, 1]).unwrap()
-/// );
-/// ```
+/// Private: the arm is an implementation detail chosen from the key's width,
+/// and exposing it would let callers build a key whose declared width and
+/// contents disagree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum IndexKey {
+enum Repr {
     /// Keys up to 64 bits.
     U64(u64),
     /// Keys up to 128 bits.
@@ -140,6 +128,92 @@ pub enum IndexKey {
     U512(Box<bnum::types::U512>),
     /// Keys wider than 512 bits, as little-endian 64-bit limbs.
     Limbs(dynamic::Limbs),
+}
+
+/// A bit-packed multi-index key.
+///
+/// A key carries the width it was built for, and the storage arm is a function
+/// of that width, so two keys are equal exactly when they were built for the
+/// same width and hold the same bits. Arms wider than 128 bits are boxed so a
+/// narrow key does not pay the footprint of the widest arm.
+///
+/// The contents are deliberately opaque. A key can only be produced by
+/// [`FlatIndexer::encode`] or [`KeyBuilder::finish`], both of which establish
+/// that its value occupies exactly `width_bits` bits. [`KeyBuilder::push`]
+/// relies on that invariant to place a sub-key without masking or truncation,
+/// and it is not one a caller could be asked to maintain by hand.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index_key::FlatIndexer;
+/// let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
+/// let a = indexer.encode(&[1, 0]).unwrap();
+/// let b = indexer.encode(&[0, 1]).unwrap();
+/// assert_ne!(a, b);
+/// assert_eq!(a, indexer.encode(&[1, 0]).unwrap());
+/// assert_eq!(a.width_bits(), 2);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IndexKey {
+    width_bits: u64,
+    repr: Repr,
+}
+
+impl IndexKey {
+    /// The width this key was built for, in bits.
+    ///
+    /// This is what [`KeyBuilder::push`] consumes, so a sub-key can never be
+    /// appended under a width that disagrees with its contents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::index_key::FlatIndexer;
+    /// let indexer = FlatIndexer::try_new(&[3, 4]).unwrap();
+    /// assert_eq!(indexer.width_bits(), 4);
+    /// assert_eq!(indexer.encode(&[2, 3]).unwrap().width_bits(), 4);
+    /// ```
+    pub fn width_bits(&self) -> u64 {
+        self.width_bits
+    }
+
+    /// The storage arm, for tests that pin which arm a width selects.
+    #[cfg(test)]
+    fn repr(&self) -> &Repr {
+        &self.repr
+    }
+
+    /// Builds a key from limbs already known to occupy exactly `width_bits`.
+    ///
+    /// The arm is selected from `width_bits` alone, which is what keeps a
+    /// composed key equal to the same value from [`FlatIndexer::encode`].
+    fn from_limbs(limbs: &dynamic::Limbs, width_bits: u64) -> Self {
+        fn digit(limbs: &[u64], position: usize) -> u64 {
+            limbs.get(position).copied().unwrap_or(0)
+        }
+        fn digits<const N: usize>(limbs: &[u64]) -> [u64; N] {
+            let mut out = [0u64; N];
+            for (position, slot) in out.iter_mut().enumerate() {
+                *slot = digit(limbs, position);
+            }
+            out
+        }
+        let repr = match width_bits {
+            0..=64 => Repr::U64(digit(limbs, 0)),
+            65..=128 => {
+                Repr::U128(u128::from(digit(limbs, 0)) | (u128::from(digit(limbs, 1)) << 64))
+            }
+            129..=256 => Repr::U256(Box::new(bnum::types::U256::from_digits(digits::<4>(limbs)))),
+            257..=512 => Repr::U512(Box::new(bnum::types::U512::from_digits(digits::<8>(limbs)))),
+            _ => {
+                let mut truncated = limbs.clone();
+                truncated.truncate(dynamic::limb_count(width_bits));
+                Repr::Limbs(truncated)
+            }
+        };
+        Self { width_bits, repr }
+    }
 }
 
 /// Encodes multi-indices over fixed local dimensions as [`IndexKey`] values.
@@ -248,24 +322,30 @@ impl FlatIndexer {
                         })?;
                     key = $place(key, value, offset);
                 }
-                Ok($arm(key))
+                Ok(IndexKey {
+                    width_bits: self.width_bits,
+                    repr: $arm(key),
+                })
             }};
         }
         match self.width_bits {
-            0..=64 => pack!(0u64, fixed::place_u64, IndexKey::U64),
-            65..=128 => pack!(0u128, fixed::place_u128, IndexKey::U128),
+            0..=64 => pack!(0u64, fixed::place_u64, Repr::U64),
+            65..=128 => pack!(0u128, fixed::place_u128, Repr::U128),
             129..=256 => pack!(bnum::types::U256::ZERO, fixed::place_u256, |k| {
-                IndexKey::U256(Box::new(k))
+                Repr::U256(Box::new(k))
             }),
             257..=512 => pack!(bnum::types::U512::ZERO, fixed::place_u512, |k| {
-                IndexKey::U512(Box::new(k))
+                Repr::U512(Box::new(k))
             }),
             _ => {
-                let mut limbs = dynamic::zeroed(self.width_bits);
+                let mut limbs = dynamic::zeroed(self.width_bits)?;
                 for (&value, &offset) in idx.iter().zip(&self.offsets) {
                     dynamic::place(&mut limbs, value, offset);
                 }
-                Ok(IndexKey::Limbs(limbs))
+                Ok(IndexKey {
+                    width_bits: self.width_bits,
+                    repr: Repr::Limbs(limbs),
+                })
             }
         }
     }
@@ -313,8 +393,8 @@ impl FlatIndexer {
 /// let whole = FlatIndexer::try_new(&[3, 2, 4]).unwrap();
 ///
 /// let mut builder = KeyBuilder::with_capacity_bits(whole.width_bits()).unwrap();
-/// builder.push(&local.encode(&[2, 1]).unwrap(), local.width_bits()).unwrap();
-/// builder.push(&child.encode(&[3]).unwrap(), child.width_bits()).unwrap();
+/// builder.push(&local.encode(&[2, 1]).unwrap()).unwrap();
+/// builder.push(&child.encode(&[3]).unwrap()).unwrap();
 ///
 /// assert_eq!(builder.finish(), whole.encode(&[2, 1, 3]).unwrap());
 /// ```
@@ -341,11 +421,8 @@ impl KeyBuilder {
     /// assert!(KeyBuilder::with_capacity_bits(4096).is_ok());
     /// ```
     pub fn with_capacity_bits(width_bits: u64) -> Result<Self, IndexKeyError> {
-        usize::try_from(width_bits.div_ceil(64)).map_err(|_| IndexKeyError::WidthOverflow {
-            requested_bits: width_bits,
-        })?;
         Ok(Self {
-            limbs: dynamic::zeroed(width_bits),
+            limbs: dynamic::zeroed(width_bits)?,
             offset: 0,
             capacity_bits: width_bits,
         })
@@ -356,7 +433,11 @@ impl KeyBuilder {
         self.offset
     }
 
-    /// Appends `key`, which occupies `key_width_bits`, at the current offset.
+    /// Appends `key` at the current offset, advancing by the key's own width.
+    ///
+    /// The width comes from the key itself, so a sub-key can never be placed
+    /// under a width that disagrees with its contents -- which would overwrite
+    /// the following field and silently break injectivity.
     ///
     /// # Errors
     ///
@@ -370,10 +451,11 @@ impl KeyBuilder {
     /// let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
     /// let key = indexer.encode(&[1, 1]).unwrap();
     /// let mut builder = KeyBuilder::with_capacity_bits(2).unwrap();
-    /// assert!(builder.push(&key, 2).is_ok());
-    /// assert!(builder.push(&key, 2).is_err());
+    /// assert!(builder.push(&key).is_ok());
+    /// assert!(builder.push(&key).is_err());
     /// ```
-    pub fn push(&mut self, key: &IndexKey, key_width_bits: u64) -> Result<(), IndexKeyError> {
+    pub fn push(&mut self, key: &IndexKey) -> Result<(), IndexKeyError> {
+        let key_width_bits = key.width_bits;
         let end = self
             .offset
             .checked_add(key_width_bits)
@@ -386,21 +468,21 @@ impl KeyBuilder {
             });
         }
         let offset = self.offset;
-        match key {
-            IndexKey::U64(value) => {
+        match &key.repr {
+            Repr::U64(value) => {
                 dynamic::place_limbs(&mut self.limbs, &[*value], key_width_bits, offset);
             }
-            IndexKey::U128(value) => {
+            Repr::U128(value) => {
                 let source = [*value as u64, (*value >> 64) as u64];
                 dynamic::place_limbs(&mut self.limbs, &source, key_width_bits, offset);
             }
-            IndexKey::U256(value) => {
+            Repr::U256(value) => {
                 dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
             }
-            IndexKey::U512(value) => {
+            Repr::U512(value) => {
                 dynamic::place_limbs(&mut self.limbs, value.digits(), key_width_bits, offset);
             }
-            IndexKey::Limbs(value) => {
+            Repr::Limbs(value) => {
                 dynamic::place_limbs(&mut self.limbs, value, key_width_bits, offset);
             }
         }
@@ -408,43 +490,34 @@ impl KeyBuilder {
         Ok(())
     }
 
-    /// Narrows the accumulated limbs to the smallest arm holding the capacity.
+    /// Produces the key for the bits actually appended.
     ///
-    /// Narrowing is what makes a composed key compare equal to the same value
-    /// produced by [`FlatIndexer::encode`], which also picks its arm from the
-    /// declared width.
+    /// The arm is selected from the appended width, not from the declared
+    /// capacity, so a composed key equals the same value from
+    /// [`FlatIndexer::encode`] even when the builder was given more capacity
+    /// than it ended up using.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::index_key::{IndexKey, KeyBuilder};
-    /// let builder = KeyBuilder::with_capacity_bits(8).unwrap();
-    /// assert_eq!(builder.finish(), IndexKey::U64(0));
+    /// use tensor4all_core::index_key::{FlatIndexer, KeyBuilder};
+    /// let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
+    /// let key = indexer.encode(&[1, 0]).unwrap();
+    ///
+    /// // Over-declared capacity does not change the composed key.
+    /// let mut tight = KeyBuilder::with_capacity_bits(2).unwrap();
+    /// tight.push(&key).unwrap();
+    /// let mut loose = KeyBuilder::with_capacity_bits(600).unwrap();
+    /// loose.push(&key).unwrap();
+    /// let composed = tight.finish();
+    /// assert_eq!(composed, loose.finish());
+    /// assert_eq!(composed, key);
+    ///
+    /// let empty = KeyBuilder::with_capacity_bits(8).unwrap();
+    /// assert_eq!(empty.finish().width_bits(), 0);
     /// ```
     pub fn finish(self) -> IndexKey {
-        fn digit(limbs: &[u64], position: usize) -> u64 {
-            limbs.get(position).copied().unwrap_or(0)
-        }
-        fn digits<const N: usize>(limbs: &[u64]) -> [u64; N] {
-            let mut out = [0u64; N];
-            for (position, slot) in out.iter_mut().enumerate() {
-                *slot = digit(limbs, position);
-            }
-            out
-        }
-        match self.capacity_bits {
-            0..=64 => IndexKey::U64(digit(&self.limbs, 0)),
-            65..=128 => IndexKey::U128(
-                u128::from(digit(&self.limbs, 0)) | (u128::from(digit(&self.limbs, 1)) << 64),
-            ),
-            129..=256 => IndexKey::U256(Box::new(bnum::types::U256::from_digits(digits::<4>(
-                &self.limbs,
-            )))),
-            257..=512 => IndexKey::U512(Box::new(bnum::types::U512::from_digits(digits::<8>(
-                &self.limbs,
-            )))),
-            _ => IndexKey::Limbs(self.limbs),
-        }
+        IndexKey::from_limbs(&self.limbs, self.offset)
     }
 }
 

@@ -77,20 +77,22 @@ fn bench_compose(c: &mut Criterion) {
             // Split into a local part and three children, as a degree-three node.
             let chunk = dims.len().div_ceil(4).max(1);
             let parts: Vec<Vec<usize>> = dims.chunks(chunk).map(<[usize]>::to_vec).collect();
-            let keys: Vec<(IndexKey, u64)> = parts
+            let keys: Vec<IndexKey> = parts
                 .iter()
                 .map(|part| {
                     let indexer = FlatIndexer::try_new(part).unwrap();
                     let idx: Vec<usize> = part.iter().map(|d| d - 1).collect();
-                    (indexer.encode(&idx).unwrap(), indexer.width_bits())
+                    indexer.encode(&idx).unwrap()
                 })
                 .collect();
-            let total: u64 = keys.iter().map(|(_, w)| *w).sum();
+            // The key carries its own width, so composition needs no separate
+            // width bookkeeping; the capacity is just their sum.
+            let total: u64 = keys.iter().map(|key| key.width_bits()).sum();
             group.bench_with_input(BenchmarkId::new(label, width), &keys, |b, keys| {
                 b.iter(|| {
                     let mut builder = KeyBuilder::with_capacity_bits(total).unwrap();
-                    for (key, key_width) in keys {
-                        builder.push(black_box(key), *key_width).unwrap();
+                    for key in keys {
+                        builder.push(black_box(key)).unwrap();
                     }
                     builder.finish()
                 })

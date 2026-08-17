@@ -69,9 +69,15 @@ fn encoding_rejects_bad_input_instead_of_wrapping() {
 #[test]
 fn width_selects_u64_then_u128() {
     let narrow = FlatIndexer::try_new(&[2; 64]).unwrap();
-    assert!(matches!(narrow.encode(&[0; 64]).unwrap(), IndexKey::U64(_)));
+    assert!(matches!(
+        narrow.encode(&[0; 64]).unwrap().repr(),
+        Repr::U64(_)
+    ));
     let wide = FlatIndexer::try_new(&[2; 65]).unwrap();
-    assert!(matches!(wide.encode(&[0; 65]).unwrap(), IndexKey::U128(_)));
+    assert!(matches!(
+        wide.encode(&[0; 65]).unwrap().repr(),
+        Repr::U128(_)
+    ));
 }
 
 /// The fixed-width ladder stops at 512 bits; 513 and above go to limbs.
@@ -89,28 +95,50 @@ fn wide_arms_are_selected_by_width() {
     ] {
         let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
         let key = indexer.encode(&vec![0usize; bits]).unwrap();
-        assert_eq!(matches!(key, IndexKey::U256(_)), want_u256, "{bits} bits");
-        assert_eq!(matches!(key, IndexKey::U512(_)), want_u512, "{bits} bits");
-        assert_eq!(matches!(key, IndexKey::Limbs(_)), want_limbs, "{bits} bits");
+        assert_eq!(
+            matches!(key.repr(), Repr::U256(_)),
+            want_u256,
+            "{bits} bits"
+        );
+        assert_eq!(
+            matches!(key.repr(), Repr::U512(_)),
+            want_u512,
+            "{bits} bits"
+        );
+        assert_eq!(
+            matches!(key.repr(), Repr::Limbs(_)),
+            want_limbs,
+            "{bits} bits"
+        );
     }
 }
 
 /// #628: "the exact layout should not inflate every fixed-width key merely
 /// because the enum has a large inline variant".
 ///
-/// 32 bytes is the floor while `U128(u128)` is inline: `u128` forces 16-byte
-/// alignment, so the enum rounds up to 32 once a discriminant is added. The
-/// bound therefore checks what it is meant to check — an inlined `U512` would
-/// make this 64 bytes on its own, and boxing the wide arms is what keeps a
-/// `u64` key from paying for them.
+/// 48 bytes is the floor for a key that carries its own width while `U128`
+/// stays inline. `Repr` is 32 bytes — `u128` forces 16-byte alignment, so the
+/// enum rounds up to 32 once a discriminant is added — and the `width_bits`
+/// field rounds the struct up one further alignment step.
 ///
-/// Measured, not predicted: the `SmallVec<[u64; 2]>` limb arm fits inside the
-/// space `u128`'s alignment already reserved, so it did not move this bound.
-/// If a future arm does move it, box that arm rather than raising the number.
+/// Carrying the width is what makes `KeyBuilder::push` unable to place a
+/// sub-key under a width that disagrees with its contents, and what lets
+/// `finish` pick the same arm `encode` would. Two ways back to 32 were measured
+/// and rejected: narrowing `width_bits` to `u32` changes nothing, because the
+/// padding is set by `Repr`'s alignment rather than the field's size; boxing
+/// the `U128` arm reaches 40, but puts a heap allocation on the 65–128 bit
+/// path, which is a common width.
+///
+/// The bound still checks what it is meant to check — an inlined `U512` would
+/// make `Repr` 64 bytes on its own, and boxing the wide arms is what keeps a
+/// `u64` key from paying for them. Measured, not predicted: the
+/// `SmallVec<[u64; 2]>` limb arm fits inside the space `u128`'s alignment
+/// already reserved, so it did not move this bound. If a future arm does move
+/// it, box that arm rather than raising the number.
 #[test]
 fn the_key_enum_stays_small() {
     assert!(
-        std::mem::size_of::<IndexKey>() <= 32,
+        std::mem::size_of::<IndexKey>() <= 48,
         "IndexKey is {} bytes; wide arms must be boxed",
         std::mem::size_of::<IndexKey>()
     );
@@ -137,7 +165,7 @@ fn widths_beyond_the_fixed_ladder_use_limbs_and_stay_injective() {
     assert_eq!(indexer.width_bits(), bits as u64);
 
     let zero = indexer.encode(&vec![0usize; bits]).unwrap();
-    assert!(matches!(zero, IndexKey::Limbs(_)));
+    assert!(matches!(zero.repr(), Repr::Limbs(_)));
 
     let mut seen = std::collections::HashSet::new();
     seen.insert(zero);
@@ -192,12 +220,8 @@ fn composition_matches_encoding_the_concatenated_multi_index() {
             for c in 0..4 {
                 for d in 0..5 {
                     let mut builder = KeyBuilder::with_capacity_bits(whole.width_bits()).unwrap();
-                    builder
-                        .push(&local.encode(&[a, b]).unwrap(), local.width_bits())
-                        .unwrap();
-                    builder
-                        .push(&child.encode(&[c, d]).unwrap(), child.width_bits())
-                        .unwrap();
+                    builder.push(&local.encode(&[a, b]).unwrap()).unwrap();
+                    builder.push(&child.encode(&[c, d]).unwrap()).unwrap();
                     assert_eq!(
                         builder.finish(),
                         whole.encode(&[a, b, c, d]).unwrap(),
@@ -220,12 +244,12 @@ fn composition_is_injective_across_the_limb_boundary() {
     };
 
     let mut first = KeyBuilder::with_capacity_bits(80).unwrap();
-    first.push(&zero, 40).unwrap();
-    first.push(&one, 40).unwrap();
+    first.push(&zero).unwrap();
+    first.push(&one).unwrap();
 
     let mut second = KeyBuilder::with_capacity_bits(80).unwrap();
-    second.push(&one, 40).unwrap();
-    second.push(&zero, 40).unwrap();
+    second.push(&one).unwrap();
+    second.push(&zero).unwrap();
 
     assert_ne!(first.finish(), second.finish());
 }
@@ -240,8 +264,8 @@ fn composition_spans_the_fixed_to_dynamic_boundary() {
     high[599] = 1;
 
     let mut builder = KeyBuilder::with_capacity_bits(1200).unwrap();
-    builder.push(&part.encode(&low).unwrap(), 600).unwrap();
-    builder.push(&part.encode(&high).unwrap(), 600).unwrap();
+    builder.push(&part.encode(&low).unwrap()).unwrap();
+    builder.push(&part.encode(&high).unwrap()).unwrap();
 
     let mut expected = vec![0usize; 1200];
     expected[0] = 1;
@@ -253,9 +277,9 @@ fn composition_spans_the_fixed_to_dynamic_boundary() {
 fn pushing_past_the_declared_capacity_is_an_error() {
     let indexer = FlatIndexer::try_new(&[2, 2]).unwrap();
     let mut builder = KeyBuilder::with_capacity_bits(2).unwrap();
-    builder.push(&indexer.encode(&[1, 1]).unwrap(), 2).unwrap();
+    builder.push(&indexer.encode(&[1, 1]).unwrap()).unwrap();
     assert!(matches!(
-        builder.push(&indexer.encode(&[1, 1]).unwrap(), 2),
+        builder.push(&indexer.encode(&[1, 1]).unwrap()),
         Err(IndexKeyError::WidthOverflow { .. })
     ));
 }
@@ -265,7 +289,9 @@ fn an_empty_index_space_encodes_to_zero() {
     let indexer = FlatIndexer::try_new(&[]).unwrap();
     assert_eq!(indexer.width_bits(), 0);
     assert!(indexer.is_empty());
-    assert_eq!(indexer.encode(&[]).unwrap(), IndexKey::U64(0));
+    let empty = indexer.encode(&[]).unwrap();
+    assert_eq!(empty.width_bits(), 0);
+    assert!(matches!(empty.repr(), Repr::U64(0)));
 }
 
 #[test]
@@ -277,4 +303,75 @@ fn total_bits_sums_and_reports_the_offending_position() {
         total_bits(&[2, 0, 2]),
         Err(IndexKeyError::ZeroDimension { position: 1 })
     ));
+}
+
+/// A sub-key can only be appended under its own width, so it cannot overwrite
+/// the field that follows it.
+///
+/// The earlier API took the width as a separate argument to `push`, which let a
+/// caller declare a width narrower than the key's contents; the surplus high
+/// bits then landed in the next field and two distinct multi-indices could
+/// compose to the same key. The width now travels with the key, so the mistake
+/// is unrepresentable rather than rejected.
+#[test]
+fn composition_cannot_overwrite_the_following_field() {
+    let two_bit = FlatIndexer::try_new(&[4]).unwrap();
+    let one_bit = FlatIndexer::try_new(&[2]).unwrap();
+    assert_eq!(two_bit.width_bits(), 2);
+    assert_eq!(one_bit.width_bits(), 1);
+
+    // `0b11` occupies both of its bits; appending a 1-bit key after it must not
+    // collide with appending a 1-bit key after `0b01`.
+    let mut wide_then_one = KeyBuilder::with_capacity_bits(3).unwrap();
+    wide_then_one.push(&two_bit.encode(&[3]).unwrap()).unwrap();
+    wide_then_one.push(&one_bit.encode(&[0]).unwrap()).unwrap();
+
+    let mut narrow_then_one = KeyBuilder::with_capacity_bits(3).unwrap();
+    narrow_then_one
+        .push(&two_bit.encode(&[1]).unwrap())
+        .unwrap();
+    narrow_then_one
+        .push(&one_bit.encode(&[1]).unwrap())
+        .unwrap();
+
+    assert_ne!(wide_then_one.finish(), narrow_then_one.finish());
+}
+
+/// `finish` reports the width actually appended, so an over-declared capacity
+/// does not change the composed key.
+///
+/// Selecting the arm from `capacity_bits` instead made a builder with capacity
+/// 600 return the limb arm for a 100-bit key, while `FlatIndexer::encode` of
+/// the same 100 bits returned the `U128` arm — two unequal keys for one value,
+/// contradicting the documented interchangeability.
+#[test]
+fn an_over_declared_capacity_does_not_change_the_key() {
+    let dims = vec![2usize; 100];
+    let indexer = FlatIndexer::try_new(&dims).unwrap();
+    assert_eq!(indexer.width_bits(), 100);
+    let mut idx = vec![0usize; 100];
+    idx[0] = 1;
+    idx[99] = 1;
+    let direct = indexer.encode(&idx).unwrap();
+
+    for capacity in [100u64, 600, 4096] {
+        let mut builder = KeyBuilder::with_capacity_bits(capacity).unwrap();
+        builder.push(&direct).unwrap();
+        let composed = builder.finish();
+        assert_eq!(
+            composed, direct,
+            "capacity {capacity} must not change the composed key"
+        );
+        assert_eq!(composed.width_bits(), 100);
+    }
+}
+
+/// An empty builder yields a zero-width key, not a key of its declared
+/// capacity.
+#[test]
+fn an_unfilled_builder_reports_the_width_it_holds() {
+    let builder = KeyBuilder::with_capacity_bits(4096).unwrap();
+    let key = builder.finish();
+    assert_eq!(key.width_bits(), 0);
+    assert!(matches!(key.repr(), Repr::U64(0)));
 }

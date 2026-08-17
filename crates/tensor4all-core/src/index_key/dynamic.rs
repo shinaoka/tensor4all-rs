@@ -7,18 +7,42 @@
 
 use smallvec::SmallVec;
 
+use super::IndexKeyError;
+
 /// Little-endian `u64` limbs.
 pub(super) type Limbs = SmallVec<[u64; 2]>;
 
 /// Number of limbs needed to hold `width_bits`.
+///
+/// Saturates rather than truncating: a width whose limb count does not fit
+/// `usize` cannot be allocated anyway, and [`try_limb_count`] is the checked
+/// form every allocation path goes through.
 #[inline]
 pub(super) fn limb_count(width_bits: u64) -> usize {
-    width_bits.div_ceil(64) as usize
+    usize::try_from(width_bits.div_ceil(64)).unwrap_or(usize::MAX)
+}
+
+/// Number of limbs needed to hold `width_bits`, or an error if that count does
+/// not fit `usize`.
+///
+/// On a 32-bit target `u64 -> usize` can truncate, which would allocate too few
+/// limbs and turn a width the API should reject into a later index-out-of-bounds
+/// panic. Every allocation path goes through this.
+#[inline]
+pub(super) fn try_limb_count(width_bits: u64) -> Result<usize, IndexKeyError> {
+    usize::try_from(width_bits.div_ceil(64)).map_err(|_| IndexKeyError::WidthOverflow {
+        requested_bits: width_bits,
+    })
 }
 
 /// Allocates zeroed limbs for `width_bits`.
-pub(super) fn zeroed(width_bits: u64) -> Limbs {
-    smallvec::smallvec![0u64; limb_count(width_bits)]
+///
+/// # Errors
+///
+/// Returns [`IndexKeyError::WidthOverflow`] when the limb count does not fit
+/// `usize` on this target.
+pub(super) fn zeroed(width_bits: u64) -> Result<Limbs, IndexKeyError> {
+    Ok(smallvec::smallvec![0u64; try_limb_count(width_bits)?])
 }
 
 /// Copies `source`'s low `width_bits` bits into `limbs` starting at `offset`.
@@ -27,11 +51,22 @@ pub(super) fn zeroed(width_bits: u64) -> Limbs {
 /// are dropped. Cost is linear in the number of limbs the source occupies,
 /// which is what makes append-style tree composition linear rather than
 /// quadratic.
+///
+/// The final partial limb is masked to `width_bits`. A key produced by this
+/// module never carries bits above its own width, so the mask is redundant
+/// today; it is what keeps a stray high bit from silently landing in the next
+/// field rather than corrupting the composition.
 pub(super) fn place_limbs(limbs: &mut Limbs, source: &[u64], width_bits: u64, offset: u64) {
     let word = (offset / 64) as usize;
     let shift = (offset % 64) as u32;
     let used = limb_count(width_bits).min(source.len());
+    let tail_bits = (width_bits % 64) as u32;
     for (position, &digit) in source.iter().take(used).enumerate() {
+        let digit = if tail_bits != 0 && position + 1 == used {
+            digit & ((1u64 << tail_bits) - 1)
+        } else {
+            digit
+        };
         if digit == 0 {
             continue;
         }
