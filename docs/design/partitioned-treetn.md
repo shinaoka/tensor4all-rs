@@ -2,9 +2,10 @@
 
 ## Status
 
-Proposed and revised after maintainer decisions on tracking issue
-[#648](https://github.com/tensor4all/tensor4all-rs/issues/648). The formal
-cross-model pre-implementation review gate is pending.
+Approved after maintainer decisions on tracking issue
+[#648](https://github.com/tensor4all/tensor4all-rs/issues/648). The rebased
+cross-model pre-implementation review gate passed on commit `bda6a58f`; this
+record is the implementation contract for the migration.
 
 ## Goal
 
@@ -164,8 +165,27 @@ The TreeTN-general patch algebra remains in this crate:
 - `PatchSplitStrategy`.
 
 Each operation requiring truncation or contraction accepts an explicit center.
-Split candidates are full external indices and remain independent of tree
-traversal order. Multiple external indices on one node are supported.
+The public signatures are:
+
+```text
+add_with_patching<V>(Vec<SubDomainTreeTN<V>>, &V, &PatchingOptions)
+    -> Result<PartitionedTreeTN<V>>
+truncate_adaptive<V>(&PartitionedTreeTN<V>, &V, f64, Option<usize>)
+    -> Result<PartitionedTreeTN<V>>
+contract_adaptive<V>(
+    &PartitionedTreeTN<V>,
+    &PartitionedTreeTN<V>,
+    &V,
+    &ContractionOptions,
+    &PatchingOptions,
+) -> Result<PartitionedTreeTN<V>>
+```
+
+`PatchingOptions` contains `rtol`, `max_bond_dim`, a partial full-index
+`patch_order`, and `split_strategy`. `PatchSplitStrategy::Sequential` follows
+that order; `ExactParameterGain` evaluates all available candidates. Split
+candidates are full external indices and remain independent of tree traversal
+order. Multiple external indices on one node are supported.
 
 `ExactParameterGain` preserves the TT predecessor's meaning: after forming and
 budget-truncating each candidate's children, count the checked sum of each local
@@ -194,8 +214,9 @@ zero-detection policy, or merge disposition.
 Use a crate-local `thiserror` enum. Preserve typed sources from
 `TreeTNOperationError`, tensor storage, and tensor construction. Validation
 errors for topology, dtype, center, projector indices, coordinates, and options
-remain structured where callers need their payloads. Every public `Result` API
-documents concrete failure conditions.
+remain structured where callers need their payloads. Volume and logical
+parameter-count overflow return typed crate errors rather than wrapping.
+Every public `Result` API documents concrete failure conditions.
 
 ## Dependencies and provenance
 

@@ -1,4 +1,11 @@
-//! Partitioned Tensor Train for tensor4all
+//! Partitioned Tensor Train for tensor4all.
+//!
+//! **Deprecated:** new TreeTN-based work should use
+//! [`tensor4all-partitionedtreetn`](https://docs.rs/tensor4all-partitionedtreetn).
+//! Both crates coexist during migration. This crate remains buildable and
+//! accepts correctness and security fixes only; no removal date has been set,
+//! and removal requires a separate maintainer decision. This documentation-only
+//! deprecation intentionally does not emit a compiler warning.
 //!
 //! This crate provides partitioned tensor train functionality for representing
 //! functions over subdomains with non-overlapping projectors.

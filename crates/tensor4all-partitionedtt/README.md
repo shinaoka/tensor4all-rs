@@ -1,5 +1,12 @@
 # tensor4all-partitionedtt
 
+> **Deprecated:** use [`tensor4all-partitionedtreetn`](../tensor4all-partitionedtreetn/)
+> for new TreeTN-based partitioned tensor-network work.
+>
+> Both crates coexist during migration. This crate remains buildable and accepts
+> correctness and security fixes only; no removal date has been set, and removal
+> requires a separate maintainer decision.
+
 Partitioned Tensor Train for representing functions over non-overlapping subdomains
 with projectors.
 

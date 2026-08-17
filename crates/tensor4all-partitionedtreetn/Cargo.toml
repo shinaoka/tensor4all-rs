@@ -1,0 +1,38 @@
+[package]
+name = "tensor4all-partitionedtreetn"
+description = "Partitioned Tree Tensor Networks with adaptive patching for tensor4all"
+readme = "README.md"
+keywords = ["tensor-network", "tensor-train", "tree-tensor-network"]
+categories = ["science", "mathematics", "algorithms"]
+rust-version = "1.85"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["tenferro-cpu-faer"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-tensorbackend/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-tensorbackend/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
+]
+
+[package.metadata.docs.rs]
+features = ["tenferro-cpu-faer"]
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+
+[dev-dependencies]
+num-complex.workspace = true

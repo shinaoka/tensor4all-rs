@@ -1,6 +1,6 @@
 ---
 name: use-tensor4all-rs
-description: Use the tensor4all-rs Rust tensor-network library (TCI, quantics tensor trains, tree tensor networks, DMRG/TDVP/GSE time evolution, adaptive patch interpolation). Use when working with `tensor4all-*` crates (core/simplett/tensorci/quanticstci/treetn/partitionedtt/...), their `IdxTensor`/`SimpleTensorTrain`/`TreeTN`/`QuanticsTensorCI2`/`PartitionedTT` APIs, or the `dmrg`/`tdvp`/`gse_tdvp`/`adaptiveinterpolate` entry points. Also when porting ITensors.jl, QuanticsTCI.jl, or TCI patterns to Rust, or debugging column-major, `rtol`, or 0-vs-1 indexing mismatches in tensor4all-rs code.
+description: Use the tensor4all-rs Rust tensor-network library (TCI, quantics tensor trains, tree tensor networks, partitioned TreeTNs, DMRG/TDVP/GSE time evolution, and adaptive patching). Use when working with `tensor4all-*` crates (core/simplett/tensorci/quanticstci/treetn/partitionedtreetn/partitionedtt/...), their `IdxTensor`/`SimpleTensorTrain`/`TreeTN`/`QuanticsTensorCI2`/`PartitionedTreeTN`/`PartitionedTT` APIs, or the `dmrg`/`tdvp`/`gse_tdvp`/`add_with_patching`/`adaptiveinterpolate` entry points. Also when porting ITensors.jl, QuanticsTCI.jl, or TCI patterns to Rust, or debugging column-major, `rtol`, or 0-vs-1 indexing mismatches in tensor4all-rs code.
 license: MIT
 ---
 
@@ -27,7 +27,7 @@ tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", pac
 
 This skill tracks `main`; a release tag may not contain every API described below. Add each crate that your code imports directly. Do not add transitive crates that you never name.
 
-- **Import the crate's `prelude`** — every user-facing crate (`tensor4all-core`, `tensor4all-simplett`, `tensor4all-treetn`, `tensor4all-itensorlike`, `tensor4all-tensorci`, `tensor4all-quanticstci`, `tensor4all-aci`, `tensor4all-interpolativeqtt`) ships a `prelude` re-exporting its public traits plus the types needed to call them. Start with `use tensor4all_<crate>::prelude::*;` instead of guessing trait imports; a missing trait import is the top first-try failure (`error[E0599]`).
+- **Import the crate's `prelude`** — the established user-facing crates (`tensor4all-core`, `tensor4all-simplett`, `tensor4all-treetn`, `tensor4all-itensorlike`, `tensor4all-tensorci`, `tensor4all-quanticstci`, `tensor4all-aci`, `tensor4all-interpolativeqtt`) ship a `prelude` re-exporting their public traits plus the types needed to call them. `tensor4all-partitionedtreetn` intentionally exposes its small concrete API at the crate root; import `Projector`, `SubDomainTreeTN`, `PartitionedTreeTN`, and the adaptive patching functions directly. Start with the owning crate's documented imports instead of guessing trait imports; a missing trait import is the top first-try failure (`error[E0599]`).
 
 - **Backend defaults to pure-Rust `faer` — no system BLAS.** Compute crates enable `tenferro-cpu-faer` by default, so a plain dependency compiles standalone. To link a system BLAS (OpenBLAS / MKL / Apple Accelerate) instead, set `default-features = false` and enable `tenferro-system-blas` on each directly imported crate where it is exposed.
 - **Build with `--release`.** Tensor linalg in debug is orders of magnitude slower; TCI and DMRG are unusable without optimization. For benchmarks set `opt-level = 3` (and `lto`, `codegen-units = 1`).
@@ -58,7 +58,8 @@ Match the goal to the crate. This is the leading decision — the rest follows.
 | Tree tensor networks, arbitrary topology; DMRG/TDVP/GSE sweeps | `tensor4all-treetn` |
 | Quantics transform operators (shift, flip, Fourier, affine) | `tensor4all-quanticstransform` |
 | Interpolative QTT construction | `tensor4all-interpolativeqtt` |
-| Adaptive TCI over subdomain patches; patching add/contract/truncate | `tensor4all-partitionedtt` |
+| Partitioned TreeTN subdomains and adaptive patching | `tensor4all-partitionedtreetn` |
+| Adaptive TCI over legacy TT subdomain patches | `tensor4all-partitionedtt` (deprecated during migration) |
 | Core Index / Tensor / contraction / SVD-QR-LU | `tensor4all-core` |
 | HDF5 I/O compatible with ITensors.jl | `tensor4all-hdf5` |
 | C FFI for language bindings | `tensor4all-capi` |
@@ -93,7 +94,7 @@ These apply across crates and fail silently when ignored. Check them against eve
 
 **No hidden dense materialization in production paths.** `to_dense()`, `contract_to_tensor()`, and full-network `evaluate`-every-element loops are for tests and small examples only — they scale as the product of index dimensions. For long TT / TreeTN comparisons use a direct-sum difference plus a tensor-network norm, or sampled `evaluate()` checks. `ApplyOptions::naive()` is local exact apply (bond dims may grow as products), not full dense.
 
-**Index identity is full-index equality, not `id()`.** Two indices with the same id but different prime level, tags, or direction are distinct. Key maps and sets by the full `Index` value. Select concrete legs/sites by passing the full `Index`, never an id. `AdaptiveInterpolateOptions::patch_order` and `PatchingOptions::patch_order` are validated as exact full-`Index` permutations of the site indices — matching by id alone is rejected.
+**Index identity is full-index equality, not `id()`.** Two indices with the same id but different prime level, tags, or direction are distinct. Key maps and sets by the full `Index` value. Select concrete legs/sites by passing the full `Index`, never an id. `AdaptiveInterpolateOptions::patch_order` is an exact full-`Index` permutation; `tensor4all-partitionedtreetn::PatchingOptions::patch_order` accepts a partial order but every entry must be an exact full site-index identity — matching by id alone is rejected.
 
 ## 4.5 Common pitfalls
 

@@ -22,9 +22,11 @@ facade, and each crate can be used on its own.
               |                                                |
    tensor4all-itensorlike (TensorTrain)           tensor4all-tensorci (TCI1/TCI2)
               |                                                |
-   tensor4all-partitionedtt                        tensor4all-quanticstci
+   tensor4all-partitionedtreetn (TreeTN patches)    tensor4all-quanticstci
               |                                                |
-   tensor4all-treetci                              tensor4all-quanticstransform
+   tensor4all-partitionedtt (deprecated)            tensor4all-quanticstransform
+              |
+   tensor4all-treetci
 
    tensor4all-capi  (C FFI for language bindings; depends on both stacks)
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
@@ -47,7 +49,9 @@ The only sanctioned place where the two stacks convert into each other is
 Crates that need to cross stacks must route through this bridge. New ad hoc
 bridges (hand-rolled conversion logic inside another crate) are rejected.
 `tensor4all-partitionedtt` consumes simplett output (TCI2 results) only via
-`tensor_train_to_treetn`.
+`tensor_train_to_treetn`; the TreeTN-native `tensor4all-partitionedtreetn`
+operates directly on named `TreeTN<IdxTensor, V>` values and does not depend on
+simplett, itensorlike, or TCI crates.
 
 One deliberate exception exists: `tensor4all-quanticstransform` builds
 TreeTN-based `LinearOperator`s from simplett **MPO** data (two site indices
@@ -125,7 +129,8 @@ Rules:
 |-------|-------------|
 | **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and hosts the sanctioned `simplett_bridge`. |
 | **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. |
-| **partitionedtt** | Partitioned tensor trains for subdomain decomposition. Builds on itensorlike and crosses to simplett via `simplett_bridge`. |
+| **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, and volume-budgeted adaptive patching. |
+| **partitionedtt** | **Deprecated** partitioned tensor trains for subdomain decomposition. Builds on itensorlike and crosses to simplett via `simplett_bridge`; it remains buildable during migration. |
 | **treetci** | Tree TCI: cross interpolation on tree-structured tensor networks. |
 
 ### Simplett stack
@@ -168,7 +173,8 @@ Rules:
 | Simple positional tensor train (create, evaluate, compress) | `tensor4all-simplett` (`SimpleTensorTrain`) |
 | Tensor train with ITensors.jl-style interface | `tensor4all-itensorlike` (`TensorTrain`) |
 | Tree tensor networks | `tensor4all-treetn` |
-| Subdomain decomposition via partitioned TT | `tensor4all-partitionedtt` |
+| Subdomain decomposition on named TreeTNs | `tensor4all-partitionedtreetn` |
+| Legacy simple TT subdomain decomposition or adaptive TCI | `tensor4all-partitionedtt` (deprecated during migration) |
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |
 | Interpolative QTT on a coarse grid | `tensor4all-interpolativeqtt` |
