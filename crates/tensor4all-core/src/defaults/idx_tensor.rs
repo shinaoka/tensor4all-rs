@@ -3307,19 +3307,19 @@ impl IdxTensor {
     /// This is the main permutation method that takes the desired new indices
     /// and automatically computes the corresponding permutation of dimensions
     /// and data. The new indices must be a permutation of the original indices
-    /// (matched by ID).
+    /// (matched by full index identity).
     ///
     /// # Arguments
     /// * `new_indices` - The desired new indices order. Must be a permutation
     ///
-    ///   of `self.indices` (matched by ID).
+    ///   of `self.indices` (matched by full index identity).
     ///
     /// # Errors
     /// Returns an error when `new_order` does not contain exactly the tensor's
     /// indices (an index-set mismatch or a missing-index failure).
     /// # Panics
-    /// Panics if `new_indices.len() != self.indices.len()`, if any index ID
-    /// doesn't match, or if there are duplicate indices.
+    /// Panics if `new_indices.len() != self.indices.len()`, if any full index
+    /// identity doesn't match, or if there are duplicate indices.
     ///
     /// # Example
     /// ```
@@ -3340,7 +3340,7 @@ impl IdxTensor {
         &self,
         new_indices: &[DynIndex],
     ) -> std::result::Result<Self, IdxTensorError> {
-        // Compute permutation by matching IDs
+        // Compute permutation by full index equality
         let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
         if perm.iter().copied().eq(0..perm.len()) {
             return Ok(Self {
@@ -3765,8 +3765,9 @@ impl IdxTensor {
 impl IdxTensor {
     /// Add two tensors element-wise.
     ///
-    /// The tensors must have the same index set (matched by ID). If the indices
-    /// are in a different order, the other tensor will be permuted to match `self`.
+    /// The tensors must have the same full index set (including tags and prime
+    /// levels). If the indices are in a different order, the other tensor will
+    /// be permuted to match `self`.
     ///
     /// # Arguments
     /// * `other` - The tensor to add
@@ -3858,8 +3859,8 @@ impl IdxTensor {
 
     /// Compute a linear combination: `a * self + b * other`.
     ///
-    /// Both tensors must have the same set of indices (matched by ID).
-    /// If indices are in a different order, `other` is automatically permuted
+    /// Both tensors must have the same full set of indices (including tags and
+    /// prime levels). If indices are in a different order, `other` is automatically permuted
     /// to match `self`.
     ///
     /// # Errors
@@ -5814,7 +5815,7 @@ impl IdxTensor {
 
     /// Replace multiple tensor indices with one fused index using an exact local reshape.
     ///
-    /// The indices in `old_indices` identify the axes to fuse by ID and also
+    /// The full indices in `old_indices` identify the axes to fuse and also
     /// define the coordinate order used inside `new_index`. The new fused index
     /// is inserted at the earliest axis position among the fused axes; all
     /// other axes keep their original relative order. Use
@@ -5825,9 +5826,9 @@ impl IdxTensor {
     /// # Arguments
     /// * `old_indices` - Non-empty list of existing tensor indices to replace.
     ///
-    ///   Each index is matched by ID, must appear exactly once in the tensor,
-    ///   must have the same dimension as the matched tensor axis, and must not
-    ///   be duplicated in this list.
+    ///   Each index is matched by full identity, must appear exactly once in
+    ///   the tensor, must have the same dimension as the matched tensor axis,
+    ///   and must not be duplicated in this list.
     /// * `new_index` - Replacement index whose dimension must equal the product
     ///
     ///   of the dimensions in `old_indices`.

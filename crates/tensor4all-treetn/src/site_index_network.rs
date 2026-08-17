@@ -394,13 +394,6 @@ where
         self.topology.graph()
     }
 
-    /// Get a mutable reference to the internal graph.
-    ///
-    /// **Warning**: Directly modifying the internal graph can break consistency.
-    pub fn graph_mut(&mut self) -> &mut StableGraph<(), (), Undirected> {
-        self.topology.graph_mut()
-    }
-
     /// Check if two SiteIndexNetworks share equivalent site index structure.
     ///
     /// Two networks are equivalent if:
