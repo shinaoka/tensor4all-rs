@@ -394,6 +394,47 @@ impl<V> Default for CachedEvaluatorOptions<V> {
     }
 }
 
+/// Per-call knowledge a caller can supply to `evaluate_batched_with_hint`.
+///
+/// Non-exhaustive so later hints can be added without breaking callers.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::EvaluationHint;
+///
+/// assert!(EvaluationHint::<usize>::default().center.is_none());
+/// assert_eq!(EvaluationHint::around(3usize).center, Some(3));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct EvaluationHint<V> {
+    /// The node this batch varies around, if the caller knows it.
+    ///
+    /// `None` keeps the evaluator's existing centre, chosen from options or by
+    /// greedy search on the first batch.
+    pub center: Option<V>,
+}
+
+impl<V> Default for EvaluationHint<V> {
+    /// An empty hint, which leaves the evaluator's centre selection unchanged.
+    ///
+    /// Written out rather than derived: `derive(Default)` would demand
+    /// `V: Default`, but a hint that names no node needs nothing of `V`.
+    fn default() -> Self {
+        Self { center: None }
+    }
+}
+
+impl<V> EvaluationHint<V> {
+    /// A hint naming the node this batch varies around.
+    pub fn around(center: V) -> Self {
+        Self {
+            center: Some(center),
+        }
+    }
+}
+
 /// Result of greedy center search for cached TreeTN evaluation.
 ///
 /// The result records the selected node, its estimated cost, and the path taken
@@ -739,6 +780,63 @@ where
         &mut self,
         values: ColMajorArrayRef<'_, usize>,
     ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
+        self.evaluate_batched_with_hint(values, EvaluationHint::default())
+    }
+
+    /// Evaluates a batch, optionally naming the node this batch varies around.
+    ///
+    /// A caller that scans one site while holding the rest fixed knows which
+    /// node that is. Contracting around it makes every incoming message
+    /// constant across the batch, so each is contracted once; contracting
+    /// around any other node recontracts the messages on the path between them
+    /// once per scanned value.
+    ///
+    /// The hint applies to this call only and does not replace a centre already
+    /// chosen by [`CachedEvaluatorOptions::center`] or by greedy search, so a
+    /// caller that knows nothing keeps the existing behaviour.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `values` has the wrong shape for this evaluator's
+    /// index list (a shape mismatch), when the hinted node is not in the tree
+    /// (a missing-node failure), or when a contraction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+    /// use tensor4all_treetn::{
+    ///     CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
+    /// };
+    ///
+    /// let a = DynIndex::new_dyn(2);
+    /// let b = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(1);
+    /// let left = IdxTensor::from_dense(vec![a.clone(), bond.clone()], vec![1.0_f64, 2.0])?;
+    /// let right = IdxTensor::from_dense(vec![bond, b.clone()], vec![1.0_f64, 10.0])?;
+    /// let tree = TreeTN::from_tensors(vec![left, right], vec![0usize, 1])?;
+    ///
+    /// let mut evaluator = TreeTNCachedEvaluator::new(
+    ///     &tree,
+    ///     &[a, b],
+    ///     CachedEvaluatorOptions::<usize>::default(),
+    /// )?;
+    ///
+    /// // Scan site 1 with site 0 held fixed.
+    /// let values = [0usize, 0, 0, 1];
+    /// let points = ColMajorArrayRef::new(&values, &[2, 2])?;
+    /// let hinted = evaluator.evaluate_batched_with_hint(points, EvaluationHint::around(1))?;
+    ///
+    /// assert_eq!(hinted.len(), 2);
+    /// assert_eq!(hinted[0].real(), 1.0);
+    /// assert_eq!(hinted[1].real(), 10.0);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn evaluate_batched_with_hint(
+        &mut self,
+        values: ColMajorArrayRef<'_, usize>,
+        hint: EvaluationHint<V>,
+    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
         validate_values_shape(
             values,
             self.layout.n_indices,
@@ -748,7 +846,18 @@ where
             self.last_stats = CachedEvaluationStats::default();
             return Ok(Vec::new());
         }
-        let center = self.ensure_center(values)?.clone();
+        let center = match hint.center {
+            Some(node) => {
+                if self.tree.node_index(&node).is_none() {
+                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                        "TreeTNCachedEvaluator: hinted centre {:?} is not a node of this tree",
+                        node
+                    )));
+                }
+                node
+            }
+            None => self.ensure_center(values)?.clone(),
+        };
         let (component_batches, environment_cache) =
             self.build_environment_cache(&center, values)?;
         let results = self.contract_center_for_points(

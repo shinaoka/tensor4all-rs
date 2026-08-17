@@ -7,7 +7,7 @@ use std::mem::size_of;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
+use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
 use crate::{
     frames::InputFrameStore, state::TreeAciState, Result, TreeAciError, TreeAciNode,
@@ -376,6 +376,35 @@ pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
     dims: Vec<Vec<usize>>,
     evaluations: usize,
     max_working_bytes: usize,
+    /// Prepared node order, so a varying coordinate maps back to a node name.
+    node_order: Vec<V>,
+}
+
+/// The single node whose coordinate differs across `points`, if there is one.
+///
+/// A floating-zone scan varies one site and holds the rest fixed, so naming that
+/// site lets the evaluator contract around it and compute each incoming message
+/// once instead of once per scanned value. Zero or several varying nodes means
+/// this is not a scan, and the caller falls back to the evaluator's own centre
+/// selection.
+fn sole_varying_node(points: &[Vec<usize>]) -> Option<usize> {
+    let first = points.first()?;
+    let mut varying = None;
+    for point in points.iter().skip(1) {
+        if point.len() != first.len() {
+            return None;
+        }
+        for (site, (a, b)) in first.iter().zip(point).enumerate() {
+            if a != b {
+                match varying {
+                    None => varying = Some(site),
+                    Some(known) if known == site => {}
+                    Some(_) => return None,
+                }
+            }
+        }
+    }
+    varying
 }
 
 impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
@@ -412,6 +441,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 .collect(),
             evaluations: 0,
             max_working_bytes: problem.max_working_bytes,
+            node_order: problem.node_order.clone(),
         })
     }
 
@@ -424,9 +454,15 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         points: &[Vec<usize>],
         _split: Option<usize>,
     ) -> Result<Vec<T>> {
-        // TreeTN's current evaluator API does not accept a split coordinate.
-        // Keep the argument at this seam so a future split-aware API can be
-        // adopted without changing guard scheduling again.
+        // A floating-zone scan varies one site; contracting around it keeps
+        // every incoming message constant across the batch. `_split` used to be
+        // an unfilled seam here -- the parameter existed and every caller passed
+        // `None` -- so the centre stayed wherever greedy search put it on the
+        // first batch of the run.
+        let hint = sole_varying_node(points)
+            .and_then(|site| self.node_order.get(site).cloned())
+            .map(EvaluationHint::around)
+            .unwrap_or_default();
         let cold_evaluators = self
             .inputs
             .iter()
@@ -459,7 +495,11 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         crate::problem::enforce_limit("working bytes", result_bytes, self.max_working_bytes)?;
         let mut result = vec![T::default(); result_elements];
         for (input_number, evaluator) in self.inputs.iter_mut().enumerate() {
-            for (point, value) in evaluator.evaluate_batched(values)?.into_iter().enumerate() {
+            for (point, value) in evaluator
+                .evaluate_batched_with_hint(values, hint.clone())?
+                .into_iter()
+                .enumerate()
+            {
                 result[input_number + input_count * point] = T::from_evaluated_scalar(value)
                     .map_err(|message| TreeAciError::ScalarKind {
                         message: message.into(),

@@ -328,3 +328,29 @@ fn padding_refuses_an_over_budget_request() {
         "unexpected error: {error}"
     );
 }
+
+/// A floating-zone scan names the site it varies, so the evaluator can contract
+/// around it.
+///
+/// `InputEvaluators::evaluate` used to take a split coordinate and discard it;
+/// every caller passed `None`, so the contraction centre stayed wherever greedy
+/// search put it on the first batch of the run. Detection is on the batch
+/// itself, so a batch that is not a scan falls back rather than guessing.
+#[test]
+fn a_scan_batch_names_its_varying_site() {
+    use super::sole_varying_node;
+
+    // A scan: only site 1 differs.
+    assert_eq!(
+        sole_varying_node(&[vec![0, 0, 1], vec![0, 1, 1], vec![0, 2, 1]]),
+        Some(1)
+    );
+    // A single point varies nothing.
+    assert_eq!(sole_varying_node(&[vec![0, 1, 2]]), None);
+    // Two sites differ, so this is not a scan.
+    assert_eq!(sole_varying_node(&[vec![0, 0, 0], vec![1, 1, 0]]), None);
+    // Ragged input is rejected rather than read past the shorter point.
+    assert_eq!(sole_varying_node(&[vec![0, 0], vec![0, 0, 0]]), None);
+    // No points at all.
+    assert_eq!(sole_varying_node(&[]), None);
+}

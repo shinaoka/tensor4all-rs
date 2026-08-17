@@ -93,6 +93,7 @@ pub use treetn::{
     BoundaryEdge,
     CachedEvaluatorOptions,
     CenterSearchResult,
+    EvaluationHint,
     // Core type
     GreedyCenterSearch,
     LocalUpdateStep,
