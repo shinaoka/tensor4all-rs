@@ -1799,34 +1799,41 @@ impl IdxTensor {
         payload: Vec<T>,
         kept_dims: &[usize],
         selected_positions: &[usize],
-    ) -> Vec<T> {
-        let output_len = kept_dims.iter().product::<usize>();
+    ) -> Result<Vec<T>> {
+        let output_len = checked_product(kept_dims)?;
         let mut data = vec![T::zero(); output_len];
         if output_len == 0 {
-            return data;
+            return Ok(data);
         }
 
         let Some((&first_position, rest)) = selected_positions.split_first() else {
-            return data;
+            return Ok(data);
         };
         if rest.iter().any(|&position| position != first_position) {
-            return data;
+            return Ok(data);
         }
 
         let value = payload[first_position];
         if kept_dims.is_empty() {
             data[0] = value;
-            return data;
+            return Ok(data);
         }
 
         let mut offset = 0usize;
         let mut stride = 1usize;
         for &dim in kept_dims {
-            offset += first_position * stride;
-            stride *= dim;
+            let term = first_position
+                .checked_mul(stride)
+                .ok_or_else(|| anyhow::anyhow!("diagonal selection offset overflow"))?;
+            offset = offset
+                .checked_add(term)
+                .ok_or_else(|| anyhow::anyhow!("diagonal selection offset overflow"))?;
+            stride = stride
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow::anyhow!("diagonal selection stride overflow"))?;
         }
         data[offset] = value;
-        data
+        Ok(data)
     }
 
     fn select_diag_indices(
@@ -1840,14 +1847,14 @@ impl IdxTensor {
             let payload = storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.is_c64() {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::F32) {
             let inner = self
@@ -1855,7 +1862,7 @@ impl IdxTensor {
                 .eager()
                 .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?;
             let payload = inner.value()?.as_slice::<f32>()?.to_vec();
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::C32) {
             let inner = self
@@ -1863,7 +1870,7 @@ impl IdxTensor {
                 .eager()
                 .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?;
             let payload = inner.value()?.as_slice::<Complex32>()?.to_vec();
-            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else {
             Err(anyhow::anyhow!("unsupported diagonal storage scalar type"))
@@ -5293,8 +5300,8 @@ pub(crate) fn unfold_split_inner(
 
     // Compute matrix dimensions
     let unfolded_dims = unfolded.dims();
-    let m: usize = unfolded_dims[..left_len].iter().product();
-    let n: usize = unfolded_dims[left_len..].iter().product();
+    let m = checked_product(&unfolded_dims[..left_len])?;
+    let n = checked_product(&unfolded_dims[left_len..])?;
 
     let matrix_tensor = unfolded.try_materialized_inner()?.reshape(&[m, n])?;
 
@@ -6092,7 +6099,7 @@ impl IdxTensor {
         indices: Vec<DynIndex>,
     ) -> std::result::Result<Self, IdxTensorError> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let size: usize = dims.iter().product();
+        let size = checked_product(&dims)?;
         Self::from_dense(indices, vec![T::zero(); size])
     }
 }
