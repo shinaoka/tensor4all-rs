@@ -383,6 +383,11 @@ where
                 message: "local_dims should have at least 2 elements".to_string(),
             });
         }
+        if let Some((site, _)) = local_dims.iter().enumerate().find(|(_, &dim)| dim == 0) {
+            return Err(TCIError::InvalidConfiguration {
+                message: format!("local dimension at site {site} must be positive"),
+            });
+        }
 
         let n = local_dims.len();
         Ok(Self {
@@ -410,6 +415,11 @@ where
         if local_dims.len() < 2 {
             return Err(TCIError::DimensionMismatch {
                 message: "local_dims should have at least 2 elements".to_string(),
+            });
+        }
+        if let Some((site, _)) = local_dims.iter().enumerate().find(|(_, &dim)| dim == 0) {
+            return Err(TCIError::InvalidConfiguration {
+                message: format!("local dimension at site {site} must be positive"),
             });
         }
         let n = local_dims.len();
@@ -665,6 +675,16 @@ where
                         self.len()
                     ),
                 });
+            }
+            for (site, &value) in pivot.iter().enumerate() {
+                if value >= self.local_dims[site] {
+                    return Err(TCIError::IndexOutOfBounds {
+                        message: format!(
+                            "pivot value {value} is out of bounds at site {site} with dimension {}",
+                            self.local_dims[site]
+                        ),
+                    });
+                }
             }
 
             // Add to I and J sets

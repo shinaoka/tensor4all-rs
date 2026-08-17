@@ -124,6 +124,14 @@ where
     let flat: Vec<usize> = pivots.iter().flat_map(|p| p.iter().copied()).collect();
     let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
     let init_vals = evaluate(batch)?;
+    if init_vals.len() != pivots.len() {
+        return Err(anyhow::anyhow!(
+            "initial evaluator returned {} values for {} pivots",
+            init_vals.len(),
+            pivots.len()
+        )
+        .into());
+    }
     tci.max_sample_value = init_vals
         .iter()
         .map(|v| CommonScalar::abs_val(*v))
