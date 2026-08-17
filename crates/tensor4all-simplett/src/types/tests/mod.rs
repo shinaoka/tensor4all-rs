@@ -79,6 +79,11 @@ fn test_slice_site() {
 
     let slice_zero = t.slice_site(0);
     assert!(slice_zero.iter().all(|&v| v == 0.0));
+
+    let fallible_slice = t.try_slice_site(1).unwrap();
+    assert_eq!(fallible_slice, slice);
+    let error = t.try_slice_site(3).unwrap_err();
+    assert!(matches!(error, TensorTrainError::IndexOutOfBounds { .. }));
 }
 
 #[test]
@@ -98,6 +103,12 @@ fn test_as_left_matrix() {
     assert_eq!(mat[2], 4.0);
     assert_eq!(mat[5], 5.0);
     assert_eq!(mat[6], 6.0);
+
+    let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_left_matrix().unwrap();
+    assert_eq!(
+        (fallible_mat, fallible_rows, fallible_cols),
+        (mat, rows, cols)
+    );
 }
 
 #[test]
@@ -115,4 +126,10 @@ fn test_as_right_matrix() {
     assert_eq!(mat[1], 1.0);
     assert_eq!(mat[22], 22.0);
     assert_eq!(mat[23], 23.0);
+
+    let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_right_matrix().unwrap();
+    assert_eq!(
+        (fallible_mat, fallible_rows, fallible_cols),
+        (mat, rows, cols)
+    );
 }

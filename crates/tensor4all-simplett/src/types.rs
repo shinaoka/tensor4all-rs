@@ -127,8 +127,15 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
     }
 
     fn slice_site(&self, s: usize) -> Vec<T> {
-        self.try_slice_site(s)
-            .unwrap_or_else(|error| panic!("failed to slice site: {error}"))
+        let left_dim = self.left_dim();
+        let right_dim = self.right_dim();
+        let mut result = Vec::with_capacity(left_dim * right_dim);
+        for r in 0..right_dim {
+            for l in 0..left_dim {
+                result.push(self[[l, s, r]]);
+            }
+        }
+        result
     }
 
     fn try_slice_site(&self, s: usize) -> Result<Vec<T>> {
@@ -157,8 +164,20 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
     }
 
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize) {
-        self.try_as_left_matrix()
-            .unwrap_or_else(|error| panic!("failed to reshape as left matrix: {error}"))
+        let left_dim = self.left_dim();
+        let site_dim = self.site_dim();
+        let right_dim = self.right_dim();
+        let rows = left_dim * site_dim;
+        let cols = right_dim;
+        let mut result = Vec::with_capacity(rows * cols);
+        for r in 0..right_dim {
+            for l in 0..left_dim {
+                for s in 0..site_dim {
+                    result.push(self[[l, s, r]]);
+                }
+            }
+        }
+        (result, rows, cols)
     }
 
     fn try_as_left_matrix(&self) -> Result<(Vec<T>, usize, usize)> {
@@ -188,8 +207,20 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
     }
 
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize) {
-        self.try_as_right_matrix()
-            .unwrap_or_else(|error| panic!("failed to reshape as right matrix: {error}"))
+        let left_dim = self.left_dim();
+        let site_dim = self.site_dim();
+        let right_dim = self.right_dim();
+        let rows = left_dim;
+        let cols = site_dim * right_dim;
+        let mut result = Vec::with_capacity(rows * cols);
+        for s in 0..site_dim {
+            for r in 0..right_dim {
+                for l in 0..left_dim {
+                    result.push(self[[l, s, r]]);
+                }
+            }
+        }
+        (result, rows, cols)
     }
 
     fn try_as_right_matrix(&self) -> Result<(Vec<T>, usize, usize)> {
