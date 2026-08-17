@@ -1,3 +1,4 @@
+use crate::batch::checked_batch_len;
 use crate::error::Result as TreeTciResult;
 use crate::{
     materialize::to_treetn, optimize_with_proposer, GlobalIndexBatch, MultiIndex,
@@ -121,9 +122,7 @@ where
 
     // Initialize max_sample_value via batch evaluate
     let n_sites = tci.local_dims.len();
-    let flat_len = n_sites
-        .checked_mul(pivots.len())
-        .ok_or_else(|| anyhow::anyhow!("initial pivot batch size overflowed usize"))?;
+    let flat_len = checked_batch_len(n_sites, pivots.len())?;
     let mut flat = Vec::with_capacity(flat_len);
     for pivot in &pivots {
         flat.extend_from_slice(pivot);
