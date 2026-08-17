@@ -6406,7 +6406,12 @@ fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
                 dim
             ));
         };
-        linear += index * stride;
+        let term = index
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow::anyhow!("linear offset overflow"))?;
+        linear = linear
+            .checked_add(term)
+            .ok_or_else(|| anyhow::anyhow!("linear offset overflow"))?;
         stride = stride
             .checked_mul(dim)
             .ok_or_else(|| anyhow::anyhow!("stride overflow"))?;
@@ -6635,5 +6640,13 @@ mod tests {
         );
         assert!(!conjugated.tracks_grad());
         assert!(conjugated.detach().is_err());
+    }
+
+    #[test]
+    fn encode_col_major_linear_rejects_offset_overflow() {
+        let error =
+            encode_col_major_linear(&[usize::MAX - 1, usize::MAX - 1], &[usize::MAX, usize::MAX])
+                .unwrap_err();
+        assert!(error.to_string().contains("linear offset overflow"));
     }
 }
