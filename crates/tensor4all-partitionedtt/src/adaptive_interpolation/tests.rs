@@ -1,4 +1,8 @@
 use super::*;
+
+fn projector(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Projector {
+    Projector::from_pairs(pairs).unwrap()
+}
 use num_complex::Complex64;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -231,7 +235,7 @@ fn extracts_full_diagonal_pivots_for_recycling() {
 #[test]
 fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
     let sites = binary_sites(3);
-    let projector = Projector::from_pairs([(sites[0].clone(), 1)]);
+    let projector = projector([(sites[0].clone(), 1)]);
     let active = active_positions(&sites, &projector);
     let recycled = vec![vec![0, 0, 0], vec![0, 1, 1]];
     let mut rng = StdRng::seed_from_u64(7);
@@ -258,7 +262,7 @@ fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
 fn projected_middle_sites_use_compact_structured_storage() {
     let sites = binary_sites(3);
     let active = vec![0, 2];
-    let projector = Projector::from_pairs([(sites[1].clone(), 1)]);
+    let projector = projector([(sites[1].clone(), 1)]);
     let active_tt = tensor4all_simplett::SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![5.0, 6.0, 7.0, 8.0], 2, 2, 1).unwrap(),
