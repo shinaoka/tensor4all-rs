@@ -232,6 +232,13 @@ fn test_with_site_dims_mismatch_product() {
 }
 
 #[test]
+fn test_with_site_dims_rejects_product_overflow() {
+    let tt = SimpleTensorTrain::<f64>::constant(&[2], 1.0);
+    let error = TTCache::with_site_dims(&tt, vec![vec![usize::MAX, 2]]).unwrap_err();
+    assert!(error.to_string().contains("overflows usize"));
+}
+
+#[test]
 fn find_split_heuristic() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
     let cache = TTCache::new(&tt);

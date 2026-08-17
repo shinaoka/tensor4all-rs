@@ -281,7 +281,14 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Validate that site_dims products match tensor site dimensions
         for (i, (tensor, dims)) in tt.site_tensors().iter().zip(site_dims.iter()).enumerate() {
-            let expected: usize = dims.iter().product();
+            let expected = dims
+                .iter()
+                .try_fold(1usize, |acc, &dim| acc.checked_mul(dim));
+            let Some(expected) = expected else {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: format!("site_dims product overflows usize at site {i}"),
+                });
+            };
             if expected != tensor.site_dim() {
                 return Err(TensorTrainError::InvalidOperation {
                     message: format!(
