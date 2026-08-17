@@ -39,4 +39,19 @@ After the initial batch, the branch additionally checked:
 
 Current focused release evidence: tensor4all-core 789 tests (2 skipped), tensor4all-aci 90 tests (1 skipped), tensor4all-itensorlike 154 tests (5 skipped), tensor4all-interpolativeqtt 27 tests, tensor4all-simplett 252 tests, tensor4all-tensorci 79 tests; all passed. Strict workspace clippy also passed.
 
-A stale guide callback was corrected (`CachedFunction::eval` now unwraps its documented valid-input result), and a probabilistically flaky interior-coordinate test now uses a nonzero-at-origin affine function while retaining its coordinate assertions. The full repository rules script and changed-file error-doc validation pass. Latest full release nextest passes with 2,852 tests and 14 skips; latest rustdoc passes with 861 doctests; coverage passes 215/215 files; formatting, strict clippy, API inventory, repository-rules review, panic audit, crate-boundary audit, and mdBook all pass. A fresh issue-by-issue acceptance audit and the remaining cited raw-arithmetic sweep for every #544/#543 path are still required before marking the goal complete or closing issues.
+A stale guide callback was corrected (`CachedFunction::eval` now unwraps its documented valid-input result), and a probabilistically flaky interior-coordinate test now uses a nonzero-at-origin affine function while retaining its coordinate assertions.
+
+## Final synchronized verification
+
+The final branch is `ai-ready-batch` at `193c217` (ahead of `origin/main` at `2b11f7f`), with a clean worktree. The issue acceptance map is:
+
+- **#543:** HDF5 schema/storage validation and TreeTN C API span checks reject invalid input before access.
+- **#544:** checked arithmetic and overflow regressions cover core factorization/Krylov, ACI, TensorCI/TreeTCI, SimpleTT, interpolative QTT, tensor backend, block/direct-sum, and materialization paths; the final TreeTCI batch helper and SimpleTT fallible-shape tests are in commits `5e86dea` and `193c217`.
+- **#545:** AD-preserving paths retain backend graphs where supported and reject unsupported tracked LU/CI materialization with typed errors.
+- **#546:** pivot, callback, factorization, cache, matrix, linsolve, and batched-evaluation failures are validated and propagated transactionally.
+- **#547/#548:** staged mutation, TreeTN topology/index invariants, canonical metadata, and public conversion contracts are covered by regression tests and docs.
+- **#550:** einsum label conversion is checked before profiling/backend calls.
+- **#633/#634:** removed inert options and hardened nonuniform interpolation, projector ordering/validation, and transactional partition insertion.
+- **#637:** API inventory generation/verification is deterministic, CI-backed, and currently verifies all 14 public crate artifacts.
+
+Final validation passed: release workspace nextest (**2,875 passed, 14 skipped**), release rustdoc (**862 passed**), coverage (**215/215 files**), strict workspace clippy, `cargo doc --workspace --no-deps`, public error-doc validation, API inventory, mdBook tests, crate-boundary audit, library panic audit, repository-rules review, formatting, and `git diff --check`. The doc build retains only the repository's existing rustdoc warnings.
