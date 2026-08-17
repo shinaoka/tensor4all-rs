@@ -647,17 +647,13 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
                 )
             }
         };
-        *out_len = data.len();
-
-        if buf.is_null() {
-            return T4A_SUCCESS;
+        match copy_plain_slice("tensor dense f64", &data, buf, buf_len, out_len) {
+            Ok(()) => T4A_SUCCESS,
+            Err((code, message)) => {
+                set_last_error(&message);
+                code
+            }
         }
-        if buf_len < data.len() {
-            return err_buffer_too_small("tensor dense f64", data.len(), buf_len);
-        }
-
-        std::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
-        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)
@@ -699,20 +695,19 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
                 )
             }
         };
-        *out_len = data.len();
-
-        if buf_interleaved.is_null() {
-            return T4A_SUCCESS;
+        match copy_c64_interleaved(
+            "tensor dense c64",
+            &data,
+            buf_interleaved,
+            n_complex,
+            out_len,
+        ) {
+            Ok(()) => T4A_SUCCESS,
+            Err((code, message)) => {
+                set_last_error(&message);
+                code
+            }
         }
-        if n_complex < data.len() {
-            return err_buffer_too_small("tensor dense c64", data.len(), n_complex);
-        }
-
-        for (i, value) in data.iter().enumerate() {
-            *buf_interleaved.add(2 * i) = value.re;
-            *buf_interleaved.add(2 * i + 1) = value.im;
-        }
-        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)
