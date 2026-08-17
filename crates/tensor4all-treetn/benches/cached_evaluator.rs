@@ -257,10 +257,70 @@ fn bench_bond_dim_scaling(c: &mut Criterion) {
     group.finish();
 }
 
+/// Does one warm `evaluate_batched` call cost more as the bond dimension grows?
+///
+/// Registered measurement. Two explanations of TreeACI's per-evaluation cost
+/// predict different answers: a fixed per-message planning and dispatch cost
+/// predicts no growth, while the contraction arithmetic and the data movement
+/// around it predict growth of at least `O(chi^2)`. The fitted slope of
+/// `log(time)` against `log(bond)` separates them.
+///
+/// Differences from `bench_bond_dim_scaling`, which varies the same parameter
+/// but answers a different question: the evaluator is built **outside** the
+/// timed closure here, because in the ACI path evaluators live for the whole
+/// run and rebuilding one per call would time layout construction and centre
+/// search instead of steady-state evaluation. The batch is a floating-zone
+/// coordinate scan rather than scattered TCI-like points, and the contraction
+/// centre is pinned to the varying site so centre placement is not a free
+/// variable.
+fn bench_warm_call_vs_bond(c: &mut Criterion) {
+    const LOCAL_DIM: usize = 2;
+
+    let mut group = c.benchmark_group("treetn_warm_call_vs_bond");
+    for n_sites in [8usize, 32] {
+        let varying = n_sites / 2;
+        // One coordinate scan: both values of the varying site, rest fixed.
+        let mut values = vec![0usize; n_sites * 2];
+        for point in 0..2 {
+            for site in 0..n_sites {
+                values[site + n_sites * point] = usize::from(site != varying || point == 1);
+            }
+        }
+        let shape = [n_sites, 2];
+
+        for bond_dim in [2usize, 4, 8, 16, 32, 64, 128] {
+            let tt = create_tt_with_bond_dim(n_sites, LOCAL_DIM, bond_dim);
+            let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &site_indices,
+                CachedEvaluatorOptions::<usize> {
+                    center: Some(varying),
+                    ..CachedEvaluatorOptions::default()
+                },
+            )
+            .unwrap();
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("n{n_sites}"), bond_dim),
+                &values,
+                |b, values| {
+                    b.iter(|| {
+                        let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
+                        evaluator.evaluate_batched(points).unwrap()
+                    })
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_chain_size_scaling,
     bench_batch_size_scaling,
-    bench_bond_dim_scaling
+    bench_bond_dim_scaling,
+    bench_warm_call_vs_bond
 );
 criterion_main!(benches);
