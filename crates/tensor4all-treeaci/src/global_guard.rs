@@ -215,7 +215,24 @@ fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
         replacements.push((graph_edge, old, DynIndex::new_dyn(dimension)));
     }
 
-    let mut tensors = Vec::with_capacity(state.problem.node_order.len());
+    // Plan every padded core before allocating any of it. Sizing and
+    // allocation used to share one loop, so the aggregate `max_working_bytes`
+    // check only ran after every core was already allocated and retained: a
+    // caller could set a small ceiling and still pay the full peak before being
+    // told the request was rejected.
+    // Holds the node name rather than its index: `TreeTN::node_index` returns
+    // petgraph's `NodeIndex`, which treetn does not re-export, so naming it
+    // here would mean depending on petgraph directly. Re-resolving the name is
+    // a hash lookup and keeps the dependency boundary intact.
+    struct PaddedCorePlan<V> {
+        node: V,
+        new_indices: Vec<DynIndex>,
+        old_dims: Vec<usize>,
+        new_dims: Vec<usize>,
+        new_len: usize,
+    }
+
+    let mut plans = Vec::with_capacity(state.problem.node_order.len());
     let mut working_elements = 0usize;
     for node in &state.problem.node_order {
         let node_index = state
@@ -262,6 +279,50 @@ fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
                 .ok_or(TreeAciError::SizeOverflow {
                     context: "global-pivot padding working elements",
                 })?;
+        plans.push(PaddedCorePlan {
+            node: node.clone(),
+            new_indices,
+            old_dims,
+            new_dims,
+            new_len,
+        });
+    }
+
+    let planned_bytes =
+        working_elements
+            .checked_mul(size_of::<T>())
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "global-pivot padding working bytes",
+            })?;
+    if planned_bytes > state.problem.max_working_bytes {
+        return Err(TreeAciError::ResourceLimit {
+            resource: "working bytes",
+            requested: planned_bytes,
+            limit: state.problem.max_working_bytes,
+        });
+    }
+
+    let mut tensors = Vec::with_capacity(plans.len());
+    for PaddedCorePlan {
+        node,
+        new_indices,
+        old_dims,
+        new_dims,
+        new_len,
+    } in plans
+    {
+        let node_index = state
+            .output
+            .node_index(&node)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "global-pivot padding references a missing output node",
+            })?;
+        let tensor = state
+            .output
+            .tensor(node_index)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "global-pivot padding references a missing output tensor",
+            })?;
         let mut padded = vec![T::default(); new_len];
         let values = tensor
             .to_vec::<T>()
@@ -297,20 +358,6 @@ fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
             })?,
         ));
     }
-    let working_bytes =
-        working_elements
-            .checked_mul(size_of::<T>())
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "global-pivot padding working bytes",
-            })?;
-    if working_bytes > state.problem.max_working_bytes {
-        return Err(TreeAciError::ResourceLimit {
-            resource: "working bytes",
-            requested: working_bytes,
-            limit: state.problem.max_working_bytes,
-        });
-    }
-
     let mut output = state.output.clone();
     for (edge, _, new) in &replacements {
         output.replace_edge_bond(*edge, new.clone())?;
@@ -328,6 +375,7 @@ pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
     strides: Vec<Vec<usize>>,
     dims: Vec<Vec<usize>>,
     evaluations: usize,
+    max_working_bytes: usize,
 }
 
 impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
@@ -363,6 +411,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 .map(|physical| physical.dims.clone())
                 .collect(),
             evaluations: 0,
+            max_working_bytes: problem.max_working_bytes,
         })
     }
 
@@ -392,7 +441,23 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
             }
         })?;
         let input_count = self.inputs.len();
-        let mut result = vec![T::default(); input_count * points.len()];
+        // Checked, and charged against the working budget: this buffer is
+        // sized by the caller's batch, so it is the guard's largest transient
+        // allocation and the one a small `max_working_bytes` is meant to stop.
+        let result_elements =
+            input_count
+                .checked_mul(points.len())
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "guard input evaluation buffer",
+                })?;
+        let result_bytes =
+            result_elements
+                .checked_mul(size_of::<T>())
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "guard input evaluation bytes",
+                })?;
+        crate::problem::enforce_limit("working bytes", result_bytes, self.max_working_bytes)?;
+        let mut result = vec![T::default(); result_elements];
         for (input_number, evaluator) in self.inputs.iter_mut().enumerate() {
             for (point, value) in evaluator.evaluate_batched(values)?.into_iter().enumerate() {
                 result[input_number + input_count * point] = T::from_evaluated_scalar(value)

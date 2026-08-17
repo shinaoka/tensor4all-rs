@@ -71,3 +71,51 @@ fn scalar_node_without_physical_indices_is_one_point() {
     );
     assert_eq!(result.diagnostics.evaluated_points, 1);
 }
+
+/// The exact single-node path is charged against `max_working_bytes` like every
+/// other allocation site.
+///
+/// It bypasses the sweep entirely, so it used to allocate `inputs * local_dim`
+/// with a bare multiplication and no budget check at all — a caller could set a
+/// hard ceiling and this one public entry would ignore it.
+#[test]
+fn the_exact_path_respects_the_working_budget() {
+    let site = DynIndex::new_dyn(4);
+    let tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![site], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    let mut square = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            let x = batch.get(0, point)?;
+            *value = x * x;
+        }
+        Ok(())
+    };
+
+    // One input of four points is 4 * size_of::<f64>() = 32 bytes.
+    let generous = TreeAciOptions::<usize> {
+        max_working_bytes: 32,
+        ..TreeAciOptions::default()
+    };
+    assert!(evaluate_single_site(std::slice::from_ref(&tree), &generous, &mut square).is_ok());
+
+    let tight = TreeAciOptions::<usize> {
+        max_working_bytes: 31,
+        ..TreeAciOptions::default()
+    };
+    let error = evaluate_single_site(std::slice::from_ref(&tree), &tight, &mut square)
+        .expect_err("a 31-byte ceiling must reject a 32-byte buffer");
+    assert!(
+        matches!(
+            error,
+            crate::TreeAciError::ResourceLimit {
+                resource: "working bytes",
+                requested: 32,
+                limit: 31,
+            }
+        ),
+        "unexpected error: {error}"
+    );
+}

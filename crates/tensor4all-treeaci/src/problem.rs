@@ -294,7 +294,11 @@ fn validate_options<V: TreeAciNode>(options: &TreeAciOptions<V>) -> Result<()> {
     Ok(())
 }
 
-fn enforce_limit(resource: &'static str, requested: usize, limit: usize) -> Result<()> {
+/// Rejects a request that exceeds its configured ceiling.
+///
+/// Shared so every allocation site reports the same `ResourceLimit` shape, and
+/// so a new site cannot quietly grow its own ad hoc check.
+pub(crate) fn enforce_limit(resource: &'static str, requested: usize, limit: usize) -> Result<()> {
     if requested > limit {
         return Err(TreeAciError::ResourceLimit {
             resource,

@@ -290,3 +290,41 @@ fn guard_reuses_input_evaluators_across_invocations() {
         "the second guard run must reuse warm evaluators: {second} vs {first}"
     );
 }
+
+/// Padding rejects an over-budget request before allocating any padded core.
+///
+/// Sizing and allocation used to share one loop, with the aggregate
+/// `max_working_bytes` comparison after it, so every core was already allocated
+/// and retained by the time the caller was told the request was refused. The
+/// per-core `max_core_elements` bound did not help: N nodes each just under it
+/// still peak at N times that, whatever the working ceiling says.
+///
+/// The check now runs on the planned total, so a one-byte ceiling refuses the
+/// request outright.
+#[test]
+fn padding_refuses_an_over_budget_request() {
+    let (input, _, _) = delta_tree();
+    let options = TreeAciOptions {
+        max_bond_dim: Some(1),
+        ..TreeAciOptions::default()
+    };
+    let inputs = vec![input];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+
+    // Tighten after preparation so this exercises the padding check rather than
+    // the preparation-time one, which would reject the run before injection.
+    state.problem.max_working_bytes = 1;
+    let error = inject_global_pivots(&mut state, &mut input_evaluators, &[vec![1, 1]], &[true])
+        .expect_err("a one-byte working ceiling must refuse padding");
+    assert!(
+        matches!(
+            error,
+            crate::TreeAciError::ResourceLimit {
+                resource: "working bytes",
+                ..
+            }
+        ),
+        "unexpected error: {error}"
+    );
+}

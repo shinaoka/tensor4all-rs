@@ -29,7 +29,24 @@ where
     let node = &problem.node_order[0];
     let indices = problem.physical[0].indices.clone();
     let point_count = problem.physical[0].local_dim;
-    let mut input_values = vec![T::default(); inputs.len() * point_count];
+    // Checked and charged against the working budget. The exact single-node
+    // path skips the sweep entirely, so it used to be the one public entry that
+    // allocated without consulting either.
+    let input_elements =
+        inputs
+            .len()
+            .checked_mul(point_count)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "single-site input buffer",
+            })?;
+    let input_bytes =
+        input_elements
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "single-site input bytes",
+            })?;
+    crate::problem::enforce_limit("working bytes", input_bytes, problem.max_working_bytes)?;
+    let mut input_values = vec![T::default(); input_elements];
     for (input_number, input) in inputs.iter().enumerate() {
         let node_index = input
             .node_index(node)
