@@ -37,9 +37,15 @@ tensor4all-simplett = { path = "../tensor4all-simplett", default-features = fals
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 
 [dev-dependencies]
+tensor4all-treeaci = { path = "../tensor4all-treeaci", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 approx.workspace = true
 criterion.workspace = true
 
 [[bench]]
 name = "elementwise_scaling"
+harness = false
+
+[[bench]]
+name = "treeaci_parity"
 harness = false
