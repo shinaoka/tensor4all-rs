@@ -11,7 +11,7 @@ pub enum ContractionAlgorithm {
     Naive,
     /// Zip-up contraction with on-the-fly compression
     ZipUp,
-    /// Variational fitting algorithm
+    /// Variational fitting algorithm (currently unsupported for simplett MPOs)
     Fit,
 }
 
@@ -40,7 +40,8 @@ use crate::einsum_helper::EinsumScalar;
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, a backend failure, or the selected algorithm is
+/// unsupported).
 ///
 /// # Example
 ///
@@ -59,9 +60,9 @@ use crate::einsum_helper::EinsumScalar;
 /// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::ZipUp, &options).unwrap();
 /// assert_eq!(result.len(), 2);
 ///
-/// // Use variational fitting for controlled bond dimension
-/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Fit, &options).unwrap();
-/// assert_eq!(result.len(), 2);
+/// // Simplett variational fitting is not implemented yet.
+/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Fit, &options);
+/// assert!(matches!(result, Err(tensor4all_simplett::mpo::MPOError::Unsupported { .. })));
 /// ```
 pub fn contract<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
