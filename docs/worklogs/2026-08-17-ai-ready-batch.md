@@ -43,7 +43,7 @@ A stale guide callback was corrected (`CachedFunction::eval` now unwraps its doc
 
 ## Final synchronized verification
 
-The final branch is `ai-ready-batch` at `193c217` (ahead of `origin/main` at `2b11f7f`), with a clean worktree. The issue acceptance map is:
+The final branch is `ai-ready-batch` at `a180742` (ahead of `origin/main` at `2b11f7f`), with a clean worktree. The issue acceptance map is:
 
 - **#543:** HDF5 schema/storage validation and TreeTN C API span checks reject invalid input before access.
 - **#544:** checked arithmetic and overflow regressions cover core factorization/Krylov, ACI, TensorCI/TreeTCI, SimpleTT, interpolative QTT, tensor backend, block/direct-sum, and materialization paths; the final TreeTCI batch helper and SimpleTT fallible-shape tests are in commits `5e86dea` and `193c217`.
