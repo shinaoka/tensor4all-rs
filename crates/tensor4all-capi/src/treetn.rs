@@ -175,6 +175,7 @@ fn query_then_fill_copy<T: Copy>(
     if buf.is_null() {
         return Ok(());
     }
+    checked_ptr_span::<T>(values.len(), what)?;
     if buf_len < values.len() {
         return Err(capi_error(
             T4A_BUFFER_TOO_SMALL,
@@ -381,7 +382,14 @@ fn build_target_network(
         n_target_vertices,
         &format!("{what}.siteind_lens"),
     )?;
-    let total_site_indices: usize = siteind_lens.iter().sum();
+    let total_site_indices = siteind_lens.iter().try_fold(0usize, |total, &len| {
+        total.checked_add(len).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{what}: total site-index count overflows size_t"),
+            )
+        })
+    })?;
     let flat_site_indices = collect_indices(
         target_site_indices,
         total_site_indices,
@@ -407,7 +415,13 @@ fn build_target_network(
             ));
         }
         let mut site_space = HashSet::with_capacity(len);
-        for siteind in &flat_site_indices[offset..offset + len] {
+        let end = offset.checked_add(len).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{what}: site-index slice end overflows size_t"),
+            )
+        })?;
+        for siteind in &flat_site_indices[offset..end] {
             if let Some(previous_vertex) = seen_site_indices.insert(siteind.clone(), vertex) {
                 return Err(capi_error(
                     T4A_INVALID_ARGUMENT,
@@ -419,7 +433,7 @@ fn build_target_network(
             }
             site_space.insert(siteind.clone());
         }
-        offset += len;
+        offset = end;
         network
             .add_node(vertex, site_space)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, format!("{what}: {err}")))?;
@@ -898,6 +912,7 @@ pub extern "C" fn t4a_treetn_new(
         if tensors.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "tensors is null"));
         }
+        checked_ptr_span::<*const t4a_tensor>(n_tensors, "tensors")?;
 
         let mut tensor_vec = Vec::with_capacity(n_tensors);
         for i in 0..n_tensors {
@@ -1068,6 +1083,7 @@ pub extern "C" fn t4a_treetn_site_indices(
         if buf.is_null() {
             return Ok(());
         }
+        checked_ptr_span::<*mut t4a_index>(ordered_indices.len(), "t4a_treetn_site_indices.buf")?;
         if buf_len < ordered_indices.len() {
             return Err(capi_error(
                 T4A_BUFFER_TOO_SMALL,
