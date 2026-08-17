@@ -91,11 +91,18 @@ macro_rules! flat_index_bnum {
 }
 
 impl FlatIndexer {
-    /// Create a new indexer, automatically selecting the key type
-    fn new(local_dims: &[usize]) -> Self {
+    /// Create a new indexer, automatically selecting a lossless key type.
+    fn new(local_dims: &[usize]) -> Result<Self> {
         let total_bits = compute_total_bits(local_dims);
+        if total_bits > 1024 {
+            return Err(TensorTrainError::InvalidOperation {
+                message: format!(
+                    "cache index space requires {total_bits} bits, exceeding the 1024-bit key limit"
+                ),
+            });
+        }
 
-        if total_bits <= 64 {
+        let indexer = if total_bits <= 64 {
             Self::U64 {
                 coeffs: compute_coeffs_primitive!(local_dims, u64),
             }
@@ -115,7 +122,8 @@ impl FlatIndexer {
             Self::U1024 {
                 coeffs: compute_coeffs_bnum!(local_dims, U1024),
             }
-        }
+        };
+        Ok(indexer)
     }
 
     /// Compute flat index key from multi-index
@@ -143,17 +151,17 @@ struct IndexMapper {
 }
 
 impl IndexMapper {
-    fn new(left_dims: &[usize], right_dims: &[usize], capacity: usize) -> Self {
-        Self {
-            left_indexer: FlatIndexer::new(left_dims),
-            right_indexer: FlatIndexer::new(right_dims),
+    fn new(left_dims: &[usize], right_dims: &[usize], capacity: usize) -> Result<Self> {
+        Ok(Self {
+            left_indexer: FlatIndexer::new(left_dims)?,
+            right_indexer: FlatIndexer::new(right_dims)?,
             left_key_to_id: HashMap::new(),
             right_key_to_id: HashMap::new(),
             idx_to_left: Vec::with_capacity(capacity),
             idx_to_right: Vec::with_capacity(capacity),
             left_first_idx: Vec::new(),
             right_first_idx: Vec::new(),
-        }
+        })
     }
 
     fn add_index(&mut self, i: usize, left_part: &[usize], right_part: &[usize]) {
@@ -192,11 +200,11 @@ struct UniqueCounter {
 }
 
 impl UniqueCounter {
-    fn new(local_dims: &[usize], capacity: usize) -> Self {
-        Self {
-            indexer: FlatIndexer::new(local_dims),
+    fn new(local_dims: &[usize], capacity: usize) -> Result<Self> {
+        Ok(Self {
+            indexer: FlatIndexer::new(local_dims)?,
             keys: HashSet::with_capacity(capacity),
-        }
+        })
     }
 
     fn insert(&mut self, idx: &[usize]) {
@@ -604,7 +612,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Determine split position
         let split = match split {
             Some(s) => s,
-            None => self.find_split_heuristic(indices),
+            None => self.find_split_heuristic(indices)?,
         };
 
         if split == 0 || split > n {
@@ -620,7 +628,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Build index mapper with appropriate key type for each half
         let mut mapper =
-            IndexMapper::new(&local_dims[..split], &local_dims[split..], indices.len());
+            IndexMapper::new(&local_dims[..split], &local_dims[split..], indices.len())?;
 
         for (i, idx) in indices.iter().enumerate() {
             mapper.add_index(i, &idx[..split], &idx[split..]);
@@ -674,44 +682,56 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     ///
     /// Samples at 1/4, 1/2, 3/4 positions and returns the one with
     /// minimum total unique left + right parts.
-    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> usize {
+    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> Result<usize> {
         let n = self.len();
         if n <= 1 {
-            return n.max(1);
+            return Ok(n.max(1));
         }
 
-        let local_dims: Vec<usize> = self.site_dims.iter().map(|d| d.iter().product()).collect();
+        let local_dims: Vec<usize> = self
+            .site_dims
+            .iter()
+            .map(|dims| {
+                dims.iter()
+                    .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| TensorTrainError::InvalidOperation {
+                message: "cache heuristic site-dimension product overflowed usize".to_string(),
+            })?;
 
         // Helper to compute cost at a split position
-        let compute_cost = |split: usize| -> usize {
+        let compute_cost = |split: usize| -> Result<usize> {
             if split == 0 || split >= n {
-                return usize::MAX;
+                return Ok(usize::MAX);
             }
 
-            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len());
-            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len());
+            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len())?;
+            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len())?;
 
             for idx in indices {
                 left_counter.insert(&idx[..split]);
                 right_counter.insert(&idx[split..]);
             }
 
-            left_counter.len().saturating_add(right_counter.len())
+            Ok(left_counter.len().saturating_add(right_counter.len()))
         };
 
         // 3-point sampling: 1/4, 1/2, 3/4 positions
         let candidates = [n / 4, n / 2, n.saturating_mul(3) / 4];
-        let costs: Vec<(usize, usize)> = candidates
+        let costs: Result<Vec<(usize, usize)>> = candidates
             .iter()
             .filter(|&&p| p >= 1 && p < n)
-            .map(|&p| (p, compute_cost(p)))
+            .map(|&p| Ok((p, compute_cost(p)?)))
             .collect();
 
-        costs
+        costs?
             .into_iter()
             .min_by_key(|&(_, c)| c)
             .map(|(p, _)| p)
-            .unwrap_or(n / 2)
+            .ok_or_else(|| TensorTrainError::InvalidOperation {
+                message: "cache heuristic could not choose a valid split".to_string(),
+            })
     }
 }
 
