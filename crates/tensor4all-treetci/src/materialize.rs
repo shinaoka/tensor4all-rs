@@ -227,7 +227,7 @@ where
 {
     let in_combos = cartesian_entries(&state.ijset, in_keys)?;
     let out_combos = cartesian_entries(&state.ijset, out_keys)?;
-    let central_combos = central_assignments(&state.local_dims, central_sites);
+    let central_combos = central_assignments(&state.local_dims, central_sites)?;
     let point_count = in_combos
         .len()
         .checked_mul(out_combos.len())
@@ -287,8 +287,13 @@ fn cartesian_entries(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let combo_capacity = entry_sets.iter().try_fold(1usize, |count, entries| {
+        count
+            .checked_mul(entries.len())
+            .ok_or_else(|| anyhow::anyhow!("cartesian entry count overflowed usize"))
+    })?;
     let mut current = vec![Vec::new(); keys.len()];
-    let mut combos = Vec::new();
+    let mut combos = Vec::with_capacity(combo_capacity);
     cartesian_entries_recursive(&entry_sets, keys.len(), &mut current, &mut combos);
     Ok(combos)
 }
@@ -311,10 +316,17 @@ fn cartesian_entries_recursive(
     }
 }
 
-fn central_assignments(local_dims: &[usize], central_sites: &[usize]) -> Vec<Vec<(usize, usize)>> {
+fn central_assignments(
+    local_dims: &[usize],
+    central_sites: &[usize],
+) -> Result<Vec<Vec<(usize, usize)>>> {
     let mut combos = vec![Vec::new()];
     for &site in central_sites {
-        let mut next = Vec::new();
+        let count = combos
+            .len()
+            .checked_mul(local_dims[site])
+            .ok_or_else(|| anyhow::anyhow!("central assignment count overflowed usize"))?;
+        let mut next = Vec::with_capacity(count);
         for combo in &combos {
             for value in 0..local_dims[site] {
                 let mut extended = combo.clone();
@@ -324,11 +336,7 @@ fn central_assignments(local_dims: &[usize], central_sites: &[usize]) -> Vec<Vec
         }
         combos = next;
     }
-    if central_sites.is_empty() {
-        vec![Vec::new()]
-    } else {
-        combos
-    }
+    Ok(combos)
 }
 
 #[cfg(test)]

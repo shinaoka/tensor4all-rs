@@ -71,13 +71,13 @@ impl PivotCandidateProposer for DefaultProposer {
         let in_ikeys = state.graph.edge_in_ij_keys(vp, &adjacent_vp)?;
         let ipivots = pivot_set(&state.ijset, &in_ikeys, &ikey)?;
         let isite_index = subtree_position(&ikey, vp)?;
-        let iset = kronecker(&ipivots, isite_index, state.local_dims[vp]);
+        let iset = kronecker(&ipivots, isite_index, state.local_dims[vp])?;
 
         let adjacent_vq = state.graph.adjacent_edges(vq, &[edge]);
         let in_jkeys = state.graph.edge_in_ij_keys(vq, &adjacent_vq)?;
         let jpivots = pivot_set(&state.ijset, &in_jkeys, &jkey)?;
         let jsite_index = subtree_position(&jkey, vq)?;
-        let jset = kronecker(&jpivots, jsite_index, state.local_dims[vq]);
+        let jset = kronecker(&jpivots, jsite_index, state.local_dims[vq])?;
 
         let history = state.ijset_history.last();
         let icombined = union_with_history(iset, history, &ikey)?;
@@ -145,16 +145,16 @@ impl PivotCandidateProposer for SimpleProposer {
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
         let mut rng = rng_for_edge(state, edge, self.seed, "simple")?;
 
-        let ichi =
-            state.local_dims[vp]
-                * ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
-                    anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
-                })?)?;
-        let jchi =
-            state.local_dims[vq]
-                * ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
-                    anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
-                })?)?;
+        let ichi = state.local_dims[vp]
+            .checked_mul(ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
+                anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
+            })?)?)
+            .ok_or_else(|| anyhow::anyhow!("left candidate count overflowed usize"))?;
+        let jchi = state.local_dims[vq]
+            .checked_mul(ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
+                anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
+            })?)?)
+            .ok_or_else(|| anyhow::anyhow!("right candidate count overflowed usize"))?;
 
         let iset = random_candidates(&mut rng, state.local_dims.as_slice(), &ikey, ichi);
         let jset = random_candidates(&mut rng, state.local_dims.as_slice(), &jkey, jchi);
@@ -223,16 +223,16 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
         let (default_i, default_j) = DefaultProposer.candidates(state, edge)?;
         let mut rng = rng_for_edge(state, edge, self.seed, "truncated_default")?;
 
-        let ichi =
-            state.local_dims[vp]
-                * ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
-                    anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
-                })?)?;
-        let jchi =
-            state.local_dims[vq]
-                * ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
-                    anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
-                })?)?;
+        let ichi = state.local_dims[vp]
+            .checked_mul(ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
+                anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
+            })?)?)
+            .ok_or_else(|| anyhow::anyhow!("left candidate count overflowed usize"))?;
+        let jchi = state.local_dims[vq]
+            .checked_mul(ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
+                anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
+            })?)?)
+            .ok_or_else(|| anyhow::anyhow!("right candidate count overflowed usize"))?;
 
         Ok((
             sample_ordered_candidates(&default_i, ichi, &mut rng),
@@ -316,8 +316,16 @@ fn pivot_set(
     Ok(pivots)
 }
 
-fn kronecker(pivots: &[MultiIndex], site_index: usize, local_dim: usize) -> Vec<MultiIndex> {
-    let mut result = Vec::with_capacity(pivots.len() * local_dim);
+fn kronecker(
+    pivots: &[MultiIndex],
+    site_index: usize,
+    local_dim: usize,
+) -> Result<Vec<MultiIndex>> {
+    let capacity = pivots
+        .len()
+        .checked_mul(local_dim)
+        .ok_or_else(|| anyhow::anyhow!("Kronecker candidate count overflowed usize"))?;
+    let mut result = Vec::with_capacity(capacity);
     for pivot in pivots {
         for value in 0..local_dim {
             let mut candidate = pivot.clone();
@@ -325,7 +333,7 @@ fn kronecker(pivots: &[MultiIndex], site_index: usize, local_dim: usize) -> Vec<
             result.push(candidate);
         }
     }
-    result
+    Ok(result)
 }
 
 fn random_candidates(
