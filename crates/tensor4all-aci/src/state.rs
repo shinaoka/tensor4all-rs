@@ -85,8 +85,9 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             })
             .collect::<Result<Vec<_>>>();
         let input_core_matrices = input_core_matrices?;
-        let mut left_frames = vec![vec![None; n + 1]; n_inputs];
-        let mut right_frames = vec![vec![None; n + 1]; n_inputs];
+        let frame_count = checked_frame_add(n, 1, "ACI frame count")?;
+        let mut left_frames = vec![vec![None; frame_count]; n_inputs];
+        let mut right_frames = vec![vec![None; frame_count]; n_inputs];
 
         for input in 0..n_inputs {
             left_frames[input][0] = Some(unit_frame());
@@ -391,7 +392,8 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let Some((source_rows, source_cols, site_dim, right_dim, full_rows)) = shared else {
             return Ok(None);
         };
-        let output_cols = site_dim * right_dim;
+        let output_cols =
+            checked_frame_mul(site_dim, right_dim, "batched left output column count")?;
         let values = batched_mat_mul_same_shape_owned(
             n_inputs,
             source_rows,
@@ -401,7 +403,8 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             core_batch,
         )
         .map_err(|err| frame_matmul_error("batched left", err))?;
-        let item_len = source_rows * output_cols;
+        let item_len =
+            checked_frame_mul(source_rows, output_cols, "batched left frame item count")?;
 
         let frames = (0..n_inputs)
             .map(|input| {
@@ -482,7 +485,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let Some((left_dim, site_dim, right_dim, source_cols, _full_cols)) = shared else {
             return Ok(None);
         };
-        let core_rows = left_dim * site_dim;
+        let core_rows = checked_frame_mul(left_dim, site_dim, "batched right input row count")?;
         let values = batched_mat_mul_same_shape_owned(
             n_inputs,
             core_rows,
@@ -492,7 +495,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             frame_batch,
         )
         .map_err(|err| frame_matmul_error("batched right", err))?;
-        let item_len = core_rows * source_cols;
+        let item_len = checked_frame_mul(core_rows, source_cols, "batched right frame item count")?;
 
         let frames = (0..n_inputs)
             .map(|input| {
@@ -549,9 +552,10 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     {
         let n = self.len();
         let mut new_pivots = 0usize;
-        let mut growth = vec![0usize; n + 1];
-        let bounds = self.algebraic_bond_bounds();
-        let mut dims = vec![0usize; n + 1];
+        let bond_count = checked_frame_add(n, 1, "ACI bond count")?;
+        let mut growth = vec![0usize; bond_count];
+        let bounds = self.algebraic_bond_bounds()?;
+        let mut dims = vec![0usize; bond_count];
         for (bond, dim) in self.solution.link_dims().iter().enumerate() {
             dims[bond + 1] = *dim;
         }
@@ -623,13 +627,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                         )?;
                     }
                 }
-                growth[bond] += 1;
-                dims[bond] += 1;
+                growth[bond] = checked_frame_add(growth[bond], 1, "bond growth count")?;
+                dims[bond] = checked_frame_add(dims[bond], 1, "bond dimension")?;
                 injected = true;
             }
 
             if injected {
-                new_pivots += 1;
+                new_pivots = checked_frame_add(new_pivots, 1, "injected pivot count")?;
             }
         }
         if new_pivots > 0 {
@@ -643,23 +647,26 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     /// Entry `k` refers to the bond between sites `k - 1` and `k` and is the
     /// largest number of linearly independent rows (or columns) its frames can
     /// hold; entries `0` and `n` are the trivial boundary bonds and are `1`.
-    /// Products are computed with saturating arithmetic, so a site space too
-    /// large to count simply never reports saturation.
-    fn algebraic_bond_bounds(&self) -> Vec<usize> {
+    /// Products are checked and reported as an [`AciError::InvalidInitialGuess`]
+    /// when the index-space size overflows `usize`.
+    fn algebraic_bond_bounds(&self) -> Result<Vec<usize>> {
         let n = self.len();
         let dims: Vec<usize> = (0..n).map(|site| self.solution.site_dim(site)).collect();
-        let mut left_space = vec![1usize; n + 1];
+        let bond_count = checked_frame_add(n, 1, "ACI bond count")?;
+        let mut left_space = vec![1usize; bond_count];
         for site in 0..n {
-            left_space[site + 1] = left_space[site].saturating_mul(dims[site]);
+            left_space[site + 1] =
+                checked_frame_mul(left_space[site], dims[site], "left index-space size")?;
         }
-        let mut right_space = vec![1usize; n + 1];
+        let mut right_space = vec![1usize; bond_count];
         for site in (0..n).rev() {
-            right_space[site] = right_space[site + 1].saturating_mul(dims[site]);
+            right_space[site] =
+                checked_frame_mul(right_space[site + 1], dims[site], "right index-space size")?;
         }
 
-        (0..=n)
+        Ok((0..=n)
             .map(|bond| left_space[bond].min(right_space[bond]))
-            .collect()
+            .collect())
     }
 
     /// Grow internal bond `k` of the solution by `growth[k]` with zero padding.
@@ -676,12 +683,12 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         if growth.iter().all(|&g| g == 0) {
             return Ok(());
         }
-        if growth.len() != n + 1 {
+        let expected_growth_len = checked_frame_add(n, 1, "bond growth length")?;
+        if growth.len() != expected_growth_len {
             return Err(AciError::InvalidInitialGuess {
                 message: format!(
-                    "bond growth has {} entries, expected {} for {n} sites",
+                    "bond growth has {} entries, expected {expected_growth_len} for {n} sites",
                     growth.len(),
-                    n + 1
                 ),
             });
         }
@@ -694,14 +701,16 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let new_left = if site == 0 {
                 left_dim
             } else {
-                left_dim + growth[site]
+                checked_frame_add(left_dim, growth[site], "padded left bond dimension")?
             };
             let new_right = if site == n - 1 {
                 right_dim
             } else {
-                right_dim + growth[site + 1]
+                checked_frame_add(right_dim, growth[site + 1], "padded right bond dimension")?
             };
-            let mut data = vec![T::zero(); new_left * site_dim * new_right];
+            let core_len = checked_frame_mul(new_left, site_dim, "padded core size")?;
+            let core_len = checked_frame_mul(core_len, new_right, "padded core size")?;
+            let mut data = vec![T::zero(); core_len];
             for r in 0..right_dim {
                 for s in 0..site_dim {
                     for l in 0..left_dim {
@@ -856,7 +865,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let current = &solution_cores[site];
             let site_dim = current.site_dim();
             let right_dim = current.right_dim();
-            let matrix = right_matrix_julia_order(current);
+            let matrix = right_matrix_julia_order(current)?;
             let factors = matrix_luci_factors_from_matrix(
                 &matrix,
                 Some(RrLUOptions {
@@ -901,7 +910,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let previous = &solution_cores[site - 1];
             let previous_left_dim = previous.left_dim();
             let previous_site_dim = previous.site_dim();
-            let previous_matrix = left_matrix_julia_order(previous);
+            let previous_matrix = left_matrix_julia_order(previous)?;
             let product = matmul_checked_owned(previous_matrix, left_factor, site - 1)?;
             solution_cores[site - 1] =
                 matrix_into_tensor3(product, previous_left_dim, previous_site_dim, new_rank)?;
@@ -1066,17 +1075,27 @@ fn checked_frame_mul(lhs: usize, rhs: usize, description: &str) -> Result<usize>
         })
 }
 
+fn checked_frame_add(lhs: usize, rhs: usize, description: &str) -> Result<usize> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| AciError::InvalidInitialGuess {
+            message: format!("{description} overflows usize"),
+        })
+}
+
 fn missing_frame(kind: &'static str, input: usize, site: usize) -> AciError {
     AciError::InvalidInitialGuess {
         message: format!("{kind} frame for input {input}, site {site} is not initialized"),
     }
 }
 
-fn right_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Matrix<T> {
+fn right_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Result<Matrix<T>> {
     let left_dim = core.left_dim();
     let site_dim = core.site_dim();
     let right_dim = core.right_dim();
-    let mut data = Vec::with_capacity(left_dim * site_dim * right_dim);
+    let core_len = checked_frame_mul(left_dim, site_dim, "right matrix core size")?;
+    let core_len = checked_frame_mul(core_len, right_dim, "right matrix core size")?;
+    let output_cols = checked_frame_mul(site_dim, right_dim, "right matrix column count")?;
+    let mut data = Vec::with_capacity(core_len);
     for right in 0..right_dim {
         for site in 0..site_dim {
             for left in 0..left_dim {
@@ -1084,14 +1103,17 @@ fn right_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Matrix<T> {
             }
         }
     }
-    Matrix::from_col_major_vec(left_dim, site_dim * right_dim, data)
+    Ok(Matrix::from_col_major_vec(left_dim, output_cols, data))
 }
 
-fn left_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Matrix<T> {
+fn left_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Result<Matrix<T>> {
     let left_dim = core.left_dim();
     let site_dim = core.site_dim();
     let right_dim = core.right_dim();
-    let mut data = Vec::with_capacity(left_dim * site_dim * right_dim);
+    let core_len = checked_frame_mul(left_dim, site_dim, "left matrix core size")?;
+    let core_len = checked_frame_mul(core_len, right_dim, "left matrix core size")?;
+    let row_count = checked_frame_mul(left_dim, site_dim, "left matrix row count")?;
+    let mut data = Vec::with_capacity(core_len);
     for right in 0..right_dim {
         for site in 0..site_dim {
             for left in 0..left_dim {
@@ -1099,7 +1121,7 @@ fn left_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Matrix<T> {
             }
         }
     }
-    Matrix::from_col_major_vec(left_dim * site_dim, right_dim, data)
+    Ok(Matrix::from_col_major_vec(row_count, right_dim, data))
 }
 
 pub(crate) fn matrix_to_tensor3<T: AciScalar>(
@@ -1108,7 +1130,8 @@ pub(crate) fn matrix_to_tensor3<T: AciScalar>(
     site_dim: usize,
     right_dim: usize,
 ) -> Result<Tensor3<T>> {
-    if matrix.nrows() != left_dim * site_dim || matrix.ncols() != right_dim {
+    let expected_rows = checked_frame_mul(left_dim, site_dim, "tensor core row count")?;
+    if matrix.nrows() != expected_rows || matrix.ncols() != right_dim {
         return Err(AciError::InvalidInitialGuess {
             message: format!(
                 "cannot reshape matrix of shape ({}, {}) to tensor core ({left_dim}, \
@@ -1132,7 +1155,8 @@ pub(crate) fn matrix_into_tensor3<T: AciScalar>(
     site_dim: usize,
     right_dim: usize,
 ) -> Result<Tensor3<T>> {
-    if matrix.nrows() != left_dim * site_dim || matrix.ncols() != right_dim {
+    let expected_rows = checked_frame_mul(left_dim, site_dim, "tensor core row count")?;
+    if matrix.nrows() != expected_rows || matrix.ncols() != right_dim {
         return Err(AciError::InvalidInitialGuess {
             message: format!(
                 "cannot reshape matrix of shape ({}, {}) to tensor core ({left_dim}, \
@@ -1156,7 +1180,8 @@ pub(crate) fn right_factor_to_tensor3<T: AciScalar>(
     site_dim: usize,
     right_dim: usize,
 ) -> Result<Tensor3<T>> {
-    if matrix.nrows() != left_dim || matrix.ncols() != site_dim * right_dim {
+    let expected_cols = checked_frame_mul(site_dim, right_dim, "tensor core column count")?;
+    if matrix.nrows() != left_dim || matrix.ncols() != expected_cols {
         return Err(AciError::InvalidInitialGuess {
             message: format!(
                 "cannot reshape right factor of shape ({}, {}) to tensor core ({left_dim}, \
@@ -1180,7 +1205,8 @@ pub(crate) fn right_factor_into_tensor3<T: AciScalar>(
     site_dim: usize,
     right_dim: usize,
 ) -> Result<Tensor3<T>> {
-    if matrix.nrows() != left_dim || matrix.ncols() != site_dim * right_dim {
+    let expected_cols = checked_frame_mul(site_dim, right_dim, "tensor core column count")?;
+    if matrix.nrows() != left_dim || matrix.ncols() != expected_cols {
         return Err(AciError::InvalidInitialGuess {
             message: format!(
                 "cannot reshape right factor of shape ({}, {}) to tensor core ({left_dim}, \
@@ -1324,7 +1350,8 @@ fn append_row<T: AciScalar>(frame: &mut Matrix<T>, row: &[T]) -> Result<()> {
     }
     let mut data = frame.as_col_major_slice().to_vec();
     data.extend_from_slice(row);
-    *frame = Matrix::from_col_major_vec(frame.nrows() + 1, frame.ncols(), data);
+    let rows = checked_frame_add(frame.nrows(), 1, "appended frame row count")?;
+    *frame = Matrix::from_col_major_vec(rows, frame.ncols(), data);
     Ok(())
 }
 
@@ -1365,6 +1392,18 @@ fn append_col<T: AciScalar>(frame: &mut Matrix<T>, col: &[T]) -> Result<()> {
     for value in col {
         data.push(*value);
     }
-    *frame = Matrix::from_col_major_vec(frame.nrows(), frame.ncols() + 1, data);
+    let cols = checked_frame_add(frame.ncols(), 1, "appended frame column count")?;
+    *frame = Matrix::from_col_major_vec(frame.nrows(), cols, data);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{checked_frame_add, checked_frame_mul};
+
+    #[test]
+    fn frame_shape_helpers_reject_overflow() {
+        assert!(checked_frame_mul(usize::MAX, 2, "product").is_err());
+        assert!(checked_frame_add(usize::MAX, 1, "sum").is_err());
+    }
 }
