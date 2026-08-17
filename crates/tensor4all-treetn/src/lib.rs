@@ -39,6 +39,7 @@ mod node_name_network;
 mod operator;
 mod options;
 mod random;
+#[cfg(feature = "simplett-bridge")]
 mod simplett_bridge;
 mod site_index_network;
 mod tdvp;
@@ -68,6 +69,7 @@ pub use operator::{
 };
 pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
+#[cfg(feature = "simplett-bridge")]
 pub use simplett_bridge::{
     fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
     tensor_train_to_treetn, tensor_train_to_treetn_with_names,
