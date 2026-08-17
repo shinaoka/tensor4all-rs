@@ -13,7 +13,9 @@ use tensor4all_core::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex,
     RrLUOptions, Scalar,
 };
-use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
+use tensor4all_simplett::{
+    tensor3_zeros, try_tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops,
+};
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
@@ -912,7 +914,9 @@ where
         // Build Pi matrix by evaluating function at all (I, J) combinations
         let ni = is.len();
         let nj = js.len();
-        let mut pi = Matrix::zeros(ni, nj);
+        let mut pi = Matrix::try_zeros(ni, nj).map_err(|error| TCIError::InvalidOperation {
+            message: format!("two-site candidate matrix construction failed: {error}"),
+        })?;
         for (i, i_multi) in is.iter().enumerate() {
             for (j, j_multi) in js.iter().enumerate() {
                 let mut full_idx = i_multi.clone();
@@ -962,11 +966,17 @@ where
             if forward {
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
                 let right_dim = factors.rank.max(1);
-                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim);
+                let mut tensor = try_tensor3_zeros(left_dim, local_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..local_dim {
                         for r in 0..right_dim {
-                            let row = l * local_dim + s;
+                            let row = l
+                                .checked_mul(local_dim)
+                                .and_then(|row| row.checked_add(s))
+                                .ok_or_else(|| TCIError::InvalidOperation {
+                                    message: "TensorCI2 site row offset overflowed usize"
+                                        .to_string(),
+                                })?;
                             if row < mat.nrows() && r < mat.ncols() {
                                 tensor.set3(l, s, r, mat[[row, r]]);
                             }
@@ -981,11 +991,17 @@ where
                 } else {
                     self.j_set[b].len()
                 };
-                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim);
+                let mut tensor = try_tensor3_zeros(left_dim, local_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..local_dim {
                         for r in 0..right_dim {
-                            let col = s * right_dim + r;
+                            let col = s
+                                .checked_mul(right_dim)
+                                .and_then(|col| col.checked_add(r))
+                                .ok_or_else(|| TCIError::InvalidOperation {
+                                    message: "TensorCI2 site column offset overflowed usize"
+                                        .to_string(),
+                                })?;
                             if l < mat.nrows() && col < mat.ncols() {
                                 tensor.set3(l, s, r, mat[[l, col]]);
                             }
@@ -1045,14 +1061,17 @@ where
                 } else {
                     self.i_set[b + 1].len().max(1)
                 };
-                self.site_tensors[b] = tensor3_zeros(left_dim, self.local_dims[b], right_dim);
+                self.site_tensors[b] = try_tensor3_zeros(left_dim, self.local_dims[b], right_dim)?;
                 continue;
             }
 
             // Pi1: evaluate f at (Kronecker(I_b, d_b), J_b)
             let ni = i_kron.len();
             let nj = j_set_b.len();
-            let mut pi1 = Matrix::zeros(ni, nj);
+            let mut pi1 =
+                Matrix::try_zeros(ni, nj).map_err(|error| TCIError::InvalidOperation {
+                    message: format!("one-site candidate matrix construction failed: {error}"),
+                })?;
             for (i, i_multi) in i_kron.iter().enumerate() {
                 for (j, j_multi) in j_set_b.iter().enumerate() {
                     let mut full_idx = i_multi.clone();
@@ -1066,10 +1085,15 @@ where
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
                 let site_dim = self.local_dims[b];
                 let right_dim = 1; // last site
-                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+                let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..site_dim {
-                        let row = l * site_dim + s;
+                        let row = l
+                            .checked_mul(site_dim)
+                            .and_then(|row| row.checked_add(s))
+                            .ok_or_else(|| TCIError::InvalidOperation {
+                                message: "TensorCI2 site row offset overflowed usize".to_string(),
+                            })?;
                         if row < ni {
                             tensor.set3(l, s, 0, pi1[[row, 0]]);
                         }
@@ -1082,7 +1106,10 @@ where
                 let i_set_bp1 = self.i_set[b + 1].clone();
                 let np = i_set_bp1.len();
 
-                let mut p_mat = Matrix::zeros(np, nj);
+                let mut p_mat =
+                    Matrix::try_zeros(np, nj).map_err(|error| TCIError::InvalidOperation {
+                        message: format!("one-site pivot matrix construction failed: {error}"),
+                    })?;
                 for (i, i_multi) in i_set_bp1.iter().enumerate() {
                     for (j, j_multi) in j_set_b.iter().enumerate() {
                         let mut full_idx = i_multi.clone();
@@ -1099,7 +1126,7 @@ where
                 // this subdomain) cannot be solved; emit a zero core with the
                 // same bond shape instead of failing the solve.
                 if (0..np).all(|i| (0..nj).all(|j| Scalar::abs_val(p_mat[[i, j]]) < f64::EPSILON)) {
-                    self.site_tensors[b] = tensor3_zeros(left_dim, site_dim, right_dim);
+                    self.site_tensors[b] = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
                     continue;
                 }
 
@@ -1111,11 +1138,17 @@ where
                 })?;
 
                 // X = X_t^T → shape (ni, np) = (|I_b|*d_b, |I_{b+1}|)
-                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+                let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..site_dim {
                         for r in 0..right_dim {
-                            let row = l * site_dim + s;
+                            let row = l
+                                .checked_mul(site_dim)
+                                .and_then(|row| row.checked_add(s))
+                                .ok_or_else(|| TCIError::InvalidOperation {
+                                    message: "TensorCI2 site row offset overflowed usize"
+                                        .to_string(),
+                                })?;
                             tensor.set3(l, s, r, x_t[[r, row]]);
                         }
                     }
@@ -1895,11 +1928,16 @@ where
     let site_dim_b = tci.local_dims[b];
     let new_bond_dim = factors.rank.max(1);
 
-    let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim);
+    let mut tensor_b = try_tensor3_zeros(left_dim, site_dim_b, new_bond_dim)?;
     for l in 0..left_dim {
         for s in 0..site_dim_b {
             for r in 0..new_bond_dim {
-                let row = l * site_dim_b + s;
+                let row = l
+                    .checked_mul(site_dim_b)
+                    .and_then(|row| row.checked_add(s))
+                    .ok_or_else(|| TCIError::InvalidOperation {
+                        message: "TensorCI2 site row offset overflowed usize".to_string(),
+                    })?;
                 if row < factors.left.nrows() && r < factors.left.ncols() {
                     tensor_b.set3(l, s, r, factors.left[[row, r]]);
                 }
@@ -1916,11 +1954,16 @@ where
         tci.j_set[b + 1].len()
     };
 
-    let mut tensor_bp1 = tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim);
+    let mut tensor_bp1 = try_tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim)?;
     for l in 0..new_bond_dim {
         for s in 0..site_dim_bp1 {
             for r in 0..right_dim {
-                let col = s * right_dim + r;
+                let col = s
+                    .checked_mul(right_dim)
+                    .and_then(|col| col.checked_add(r))
+                    .ok_or_else(|| TCIError::InvalidOperation {
+                        message: "TensorCI2 site column offset overflowed usize".to_string(),
+                    })?;
                 if l < factors.right.nrows() && col < factors.right.ncols() {
                     tensor_bp1.set3(l, s, r, factors.right[[l, col]]);
                 }
