@@ -794,13 +794,16 @@ where
         j_indices: &[MultiIndex],
         local_dim: usize,
         site: usize,
-    ) -> Tensor3<T>
+    ) -> Result<Tensor3<T>>
     where
         F: Fn(&MultiIndex) -> T,
     {
         let ni = i_indices.len();
         let nj = j_indices.len();
-        let mut tensor = tensor3_zeros(ni, local_dim, nj);
+        let mut tensor =
+            try_tensor3_zeros(ni, local_dim, nj).map_err(|error| TCIError::InvalidOperation {
+                message: format!("TensorCI2 site tensor construction failed: {error}"),
+            })?;
         for (ii, i_multi) in i_indices.iter().enumerate() {
             for s in 0..local_dim {
                 for (jj, j_multi) in j_indices.iter().enumerate() {
@@ -820,7 +823,7 @@ where
                 }
             }
         }
-        tensor
+        Ok(tensor)
     }
 
     /// Perform a 1-site sweep, updating I/J sets and optionally site tensors.
@@ -881,7 +884,7 @@ where
                 &self.j_set[last_idx].clone(),
                 self.local_dims[last_idx],
                 last_idx,
-            );
+            )?;
             self.site_tensors[last_idx] = tensor;
         }
 

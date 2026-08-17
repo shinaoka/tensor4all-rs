@@ -313,7 +313,10 @@ where
                 ),
             });
         }
-        let mut tensor = tensor4all_simplett::tensor3_zeros(left_dim, site_dim, new_bond_dim);
+        let mut tensor = tensor4all_simplett::try_tensor3_zeros(left_dim, site_dim, new_bond_dim)
+            .map_err(|error| TCIError::InvalidOperation {
+            message: format!("TensorCI2 conversion tensor construction failed: {error}"),
+        })?;
         for r in 0..new_bond_dim {
             for l in 0..left_dim {
                 for s in 0..site_dim {
@@ -332,7 +335,10 @@ where
                 ),
             });
         }
-        let mut tensor = tensor4all_simplett::tensor3_zeros(new_bond_dim, site_dim, right_dim);
+        let mut tensor = tensor4all_simplett::try_tensor3_zeros(new_bond_dim, site_dim, right_dim)
+            .map_err(|error| TCIError::InvalidOperation {
+                message: format!("TensorCI2 conversion tensor construction failed: {error}"),
+            })?;
         for l in 0..new_bond_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {

@@ -5,7 +5,7 @@ use tensor4all_core::{
     AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
 };
 use tensor4all_simplett::{
-    tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
+    tensor3_zeros, try_tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScalar};
 
@@ -735,13 +735,23 @@ where
                 .ok_or_else(|| TCIError::InvalidOperation {
                     message: "TensorCI1 site column count overflowed usize".to_string(),
                 })?;
-        let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+        let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim).map_err(|error| {
+            TCIError::InvalidOperation {
+                message: format!("TensorCI1 site tensor construction failed: {error}"),
+            }
+        })?;
 
         if matrix.nrows() == left_rows && matrix.ncols() == right_dim {
             for left in 0..left_dim {
                 for local in 0..site_dim {
                     for right in 0..right_dim {
-                        tensor.set3(left, local, right, matrix[[left * site_dim + local, right]]);
+                        let row = left
+                            .checked_mul(site_dim)
+                            .and_then(|row| row.checked_add(local))
+                            .ok_or_else(|| TCIError::InvalidOperation {
+                                message: "TensorCI1 site row offset overflowed usize".to_string(),
+                            })?;
+                        tensor.set3(left, local, right, matrix[[row, right]]);
                     }
                 }
             }
@@ -1091,7 +1101,13 @@ fn tensor_from_left_matrix<T>(
 where
     T: Scalar + TTScalar,
 {
-    if matrix.nrows() != left_dim * site_dim || matrix.ncols() != right_dim {
+    let expected_rows =
+        left_dim
+            .checked_mul(site_dim)
+            .ok_or_else(|| TCIError::InvalidOperation {
+                message: "TensorCI1 tensor row count overflowed usize".to_string(),
+            })?;
+    if matrix.nrows() != expected_rows || matrix.ncols() != right_dim {
         return Err(TCIError::DimensionMismatch {
             message: format!(
                 "cannot reshape {}x{} matrix into tensor shape ({left_dim}, {site_dim}, {right_dim})",
@@ -1100,11 +1116,21 @@ where
             ),
         });
     }
-    let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+    let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim).map_err(|error| {
+        TCIError::InvalidOperation {
+            message: format!("TensorCI1 site tensor construction failed: {error}"),
+        }
+    })?;
     for left in 0..left_dim {
         for local in 0..site_dim {
             for right in 0..right_dim {
-                tensor.set3(left, local, right, matrix[[left * site_dim + local, right]]);
+                let row = left
+                    .checked_mul(site_dim)
+                    .and_then(|row| row.checked_add(local))
+                    .ok_or_else(|| TCIError::InvalidOperation {
+                        message: "TensorCI1 site row offset overflowed usize".to_string(),
+                    })?;
+                tensor.set3(left, local, right, matrix[[row, right]]);
             }
         }
     }
