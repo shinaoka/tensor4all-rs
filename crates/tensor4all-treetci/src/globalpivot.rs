@@ -131,7 +131,13 @@ where
     }
 
     // Evaluate the function at all candidates in one batch.
-    let flat: Vec<usize> = points.iter().flat_map(|p| p.iter().copied()).collect();
+    let flat_len = n_sites
+        .checked_mul(points.len())
+        .ok_or_else(|| anyhow::anyhow!("global-pivot flat batch size overflowed usize"))?;
+    let mut flat = Vec::with_capacity(flat_len);
+    for point in &points {
+        flat.extend_from_slice(point);
+    }
     let f_values = evaluate(GlobalIndexBatch::new(&flat, n_sites, points.len())?)?;
     if f_values.len() != points.len() {
         return Err(anyhow::anyhow!(
