@@ -287,8 +287,18 @@ where
     T: TTScalar + Default,
 {
     let (left_dim, site_dim, right_dim) = shape;
+    let left_rows = left_dim
+        .checked_mul(site_dim)
+        .ok_or_else(|| TCIError::InvalidOperation {
+            message: "TensorCI conversion left matrix row count overflowed usize".to_string(),
+        })?;
+    let right_cols = site_dim
+        .checked_mul(right_dim)
+        .ok_or_else(|| TCIError::InvalidOperation {
+            message: "TensorCI conversion right matrix column count overflowed usize".to_string(),
+        })?;
     if forward != next {
-        if matrix.nrows() != left_dim * site_dim || matrix.ncols() != new_bond_dim {
+        if matrix.nrows() != left_rows || matrix.ncols() != new_bond_dim {
             return Err(TCIError::DimensionMismatch {
                 message: format!(
                     "cannot reshape conversion matrix {}x{} into ({left_dim}, {site_dim}, {new_bond_dim})",
@@ -307,7 +317,7 @@ where
         }
         Ok(tensor)
     } else {
-        if matrix.nrows() != new_bond_dim || matrix.ncols() != site_dim * right_dim {
+        if matrix.nrows() != new_bond_dim || matrix.ncols() != right_cols {
             return Err(TCIError::DimensionMismatch {
                 message: format!(
                     "cannot reshape conversion matrix {}x{} into ({new_bond_dim}, {site_dim}, {right_dim})",
