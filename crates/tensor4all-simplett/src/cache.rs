@@ -15,10 +15,14 @@ use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 
 /// Compute total bits needed for index space
 fn compute_total_bits(local_dims: &[usize]) -> u32 {
-    local_dims
-        .iter()
-        .map(|&d| if d <= 1 { 0 } else { (d as u64).ilog2() + 1 })
-        .sum()
+    local_dims.iter().fold(0u32, |bits, &dim| {
+        let dim_bits = if dim <= 1 {
+            0
+        } else {
+            (dim as u64).ilog2().saturating_add(1)
+        };
+        bits.saturating_add(dim_bits)
+    })
 }
 
 /// Index key types for different bit widths
