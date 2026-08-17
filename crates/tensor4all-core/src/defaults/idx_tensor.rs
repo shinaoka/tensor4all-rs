@@ -1080,6 +1080,21 @@ impl IdxTensor {
         axis_classes.len() >= 2 && axis_classes.iter().all(|&class_id| class_id == 0)
     }
 
+    fn validate_axis_classes(axis_classes: &[usize], rank: usize) -> Result<()> {
+        if axis_classes.len() != rank {
+            return Err(anyhow::anyhow!(
+                "axis-class rank {} does not match tensor rank {rank}",
+                axis_classes.len()
+            ));
+        }
+        if Self::canonicalize_axis_classes(axis_classes) != axis_classes {
+            return Err(anyhow::anyhow!(
+                "axis classes must be canonical first-occurrence labels: {axis_classes:?}"
+            ));
+        }
+        Ok(())
+    }
+
     fn einsum_subscripts_from_usize_ids(
         inputs: &[Vec<usize>],
         output: &[usize],
@@ -1377,12 +1392,12 @@ impl IdxTensor {
         axis_classes: &[usize],
         logical_dims: &[usize],
     ) -> Result<EagerTensor> {
-        let payload_rank = axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|class_id| class_id + 1)
-            .unwrap_or(0);
+        let payload_rank = match axis_classes.iter().copied().max() {
+            Some(class_id) => class_id
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("structured payload class rank overflows usize"))?,
+            None => 0,
+        };
         if !(payload.shape().len() == payload_rank) {
             return Err(anyhow::anyhow!(
                 "structured payload rank {} does not match axis classes {:?}",
@@ -2971,7 +2986,8 @@ impl IdxTensor {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_diag_dims(&dims)?;
-        Self::validate_diag_payload_len(payload_inner.shape().iter().product(), &dims)?;
+        let payload_len = checked_product(payload_inner.shape())?;
+        Self::validate_diag_payload_len(payload_len, &dims)?;
         let axis_classes = Self::diag_axis_classes(dims.len());
         let diag_inner = payload_inner.embed_diag(0, 1)?;
         Self::from_inner_with_axis_classes(indices, diag_inner, axis_classes)
@@ -3001,6 +3017,7 @@ impl IdxTensor {
         profile_pairwise_contract_section("from_inner_validate_indices", || {
             Self::validate_indices(&indices)
         })?;
+        Self::validate_axis_classes(&axis_classes, indices.len())?;
         if dims != inner.shape() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
