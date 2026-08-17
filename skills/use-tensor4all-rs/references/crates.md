@@ -143,14 +143,14 @@ Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than reaching into core internals.
 
 - `Projector` — maps site `DynIndex` → fixed coordinate, defining a subdomain.
-  - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])`.
-  - `.get(&idx) -> Option<usize>`, `.is_projected_at(&idx)`, `.insert(idx, value)`, `.projected_indices()`, `.len()`, `.is_empty()`.
+  - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])?`.
+  - `.get(&idx) -> Option<usize>`, `.is_projected_at(&idx)`, `.insert(idx, value)?`, `.projected_indices()`, `.len()`, `.is_empty()`.
 - `SubDomainTT` — an itensorlike `TensorTrain` plus its `Projector`.
-  - `SubDomainTT::new(tt, projector)`, `SubDomainTT::from_tt(tt)` (empty projector).
-  - `.data()`, `.data_mut()`, `.projector()`, `.max_bond_dim()`, `.into_data()`, `.all_indices()`.
-- `PartitionedTT` — collection of mutually disjoint `SubDomainTT`s (disjointness validated at construction).
-  - `PartitionedTT::from_subdomains(vec)?`, `::from_subdomain(one)`, `::new()`.
-  - `.len()`, `.is_empty()`, `.projectors()`, `.iter()`, `.values()`, `.values_mut()`, `.contains(&projector)`.
+  - `SubDomainTT::new(tt, projector)?`, `SubDomainTT::from_tt(tt)` (empty projector).
+  - `.data()`, `.projector()`, `.max_bond_dim()`, `.into_data()`, `.all_indices()`.
+- `PartitionedTT` — collection of mutually disjoint `SubDomainTT`s (disjointness validated at construction and insertion).
+  - `PartitionedTT::from_subdomains(vec)?`, `::from_subdomain(one)?`, `::new()`.
+  - `.len()`, `.is_empty()`, `.projectors()`, `.iter()`, `.values()`, `.contains(&projector)`.
   - `.to_tensor_train() -> Result<SimpleTensorTrain>` — recombine all patches into one TT (drops the partition structure).
   - `.contract(&other, &ContractOptions)?` (also free `contract` / `proj_contract`).
 - Adaptive patching — bond-cap-driven splitting plus volume-proportional truncation:

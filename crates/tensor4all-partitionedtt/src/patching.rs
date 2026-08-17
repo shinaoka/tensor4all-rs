@@ -255,10 +255,10 @@ pub fn add_with_patching(
 /// let right_l12 = Index::new_dyn(3);
 /// let left = PartitionedTT::from_subdomain(SubDomainTT::from_tt(three_site_tt(
 ///     &s0, &left_l01, &s1, &left_l12, &s2,
-/// )?));
+/// )?))?;
 /// let right = PartitionedTT::from_subdomain(SubDomainTT::from_tt(three_site_tt(
 ///     &s0, &right_l01, &s1, &right_l12, &s2,
-/// )?));
+/// )?))?;
 /// let patching = PatchingOptions {
 ///     rtol: 0.0,
 ///     max_bond_dim: Some(1),
@@ -333,10 +333,10 @@ pub fn contract_adaptive(
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let s0 = Index::new_dyn(2);
 /// let s1 = Index::new_dyn(2);
-/// let high_proj = Projector::from_pairs([(s0.clone(), 0)]);
-/// let low_proj = Projector::from_pairs([(s0.clone(), 1)]);
-/// let high = SubDomainTT::new(rank_one_tt(&s0, &s1, 10.0)?, high_proj.clone());
-/// let low = SubDomainTT::new(rank_one_tt(&s0, &s1, 0.01)?, low_proj.clone());
+/// let high_proj = Projector::from_pairs([(s0.clone(), 0)])?;
+/// let low_proj = Projector::from_pairs([(s0.clone(), 1)])?;
+/// let high = SubDomainTT::new(rank_one_tt(&s0, &s1, 10.0)?, high_proj.clone())?;
+/// let low = SubDomainTT::new(rank_one_tt(&s0, &s1, 0.01)?, low_proj.clone())?;
 /// let partitioned = PartitionedTT::from_subdomains(vec![high, low])?;
 ///
 /// let truncated = truncate_adaptive(&partitioned, 0.01, Some(4))?;
@@ -679,7 +679,7 @@ fn split_subdomain(subdomain: &SubDomainTT, index: &DynIndex) -> Result<Vec<SubD
         .map(|budget_squared| budget_squared / index.dim as f64);
     let mut children = Vec::with_capacity(index.dim);
     for value in 0..index.dim {
-        let projector = Projector::from_pairs([(index.clone(), value)]);
+        let projector = Projector::from_pairs([(index.clone(), value)])?;
         let child = subdomain.project(&projector)?.ok_or_else(|| {
             PartitionedTTError::IncompatibleProjectors(
                 "split projector was incompatible with subdomain projector".to_string(),

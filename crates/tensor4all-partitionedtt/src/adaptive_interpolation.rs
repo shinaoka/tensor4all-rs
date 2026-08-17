@@ -179,7 +179,7 @@ where
                 &site_indices,
             ));
             let tt = rank_one_full_tt(&site_indices, &patch.projector, value)?;
-            accepted.push(SubDomainTT::new(tt, patch.projector));
+            accepted.push(SubDomainTT::new(tt, patch.projector)?);
             continue;
         }
 
@@ -207,7 +207,7 @@ where
                 &active_positions,
                 &patch.projector,
             )?;
-            accepted.push(SubDomainTT::new(tt, patch.projector));
+            accepted.push(SubDomainTT::new(tt, patch.projector)?);
             continue;
         }
 
@@ -237,7 +237,7 @@ where
             .all(|value| Scalar::abs_val(*value) < ZERO_SAMPLE_THRESHOLD)
         {
             let tt = rank_one_full_tt(&site_indices, &patch.projector, T::zero())?;
-            accepted.push(SubDomainTT::new(tt, patch.projector));
+            accepted.push(SubDomainTT::new(tt, patch.projector)?);
             continue;
         }
 
@@ -296,7 +296,7 @@ where
                 &active_positions,
                 &patch.projector,
             )?;
-            accepted.push(SubDomainTT::new(tt, patch.projector));
+            accepted.push(SubDomainTT::new(tt, patch.projector)?);
             continue;
         }
 
@@ -316,7 +316,7 @@ where
         };
         for value in 0..split_index.dim {
             let mut child_projector = patch.projector.clone();
-            child_projector.insert(split_index.clone(), value);
+            child_projector.insert(split_index.clone(), value)?;
             pending.push_back(PendingPatch {
                 projector: child_projector,
                 recycled_pivots: recycled_pivots.clone(),

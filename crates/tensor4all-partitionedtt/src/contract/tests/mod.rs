@@ -1,4 +1,12 @@
 use super::*;
+
+fn projector(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Projector {
+    Projector::from_pairs(pairs).unwrap()
+}
+
+fn subdomain(data: TensorTrain, projector: Projector) -> SubDomainTT {
+    SubDomainTT::new(data, projector).unwrap()
+}
 use num_complex::Complex64;
 use tensor4all_core::index::Index;
 use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike, TensorElement};
@@ -116,10 +124,10 @@ fn test_projector_compatibility_check() {
     let (s0, l01, s1, l12, s2) = make_contraction_indices();
 
     let tt1 = make_tt_generic::<f64>(&s0, &l01, &s1);
-    let m1 = SubDomainTT::new(tt1, Projector::from_pairs([(s0.clone(), 0)]));
+    let m1 = subdomain(tt1, projector([(s0.clone(), 0)]));
 
     let tt2 = make_tt_generic::<f64>(&s1, &l12, &s2);
-    let m2 = SubDomainTT::new(tt2, Projector::from_pairs([(s2.clone(), 0)]));
+    let m2 = subdomain(tt2, projector([(s2.clone(), 0)]));
 
     // Projectors are compatible (different indices)
     assert!(m1.projector().is_compatible_with(m2.projector()));
@@ -130,11 +138,11 @@ fn test_projector_incompatibility_check() {
     let (s0, l01, s1, l12, s2) = make_contraction_indices();
 
     let tt1 = make_tt_generic::<f64>(&s0, &l01, &s1);
-    let m1 = SubDomainTT::new(tt1, Projector::from_pairs([(s1.clone(), 0)]));
+    let m1 = subdomain(tt1, projector([(s1.clone(), 0)]));
 
     let tt2 = make_tt_generic::<f64>(&s1, &l12, &s2);
     // Incompatible: same shared index s1, different values
-    let m2 = SubDomainTT::new(tt2, Projector::from_pairs([(s1.clone(), 1)]));
+    let m2 = subdomain(tt2, projector([(s1.clone(), 1)]));
 
     // Projectors conflict (s1=0 vs s1=1)
     assert!(!m1.projector().is_compatible_with(m2.projector()));
@@ -146,11 +154,11 @@ fn test_contract_compatible_projectors() {
 
     // TT1 with projector on s0
     let tt1 = make_tt_generic::<f64>(&s0, &l01, &s1);
-    let m1 = SubDomainTT::new(tt1, Projector::from_pairs([(s0.clone(), 0)]));
+    let m1 = subdomain(tt1, projector([(s0.clone(), 0)]));
 
     // TT2 with projector on s2
     let tt2 = make_tt_generic::<f64>(&s1, &l12, &s2);
-    let m2 = SubDomainTT::new(tt2, Projector::from_pairs([(s2.clone(), 1)]));
+    let m2 = subdomain(tt2, projector([(s2.clone(), 1)]));
 
     // Contract: s1 is contracted away, result has s0 and s2
     let options = ContractOptions::default();
@@ -172,11 +180,11 @@ fn test_contract_incompatible_projectors() {
 
     // TT1 with projector s1=0
     let tt1 = make_tt_generic::<f64>(&s0, &l01, &s1);
-    let m1 = SubDomainTT::new(tt1, Projector::from_pairs([(s1.clone(), 0)]));
+    let m1 = subdomain(tt1, projector([(s1.clone(), 0)]));
 
     // TT2 with conflicting projector s1=1
     let tt2 = make_tt_generic::<f64>(&s1, &l12, &s2);
-    let m2 = SubDomainTT::new(tt2, Projector::from_pairs([(s1.clone(), 1)]));
+    let m2 = subdomain(tt2, projector([(s1.clone(), 1)]));
 
     // Contract should return None due to incompatible projectors
     let options = ContractOptions::default();
@@ -221,7 +229,7 @@ fn test_proj_contract_projector_filtering() {
     let tt1 = make_tt_generic::<f64>(&s0, &l01, &s1);
     let m1 = SubDomainTT::from_tt(tt1);
 
-    let proj = Projector::from_pairs([(s0.clone(), 0)]);
+    let proj = projector([(s0.clone(), 0)]);
 
     // Project should work since m1 has empty projector (compatible with anything)
     let projected = m1.project(&proj).unwrap();
@@ -242,7 +250,7 @@ fn test_proj_contract() {
     let m2 = SubDomainTT::from_tt(tt2);
 
     // Project both to s0=0, then contract
-    let proj = Projector::from_pairs([(s0.clone(), 0)]);
+    let proj = projector([(s0.clone(), 0)]);
     let options = ContractOptions::default();
     let result = proj_contract(&m1, &m2, &proj, &options).unwrap();
 
@@ -259,7 +267,7 @@ fn test_proj_contract_rejects_projector_index_absent_from_both_operands() {
     let left = SubDomainTT::from_tt(make_tt_generic::<f64>(&s0, &l01, &s1));
     let right = SubDomainTT::from_tt(make_tt_generic::<f64>(&s1, &l12, &s2));
     let absent = make_index(2);
-    let projector = Projector::from_pairs([(absent.clone(), 0)]);
+    let projector = projector([(absent.clone(), 0)]);
 
     let error = proj_contract(&left, &right, &projector, &ContractOptions::default()).unwrap_err();
     assert!(matches!(
@@ -342,11 +350,11 @@ fn test_contract_with_projectors_numerical_correctness_generic<T: TestScalar>() 
     // Create SubDomainTTs with projectors
     // m1 is projected at s0=0
     // m2 is projected at s2=1
-    let proj1 = Projector::from_pairs([(s0.clone(), 0)]);
-    let proj2 = Projector::from_pairs([(s2.clone(), 1)]);
+    let proj1 = projector([(s0.clone(), 0)]);
+    let proj2 = projector([(s2.clone(), 1)]);
 
-    let m1 = SubDomainTT::new(tt1, proj1.clone());
-    let m2 = SubDomainTT::new(tt2, proj2.clone());
+    let m1 = subdomain(tt1, proj1.clone());
+    let m2 = subdomain(tt2, proj2.clone());
 
     // Contract
     // Use Naive method for exact results (no approximation)
@@ -420,11 +428,11 @@ fn test_contract_with_projectors_numerical_correctness_default_zipup_generic<T: 
             let t1_full = tt1.to_dense().unwrap();
             let t2_full = tt2.to_dense().unwrap();
 
-            let proj1 = Projector::from_pairs([(s0.clone(), s0_val)]);
-            let proj2 = Projector::from_pairs([(s2.clone(), s2_val)]);
+            let proj1 = projector([(s0.clone(), s0_val)]);
+            let proj2 = projector([(s2.clone(), s2_val)]);
 
-            let m1 = SubDomainTT::new(tt1, proj1);
-            let m2 = SubDomainTT::new(tt2, proj2);
+            let m1 = subdomain(tt1, proj1);
+            let m2 = subdomain(tt2, proj2);
 
             let result = contract(&m1, &m2, &ContractOptions::default())
                 .unwrap()
@@ -479,11 +487,11 @@ fn test_contract_with_projector_on_contracted_index_generic<T: TestScalar>() {
 
     // Both have projector on the contracted index s1
     // m1: s1=0, m2: s1=0 (compatible)
-    let proj1 = Projector::from_pairs([(s1.clone(), 0)]);
-    let proj2 = Projector::from_pairs([(s1.clone(), 0)]);
+    let proj1 = projector([(s1.clone(), 0)]);
+    let proj2 = projector([(s1.clone(), 0)]);
 
-    let m1 = SubDomainTT::new(tt1, proj1);
-    let m2 = SubDomainTT::new(tt2, proj2);
+    let m1 = subdomain(tt1, proj1);
+    let m2 = subdomain(tt2, proj2);
 
     // Use Naive method for exact results (no approximation)
     let options = naive_reference_options();
@@ -538,8 +546,8 @@ fn test_contract_one_side_has_projector_generic<T: TestScalar>() {
     let t2_full = tt2.to_dense().unwrap();
 
     // m1 has projector on s0, m2 has no projector
-    let proj1 = Projector::from_pairs([(s0.clone(), 1)]);
-    let m1 = SubDomainTT::new(tt1, proj1);
+    let proj1 = projector([(s0.clone(), 1)]);
+    let m1 = subdomain(tt1, proj1);
     let m2 = SubDomainTT::from_tt(tt2);
 
     // Use Naive method for exact results (no approximation)
@@ -597,7 +605,7 @@ fn test_proj_contract_numerical_correctness_generic<T: TestScalar>() {
     let m2 = SubDomainTT::from_tt(tt2);
 
     // proj_contract with projector that projects s0=0 and s2=1
-    let proj = Projector::from_pairs([(s0.clone(), 0), (s2.clone(), 1)]);
+    let proj = projector([(s0.clone(), 0), (s2.clone(), 1)]);
     // Use Naive method for exact results (no approximation)
     let options = naive_reference_options();
     let result = proj_contract(&m1, &m2, &proj, &options).unwrap().unwrap();

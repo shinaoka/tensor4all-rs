@@ -15,6 +15,7 @@
 | Document | Description |
 |----------|-------------|
 | [adaptive-tci-interpolation.md](./adaptive-tci-interpolation.md) | Adaptive TCI patching, convergence, pivot recycling, and structured embedding |
+| [partitionedtt-projector-invariants.md](./partitionedtt-projector-invariants.md) | Issue #634 design for coherent projector identity, validation, and transactional PartitionedTT mutation |
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
 
 ## Automatic Differentiation
