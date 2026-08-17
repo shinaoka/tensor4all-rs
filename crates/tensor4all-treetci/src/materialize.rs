@@ -89,7 +89,12 @@ where
             site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &evaluate)?
         };
 
-        let mut indices = Vec::with_capacity(1 + incoming_edges.len() + out_edges.len());
+        let index_count = incoming_edges
+            .len()
+            .checked_add(out_edges.len())
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| anyhow::anyhow!("materialized site index count overflowed usize"))?;
+        let mut indices = Vec::with_capacity(index_count);
         indices.push(DynIndex::new_dyn(state.local_dims[site]));
         for edge in &incoming_edges {
             indices.push(
