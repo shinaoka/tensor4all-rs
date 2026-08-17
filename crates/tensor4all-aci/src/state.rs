@@ -407,18 +407,19 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             checked_frame_mul(source_rows, output_cols, "batched left frame item count")?;
 
         let frames = (0..n_inputs)
-            .map(|input| {
-                let offset = input * item_len;
-                let full_data = &values[offset..offset + item_len];
+            .map(|input| -> Result<Matrix<T>> {
+                let offset = checked_frame_mul(input, item_len, "batched left frame offset")?;
+                let end = checked_frame_add(offset, item_len, "batched left frame end")?;
+                let full_data = &values[offset..end];
                 let mut selected = Matrix::zeros(row_indices.len(), right_dim);
                 for (selected_row, &full_row) in row_indices.iter().enumerate() {
                     for right in 0..right_dim {
                         selected[[selected_row, right]] = full_data[full_row + full_rows * right];
                     }
                 }
-                selected
+                Ok(selected)
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         Ok(Some(frames))
     }
 
@@ -498,18 +499,19 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let item_len = checked_frame_mul(core_rows, source_cols, "batched right frame item count")?;
 
         let frames = (0..n_inputs)
-            .map(|input| {
-                let offset = input * item_len;
-                let full_data = &values[offset..offset + item_len];
+            .map(|input| -> Result<Matrix<T>> {
+                let offset = checked_frame_mul(input, item_len, "batched right frame offset")?;
+                let end = checked_frame_add(offset, item_len, "batched right frame end")?;
+                let full_data = &values[offset..end];
                 let mut selected = Matrix::zeros(left_dim, col_indices.len());
                 for (selected_col, &full_col) in col_indices.iter().enumerate() {
                     for left in 0..left_dim {
                         selected[[left, selected_col]] = full_data[left + left_dim * full_col];
                     }
                 }
-                selected
+                Ok(selected)
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         Ok(Some(frames))
     }
 
