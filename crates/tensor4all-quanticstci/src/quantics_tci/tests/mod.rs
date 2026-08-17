@@ -152,12 +152,16 @@ fn from_arrays_uses_interior_coordinates() {
         .with_tolerance(1e-10)
         .with_nrandominitpivot(2)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
-    let (qtci, _, _) =
-        quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, |coords| coords[0], None, options)
-            .unwrap();
+    let (qtci, _, _) = quanticscrossinterpolate_from_arrays::<f64, _>(
+        &xvals,
+        |coords| coords[0] + 1.0,
+        None,
+        options,
+    )
+    .unwrap();
 
-    assert_relative_eq!(qtci.evaluate(&[1]).unwrap(), 0.5, epsilon = 1e-8);
-    assert_relative_eq!(qtci.evaluate(&[2]).unwrap(), 2.0, epsilon = 1e-8);
+    assert_relative_eq!(qtci.evaluate(&[1]).unwrap(), 1.5, epsilon = 1e-8);
+    assert_relative_eq!(qtci.evaluate(&[2]).unwrap(), 3.0, epsilon = 1e-8);
 }
 
 #[test]
