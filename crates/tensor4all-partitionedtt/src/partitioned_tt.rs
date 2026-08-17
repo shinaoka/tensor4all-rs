@@ -113,9 +113,11 @@ impl PartitionedTT {
     ///
     /// # Errors
     ///
-    /// Returns a typed projector-validation error if the subdomain's private
-    /// data and projector invariants are inconsistent. No partition is returned
-    /// on failure.
+    /// Returns [`PartitionedTTError::ProjectorIndexNotFound`] if the projector
+    /// contains an index absent from the tensor train, or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] if a coordinate is
+    /// invalid for the matched tensor-train index. No partition is returned on
+    /// failure.
     pub fn from_subdomain(subdomain: SubDomainTT) -> Result<Self> {
         let mut partitioned = Self::new();
         partitioned.insert(subdomain)?;
@@ -210,8 +212,12 @@ impl PartitionedTT {
     /// Append another PartitionedTT (must have non-overlapping projectors).
     /// # Errors
     ///
-    /// Returns an error when a different projector overlaps an existing
-    /// projector. Equal keys replace existing values. All checks happen before
+    /// Returns [`PartitionedTTError::OverlappingProjectors`] when a different
+    /// projector overlaps an existing projector,
+    /// [`PartitionedTTError::ProjectorIndexNotFound`] when an appended
+    /// subdomain refers to an absent tensor-train index, or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] when its coordinate
+    /// is invalid. Equal keys replace existing values. All checks happen before
     /// this partition is mutated.
     ///
     pub fn append(&mut self, other: Self) -> Result<()> {
@@ -236,9 +242,13 @@ impl PartitionedTT {
     /// Append subdomains.
     /// # Errors
     ///
-    /// Returns an error when a different candidate projector overlaps an
-    /// existing projector. The complete candidate set is validated before this
-    /// partition is mutated.
+    /// Returns [`PartitionedTTError::OverlappingProjectors`] when different
+    /// candidate or existing projectors overlap,
+    /// [`PartitionedTTError::ProjectorIndexNotFound`] when a candidate refers to
+    /// an absent tensor-train index, or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] when its coordinate
+    /// is invalid. The complete candidate set is validated before this partition
+    /// is mutated.
     ///
     pub fn append_subdomains(&mut self, subdomains: Vec<SubDomainTT>) -> Result<()> {
         let other = Self::from_subdomains(subdomains)?;
