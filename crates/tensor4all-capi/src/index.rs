@@ -339,7 +339,14 @@ pub extern "C" fn t4a_index_tags(
             .map(|tag| tag.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        let required_len = tags.len() + 1;
+        let required_len = match tags.len().checked_add(1) {
+            Some(length) => length,
+            None => {
+                let message = "index tags output length overflowed usize";
+                set_last_error(message);
+                return T4A_INVALID_ARGUMENT;
+            }
+        };
         *out_len = required_len;
 
         if buf.is_null() {
