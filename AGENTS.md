@@ -338,4 +338,27 @@ gh pr checks <NUM>
 gh run view <RUN_ID> --log-failed
 ```
 
-**Before creating PR**: Verify README.md is accurate (project structure, examples).
+### New Public Crate Checklist
+
+Before creating a PR that adds a public workspace crate, complete every
+applicable item below. Mark an item not applicable explicitly in the PR body
+rather than silently omitting it.
+
+- [ ] Add the crate to the workspace and the root `README.md` crate map.
+- [ ] Add the crate and its primary use cases to `llms.txt` with a direct link
+      to the most useful guide for a new user or coding agent.
+- [ ] Update `docs/book/src/architecture.md`, including the layer diagram,
+      crate table, and goal-to-crate selection table where applicable.
+- [ ] Add or update an mdBook guide and register it in
+      `docs/book/src/SUMMARY.md`.
+- [ ] Link the new guide from related existing guides so that users do not need
+      to know the new crate name in advance.
+- [ ] Add a crate `README.md` or an equally clear docs.rs landing page.
+- [ ] Provide a runnable, asserted example that exercises the crate's primary
+      nontrivial code path; a degenerate shortcut or smoke test is not enough.
+- [ ] Remove developer-local absolute paths and references to inaccessible
+      design material from committed documentation.
+- [ ] Run workspace doctests and `./scripts/test-mdbook.sh`.
+
+For every PR, verify that the root `README.md` remains accurate, including the
+project structure and examples.
