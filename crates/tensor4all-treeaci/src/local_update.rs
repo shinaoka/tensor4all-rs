@@ -294,12 +294,7 @@ fn candidate_frames<T: TreeAciScalar, V: TreeAciNode>(
     candidates: &[ComponentSample],
 ) -> Result<Vec<Vec<Vec<T>>>> {
     (0..inputs.len())
-        .map(|input| {
-            candidates
-                .iter()
-                .map(|candidate| frames.candidate_frame(inputs, problem, input, edge, candidate))
-                .collect()
-        })
+        .map(|input| frames.candidate_frames_for_edge(inputs, problem, input, edge, candidates))
         .collect()
 }
 

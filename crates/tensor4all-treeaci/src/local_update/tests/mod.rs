@@ -3,7 +3,7 @@ use std::cell::Cell;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
-use super::materialize_and_factor_edge;
+use super::{enumerate_candidates, materialize_and_factor_edge};
 use crate::{
     frames::InputFrameStore, problem::prepare_problem, samples::SampleArena, TreeAciError,
     TreeAciOptions,
@@ -161,4 +161,103 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             limit: 3
         })
     ));
+}
+
+/// Builds a 3-node chain `0 -- 1 -- 2` whose middle node (`1`) has a
+/// non-trivial (dim-3) physical leg and asymmetric bond dimensions, so the
+/// single-incoming-edge batched path in
+/// `InputFrameStore::candidate_frames_for_edge` (dispatched from
+/// `candidate_frames`) exercises a genuinely rectangular core matrix rather
+/// than a degenerate square one. Directed edge `1 -> 2` has exactly one
+/// incoming edge (`0 -> 1`), so it is the edge under test.
+fn three_node_chain_for_batched_dispatch() -> TreeTN<IdxTensor, usize> {
+    let s0 = DynIndex::new_dyn(2);
+    let bond01 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(3);
+    let bond12 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(2);
+
+    let node0 = IdxTensor::from_dense(vec![s0, bond01.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let node1 = IdxTensor::from_dense(
+        vec![bond01, s1, bond12.clone()],
+        (1..=12).map(|value| value as f64).collect(),
+    )
+    .unwrap();
+    let node2 = IdxTensor::from_dense(vec![bond12, s2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+
+    TreeTN::from_tensors(vec![node0, node1, node2], vec![0, 1, 2]).unwrap()
+}
+
+#[test]
+fn candidate_frames_batched_path_matches_scalar_path_on_a_chain() {
+    let inputs = vec![three_node_chain_for_batched_dispatch()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    // Seed both physical values of node 0 so directed edge 0 -> 1's
+    // candidate set has two distinct incoming samples; combined with node
+    // 1's dim-3 physical leg, `enumerate_candidates` below produces 6
+    // candidates for edge 1 -> 2, whose `local_coordinate` values are
+    // strided (not contiguous) across the candidate slice -- see
+    // `local_update::enumerate_candidates`'s mixed-radix encoding.
+    let seeds = vec![vec![0, 0, 0], vec![1, 0, 0]];
+    let (_arena, candidates) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+
+    // Directed edge id 2 is node 1 -> node 2 (forward edge of the second
+    // undirected edge (1, 2)); it has exactly one incoming edge (0 -> 1),
+    // making it the single-incoming-edge fast path under test.
+    let edge = 2;
+    assert_eq!(problem.directed_edges[edge].from, 1);
+    assert_eq!(problem.directed_edges[edge].to, 2);
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 1);
+
+    let row_candidates =
+        enumerate_candidates(&problem, &candidates, edge, "candidate rows", 1_000).unwrap();
+    assert_eq!(row_candidates.len(), 6);
+    let distinct_local_coordinates = row_candidates
+        .iter()
+        .map(|candidate| candidate.local_coordinate)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(distinct_local_coordinates.len(), 3);
+
+    // The batched-dispatch path, run first against a freshly built store so
+    // its own (empty) candidate cache cannot be pre-populated by the scalar
+    // oracle below.
+    let (arena_for_batched, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames_batched =
+        InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena_for_batched).unwrap();
+    let batched = frames_batched
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &row_candidates)
+        .unwrap();
+
+    // The scalar oracle: a second, independently built store, walked one
+    // candidate at a time through the pre-existing per-candidate
+    // `candidate_frame` method that `candidate_frames_for_edge` falls back
+    // to for non-single-incoming edges. This is the code path that shipped
+    // before this task and is untouched by it, so a mismatch here is a real
+    // regression in the new batched math, not a comparison of the new path
+    // to itself.
+    let (arena_for_scalar, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames_scalar =
+        InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena_for_scalar).unwrap();
+    let scalar = row_candidates
+        .iter()
+        .map(|candidate| {
+            frames_scalar
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(batched.len(), scalar.len());
+    assert_eq!(batched, scalar);
+    // Sanity: the frame vectors are exactly `bond12`'s dimension long, and
+    // not all zero/identical, so this is a meaningful numeric comparison and
+    // not a vacuous shape check.
+    for frame in &batched {
+        assert_eq!(frame.len(), 2);
+    }
+    assert!(batched
+        .iter()
+        .any(|frame| frame.iter().any(|&value| value != batched[0][0])));
 }

@@ -359,6 +359,177 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             .collect())
     }
 
+    /// Computes every candidate's frame vector for one input and directed
+    /// edge, using the batched BLAS path (one `mat_mul` call per distinct
+    /// `local_coordinate`) when the edge's source node has exactly one
+    /// incoming edge, and falling back to the scalar
+    /// [`Self::candidate_frame`] path (called once per candidate, and still
+    /// consulting/populating `candidate_cache`) otherwise.
+    ///
+    /// The batched path also consults `candidate_cache` per candidate before
+    /// grouping it into a BLAS call. A one-off instrumented run of
+    /// `tree_elementwise` on a 24-node `separated_two_peak_tree` chain (see
+    /// Task 4's report) measured a 0% candidate-cache hit rate for that
+    /// workload, unlike the 45-65% this file's `candidate_cache` doc cites
+    /// from an older worklog measurement. The check is kept anyway: it costs
+    /// one `HashMap` lookup per candidate against an `O(bond_dim)`-or-larger
+    /// BLAS contraction, negligible even when it never hits, and it keeps
+    /// this path's cache semantics identical to the scalar
+    /// [`Self::candidate_frame`] path it replaces for other workloads or
+    /// call patterns where reuse may still occur.
+    pub(crate) fn candidate_frames_for_edge<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        input: usize,
+        directed_edge: DirectedEdgeId,
+        candidates: &[ComponentSample],
+    ) -> Result<Vec<Vec<T>>> {
+        let directed =
+            problem
+                .directed_edges
+                .get(directed_edge)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate frame references an unknown directed edge",
+                })?;
+        if directed.incoming_to_from.len() != 1 {
+            return candidates
+                .iter()
+                .map(|candidate| {
+                    self.candidate_frame(inputs, problem, input, directed_edge, candidate)
+                })
+                .collect();
+        }
+
+        let node =
+            *problem
+                .node_positions
+                .get(&directed.from)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate source has no prepared node position",
+                })?;
+        let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame references an unknown input",
+        })?;
+        let cores = self
+            .cores
+            .get(input)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "candidate frame has no prepared input cores",
+            })?;
+        let core = cores.get(node).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame source node has no prepared core",
+        })?;
+        let outgoing = outgoing_bond(tree, problem, directed_edge)?;
+        let outgoing_axis = axis_of(&core.indices, outgoing)?;
+        let physical = &problem.physical[node];
+        let physical_axes = physical
+            .indices
+            .iter()
+            .map(|index| axis_of(&core.indices, index))
+            .collect::<Result<Vec<_>>>()?;
+        let incoming_edge = directed.incoming_to_from[0];
+        let incoming_bond = outgoing_bond(tree, problem, incoming_edge)?;
+        let incoming_axis = axis_of(&core.indices, incoming_bond)?;
+        let outgoing_dim = core.dims[outgoing_axis];
+        let incoming_dim = core.dims[incoming_axis];
+
+        // Group candidate indices by local_coordinate. Candidates sharing a
+        // local_coordinate are not contiguous in `candidates` -- see
+        // `enumerate_candidates` in `local_update.rs`, whose mixed-radix
+        // encoding cycles `local_coordinate` fastest -- so grouping must
+        // bucket explicitly rather than slice.
+        let mut groups: std::collections::BTreeMap<usize, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        let mut results: Vec<Option<Vec<T>>> = vec![None; candidates.len()];
+        for (candidate_index, candidate) in candidates.iter().enumerate() {
+            let key: CandidateCacheKey = (
+                input,
+                directed_edge,
+                candidate.local_coordinate,
+                candidate.incoming.clone(),
+            );
+            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+                #[cfg(test)]
+                candidate_debug_stats::record_hit();
+                results[candidate_index] = Some(cached.clone());
+                continue;
+            }
+            #[cfg(test)]
+            candidate_debug_stats::record_miss();
+            groups
+                .entry(candidate.local_coordinate)
+                .or_default()
+                .push(candidate_index);
+        }
+
+        for (local_coordinate, indices) in groups {
+            let mut base_offset = 0usize;
+            for (physical_axis, &axis) in physical_axes.iter().enumerate() {
+                let wanted = (local_coordinate / physical.strides[physical_axis])
+                    % physical.dims[physical_axis];
+                base_offset += wanted * core.strides[axis];
+            }
+            let core_matrix = single_incoming_core_matrix(
+                core,
+                outgoing_axis,
+                incoming_axis,
+                base_offset,
+                outgoing_dim,
+                incoming_dim,
+            );
+            let mut frame_data = Vec::with_capacity(incoming_dim * indices.len());
+            for &candidate_index in &indices {
+                let (edge, sample) = candidates[candidate_index].incoming[0];
+                debug_assert_eq!(edge, incoming_edge);
+                let values = self.frame_values(input, edge, sample)?;
+                if values.len() != incoming_dim {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "incoming frame length differs from its bond dimension",
+                    });
+                }
+                frame_data.extend(values);
+            }
+            let frame_matrix = Matrix::from_col_major_vec(incoming_dim, indices.len(), frame_data);
+            let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
+            for (column, &candidate_index) in indices.iter().enumerate() {
+                let values: Vec<T> = (0..outgoing_dim)
+                    .map(|row| batched[[row, column]])
+                    .collect();
+                let entry_bytes = values.len().saturating_mul(size_of::<T>());
+                let candidate_bytes = self.candidate_cache_bytes.get();
+                let projected = self
+                    .retained_bytes
+                    .saturating_add(candidate_bytes)
+                    .saturating_add(entry_bytes);
+                if projected <= problem.max_frame_bytes {
+                    let candidate = &candidates[candidate_index];
+                    let key: CandidateCacheKey = (
+                        input,
+                        directed_edge,
+                        candidate.local_coordinate,
+                        candidate.incoming.clone(),
+                    );
+                    self.candidate_cache_bytes
+                        .set(candidate_bytes.saturating_add(entry_bytes));
+                    self.candidate_cache
+                        .borrow_mut()
+                        .insert(key, values.clone());
+                }
+                results[candidate_index] = Some(values);
+            }
+        }
+
+        results
+            .into_iter()
+            .map(|value| {
+                value.ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate frame batching left a candidate unfilled",
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn candidate_frame<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
