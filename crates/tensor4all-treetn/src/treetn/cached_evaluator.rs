@@ -5,6 +5,32 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
+/// Temporary phase-timing counters for root-cause investigation into why the
+/// message cache does not deliver a net speedup despite a high hit rate. Not
+/// on the hot path in non-test builds.
+#[cfg(test)]
+mod phase_timing {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static KEY_AND_LOOKUP_NS: AtomicU64 = AtomicU64::new(0);
+    pub static CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static TENSOR_VALUES_NS: AtomicU64 = AtomicU64::new(0);
+    pub static RECONSTRUCT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static INSERT_NS: AtomicU64 = AtomicU64::new(0);
+
+    pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
+        counter.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    pub fn reset_all() {
+        KEY_AND_LOOKUP_NS.store(0, Ordering::Relaxed);
+        CONTRACT_NS.store(0, Ordering::Relaxed);
+        TENSOR_VALUES_NS.store(0, Ordering::Relaxed);
+        RECONSTRUCT_NS.store(0, Ordering::Relaxed);
+        INSERT_NS.store(0, Ordering::Relaxed);
+    }
+}
+
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::{
@@ -1052,6 +1078,212 @@ where
         self.indexer.encode(&raw).map_err(anyhow::Error::from)
     }
 
+    /// Computes a leaf node's message directly from the tree tensor's raw
+    /// data, bypassing `contract_with_options`/`IdxTensor` entirely.
+    ///
+    /// Root cause (see `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`):
+    /// a contraction result is backend-resident/non-contiguous, so reading it
+    /// back out via `IdxTensor::to_vec` falls through to an expensive
+    /// session-based materialization (measured at 71.3% of miss-path time,
+    /// 3x the contraction itself). A leaf node has no contraction to do at
+    /// all -- its message is just its own tensor with the physical index
+    /// fixed -- so this reads the tensor's already-host-resident data once
+    /// and slices it directly, producing a plain `Vec<f64>` with no backend
+    /// round-trip.
+    ///
+    /// Returns `Ok(None)` when `node` is not eligible for this fast path
+    /// (more than one physical index, a complex-valued tensor, or a tensor
+    /// shape other than the expected 2 axes for a leaf), so the caller can
+    /// fall back to [`Self::compute_stacked_message`]. Ineligibility is not
+    /// an error: most of this crate's existing tests exercise multi-physical
+    /// or branched nodes this first slice does not yet cover.
+    fn try_compute_leaf_message_raw(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+    ) -> Result<Option<Vec<f64>>> {
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if tensor.is_complex() {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != 2 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let parent_axis = 1 - physical_axis;
+
+        let dims = tensor.dims();
+        let parent_dim = dims[parent_axis];
+        // Column-major: stride of axis k is the product of the dims before it.
+        let strides = [1usize, dims[0]];
+
+        let raw = tensor.to_vec::<f64>()?;
+
+        let mut out = Vec::with_capacity(parent_dim * points.len());
+        for &point in points {
+            let physical_value = value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_leaf_message_raw",
+            )?;
+            for parent_value in 0..parent_dim {
+                let mut axis_values = [0usize; 2];
+                axis_values[physical_axis] = physical_value;
+                axis_values[parent_axis] = parent_value;
+                let flat = axis_values[0] * strides[0] + axis_values[1] * strides[1];
+                out.push(raw[flat]);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Computes an interior chain node's (exactly one child) message directly
+    /// from raw data, generalizing [`Self::try_compute_leaf_message_raw`] the
+    /// way `row_vector_times_matrix`
+    /// (`crates/tensor4all-simplett/src/einsum_helper.rs`) generalizes a bare
+    /// slice: contract the node's own raw tensor data against the child's
+    /// already-computed message column with a hand-written loop, never
+    /// constructing an `IdxTensor` or calling `contract_with_options`.
+    ///
+    /// The child's message must already be present in `messages` (true for
+    /// any node reached in postorder) and must itself be real-valued and
+    /// `IdxTensor`-backed by already-host-resident data -- true for every
+    /// `StackedMessage` this evaluator produces, since both
+    /// `IdxTensor::from_dense_any` (the cache-hit path) and a leaf's own
+    /// slice-only tensor are host-resident by construction, unlike a
+    /// `contract_with_options` result.
+    ///
+    /// Returns `Ok(None)` when `node` is not eligible (not exactly one
+    /// physical index and one child, a complex-valued tensor, or an
+    /// unexpected axis count), so the caller falls back to
+    /// [`Self::compute_stacked_message`].
+    fn try_compute_chain_message_raw(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+    ) -> Result<Option<Vec<f64>>> {
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+        let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        let [child] = children else {
+            return Ok(None);
+        };
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if tensor.is_complex() {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != 3 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let Some(child_edge) = self.tree.edge_between(node, child) else {
+            return Ok(None);
+        };
+        let Some(child_bond_index) = self.tree.bond_index(child_edge) else {
+            return Ok(None);
+        };
+        let Some(child_axis) = tensor_indices
+            .iter()
+            .position(|idx| idx == child_bond_index)
+        else {
+            return Ok(None);
+        };
+        let Some(parent_axis) = (0..3).find(|&axis| axis != physical_axis && axis != child_axis)
+        else {
+            return Ok(None);
+        };
+
+        let child_message = messages.get(child).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_chain_message_raw: missing message for child {:?}",
+                child
+            )
+        })?;
+        if child_message.tensor.is_complex() {
+            return Ok(None);
+        }
+        let child_assignment_batch = assignment_batches.get(child).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_chain_message_raw: missing assignment batch for child {:?}",
+                child
+            )
+        })?;
+
+        let dims = tensor.dims();
+        let parent_dim = dims[parent_axis];
+        let child_dim = dims[child_axis];
+        let strides = [1usize, dims[0], dims[0] * dims[1]];
+        let raw = tensor.to_vec::<f64>()?;
+        let child_values = child_message.tensor.to_vec::<f64>()?;
+
+        let mut out = Vec::with_capacity(parent_dim * points.len());
+        for &point in points {
+            let physical_value = value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_chain_message_raw",
+            )?;
+            let child_assignment = child_assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::try_compute_chain_message_raw: missing child assignment for point {point}"
+                    )
+                })?;
+            let child_col =
+                &child_values[child_assignment * child_dim..(child_assignment + 1) * child_dim];
+
+            for parent_value in 0..parent_dim {
+                let mut sum = 0.0f64;
+                for (child_value, &child_amplitude) in child_col.iter().enumerate() {
+                    let mut axis_values = [0usize; 3];
+                    axis_values[physical_axis] = physical_value;
+                    axis_values[parent_axis] = parent_value;
+                    axis_values[child_axis] = child_value;
+                    let flat = axis_values[0] * strides[0]
+                        + axis_values[1] * strides[1]
+                        + axis_values[2] * strides[2];
+                    sum += child_amplitude * raw[flat];
+                }
+                out.push(sum);
+            }
+        }
+        Ok(Some(out))
+    }
+
     /// Computes `node`'s directed message toward its parent, consulting the
     /// per-node persistent cache first.
     ///
@@ -1078,6 +1310,8 @@ where
                 node
             )
         })?;
+        #[cfg(test)]
+        let phase_start = std::time::Instant::now();
         let points = assignment_batch.first_points.clone();
         let keys = points
             .iter()
@@ -1136,12 +1370,18 @@ where
                 .entry(node.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
             if let Some(positions) = cache.get_all_cached(&keys) {
+                #[cfg(test)]
+                phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
+                #[cfg(test)]
+                let reconstruct_start = std::time::Instant::now();
                 let mut data = Vec::with_capacity(bond_dim * keys.len());
                 for position in positions {
                     data.extend_from_slice(cache.column(position));
                 }
                 let tensor =
                     IdxTensor::from_dense_any(vec![bond_index, assignment_index.clone()], data)?;
+                #[cfg(test)]
+                phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
                 self.last_stats.message_cache_hits += keys.len();
                 return Ok(StackedMessage {
                     assignment_index,
@@ -1159,6 +1399,8 @@ where
             }
             (hit_keys, missing_indices)
         };
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
         self.last_stats.message_cache_hits += hit_keys.len();
         self.last_stats.message_cache_misses += missing_indices.len();
         if !hit_keys.is_empty() {
@@ -1178,16 +1420,39 @@ where
             .iter()
             .map(|&i| keys[i].clone())
             .collect::<Vec<_>>();
-        let missing_message = self.compute_stacked_message(
-            node,
-            values,
-            &missing_points,
-            plan,
-            assignment_batches,
-            messages,
-        )?;
-        let missing_values = tensor_values_any(&missing_message.tensor)?;
+        #[cfg(test)]
+        let contract_start = std::time::Instant::now();
+        let raw_missing_values =
+            match self.try_compute_leaf_message_raw(node, values, &missing_points)? {
+                Some(raw) => Some(raw),
+                None => self.try_compute_chain_message_raw(
+                    node,
+                    values,
+                    &missing_points,
+                    plan,
+                    assignment_batches,
+                    messages,
+                )?,
+            };
+        let missing_values: Vec<AnyScalar> = match raw_missing_values {
+            Some(raw) => raw.into_iter().map(AnyScalar::new_real).collect(),
+            None => {
+                let missing_message = self.compute_stacked_message(
+                    node,
+                    values,
+                    &missing_points,
+                    plan,
+                    assignment_batches,
+                    messages,
+                )?;
+                tensor_values_any(&missing_message.tensor)?
+            }
+        };
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::CONTRACT_NS, contract_start.elapsed());
 
+        #[cfg(test)]
+        let insert_start = std::time::Instant::now();
         let cache = self
             .message_caches
             .get_mut(node)
@@ -1205,7 +1470,11 @@ where
                 })
                 .collect::<Result<Vec<_>>>()
         })?;
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::INSERT_NS, insert_start.elapsed());
 
+        #[cfg(test)]
+        let reconstruct_start = std::time::Instant::now();
         // Merge: every key is now cached (unbounded budget in this phase
         // guarantees the insert above retained all of them), in original order.
         let mut data = Vec::with_capacity(bond_dim * keys.len());
@@ -1218,6 +1487,8 @@ where
             data.extend_from_slice(cache.column(position));
         }
         let tensor = IdxTensor::from_dense_any(vec![bond_index, assignment_index.clone()], data)?;
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
         Ok(StackedMessage {
             assignment_index,
             tensor,
@@ -2128,6 +2399,137 @@ mod tests {
         );
     }
 
+    /// Root cause of the cache slowdown (see the message-cache-prototype
+    /// worklog) is `IdxTensor::to_vec` on a `contract_with_options` result
+    /// hitting an expensive non-contiguous/backend-resident fallback. This
+    /// tests the fix's first slice: a leaf node's message computed directly
+    /// from the tree tensor's raw data, with no `contract_with_options` and
+    /// no intermediate `IdxTensor` at all, must match the existing generic
+    /// path exactly.
+    #[test]
+    fn raw_leaf_message_matches_generic_contraction() {
+        let (tree, indices) = varied_three_node_chain();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [3usize, 2usize];
+        let values = [0usize, 0, 0, 0, 0, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        // Force layout/center bookkeeping the same way evaluate_batched would.
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
+
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &2,
+                points,
+                &leaf_points,
+                &plan,
+                &assignment_batches,
+                &HashMap::new(),
+            )
+            .unwrap();
+        let expected = tensor_values_any(&expected_message.tensor).unwrap();
+
+        let actual = evaluator
+            .try_compute_leaf_message_raw(&2, points, &leaf_points)
+            .unwrap()
+            .expect("leaf node with one physical index and a real tensor must be eligible");
+
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (a - e.real()).abs() < 1.0e-12,
+                "raw={a} generic={}",
+                e.real()
+            );
+        }
+    }
+
+    #[test]
+    fn raw_chain_message_matches_generic_contraction() {
+        let (tree, indices) = varied_three_node_chain();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [3usize, 2usize];
+        let values = [0usize, 0, 0, 0, 0, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+
+        // Node 2 (leaf, child of node 1) via the generic oracle path.
+        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
+        let node2_message = evaluator
+            .compute_stacked_message(
+                &2,
+                points,
+                &leaf_points,
+                &plan,
+                &assignment_batches,
+                &HashMap::new(),
+            )
+            .unwrap();
+        let mut messages = HashMap::new();
+        messages.insert(2usize, node2_message);
+
+        let node1_points = assignment_batches.get(&1).unwrap().first_points.clone();
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &1,
+                points,
+                &node1_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap();
+        let expected = tensor_values_any(&expected_message.tensor).unwrap();
+
+        let actual = evaluator
+            .try_compute_chain_message_raw(
+                &1,
+                points,
+                &node1_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap()
+            .expect("interior node with one child and one physical index must be eligible");
+
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (a - e.real()).abs() < 1.0e-10,
+                "raw={a} generic={}",
+                e.real()
+            );
+        }
+    }
+
     fn assert_scalars_close(actual: &[AnyScalar], expected: &[AnyScalar]) {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
@@ -2748,5 +3150,102 @@ mod tests {
             total_hits as f64 / (total_hits + total_misses) as f64,
         );
         assert!(cached_elapsed.as_nanos() > 0);
+    }
+
+    /// Root-cause investigation for the slowdown found by
+    /// `message_cache_wall_time_on_realistic_floating_zone_walk`: which phase
+    /// inside `get_or_compute_node_message` actually accounts for the time,
+    /// on the real call pattern -- not inferred from the old bond=2 primitive
+    /// breakdown in `2026-08-17-treeaci-per-evaluation-cost.md`. Reuses the
+    /// same 16-site, bond=128 walk as the wall-time measurement.
+    #[test]
+    fn message_cache_phase_breakdown_on_realistic_floating_zone_walk() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+        use tensor4all_core::floating_zone_walk;
+        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
+
+        const N_SITES: usize = 16;
+        const LOCAL_DIM: usize = 2;
+        const BOND_DIM: usize = 128;
+        const NSEARCH: usize = 5;
+        const MAX_SWEEPS: usize = 100;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
+        for site in 0..N_SITES {
+            let left_dim = if site == 0 { 1 } else { BOND_DIM };
+            let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
+            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+            for l in 0..left_dim {
+                for s in 0..LOCAL_DIM {
+                    for r in 0..right_dim {
+                        tensor.set3(l, s, r, rng.random::<f64>());
+                    }
+                }
+            }
+            tensors.push(tensor);
+        }
+        let tt = SimpleTensorTrain::new(tensors).unwrap();
+        let (tree, site_indices) = crate::tensor_train_to_treetn(&tt).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &site_indices, CachedEvaluatorOptions::default())
+                .unwrap();
+        let warm_values = vec![0usize; N_SITES];
+        let warm_shape = [N_SITES, 1];
+        evaluator
+            .evaluate_batched(ColMajorArrayRef::new(&warm_values, &warm_shape).unwrap())
+            .unwrap();
+
+        phase_timing::reset_all();
+
+        let site_dims = vec![LOCAL_DIM; N_SITES];
+        let mut start_rng = ChaCha8Rng::seed_from_u64(11);
+        let starts: Vec<Vec<usize>> = (0..NSEARCH)
+            .map(|_| {
+                (0..N_SITES)
+                    .map(|_| start_rng.random_range(0..LOCAL_DIM))
+                    .collect()
+            })
+            .collect();
+        for start in &starts {
+            floating_zone_walk(
+                &site_dims,
+                start,
+                MAX_SWEEPS,
+                f64::INFINITY,
+                |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                    let mut values = vec![0usize; N_SITES * points.len()];
+                    for (p, point) in points.iter().enumerate() {
+                        for (site, &v) in point.iter().enumerate() {
+                            values[site + N_SITES * p] = v;
+                        }
+                    }
+                    let shape = [N_SITES, points.len()];
+                    let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
+                    let out = evaluator.evaluate_batched(arr)?;
+                    Ok(out.iter().map(|v| v.real().abs()).collect())
+                },
+            )
+            .unwrap();
+        }
+
+        use std::sync::atomic::Ordering;
+        let key_and_lookup = phase_timing::KEY_AND_LOOKUP_NS.load(Ordering::Relaxed);
+        let contract = phase_timing::CONTRACT_NS.load(Ordering::Relaxed);
+        let tensor_values = phase_timing::TENSOR_VALUES_NS.load(Ordering::Relaxed);
+        let insert = phase_timing::INSERT_NS.load(Ordering::Relaxed);
+        let reconstruct = phase_timing::RECONSTRUCT_NS.load(Ordering::Relaxed);
+        let total = key_and_lookup + contract + tensor_values + insert + reconstruct;
+        println!(
+            "phase breakdown at bond={BOND_DIM}: key_and_lookup={:.1}ms ({:.1}%) contract={:.1}ms ({:.1}%) tensor_values={:.1}ms ({:.1}%) insert={:.1}ms ({:.1}%) reconstruct={:.1}ms ({:.1}%) total={:.1}ms",
+            key_and_lookup as f64 / 1e6, 100.0 * key_and_lookup as f64 / total as f64,
+            contract as f64 / 1e6, 100.0 * contract as f64 / total as f64,
+            tensor_values as f64 / 1e6, 100.0 * tensor_values as f64 / total as f64,
+            insert as f64 / 1e6, 100.0 * insert as f64 / total as f64,
+            reconstruct as f64 / 1e6, 100.0 * reconstruct as f64 / total as f64,
+            total as f64 / 1e6,
+        );
+        assert!(total > 0);
     }
 }

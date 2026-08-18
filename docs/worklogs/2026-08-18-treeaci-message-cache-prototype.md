@@ -204,3 +204,74 @@ chain-only; a branched-tree wall-clock measurement has not been made. The
 dimensions at construction time; it has not been checked against non-uniform
 local dimensions beyond what the existing `index_key` test suite (merged from
 #645) already covers.
+
+## Update: root-caused and fixed for chain topology (same session, systematic debugging)
+
+The "what fixes it" section above was itself a hypothesis, arrived at by
+extrapolating Hiroshi's bond=2 primitive-cost table
+(`2026-08-17-treeaci-per-evaluation-cost.md`) rather than by measuring this
+code path directly. Continuing under `superpowers:systematic-debugging`
+rather than starting the step-4 rewrite on that assumption:
+
+**Phase 1, evidence.** Added `#[cfg(test)]`-gated `AtomicU64` phase timers
+inside `get_or_compute_node_message`
+(`message_cache_phase_breakdown_on_realistic_floating_zone_walk`, kept) and
+reran the same 16-site/bond-128 walk. Result:
+
+```
+key_and_lookup=4.7ms (0.2%) contract=619.9ms (25.1%) tensor_values=1760.1ms (71.3%)
+insert=9.2ms (0.4%) reconstruct=74.6ms (3.0%) total=2468.6ms
+```
+
+`IdxTensor::from_dense_any` (the reconstruct step, i.e. the mechanism the
+original hypothesis blamed) is 3.0%. The actual dominant cost, at 71.3% and
+**three times the contraction that produced the data**, is
+`tensor_values_any` -- converting a cache miss's freshly contracted message
+back into a plain `Vec<AnyScalar>` so it can be stored.
+
+**Root cause, traced into `tenferro-ad`'s source rather than inferred:**
+`IdxTensor::to_vec` calls `EagerTensor::duplicate_value`, which has a cheap
+path (`duplicate_host_tensor`, a plain slice copy) and an expensive fallback
+(`with_execution_session(|s| s.to_contiguous_read(...))`) taken whenever the
+value is non-contiguous or not yet host-resident. A `contract_with_options`
+result hits the fallback every time; the uncached code never paid this cost
+because it keeps every intermediate message as an `IdxTensor` and only
+materializes once, at the very end, for the final scalar output. The cache
+introduced a new per-miss materialization that the original code structurally
+avoided.
+
+**Fix (chain topology; branching and complex scalars fall back to the
+existing generic path).** `try_compute_leaf_message_raw` and
+`try_compute_chain_message_raw`: hand-written loops over each node's own
+`Vec<f64>` (read once, host-resident by construction) and, for a one-child
+node, the child's already-`Vec<f64>` message, generalizing
+`row_vector_times_matrix` from `crates/tensor4all-simplett/src/einsum_helper.rs`
+to the `abq,aq->bq` chain-message shape. Never calls `contract_with_options`
+or produces a non-contiguous intermediate, so there is nothing for
+`to_vec`/`duplicate_value` to fall back on. TDD throughout: each kernel has a
+test asserting bit-for-bit agreement with `compute_stacked_message`'s existing
+(oracle) output before being wired in
+(`raw_leaf_message_matches_generic_contraction`,
+`raw_chain_message_matches_generic_contraction`).
+
+**Result**, same walk, three repeated runs: **0.96x, 1.40x, 1.09x** -- cached
+is now faster than uncached, versus 0.83-0.89x before this fix. Phase
+breakdown after the fix: `total` drops from 2468.6ms to 2014.4ms; `contract`
+(now covering both the raw and any remaining generic-path computation)
+absorbs what were separately the contract and tensor_values phases, since the
+raw path produces no separately-timed materialization step at all.
+
+417 tests pass (up from 414: three new tests for this fix, all TDD'd
+RED-then-GREEN), `cargo clippy -- -D warnings` clean, `tensor4all-treeaci`
+still compiles against the unchanged public surface.
+
+**What is not yet covered by the fix:** nodes with two or more children
+(branching) and complex-valued (`Complex64`) trees still go through the
+original `compute_stacked_message`/`contract_with_options` path and pay the
+same materialization cost measured above. `try_compute_chain_message_raw`'s
+eligibility check (`entries.len() == 1`, `children.len() == 1`,
+`!tensor.is_complex()`) returns `Ok(None)` for those cases rather than
+guessing, so correctness cannot regress for them -- but they get none of this
+session's speedup. Generalizing to N children, matching Hiroshi's
+`abcq,bq,cq->aq` shape and beyond, is the natural next increment and was not
+attempted here.
