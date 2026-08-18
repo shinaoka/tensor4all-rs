@@ -21,7 +21,10 @@ use tensor4all_tensorbackend::TensorElement;
 /// accepts::<num_complex::Complex64>();
 /// ```
 pub trait TreeAciScalar:
-    TensorElement + tensor4all_core::Scalar + tensor4all_core::MatrixLuciScalar
+    TensorElement
+    + tensor4all_core::Scalar
+    + tensor4all_core::MatrixLuciScalar
+    + tensor4all_tensorbackend::MatrixScalar
 {
     /// Converts a scalar returned by a high-level TreeTN evaluator.
     ///
@@ -152,6 +155,24 @@ mod tests {
             Complex64::from_evaluated_scalar(AnyScalar::new_complex(1.25, -3.5)).unwrap(),
             Complex64::new(1.25, -3.5)
         );
+    }
+
+    /// `TreeAciScalar` alone (no explicit `MatrixScalar` bound at the call
+    /// site) must be enough to satisfy a function that requires
+    /// `MatrixScalar`. This only compiles because `TreeAciScalar` has
+    /// `MatrixScalar` as a supertrait; if that supertrait bound were removed,
+    /// `requires_matrix_scalar::<T>()` inside `accepts` would fail to
+    /// typecheck even though `accepts`'s own bound list is unchanged.
+    #[test]
+    fn tree_aci_scalar_implies_matrix_scalar() {
+        fn requires_matrix_scalar<T: tensor4all_tensorbackend::MatrixScalar>() {}
+        fn accepts<T: super::TreeAciScalar>() {
+            requires_matrix_scalar::<T>();
+        }
+        accepts::<f32>();
+        accepts::<f64>();
+        accepts::<Complex32>();
+        accepts::<Complex64>();
     }
 
     /// Precision conversion within one kind is lossy but permitted; the kind
