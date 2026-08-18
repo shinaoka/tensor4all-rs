@@ -788,3 +788,133 @@ work there needs its own benchmark with actual branch points, not an
 opportunistic extension of this update. `from_samples`'s initial,
 non-incremental build noted as the likely next hotspot after Update 5
 remains unprofiled against the current code.
+
+## Update 7: sample materialization (`from_samples`/`extend`) through BLAS `mat_mul`, same shape as Update 6
+
+Separate plan (`2026-08-18-treeaci-blas-sample-materialization`), executed as
+three tasks. This closes the item Update 6 left explicitly unprofiled
+("`from_samples`'s initial, non-incremental build ... remains unprofiled
+against the current code").
+
+**Root cause, traced into the call site rather than inferred.** A phase-timer
+profiling pass (same technique as Updates 3-4) measured
+`InputFrameStore::from_samples`/`extend` at roughly 70% of wall time at
+chi=128. `InputFrameStore::build_or_extend` (`frames.rs`) is the shared
+implementation behind both entry points, and its inner loop --
+`for sample in known..builder.memo[edge].len() { builder.compute(edge,
+sample)?; }` -- called `FrameBuilder::compute` once per sample.
+`compute`'s single-incoming-edge case bottoms out in the same
+`contract_prepared_core`/`accumulate_incoming` scalar per-candidate loop that
+Update 6 had already replaced with a BLAS `mat_mul` at a *different* call
+site (`candidate_frames_for_edge`, used by pivot-search candidate
+contraction). Sample materialization shares the same underlying scalar
+primitive but was never routed through Update 6's batching, because it goes
+through `compute`, not `candidate_frame` -- a separate call site doing
+functionally the same per-candidate/per-sample contraction, requiring its own
+batched entry point rather than reuse of Update 6's.
+
+**Fix, in two tasks.** (1) `FrameBuilder::compute_batch(&mut self, edge:
+DirectedEdgeId, samples: Range<SampleId>) -> Result<()>` (`frames.rs`): the
+single-incoming-edge case gathers the requested sample range's incoming
+frames into one `incoming_dim x n_samples` matrix and issues one `mat_mul`
+against the node's prepared-core matrix, writing every sample's memoized
+result from the single batched result; 0- or >=2-incoming-edge cuts fall back
+to the unchanged per-sample scalar `compute`, mirroring Update 6's
+`candidate_frames_for_edge` dispatcher exactly. (2)
+`InputFrameStore::build_or_extend`'s inner loop was reduced from the
+per-sample `compute` loop above to one `builder.compute_batch(edge,
+known..builder.memo[edge].len())?` call -- a three-line diff in `frames.rs`,
+no other file touched. `compute_batch` itself was added in a prior commit
+with zero production call sites (verified by grep) and wired in only in the
+second commit, so the batched path had standalone test coverage before it
+carried any real traffic.
+
+TDD: three new tests in `frames/tests/mod.rs`
+(`compute_batch_matches_scalar_compute_on_a_chain_edge`,
+`compute_batch_falls_back_correctly_on_a_leaf_edge`,
+`compute_batch_falls_back_correctly_on_a_branch_edge`), each building two
+independent `FrameBuilder`s over the same input/problem/arena and comparing
+`compute_batch`'s memoized results against the pre-existing scalar `compute`
+loop's, exact (`assert_eq!`, both paths perform the same floating-point
+operations in the same order). None of the crate's existing fixtures had a
+directed edge with exactly one incoming edge, so a new 3-node chain fixture
+(`chain_tree_for_batched_compute`) was added for the batched-branch test.
+A task-reviewer fix round then added
+`extend_matches_a_full_rebuild_on_a_chain_with_a_batched_edge`, closing a
+coverage gap the reviewer identified: the two pre-existing "designated"
+extend-correctness tests both use the `y_tree` fixture, whose directed edges
+are always 0- or 2-incoming (center degree 3, leaves degree 1), so neither
+ever drove `compute_batch`'s batched branch with a nonzero `known` offset --
+the exact `extend`-plus-batching interaction this task exists to scrutinize.
+The new test grows a chain arena, asserts `known > 0` and `grown_count >
+known` (so the setup is non-vacuous), then compares a genuine `extend` call
+against a from-scratch rebuild sample-by-sample.
+
+**Result**, `treeaci_parity.rs` chi=16/32/64/128, same benchmark invocation
+as the Update 6 baseline capture. The host was under sustained,
+unrelated background CPU contention throughout this measurement --
+`ecosystemd`/`EcosystemAnalytics`/`trustd` daemons active shortly after a
+restart, load average oscillating 4.4-7.7 against 8 cores and not settling
+after several minutes of waiting, the same class of noise Update 4 and
+Update 6 both already documented. Rather than discard the run outright, two
+independent full benchmark invocations were run back to back and their
+per-chi tree/train ratios compared: they agreed to within 2% of each other
+at every chi (e.g. chi=128: 6.01x and 5.97x), even though each run's own
+criterion change-detection against its stored baseline showed inconsistent,
+noise-driven regressed/improved swings on individual arms. Reported numbers
+below are the two runs' average:
+
+| chi | ratio before (Update 6) | ratio after | improvement |
+|---:|---:|---:|---:|
+| 16 | 2.70x | 2.85x | -5.4% (regressed, within run-to-run noise) |
+| 32 | 3.91x | 3.74x | 4.4% |
+| 64 | 5.33x | 4.24x | 20.4% |
+| 128 | 9.43x | 5.99x | 36.5% |
+
+The improvement grows with chi, the same pattern Update 6 found and larger in
+magnitude at every chi from 32 up (Update 6: 3.0%/13.6%/31.6% at
+chi=32/64/128; this update: 4.4%/20.4%/36.5%) -- consistent with the
+profiling finding that sample materialization was a larger fraction of wall
+time than candidate-frame contraction was. At chi=16 the regression is not
+distinguishable from ordinary run-to-run noise, the same conclusion Update 6
+reached at chi=16 for the same reason (candidate/sample counts too small for
+one BLAS call to amortize better than the scalar loop's fixed overhead).
+
+The ratio does not approach 1x even though the dominant cost is now
+BLAS-backed on both arms of the comparison, and the benchmark's own printed
+diagnostics point at part of why: at every chi, the tree solver takes
+noticeably more sweeps to converge than chain `tensor4all-aci` on this
+benchmark (chi=128: 2 sweeps for train, 5 for tree; chi=64: 3 vs 6; chi=32: 2
+vs 4; chi=16: 3 vs 5) -- roughly 2x-2.5x, unrelated to and unmoved by this
+change, since neither task touched scheduling or convergence logic. A sweep
+count multiplier of that size alone puts a floor under the ratio well above
+1x regardless of how fast per-sweep contraction becomes. This is offered as
+a directly observed, not inferred, partial explanation rather than a full
+accounting of the remaining gap; the ~20% "other" phase (`initialize` prep,
+`commit_edge_proposal` bookkeeping) flagged as unresolved after Update 5
+remains unprofiled against the current code, and multi-incoming-edge nodes
+remain on the original scalar path for both candidate contraction and sample
+materialization, as before. The crate's own maturity doc comment (`lib.rs`)
+has been updated from "2.7x-9.4x" to "2.8x-6.0x".
+
+Full verification: `cargo fmt --all -- --check` clean; scoped `cargo clippy
+-p tensor4all-treeaci -p tensor4all-aci --all-targets -- -D warnings` clean;
+`cargo test --release -p tensor4all-treeaci --no-fail-fast` green (100 lib
+tests, 7 integration, 1 rank-scaling, 18 doctests, 126 total, all passing);
+`cargo doc -p tensor4all-treeaci -p tensor4all-aci --no-deps` clean
+(workspace-wide `cargo doc`/`cargo clippy` still fail on the same unrelated,
+pre-existing `tensor4all-hdf5` Homebrew-formula-name mismatch documented in
+Update 6, not investigated further here).
+
+## What remains after Update 7
+
+Multi-incoming-edge (genuine tree branch point) nodes still use the scalar
+path for both candidate contraction and sample materialization -- unchanged
+by this update, same scope boundary as Update 6. The ~20% "other" phase
+(`initialize` prep, `commit_edge_proposal` bookkeeping) identified after
+Update 5 remains unprofiled. The sweep-count gap between tree and chain
+convergence on this benchmark (roughly 2x-2.5x, noted above) is a newly
+observed candidate explanation for part of the remaining ratio, but is not
+itself investigated here -- if it turns out to dominate what remains, that is
+a new root-cause pass on scheduling/convergence behavior, not an
+opportunistic extension of this update's sample-materialization scope.
