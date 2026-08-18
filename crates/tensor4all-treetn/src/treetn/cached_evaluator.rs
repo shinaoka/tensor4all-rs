@@ -703,6 +703,16 @@ where
     /// `message_caches`, per #645. Built once from the indices this evaluator
     /// was constructed with, since their dimensions never change.
     indexer: FlatIndexer,
+    /// The centre `message_caches`/`parent_bond_indices` were built for.
+    ///
+    /// `evaluate_batched_with_hint` can pass a *different* centre on every
+    /// call (`EvaluationHint::around`, used by `global_guard.rs` to pin the
+    /// contraction centre to whichever site a batch varies). A node's
+    /// "message toward its parent" means a different neighbour under a
+    /// different rooting, so a cache built under one centre is not just
+    /// stale but wrong under another -- both caches are cleared whenever the
+    /// centre actually used changes.
+    rooted_for_center: Option<V>,
 }
 
 impl<'a, V> TreeTNCachedEvaluator<'a, V>
@@ -765,6 +775,7 @@ where
             message_caches: HashMap::new(),
             parent_bond_indices: HashMap::new(),
             indexer,
+            rooted_for_center: None,
         })
     }
 
@@ -942,6 +953,14 @@ where
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<CacheBuildResult<V>> {
+        if self.rooted_for_center.as_ref() != Some(center) {
+            // A node's cached "message toward parent" means a different
+            // neighbour under a different rooting, so a cache built for one
+            // centre is wrong, not merely stale, once the centre changes.
+            self.message_caches.clear();
+            self.parent_bond_indices.clear();
+            self.rooted_for_center = Some(center.clone());
+        }
         self.last_stats = CachedEvaluationStats::default();
         let plan = RootedMessagePlan::new(self.tree, center)?;
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;

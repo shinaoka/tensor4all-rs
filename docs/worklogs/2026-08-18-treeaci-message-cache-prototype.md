@@ -275,3 +275,99 @@ guessing, so correctness cannot regress for them -- but they get none of this
 session's speedup. Generalizing to N children, matching Hiroshi's
 `abcq,bq,cq->aq` shape and beyond, is the natural next increment and was not
 attempted here.
+
+## Update 2: this fix didn't move the number that matters, so it kept going
+
+Rerunning `crates/tensor4all-aci/benches/treeaci_parity.rs` (the same
+end-to-end tree-vs-train comparison `2026-08-17-treeaci-train-parity.md`
+used) after the fix above showed the tree/train ratio essentially unchanged:
+677x -> 622x at chi=128, within run-to-run noise. The reason: that benchmark
+sets `enable_global_guard: false`, so `find_global_pivots` -- the only place
+the message cache this session built actually runs -- never executes. The
+fix was real and verified, but for a code path this benchmark does not
+exercise.
+
+**Phase 1, again, on the actual dominant path.** Added temporary
+`AtomicU64` instrumentation (reverted after use, not committed) around
+`contract_prepared_core` in `crates/tensor4all-treeaci/src/frames.rs` and ran
+the same parity benchmark. At chi=128: **this one function was 20.7s of the
+21.4s total tree run -- 96.7% -- visiting 4.99 billion elements across
+582,282 calls**, at a remarkably constant 4.05-4.56 ns/element across all
+four chi values (consistent with a fixed per-element cost, not one that
+improves with scale).
+
+**Root cause.** `contract_prepared_core` scanned every element of a node's
+*entire* dense core (`left_dim x local_dim x right_dim`) for every candidate
+frame, decoding each element's per-axis coordinate via integer division and
+modulo (`axis_coordinate`), and discarding (`continue`) whatever did not
+match the wanted physical value -- rather than computing the one flat offset
+that already selects the right physical slice and iterating only the axes
+that are actually contracted.
+
+**Fix.** Compute the physical-fixed base offset once (a sum of `wanted axis
+coordinate x stride`, one add per physical axis, no division), then a
+recursive helper (`accumulate_incoming`) walks the cartesian product of the
+incoming axes directly via stride arithmetic, touching exactly
+`outgoing.dim() * product(incoming dims)` elements -- never the padded
+`local_dim`-inclusive volume, never a per-element divmod. Existing tests in
+`crates/tensor4all-treeaci/src/frames/tests/mod.rs` (two-node chain, branching
+Y-tree, multiple-physical-axes-per-node, real and complex scalars, resource
+limits) already covered this function's correctness and served as the
+regression suite; all 6 passed unchanged before and after.
+
+**A second bug found by running the full downstream suite, not just the
+crate I was editing.** After the frames.rs rewrite, running
+`tensor4all-treeaci`'s own test suite (not just `tensor4all-treetn`'s, which
+this session had been checking after every change) surfaced two failures
+that predated the frames.rs work: `global_guard_recovers_a_separated_feature_end_to_end`
+and `...at_the_default_search_count`, both failing with "center contraction
+left non-scalar indices" -- and confirmed (`git stash` + retest) to already
+fail at commit `09656ad8`, i.e. caused by the message-cache work from Update 1,
+not by this update. Root cause: `global_guard.rs` calls
+`evaluate_batched_with_hint` with a *different* centre on every call
+(`EvaluationHint::around`, pinning the contraction centre to whichever site
+the current batch varies). A node's "message toward its parent" names a
+different neighbour under a different rooting, so `message_caches` and
+`parent_bond_indices` -- keyed only by node, implicitly assuming one fixed
+rooting -- served stale-and-wrong data across a centre change. This is a
+correctness bug, not merely a missed optimization: it would have shipped
+silently wrong numbers in any run where the guard's per-call centre hint
+actually changed between calls, most of the time.
+
+Fixed by tracking which centre the caches were built for
+(`rooted_for_center: Option<V>`) and clearing both caches whenever
+`build_environment_cache` is called with a different one. This is exactly
+correctness-first: it costs cache reuse across a centre change, but a fast
+wrong answer is worse than a slow right one. `message_cache_wall_time_on_realistic_floating_zone_walk`
+does not exercise this path (it never passes a hint, so centre never
+changes), which is why it did not catch the bug -- a gap in that test's
+realism, noted for anyone extending it.
+
+**Result**, `treeaci_parity.rs` chi=16/32/64/128, before vs after the
+frames.rs fix (both with the global-guard correctness fix also applied,
+though inert here since the guard is disabled in this benchmark):
+
+| chi | train | tree before | tree after | ratio before | ratio after |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 22.9 ms | 455.6 ms | 302.2 ms | 26x | 13.2x |
+| 32 | 16.9 ms | 1934.3 ms | 1207.1 ms | 139x | 71.4x |
+| 64 | 28.6 ms | 7983.5 ms | 4723.3 ms | 303x | 165.2x |
+| 128 | 36.0 ms | 21594 ms | 14567 ms | 677x | 404.6x |
+
+Roughly a 33-40% reduction in tree wall time at every chi, halving the ratio
+to train ACI at each point. Not parity -- still 13x-405x slower -- but a real,
+verified, end-to-end improvement from fixing the function that actually
+dominates, unlike Update 1's fix. `tensor4all-treetn` (417 tests) and
+`tensor4all-treeaci` (83 tests, including both previously-failing
+global-guard tests) both green; `cargo clippy -- -D warnings` clean on both.
+
+## What remains
+
+The gap did not close, only halve. `contract_prepared_core` was the single
+largest item found, not necessarily the only one -- `local_update.rs`'s LU
+factorization (`matrix_luci_factors_from_matrix_owned`) and the surrounding
+candidate-enumeration/frame-assembly machinery have not been individually
+profiled the way `contract_prepared_core` was. The natural next step is the
+same discipline again: instrument the post-fix run, find what now dominates,
+and decide from measurement rather than assumption whether it is worth
+fixing.

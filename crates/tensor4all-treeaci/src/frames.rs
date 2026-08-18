@@ -330,29 +330,55 @@ fn contract_prepared_core<T: TreeAciScalar, V: TreeAciNode>(
         incoming_axes.push((axis_of(&core.indices, incoming_bond)?, values));
     }
 
+    // Fix the physical axes once via direct offset arithmetic, instead of
+    // scanning every element of the core (including every other physical
+    // value) and discarding the ones that do not match. This is the fix for
+    // the root cause in `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`'s
+    // "Update" section: `contract_prepared_core` was measured to be 96.7% of
+    // a full tree ACI run's wall time at chi=128, visiting 4.99 billion
+    // elements via a per-element `axis_coordinate` divmod even though only
+    // `outgoing.dim() * product(incoming dims)` elements are ever used.
+    let mut base_offset = 0usize;
+    for (physical_axis, &axis) in physical_axes.iter().enumerate() {
+        let wanted =
+            (local_coordinate / physical.strides[physical_axis]) % physical.dims[physical_axis];
+        base_offset += wanted * core.strides[axis];
+    }
+    let outgoing_stride = core.strides[outgoing_axis];
+
     let mut result = vec![T::default(); outgoing.dim()];
-    // INVARIANT: the prepared core payload is bounded by max_core_elements;
-    // this exact conformance loop visits each stored element once.
-    for (flat, core_value) in core.values.iter().copied().enumerate() {
-        let physical_matches = physical_axes
-            .iter()
-            .enumerate()
-            .all(|(physical_axis, axis)| {
-                let wanted = (local_coordinate / physical.strides[physical_axis])
-                    % physical.dims[physical_axis];
-                axis_coordinate(flat, *axis, core) == wanted
-            });
-        if !physical_matches {
-            continue;
-        }
-        let mut contribution = core_value;
-        for (axis, values) in &incoming_axes {
-            contribution = contribution * values[axis_coordinate(flat, *axis, core)];
-        }
-        let outgoing_coordinate = axis_coordinate(flat, outgoing_axis, core);
-        result[outgoing_coordinate] = result[outgoing_coordinate] + contribution;
+    for (outgoing_value, slot) in result.iter_mut().enumerate() {
+        let outgoing_offset = base_offset + outgoing_value * outgoing_stride;
+        *slot = accumulate_incoming(core, &incoming_axes, 0, outgoing_offset);
     }
     Ok(result)
+}
+
+/// Sums `core.values[offset]` over the cartesian product of `incoming_axes`'
+/// values, each axis contracted with its frame vector, without ever touching
+/// an element the physical/outgoing fixing above did not select.
+fn accumulate_incoming<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    incoming_axes: &[(usize, &Vec<T>)],
+    axis_index: usize,
+    offset: usize,
+) -> T {
+    let Some(&(axis, values)) = incoming_axes.get(axis_index) else {
+        return core.values[offset];
+    };
+    let stride = core.strides[axis];
+    let mut sum = T::default();
+    for (value_index, &value) in values.iter().enumerate() {
+        sum = sum
+            + value
+                * accumulate_incoming(
+                    core,
+                    incoming_axes,
+                    axis_index + 1,
+                    offset + value_index * stride,
+                );
+    }
+    sum
 }
 
 fn outgoing_bond<'a, V: TreeAciNode>(
@@ -429,10 +455,6 @@ fn axis_of(indices: &[DynIndex], target: &DynIndex) -> Result<usize> {
         .ok_or(TreeAciError::InternalInvariant {
             message: "prepared core is missing a required full-equality index",
         })
-}
-
-fn axis_coordinate<T>(flat: usize, axis: usize, core: &PreparedCore<T>) -> usize {
-    (flat / core.strides[axis]) % core.dims[axis]
 }
 
 #[cfg(test)]
