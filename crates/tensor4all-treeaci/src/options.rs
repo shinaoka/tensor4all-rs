@@ -67,11 +67,15 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// cache as a whole.
     pub max_frame_elements: usize,
     /// Maximum logical bytes retained by the directed-frame cache, across every
-    /// input and every directed edge. Default: 256 MiB.
+    /// input and every directed edge, plus the pivot-search candidate-frame
+    /// cache that shares this budget. Default: 256 MiB.
     ///
     /// Checked before each frame allocation, so an over-budget run is refused
-    /// rather than reaching the ceiling and then reporting it. Counts the
-    /// cache's owned payload, not allocator or process overhead.
+    /// rather than reaching the ceiling and then reporting it. The candidate
+    /// cache degrades instead of refusing: once it would push the combined
+    /// total over this ceiling, new candidates are still computed but simply
+    /// not cached. Counts the caches' owned payload, not allocator or process
+    /// overhead.
     pub max_frame_bytes: usize,
     /// Maximum logical bytes retained by immutable component samples. Default: 256 MiB.
     pub max_sample_arena_bytes: usize,

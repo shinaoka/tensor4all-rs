@@ -4,7 +4,10 @@
 // remains crate-private while that engine is staged.
 #![allow(dead_code)]
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::mem::size_of;
+use std::rc::Rc;
 
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_tensorbackend::Matrix;
@@ -30,6 +33,22 @@ pub(crate) mod debug_stats {
     }
 }
 
+/// Test-only hit/miss counters for the candidate-frame cache, used to prove
+/// repeated candidate lookups actually hit the cache (see
+/// `frames::tests::candidate_frame_hits_the_cache_on_a_repeated_lookup`).
+#[cfg(test)]
+pub(crate) mod candidate_debug_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub(crate) static HITS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static MISSES: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) fn reset() {
+        HITS.store(0, Ordering::Relaxed);
+        MISSES.store(0, Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct DirectedFrame<T> {
     pub(crate) sample_count: usize,
@@ -46,6 +65,17 @@ impl<T: TreeAciScalar> DirectedFrame<T> {
     }
 }
 
+/// Identifies a pivot-search candidate's frame independent of whether it is
+/// (yet) interned in a `SampleArena`: which input, which directed cut, the
+/// node's own physical value, and the exact ordered set of incoming-edge
+/// frame identities it was built from.
+type CandidateCacheKey = (
+    usize,
+    DirectedEdgeId,
+    usize,
+    Vec<(DirectedEdgeId, SampleId)>,
+);
+
 #[derive(Clone, Debug)]
 pub(crate) struct InputFrameStore<T> {
     pub(crate) frames: Vec<Vec<DirectedFrame<T>>>,
@@ -57,6 +87,30 @@ pub(crate) struct InputFrameStore<T> {
     /// The cache's own accounting, not an allocator or process measurement:
     /// `sample_count * bond_dim * size_of::<T>()` summed over what is retained.
     retained_bytes: usize,
+    /// Memoized `candidate_frame` results, keyed by candidate identity.
+    ///
+    /// Unlike `frames`, these candidates are usually never interned into a
+    /// `SampleArena` (most are proposed, not selected, by one pivot search),
+    /// so they cannot ride the arena's own deduplication. Persisted across
+    /// `extend` calls (i.e. across the whole run, not just one local update)
+    /// because the same candidate identity recurs across sweeps and across
+    /// neighbouring edges once ranks stabilize -- see
+    /// `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`'s
+    /// second #646 continuation for the measured duplication rate (45-65%
+    /// of calls). Shares `retained_bytes`'s budget against
+    /// `PreparedTreeProblem::max_frame_bytes`: once the combined total would
+    /// exceed it, new candidates are still computed but simply not cached,
+    /// rather than evicting or erroring.
+    ///
+    /// `Rc`-shared rather than deep-cloned on `extend`: `extend` runs once
+    /// per directed-edge commit, so a deep clone here would reintroduce the
+    /// same `O(edges)`-work-repeated-`O(edges)`-times shape this file's
+    /// `extend` was written to eliminate for `frames`, just relocated to the
+    /// candidate cache instead. An initial deep-clone version was measured
+    /// to be a net regression at chi=128 for exactly this reason; see the
+    /// worklog for the before/after numbers.
+    candidate_cache: Rc<RefCell<HashMap<CandidateCacheKey, Vec<T>>>>,
+    candidate_cache_bytes: Rc<std::cell::Cell<usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -219,11 +273,20 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             all_inputs.push(input_frames);
             all_cores.push(builder.cores);
         }
+        let (candidate_cache, candidate_cache_bytes) = match existing {
+            Some(store) => (
+                Rc::clone(&store.candidate_cache),
+                Rc::clone(&store.candidate_cache_bytes),
+            ),
+            None => (Rc::new(RefCell::new(HashMap::new())), Rc::new(Cell::new(0))),
+        };
         Ok(Self {
             frames: all_inputs,
             cores: all_cores,
             records,
             retained_bytes,
+            candidate_cache,
+            candidate_cache_bytes,
         })
     }
 
@@ -268,6 +331,19 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         directed_edge: DirectedEdgeId,
         sample: &ComponentSample,
     ) -> Result<Vec<T>> {
+        let key: CandidateCacheKey = (
+            input,
+            directed_edge,
+            sample.local_coordinate,
+            sample.incoming.clone(),
+        );
+        if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            #[cfg(test)]
+            candidate_debug_stats::HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(cached.clone());
+        }
+        #[cfg(test)]
+        candidate_debug_stats::MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
             message: "candidate frame references an unknown input",
         })?;
@@ -285,14 +361,28 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     .map(|values| (edge, values))
             })
             .collect::<Result<Vec<_>>>()?;
-        contract_prepared_core(
+        let values = contract_prepared_core(
             tree,
             problem,
             cores,
             directed_edge,
             sample.local_coordinate,
             &incoming,
-        )
+        )?;
+        let entry_bytes = values.len().saturating_mul(size_of::<T>());
+        let candidate_bytes = self.candidate_cache_bytes.get();
+        let projected = self
+            .retained_bytes
+            .saturating_add(candidate_bytes)
+            .saturating_add(entry_bytes);
+        if projected <= problem.max_frame_bytes {
+            self.candidate_cache_bytes
+                .set(candidate_bytes.saturating_add(entry_bytes));
+            self.candidate_cache
+                .borrow_mut()
+                .insert(key, values.clone());
+        }
+        Ok(values)
     }
 }
 

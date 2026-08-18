@@ -3,7 +3,10 @@ use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
 use super::InputFrameStore;
-use crate::{problem::prepare_problem, samples::SampleArena, TreeAciOptions, TreeAciScalar};
+use crate::{
+    problem::prepare_problem, samples::ComponentSample, samples::SampleArena, TreeAciOptions,
+    TreeAciScalar,
+};
 
 fn two_node_tree<T: TreeAciScalar + From<f64>>() -> TreeTN<IdxTensor, usize> {
     let s0 = DynIndex::new_dyn(2);
@@ -217,6 +220,92 @@ fn extend_recomputes_only_the_newly_interned_samples() {
         "extend should recompute only the new samples: extend={extend_calls} rebuild={rebuild_calls}"
     );
     assert!(extend_calls > 0, "the new seed must still be computed");
+}
+
+/// `candidate_frame` must cache: an identical candidate looked up twice
+/// should compute `contract_prepared_core` once and return the same,
+/// correct value both times.
+#[test]
+fn candidate_frame_hits_the_cache_on_a_repeated_lookup() {
+    let input = two_node_tree::<f64>();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0]]).unwrap();
+    let frames =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .unwrap();
+    let candidate = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![],
+    };
+
+    super::candidate_debug_stats::reset();
+    let first = frames
+        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .unwrap();
+    let second = frames
+        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .unwrap();
+
+    assert_eq!(first, vec![1.0, 10.0]);
+    assert_eq!(second, first);
+    assert_eq!(
+        super::candidate_debug_stats::MISSES.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "the first lookup must compute"
+    );
+    assert_eq!(
+        super::candidate_debug_stats::HITS.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "the second, identical lookup must hit the cache"
+    );
+}
+
+/// When the shared frame budget has no headroom left for the candidate
+/// cache, `candidate_frame` must keep returning the correct value -- just
+/// without caching it -- rather than erroring or corrupting the result.
+#[test]
+fn candidate_frame_stays_correct_when_the_shared_budget_has_no_headroom_for_caching() {
+    let input = two_node_tree::<f64>();
+    let seeds = [vec![0, 0], vec![1, 1]];
+    // Exactly the persistent frame cache's own cost (see
+    // `the_frame_cache_is_bounded_in_aggregate`: 64 bytes for this fixture),
+    // leaving zero headroom for the candidate cache.
+    let tight = prepare_problem(
+        std::slice::from_ref(&input),
+        &TreeAciOptions {
+            max_frame_bytes: 64,
+            ..TreeAciOptions::default()
+        },
+    )
+    .unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&tight, &seeds).unwrap();
+    let frames =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &tight, &arena).unwrap();
+    let candidate = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![],
+    };
+
+    super::candidate_debug_stats::reset();
+    let first = frames
+        .candidate_frame(std::slice::from_ref(&input), &tight, 0, 0, &candidate)
+        .unwrap();
+    let second = frames
+        .candidate_frame(std::slice::from_ref(&input), &tight, 0, 0, &candidate)
+        .unwrap();
+
+    assert_eq!(first, vec![1.0, 10.0]);
+    assert_eq!(second, first);
+    assert_eq!(
+        super::candidate_debug_stats::MISSES.load(std::sync::atomic::Ordering::Relaxed),
+        2,
+        "with no budget headroom, every lookup must recompute rather than corrupt or error"
+    );
+    assert_eq!(
+        super::candidate_debug_stats::HITS.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
 }
 
 /// The frame cache is bounded in aggregate, not only per frame.

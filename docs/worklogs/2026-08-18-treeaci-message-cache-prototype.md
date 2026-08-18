@@ -469,3 +469,106 @@ book-tests -- -D warnings` clean (the excluded crates fail to build in this
 environment for an unrelated, pre-existing reason: no local HDF5 via
 Homebrew); `cargo test -p tensor4all-treeaci -p tensor4all-treetn --release`
 green end to end (unit, integration, and doctests, exit code 0).
+
+## Update 4: the BLAS hypothesis above was wrong; `candidate_frame` was redundant, not merely scalar (#646 continuation)
+
+Continuing under `superpowers:systematic-debugging`. Update 3's "what was
+checked and deliberately not fixed" section guessed the remaining
+`candidate_frame` cost was a missing-BLAS problem. That guess was never
+measured on its own terms and turned out to be wrong.
+
+**Phase 1, evidence.** Instrumented `local_update.rs`'s own phases
+(candidates/frames/matrix_build/operator/factor) plus a hit/miss counter on
+`InputFrameStore::candidate_frame`. Two findings, neither assumed:
+
+- `local_update.rs`'s own row/col dot-product loop (`matrix_build`, the
+  candidate BLAS hypothesis's actual target) was 0.8% of total time at
+  chi=128 -- not a meaningful share of the workload. Not touched.
+- Counting distinct `(input, directed_edge, local_coordinate, incoming)`
+  keys against total `candidate_frame` calls: 45-65% of calls across chi =
+  16..128 are exact duplicates of an already-computed candidate. Since a
+  candidate's frame is a pure function of that key (plus the fixed input
+  cores), a repeat is genuine wasted work, not new work as Update 3 assumed.
+
+**Root cause.** `candidate_frame` (unlike the persistent `frames` cache
+fixed in Update 3) had no cache at all: every pivot-search candidate, most
+of which are proposed and never selected or interned into `SampleArena`, re-ran
+`contract_prepared_core` from scratch on every call, including calls with
+identical keys from earlier sweeps or neighbouring edges once ranks
+stabilize.
+
+**Fix.** A bounded cache on `InputFrameStore`, keyed by candidate identity,
+sharing `retained_bytes`'s budget against `max_frame_bytes` (degrades by
+skipping the cache insert once the shared budget is exhausted, never by
+evicting or erroring -- `options.rs`'s doc for `max_frame_bytes` updated to
+say so). TDD: `candidate_frame_hits_the_cache_on_a_repeated_lookup` (a
+repeated identical lookup must hit and return the same value) and
+`candidate_frame_stays_correct_when_the_shared_budget_has_no_headroom_for_caching`
+(correctness survives even when caching is skipped).
+
+**A self-inflicted regression, caught by measurement before it shipped.**
+The first version carried the cache across `extend` calls (needed, since
+duplicates recur across the whole run, not one local update) by deep-cloning
+the `HashMap` each time. `extend` runs once per directed-edge commit --
+exactly the call site Update 3 fixed for the same reason -- so this
+reintroduced an `O(edges)`-deep-clone repeated `O(edges)` times, just
+relocated from `frames` to the new candidate cache. A diagnostic single run
+measured chi=128 total time *nearly doubling* (864ms -> ~1.7s) instead of
+improving. Fixed by making the cache `Rc<RefCell<HashMap<...>>>`-shared:
+`extend` now clones two `Rc` pointers (refcount bumps) instead of the map's
+contents.
+
+**Measurement was itself unreliable for a while, and that was diagnosed
+rather than papered over.** After the `Rc` fix, repeated `cargo bench`
+criterion runs disagreed with each other by 20-30% at the same chi, and
+`tensor4all-aci`'s own arm -- untouched by this change -- showed confidence
+intervals spanning nearly 2x within a single run (e.g. chi=64 tree:
+`[531.72ms 731.54ms 948.45ms]`). Comparing CI width across every log
+recorded this session showed a clear trend: baseline runs early in the
+session had ~1-17% CI width; by this point the same unchanged `train` arm
+was regularly 20-80%. This was host contention (`top -o cpu` caught
+`ANECompilerService`/`ecosystemd`/`ecosystemanalyticsd` at 60-90% CPU after
+a machine restart, and multiple `git worktree`s exist on this host that can
+run concurrent builds), not a property of the code. Declining to conclude
+from noisy runs and instead re-measuring once `top` showed CPU usage settled
+produced consistent, tight results (CI width 0.5-3.3%), confirming the
+fix's effect was real and small, not an artifact of the earlier noise.
+
+**Result**, `treeaci_parity.rs` chi=16/32/64/128, two clean back-to-back
+runs (with vs. without the candidate cache, same quiet host state,
+`git stash` used to isolate the change so both arms saw identical
+conditions):
+
+| chi | ratio without cache | ratio with cache | improvement |
+|---:|---:|---:|---:|
+| 16 | 3.71x | 3.56x | 4.0% |
+| 32 | 10.86x | 10.13x | 6.7% |
+| 64 | 13.75x | 12.98x | 5.6% |
+| 128 | 27.13x | 24.65x | 9.1% |
+
+A real, reproducible, modest win that grows with chi (matching the
+duplication mechanism: candidates recur more as sweeps and neighbourhoods
+stabilize at higher rank), not the second `Update-3`-sized win a first,
+noise-contaminated measurement briefly suggested. Consistent with a
+back-of-envelope ceiling computed from the hit/miss data: eliminating every
+duplicate `candidate_frame` call for free (zero cache overhead) would save
+at most ~13% of chi=128's total time, since that phase is only ~28% of the
+run; the observed 9.1% is a reasonable fraction of that ceiling once real
+cache bookkeeping cost is accounted for.
+
+Full verification: `cargo fmt --all -- --check` clean; `cargo clippy
+-p tensor4all-treeaci --all-targets -- -D warnings` and `cargo clippy
+--workspace --all-targets --exclude tensor4all-hdf5 --exclude book-tests
+-- -D warnings` both clean; `cargo test -p tensor4all-treeaci --release`
+(87 lib tests, up from 85) and `cargo test -p tensor4all-treetn --release`
+(121 tests) both green, exit code 0 on every run.
+
+## What remains after Update 4
+
+`candidate_frame` is now cached but `frames` (its containing phase) is still
+the largest single item in `local_update.rs` at high chi. The BLAS
+hypothesis is now known-wrong for the row/col dot-product loop specifically
+(measured at 0.8% of total); whether it would help `contract_prepared_core`
+itself (the shared primitive both `frames.rs`'s persistent cache and the new
+candidate cache route through) has not been measured and should not be
+assumed either way without doing so first.
