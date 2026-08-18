@@ -1019,3 +1019,113 @@ As with Update 7, `InputFrameStore::build_or_extend`'s edge-processing loop
 was deliberately left in index order rather than reordered to topological
 order -- that remains a separate, riskier future change, out of scope for
 this fix. The memo-check skip is the complete, intended fix for this round.
+
+## Update 9: the sweep-count gap flagged after Update 7 was the convergence criterion, not a real algorithmic difference
+
+Update 7's "What remains after Update 7" section named the tree/chain
+sweep-count gap (roughly 2x-2.5x on `treeaci_parity`) as "a newly observed
+candidate explanation for part of the remaining ratio" and left it
+uninvestigated. This update is that follow-up pass: a per-sweep rank/error
+trajectory comparison at chi=32 (informal instrumentation, not committed)
+showed both `tensor4all-aci` (chain) and `tensor4all-treeaci` (tree) reaching
+their near-final rank and error by sweep 0-1 -- the two algorithms were doing
+essentially the same convergence work per sweep, at the same pace. The gap
+was entirely in how many *additional* sweeps each side's stopping rule
+demanded before declaring convergence, not in how many sweeps were needed to
+reach the answer.
+
+**Root cause** (`crates/tensor4all-treeaci/src/schedule.rs`,
+`convergence_criterion`): the tree crate's dwell-window check required every
+individual directed edge's rank to be simultaneously non-increasing across
+the window (`ranks: &[Vec<usize>]`, per-edge comparison). `tensor4all-aci`'s
+`convergence_criterion_like_julia` (`crates/tensor4all-aci/src/elementwise.rs`)
+only requires the network-wide **scalar max rank** to be non-increasing;
+individual bonds are free to fluctuate underneath that max. On a tree, with
+more edges than a chain has bonds, the probability that at least one edge
+ticks up by one while the network max is already flat and stable is higher
+than on a chain -- and every such tick reset tree's dwell window, forcing it
+to re-accumulate `min_sweeps` more clean passes before it could converge,
+even though the quantity chain's criterion actually cares about (the network
+max) had already stopped moving. This is exactly the mechanism informally
+observed in the chi=32 trajectory: individual edges fluctuated by one for a
+sweep or two while the max rank held flat, and each fluctuation cost tree
+roughly one more sweep it did not algorithmically need.
+
+**Fix** (Task 2 of this plan, commit `8725c5b0`,
+`crates/tensor4all-treeaci/src/schedule.rs`): changed `convergence_criterion`
+to read the already-computed `max_ranks: Vec<usize>` (pushed from
+`report.max_rank` every pass -- this was already being computed and returned
+in `SweepHistory`, just not used for the stability check) instead of the
+per-edge `rank_vectors: Vec<Vec<usize>>`, which was then dead and removed.
+The window check is now structurally identical to `tensor4all-aci`'s
+reference criterion: non-increasing scalar max across the dwell window, plus
+the unchanged `error <= tolerance` gate and the unchanged "zero global pivots
+found in the window" clause. Neither of those two other gates was touched.
+
+**TDD.** The old test
+`convergence_requires_full_rank_vector_stability_and_minimum_dwell` was
+replaced with `convergence_requires_stable_max_rank_and_minimum_dwell`
+(`crates/tensor4all-treeaci/src/schedule/tests/mod.rs`), which first asserts
+the new signature fails to compile against the old `&[Vec<usize>]` parameter
+(confirmed: 5 call-site type errors), then after the fix asserts: (1) below
+minimum dwell never converges; (2) two sweeps with a stable scalar max rank,
+error at tolerance, and no global pivots in the window converges even though
+this is exactly the per-edge-fluctuation-underneath-a-stable-max scenario the
+old code used to reject; (3) a max rank that actually increases within the
+window still blocks convergence (unchanged); (4) error above tolerance still
+blocks (unchanged); (5) a global pivot found in the window still blocks
+(unchanged). No other test in the crate needed an updated expected rank,
+sweep count, or error value -- the full 127-test suite (101 unit + 7
+`public_api` + 1 `rank_scaling` + 18 doctests) passed unchanged both before
+and after, because no pre-existing test scenario happened to exercise an edge
+fluctuating underneath an already-stable network max.
+
+**Result.** Re-ran `cargo bench -p tensor4all-aci --bench treeaci_parity`
+twice back to back (host load average 5.5, CPU 28% idle -- moderately loaded
+but the two runs agreed closely, see table). Sweep counts are deterministic
+on this fixed-seed benchmark and were identical between the two runs:
+
+| chi | chain sweeps | tree sweeps (before) | tree sweeps (after) | sweep ratio (before) | sweep ratio (after) |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 3 | 5 | 4 | 1.67x | 1.33x |
+| 32 | 2 | 4 | 2 | 2.00x | 1.00x |
+| 64 | 3 | 6 | 2 | 2.00x | 0.67x |
+| 128 | 2 | 5 | 2 | 2.50x | 1.00x |
+
+Sweep counts converged from a 1.67x-2.50x tree/chain gap down to 0.67x-1.33x
+-- at chi=32 and chi=128 tree now matches chain's sweep count exactly, and at
+chi=64 tree actually converges in *fewer* sweeps than chain. Wall-time
+followed the same direction, using the mean of the two back-to-back runs'
+center estimates:
+
+| chi | chain time (ms) | tree time (ms) | wall ratio (before, Task 1) | wall ratio (after) |
+|---:|---:|---:|---:|---:|
+| 16 | 22.36 | 52.42 | 2.84x | 2.35x |
+| 32 | 16.65 | 37.74 | 3.62x | 2.27x |
+| 64 | 28.13 | 59.48 | 4.37x | 2.11x |
+| 128 | 33.94 | 122.19 | 5.82x | 3.60x |
+
+The wall-time ratio dropped at every chi (from 2.84x-5.82x to 2.11x-3.60x),
+and no longer grows monotonically with chi the way the pre-fix numbers did --
+chi=64's ratio (2.11x) is now the lowest of the four, not the second highest.
+The remaining 2.1x-3.6x gap is consistent with Update 6/7's still-unfinished
+per-sweep BLAS-batching scope (multi-incoming-edge nodes and the
+scalar-primed subset of single-incoming-edge nodes still use the
+per-candidate/per-sample scalar path) rather than with sweep count, which
+this update brought to near parity. The crate's maturity doc comment
+(`crates/tensor4all-treeaci/src/lib.rs`) has been updated to report both the
+new sweep-count ratio (0.7x-1.3x, down from 1.7x-2.5x) and the new wall-time
+ratio (2.1x-3.6x, down from 2.8x-5.8x), and the "still growing with bond
+dimension" characterization of the wall-time gap has been dropped since it is
+no longer accurate (the new ratio dips at chi=64 before rising again at
+chi=128).
+
+**Verification.** `cargo fmt --all -- --check` clean. Scoped `cargo clippy -p
+tensor4all-treeaci -p tensor4all-aci --all-targets -- -D warnings` clean.
+`cargo test --release -p tensor4all-treeaci --no-fail-fast`: 101 lib tests,
+7 integration, 1 rank-scaling, 18 doctests, all passing. `cargo doc -p
+tensor4all-treeaci -p tensor4all-aci --no-deps` builds clean.
+
+This closes the sweep-count-gap question Update 7 raised and left open: it
+was the stopping rule, not a real per-sweep algorithmic difference between
+tree and chain traversal.

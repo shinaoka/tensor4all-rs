@@ -9,11 +9,17 @@
 //!
 //! **This is not yet a drop-in replacement for `tensor4all-aci`.** On a chain,
 //! where the two are directly comparable, it reaches the same accuracy at the
-//! same or lower rank for no more function evaluations, but remains several
-//! times slower end to end (roughly 2.7x-5.8x on `tensor4all-aci`'s
-//! `treeaci_parity` benchmark, chain, bond dimension 16 through 128, and
-//! still growing with bond dimension, though much less steeply than before).
-//! Candidate/pivot-search frame contraction, and sample materialization
+//! same or lower rank for no more function evaluations, and now converges in
+//! a comparable number of sweeps (0.7x-1.3x `tensor4all-aci`'s sweep count on
+//! `treeaci_parity`'s chain, bond dimension 16 through 128 -- down from
+//! 1.7x-2.5x before `convergence_criterion` was changed to match
+//! `tensor4all-aci`'s network-wide scalar max-rank stopping rule instead of
+//! requiring every individual edge's rank to be simultaneously
+//! non-increasing). It still remains several times slower end to end
+//! (roughly 2.1x-3.6x wall time on the same benchmark, down from 2.8x-5.8x
+//! before that fix), but the gap is no longer chiefly a sweep-count effect --
+//! it now reflects the per-sweep cost described below. Candidate/pivot-search
+//! frame contraction, and sample materialization
 //! (`from_samples`/`extend`) for single-incoming-edge nodes (which covers
 //! every node on a chain), route through a BLAS matrix-multiply primitive
 //! instead of a per-candidate/per-sample scalar loop *when* that sample is
