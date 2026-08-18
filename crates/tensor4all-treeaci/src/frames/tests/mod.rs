@@ -4,8 +4,8 @@ use tensor4all_treetn::TreeTN;
 
 use super::InputFrameStore;
 use crate::{
-    problem::prepare_problem, samples::ComponentSample, samples::SampleArena, TreeAciOptions,
-    TreeAciScalar,
+    problem::prepare_problem, problem::PreparedTreeProblem, samples::ComponentSample,
+    samples::SampleArena, TreeAciOptions, TreeAciScalar,
 };
 
 fn two_node_tree<T: TreeAciScalar + From<f64>>() -> TreeTN<IdxTensor, usize> {
@@ -671,4 +671,220 @@ fn candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges
     // Sanity: candidates are not all identical, so this exercises real,
     // differing per-candidate contractions rather than a degenerate case.
     assert!(dispatched.iter().any(|frame| frame != &dispatched[0]));
+}
+
+/// Builds a `FrameBuilder` the same way `InputFrameStore::build_or_extend`
+/// builds its initial (non-`extend`) builder at `frames.rs:229-235`, so tests
+/// can drive `FrameBuilder::compute`/`compute_batch` directly against a fresh,
+/// unpolluted memo. Two independent builders over the same
+/// input/problem/arena (one per call) let a test compare the scalar and
+/// batched paths without either polluting the other's memo.
+fn build_frame_builder<'a>(
+    input: &'a TreeTN<IdxTensor, usize>,
+    problem: &'a PreparedTreeProblem<usize>,
+    arena: &'a SampleArena,
+) -> super::FrameBuilder<'a, f64, usize> {
+    let cores = super::prepare_cores::<f64, usize>(input, problem).unwrap();
+    let memo = problem
+        .directed_edges
+        .iter()
+        .enumerate()
+        .map(|(edge, _)| {
+            let count = arena.directed_record_count(edge).unwrap();
+            vec![None; count]
+        })
+        .collect::<Vec<_>>();
+    super::FrameBuilder {
+        input,
+        problem,
+        arena,
+        cores,
+        memo,
+    }
+}
+
+/// 3-node chain `0 -- 1 -- 2`. Directed edge `1 -> 2` has exactly one
+/// incoming edge (`0 -> 1`, node 1's only other neighbor) -- the shape
+/// `FrameBuilder::compute_batch`'s batched BLAS path requires, and which
+/// none of this module's other fixtures (`y_tree`, `star_tree_for_fallback_dispatch`)
+/// provide, since both have a degree-3 center and therefore only 0- or
+/// 2-incoming directed edges. Values are arbitrary; the tests using this
+/// fixture only compare `compute_batch` against the pre-existing scalar
+/// `compute` path, not against a hand-computed answer.
+fn chain_tree_for_batched_compute() -> TreeTN<IdxTensor, usize> {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(2);
+    let bond01 = DynIndex::new_dyn(2);
+    let bond12 = DynIndex::new_dyn(2);
+
+    let node0 = IdxTensor::from_dense(vec![s0, bond01.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let node1 = IdxTensor::from_dense(
+        vec![bond01, s1, bond12.clone()],
+        (1..=8).map(|value| value as f64).collect(),
+    )
+    .unwrap();
+    let node2 = IdxTensor::from_dense(vec![bond12, s2], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
+
+    TreeTN::from_tensors(vec![node0, node1, node2], vec![0, 1, 2]).unwrap()
+}
+
+/// `compute_batch` on a single-incoming-edge cut must produce exactly the
+/// same memoized values as calling `compute` once per sample -- both paths
+/// perform the same floating-point operations per sample in the same order
+/// (see the prior BLAS plan's Task 3/4, which established this exact-equality
+/// property for the analogous candidate-frame batching).
+#[test]
+fn compute_batch_matches_scalar_compute_on_a_chain_edge() {
+    let input = chain_tree_for_batched_compute();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .expect("chain must have a directed edge 1 -> 2");
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 1);
+
+    // Three distinct seeds, varying both node 0's and node 1's physical
+    // values, so directed edge 1 -> 2 (local_coordinate = node 1's physical
+    // value, incoming = node 0's sample) ends up with three distinct
+    // samples.
+    let seeds = vec![vec![0, 0, 0], vec![1, 0, 0], vec![0, 1, 0]];
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let sample_count = arena.directed_record_count(edge).unwrap();
+    assert!(
+        sample_count >= 3,
+        "expected at least 3 distinct samples on the single-incoming edge, got {sample_count}"
+    );
+
+    let mut builder_a = build_frame_builder(&input, &problem, &arena);
+    let mut builder_b = build_frame_builder(&input, &problem, &arena);
+
+    let mut scalar_results = Vec::with_capacity(sample_count);
+    for sample in 0..sample_count {
+        scalar_results.push(builder_a.compute(edge, sample).unwrap());
+    }
+
+    builder_b.compute_batch(edge, 0..sample_count).unwrap();
+    for (sample, expected) in scalar_results.iter().enumerate() {
+        let batched = builder_b.memo[edge][sample]
+            .clone()
+            .expect("compute_batch must memoize every sample in its range");
+        assert_eq!(
+            &batched, expected,
+            "sample {sample} disagrees between compute and compute_batch"
+        );
+    }
+    // Sanity: this is a meaningful comparison, not a vacuous shape check --
+    // the three samples' frames actually differ.
+    assert!(scalar_results
+        .iter()
+        .any(|frame| frame != &scalar_results[0]));
+}
+
+/// `compute_batch` on a directed edge with zero incoming edges (a leaf
+/// source) must fall back to `compute` per sample and produce identical
+/// results, mirroring
+/// `candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges`'s
+/// coverage of the analogous candidate-frame dispatcher. Reuses
+/// `star_tree_for_fallback_dispatch` (added by the prior BLAS plan's fix
+/// round, commit `4b06c3c2`) rather than a new branch-point fixture.
+#[test]
+fn compute_batch_falls_back_correctly_on_a_leaf_edge() {
+    let input = star_tree_for_fallback_dispatch();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 0)
+        .expect("star tree must have a directed edge 1 -> 0");
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 0);
+
+    // Directed edge 1 -> 0's only component is node 1's own physical value
+    // (incoming is empty), so the seeds must vary node 1's (position index 1
+    // in `node_order`, which is sorted `[0, 1, 2, 3]`) physical value, not
+    // node 0's.
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 1, 0, 0]];
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let sample_count = arena.directed_record_count(edge).unwrap();
+    assert!(
+        sample_count >= 2,
+        "expected at least 2 distinct samples on the leaf edge, got {sample_count}"
+    );
+
+    let mut builder_a = build_frame_builder(&input, &problem, &arena);
+    let mut builder_b = build_frame_builder(&input, &problem, &arena);
+
+    let mut scalar_results = Vec::with_capacity(sample_count);
+    for sample in 0..sample_count {
+        scalar_results.push(builder_a.compute(edge, sample).unwrap());
+    }
+
+    builder_b.compute_batch(edge, 0..sample_count).unwrap();
+    for (sample, expected) in scalar_results.iter().enumerate() {
+        let batched = builder_b.memo[edge][sample]
+            .clone()
+            .expect("compute_batch must memoize every sample in its range");
+        assert_eq!(
+            &batched, expected,
+            "sample {sample} disagrees between compute and compute_batch"
+        );
+    }
+    // Sanity: this is a meaningful comparison, not a vacuous shape check --
+    // the two samples' frames actually differ.
+    assert_ne!(scalar_results[0], scalar_results[1]);
+}
+
+/// `compute_batch` on a directed edge with two incoming edges (a branch
+/// point) must fall back to `compute` per sample and produce identical
+/// results, mirroring
+/// `candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges`'s
+/// coverage of the analogous candidate-frame dispatcher. Reuses
+/// `star_tree_for_fallback_dispatch` rather than a new branch-point fixture.
+#[test]
+fn compute_batch_falls_back_correctly_on_a_branch_edge() {
+    let input = star_tree_for_fallback_dispatch();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 2);
+
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let sample_count = arena.directed_record_count(edge).unwrap();
+    assert!(
+        sample_count >= 2,
+        "expected at least 2 distinct samples on the branch edge, got {sample_count}"
+    );
+
+    let mut builder_a = build_frame_builder(&input, &problem, &arena);
+    let mut builder_b = build_frame_builder(&input, &problem, &arena);
+
+    let mut scalar_results = Vec::with_capacity(sample_count);
+    for sample in 0..sample_count {
+        scalar_results.push(builder_a.compute(edge, sample).unwrap());
+    }
+
+    builder_b.compute_batch(edge, 0..sample_count).unwrap();
+    for (sample, expected) in scalar_results.iter().enumerate() {
+        let batched = builder_b.memo[edge][sample]
+            .clone()
+            .expect("compute_batch must memoize every sample in its range");
+        assert_eq!(
+            &batched, expected,
+            "sample {sample} disagrees between compute and compute_batch"
+        );
+    }
+    // Sanity: this is a meaningful comparison, not a vacuous shape check --
+    // the two samples' frames actually differ.
+    assert_ne!(scalar_results[0], scalar_results[1]);
 }

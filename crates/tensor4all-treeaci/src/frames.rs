@@ -651,6 +651,138 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         Ok(values)
     }
 
+    /// Computes and memoizes every sample in `samples` for `edge`, using the
+    /// batched BLAS path ([`contract_prepared_core_batched`]) when `edge`'s
+    /// source node has exactly one incoming edge -- the same precondition and
+    /// grouping strategy [`InputFrameStore::candidate_frames_for_edge`]
+    /// already uses for pivot-search candidates -- and falling back to
+    /// [`Self::compute`] per sample otherwise (0 or >=2 incoming edges).
+    ///
+    /// Unlike `compute`, this has no return value: every result lands in
+    /// `self.memo[edge]`, which is where `build_or_extend`'s caller reads
+    /// results back from regardless of which path computed them.
+    fn compute_batch(
+        &mut self,
+        edge: DirectedEdgeId,
+        samples: std::ops::Range<SampleId>,
+    ) -> Result<()> {
+        let directed = &self.problem.directed_edges[edge];
+        if directed.incoming_to_from.len() != 1 {
+            for sample in samples {
+                self.compute(edge, sample)?;
+            }
+            return Ok(());
+        }
+        let incoming_edge = directed.incoming_to_from[0];
+
+        // Ensure every sample's single incoming frame is memoized first. This
+        // recursion is `compute`'s existing one -- it is already memoized, so
+        // a sample whose incoming frame was computed by an earlier call (this
+        // one or a sibling directed edge sharing an ancestor) does no
+        // repeated work.
+        for sample in samples.clone() {
+            let record = self.arena.record(edge, sample)?.clone();
+            if record.incoming.len() != 1 {
+                return Err(TreeAciError::InternalInvariant {
+                    message:
+                        "single-incoming-edge sample does not have exactly one incoming sample",
+                });
+            }
+            let (incoming_edge_of_sample, incoming_sample) = record.incoming[0];
+            if incoming_edge_of_sample != incoming_edge {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "single-incoming-edge sample's incoming sample is on the wrong directed edge",
+                });
+            }
+            self.compute(incoming_edge, incoming_sample)?;
+        }
+
+        let node = *self.problem.node_positions.get(&directed.from).ok_or(
+            TreeAciError::InternalInvariant {
+                message: "frame source has no prepared node position",
+            },
+        )?;
+        let core = &self.cores[node];
+        let outgoing = self.outgoing_bond(edge)?;
+        let outgoing_axis = axis_of(&core.indices, outgoing)?;
+        let physical = &self.problem.physical[node];
+        let physical_axes = physical
+            .indices
+            .iter()
+            .map(|index| axis_of(&core.indices, index))
+            .collect::<Result<Vec<_>>>()?;
+        let incoming_bond = self.outgoing_bond(incoming_edge)?;
+        let incoming_axis = axis_of(&core.indices, incoming_bond)?;
+        let outgoing_dim = core.dims[outgoing_axis];
+        let incoming_dim = core.dims[incoming_axis];
+
+        // Group by local_coordinate -- same rationale as
+        // `candidate_frames_for_edge`: samples sharing a local_coordinate are
+        // not guaranteed contiguous in `samples`.
+        let mut groups: std::collections::BTreeMap<usize, Vec<SampleId>> =
+            std::collections::BTreeMap::new();
+        for sample in samples.clone() {
+            let record = self.arena.record(edge, sample)?.clone();
+            groups
+                .entry(record.local_coordinate)
+                .or_default()
+                .push(sample);
+        }
+
+        for (local_coordinate, group_samples) in groups {
+            let mut base_offset = 0usize;
+            for (physical_axis, &axis) in physical_axes.iter().enumerate() {
+                let wanted = (local_coordinate / physical.strides[physical_axis])
+                    % physical.dims[physical_axis];
+                base_offset += wanted * core.strides[axis];
+            }
+            let core_matrix = single_incoming_core_matrix(
+                core,
+                outgoing_axis,
+                incoming_axis,
+                base_offset,
+                outgoing_dim,
+                incoming_dim,
+            );
+            let mut frame_data = Vec::with_capacity(incoming_dim * group_samples.len());
+            for &sample in &group_samples {
+                let record = self.arena.record(edge, sample)?.clone();
+                let (_, incoming_sample) = record.incoming[0];
+                let values = self.memo[incoming_edge][incoming_sample].clone().ok_or(
+                    TreeAciError::InternalInvariant {
+                        message:
+                            "incoming sample frame was not memoized before batched contraction",
+                    },
+                )?;
+                if values.len() != incoming_dim {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "incoming frame length differs from its bond dimension",
+                    });
+                }
+                frame_data.extend(values);
+            }
+            let frame_matrix =
+                Matrix::from_col_major_vec(incoming_dim, group_samples.len(), frame_data);
+            let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
+            for (column, &sample) in group_samples.iter().enumerate() {
+                let values: Vec<T> = (0..outgoing_dim)
+                    .map(|row| batched[[row, column]])
+                    .collect();
+                #[cfg(test)]
+                debug_stats::record_compute_call();
+                let slot = self
+                    .memo
+                    .get_mut(edge)
+                    .and_then(|s| s.get_mut(sample))
+                    .ok_or(TreeAciError::InternalInvariant {
+                        message: "computed frame has no memoization slot",
+                    })?;
+                *slot = Some(values);
+            }
+        }
+        Ok(())
+    }
+
     fn outgoing_bond(&self, edge: DirectedEdgeId) -> Result<&DynIndex> {
         let edge =
             self.problem
