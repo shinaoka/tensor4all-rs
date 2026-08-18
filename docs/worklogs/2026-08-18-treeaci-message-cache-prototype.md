@@ -926,3 +926,96 @@ observed candidate explanation for part of the remaining ratio, but is not
 itself investigated here -- if it turns out to dominate what remains, that is
 a new root-cause pass on scheduling/convergence behavior, not an
 opportunistic extension of this update's sample-materialization scope.
+
+## Update 8: final-review fix round for Update 7 -- `compute_batch` was redundantly re-materializing samples an earlier edge had already primed
+
+Final-review fix round on the same plan Update 7 shipped
+(`2026-08-18-treeaci-blas-sample-materialization`). Root cause: Update 7's
+`InputFrameStore::build_or_extend` calls `FrameBuilder::compute_batch` once
+per directed edge, in the edge's index order (`0..problem.directed_edges.len()`),
+which is not topological order. `compute_batch`'s single-incoming-edge branch
+primes its group's incoming frames via the ordinary scalar `self.compute`
+recursion before batching -- and `compute` walks the ancestor chain, so an
+earlier edge's priming recursion can reach and scalar-materialize samples that
+belong to a *later* edge before `build_or_extend`'s own loop gets there. When
+the loop later calls `compute_batch` for that later edge directly, its old
+code re-fetched and re-grouped every sample in the requested range
+unconditionally -- including the ones the earlier edge's recursion had just
+computed -- and pushed them through a second, wasted `mat_mul`. The result
+was still correct (both paths compute the same value), but did real duplicate
+work that Update 7's batching was specifically meant to eliminate.
+
+**Fix** (`crates/tensor4all-treeaci/src/frames.rs`, `compute_batch`'s
+single-incoming-edge branch): before grouping a sample for batching, check
+`self.memo[edge][sample].is_some()` and skip samples already memoized,
+collecting the rest into a `pending: Vec<(SampleId, ComponentSample)>`. Each
+pending sample's `ComponentSample` record is now fetched from the arena
+exactly once and reused across the priming, local-coordinate-grouping, and
+frame-gathering steps, instead of being re-fetched from `self.arena` in each
+of those three separate loops as before. This mirrors the existing
+`candidate_cache` check `candidate_frames_for_edge` already had at the
+equivalent point in its own loop (Update 6) -- `compute_batch` was the one
+call site that hadn't gotten the same guard.
+
+**Test** (`crates/tensor4all-treeaci/src/frames/tests/mod.rs`):
+`from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_chain`,
+against a new 5-node chain fixture (`chain5_tree_for_dedup_regression`). Five
+nodes is the minimum needed to reproduce the bug: it requires a directed edge
+whose own incoming edge is itself single-incoming (not a leaf), which first
+appears at 5 nodes -- the pre-existing 3-node
+`chain_tree_for_batched_compute` fixture is too short. The test asserts
+`debug_stats::compute_calls()` (which increments once per cache-miss
+materialization, whether scalar `compute` or a batched column write) equals
+the total number of memo slots filled across every directed edge -- an exact
+equality, not a loose bound, so any redundant recomputation fails it. A
+second assertion (`total_memo_slots > seeds.len() * directed_edges.len() /
+2`) guards against the comparison being vacuously satisfied by a fixture
+where every edge only ever has one sample. Before the fix this test failed
+(`calls` exceeded `total_memo_slots`); after the fix it passes.
+
+**Verification.** `cargo fmt --all -- --check` clean. Scoped `cargo clippy -p
+tensor4all-treeaci -p tensor4all-aci --all-targets -- -D warnings` clean.
+`cargo test -p tensor4all-treeaci --release --no-fail-fast`: 101 lib tests (up
+from Update 7's 100 -- the one new regression test), 7 integration, 1
+rank-scaling, 18 doctests, all passing.
+
+**Benchmark.** Same `treeaci_parity.rs` chi=16/32/64/128 invocation as Update
+7's baseline capture. The host was again under sustained, unrelated
+background CPU contention throughout (`ecosystemd`/`EcosystemAnalytics`/
+`trustd` daemons, load average 5.9-8.0, idle consistently 33-45% and not
+settling), the same recurring class of noise Updates 4, 6, and 7 all
+document. This round's run-to-run agreement was worse than Update 7's (which
+reported 0.8-2.1% agreement between two runs): four independent full
+benchmark invocations were run back to back, and their per-chi tree/train
+ratios varied by as much as ~20% at chi=16 and ~10% at chi=64 run to run,
+comparable in size to the improvement itself. Rather than pick a favorable
+pair, all four runs are reported, with the mean used as the headline number:
+
+| chi | Update 7 baseline | run 1 | run 2 | run 3 | run 4 | mean (after) | change |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 2.85x | 2.40x | 2.87x | 2.67x | 2.99x | 2.73x | -4.2% |
+| 32 | 3.74x | 3.52x | 3.72x | 3.59x | 3.74x | 3.64x | -2.7% |
+| 64 | 4.24x | 4.04x | 4.35x | 4.00x | 4.47x | 4.22x | -0.5% |
+| 128 | 5.99x | 5.71x | 5.94x | 5.61x | 5.86x | 5.78x | -3.5% |
+
+The mean sits at or below the Update 7 baseline at every chi, consistent with
+the fix's mechanism (it only ever removes work, never adds any), but the
+per-run spread is large enough that no single run, and arguably not even the
+4-run mean, cleanly separates from host noise the way Update 6's and Update
+7's own 2-run comparisons did. Two things are worth naming plainly: (1) the
+direction is right and consistent with the fix -- of the 16 (chi, run) cells,
+12 sit at or below the corresponding baseline value; (2) the *size* of the
+improvement this round is smaller than Update 7's, which is expected --
+Update 7 eliminated a full second scalar-vs-BLAS pass for every
+single-incoming-edge sample; this fix only eliminates the subset of samples
+that happened to get double-materialized because of index-vs-topological
+edge ordering, which on this benchmark's particular chain topology and
+traversal schedule is a minority of the total sample count. The crate's
+maturity doc comment (`lib.rs`) has been updated from Update 7's "2.8x-6.0x"
+(and an interrupted pass's unmeasured placeholder of "2.8x-5.9x") to
+"2.7x-5.8x" (the 4-run mean, rounded).
+
+As with Update 7, `InputFrameStore::build_or_extend`'s edge-processing loop
+was deliberately left in index order rather than reordered to topological
+order -- that remains a separate, riskier future change, out of scope for
+this fix. The memo-check skip is the complete, intended fix for this round.

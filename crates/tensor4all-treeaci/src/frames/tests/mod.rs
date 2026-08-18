@@ -859,6 +859,111 @@ fn extend_matches_a_full_rebuild_on_a_chain_with_a_batched_edge() {
     }
 }
 
+/// 5-node chain `0 -- 1 -- 2 -- 3 -- 4`. Used only by
+/// `from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_chain`
+/// below. `build_or_extend`'s outer loop visits directed edges in index
+/// order (`0..problem.directed_edges.len()`), not topological order. On
+/// this chain that index order puts directed edge id 1 (`1 -> 0`) before
+/// ids 3 (`2 -> 1`) and 5 (`3 -> 2`); id 1's `compute_batch` priming
+/// recursion (the scalar `self.compute` calls that materialize its single
+/// incoming sample) walks the ancestor chain `id1 -> id3 -> id5 -> id7` and
+/// so scalar-computes samples on id3 and id5 *before* the outer loop
+/// reaches those edges directly -- exactly the cross-order priming shape
+/// the memo-check fix in `compute_batch` exists to deduplicate. A 3-node
+/// chain (`chain_tree_for_batched_compute`) is too short to reproduce this:
+/// it needs at least one directed edge whose own incoming edge is itself
+/// single-incoming (not a leaf), which first appears at 5 nodes.
+fn chain5_tree_for_dedup_regression() -> TreeTN<IdxTensor, usize> {
+    let s: Vec<DynIndex> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
+    let bonds: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+
+    let node0 = IdxTensor::from_dense(
+        vec![s[0].clone(), bonds[0].clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
+    let node1 = IdxTensor::from_dense(
+        vec![bonds[0].clone(), s[1].clone(), bonds[1].clone()],
+        (1..=8).map(|value| value as f64).collect(),
+    )
+    .unwrap();
+    let node2 = IdxTensor::from_dense(
+        vec![bonds[1].clone(), s[2].clone(), bonds[2].clone()],
+        (1..=8).map(|value| value as f64 * 0.5).collect(),
+    )
+    .unwrap();
+    let node3 = IdxTensor::from_dense(
+        vec![bonds[2].clone(), s[3].clone(), bonds[3].clone()],
+        (1..=8).map(|value| value as f64 * 0.25).collect(),
+    )
+    .unwrap();
+    let node4 = IdxTensor::from_dense(
+        vec![bonds[3].clone(), s[4].clone()],
+        vec![5.0, 6.0, 7.0, 8.0],
+    )
+    .unwrap();
+
+    TreeTN::from_tensors(vec![node0, node1, node2, node3, node4], vec![0, 1, 2, 3, 4]).unwrap()
+}
+
+/// Regression guard for the memo-check fix in `compute_batch`
+/// (`docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`'s Update 7
+/// addendum). `debug_stats::compute_calls()` increments exactly once per
+/// "materialize a value" operation -- once per cache-miss in `compute`'s
+/// scalar branch, once per column in `compute_batch`'s batched write loop
+/// -- so if every memo slot is filled exactly once (no duplicate work), the
+/// total call count must equal the total number of memo slots filled across
+/// every directed edge. Before the fix this equality did not hold: index-
+/// order edge processing let an earlier edge's priming recursion (plain
+/// scalar `compute`) materialize samples on a later single-incoming edge,
+/// and `compute_batch`'s batched branch had no check for already-memoized
+/// samples before grouping and re-contracting them through a second,
+/// wasted `mat_mul` -- unlike `candidate_frames_for_edge`, which already
+/// checked its cache before grouping. The pre-existing
+/// `extend_recomputes_only_the_newly_interned_samples` test only asserts a
+/// loose `< rebuild_calls` / `> 0` bound and does not catch this, since the
+/// duplication happens within a single `from_samples` call, not across an
+/// `extend`.
+#[test]
+fn from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_chain() {
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    // Four distinct global seeds, varying node 0/1/2's physical values, so
+    // every directed edge accumulates multiple distinct samples rather than
+    // the trivially-deduplicated single-seed case.
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![1, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 0],
+        vec![0, 0, 1, 0, 0],
+    ];
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+
+    super::debug_stats::reset();
+    let store =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("build the frame store from scratch");
+    let calls = super::debug_stats::compute_calls();
+
+    let total_memo_slots: usize = store.frames[0].iter().map(|frame| frame.sample_count).sum();
+
+    assert_eq!(
+        calls, total_memo_slots as u64,
+        "compute_batch must not redundantly recompute samples already memoized \
+         by an earlier edge's priming recursion: calls={calls} slots={total_memo_slots}"
+    );
+    // Sanity: this chain has genuinely multiple samples on multiple edges,
+    // not a vacuous comparison where every edge has exactly one sample.
+    assert!(
+        total_memo_slots > seeds.len() * problem.directed_edges.len() / 2,
+        "expected substantially more than one sample per edge on average, got \
+         {total_memo_slots} slots across {} directed edges",
+        problem.directed_edges.len()
+    );
+}
+
 /// `compute_batch` on a directed edge with zero incoming edges (a leaf
 /// source) must fall back to `compute` per sample and produce identical
 /// results, mirroring

@@ -673,12 +673,26 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         }
         let incoming_edge = directed.incoming_to_from[0];
 
-        // Ensure every sample's single incoming frame is memoized first. This
-        // recursion is `compute`'s existing one -- it is already memoized, so
-        // a sample whose incoming frame was computed by an earlier call (this
-        // one or a sibling directed edge sharing an ancestor) does no
-        // repeated work.
-        for sample in samples.clone() {
+        // Skip samples already memoized, and fetch each remaining sample's
+        // `ComponentSample` exactly once (reused below for both the priming
+        // recursion and the local_coordinate grouping, rather than
+        // re-fetched from `self.arena` in each of three separate loops).
+        //
+        // The skip matters for correctness-of-effort, not correctness of
+        // result: `InputFrameStore::build_or_extend`'s outer loop visits
+        // directed edges in index order, not topological order, so an
+        // earlier edge's `compute_batch` call can already have primed (via
+        // the scalar `self.compute` recursion below) samples on a *later*
+        // edge that this call's own range also covers, before this call
+        // runs. Without this check those already-memoized samples would be
+        // redundantly re-grouped and re-contracted through a second, wasted
+        // `mat_mul`. Mirrors `candidate_frames_for_edge`'s existing
+        // `candidate_cache` check at the equivalent point in its own loop.
+        let mut pending: Vec<(SampleId, ComponentSample)> = Vec::new();
+        for sample in samples {
+            if self.memo[edge][sample].is_some() {
+                continue;
+            }
             let record = self.arena.record(edge, sample)?.clone();
             if record.incoming.len() != 1 {
                 return Err(TreeAciError::InternalInvariant {
@@ -686,12 +700,25 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
                         "single-incoming-edge sample does not have exactly one incoming sample",
                 });
             }
-            let (incoming_edge_of_sample, incoming_sample) = record.incoming[0];
+            let (incoming_edge_of_sample, _) = record.incoming[0];
             if incoming_edge_of_sample != incoming_edge {
                 return Err(TreeAciError::InternalInvariant {
                     message: "single-incoming-edge sample's incoming sample is on the wrong directed edge",
                 });
             }
+            pending.push((sample, record));
+        }
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        // Ensure every pending sample's single incoming frame is memoized
+        // first. This recursion is `compute`'s existing one -- it is already
+        // memoized, so a sample whose incoming frame was computed by an
+        // earlier call (this one or a sibling directed edge sharing an
+        // ancestor) does no repeated work.
+        for (_, record) in &pending {
+            let (_, incoming_sample) = record.incoming[0];
             self.compute(incoming_edge, incoming_sample)?;
         }
 
@@ -716,15 +743,18 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
 
         // Group by local_coordinate -- same rationale as
         // `candidate_frames_for_edge`: samples sharing a local_coordinate are
-        // not guaranteed contiguous in `samples`.
-        let mut groups: std::collections::BTreeMap<usize, Vec<SampleId>> =
+        // not guaranteed contiguous in `samples`. Each group entry carries
+        // the sample's own id plus its (already-resolved) incoming sample
+        // id, so the frame-gathering loop below never needs to re-fetch the
+        // `ComponentSample` a third time.
+        let mut groups: std::collections::BTreeMap<usize, Vec<(SampleId, SampleId)>> =
             std::collections::BTreeMap::new();
-        for sample in samples.clone() {
-            let record = self.arena.record(edge, sample)?.clone();
+        for (sample, record) in &pending {
+            let (_, incoming_sample) = record.incoming[0];
             groups
                 .entry(record.local_coordinate)
                 .or_default()
-                .push(sample);
+                .push((*sample, incoming_sample));
         }
 
         for (local_coordinate, group_samples) in groups {
@@ -743,9 +773,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
                 incoming_dim,
             );
             let mut frame_data = Vec::with_capacity(incoming_dim * group_samples.len());
-            for &sample in &group_samples {
-                let record = self.arena.record(edge, sample)?.clone();
-                let (_, incoming_sample) = record.incoming[0];
+            for &(_, incoming_sample) in &group_samples {
                 let values = self.memo[incoming_edge][incoming_sample].clone().ok_or(
                     TreeAciError::InternalInvariant {
                         message:
@@ -762,7 +790,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             let frame_matrix =
                 Matrix::from_col_major_vec(incoming_dim, group_samples.len(), frame_data);
             let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
-            for (column, &sample) in group_samples.iter().enumerate() {
+            for (column, &(sample, _)) in group_samples.iter().enumerate() {
                 let values: Vec<T> = (0..outgoing_dim)
                     .map(|row| batched[[row, column]])
                     .collect();
