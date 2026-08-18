@@ -1423,10 +1423,17 @@ where
         self.last_stats.message_cache_hits += hit_keys.len();
         self.last_stats.message_cache_misses += missing_indices.len();
         if !hit_keys.is_empty() {
+            // `entry().or_insert_with()` rather than `get_mut().expect(...)`:
+            // the entry for `node` was inserted above and nothing removes
+            // entries from `message_caches` (the only other mutator is
+            // `Self::message_caches.clear()`, gated to run once at the top
+            // of `build_environment_cache`, before this function's only
+            // caller). `or_insert_with`'s closure is never invoked here, so
+            // this cannot fail rather than merely being checked not to.
             let cache = self
                 .message_caches
-                .get_mut(node)
-                .expect("entry inserted above");
+                .entry(node.clone())
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
             cache.get_all_cached(&hit_keys); // counted above; discard positions here
         }
 
@@ -1472,10 +1479,14 @@ where
 
         #[cfg(test)]
         let insert_start = std::time::Instant::now();
+        // Same reasoning as the `get_all_cached` call above: the entry for
+        // `node` was inserted at the top of this function and nothing
+        // between there and here removes it, so `entry().or_insert_with()`
+        // cannot fail rather than merely being checked not to.
         let cache = self
             .message_caches
-            .get_mut(node)
-            .expect("entry inserted above");
+            .entry(node.clone())
+            .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
         cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
                 .iter()
@@ -2168,6 +2179,7 @@ where
     ) -> std::result::Result<Vec<CacheSlot<T>>, E>
     where
         F: FnOnce(&[K]) -> std::result::Result<Vec<Vec<T>>, E>,
+        E: From<anyhow::Error>,
     {
         let mut missing_keys = Vec::new();
         let mut missing_seen = HashSet::new();
@@ -2198,18 +2210,27 @@ where
             }
         }
 
-        Ok(keys
-            .iter()
+        // Every key is either cached above or, when the byte budget refused
+        // it, present in `computed_values` -- unless `compute_missing`
+        // returned fewer columns than the `missing_keys` it was asked for,
+        // which is a caller contract violation this type cannot prevent, so
+        // it is reported as an error rather than assumed impossible.
+        keys.iter()
             .map(|key| match self.positions.get(key) {
-                Some(&position) => CacheSlot::Cached(position),
-                None => CacheSlot::Uncached(
-                    computed_values
-                        .get(key)
-                        .expect("key is neither cached nor freshly computed")
-                        .clone(),
-                ),
+                Some(&position) => Ok(CacheSlot::Cached(position)),
+                None => computed_values
+                    .get(key)
+                    .cloned()
+                    .map(CacheSlot::Uncached)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "PackedMessageCache::get_or_compute_batch: compute_missing returned \
+                             fewer columns than requested keys"
+                        )
+                        .into()
+                    }),
             })
-            .collect())
+            .collect::<std::result::Result<Vec<_>, E>>()
     }
 }
 
@@ -2359,6 +2380,27 @@ mod tests {
             .unwrap();
         assert_eq!(recompute_calls, 1);
         assert!(matches!(slots_again[0], CacheSlot::Uncached(_)));
+    }
+
+    /// `get_or_compute_batch` trusts `compute_missing` to return exactly one
+    /// column per requested missing key. If a caller's closure violates that
+    /// contract (returns fewer), the call must report a descriptive error
+    /// rather than panicking.
+    #[test]
+    fn packed_message_cache_reports_an_error_when_compute_missing_returns_too_few_columns() {
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
+
+        let result = cache.get_or_compute_batch(&[1u32, 2u32], |missing| {
+            // Only ever returns a column for the first requested key,
+            // regardless of how many were actually missing.
+            Ok::<_, anyhow::Error>(vec![vec![missing[0] as f64, 0.0]])
+        });
+
+        let error = result.expect_err("a short compute_missing result must not panic");
+        assert!(
+            error.to_string().contains("fewer columns"),
+            "unexpected error: {error}"
+        );
     }
 
     fn varied_three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
