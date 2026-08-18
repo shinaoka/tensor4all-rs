@@ -328,7 +328,11 @@ fn chebyshev_lobatto_barycentric_weights(degree: usize) -> Vec<f64> {
 /// ```
 pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
     let n = basis.len();
-    let mut data = Vec::with_capacity(n * 2 * n);
+    let data_len = n
+        .checked_mul(2)
+        .and_then(|value| value.checked_mul(n))
+        .ok_or_else(|| invalid_argument("interpolation core size overflowed usize"))?;
+    let mut data = Vec::with_capacity(data_len);
     for alpha in 0..n {
         for sigma in 0..2 {
             for beta in 0..n {
@@ -338,9 +342,9 @@ pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>>
         }
     }
 
-    Ok(Tensor3::from_fn([n, 2, n], |[alpha, sigma, beta]| {
+    Ok(Tensor3::try_from_fn([n, 2, n], |[alpha, sigma, beta]| {
         data[(alpha * 2 + sigma) * n + beta]
-    }))
+    })?)
 }
 
 /// Build the fused direct product of rank-3 core tensors.
@@ -394,7 +398,7 @@ fn direct_product_two(a: &Tensor3<f64>, b: &Tensor3<f64>) -> Result<Tensor3<f64>
     let site_dim = checked_fused_dim(site_a, site_b, "site")?;
     let right_dim = checked_fused_dim(right_a, right_b, "right")?;
 
-    Ok(Tensor3::from_fn(
+    Ok(Tensor3::try_from_fn(
         [left_dim, site_dim, right_dim],
         |[left, site, right]| {
             let left_0 = left % left_a;
@@ -405,7 +409,7 @@ fn direct_product_two(a: &Tensor3<f64>, b: &Tensor3<f64>) -> Result<Tensor3<f64>
             let right_1 = right / right_a;
             *a.get3(left_0, site_0, right_0) * *b.get3(left_1, site_1, right_1)
         },
-    ))
+    )?)
 }
 
 pub(crate) fn angular_local_lagrange(
@@ -413,14 +417,20 @@ pub(crate) fn angular_local_lagrange(
     window_radius: usize,
 ) -> Result<Tensor3<f64>> {
     let degree = basis.len() - 1;
-    if degree < 2 * window_radius {
+    let double_window = window_radius
+        .checked_mul(2)
+        .ok_or_else(|| invalid_argument("angular interpolation window overflows usize"))?;
+    if degree < double_window {
         return Err(invalid_argument(format!(
             "need degree >= 2 * window_radius, got degree {degree} and window_radius {window_radius}"
         )));
     }
 
-    Ok(Tensor3::from_fn(
-        [degree + 1, 2, degree + 1],
+    let core_dim = degree
+        .checked_add(1)
+        .ok_or_else(|| invalid_argument("angular interpolation core dimension overflows usize"))?;
+    Ok(Tensor3::try_from_fn(
+        [core_dim, 2, core_dim],
         |[alpha, sigma, beta]| {
             let x = (sigma as f64 + basis.grid[beta]) / 2.0;
             let theta = (1.0 - 2.0 * x).clamp(-1.0, 1.0).acos();
@@ -429,8 +439,8 @@ pub(crate) fn angular_local_lagrange(
                 .clamp(0.0, degree as f64) as usize;
             let lo = nearest
                 .saturating_sub(window_radius)
-                .min(degree - 2 * window_radius);
-            let hi = lo + 2 * window_radius;
+                .min(degree - double_window);
+            let hi = lo + double_window;
             if alpha < lo || alpha > hi {
                 return 0.0;
             }
@@ -446,5 +456,5 @@ pub(crate) fn angular_local_lagrange(
             }
             value
         },
-    ))
+    )?)
 }

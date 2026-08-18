@@ -321,7 +321,7 @@ fn test_site_space_by_index() {
 }
 
 #[test]
-fn test_graph_and_graph_mut() {
+fn test_graph_access() {
     let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
     let empty: HashSet<DynIndex> = HashSet::new();
     net.add_node("A".to_string(), empty.clone()).unwrap();
@@ -331,10 +331,6 @@ fn test_graph_and_graph_mut() {
     // graph() read access
     assert_eq!(net.graph().node_count(), 2);
     assert_eq!(net.graph().edge_count(), 1);
-
-    // graph_mut() write access
-    let g = net.graph_mut();
-    assert_eq!(g.node_count(), 2);
 }
 
 #[test]

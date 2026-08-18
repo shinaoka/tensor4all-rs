@@ -182,7 +182,9 @@ fn setup_direct_sum(
     // Create new indices for paired dimensions
     let mut new_indices: Vec<DynIndex> = Vec::new();
     for (&dim_a, &dim_b) in paired_dims_a.iter().zip(&paired_dims_b) {
-        let new_dim = dim_a + dim_b;
+        let new_dim = dim_a
+            .checked_add(dim_b)
+            .ok_or_else(|| anyhow::anyhow!("direct_sum index dimension overflowed usize"))?;
         let new_index = DynIndex::new_link(new_dim)
             .map_err(|e| anyhow::anyhow!("Failed to create index: {:?}", e))?;
         new_indices.push(new_index);
@@ -206,23 +208,13 @@ fn setup_direct_sum(
     }
 
     // Compute column-major strides (leftmost index fastest).
-    let result_total: usize = result_dims.iter().product();
-    let mut result_strides: Vec<usize> = vec![1; result_dims.len()];
-    for i in 1..result_dims.len() {
-        result_strides[i] = result_strides[i - 1] * result_dims[i - 1];
-    }
+    let result_total = checked_product(&result_dims, "direct_sum result")?;
+    let result_strides = checked_strides(&result_dims, "direct_sum result")?;
 
     let a_dims = a.dims();
     let b_dims = b.dims();
-    let mut a_strides: Vec<usize> = vec![1; a_dims.len()];
-    for i in 1..a_dims.len() {
-        a_strides[i] = a_strides[i - 1] * a_dims[i - 1];
-    }
-
-    let mut b_strides: Vec<usize> = vec![1; b_dims.len()];
-    for i in 1..b_dims.len() {
-        b_strides[i] = b_strides[i - 1] * b_dims[i - 1];
-    }
+    let a_strides = checked_strides(&a_dims, "direct_sum lhs")?;
+    let b_strides = checked_strides(&b_dims, "direct_sum rhs")?;
 
     let n_common = common_a_positions.len();
 
@@ -244,6 +236,23 @@ fn setup_direct_sum(
     })
 }
 
+fn checked_product(dims: &[usize], name: &str) -> Result<usize> {
+    dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| anyhow::anyhow!("{name} shape product overflowed usize"))
+    })
+}
+
+fn checked_strides(dims: &[usize], name: &str) -> Result<Vec<usize>> {
+    let mut strides = vec![1usize; dims.len()];
+    for i in 1..dims.len() {
+        strides[i] = strides[i - 1]
+            .checked_mul(dims[i - 1])
+            .ok_or_else(|| anyhow::anyhow!("{name} stride overflowed usize"))?;
+    }
+    Ok(strides)
+}
+
 fn linear_to_multi(linear: usize, dims: &[usize]) -> Vec<usize> {
     let mut multi = vec![0; dims.len()];
     let mut remaining = linear;
@@ -254,8 +263,14 @@ fn linear_to_multi(linear: usize, dims: &[usize]) -> Vec<usize> {
     multi
 }
 
-fn multi_to_linear(multi: &[usize], strides: &[usize]) -> usize {
-    multi.iter().zip(strides).map(|(&m, &s)| m * s).sum()
+fn multi_to_linear(multi: &[usize], strides: &[usize]) -> Result<usize> {
+    multi.iter().zip(strides).try_fold(0usize, |acc, (&m, &s)| {
+        let offset = m
+            .checked_mul(s)
+            .ok_or_else(|| anyhow::anyhow!("direct_sum flat offset overflowed usize"))?;
+        acc.checked_add(offset)
+            .ok_or_else(|| anyhow::anyhow!("direct_sum flat offset overflowed usize"))
+    })
 }
 
 fn direct_sum_typed<T: TensorElement + Zero>(
@@ -263,6 +278,11 @@ fn direct_sum_typed<T: TensorElement + Zero>(
     b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<(IdxTensor, Vec<DynIndex>)> {
+    if a.tracks_grad() || b.tracks_grad() {
+        return Err(anyhow::anyhow!(
+            "direct_sum does not support tracked tensors until an AD-preserving block path is available"
+        ));
+    }
     let setup = setup_direct_sum(a, b, pairs)?;
     let a_data = a.to_vec::<T>()?;
     let b_data = b.to_vec::<T>()?;
@@ -293,7 +313,7 @@ fn direct_sum_typed<T: TensorElement + Zero>(
             for (i, &pp) in setup.paired_a_positions.iter().enumerate() {
                 a_multi[pp] = paired_multi[i];
             }
-            let a_linear = multi_to_linear(&a_multi, &setup.a_strides);
+            let a_linear = multi_to_linear(&a_multi, &setup.a_strides)?;
             result_data[result_linear] = a_data[a_linear];
         } else if all_from_b {
             let b_dims = b.dims();
@@ -304,7 +324,7 @@ fn direct_sum_typed<T: TensorElement + Zero>(
             for (i, &pp) in setup.paired_b_positions.iter().enumerate() {
                 b_multi[pp] = paired_multi[i] - setup.paired_dims_a[i];
             }
-            let b_linear = multi_to_linear(&b_multi, &setup.b_strides);
+            let b_linear = multi_to_linear(&b_multi, &setup.b_strides)?;
             result_data[result_linear] = b_data[b_linear];
         }
         // else: mixed case stays T::zero()

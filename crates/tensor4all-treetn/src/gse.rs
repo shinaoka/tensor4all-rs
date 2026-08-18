@@ -650,7 +650,7 @@ where
         .into_iter()
         .filter(|idx| idx != &old_bond)
         .collect::<Vec<_>>();
-    let q_dim = product_dim(&q_indices);
+    let q_dim = product_dim(&q_indices)?;
 
     let factorized = child_tensor
         .factorize_full_rank(
@@ -1357,8 +1357,14 @@ where
         })
 }
 
-fn product_dim(indices: &[DynIndex]) -> usize {
-    indices.iter().map(DynIndex::dim).product()
+fn product_dim(indices: &[DynIndex]) -> std::result::Result<usize, GseError> {
+    indices.iter().try_fold(1usize, |acc, index| {
+        acc.checked_mul(index.dim())
+            .ok_or_else(|| GseError::Algorithm {
+                context: "GSE fused site dimension overflowed usize",
+                source: anyhow::anyhow!("site dimension product overflowed usize"),
+            })
+    })
 }
 
 fn max_link_dim<V>(state: &TreeTN<IdxTensor, V>) -> usize

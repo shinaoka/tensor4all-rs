@@ -84,33 +84,31 @@ fn factorize_qr_reconstruction_preserves_gradient_to_input() {
     assert_f64_slice_close(&grad.to_vec::<f64>().unwrap(), &[1.0, 1.0, 1.0, 1.0], 1e-8);
 }
 
-fn assert_ci_reconstruction_gradient(canonical: Canonical) {
+fn assert_ci_reconstruction_rejects_tracked_input(canonical: Canonical) {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let x = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![2.0_f64, 0.5, 1.0, 3.0])
+    let x = IdxTensor::from_dense(vec![i.clone(), j], vec![2.0_f64, 0.5, 1.0, 3.0])
         .unwrap()
         .enable_grad()
         .unwrap();
 
-    let result =
-        factorize_full_rank(&x, std::slice::from_ref(&i), FactorizeAlg::CI, canonical).unwrap();
-    let reconstructed = result.left.contract_pair(&result.right).unwrap();
-    let loss = reconstructed.sum().unwrap();
-    assert!(loss.tracks_grad());
-    loss.backward().unwrap();
-
-    let grad = x.grad().unwrap().unwrap();
-    assert_f64_slice_close(&grad.to_vec::<f64>().unwrap(), &[1.0, 1.0, 1.0, 1.0], 1e-8);
+    let error =
+        factorize_full_rank(&x, std::slice::from_ref(&i), FactorizeAlg::CI, canonical).unwrap_err();
+    assert!(matches!(
+        error,
+        tensor4all_core::FactorizeError::UnsupportedStorage(_)
+    ));
+    assert!(error.to_string().contains("tracked tensors"));
 }
 
 #[test]
-fn factorize_ci_left_reconstruction_preserves_gradient_to_input() {
-    assert_ci_reconstruction_gradient(Canonical::Left);
+fn factorize_ci_left_rejects_tracked_input() {
+    assert_ci_reconstruction_rejects_tracked_input(Canonical::Left);
 }
 
 #[test]
-fn factorize_ci_right_reconstruction_preserves_gradient_to_input() {
-    assert_ci_reconstruction_gradient(Canonical::Right);
+fn factorize_ci_right_rejects_tracked_input() {
+    assert_ci_reconstruction_rejects_tracked_input(Canonical::Right);
 }
 
 #[test]

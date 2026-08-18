@@ -1,7 +1,5 @@
 //! Configuration options for tensor train operations.
 
-use std::ops::Range;
-
 use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
 use crate::error::{Result, TensorTrainError};
@@ -48,18 +46,15 @@ pub(crate) fn validate_svd_truncation_options(
 ///
 /// let opts = TruncateOptions::svd()
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
-///     .with_max_bond_dim(20)
-///     .with_site_range(0..4);
+///     .with_max_bond_dim(20);
 ///
 /// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
 /// assert_eq!(opts.max_bond_dim(), Some(20));
-/// assert_eq!(opts.site_range(), Some(0..4));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct TruncateOptions {
     max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
-    site_range: Option<Range<usize>>,
 }
 
 impl TruncateOptions {
@@ -80,14 +75,6 @@ impl TruncateOptions {
         self
     }
 
-    /// Set the site range for truncation.
-    ///
-    /// The range is 0-indexed with exclusive end.
-    pub fn with_site_range(mut self, range: Range<usize>) -> Self {
-        self.site_range = Some(range);
-        self
-    }
-
     /// Get the SVD truncation policy override.
     #[inline]
     pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
@@ -98,12 +85,6 @@ impl TruncateOptions {
     #[inline]
     pub fn max_bond_dim(&self) -> Option<usize> {
         self.max_bond_dim
-    }
-
-    /// Get the site range for truncation.
-    #[inline]
-    pub fn site_range(&self) -> Option<Range<usize>> {
-        self.site_range.clone()
     }
 }
 
@@ -222,9 +203,10 @@ impl ContractOptions {
 
     /// Set number of full sweeps.
     ///
-    /// A full sweep is two half-sweeps.
+    /// A full sweep is two half-sweeps. Values that would overflow the
+    /// half-sweep counter saturate at `usize::MAX`.
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nhalfsweeps = nsweeps * 2;
+        self.nhalfsweeps = nsweeps.saturating_mul(2);
         self
     }
 
@@ -351,9 +333,12 @@ impl Default for LinsolveOptions {
 
 impl LinsolveOptions {
     /// Create options with the specified number of full sweeps.
+    ///
+    /// Values that would overflow the half-sweep counter saturate at
+    /// `usize::MAX`.
     pub fn new(nsweeps: usize) -> Self {
         Self {
-            nhalfsweeps: nsweeps * 2,
+            nhalfsweeps: nsweeps.saturating_mul(2),
             ..Default::default()
         }
     }
@@ -376,9 +361,10 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set number of full sweeps.
+    /// Set number of full sweeps. Values that would overflow the
+    /// half-sweep counter saturate at `usize::MAX`.
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nhalfsweeps = nsweeps * 2;
+        self.nhalfsweeps = nsweeps.saturating_mul(2);
         self
     }
 

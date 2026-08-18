@@ -19,16 +19,11 @@ use super::TreeTN;
 /// When adding two TreeTNs, each bond index in the result has dimension
 /// `dim_a + dim_b`, where `dim_a` and `dim_b` are the original bond dimensions.
 #[derive(Debug, Clone)]
-pub struct MergedBondInfo<I>
-where
-    I: IndexLike,
-{
-    /// Bond dimension from the first TreeTN
+pub struct MergedBondInfo {
+    /// Bond dimension from the first TreeTN.
     pub dim_a: usize,
-    /// Bond dimension from the second TreeTN
+    /// Bond dimension from the second TreeTN.
     pub dim_b: usize,
-    /// The new merged bond index (with dimension dim_a + dim_b)
-    pub merged_index: I,
 }
 
 impl<T, V> TreeTN<T, V>
@@ -192,8 +187,9 @@ where
 
     /// Compute merged bond indices for direct-sum addition.
     ///
-    /// For each edge in the network, compute the merged bond information
-    /// containing dimensions from both networks and a new merged index.
+    /// For each edge in the network, compute the merged bond dimensions from
+    /// both networks. The direct-sum operation owns construction of the actual
+    /// merged bond index.
     ///
     /// # Arguments
     /// * `other` - The other TreeTN to compute merged bonds with
@@ -215,7 +211,7 @@ where
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
-    ) -> std::result::Result<HashMap<(V, V), MergedBondInfo<T::Index>>, TreeTNOperationError>
+    ) -> std::result::Result<HashMap<(V, V), MergedBondInfo>, TreeTNOperationError>
     where
         V: Ord,
     {
@@ -274,31 +270,15 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found in other"))?;
             let dim_b = bond_index_b.dim();
 
-            // Create merged bond index using direct_sum on dummy tensors
-            // For now, we just store dimensions; the actual merged index will be
-            // created during the direct sum operation using TensorContractionLike::direct_sum
-            //
-            // Note: We need a way to create a new index with dim_a + dim_b.
-            // This requires the TensorLike implementation to handle index creation.
-            // For now, we clone one of the existing indices as a placeholder.
-            // The actual merging happens in the direct_sum operation.
-            let merged_index = bond_index_a.clone();
-
-            // Store in canonical order (smaller name first)
+            // Store in canonical order (smaller name first). The actual
+            // merged bond is created by the direct-sum implementation.
             let key = if src_name < tgt_name {
                 (src_name, tgt_name)
             } else {
                 (tgt_name, src_name)
             };
 
-            result.insert(
-                key,
-                MergedBondInfo {
-                    dim_a,
-                    dim_b,
-                    merged_index,
-                },
-            );
+            result.insert(key, MergedBondInfo { dim_a, dim_b });
         }
 
         Ok(result)

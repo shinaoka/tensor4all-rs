@@ -3,6 +3,22 @@ use num_complex::Complex64;
 use tenferro::TypedTensor;
 
 #[test]
+fn fallible_matrix_constructors_reject_overflow_and_length_mismatch() {
+    assert!(matches!(
+        Matrix::<f64>::try_from_col_major_vec(usize::MAX, 2, Vec::new()),
+        Err(MatrixShapeError::ShapeOverflow { .. })
+    ));
+    assert!(matches!(
+        Matrix::<f64>::try_from_col_major_vec(2, 2, vec![0.0; 3]),
+        Err(MatrixShapeError::DataLengthMismatch { .. })
+    ));
+    assert!(matches!(
+        Matrix::<f64>::try_zeros(usize::MAX, 2),
+        Err(MatrixShapeError::ShapeOverflow { .. })
+    ));
+}
+
+#[test]
 fn hermitian_eigendecomposition_maps_eager_context_error_with_source_chain() {
     let matrix = Matrix::from_col_major_vec(1, 1, vec![2.0_f64]);
     let error = crate::context::with_forced_eager_context_failure(|| {

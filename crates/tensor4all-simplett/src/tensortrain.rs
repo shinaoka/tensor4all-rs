@@ -355,28 +355,37 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// **Warning:** The full tensor can be extremely large for high-dimensional
     /// problems. Only use this for small tensors or debugging.
     ///
+    /// # Errors
+    /// Returns [`TensorTrainError::InvalidOperation`] when the dense element
+    /// count overflows or an evaluation fails.
+    ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
     /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 7.0);
-    /// let (data, shape) = tt.full_tensor();
+    /// let (data, shape) = tt.full_tensor().unwrap();
     /// assert_eq!(shape, vec![2, 3]);
     /// assert_eq!(data.len(), 6);
     /// // Every element should be 7.0
     /// assert!(data.iter().all(|&v| (v - 7.0).abs() < 1e-12));
     /// ```
-    pub fn full_tensor(&self) -> (Vec<T>, Vec<usize>) {
+    pub fn full_tensor(&self) -> Result<(Vec<T>, Vec<usize>)> {
         if self.is_empty() {
-            return (Vec::new(), Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         let site_dims: Vec<usize> = self.site_dims();
-        let total_size: usize = site_dims.iter().product();
+        let total_size = site_dims.iter().try_fold(1usize, |acc, &dim| {
+            acc.checked_mul(dim)
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: "full tensor element count overflowed usize".to_string(),
+                })
+        })?;
 
         if total_size == 0 {
-            return (Vec::new(), site_dims);
+            return Ok((Vec::new(), site_dims));
         }
 
         // Build full tensor by iterating over all indices
@@ -385,11 +394,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
         loop {
             // Evaluate at current indices
-            if let Ok(val) = self.evaluate(&indices) {
-                result.push(val);
-            } else {
-                result.push(T::zero());
-            }
+            result.push(self.evaluate(&indices)?);
 
             // Increment indices in column-major order, leftmost index fastest.
             let mut carry = true;
@@ -409,7 +414,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             }
         }
 
-        (result, site_dims)
+        Ok((result, site_dims))
     }
 }
 

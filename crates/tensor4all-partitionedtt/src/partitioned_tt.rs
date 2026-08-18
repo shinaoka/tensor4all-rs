@@ -36,9 +36,9 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 /// let tt = make_tt(&s0, &bond, &s1);
 ///
 /// // Create a PartitionedTT with one patch projected to s0=0
-/// let proj = Projector::from_pairs([(s0.clone(), 0)]);
-/// let subdomain = SubDomainTT::new(tt, proj);
-/// let ptt = PartitionedTT::from_subdomain(subdomain);
+/// let proj = Projector::from_pairs([(s0.clone(), 0)]).unwrap();
+/// let subdomain = SubDomainTT::new(tt, proj).unwrap();
+/// let ptt = PartitionedTT::from_subdomain(subdomain).unwrap();
 ///
 /// assert_eq!(ptt.len(), 1);
 /// assert!(!ptt.is_empty());
@@ -69,12 +69,14 @@ impl PartitionedTT {
 
     /// Create a PartitionedTT from a vector of SubDomainTTs.
     ///
-    /// Returns an error if the projectors are not mutually disjoint.
+    /// Returns an error if different projectors overlap. Equal projectors
+    /// replace earlier values in input order.
     ///
     /// # Errors
     ///
-    /// Returns an error when the subdomains have incompatible shapes (a shape
-    /// /// mismatch) or the construction fails.
+    /// Returns [`PartitionedTTError::OverlappingProjectors`] when two
+    /// different projectors describe overlapping regions or when a subdomain
+    /// fails projector validation. No partially built value is returned.
     ///
     /// # Examples
     ///
@@ -91,34 +93,35 @@ impl PartitionedTT {
     /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// // Two disjoint patches: s0=0 and s0=1
-    /// let proj0 = Projector::from_pairs([(s0.clone(), 0)]);
-    /// let proj1 = Projector::from_pairs([(s0.clone(), 1)]);
-    /// let sd0 = SubDomainTT::new(tt.clone(), proj0);
-    /// let sd1 = SubDomainTT::new(tt, proj1);
+    /// let proj0 = Projector::from_pairs([(s0.clone(), 0)]).unwrap();
+    /// let proj1 = Projector::from_pairs([(s0.clone(), 1)]).unwrap();
+    /// let sd0 = SubDomainTT::new(tt.clone(), proj0).unwrap();
+    /// let sd1 = SubDomainTT::new(tt, proj1).unwrap();
     ///
     /// let ptt = PartitionedTT::from_subdomains(vec![sd0, sd1]).unwrap();
     /// assert_eq!(ptt.len(), 2);
     /// ```
     pub fn from_subdomains(subdomains: Vec<SubDomainTT>) -> Result<Self> {
-        // Check that projectors are disjoint
-        let projectors: Vec<_> = subdomains.iter().map(|s| s.projector().clone()).collect();
-        if !Projector::are_disjoint(&projectors) {
-            return Err(PartitionedTTError::OverlappingProjectors);
-        }
-
-        let mut data = HashMap::new();
+        let mut partitioned = Self::new();
         for subdomain in subdomains {
-            data.insert(subdomain.projector().clone(), subdomain);
+            partitioned.insert(subdomain)?;
         }
-
-        Ok(Self { data })
+        Ok(partitioned)
     }
 
-    /// Create a PartitionedTT from a single SubDomainTT.
-    pub fn from_subdomain(subdomain: SubDomainTT) -> Self {
-        let mut data = HashMap::new();
-        data.insert(subdomain.projector().clone(), subdomain);
-        Self { data }
+    /// Create a `PartitionedTT` from one validated subdomain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::ProjectorIndexNotFound`] if the projector
+    /// contains an index absent from the tensor train, or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] if a coordinate is
+    /// invalid for the matched tensor-train index. No partition is returned on
+    /// failure.
+    pub fn from_subdomain(subdomain: SubDomainTT) -> Result<Self> {
+        let mut partitioned = Self::new();
+        partitioned.insert(subdomain)?;
+        Ok(partitioned)
     }
 
     /// Number of subdomains (patches).
@@ -141,11 +144,6 @@ impl PartitionedTT {
         self.data.get(projector)
     }
 
-    /// Get mutable subdomain by projector.
-    pub fn get_mut(&mut self, projector: &Projector) -> Option<&mut SubDomainTT> {
-        self.data.get_mut(projector)
-    }
-
     /// Check if a projector exists.
     ///
     /// # Examples
@@ -162,12 +160,12 @@ impl PartitionedTT {
     /// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![3.0, 4.0]).unwrap();
     /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let proj = Projector::from_pairs([(s0.clone(), 0)]);
-    /// let subdomain = SubDomainTT::new(tt, proj.clone());
-    /// let ptt = PartitionedTT::from_subdomain(subdomain);
+    /// let proj = Projector::from_pairs([(s0.clone(), 0)]).unwrap();
+    /// let subdomain = SubDomainTT::new(tt, proj.clone()).unwrap();
+    /// let ptt = PartitionedTT::from_subdomain(subdomain).unwrap();
     ///
     /// assert!(ptt.contains(&proj));
-    /// let absent = Projector::from_pairs([(s0, 1)]);
+    /// let absent = Projector::from_pairs([(s0, 1)]).unwrap();
     /// assert!(!ptt.contains(&absent));
     /// ```
     pub fn contains(&self, projector: &Projector) -> bool {
@@ -184,45 +182,73 @@ impl PartitionedTT {
         self.data.values()
     }
 
-    /// Iterate over mutable subdomains.
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut SubDomainTT> {
-        self.data.values_mut()
-    }
+    /// Insert a subdomain transactionally.
+    ///
+    /// An exactly equal projector replaces the existing key and value together.
+    /// A different projector must be disjoint from every stored projector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTTError::OverlappingProjectors`] for a different
+    /// compatible projector, or a typed projector-validation error when the
+    /// subdomain's data and projector are inconsistent. On error, this
+    /// partition is unchanged.
+    pub fn insert(&mut self, subdomain: SubDomainTT) -> Result<()> {
+        subdomain.validate_invariants()?;
+        let projector = subdomain.projector().clone();
+        for existing in self.data.keys() {
+            if existing != &projector && existing.is_compatible_with(&projector) {
+                return Err(PartitionedTTError::OverlappingProjectors);
+            }
+        }
 
-    /// Insert a subdomain, replacing any existing one with the same projector.
-    pub fn insert(&mut self, subdomain: SubDomainTT) {
-        self.data.insert(subdomain.projector().clone(), subdomain);
+        // HashMap::insert retains an equal old key. Remove first so the key and
+        // value remain the coherent pair supplied by the caller.
+        self.data.remove(&projector);
+        self.data.insert(projector, subdomain);
+        Ok(())
     }
 
     /// Append another PartitionedTT (must have non-overlapping projectors).
     /// # Errors
     ///
-    /// Returns an error when the partition shapes are incompatible (a shape
-    /// /// mismatch) or the append fails.
+    /// Returns [`PartitionedTTError::OverlappingProjectors`] when a different
+    /// projector overlaps an existing projector,
+    /// [`PartitionedTTError::ProjectorIndexNotFound`] when an appended
+    /// subdomain refers to an absent tensor-train index, or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] when its coordinate
+    /// is invalid. Equal keys replace existing values. All checks happen before
+    /// this partition is mutated.
     ///
     pub fn append(&mut self, other: Self) -> Result<()> {
-        // Check for overlap
-        for proj in other.data.keys() {
-            for existing_proj in self.data.keys() {
-                if proj.is_compatible_with(existing_proj) {
+        for subdomain in other.data.values() {
+            subdomain.validate_invariants()?;
+        }
+        for projector in other.data.keys() {
+            for existing in self.data.keys() {
+                if projector != existing && projector.is_compatible_with(existing) {
                     return Err(PartitionedTTError::OverlappingProjectors);
                 }
             }
         }
 
-        // Merge
-        for (proj, subdomain) in other.data {
-            self.data.insert(proj, subdomain);
+        for (projector, subdomain) in other.data {
+            self.data.remove(&projector);
+            self.data.insert(projector, subdomain);
         }
-
         Ok(())
     }
 
     /// Append subdomains.
     /// # Errors
     ///
-    /// Returns an error when the partition shapes are incompatible (a shape
-    /// /// mismatch) or the append fails.
+    /// Returns [`PartitionedTTError::OverlappingProjectors`] when different
+    /// candidate or existing projectors overlap,
+    /// [`PartitionedTTError::ProjectorIndexNotFound`] when a candidate refers to
+    /// an absent tensor-train index, or
+    /// [`PartitionedTTError::ProjectorCoordinateOutOfBounds`] when its coordinate
+    /// is invalid. The complete candidate set is validated before this partition
+    /// is mutated.
     ///
     pub fn append_subdomains(&mut self, subdomains: Vec<SubDomainTT>) -> Result<()> {
         let other = Self::from_subdomains(subdomains)?;
@@ -250,9 +276,9 @@ impl PartitionedTT {
     /// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0]).unwrap();
     /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let proj = Projector::from_pairs([(s0, 0)]);
-    /// let subdomain = SubDomainTT::new(tt, proj);
-    /// let ptt = PartitionedTT::from_subdomain(subdomain);
+    /// let proj = Projector::from_pairs([(s0, 0)]).unwrap();
+    /// let subdomain = SubDomainTT::new(tt, proj).unwrap();
+    /// let ptt = PartitionedTT::from_subdomain(subdomain).unwrap();
     ///
     /// let n = ptt.norm().unwrap();
     /// assert!(n >= 0.0);
@@ -286,7 +312,7 @@ impl PartitionedTT {
         for (proj, m1, m2) in tasks {
             if let Some(contracted) = m1.contract(&m2, options)? {
                 // Check if we already have a subdomain with the same projector
-                if let Some(existing) = result.get_mut(&proj) {
+                if let Some(existing) = result.data.get_mut(&proj) {
                     // Sum the subdomains using TT addition
                     let mut summed_tt = existing
                         .data()
@@ -303,9 +329,9 @@ impl PartitionedTT {
                     summed_tt
                         .truncate(&truncate_opts)
                         .map_err(|source| PartitionedTTError::TensorTrain { source })?;
-                    *existing = SubDomainTT::new(summed_tt, proj.clone());
+                    *existing = SubDomainTT::new(summed_tt, proj.clone())?;
                 } else {
-                    result.insert(contracted);
+                    result.insert(contracted)?;
                 }
             }
         }
@@ -354,17 +380,17 @@ impl PartitionedTT {
                 summed_tt
                     .truncate(options)
                     .map_err(|source| PartitionedTTError::TensorTrain { source })?;
-                result.insert(SubDomainTT::new(summed_tt, proj.clone()));
+                result.insert(SubDomainTT::new(summed_tt, proj.clone())?)?;
             } else {
                 // Only self has this projector: clone it
-                result.insert(subdomain.clone());
+                result.insert(subdomain.clone())?;
             }
         }
 
         // Process projectors only in other (not in self)
         for (proj, subdomain) in other.iter() {
             if !self.contains(proj) {
-                result.insert(subdomain.clone());
+                result.insert(subdomain.clone())?;
             }
         }
 
@@ -405,7 +431,7 @@ impl PartitionedTT {
                             proj_data.push((idx.clone(), val));
                         }
                     }
-                    let proj_after = Projector::from_pairs(proj_data);
+                    let proj_after = Projector::from_pairs(proj_data)?;
 
                     // SubDomainTT::contract already applies each input projector.
                     // Pre-projecting here is redundant and can attach projector
@@ -438,7 +464,7 @@ impl PartitionedTT {
 
         // Sort subdomains by projector for deterministic ordering
         let mut sorted: Vec<_> = self.data.iter().collect();
-        sorted.sort_by(|(p1, _), (p2, _)| Self::projector_cmp(p1, p2));
+        sorted.sort_by(|(p1, _), (p2, _)| p1.canonical_cmp(p2));
 
         let mut iter = sorted.into_iter().map(|(_, subdomain)| subdomain);
         let first = iter.next().ok_or(PartitionedTTError::Empty)?;
@@ -451,27 +477,6 @@ impl PartitionedTT {
         }
 
         Ok(result)
-    }
-
-    /// Compare two projectors for deterministic ordering.
-    ///
-    /// Orders by: number of projections, then by sorted (index_id, value) pairs.
-    fn projector_cmp(a: &Projector, b: &Projector) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-
-        // First compare by length
-        match a.len().cmp(&b.len()) {
-            Ordering::Equal => {}
-            ord => return ord,
-        }
-
-        // Then compare by sorted (id, value) pairs
-        let mut a_pairs: Vec<_> = a.iter().map(|(idx, &val)| (idx.id, val)).collect();
-        let mut b_pairs: Vec<_> = b.iter().map(|(idx, &val)| (idx.id, val)).collect();
-        a_pairs.sort();
-        b_pairs.sort();
-
-        a_pairs.cmp(&b_pairs)
     }
 }
 

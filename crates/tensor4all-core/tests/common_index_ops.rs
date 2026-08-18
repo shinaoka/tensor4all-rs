@@ -89,6 +89,22 @@ fn test_replace_indices_mut_space_mismatch() {
 }
 
 #[test]
+fn test_replace_indices_mut_is_transactional_on_duplicate_result() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let replacement = i.clone();
+    let mut indices = vec![i.clone(), j.clone()];
+    let before = indices.clone();
+
+    let result = replace_indices_mut(&mut indices, &[(j, replacement)]);
+    assert!(matches!(
+        result,
+        Err(ReplaceIndsError::DuplicateIndices { .. })
+    ));
+    assert_eq!(indices, before);
+}
+
+#[test]
 fn test_unique_inds() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);

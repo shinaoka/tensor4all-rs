@@ -28,7 +28,7 @@ fn test_tensortrain_constant_single_site_generic<T: TTScalar>() {
     let sum = tt.sum();
     assert!((sum.abs_sq().sqrt() - 15.0).abs() < 1e-10);
 
-    let (data, shape) = tt.full_tensor();
+    let (data, shape) = tt.full_tensor().unwrap();
     assert_eq!(shape, vec![3]);
     assert_eq!(data.len(), 3);
     for value in data {
@@ -93,7 +93,7 @@ fn test_tensortrain_reverse_generic<T: TTScalar>() {
 
 fn test_full_tensor_generic<T: TTScalar>() {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(5.0));
-    let (data, shape) = tt.full_tensor();
+    let (data, shape) = tt.full_tensor().unwrap();
 
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(data.len(), 6);
@@ -115,7 +115,7 @@ fn test_full_tensor_matches_evaluate_generic<T: TTScalar>() {
     t1.set3(0, 2, 0, T::from_f64(3.0));
 
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
-    let (data, shape) = tt.full_tensor();
+    let (data, shape) = tt.full_tensor().unwrap();
 
     assert_eq!(shape, vec![2, 3]);
 

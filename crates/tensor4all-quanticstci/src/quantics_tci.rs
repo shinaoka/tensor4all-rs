@@ -519,14 +519,12 @@ where
 
 /// Interpolate from explicit grid point arrays.
 ///
-/// Convenience wrapper around [`quanticscrossinterpolate`] that builds a
-/// [`DiscretizedGrid`] from arrays of grid coordinates. The grid bounds are
-/// inferred from the first and last elements of each array.
+/// Convenience wrapper around [`quanticscrossinterpolate_discrete`] that
+/// evaluates `f` at the exact coordinates supplied in `xvals`.
 ///
 /// # Arguments
-/// * `xvals` - Arrays of grid points for each dimension. All dimensions must have the
-///
-///   **same** number of points and each must be a power of 2.
+/// * `xvals` - Strictly increasing, finite coordinate arrays. All dimensions must have
+///   the **same** number of points and each must be a power of 2.
 /// * `f` - Function to interpolate, takes original coordinates as `&[f64]`
 /// * `initial_pivots` - Initial pivot grid indices (0-indexed, optional)
 /// * `options` - TCI options
@@ -584,53 +582,95 @@ where
         });
     }
 
-    // Validate inputs
-    let dimensions: Vec<f64> = xvals.iter().map(|x| (x.len() as f64).log2()).collect();
+    for (dimension, values) in xvals.iter().enumerate() {
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(QuanticsTCIError::InvalidConfiguration {
+                message: format!("xvals[{dimension}] must contain only finite values"),
+            });
+        }
+        if values.windows(2).any(|window| window[0] >= window[1]) {
+            return Err(QuanticsTCIError::InvalidConfiguration {
+                message: format!(
+                    "xvals[{dimension}] must be strictly increasing without duplicates"
+                ),
+            });
+        }
+    }
 
-    // Check all dimensions are equal (current limitation)
-    if !dimensions.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10) {
+    let sizes = xvals.iter().map(Vec::len).collect::<Vec<_>>();
+    let dimensions: Vec<f64> = sizes.iter().map(|&size| (size as f64).log2()).collect();
+    if !dimensions
+        .windows(2)
+        .all(|window| (window[0] - window[1]).abs() < 1e-10)
+    {
         return Err(QuanticsTCIError::InvalidConfiguration {
             message:
                 "this method only supports grids with equal number of points in each direction"
                     .to_string(),
         });
     }
-
-    // Check dimensions are powers of 2
-    if !dimensions.iter().all(|&d| (d - d.round()).abs() < 1e-10) {
+    if !dimensions
+        .iter()
+        .all(|&dimension| (dimension - dimension.round()).abs() < 1e-10)
+    {
         return Err(QuanticsTCIError::InvalidConfiguration {
             message: "this method only supports grid sizes that are powers of 2".to_string(),
         });
     }
 
-    let rs: Vec<usize> = dimensions.iter().map(|&d| d as usize).collect();
-    let lower: Vec<f64> = xvals
-        .iter()
-        .map(|x| {
-            x.first()
-                .copied()
-                .ok_or_else(|| anyhow!("xvals must not be empty"))
-        })
-        .collect::<Result<Vec<f64>>>()?;
-    let upper: Vec<f64> = xvals
-        .iter()
-        .map(|x| {
-            x.last()
-                .copied()
-                .ok_or_else(|| anyhow!("xvals must not be empty"))
-        })
-        .collect::<Result<Vec<f64>>>()?;
+    let is_uniform = xvals.iter().all(|values| {
+        let Some(first_window) = values.windows(2).next() else {
+            return true;
+        };
+        let step = first_window[1] - first_window[0];
+        values
+            .windows(2)
+            .all(|window| (window[1] - window[0] - step).abs() <= 1e-12)
+    });
+    if is_uniform {
+        let rs = dimensions
+            .iter()
+            .map(|&dimension| dimension as usize)
+            .collect::<Vec<_>>();
+        let lower = xvals
+            .iter()
+            .map(|values| {
+                values
+                    .first()
+                    .copied()
+                    .ok_or_else(|| anyhow!("xvals must not be empty"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let upper = xvals
+            .iter()
+            .map(|values| {
+                values
+                    .last()
+                    .copied()
+                    .ok_or_else(|| anyhow!("xvals must not be empty"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let grid = DiscretizedGrid::builder(&rs)
+            .with_lower_bound(&lower)
+            .with_upper_bound(&upper)
+            .with_unfolding_scheme(options.unfolding_scheme)
+            .include_endpoint(true)
+            .build()
+            .map_err(|error| anyhow!("Failed to build grid: {error}"))?;
+        return quanticscrossinterpolate(&grid, f, initial_pivots, options);
+    }
 
-    // Build grid
-    let grid = DiscretizedGrid::builder(&rs)
-        .with_lower_bound(&lower)
-        .with_upper_bound(&upper)
-        .with_unfolding_scheme(options.unfolding_scheme)
-        .include_endpoint(true)
-        .build()
-        .map_err(|e| anyhow!("Failed to build grid: {}", e))?;
+    let coordinates = xvals.to_vec();
+    let mapped_f = move |indices: &[usize]| -> V {
+        let point = indices
+            .iter()
+            .enumerate()
+            .map(|(dimension, &index)| coordinates[dimension][index])
+            .collect::<Vec<_>>();
+        f(&point)
+    };
 
-    quanticscrossinterpolate(&grid, f, initial_pivots, options)
+    quanticscrossinterpolate_discrete(&sizes, mapped_f, initial_pivots, options)
 }
 
 /// Interpolate a function defined on a discrete integer grid.

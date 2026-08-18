@@ -54,7 +54,8 @@ fn main() {
         (0..idx.len()).map(|i| (idx[i] as f64) * 0.1).sum::<f64>()
     };
     let t0 = Instant::now();
-    let (pivot, err) = floating_zone(&tt, &f_counted, &vec![local_dim; n_sites], None, 1.0e-12);
+    let (pivot, err) =
+        floating_zone(&tt, &f_counted, &vec![local_dim; n_sites], None, 1.0e-12).unwrap();
     let t_zone = t0.elapsed();
     std::hint::black_box((&pivot, err));
     let n_evals = call_counter.get();

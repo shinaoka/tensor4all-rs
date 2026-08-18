@@ -1,4 +1,12 @@
 use super::*;
+
+fn projector(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Projector {
+    Projector::from_pairs(pairs).unwrap()
+}
+
+fn subdomain(data: TensorTrain, projector: Projector) -> SubDomainTT {
+    SubDomainTT::new(data, projector).unwrap()
+}
 use std::sync::Arc;
 use tensor4all_core::index::Index;
 use tensor4all_core::{IdxTensorError, TensorStorageError};
@@ -30,9 +38,9 @@ fn make_simple_tt() -> (TensorTrain, Vec<DynIndex>, Vec<DynIndex>) {
 #[test]
 fn test_subdomain_tt_creation() {
     let (tt, site_inds, _) = make_simple_tt();
-    let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let projector = projector([(site_inds[0].clone(), 1)]);
 
-    let subdomain = SubDomainTT::new(tt, projector);
+    let subdomain = subdomain(tt, projector);
 
     assert_eq!(subdomain.len(), 2);
     assert!(subdomain.is_projected_at(&site_inds[0]));
@@ -54,7 +62,7 @@ fn test_subdomain_tt_project() {
     let subdomain = SubDomainTT::from_tt(tt);
 
     // Project to fix site 0 to value 1
-    let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let projector = projector([(site_inds[0].clone(), 1)]);
     let projected = subdomain.project(&projector).unwrap();
 
     assert!(projected.is_some());
@@ -70,7 +78,7 @@ fn test_subdomain_tt_project_value_one_numeric() {
     let full_data = full.to_vec::<f64>().unwrap();
 
     let subdomain = SubDomainTT::from_tt(tt);
-    let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let projector = projector([(site_inds[0].clone(), 1)]);
     let projected = subdomain.project(&projector).unwrap().unwrap();
     let projected_full = projected.data().to_dense().unwrap();
     let projected_data = projected_full.to_vec::<f64>().unwrap();
@@ -85,11 +93,11 @@ fn test_subdomain_tt_project_value_one_numeric() {
 #[test]
 fn test_subdomain_tt_project_incompatible() {
     let (tt, site_inds, _) = make_simple_tt();
-    let projector1 = Projector::from_pairs([(site_inds[0].clone(), 0)]);
-    let subdomain = SubDomainTT::new(tt, projector1);
+    let projector1 = projector([(site_inds[0].clone(), 0)]);
+    let subdomain = subdomain(tt, projector1);
 
     // Try to project with incompatible projector (different value at same site)
-    let projector2 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let projector2 = projector([(site_inds[0].clone(), 1)]);
     let projected = subdomain.project(&projector2).unwrap();
 
     assert!(projected.is_none());
@@ -116,30 +124,73 @@ fn test_subdomain_tt_norm() {
 }
 
 #[test]
-fn test_subdomain_tt_trim_projector() {
+fn subdomain_new_rejects_absent_projector_index() {
     let (tt, site_inds, _) = make_simple_tt();
-    // Projector with an index that doesn't exist in TT
-    let fake_index = make_index(5);
-    let projector = Projector::from_pairs([(site_inds[0].clone(), 1), (fake_index.clone(), 0)]);
+    let absent = make_index(5);
+    let projector = projector([(site_inds[0].clone(), 1), (absent.clone(), 0)]);
 
-    let subdomain = SubDomainTT::new(tt, projector);
+    let error = SubDomainTT::new(tt, projector).unwrap_err();
 
-    // Fake index should be trimmed
-    assert!(subdomain.is_projected_at(&site_inds[0]));
-    assert!(!subdomain.is_projected_at(&fake_index));
-    assert_eq!(subdomain.projector().len(), 1);
+    assert!(matches!(
+        error,
+        PartitionedTTError::ProjectorIndexNotFound { index } if index == absent
+    ));
 }
 
 #[test]
-fn project_rejects_out_of_range_coordinate() {
+fn subdomain_new_rejects_same_id_tag_or_prime_variants() {
+    let (tt, site_inds, _) = make_simple_tt();
+    let tagged = tensor4all_core::index::Index::new_with_tags(
+        site_inds[0].id,
+        site_inds[0].dim,
+        tensor4all_core::TagSet::from_str("Site").unwrap(),
+    );
+    let primed = site_inds[0].prime();
+
+    for absent in [tagged, primed] {
+        let error = SubDomainTT::new(tt.clone(), projector([(absent.clone(), 0)])).unwrap_err();
+        assert!(matches!(
+            error,
+            PartitionedTTError::ProjectorIndexNotFound { index } if index == absent
+        ));
+    }
+}
+
+#[test]
+fn subdomain_new_validates_against_matched_tensor_train_dimension() {
+    let (tt, site_inds, _) = make_simple_tt();
+    let mismatched_dimension =
+        tensor4all_core::index::Index::new_with_tags(site_inds[0].id, 5, site_inds[0].tags.clone());
+    let projector = projector([(mismatched_dimension.clone(), 2)]);
+
+    let error = SubDomainTT::new(tt, projector).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PartitionedTTError::ProjectorCoordinateOutOfBounds {
+            index,
+            value: 2,
+            dim: 2,
+        } if index == mismatched_dimension
+    ));
+}
+
+#[test]
+fn project_rejects_out_of_range_coordinate_against_tt_dimension() {
     let (tt, site_inds, _) = make_simple_tt();
     let subdomain = SubDomainTT::from_tt(tt);
-    let projector = Projector::from_pairs([(site_inds[0].clone(), 2)]);
+    let mismatched_dimension =
+        tensor4all_core::index::Index::new_with_tags(site_inds[0].id, 5, site_inds[0].tags.clone());
+    let projector = projector([(mismatched_dimension.clone(), 2)]);
 
     let error = subdomain.project(&projector).unwrap_err();
     assert!(matches!(
         error,
-        PartitionedTTError::ProjectorCoordinateOutOfBounds { .. }
+        PartitionedTTError::ProjectorCoordinateOutOfBounds {
+            index,
+            value: 2,
+            dim: 2,
+        } if index == mismatched_dimension
     ));
 }
 
@@ -148,12 +199,12 @@ fn project_rejects_index_absent_from_tensor_train() {
     let (tt, _, _) = make_simple_tt();
     let subdomain = SubDomainTT::from_tt(tt);
     let absent = make_index(2);
-    let projector = Projector::from_pairs([(absent, 0)]);
+    let projector = projector([(absent.clone(), 0)]);
 
     let error = subdomain.project(&projector).unwrap_err();
     assert!(matches!(
         error,
-        PartitionedTTError::ProjectorIndexNotFound { .. }
+        PartitionedTTError::ProjectorIndexNotFound { index } if index == absent
     ));
 }
 
@@ -167,10 +218,7 @@ fn project_preserves_autodiff_metadata_and_backward_values() {
     let source_alias = source.clone();
     let subdomain = SubDomainTT::from_tt(TensorTrain::new(vec![source]).unwrap());
 
-    let projected = subdomain
-        .project(&Projector::from_pairs([(site, 1)]))
-        .unwrap()
-        .unwrap();
+    let projected = subdomain.project(&projector([(site, 1)])).unwrap().unwrap();
     let projected_tensor = projected.data().tensor(0).unwrap();
     assert!(projected_tensor.tracks_grad());
     assert_eq!(projected_tensor.to_vec::<f64>().unwrap(), vec![0.0, 4.0]);

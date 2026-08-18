@@ -34,7 +34,7 @@
 //! ).unwrap();
 //! let zeros = vec![0usize; 1025];
 //!
-//! assert_eq!(cf.eval(&zeros), 0);
+//! assert_eq!(cf.eval(&zeros).unwrap(), 0);
 //! assert_eq!(cf.key_type(), "custom");
 //! ```
 

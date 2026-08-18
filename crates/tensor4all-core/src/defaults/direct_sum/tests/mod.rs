@@ -2,6 +2,13 @@ use super::*;
 use num_complex::Complex64;
 
 #[test]
+fn checked_direct_sum_shapes_reject_overflow() {
+    assert!(checked_product(&[usize::MAX, 2], "test").is_err());
+    assert!(checked_strides(&[2, usize::MAX, 2], "test").is_err());
+    assert!(multi_to_linear(&[usize::MAX], &[2]).is_err());
+}
+
+#[test]
 fn test_direct_sum_simple() {
     // Create two tensors with one common index
     let i = DynIndex::new_dyn(2);

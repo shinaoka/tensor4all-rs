@@ -298,6 +298,24 @@ fn test_factorize_full_rank_preserves_near_dependent_components() {
 }
 
 #[test]
+fn test_factorize_rejects_tracked_lu_and_ci_before_materialization() {
+    let tensor = create_test_matrix().enable_grad().unwrap();
+    let left_inds = vec![tensor.indices[0].clone()];
+
+    for options in [FactorizeOptions::lu(), FactorizeOptions::ci()] {
+        let error = factorize(&tensor, &left_inds, &options).unwrap_err();
+        assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
+        assert!(error.to_string().contains("tracked tensors"));
+    }
+
+    for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
+        let error = factorize_full_rank(&tensor, &left_inds, alg, Canonical::Left).unwrap_err();
+        assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
+        assert!(error.to_string().contains("tracked tensors"));
+    }
+}
+
+#[test]
 fn test_factorize_rejects_mixed_algorithm_options() {
     let tensor = create_test_matrix();
     let left_inds = vec![tensor.indices[0].clone()];

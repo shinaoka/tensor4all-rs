@@ -39,13 +39,13 @@ impl OperandLayout {
         })
     }
 
-    fn payload_rank(&self) -> usize {
-        self.axis_classes
-            .iter()
-            .copied()
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0)
+    fn payload_rank(&self) -> Result<usize> {
+        match self.axis_classes.iter().copied().max() {
+            Some(value) => value
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("payload rank overflows usize")),
+            None => Ok(0),
+        }
     }
 }
 
@@ -89,7 +89,7 @@ impl StructuredContractionPlan {
             spec.input_labels.len()
         );
 
-        let offsets = node_offsets(operands);
+        let offsets = node_offsets(operands)?;
         let total_nodes = offsets.last().copied().unwrap_or(0);
         let mut uf = UnionFind::new(total_nodes);
         let mut label_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -134,7 +134,7 @@ impl StructuredContractionPlan {
 
         let mut operand_plans = Vec::with_capacity(operands.len());
         for (operand_idx, operand) in operands.iter().enumerate() {
-            let class_roots: Vec<usize> = (0..operand.payload_rank())
+            let class_roots: Vec<usize> = (0..operand.payload_rank()?)
                 .map(|class_id| node_roots[offsets[operand_idx] + class_id])
                 .collect();
             let normalized_class_roots = unique_first_appearance(&class_roots);
@@ -185,21 +185,29 @@ fn validate_axis_classes(axis_classes: &[usize]) -> Result<()> {
             "axis_classes must be canonical first-appearance labels, got {axis_classes:?}"
         );
         if class_id == next {
-            next += 1;
+            next = next
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("axis-class rank overflows usize"))?;
         }
     }
     Ok(())
 }
 
-fn node_offsets(operands: &[OperandLayout]) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(operands.len() + 1);
+fn node_offsets(operands: &[OperandLayout]) -> Result<Vec<usize>> {
+    let capacity = operands
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("operand offset length overflows usize"))?;
+    let mut offsets = Vec::with_capacity(capacity);
     let mut next = 0usize;
     offsets.push(next);
     for operand in operands {
-        next += operand.payload_rank();
+        next = next
+            .checked_add(operand.payload_rank()?)
+            .ok_or_else(|| anyhow!("operand payload rank sum overflows usize"))?;
         offsets.push(next);
     }
-    offsets
+    Ok(offsets)
 }
 
 fn canonical_roots(uf: &mut UnionFind, total_nodes: usize) -> Vec<usize> {
@@ -238,12 +246,12 @@ fn root_dimensions(
         }
     }
 
-    let len = dims_by_root
-        .keys()
-        .copied()
-        .max()
-        .map(|root| root + 1)
-        .unwrap_or(0);
+    let len = match dims_by_root.keys().copied().max() {
+        Some(root) => root
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("merged root rank overflows usize"))?,
+        None => 0,
+    };
     let mut dims = vec![1; len];
     for (root, dim) in dims_by_root {
         dims[root] = dim;

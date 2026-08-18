@@ -75,7 +75,18 @@ where
             });
         }
 
-        let mut next = Matrix::zeros(self.left.nrows(), self.left.ncols() + 1);
+        let next_cols =
+            self.left
+                .ncols()
+                .checked_add(1)
+                .ok_or_else(|| TCIError::InvalidOperation {
+                    message: "MatrixCI pivot column count overflowed usize".to_string(),
+                })?;
+        let mut next = Matrix::try_zeros(self.left.nrows(), next_cols).map_err(|error| {
+            TCIError::InvalidOperation {
+                message: format!("MatrixCI pivot column allocation failed: {error}"),
+            }
+        })?;
         for col in 0..self.left.ncols() {
             for row in 0..self.left.nrows() {
                 next[[row, col]] = self.left[[row, col]];
@@ -106,7 +117,18 @@ where
             });
         }
 
-        let mut next = Matrix::zeros(self.right.nrows() + 1, self.right.ncols());
+        let next_rows =
+            self.right
+                .nrows()
+                .checked_add(1)
+                .ok_or_else(|| TCIError::InvalidOperation {
+                    message: "MatrixCI pivot row count overflowed usize".to_string(),
+                })?;
+        let mut next = Matrix::try_zeros(next_rows, self.right.ncols()).map_err(|error| {
+            TCIError::InvalidOperation {
+                message: format!("MatrixCI pivot row allocation failed: {error}"),
+            }
+        })?;
         for col in 0..self.right.ncols() {
             for row in 0..self.right.nrows() {
                 next[[row, col]] = self.right[[row, col]];

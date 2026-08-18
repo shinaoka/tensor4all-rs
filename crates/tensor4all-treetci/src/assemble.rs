@@ -133,7 +133,10 @@ pub fn assemble_points_column_major(points: &[MultiIndex]) -> TreeTciResult<Owne
         return Err(anyhow::anyhow!("all points must have the same site count").into());
     };
 
-    let mut data = Vec::with_capacity(n_sites * n_points);
+    let data_len = n_sites
+        .checked_mul(n_points)
+        .ok_or_else(|| anyhow::anyhow!("assembled point buffer size overflowed usize"))?;
+    let mut data = Vec::with_capacity(data_len);
     for point in points {
         data.extend_from_slice(point);
     }

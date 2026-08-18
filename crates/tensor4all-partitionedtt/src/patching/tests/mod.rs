@@ -1,4 +1,12 @@
 use super::*;
+
+fn projector(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Projector {
+    Projector::from_pairs(pairs).unwrap()
+}
+
+fn subdomain(data: TensorTrain, projector: Projector) -> SubDomainTT {
+    SubDomainTT::new(data, projector).unwrap()
+}
 use crate::projector::Projector;
 use approx::assert_abs_diff_eq;
 use tensor4all_core::index::Index;
@@ -100,10 +108,10 @@ fn test_add_with_patching_simple() {
     let (site_inds, link_ind) = make_shared_indices();
 
     let tt1 = make_tt_with_indices(&site_inds, &link_ind);
-    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let subdomain1 = subdomain(tt1, projector([(site_inds[0].clone(), 0)]));
 
     let tt2 = make_tt_with_indices(&site_inds, &link_ind);
-    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+    let subdomain2 = subdomain(tt2, projector([(site_inds[0].clone(), 1)]));
 
     let options = PatchingOptions::default();
     let result = add_with_patching(vec![subdomain1, subdomain2], &options).unwrap();
@@ -126,8 +134,8 @@ fn test_add_with_patching_splits_unprojected_patch_when_bond_hits_cap() {
     };
 
     let result = add_with_patching(vec![subdomain1], &options).unwrap();
-    let proj0 = Projector::from_pairs([(site_inds[0].clone(), 0)]);
-    let proj1 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let proj0 = projector([(site_inds[0].clone(), 0)]);
+    let proj1 = projector([(site_inds[0].clone(), 1)]);
 
     assert_eq!(result.len(), 2);
     assert!(result.contains(&proj0));
@@ -164,11 +172,11 @@ fn test_add_with_patching_truncates_before_deciding_to_split() {
 #[test]
 fn test_truncate_adaptive_drops_patch_below_volume_budget() {
     let site_inds = vec![make_index(2), make_index(2)];
-    let high_proj = Projector::from_pairs([(site_inds[0].clone(), 0)]);
-    let low_proj = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let high_proj = projector([(site_inds[0].clone(), 0)]);
+    let low_proj = projector([(site_inds[0].clone(), 1)]);
 
-    let high = SubDomainTT::new(make_scaled_rank_one_tt(&site_inds, 10.0), high_proj.clone());
-    let low = SubDomainTT::new(make_scaled_rank_one_tt(&site_inds, 0.01), low_proj.clone());
+    let high = subdomain(make_scaled_rank_one_tt(&site_inds, 10.0), high_proj.clone());
+    let low = subdomain(make_scaled_rank_one_tt(&site_inds, 0.01), low_proj.clone());
     let partitioned = PartitionedTT::from_subdomains(vec![high, low]).unwrap();
 
     let result = truncate_adaptive(&partitioned, 0.01, Some(4)).unwrap();
@@ -181,11 +189,11 @@ fn test_truncate_adaptive_drops_patch_below_volume_budget() {
 #[test]
 fn test_truncate_adaptive_assigns_volume_proportional_budgets() {
     let site_inds = vec![make_index(2), make_index(2)];
-    let wide_proj = Projector::from_pairs([(site_inds[0].clone(), 0)]);
-    let narrow_proj = Projector::from_pairs([(site_inds[0].clone(), 1), (site_inds[1].clone(), 0)]);
+    let wide_proj = projector([(site_inds[0].clone(), 0)]);
+    let narrow_proj = projector([(site_inds[0].clone(), 1), (site_inds[1].clone(), 0)]);
 
-    let wide = SubDomainTT::new(make_scaled_rank_one_tt(&site_inds, 10.0), wide_proj.clone());
-    let narrow = SubDomainTT::new(
+    let wide = subdomain(make_scaled_rank_one_tt(&site_inds, 10.0), wide_proj.clone());
+    let narrow = subdomain(
         make_scaled_rank_one_tt(&site_inds, 10.0),
         narrow_proj.clone(),
     );
@@ -226,10 +234,12 @@ fn test_contract_adaptive_retruncates_output_with_corrected_norm() {
     let r12 = make_index(3);
     let left = PartitionedTT::from_subdomain(SubDomainTT::from_tt(make_contract_tt(
         &s0, &l01, &s1, &l12, &s2,
-    )));
+    )))
+    .unwrap();
     let right = PartitionedTT::from_subdomain(SubDomainTT::from_tt(make_contract_tt(
         &s0, &r01, &s1, &r12, &s2,
-    )));
+    )))
+    .unwrap();
     let patching = PatchingOptions {
         rtol: 0.0,
         max_bond_dim: Some(1),

@@ -69,7 +69,7 @@ pub fn contract(
 /// let right = SubDomainTT::from_tt(TensorTrain::new(vec![
 ///     IdxTensor::from_dense(vec![i], vec![3.0_f64, 4.0]).unwrap(),
 /// ]).unwrap());
-/// let projector = Projector::from_pairs([(left.all_indices()[0].clone(), 0)]);
+/// let projector = Projector::from_pairs([(left.all_indices()[0].clone(), 0)]).unwrap();
 ///
 /// assert!(proj_contract(&left, &right, &projector, &ContractOptions::default())
 ///     .unwrap()

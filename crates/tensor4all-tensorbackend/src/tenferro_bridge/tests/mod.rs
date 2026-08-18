@@ -760,6 +760,32 @@ fn einsum_native_tensors_rejects_empty_operands() {
 }
 
 #[test]
+fn native_einsum_rejects_oversized_labels_on_all_input_paths() {
+    let oversized = u32::MAX as usize + 1;
+    let owned_tensor = NativeTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let owned = einsum_native_tensors_owned(vec![(owned_tensor, vec![oversized])], &[0]);
+    assert!(owned.unwrap_err().to_string().contains("u32 range"));
+
+    let borrowed_tensor = NativeTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let borrowed = einsum_native_tensors(&[(&borrowed_tensor, &[oversized])], &[0]);
+    assert!(borrowed.unwrap_err().to_string().contains("u32 range"));
+
+    let read_tensor = NativeTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let read = NativeTensorReadInput::Owned(read_tensor);
+    let read_result = einsum_native_tensor_reads(&[(&read, &[oversized])], &[0]);
+    assert!(read_result.unwrap_err().to_string().contains("u32 range"));
+}
+
+#[test]
+fn native_einsum_rejects_oversized_output_labels() {
+    let oversized = u32::MAX as usize + 1;
+    let tensor = NativeTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+
+    let result = einsum_native_tensors(&[(&tensor, &[0])], &[oversized]);
+    assert!(result.unwrap_err().to_string().contains("u32 range"));
+}
+
+#[test]
 fn ids_to_subscript_and_build_einsum_subscripts_cover_helper_paths() {
     assert_eq!(ids_to_subscript(&[0, 25, 51]).unwrap(), "azZ");
     assert_eq!(

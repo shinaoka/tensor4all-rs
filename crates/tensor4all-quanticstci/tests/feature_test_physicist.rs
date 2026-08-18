@@ -526,9 +526,7 @@ fn options_builder_all_fields() {
         .with_maxiter(100)
         .with_nrandominitpivot(10)
         .with_unfoldingscheme(UnfoldingScheme::Fused)
-        .with_verbosity(2)
-        .with_nsearchglobalpivot(3)
-        .with_nsearch(200);
+        .with_verbosity(2);
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
     assert_eq!(opts.max_bond_dim, Some(50));
@@ -536,8 +534,6 @@ fn options_builder_all_fields() {
     assert_eq!(opts.n_random_init_pivot, 10);
     assert_eq!(opts.unfolding_scheme, UnfoldingScheme::Fused);
     assert_eq!(opts.verbosity, 2);
-    assert_eq!(opts.nsearchglobalpivot, 3);
-    assert_eq!(opts.nsearch, 200);
 
     // Verify conversion to TreeTciOptions preserves key fields
     let tree_opts = opts.to_treetci_options();

@@ -270,7 +270,14 @@ pub extern "C" fn t4a_last_error_message(
 
     LAST_ERROR.with(|cell| {
         let msg = cell.borrow().clone();
-        let required_len = msg.len() + 1; // +1 for null terminator
+        let required_len = match msg.len().checked_add(1) {
+            Some(length) if length <= isize::MAX as usize => length,
+            _ => {
+                let message = "last error message output byte span exceeds isize::MAX";
+                set_last_error(message);
+                return T4A_INVALID_ARGUMENT;
+            }
+        };
 
         unsafe { *out_len = required_len };
 

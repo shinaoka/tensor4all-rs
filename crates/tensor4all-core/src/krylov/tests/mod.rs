@@ -1920,3 +1920,43 @@ fn test_restart_gmres_stagnation_verbose() {
     let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
     assert!(!result.converged);
 }
+
+#[test]
+fn krylov_capacity_overflow_is_reported_before_allocation() {
+    let error = checked_krylov_capacity(usize::MAX, "test").unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<KrylovError>(),
+        Some(KrylovError::InvalidOptions { solver: "test", .. })
+    ));
+
+    let error = projected_matrix_from_columns(&[], usize::MAX).unwrap_err();
+    assert!(error.to_string().contains("overflows usize"));
+}
+
+#[test]
+fn gmres_rejects_maximum_iteration_capacity_without_invoking_operator() {
+    let vector = PlainVector { data: vec![1.0] };
+    let options = GmresOptions {
+        max_iter: usize::MAX,
+        max_restarts: 1,
+        ..GmresOptions::default()
+    };
+    let called = AtomicUsize::new(0);
+    let result = gmres(
+        |x: &PlainVector| {
+            called.fetch_add(1, Ordering::Relaxed);
+            Ok(x.clone())
+        },
+        &vector,
+        &vector,
+        &options,
+    );
+    assert!(matches!(
+        result,
+        Err(KrylovError::InvalidOptions {
+            solver: "gmres",
+            ..
+        })
+    ));
+    assert_eq!(called.load(Ordering::Relaxed), 0);
+}

@@ -24,6 +24,13 @@ fn last_error() -> String {
         .to_string()
 }
 
+#[test]
+fn test_checked_pointer_span_rejects_impossible_byte_length() {
+    let element_size = std::mem::size_of::<usize>();
+    let len = (isize::MAX as usize) / element_size + 1;
+    assert!(checked_ptr_span::<usize>(len, "test pointer span").is_err());
+}
+
 fn new_index(dim: usize) -> *mut t4a_index {
     let mut out = std::ptr::null_mut();
     assert_eq!(

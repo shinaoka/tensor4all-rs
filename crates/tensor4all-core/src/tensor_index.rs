@@ -34,7 +34,7 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Ordering
     ///
     /// The ordering MUST be stable (deterministic). Implementations should:
-    /// - Sort indices by their `id` field, or
+    /// - Sort indices by their full index identity, or
     /// - Use insertion-ordered storage
     ///
     /// This ensures consistent behavior for hashing, serialization, and comparison.
@@ -51,12 +51,13 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
 
     /// Replace an index in this object.
     ///
-    /// This replaces the index matching `old_index` by ID with `new_index`.
+    /// This replaces the index equal to `old_index` (including dimension,
+    /// prime level, tags, and other identity metadata) with `new_index`.
     /// The storage data is not modified, only the index metadata is changed.
     ///
     /// # Arguments
     ///
-    /// * `old_index` - The index to replace (matched by ID)
+    /// * `old_index` - The full index identity to replace
     /// * `new_index` - The new index to use
     ///
     /// # Returns
@@ -76,12 +77,12 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
 
     /// Replace multiple indices in this object.
     ///
-    /// This replaces each index in `old_indices` (matched by ID) with the
+    /// This replaces each full index identity in `old_indices` with the
     /// corresponding index in `new_indices`. The storage data is not modified.
     ///
     /// # Arguments
     ///
-    /// * `old_indices` - The indices to replace (matched by ID)
+    /// * `old_indices` - The full index identities to replace
     /// * `new_indices` - The new indices to use
     ///
     /// # Returns

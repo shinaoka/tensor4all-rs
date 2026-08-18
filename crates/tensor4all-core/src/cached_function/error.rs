@@ -29,4 +29,33 @@ pub enum CacheKeyError {
         /// Actual number of dimensions.
         ndim: usize,
     },
+
+    /// An evaluation index has the wrong rank.
+    #[error("Invalid index rank: expected {expected}, got {got}")]
+    InvalidIndexLength {
+        /// Number of configured local dimensions.
+        expected: usize,
+        /// Number of coordinates supplied by the caller.
+        got: usize,
+    },
+
+    /// An evaluation coordinate is outside its local dimension.
+    #[error("Index coordinate {index} at axis {axis} is out of range for dimension {dim}")]
+    IndexOutOfBounds {
+        /// Axis containing the invalid coordinate.
+        axis: usize,
+        /// Invalid coordinate.
+        index: usize,
+        /// Valid exclusive upper bound.
+        dim: usize,
+    },
+
+    /// A batch callback returned a result vector with the wrong length.
+    #[error("Batch callback returned {got} values for {expected} indices")]
+    BatchResultLength {
+        /// Number of cache misses requested.
+        expected: usize,
+        /// Number of values returned by the callback.
+        got: usize,
+    },
 }

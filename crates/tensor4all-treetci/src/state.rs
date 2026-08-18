@@ -79,6 +79,9 @@ impl<T> TreeTCI2<T> {
             )
             .into());
         };
+        if let Some((site, _)) = local_dims.iter().enumerate().find(|(_, &dim)| dim == 0) {
+            return Err(anyhow::anyhow!("local dimension at site {site} must be positive").into());
+        }
 
         let bond_errors = graph
             .edges()
@@ -111,6 +114,17 @@ impl<T> TreeTCI2<T> {
                 anyhow::anyhow!("each global pivot must contain one index per site").into(),
             );
         };
+        for pivot in pivots {
+            for (site, &value) in pivot.iter().enumerate() {
+                if value >= self.local_dims[site] {
+                    return Err(anyhow::anyhow!(
+                        "global pivot value {value} is out of bounds for site {site} with dimension {}",
+                        self.local_dims[site]
+                    )
+                    .into());
+                }
+            }
+        }
 
         for pivot in pivots {
             for edge in self.graph.edges() {

@@ -196,6 +196,31 @@ fn test_sweep1site_preserves_accuracy() {
 }
 
 #[test]
+fn add_global_pivots_validates_batch_transactionally() {
+    let mut tci = TensorCI2::<f64>::new(vec![2, 2]).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let before_i: Vec<Vec<MultiIndex>> = (0..tci.len())
+        .map(|site| tci.i_set(site).to_vec())
+        .collect();
+    let before_j: Vec<Vec<MultiIndex>> = (0..tci.len())
+        .map(|site| tci.j_set(site).to_vec())
+        .collect();
+
+    let error = tci
+        .add_global_pivots(&[vec![1, 1], vec![2, 0]])
+        .unwrap_err();
+    assert!(matches!(error, TCIError::IndexOutOfBounds { .. }));
+    let after_i: Vec<Vec<MultiIndex>> = (0..tci.len())
+        .map(|site| tci.i_set(site).to_vec())
+        .collect();
+    let after_j: Vec<Vec<MultiIndex>> = (0..tci.len())
+        .map(|site| tci.j_set(site).to_vec())
+        .collect();
+    assert_eq!(after_i, before_i);
+    assert_eq!(after_j, before_j);
+}
+
+#[test]
 fn test_make_canonical() {
     let f = |idx: &MultiIndex| idx[0] as f64 + idx[1] as f64 * 0.5 + idx[2] as f64 * 0.25;
     let local_dims = vec![4, 4, 4];
@@ -1121,7 +1146,7 @@ fn test_global_search_oscillatory() {
 
     // Estimate true error
     let mut rng = rand::rng();
-    let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng);
+    let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng).unwrap();
 
     // Verify errors are sorted in descending order
     for i in 0..pivot_errors.len().saturating_sub(1) {
