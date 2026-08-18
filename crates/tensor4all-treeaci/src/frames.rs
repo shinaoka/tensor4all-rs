@@ -578,6 +578,57 @@ fn accumulate_incoming<T: TreeAciScalar>(
     sum
 }
 
+/// Gathers a `PreparedCore`'s fixed-physical-value slice into a plain
+/// `outgoing_dim x incoming_dim` column-major matrix, for nodes with exactly
+/// one incoming directed edge.
+///
+/// This exists so the slice can be fed to a single BLAS `mat_mul` call
+/// against every candidate's incoming frame vector at once, instead of the
+/// scalar per-candidate loop in [`accumulate_incoming`]. It is only valid
+/// for the single-incoming-edge case: with two or more incoming edges the
+/// "matrix" this node's core induces is not two-dimensional, and
+/// [`contract_prepared_core`] must be used instead.
+fn single_incoming_core_matrix<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    outgoing_axis: usize,
+    incoming_axis: usize,
+    physical_base_offset: usize,
+    outgoing_dim: usize,
+    incoming_dim: usize,
+) -> Matrix<T> {
+    let outgoing_stride = core.strides[outgoing_axis];
+    let incoming_stride = core.strides[incoming_axis];
+    let mut data = Vec::with_capacity(outgoing_dim * incoming_dim);
+    for incoming_value in 0..incoming_dim {
+        for outgoing_value in 0..outgoing_dim {
+            let offset = physical_base_offset
+                + incoming_value * incoming_stride
+                + outgoing_value * outgoing_stride;
+            data.push(core.values[offset]);
+        }
+    }
+    Matrix::from_col_major_vec(outgoing_dim, incoming_dim, data)
+}
+
+/// Contracts a single-incoming-edge core matrix against a batch of candidate
+/// incoming frame vectors (one per column) in one BLAS call.
+///
+/// `core_matrix` is `outgoing_dim x incoming_dim` (from
+/// [`single_incoming_core_matrix`]); `incoming_frame_matrix` is
+/// `incoming_dim x n_candidates`. Returns `outgoing_dim x n_candidates`,
+/// column `c` being the same result [`contract_prepared_core`] would have
+/// produced for candidate `c` alone.
+fn contract_prepared_core_batched<T: TreeAciScalar>(
+    core_matrix: &Matrix<T>,
+    incoming_frame_matrix: &Matrix<T>,
+) -> Result<Matrix<T>> {
+    tensor4all_tensorbackend::mat_mul(core_matrix, incoming_frame_matrix).map_err(|error| {
+        TreeAciError::Numerical {
+            message: error.to_string(),
+        }
+    })
+}
+
 fn outgoing_bond<'a, V: TreeAciNode>(
     input: &'a TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,

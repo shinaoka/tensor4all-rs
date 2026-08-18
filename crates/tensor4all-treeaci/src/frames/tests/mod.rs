@@ -370,3 +370,135 @@ fn the_frame_cache_is_bounded_in_aggregate() {
     )
     .is_ok());
 }
+
+#[test]
+fn batched_single_incoming_contraction_matches_scalar_path() {
+    // A 2 (physical) x 3 (incoming) x 4 (outgoing) core, values chosen so the
+    // contraction result is easy to hand-check.
+    let dims = vec![2usize, 3, 4];
+    let mut strides = Vec::with_capacity(3);
+    let mut stride = 1usize;
+    for dim in &dims {
+        strides.push(stride);
+        stride *= dim;
+    }
+    let values: Vec<f64> = (0..24).map(|value| value as f64).collect();
+    let core = super::PreparedCore {
+        indices: Vec::new(), // unused by the functions under test
+        dims,
+        strides,
+        values,
+    };
+    let physical_axis = 0usize;
+    let incoming_axis = 1usize;
+    let outgoing_axis = 2usize;
+    let local_coordinate = 1usize; // fixes the physical axis to value 1
+    let base_offset = local_coordinate * core.strides[physical_axis];
+
+    let core_matrix = super::single_incoming_core_matrix(
+        &core,
+        outgoing_axis,
+        incoming_axis,
+        base_offset,
+        core.dims[outgoing_axis],
+        core.dims[incoming_axis],
+    );
+
+    // Two candidate incoming frame vectors, as columns.
+    let frame_matrix = tensor4all_tensorbackend::Matrix::from_col_major_vec(
+        core.dims[incoming_axis],
+        2,
+        vec![
+            1.0, 0.0, 0.0, // candidate 0: e_0
+            0.0, 1.0, 0.0, // candidate 1: e_1
+        ],
+    );
+
+    let result = super::contract_prepared_core_batched(&core_matrix, &frame_matrix).unwrap();
+
+    // candidate 0 selects incoming index 0: result column 0 must equal the
+    // core's [physical=1, incoming=0, outgoing=*] slice exactly (e_0 dot
+    // product with a matrix picks out its column verbatim).
+    for outgoing_value in 0..core.dims[outgoing_axis] {
+        let offset = base_offset + outgoing_value * core.strides[outgoing_axis];
+        assert_eq!(result[[outgoing_value, 0]], core.values[offset]);
+    }
+    // candidate 1 selects incoming index 1.
+    for outgoing_value in 0..core.dims[outgoing_axis] {
+        let offset = base_offset
+            + core.strides[incoming_axis]
+            + outgoing_value * core.strides[outgoing_axis];
+        assert_eq!(result[[outgoing_value, 1]], core.values[offset]);
+    }
+}
+
+#[test]
+fn batched_path_matches_scalar_path_on_random_core() {
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+    let mut rng = StdRng::seed_from_u64(42);
+    let outgoing_dim = 5usize;
+    let incoming_dim = 7usize;
+    let physical_dim = 2usize;
+    let dims = vec![physical_dim, incoming_dim, outgoing_dim];
+    let mut strides = Vec::with_capacity(3);
+    let mut stride = 1usize;
+    for dim in &dims {
+        strides.push(stride);
+        stride *= dim;
+    }
+    let values: Vec<f64> = (0..(physical_dim * incoming_dim * outgoing_dim))
+        .map(|_| rng.random_range(-1.0..1.0))
+        .collect();
+    let core = super::PreparedCore {
+        indices: Vec::new(),
+        dims,
+        strides,
+        values,
+    };
+
+    for local_coordinate in 0..physical_dim {
+        let base_offset = local_coordinate * core.strides[0];
+        let core_matrix = super::single_incoming_core_matrix(
+            &core,
+            2,
+            1,
+            base_offset,
+            outgoing_dim,
+            incoming_dim,
+        );
+
+        let n_candidates = 4;
+        let mut frame_data = Vec::with_capacity(incoming_dim * n_candidates);
+        let mut per_candidate_frames = Vec::with_capacity(n_candidates);
+        for _ in 0..n_candidates {
+            let frame: Vec<f64> = (0..incoming_dim)
+                .map(|_| rng.random_range(-1.0..1.0))
+                .collect();
+            frame_data.extend_from_slice(&frame);
+            per_candidate_frames.push(frame);
+        }
+        let frame_matrix = tensor4all_tensorbackend::Matrix::from_col_major_vec(
+            incoming_dim,
+            n_candidates,
+            frame_data,
+        );
+        let batched = super::contract_prepared_core_batched(&core_matrix, &frame_matrix).unwrap();
+
+        for (candidate, frame) in per_candidate_frames.iter().enumerate() {
+            for outgoing_value in 0..outgoing_dim {
+                let outgoing_offset = base_offset + outgoing_value * core.strides[2];
+                let mut expected = 0.0f64;
+                for (incoming_value, &weight) in frame.iter().enumerate() {
+                    expected +=
+                        weight * core.values[outgoing_offset + incoming_value * core.strides[1]];
+                }
+                let actual = batched[[outgoing_value, candidate]];
+                assert!(
+                    (actual - expected).abs() < 1e-10,
+                    "mismatch at outgoing={outgoing_value}, candidate={candidate}: \
+                     actual={actual}, expected={expected}"
+                );
+            }
+        }
+    }
+}
