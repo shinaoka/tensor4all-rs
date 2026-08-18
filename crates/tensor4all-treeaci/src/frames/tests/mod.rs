@@ -784,6 +784,81 @@ fn compute_batch_matches_scalar_compute_on_a_chain_edge() {
         .any(|frame| frame != &scalar_results[0]));
 }
 
+/// Combines the two properties `extend_matches_a_full_rebuild_on_the_grown_arena`
+/// and `compute_batch_matches_scalar_compute_on_a_chain_edge` each cover
+/// separately, and neither covers together: `y_tree`'s directed edges are
+/// always 0- or 2-incoming (its center has degree 3, its leaves degree 1),
+/// so `extend_matches_a_full_rebuild_on_the_grown_arena` only ever drives
+/// `compute_batch`'s scalar-fallback branch; `compute_batch_matches_scalar_compute_on_a_chain_edge`
+/// drives the batched branch but always from a fresh builder with range
+/// `0..sample_count`, never a nonzero `known`. This test uses the chain
+/// fixture (so directed edge `1 -> 2` takes the batched BLAS branch) and a
+/// genuine `extend` call after growing the arena (so `build_or_extend`'s
+/// loop invokes `compute_batch` with `known > 0` on that same edge) --
+/// exactly the interaction this task was commissioned to scrutinize.
+#[test]
+fn extend_matches_a_full_rebuild_on_a_chain_with_a_batched_edge() {
+    let input = chain_tree_for_batched_compute();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .expect("chain must have a directed edge 1 -> 2");
+    assert_eq!(
+        problem.directed_edges[edge].incoming_to_from.len(),
+        1,
+        "edge 1 -> 2 must be the single-incoming-edge cut compute_batch batches"
+    );
+
+    let seed0 = vec![0, 0, 0];
+    let (mut arena, mut candidates) =
+        SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let known = initial.frames[0][edge].sample_count;
+    assert!(
+        known > 0,
+        "the seed must already produce a sample on the batched edge, or `known` is vacuously 0"
+    );
+
+    // Two more seeds, varying node 0's and node 1's physical values -- the
+    // same shape `compute_batch_matches_scalar_compute_on_a_chain_edge` uses
+    // to guarantee multiple distinct samples on edge 1 -> 2.
+    for seed in [vec![1, 0, 0], vec![0, 1, 0]] {
+        arena
+            .inject_global_point(&mut candidates, &problem, &seed)
+            .expect("grow the arena with a new global point");
+    }
+
+    let grown_count = arena.directed_record_count(edge).unwrap();
+    assert!(
+        grown_count > known,
+        "growth must add new samples on the batched edge: known={known} grown={grown_count}"
+    );
+
+    let extended = initial
+        .extend(std::slice::from_ref(&input), &problem, &arena)
+        .expect("extend the store to the grown arena");
+    let rebuilt =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("rebuild from scratch on the grown arena");
+
+    for e in 0..problem.directed_edges.len() {
+        let sample_count = arena.directed_record_count(e).unwrap();
+        for sample in 0..sample_count {
+            assert_eq!(
+                extended.frame_values(0, e, sample).unwrap(),
+                rebuilt.frame_values(0, e, sample).unwrap(),
+                "edge {e} sample {sample} disagrees between extend and full rebuild"
+            );
+        }
+    }
+}
+
 /// `compute_batch` on a directed edge with zero incoming edges (a leaf
 /// source) must fall back to `compute` per sample and produce identical
 /// results, mirroring
