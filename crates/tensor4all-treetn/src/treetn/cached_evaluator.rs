@@ -8,8 +8,10 @@ use std::hash::Hash;
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::{
-    contract_with_options, AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor,
-    IndexLike, TensorContractionLike, TensorIndex, TensorLike,
+    contract_with_options,
+    index_key::{FlatIndexer, IndexKey},
+    AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor, IndexLike,
+    TensorContractionLike, TensorIndex, TensorLike,
 };
 
 use super::TreeTN;
@@ -74,12 +76,15 @@ struct CachedEvaluationStats {
     directed_message_count: usize,
     batched_message_contract_count: usize,
     batched_center_contract_count: usize,
+    message_cache_hits: usize,
+    message_cache_misses: usize,
 }
 
 #[derive(Clone, Debug)]
 struct RootedMessagePlan<V> {
     children: HashMap<V, Vec<V>>,
     postorder: Vec<V>,
+    parent: ParentMap<V>,
 }
 
 #[derive(Debug)]
@@ -347,6 +352,7 @@ where
         Ok(Self {
             children,
             postorder,
+            parent,
         })
     }
 }
@@ -654,6 +660,23 @@ where
     options: CachedEvaluatorOptions<V>,
     center: Option<V>,
     last_stats: CachedEvaluationStats,
+    /// Run-scoped, per-directed-edge persistent message cache. Lives as long
+    /// as this evaluator: an input-tree evaluator lives for a whole TreeACI
+    /// run, so its cache does too; an output-tree evaluator that must be
+    /// dropped when pivot injection changes the output is a caller-level
+    /// concern (drop this evaluator and build a new one), not this field's.
+    /// Keyed by the full evaluated point for now, which is always correct
+    /// (never collapses two different messages together) even though it is
+    /// coarser than the minimal subtree-restricted key a later pass could use.
+    message_caches: HashMap<V, PackedMessageCache<IndexKey, AnyScalar>>,
+    /// Each node's parent-bond `DynIndex`, memoized: it never changes for a
+    /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
+    /// lookups that cost real time if repeated on every call.
+    parent_bond_indices: HashMap<V, DynIndex>,
+    /// Packs one evaluated point into a compact [`IndexKey`] for
+    /// `message_caches`, per #645. Built once from the indices this evaluator
+    /// was constructed with, since their dimensions never change.
+    indexer: FlatIndexer,
 }
 
 impl<'a, V> TreeTNCachedEvaluator<'a, V>
@@ -705,12 +728,17 @@ where
             )?;
         }
         let center = options.center.clone();
+        let local_dims = indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
+        let indexer = FlatIndexer::try_new(&local_dims).map_err(anyhow::Error::from)?;
         Ok(Self {
             tree,
             layout,
             options,
             center,
             last_stats: CachedEvaluationStats::default(),
+            message_caches: HashMap::new(),
+            parent_bond_indices: HashMap::new(),
+            indexer,
         })
     }
 
@@ -900,8 +928,13 @@ where
                 .get(node)
                 .ok_or_else(|| anyhow::anyhow!("missing assignment batch for node {:?}", node))?;
             directed_message_count += assignment_batch.first_points.len();
-            let node_message =
-                self.compute_stacked_message(node, values, &plan, &assignment_batches, &messages)?;
+            let node_message = self.get_or_compute_node_message(
+                node,
+                values,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )?;
             batched_message_contract_count += 1;
             messages.insert(node.clone(), node_message);
         }
@@ -1000,8 +1033,39 @@ where
         Ok(assignment_batches)
     }
 
-    fn compute_stacked_message(
+    fn message_cache_key(
         &self,
+        values: ColMajorArrayRef<'_, usize>,
+        point: usize,
+    ) -> Result<IndexKey> {
+        let n_rows = values.shape()[0];
+        let raw = (0..n_rows)
+            .map(|row| {
+                value_at(
+                    values,
+                    row,
+                    point,
+                    "TreeTNCachedEvaluator::evaluate_batched",
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.indexer.encode(&raw).map_err(anyhow::Error::from)
+    }
+
+    /// Computes `node`'s directed message toward its parent, consulting the
+    /// per-node persistent cache first.
+    ///
+    /// Only the assignments genuinely missing from the cache are recomputed
+    /// -- via a smaller call to [`Self::compute_stacked_message`] scoped to
+    /// just those points -- and the result is merged with the cached columns
+    /// for everything else, in the caller's original point order. A node
+    /// whose whole batch is already cached skips computation entirely.
+    ///
+    /// Cache keys are the full evaluated point for now (see the
+    /// `message_caches` field doc): correct but coarser than a
+    /// subtree-restricted key would be.
+    fn get_or_compute_node_message(
+        &mut self,
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         plan: &RootedMessagePlan<V>,
@@ -1014,10 +1078,170 @@ where
                 node
             )
         })?;
-        let assignment_index = DynIndex::new_dyn(assignment_batch.first_points.len());
+        let points = assignment_batch.first_points.clone();
+        let keys = points
+            .iter()
+            .map(|&point| self.message_cache_key(values, point))
+            .collect::<Result<Vec<_>>>()?;
+
+        let Some(Some(parent)) = plan.parent.get(node) else {
+            // No parent under this rooting: `node` is not the fixed centre but
+            // has none, which should not happen for a postorder entry. Fall
+            // back to the uncached path rather than fail the whole call.
+            return self.compute_stacked_message(
+                node,
+                values,
+                &points,
+                plan,
+                assignment_batches,
+                messages,
+            );
+        };
+        let parent = parent.clone();
+        let bond_index = match self.parent_bond_indices.get(node) {
+            Some(index) => index.clone(),
+            None => {
+                let edge = self.tree.edge_between(node, &parent).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batched: no edge between {:?} and {:?}",
+                        node,
+                        parent
+                    )
+                })?;
+                let index = self
+                    .tree
+                    .bond_index(edge)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "TreeTNCachedEvaluator::evaluate_batched: missing bond index between {:?} and {:?}",
+                            node,
+                            parent
+                        )
+                    })?
+                    .clone();
+                self.parent_bond_indices.insert(node.clone(), index.clone());
+                index
+            }
+        };
+        let bond_dim = bond_index.dim();
+        let assignment_index = DynIndex::new_dyn(keys.len());
+
+        // Split into hits and misses without computing anything yet. The
+        // cache borrow must not outlive this block: `compute_stacked_message`
+        // below needs `&self`, which conflicts with a live `&mut
+        // self.message_caches` entry.
+        let (hit_keys, missing_indices) = {
+            let cache = self
+                .message_caches
+                .entry(node.clone())
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
+            if let Some(positions) = cache.get_all_cached(&keys) {
+                let mut data = Vec::with_capacity(bond_dim * keys.len());
+                for position in positions {
+                    data.extend_from_slice(cache.column(position));
+                }
+                let tensor =
+                    IdxTensor::from_dense_any(vec![bond_index, assignment_index.clone()], data)?;
+                self.last_stats.message_cache_hits += keys.len();
+                return Ok(StackedMessage {
+                    assignment_index,
+                    tensor,
+                });
+            }
+            let mut hit_keys = Vec::new();
+            let mut missing_indices = Vec::new();
+            for (i, key) in keys.iter().enumerate() {
+                if cache.contains(key) {
+                    hit_keys.push(key.clone());
+                } else {
+                    missing_indices.push(i);
+                }
+            }
+            (hit_keys, missing_indices)
+        };
+        self.last_stats.message_cache_hits += hit_keys.len();
+        self.last_stats.message_cache_misses += missing_indices.len();
+        if !hit_keys.is_empty() {
+            let cache = self
+                .message_caches
+                .get_mut(node)
+                .expect("entry inserted above");
+            cache.get_all_cached(&hit_keys); // counted above; discard positions here
+        }
+
+        // Compute only the missing points, as a batch of just that size.
+        let missing_points = missing_indices
+            .iter()
+            .map(|&i| points[i])
+            .collect::<Vec<_>>();
+        let missing_keys = missing_indices
+            .iter()
+            .map(|&i| keys[i].clone())
+            .collect::<Vec<_>>();
+        let missing_message = self.compute_stacked_message(
+            node,
+            values,
+            &missing_points,
+            plan,
+            assignment_batches,
+            messages,
+        )?;
+        let missing_values = tensor_values_any(&missing_message.tensor)?;
+
+        let cache = self
+            .message_caches
+            .get_mut(node)
+            .expect("entry inserted above");
+        cache.get_or_compute_batch(&missing_keys, |request_keys| {
+            request_keys
+                .iter()
+                .map(|request_key| {
+                    let index = missing_keys.iter().position(|key| key == request_key).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "TreeTNCachedEvaluator::evaluate_batched: missing key not found in this call's batch"
+                        )
+                    })?;
+                    Ok(missing_values[index * bond_dim..(index + 1) * bond_dim].to_vec())
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+
+        // Merge: every key is now cached (unbounded budget in this phase
+        // guarantees the insert above retained all of them), in original order.
+        let mut data = Vec::with_capacity(bond_dim * keys.len());
+        for key in &keys {
+            let position = cache.position(key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batched: message cache invariant violated: key missing after insert"
+                )
+            })?;
+            data.extend_from_slice(cache.column(position));
+        }
+        let tensor = IdxTensor::from_dense_any(vec![bond_index, assignment_index.clone()], data)?;
+        Ok(StackedMessage {
+            assignment_index,
+            tensor,
+        })
+    }
+
+    /// Computes `node`'s directed message for exactly `points` (global point
+    /// indices into `values`, in the order the result's assignment axis
+    /// should carry) -- not necessarily the node's whole assignment batch, so
+    /// a caller with a persistent cache can pass only the points it still
+    /// needs to compute.
+    fn compute_stacked_message(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+    ) -> Result<StackedMessage> {
+        let assignment_index = DynIndex::new_dyn(points.len());
         let tensor = tensor_for_node(self.tree, node)?;
-        let mut local_slices = Vec::with_capacity(assignment_batch.first_points.len());
-        for point in assignment_batch.first_points.iter().copied() {
+        let mut local_slices = Vec::with_capacity(points.len());
+        for point in points.iter().copied() {
             let index_vals = self.index_vals_for_point(node, values, point)?;
             local_slices.push(slice_tensor(tensor, &index_vals).with_context(|| {
                 format!(
@@ -1051,8 +1275,7 @@ where
                     child
                 )
             })?;
-            let selected_assignments = assignment_batch
-                .first_points
+            let selected_assignments = points
                 .iter()
                 .map(|&point| {
                     child_assignment_batch
@@ -1551,10 +1774,359 @@ where
     Ok((parent, order))
 }
 
+/// A run-scoped, append-only cache of packed message columns for one
+/// directed edge.
+///
+/// Per Hiroshi's #646 review design: entries are never evicted individually
+/// and there is no public `clear` -- the cache lives no longer than the
+/// evaluator that owns it, so nothing outside can hold a handle that would
+/// need clearing. Columns are stored contiguously in a single flat buffer
+/// (column-major: column `i` occupies `columns[i * bond_dim .. (i+1) *
+/// bond_dim]`) instead of one heap allocation per message.
+struct PackedMessageCache<K, T> {
+    bond_dim: usize,
+    max_bytes: usize,
+    positions: HashMap<K, usize>,
+    columns: Vec<T>,
+    hits: usize,
+    misses: usize,
+}
+
+/// Where one requested key's column ended up.
+///
+/// `Uncached` carries the computed values directly rather than a position,
+/// since an over-budget entry is never written into `columns` -- there is
+/// nothing in the packed buffer to point at.
+#[derive(Debug, Clone, PartialEq)]
+enum CacheSlot<T> {
+    Cached(usize),
+    Uncached(Vec<T>),
+}
+
+impl<K, T> PackedMessageCache<K, T>
+where
+    K: Eq + Hash + Clone,
+    T: Clone,
+{
+    fn new(bond_dim: usize, max_bytes: usize) -> Self {
+        Self {
+            bond_dim,
+            max_bytes,
+            positions: HashMap::new(),
+            columns: Vec::new(),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    fn column(&self, position: usize) -> &[T] {
+        &self.columns[position * self.bond_dim..(position + 1) * self.bond_dim]
+    }
+
+    /// Looks up every key without computing anything.
+    ///
+    /// Returns `Some(positions)`, one per key in order, and counts each as a
+    /// hit, only if every key is already cached; otherwise returns `None`
+    /// without touching the hit/miss counters, so a caller that falls back to
+    /// [`Self::get_or_compute_batch`] on a partial hit does not double-count.
+    fn get_all_cached(&mut self, keys: &[K]) -> Option<Vec<usize>> {
+        let positions = keys
+            .iter()
+            .map(|key| self.positions.get(key).copied())
+            .collect::<Option<Vec<_>>>()?;
+        self.hits += keys.len();
+        Some(positions)
+    }
+
+    fn contains(&self, key: &K) -> bool {
+        self.positions.contains_key(key)
+    }
+
+    /// Looks up one key's column position without touching the hit/miss
+    /// counters -- for reassembling a merged result after the counted
+    /// lookup/insert calls that drove the merge have already run.
+    fn position(&self, key: &K) -> Option<usize> {
+        self.positions.get(key).copied()
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.columns.len() * std::mem::size_of::<T>()
+    }
+
+    fn hits(&self) -> usize {
+        self.hits
+    }
+
+    fn misses(&self) -> usize {
+        self.misses
+    }
+
+    /// Returns where each requested key's column ended up, in order.
+    ///
+    /// Follows Hiroshi's seven-step batch protocol: look up hits, dedupe
+    /// misses, compute the missing columns as one batch via
+    /// `compute_missing`, then append and commit as many as the byte budget
+    /// admits together, so the cache stays consistent even if computation
+    /// fails partway. Once the budget is exhausted, further misses are still
+    /// computed and returned (`CacheSlot::Uncached`) but not retained --
+    /// matching Hiroshi's "continue evaluating new messages without caching
+    /// them" rather than evicting an already-cached entry to make room.
+    fn get_or_compute_batch<F, E>(
+        &mut self,
+        keys: &[K],
+        compute_missing: F,
+    ) -> std::result::Result<Vec<CacheSlot<T>>, E>
+    where
+        F: FnOnce(&[K]) -> std::result::Result<Vec<Vec<T>>, E>,
+    {
+        let mut missing_keys = Vec::new();
+        let mut missing_seen = HashSet::new();
+        for key in keys {
+            if self.positions.contains_key(key) {
+                self.hits += 1;
+            } else {
+                self.misses += 1;
+                if missing_seen.insert(key.clone()) {
+                    missing_keys.push(key.clone());
+                }
+            }
+        }
+
+        let mut computed_values: HashMap<K, Vec<T>> = HashMap::new();
+        if !missing_keys.is_empty() {
+            let computed = compute_missing(&missing_keys)?;
+            let bytes_per_column = self.bond_dim * std::mem::size_of::<T>();
+            for (key, column) in missing_keys.into_iter().zip(computed) {
+                let would_retain_bytes = self.retained_bytes() + bytes_per_column;
+                if would_retain_bytes <= self.max_bytes {
+                    let position = self.columns.len() / self.bond_dim;
+                    self.columns.extend(column);
+                    self.positions.insert(key, position);
+                } else {
+                    computed_values.insert(key, column);
+                }
+            }
+        }
+
+        Ok(keys
+            .iter()
+            .map(|key| match self.positions.get(key) {
+                Some(&position) => CacheSlot::Cached(position),
+                None => CacheSlot::Uncached(
+                    computed_values
+                        .get(key)
+                        .expect("key is neither cached nor freshly computed")
+                        .clone(),
+                ),
+            })
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+
+    #[test]
+    fn packed_message_cache_computes_and_stores_new_keys() {
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
+        let mut compute_calls = 0usize;
+
+        let slots = cache
+            .get_or_compute_batch(&[1u32, 2u32], |missing: &[u32]| {
+                compute_calls += 1;
+                Ok::<_, anyhow::Error>(
+                    missing
+                        .iter()
+                        .map(|k| vec![*k as f64, (*k as f64) * 10.0])
+                        .collect(),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(compute_calls, 1);
+        let CacheSlot::Cached(p0) = slots[0] else {
+            panic!("expected a cached slot: {:?}", slots[0])
+        };
+        let CacheSlot::Cached(p1) = slots[1] else {
+            panic!("expected a cached slot: {:?}", slots[1])
+        };
+        assert_eq!(cache.column(p0), &[1.0, 10.0]);
+        assert_eq!(cache.column(p1), &[2.0, 20.0]);
+    }
+
+    #[test]
+    fn packed_message_cache_reuses_columns_across_calls() {
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
+        let mut compute_calls = 0usize;
+        let compute = |missing: &[u32]| -> std::result::Result<Vec<Vec<f64>>, anyhow::Error> {
+            Ok(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
+        };
+
+        let first = cache
+            .get_or_compute_batch(&[1u32, 2u32], |missing| {
+                compute_calls += 1;
+                compute(missing)
+            })
+            .unwrap();
+
+        // A later call across a batch that repeats key 1 and adds new key 3
+        // must recompute only the miss (3), not the already-cached hit (1).
+        let second = cache
+            .get_or_compute_batch(&[1u32, 3u32], |missing| {
+                compute_calls += 1;
+                assert_eq!(missing, &[3u32], "must not recompute an already-cached key");
+                compute(missing)
+            })
+            .unwrap();
+
+        assert_eq!(compute_calls, 2);
+        assert_eq!(second[0], first[0], "key 1 must resolve to the same column");
+        let CacheSlot::Cached(p3) = second[1] else {
+            panic!("expected a cached slot: {:?}", second[1])
+        };
+        assert_eq!(cache.column(p3), &[3.0, 0.0]);
+    }
+
+    #[test]
+    fn packed_message_cache_reports_cumulative_hits_and_misses() {
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
+        let compute = |missing: &[u32]| -> std::result::Result<Vec<Vec<f64>>, anyhow::Error> {
+            Ok(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
+        };
+
+        cache.get_or_compute_batch(&[1u32, 2u32], compute).unwrap();
+        assert_eq!((cache.hits(), cache.misses()), (0, 2));
+
+        // key 1 repeats (a hit), key 3 is new (a miss); duplicate key 1 within
+        // the same batch counts as two hits, not one.
+        cache
+            .get_or_compute_batch(&[1u32, 1u32, 3u32], compute)
+            .unwrap();
+        assert_eq!((cache.hits(), cache.misses()), (2, 3));
+    }
+
+    #[test]
+    fn packed_message_cache_get_all_cached_returns_none_on_any_miss_without_counting() {
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
+        cache
+            .get_or_compute_batch(&[1u32], |missing| {
+                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
+            })
+            .unwrap();
+
+        assert!(cache.get_all_cached(&[1u32, 2u32]).is_none());
+        assert_eq!(
+            (cache.hits(), cache.misses()),
+            (0, 1),
+            "a partial-miss lookup must not touch the counters"
+        );
+
+        let positions = cache.get_all_cached(&[1u32]).unwrap();
+        assert_eq!(cache.column(positions[0]), &[1.0, 0.0]);
+        assert_eq!((cache.hits(), cache.misses()), (1, 1));
+    }
+
+    #[test]
+    fn packed_message_cache_stops_retaining_once_budget_is_exhausted() {
+        // bond_dim=2, f64 -> 16 bytes per column. Budget fits exactly one.
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, 16);
+
+        let slots = cache
+            .get_or_compute_batch(&[1u32, 2u32], |missing| {
+                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
+            })
+            .unwrap();
+
+        let CacheSlot::Cached(position) = slots[0] else {
+            panic!(
+                "first key should fit the budget and be cached: {:?}",
+                slots[0]
+            );
+        };
+        assert_eq!(cache.column(position), &[1.0, 0.0]);
+
+        let CacheSlot::Uncached(ref values) = slots[1] else {
+            panic!(
+                "second key exceeds the budget and must not be retained: {:?}",
+                slots[1]
+            );
+        };
+        assert_eq!(values, &[2.0, 0.0]);
+        assert!(
+            !cache.contains(&2u32),
+            "an over-budget key must not be recorded as cached"
+        );
+
+        // Recomputed on a later call, since it was never retained.
+        let mut recompute_calls = 0usize;
+        let slots_again = cache
+            .get_or_compute_batch(&[2u32], |missing| {
+                recompute_calls += 1;
+                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
+            })
+            .unwrap();
+        assert_eq!(recompute_calls, 1);
+        assert!(matches!(slots_again[0], CacheSlot::Uncached(_)));
+    }
+
+    fn varied_three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let s0 = DynIndex::new_dyn(2);
+        let b01 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let b12 = DynIndex::new_dyn(2);
+        let s2 = DynIndex::new_dyn(2);
+
+        let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+            .unwrap();
+        let t1 = IdxTensor::from_dense(
+            vec![b01, s1.clone(), b12.clone()],
+            (0..8).map(|i| i as f64 + 1.0).collect(),
+        )
+        .unwrap();
+        let t2 =
+            IdxTensor::from_dense(vec![b12, s2.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
+        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
+        (tree, vec![s0, s1, s2])
+    }
+
+    /// A persistent per-edge message cache must not change results and must
+    /// actually get used across separate `evaluate_batched` calls on the same
+    /// evaluator -- the whole point of #626/#646's review-requested cache.
+    #[test]
+    fn evaluate_batched_reuses_persistent_message_cache_across_calls() {
+        let (tree, indices) = varied_three_node_chain();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [3usize, 2usize];
+
+        let values1 = [0usize, 0, 0, 0, 0, 1];
+        let points1 = ColMajorArrayRef::new(&values1, &shape).unwrap();
+        let actual1 = evaluator.evaluate_batched(points1).unwrap();
+        let expected1 = tree.evaluate(&indices, points1).unwrap();
+        assert_scalars_close(&actual1, &expected1);
+
+        // Repeats point0=(0,0,0) from the first call; point1=(1,0,0) is new.
+        let values2 = [0usize, 0, 0, 1, 0, 0];
+        let points2 = ColMajorArrayRef::new(&values2, &shape).unwrap();
+        let actual2 = evaluator.evaluate_batched(points2).unwrap();
+        let expected2 = tree.evaluate(&indices, points2).unwrap();
+        assert_scalars_close(&actual2, &expected2);
+
+        let stats = evaluator.stats_for_test();
+        assert!(
+            stats.message_cache_hits > 0,
+            "expected at least one message cache hit on the second call: {stats:?}"
+        );
+    }
 
     fn assert_scalars_close(actual: &[AnyScalar], expected: &[AnyScalar]) {
         assert_eq!(actual.len(), expected.len());
@@ -1990,5 +2562,191 @@ mod tests {
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);
+    }
+
+    /// Uncached-path duplicate of `evaluate_batched_with_hint`, calling
+    /// `compute_stacked_message` directly instead of
+    /// `get_or_compute_node_message`. Kept as measurement tooling (see
+    /// `message_cache_wall_time_on_realistic_floating_zone_walk`): times the
+    /// same floating-zone walk with and without the persistent message
+    /// cache, using one evaluator so construction overhead is identical
+    /// between the two conditions.
+    fn evaluate_batched_uncached(
+        evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
+        values: ColMajorArrayRef<'_, usize>,
+        center: &usize,
+    ) -> Result<Vec<AnyScalar>> {
+        let plan = RootedMessagePlan::new(evaluator.tree, center)?;
+        let assignment_batches = evaluator.build_message_assignment_batches(&plan, values)?;
+        let mut messages = HashMap::<usize, StackedMessage>::new();
+        for node in &plan.postorder {
+            let points = assignment_batches.get(node).unwrap().first_points.clone();
+            let node_message = evaluator.compute_stacked_message(
+                node,
+                values,
+                &points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )?;
+            messages.insert(*node, node_message);
+        }
+        let mut component_batches = Vec::new();
+        let mut environment_cache = HashMap::new();
+        for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
+            let assignment_batch = assignment_batches.get(&neighbor).unwrap();
+            let environment = messages.remove(&neighbor).unwrap();
+            environment_cache.insert(neighbor, environment);
+            component_batches.push(ComponentBatch {
+                neighbor,
+                point_to_assignment: assignment_batch.point_to_assignment.clone(),
+            });
+        }
+        evaluator.contract_center_for_points(center, values, &component_batches, &environment_cache)
+    }
+
+    /// Measurement, not a regression test: how much does the persistent
+    /// message cache save on the real `find_global_pivots` call pattern?
+    /// Drives `floating_zone_walk` with the same defaults
+    /// (`nsearch_global_pivots = 5`, `nsweeps_global_search = 100`) against a
+    /// 16-site chain at bond 128, once through the normal (now cached) path
+    /// and once through the direct, uncached path, on the same evaluator so
+    /// construction cost cancels out. Prints wall time and message counts for
+    /// both; asserts nothing about the ratio, since wall-clock numbers are
+    /// not a reproducible pass/fail condition.
+    ///
+    /// As of this commit the ratio is consistently < 1 (the cached path is
+    /// slower): see `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`.
+    /// Kept as the tool to re-run once the packed-buffer contraction path
+    /// (no `IdxTensor` construction per message) replaces
+    /// `compute_stacked_message`'s current `contract_with_options` pipeline.
+    #[test]
+    fn message_cache_wall_time_on_realistic_floating_zone_walk() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+        use std::time::Instant;
+        use tensor4all_core::floating_zone_walk;
+        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
+
+        const N_SITES: usize = 16;
+        const LOCAL_DIM: usize = 2;
+        const BOND_DIM: usize = 128;
+        const NSEARCH: usize = 5;
+        const MAX_SWEEPS: usize = 100;
+
+        fn build_tree(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
+            for site in 0..N_SITES {
+                let left_dim = if site == 0 { 1 } else { BOND_DIM };
+                let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
+                let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+                for l in 0..left_dim {
+                    for s in 0..LOCAL_DIM {
+                        for r in 0..right_dim {
+                            tensor.set3(l, s, r, rng.random::<f64>());
+                        }
+                    }
+                }
+                tensors.push(tensor);
+            }
+            let tt = SimpleTensorTrain::new(tensors).unwrap();
+            crate::tensor_train_to_treetn(&tt).unwrap()
+        }
+
+        fn starts() -> Vec<Vec<usize>> {
+            let mut rng = ChaCha8Rng::seed_from_u64(11);
+            (0..NSEARCH)
+                .map(|_| {
+                    (0..N_SITES)
+                        .map(|_| rng.random_range(0..LOCAL_DIM))
+                        .collect()
+                })
+                .collect()
+        }
+        let site_dims = vec![LOCAL_DIM; N_SITES];
+
+        // Cached path: the real evaluate_batched, as find_global_pivots uses it.
+        let (tree, site_indices) = build_tree(7);
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &site_indices, CachedEvaluatorOptions::default())
+                .unwrap();
+        // Force a centre outside the timed region, matching the uncached arm.
+        let warm_values0 = vec![0usize; N_SITES];
+        let warm_shape0 = [N_SITES, 1];
+        let warm_points0 = ColMajorArrayRef::new(&warm_values0, &warm_shape0).unwrap();
+        evaluator.evaluate_batched(warm_points0).unwrap();
+        let mut total_hits = 0usize;
+        let mut total_misses = 0usize;
+        let mut total_calls = 0usize;
+        let cached_start = Instant::now();
+        for start in &starts() {
+            floating_zone_walk(
+                &site_dims,
+                start,
+                MAX_SWEEPS,
+                f64::INFINITY,
+                |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                    let mut values = vec![0usize; N_SITES * points.len()];
+                    for (p, point) in points.iter().enumerate() {
+                        for (site, &v) in point.iter().enumerate() {
+                            values[site + N_SITES * p] = v;
+                        }
+                    }
+                    let shape = [N_SITES, points.len()];
+                    let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
+                    let out = evaluator.evaluate_batched(arr)?;
+                    let stats = evaluator.stats_for_test();
+                    total_hits += stats.message_cache_hits;
+                    total_misses += stats.message_cache_misses;
+                    total_calls += 1;
+                    Ok(out.iter().map(|v| v.real().abs()).collect())
+                },
+            )
+            .unwrap();
+        }
+        let cached_elapsed = cached_start.elapsed();
+
+        // Uncached path: identical tree, identical walk, direct compute.
+        let (tree2, site_indices2) = build_tree(7);
+        let mut evaluator2 =
+            TreeTNCachedEvaluator::new(&tree2, &site_indices2, CachedEvaluatorOptions::default())
+                .unwrap();
+        // Force a centre exactly as the cached run's first call would.
+        let warm_values = vec![0usize; N_SITES];
+        let warm_shape = [N_SITES, 1];
+        let warm_points = ColMajorArrayRef::new(&warm_values, &warm_shape).unwrap();
+        evaluator2.evaluate_batched(warm_points).unwrap();
+        let center = *evaluator2.center().unwrap();
+        let uncached_start = Instant::now();
+        for start in &starts() {
+            floating_zone_walk(
+                &site_dims,
+                start,
+                MAX_SWEEPS,
+                f64::INFINITY,
+                |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                    let mut values = vec![0usize; N_SITES * points.len()];
+                    for (p, point) in points.iter().enumerate() {
+                        for (site, &v) in point.iter().enumerate() {
+                            values[site + N_SITES * p] = v;
+                        }
+                    }
+                    let shape = [N_SITES, points.len()];
+                    let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
+                    let out = evaluate_batched_uncached(&mut evaluator2, arr, &center)?;
+                    Ok(out.iter().map(|v| v.real().abs()).collect())
+                },
+            )
+            .unwrap();
+        }
+        let uncached_elapsed = uncached_start.elapsed();
+
+        println!(
+            "floating-zone walk at bond={BOND_DIM}: cached={cached_elapsed:?} uncached={uncached_elapsed:?} speedup={:.2}x total_calls={total_calls} total_hits={total_hits} total_misses={total_misses} node_hit_rate={:.3}",
+            uncached_elapsed.as_secs_f64() / cached_elapsed.as_secs_f64(),
+            total_hits as f64 / (total_hits + total_misses) as f64,
+        );
+        assert!(cached_elapsed.as_nanos() > 0);
     }
 }
