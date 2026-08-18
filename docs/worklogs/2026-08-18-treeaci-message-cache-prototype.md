@@ -371,3 +371,101 @@ profiled the way `contract_prepared_core` was. The natural next step is the
 same discipline again: instrument the post-fix run, find what now dominates,
 and decide from measurement rather than assumption whether it is worth
 fixing.
+
+## Update 3: the actual dominant cost was `InputFrameStore` discarding itself every commit (#646 continuation, systematic debugging)
+
+Picked up from "What remains" above, continuing under
+`superpowers:systematic-debugging`. Re-baselined `treeaci_parity` at
+`fa2c47c9` first (measured, not assumed): 13.2x/71.4x/165.2x/404.6x at
+chi=16/32/64/128, matching this file's own recorded numbers, confirming no
+drift since Update 2.
+
+**Phase 1, evidence.** Added temporary phase timers (not committed) around
+`InputFrameStore::from_samples` and a call counter on
+`FrameBuilder::compute`'s cache-miss branch, then reran `treeaci_parity` with
+the criterion timing loop skipped (single un-timed run per chi, matching this
+file's established methodology). Result: `from_samples` alone is 78.4% of a
+chi=16 run and climbs to 96.3% at chi=128 -- both the dominant cost *and* the
+reason the ratio grows with chi, not just a large constant.
+
+**Root cause, traced into the call site rather than inferred.**
+`transaction.rs::commit_edge_proposal` calls
+`InputFrameStore::from_samples(state.inputs, &state.problem, &proposed_arena)`
+after *every single directed-edge commit*, discarding the current store and
+recomputing every sample on every directed edge from scratch --
+`FrameBuilder`'s own memoization only covers repeated lookups *within* one
+such call, never across calls. `samples.rs` confirms `SampleArena` is
+append-only and `SampleId`s are immutable per directed edge (`intern_key`
+only ever pushes, `PartialEq`-deduplicated) -- a sample already computed
+names exactly the same component forever. So this was `O(edges)` real work
+(recompute everything) repeated on `O(edges)` edge commits per sweep, i.e.
+`O(edges^2)` where an incremental update needs only `O(edges)` total: the
+same architectural class of bug as Update 1's fix, but for the *always-on*
+frame store rather than the guard-only message cache, and much larger in
+practice since this path runs on every commit, not only during global-pivot
+search.
+
+**Fix.** `InputFrameStore::extend(&self, inputs, problem, arena) -> Result<Self>`
+(`frames.rs`): reuses every already-computed `DirectedFrame` row from `self`
+(seeding `FrameBuilder`'s per-edge memo with them, converted back to
+`Vec<T>` via a new `DirectedFrame::row` helper) and only calls
+`contract_prepared_core` for samples in `existing_sample_count..new_count`
+per directed edge. `from_samples` and `extend` now share one
+`build_or_extend` implementation, parameterized by `existing: Option<&Self>`,
+so there is one code path to keep correct rather than two. As a side effect,
+`extend` also reuses `self.cores` instead of calling `prepare_cores` (which
+re-extracts every input tensor's dense values via `to_vec::<T>()` on every
+commit) -- free, since the fixed operands never change across the run.
+`transaction.rs` now calls `state.input_frames.extend(...)` instead of
+`InputFrameStore::from_samples(...)`.
+
+TDD: `frames/tests/mod.rs` gained
+`extend_matches_a_full_rebuild_on_the_grown_arena` (grows a `y_tree` arena by
+one global point, asserts `extend`'s frame values equal a from-scratch
+rebuild's for every sample, old and new -- correctness) and
+`extend_recomputes_only_the_newly_interned_samples` (same setup, asserts
+`extend`'s `contract_prepared_core` call count is strictly less than a
+from-scratch rebuild's on the same grown arena -- proves the reuse claim,
+not just correctness). The call counter is a `#[cfg(test)]`-gated
+`debug_stats` module in `frames.rs`, kept as permanent regression
+infrastructure rather than reverted, since it is what would catch a
+regression back to full-rebuild-per-commit.
+
+**Result**, `treeaci_parity.rs` chi=16/32/64/128, clean run (no
+instrumentation) after the fix:
+
+| chi | train | tree | ratio before | ratio after |
+|---:|---:|---:|---:|---:|
+| 16 | 21.7 ms | 81.8 ms | 13.2x | 3.8x |
+| 32 | 14.1 ms | 180.6 ms | 71.4x | 12.8x |
+| 64 | 24.7 ms | 391.9 ms | 165.2x | 15.9x |
+| 128 | 30.6 ms | 911.9 ms | 404.6x | 29.8x |
+
+The ratio's growth across the chi range shrank from roughly 30x (13.2x to
+404.6x) to roughly 8x (3.8x to 29.8x): most, though not all, of the
+super-linear-in-chi behaviour reported in the #646 review was this bug, not
+an inherent property of the tree algorithm.
+
+**What was checked and deliberately not fixed.** A second phase breakdown
+after this fix (chi=128, single run) showed `from_samples` down to 37% of
+total time; the next-largest item is `local_update.rs`'s `candidate_frame`
+calls (28% and growing faster than the rest, roughly chi^1.7). Unlike the bug
+above, these candidates are generally *not* already-interned samples --
+`transaction.rs`'s own comment records that candidate sets are replaced
+rather than accumulated specifically to keep candidate growth bounded
+without an eviction policy, so caching every enumerated candidate would
+undo a deliberate memory/recompute tradeoff, not fix a bug. The more likely
+remaining lever is the same one Update 1 identified for the guard-only
+message cache and did not reach: `contract_prepared_core` and
+`local_update.rs`'s row/col dot-product loop are hand-written scalar loops,
+while `tensor4all-aci`'s analogous frame and local-matrix construction
+(`state.rs`, `local.rs`) routes through `mat_mul`/`matmul_checked_owned`
+(BLAS). Not attempted here -- flagged for a follow-up investigation rather
+than assumed.
+
+Full verification: `cargo fmt --all -- --check` clean;
+`cargo clippy --workspace --all-targets --exclude tensor4all-hdf5 --exclude
+book-tests -- -D warnings` clean (the excluded crates fail to build in this
+environment for an unrelated, pre-existing reason: no local HDF5 via
+Homebrew); `cargo test -p tensor4all-treeaci -p tensor4all-treetn --release`
+green end to end (unit, integration, and doctests, exit code 0).

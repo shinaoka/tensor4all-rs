@@ -16,12 +16,34 @@ use crate::{
     Result, TreeAciError, TreeAciNode, TreeAciScalar,
 };
 
+/// Test-only counter of `contract_prepared_core` invocations via the
+/// memoized `FrameBuilder::compute` path, used to prove
+/// `InputFrameStore::extend` recomputes only newly interned samples (see
+/// `frames::tests::extend_recomputes_only_the_newly_interned_samples`).
+#[cfg(test)]
+pub(crate) mod debug_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    pub(crate) static COMPUTE_CALLS: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) fn reset() {
+        COMPUTE_CALLS.store(0, Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct DirectedFrame<T> {
     pub(crate) sample_count: usize,
     pub(crate) bond_dim: usize,
     pub(crate) sample_ids: Vec<SampleId>,
     pub(crate) values: Matrix<T>,
+}
+
+impl<T: TreeAciScalar> DirectedFrame<T> {
+    fn row(&self, sample: SampleId) -> Vec<T> {
+        (0..self.bond_dim)
+            .map(|bond| self.values[[sample, bond]])
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +73,37 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
     ) -> Result<Self> {
+        Self::build_or_extend(inputs, problem, arena, None)
+    }
+
+    /// Extends this store to cover every sample now retained by `arena`,
+    /// reusing every already-computed frame instead of recomputing it.
+    ///
+    /// `SampleArena` is append-only and its `SampleId`s are immutable (see
+    /// `samples.rs`): a sample already interned when this store was built
+    /// names exactly the same component forever. Only samples interned since
+    /// then need a fresh `contract_prepared_core` call. This is the fix for
+    /// the root cause in
+    /// `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`'s update
+    /// on `commit_edge_proposal`: that call site previously discarded this
+    /// store and rebuilt every sample on every directed edge from scratch
+    /// after every single-edge commit, `O(edges)` work repeated `O(edges)`
+    /// times per sweep.
+    pub(crate) fn extend<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        arena: &SampleArena,
+    ) -> Result<Self> {
+        Self::build_or_extend(inputs, problem, arena, Some(self))
+    }
+
+    fn build_or_extend<V: TreeAciNode>(
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        arena: &SampleArena,
+        existing: Option<&Self>,
+    ) -> Result<Self> {
         let mut all_inputs = Vec::with_capacity(inputs.len());
         let mut all_cores = Vec::with_capacity(inputs.len());
         // `max_frame_elements` bounds one frame; this cache keeps one per input
@@ -60,26 +113,42 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         // rather than reaching the ceiling first.
         let mut retained_bytes = 0usize;
         let mut records = 0usize;
-        for input in inputs {
-            let cores = prepare_cores::<T, V>(input, problem)?;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let existing_input = existing.and_then(|store| store.frames.get(input_index));
+            let cores = match existing.and_then(|store| store.cores.get(input_index)) {
+                Some(cores) => cores.clone(),
+                None => prepare_cores::<T, V>(input, problem)?,
+            };
+            let memo = problem
+                .directed_edges
+                .iter()
+                .enumerate()
+                .map(|(edge, _)| {
+                    let count = arena.directed_record_count(edge)?;
+                    let mut samples = vec![None; count];
+                    if let Some(previous) = existing_input.and_then(|frames| frames.get(edge)) {
+                        for (sample, slot) in
+                            samples.iter_mut().enumerate().take(previous.sample_count)
+                        {
+                            *slot = Some(previous.row(sample));
+                        }
+                    }
+                    Ok(samples)
+                })
+                .collect::<Result<Vec<_>>>()?;
             let mut builder = FrameBuilder {
                 input,
                 problem,
                 arena,
                 cores,
-                memo: problem
-                    .directed_edges
-                    .iter()
-                    .enumerate()
-                    .map(|(edge, _)| {
-                        arena
-                            .directed_record_count(edge)
-                            .map(|count| vec![None; count])
-                    })
-                    .collect::<Result<Vec<_>>>()?,
+                memo,
             };
             for edge in 0..problem.directed_edges.len() {
-                for sample in 0..builder.memo[edge].len() {
+                let known = existing_input
+                    .and_then(|frames| frames.get(edge))
+                    .map(|frame| frame.sample_count)
+                    .unwrap_or(0);
+                for sample in known..builder.memo[edge].len() {
                     builder.compute(edge, sample)?;
                 }
             }
@@ -249,6 +318,8 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         {
             return Ok(values);
         }
+        #[cfg(test)]
+        debug_stats::COMPUTE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let record = self.arena.record(edge, sample)?.clone();
         let mut incoming_frames = Vec::with_capacity(record.incoming.len());
         for &(incoming_edge, incoming_sample) in &record.incoming {

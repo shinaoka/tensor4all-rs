@@ -5,7 +5,6 @@
 use tensor4all_core::{DynIndex, IdxTensor};
 
 use crate::{
-    frames::InputFrameStore,
     local_update::{materialize_and_factor_edge, LocalUpdateResult},
     problem::DirectedEdgeId,
     state::TreeAciState,
@@ -127,7 +126,9 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     )?;
     proposed_output.verify_internal_consistency()?;
     let proposed_frames =
-        InputFrameStore::from_samples(state.inputs, &state.problem, &proposed_arena)?;
+        state
+            .input_frames
+            .extend(state.inputs, &state.problem, &proposed_arena)?;
 
     let pivot_error = proposal.pivot_errors.last().copied().unwrap_or(0.0);
     state.output = proposed_output;

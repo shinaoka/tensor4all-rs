@@ -137,6 +137,88 @@ fn frames_remain_addressable_after_active_set_replacement() {
     assert_eq!(frames.frame_values(0, 0, old_id).unwrap(), vec![1.0, 10.0]);
 }
 
+/// `extend` must reuse every already-computed frame: growing the arena and
+/// calling `extend` must produce exactly the same frame values, for every
+/// sample (old and new), as discarding the store and rebuilding from scratch
+/// on the grown arena.
+#[test]
+fn extend_matches_a_full_rebuild_on_the_grown_arena() {
+    let input = y_tree::<f64>();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let seed0 = vec![0, 0, 0, 0];
+    let seed1 = vec![0, 1, 1, 1];
+    let (mut arena, mut candidates) =
+        SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+
+    arena
+        .inject_global_point(&mut candidates, &problem, &seed1)
+        .expect("grow the arena with a second global point");
+
+    let extended = initial
+        .extend(std::slice::from_ref(&input), &problem, &arena)
+        .expect("extend the store to the grown arena");
+    let rebuilt =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("rebuild from scratch on the grown arena");
+
+    for edge in 0..problem.directed_edges.len() {
+        let sample_count = arena.directed_record_count(edge).unwrap();
+        for sample in 0..sample_count {
+            assert_eq!(
+                extended.frame_values(0, edge, sample).unwrap(),
+                rebuilt.frame_values(0, edge, sample).unwrap(),
+                "edge {edge} sample {sample} disagrees between extend and full rebuild"
+            );
+        }
+    }
+}
+
+/// `extend` must not repeat work: computing frames for samples the store
+/// already covers is the exact bug `commit_edge_proposal` had (see
+/// `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`). Growing
+/// the arena and calling `extend` must issue strictly fewer
+/// `contract_prepared_core` calls than discarding the store and rebuilding
+/// everything from scratch on the same grown arena.
+#[test]
+fn extend_recomputes_only_the_newly_interned_samples() {
+    let input = y_tree::<f64>();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let seed0 = vec![0, 0, 0, 0];
+    let seed1 = vec![0, 1, 1, 1];
+    let (mut arena, mut candidates) =
+        SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    arena
+        .inject_global_point(&mut candidates, &problem, &seed1)
+        .expect("grow the arena with a second global point");
+
+    super::debug_stats::reset();
+    let _extended = initial
+        .extend(std::slice::from_ref(&input), &problem, &arena)
+        .expect("extend the store to the grown arena");
+    let extend_calls = super::debug_stats::COMPUTE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+
+    super::debug_stats::reset();
+    let _rebuilt =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("rebuild from scratch on the grown arena");
+    let rebuild_calls =
+        super::debug_stats::COMPUTE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+
+    assert!(
+        extend_calls < rebuild_calls,
+        "extend should recompute only the new samples: extend={extend_calls} rebuild={rebuild_calls}"
+    );
+    assert!(extend_calls > 0, "the new seed must still be computed");
+}
+
 /// The frame cache is bounded in aggregate, not only per frame.
 ///
 /// `max_frame_elements` bounds one directed frame, but the cache retains one

@@ -9,12 +9,12 @@
 //!
 //! **This is not yet a drop-in replacement for `tensor4all-aci`.** On a chain,
 //! where the two are directly comparable, it reaches the same accuracy at the
-//! same or lower rank for no more function evaluations -- but it currently
-//! costs roughly two orders of magnitude more per evaluation, because the
-//! per-evaluation caching that `tensor4all-aci` has (a persistent cache reused
-//! across sweeps, and the contraction split placed at the varying site) has no
-//! counterpart here yet. The gap is a constant factor, not a difference in
-//! scaling.
+//! same or lower rank for no more function evaluations, but remains several
+//! times slower end to end (roughly 5x-17x on `tensor4all-aci`'s
+//! `treeaci_parity` benchmark, chain, bond dimension 16 through 128). The
+//! remaining gap is concentrated in candidate/pivot-search frame construction,
+//! which does not yet route through a BLAS matrix-multiply primitive the way
+//! `tensor4all-aci`'s cache does.
 //!
 //! Prefer `tensor4all-aci` for chain topologies. Use this crate when the
 //! topology is genuinely a tree, where the alternative is not a slower run but
