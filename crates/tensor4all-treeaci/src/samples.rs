@@ -146,6 +146,29 @@ impl SampleArena {
         Ok((arena, candidates))
     }
 
+    /// Projects `point` onto exactly `edge` (and, through
+    /// [`Self::project_component`]'s recursion, `edge`'s ancestor chain only),
+    /// interning any newly-needed component samples by direct mutation.
+    ///
+    /// Unlike [`Self::inject_global_point`], this does not clone the arena
+    /// first, and does not project onto any directed edge outside `edge`'s
+    /// own ancestor chain. `inject_global_point`'s clone-then-conditionally-
+    /// commit exists so a caller can safely attempt an injection that might
+    /// leave other edges' candidate sets touched by a failed batch; bootstrap
+    /// enumerates one edge's own candidates one point at a time and already
+    /// aborts the whole initialization on any error, so that atomicity buys
+    /// nothing here and the whole-arena clone plus all-edges projection were
+    /// pure overhead, repeated up to `chi` times per edge.
+    pub(crate) fn project_point_onto_edge<V: TreeAciNode>(
+        &mut self,
+        problem: &PreparedTreeProblem<V>,
+        edge: DirectedEdgeId,
+        point: &[usize],
+    ) -> Result<SampleId> {
+        self.validate_point(problem, point)?;
+        self.project_component(problem, edge, point)
+    }
+
     pub(crate) fn inject_global_point<V: TreeAciNode>(
         &mut self,
         candidates: &mut CandidateSets,

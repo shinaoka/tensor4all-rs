@@ -221,7 +221,8 @@ pub(crate) fn bootstrap_samples<V: TreeAciNode>(
                 point[*node] = encoded % dim;
                 encoded /= dim;
             }
-            arena.inject_global_point(&mut candidates, problem, &point)?;
+            let id = arena.project_point_onto_edge(problem, edge, &point)?;
+            candidates.push_unique(edge, id);
             ordinal += 1;
         }
         if candidates.ids[edge].len() < targets[edge] {
@@ -312,3 +313,6 @@ fn enforce_limit(resource: &'static str, requested: usize, limit: usize) -> Resu
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

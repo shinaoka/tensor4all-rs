@@ -10,7 +10,7 @@
 //! **This is not yet a drop-in replacement for `tensor4all-aci`.** On a chain,
 //! where the two are directly comparable, it reaches the same accuracy at the
 //! same or lower rank for no more function evaluations, but remains several
-//! times slower end to end (roughly 3.6x-24.7x on `tensor4all-aci`'s
+//! times slower end to end (roughly 2.5x-12.8x on `tensor4all-aci`'s
 //! `treeaci_parity` benchmark, chain, bond dimension 16 through 128, and
 //! growing with bond dimension). The remaining gap is concentrated in
 //! candidate/pivot-search frame construction, which does not yet route

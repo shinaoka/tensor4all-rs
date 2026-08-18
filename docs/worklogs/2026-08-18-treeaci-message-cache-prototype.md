@@ -572,3 +572,104 @@ hypothesis is now known-wrong for the row/col dot-product loop specifically
 itself (the shared primitive both `frames.rs`'s persistent cache and the new
 candidate cache route through) has not been measured and should not be
 assumed either way without doing so first.
+
+## Update 5: `TreeAciState::initialize` -- the same clone-everything shape a third time, and the largest single win yet (#646 continuation)
+
+Continuing under `superpowers:systematic-debugging`, prompted by "the ratio
+still grows a lot with chi, describe the current problem" rather than a new
+hypothesis. Phase 1 evidence: added phase timers to `transaction.rs`
+(materialize/arena_clone/intern/candidates_clone/pivots_clone/
+output_clone_replace/verify/extend) covering the whole of
+`update_edge_transaction`. At chi=128 these summed to only ~38% of total
+wall time; the remaining ~62% ("other") was *larger and growing faster*
+than the already-large `materialize` phase, and was not inside the sweep
+loop at all -- it had to be somewhere between `tree_elementwise_batched`'s
+entry and the first `update_edge_transaction` call.
+
+Timed that boundary directly (`elementwise.rs`): `TreeAciState::initialize`,
+called exactly once per run before any sweep, accounted for 58% of total
+time at chi=128 on its own. Timed inside `initialize` (`state.rs`):
+`bootstrap_samples` (213.0ms) and the initial, necessarily-non-incremental
+`InputFrameStore::from_samples` (217.9ms, scaling ~chi^2) were the two
+dominant pieces, ~92% of `initialize`'s cost between them.
+
+**Root cause, in `bootstrap_samples` (`initialize.rs`).** For every edge,
+the function enumerates candidate points one at a time until that edge's
+target rank (~chi) is reached, calling `arena.inject_global_point(...)` for
+each. `inject_global_point` (`samples.rs`) is built for a different job: it
+clones the *entire* `SampleArena` first ("Clone-and-commit is intentionally
+simple in phase one", a correctness-motivated design for callers that need
+to safely attempt an injection that might fail), then projects the point
+onto *every* directed edge, not just the one edge the caller asked about,
+checking membership on each with an O(len) `Vec::contains` scan. This is
+the third occurrence of the same shape as Update 3's and Update 5's
+predecessors: an O(n)-or-worse operation, repeated O(n) times, where the
+"everything" being redone every time is unrelated to what the immediate
+caller needs. `bootstrap_samples` never needed the clone-based rollback
+safety (any failure here aborts the whole `initialize` call regardless) or
+the all-edges projection (it processes edges one at a time in its own outer
+loop, and each edge's own iterations already reach its own target).
+
+**Fix.** `SampleArena::project_point_onto_edge`: projects onto exactly the
+requested edge (and, through `project_component`'s existing recursion, that
+edge's ancestor chain only) by direct mutation, no clone, no work on any
+other edge. `bootstrap_samples` now calls this plus the existing
+`CandidateSets::push_unique` instead of `inject_global_point`.
+`inject_global_point` itself is untouched and still correct for callers
+that do need its atomicity (e.g. global-pivot injection during a sweep).
+
+TDD: `project_point_onto_edge_touches_only_the_requested_edges_ancestor_chain`
+(the whole point of the fix -- other edges' candidate sets must stay empty)
+and `project_point_onto_edge_materializes_to_the_same_point_as_inject_global_point`
+(the cheaper path must not change the result, only the cost), both in
+`samples/tests/mod.rs`. Also added `initialize/tests/mod.rs` -- there was no
+direct test coverage of `bootstrap_samples` at all before this -- asserting
+every edge reaches exactly its requested rank with valid, materializable
+pivots.
+
+**A pre-existing, unrelated flaky test found and fixed along the way.**
+Running the full suite surfaced `frames::tests::
+candidate_frame_hits_the_cache_on_a_repeated_lookup` failing intermittently
+under the default parallel test runner (passed 100% of the time under
+`--test-threads=1`). Root cause: Update 4's cache-hit/miss counters
+(`frames.rs`'s `debug_stats`/`candidate_debug_stats`) were `static
+AtomicU64`s -- process-global, so shared and raced on by every test in the
+binary that happens to run concurrently and touch the same code path, not
+isolated to the one test reading them. Rust's default test harness runs
+each `#[test]` fn on its own thread, so the fix is `thread_local!` instead
+of `static`: each test's counters are then genuinely private to it. Verified
+with 8 consecutive full default-parallel runs, all green (previously
+observed to fail within a handful of runs once the suite grew).
+
+**Result**, `treeaci_parity.rs` chi=16/32/64/128, clean back-to-back runs
+(`git stash` isolating the fix, both arms on the same host state):
+
+| chi | ratio before | ratio after | improvement |
+|---:|---:|---:|---:|
+| 16 | 4.51x | 2.49x | 44.8% |
+| 32 | 10.17x | 3.80x | 62.6% |
+| 64 | 12.40x | 6.21x | 49.9% |
+| 128 | 25.36x | 12.77x | 49.6% |
+
+The ratio roughly *halved at every chi* -- the largest single win of the
+three fixes in this file, larger than Updates 3 and 4 combined. Sweep counts
+shifted by up to +1 at some chi values (bootstrapping candidates in a
+different order changes which points a sweep discovers when), but every run
+still converges with error under tolerance and the same or better rank than
+before, so this is a benign path change, not a correctness regression.
+
+Full verification: `cargo fmt --all -- --check` clean; `cargo test
+-p tensor4all-treeaci --release` green (90 lib tests, up from 87 -- 3 new,
+plus the flaky one now reliable), including 8 consecutive default-parallel
+runs with zero failures; integration and doctests green.
+
+## What remains after Update 5
+
+Not yet re-profiled after this fix. `from_samples`'s initial, non-incremental
+build (~chi^2 at chi=128, per Update 5's own measurement) is a plausible next
+place to look, but that is a hypothesis carried over from before this fix
+landed, not a conclusion re-checked against the current code -- the same
+discipline this file has followed throughout says to measure the post-fix
+run before deciding whether it is still the largest remaining piece, and
+whether it is inherent (there is no "previous" store to extend from at the
+very start of a run) or has its own redundant-work shape to find.

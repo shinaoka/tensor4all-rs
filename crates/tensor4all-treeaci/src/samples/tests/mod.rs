@@ -116,6 +116,81 @@ fn injection_projects_one_point_to_all_directed_cuts_and_deduplicates() {
     assert_eq!(active.generation, generation);
 }
 
+/// `project_point_onto_edge` must touch only the requested edge's ancestor
+/// chain, unlike `inject_global_point` (which projects onto every directed
+/// edge). This is the whole point of the method: `bootstrap_samples` calls
+/// it up to `chi` times per edge, and projecting onto every other edge on
+/// every call was the dominant cost at high bond dimension (see
+/// `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`'s third
+/// #646 continuation).
+#[test]
+fn project_point_onto_edge_touches_only_the_requested_edges_ancestor_chain() {
+    let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
+    let mut arena = SampleArena::from_global_seeds(&problem, &[]).unwrap().0;
+    let mut candidates = CandidateSets::new(problem.directed_edges.len());
+
+    // Edge 0 is directed 1 -> 0 or 0 -> 1 depending on orientation; whichever
+    // it is, its own component's ancestor chain does not cover every node in
+    // this star topology, so at least one other edge's candidate set must
+    // stay untouched by a single-edge projection.
+    let target_edge = 0;
+    let id = arena
+        .project_point_onto_edge(&problem, target_edge, &[1, 1, 1, 1])
+        .unwrap();
+    candidates.push_unique(target_edge, id);
+
+    assert_eq!(candidates.ids[target_edge], vec![id]);
+    let untouched_edges = (0..problem.directed_edges.len())
+        .filter(|&edge| edge != target_edge)
+        .filter(|&edge| candidates.ids[edge].is_empty())
+        .count();
+    assert!(
+        untouched_edges > 0,
+        "a single-edge projection must not populate every directed edge's candidate set"
+    );
+}
+
+/// The projected sample must still materialize back to the correct point,
+/// matching what `inject_global_point` would have produced for the same
+/// edge -- the cheaper path must not change the result, only the cost.
+#[test]
+fn project_point_onto_edge_materializes_to_the_same_point_as_inject_global_point() {
+    let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
+    let point = [1, 1, 1, 1];
+
+    let mut direct_arena = SampleArena::from_global_seeds(&problem, &[]).unwrap().0;
+    let forward = 0;
+    let reverse = problem.directed_edges[forward].reverse;
+    let direct_forward_id = direct_arena
+        .project_point_onto_edge(&problem, forward, &point)
+        .unwrap();
+    let direct_reverse_id = direct_arena
+        .project_point_onto_edge(&problem, reverse, &point)
+        .unwrap();
+
+    let (mut injected_arena, mut active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
+    injected_arena
+        .inject_global_point(&mut active, &problem, &point)
+        .unwrap();
+    let injected_forward_id = *active.ids[forward].last().unwrap();
+    let injected_reverse_id = *active.ids[reverse].last().unwrap();
+
+    assert_eq!(
+        direct_arena
+            .materialize_global_point(&problem, forward, direct_forward_id, direct_reverse_id)
+            .unwrap(),
+        injected_arena
+            .materialize_global_point(&problem, forward, injected_forward_id, injected_reverse_id)
+            .unwrap()
+    );
+    assert_eq!(
+        direct_arena
+            .materialize_global_point(&problem, forward, direct_forward_id, direct_reverse_id)
+            .unwrap(),
+        point.to_vec()
+    );
+}
+
 #[test]
 fn replacing_active_sets_does_not_invalidate_old_recursive_ids() {
     let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);

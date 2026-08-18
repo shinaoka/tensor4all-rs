@@ -206,14 +206,13 @@ fn extend_recomputes_only_the_newly_interned_samples() {
     let _extended = initial
         .extend(std::slice::from_ref(&input), &problem, &arena)
         .expect("extend the store to the grown arena");
-    let extend_calls = super::debug_stats::COMPUTE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let extend_calls = super::debug_stats::compute_calls();
 
     super::debug_stats::reset();
     let _rebuilt =
         InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
             .expect("rebuild from scratch on the grown arena");
-    let rebuild_calls =
-        super::debug_stats::COMPUTE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let rebuild_calls = super::debug_stats::compute_calls();
 
     assert!(
         extend_calls < rebuild_calls,
@@ -250,12 +249,12 @@ fn candidate_frame_hits_the_cache_on_a_repeated_lookup() {
     assert_eq!(first, vec![1.0, 10.0]);
     assert_eq!(second, first);
     assert_eq!(
-        super::candidate_debug_stats::MISSES.load(std::sync::atomic::Ordering::Relaxed),
+        super::candidate_debug_stats::misses(),
         1,
         "the first lookup must compute"
     );
     assert_eq!(
-        super::candidate_debug_stats::HITS.load(std::sync::atomic::Ordering::Relaxed),
+        super::candidate_debug_stats::hits(),
         1,
         "the second, identical lookup must hit the cache"
     );
@@ -298,14 +297,11 @@ fn candidate_frame_stays_correct_when_the_shared_budget_has_no_headroom_for_cach
     assert_eq!(first, vec![1.0, 10.0]);
     assert_eq!(second, first);
     assert_eq!(
-        super::candidate_debug_stats::MISSES.load(std::sync::atomic::Ordering::Relaxed),
+        super::candidate_debug_stats::misses(),
         2,
         "with no budget headroom, every lookup must recompute rather than corrupt or error"
     );
-    assert_eq!(
-        super::candidate_debug_stats::HITS.load(std::sync::atomic::Ordering::Relaxed),
-        0
-    );
+    assert_eq!(super::candidate_debug_stats::hits(), 0);
 }
 
 /// The frame cache is bounded in aggregate, not only per frame.

@@ -1,0 +1,80 @@
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+use tensor4all_treetn::TreeTN;
+
+use super::{algebraic_edge_bounds, bootstrap_samples};
+use crate::{problem::prepare_problem, TreeAciOptions};
+
+fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
+    let physical = (0..node_count)
+        .map(|_| DynIndex::new_dyn(2))
+        .collect::<Vec<_>>();
+    let bonds = edges
+        .iter()
+        .map(|_| DynIndex::new_dyn(2))
+        .collect::<Vec<_>>();
+    let tensors = (0..node_count)
+        .map(|node| {
+            let mut indices = vec![physical[node].clone()];
+            for (edge, &(left, right)) in edges.iter().enumerate() {
+                if left == node || right == node {
+                    indices.push(bonds[edge].clone());
+                }
+            }
+            let len = indices.iter().map(IndexLike::dim).product();
+            IdxTensor::from_dense(indices, vec![1.0; len]).unwrap()
+        })
+        .collect();
+    TreeTN::from_tensors(tensors, (0..node_count).collect()).unwrap()
+}
+
+/// `bootstrap_samples` must reach exactly the requested rank on every edge
+/// (bounded by the algebraic maximum), with distinct, valid samples -- the
+/// behaviour that `project_point_onto_edge` (see `samples::tests`) must
+/// preserve now that it replaces the clone-and-project-every-edge path.
+#[test]
+fn bootstrap_samples_reaches_the_requested_rank_on_every_edge() {
+    for (edges, node_count) in [
+        (vec![(0, 1), (1, 2), (2, 3)], 4),
+        (vec![(0, 1), (0, 2), (0, 3)], 4),
+    ] {
+        let tree = make_tree(&edges, node_count);
+        let problem = prepare_problem(std::slice::from_ref(&tree), &TreeAciOptions::default())
+            .expect("prepared problem");
+        let algebraic = algebraic_edge_bounds(&problem).expect("algebraic bounds");
+        // Ask for less than the algebraic maximum everywhere it is more than
+        // 1, so the loop must actually enumerate multiple points per edge
+        // rather than exhausting the whole component space trivially.
+        let targets = algebraic
+            .iter()
+            .map(|&bound| bound.clamp(1, 2))
+            .collect::<Vec<_>>();
+
+        let (arena, candidates, pivots) =
+            bootstrap_samples(&problem, &targets).expect("bootstrap must reach every target");
+
+        for (edge_number, &target) in targets.iter().enumerate() {
+            let forward = 2 * edge_number;
+            let reverse = forward + 1;
+            assert_eq!(
+                candidates.ids[forward].len(),
+                target,
+                "edge {edge_number} forward candidate count must equal its target rank"
+            );
+            assert_eq!(
+                candidates.ids[reverse].len(),
+                target,
+                "edge {edge_number} reverse candidate count must equal its target rank"
+            );
+            assert_eq!(pivots.rank(edge_number), target);
+
+            // Every selected pivot pair must materialize to a valid,
+            // in-range point through the arena.
+            for &(left, right) in &pivots.per_edge[edge_number] {
+                let point = arena
+                    .materialize_global_point(&problem, forward, left, right)
+                    .expect("pivot pair must materialize to a full point");
+                assert_eq!(point.len(), node_count);
+            }
+        }
+    }
+}

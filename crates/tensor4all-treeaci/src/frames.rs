@@ -23,29 +23,65 @@ use crate::{
 /// memoized `FrameBuilder::compute` path, used to prove
 /// `InputFrameStore::extend` recomputes only newly interned samples (see
 /// `frames::tests::extend_recomputes_only_the_newly_interned_samples`).
+///
+/// `thread_local!`, not a process-global `static`: Rust's default test
+/// harness runs each `#[test]` fn on its own thread, so a `static` counter
+/// is shared -- and raced on -- by every test in the binary that happens to
+/// execute concurrently and touch this code path, not just the one test
+/// that means to read it.
 #[cfg(test)]
 pub(crate) mod debug_stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    pub(crate) static COMPUTE_CALLS: AtomicU64 = AtomicU64::new(0);
+    use std::cell::Cell;
+
+    thread_local! {
+        static COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record_compute_call() {
+        COMPUTE_CALLS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn compute_calls() -> u64 {
+        COMPUTE_CALLS.with(Cell::get)
+    }
 
     pub(crate) fn reset() {
-        COMPUTE_CALLS.store(0, Ordering::Relaxed);
+        COMPUTE_CALLS.with(|count| count.set(0));
     }
 }
 
 /// Test-only hit/miss counters for the candidate-frame cache, used to prove
 /// repeated candidate lookups actually hit the cache (see
 /// `frames::tests::candidate_frame_hits_the_cache_on_a_repeated_lookup`).
+/// `thread_local!` for the same reason as `debug_stats` above.
 #[cfg(test)]
 pub(crate) mod candidate_debug_stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::cell::Cell;
 
-    pub(crate) static HITS: AtomicU64 = AtomicU64::new(0);
-    pub(crate) static MISSES: AtomicU64 = AtomicU64::new(0);
+    thread_local! {
+        static HITS: Cell<u64> = const { Cell::new(0) };
+        static MISSES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record_hit() {
+        HITS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn record_miss() {
+        MISSES.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn hits() -> u64 {
+        HITS.with(Cell::get)
+    }
+
+    pub(crate) fn misses() -> u64 {
+        MISSES.with(Cell::get)
+    }
 
     pub(crate) fn reset() {
-        HITS.store(0, Ordering::Relaxed);
-        MISSES.store(0, Ordering::Relaxed);
+        HITS.with(|count| count.set(0));
+        MISSES.with(|count| count.set(0));
     }
 }
 
@@ -339,11 +375,11 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         );
         if let Some(cached) = self.candidate_cache.borrow().get(&key) {
             #[cfg(test)]
-            candidate_debug_stats::HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            candidate_debug_stats::record_hit();
             return Ok(cached.clone());
         }
         #[cfg(test)]
-        candidate_debug_stats::MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        candidate_debug_stats::record_miss();
         let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
             message: "candidate frame references an unknown input",
         })?;
@@ -409,7 +445,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             return Ok(values);
         }
         #[cfg(test)]
-        debug_stats::COMPUTE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        debug_stats::record_compute_call();
         let record = self.arena.record(edge, sample)?.clone();
         let mut incoming_frames = Vec::with_capacity(record.incoming.len());
         for &(incoming_edge, incoming_sample) in &record.incoming {
