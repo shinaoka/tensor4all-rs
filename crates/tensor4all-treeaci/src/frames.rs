@@ -238,9 +238,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     .and_then(|frames| frames.get(edge))
                     .map(|frame| frame.sample_count)
                     .unwrap_or(0);
-                for sample in known..builder.memo[edge].len() {
-                    builder.compute(edge, sample)?;
-                }
+                builder.compute_batch(edge, known..builder.memo[edge].len())?;
             }
             let mut input_frames = Vec::with_capacity(problem.directed_edges.len());
             let bond_dims = (0..problem.directed_edges.len())
