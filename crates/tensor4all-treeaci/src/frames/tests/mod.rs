@@ -430,6 +430,22 @@ fn batched_single_incoming_contraction_matches_scalar_path() {
             + outgoing_value * core.strides[outgoing_axis];
         assert_eq!(result[[outgoing_value, 1]], core.values[offset]);
     }
+
+    // Genuine cross-check against the scalar path: `accumulate_incoming` is
+    // exactly the per-candidate scalar accumulator `contract_prepared_core`
+    // calls once per outgoing value; comparing the batched result column
+    // against it (not just the hand-computed slice above) is what actually
+    // catches a batched/scalar mismatch the hand-picked one-hot vectors
+    // above might miss.
+    let candidate_frames: [Vec<f64>; 2] = [vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+    for (candidate, frame) in candidate_frames.iter().enumerate() {
+        for outgoing_value in 0..core.dims[outgoing_axis] {
+            let outgoing_offset = base_offset + outgoing_value * core.strides[outgoing_axis];
+            let expected =
+                super::accumulate_incoming(&core, &[(incoming_axis, frame)], 0, outgoing_offset);
+            assert_eq!(result[[outgoing_value, candidate]], expected);
+        }
+    }
 }
 
 #[test]
@@ -498,7 +514,161 @@ fn batched_path_matches_scalar_path_on_random_core() {
                     "mismatch at outgoing={outgoing_value}, candidate={candidate}: \
                      actual={actual}, expected={expected}"
                 );
+
+                // Genuine cross-check against the scalar path itself
+                // (`accumulate_incoming`, the exact accumulator
+                // `contract_prepared_core` calls once per outgoing value),
+                // not just the hand-rolled dot product above -- this is what
+                // would actually catch a mistake shared between this test's
+                // hand-computed `expected` and the production scalar path.
+                let scalar_path_expected =
+                    super::accumulate_incoming(&core, &[(1, frame)], 0, outgoing_offset);
+                assert!(
+                    (actual - scalar_path_expected).abs() < 1e-10,
+                    "batched result disagrees with the scalar accumulate_incoming path at \
+                     outgoing={outgoing_value}, candidate={candidate}: \
+                     actual={actual}, scalar_path_expected={scalar_path_expected}"
+                );
             }
         }
     }
+}
+
+/// Builds a 4-node star `1 -- 0 -- 2`, `0 -- 3`, whose center (node `0`) has
+/// three neighbors. Directed edge `1 -> 0` has zero incoming edges (node `1`
+/// is a leaf), and directed edge `0 -> 1` has two incoming edges (`2 -> 0`
+/// and `3 -> 0`, node `0`'s other two neighbors) -- the two shapes of
+/// `InputFrameStore::candidate_frames_for_edge`'s fallback branch, which
+/// dispatches away from the batched BLAS path whenever a directed edge's
+/// source does not have exactly one incoming edge. See
+/// `candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges`
+/// and
+/// `candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges`.
+fn star_tree_for_fallback_dispatch() -> TreeTN<IdxTensor, usize> {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(2);
+    let s3 = DynIndex::new_dyn(2);
+    let bond01 = DynIndex::new_dyn(2);
+    let bond02 = DynIndex::new_dyn(2);
+    let bond03 = DynIndex::new_dyn(2);
+
+    let node0 = IdxTensor::from_dense(
+        vec![s0, bond01.clone(), bond02.clone(), bond03.clone()],
+        (1..=16).map(|value| value as f64).collect(),
+    )
+    .unwrap();
+    let node1 = IdxTensor::from_dense(vec![bond01, s1], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let node2 = IdxTensor::from_dense(vec![bond02, s2], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
+    let node3 = IdxTensor::from_dense(vec![bond03, s3], vec![9.0, 10.0, 11.0, 12.0]).unwrap();
+
+    TreeTN::from_tensors(vec![node0, node1, node2, node3], vec![0, 1, 2, 3]).unwrap()
+}
+
+#[test]
+fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges() {
+    let inputs = vec![star_tree_for_fallback_dispatch()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 0)
+        .expect("star tree must have a directed edge 1 -> 0");
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 0);
+
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    // Node 1's only physical leg has dimension 2, so directed edge 1 -> 0
+    // (zero incoming edges) has exactly two candidates, one per physical
+    // value, and no incoming samples at all.
+    let candidates = [
+        ComponentSample {
+            local_coordinate: 0,
+            incoming: Vec::new(),
+        },
+        ComponentSample {
+            local_coordinate: 1,
+            incoming: Vec::new(),
+        },
+    ];
+
+    let dispatched = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(dispatched, scalar);
+    // Sanity: this is a meaningful comparison, not a vacuous shape check --
+    // the two candidates' frames actually differ.
+    assert_ne!(dispatched[0], dispatched[1]);
+}
+
+#[test]
+fn candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges() {
+    let inputs = vec![star_tree_for_fallback_dispatch()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+
+    // Seed two distinct physical points so each incoming edge (2 -> 0 and
+    // 3 -> 0) has two candidate samples, giving this branch-point fallback a
+    // genuine multi-candidate cartesian product to walk, not just a single
+    // trivial candidate.
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    let incoming_edge_a = directed.incoming_to_from[0];
+    let incoming_edge_b = directed.incoming_to_from[1];
+    let ids_a = &candidate_sets.ids[incoming_edge_a];
+    let ids_b = &candidate_sets.ids[incoming_edge_b];
+    assert_eq!(ids_a.len(), 2);
+    assert_eq!(ids_b.len(), 2);
+
+    let mut candidates = Vec::new();
+    for local_coordinate in 0..2 {
+        for &id_a in ids_a {
+            for &id_b in ids_b {
+                candidates.push(ComponentSample {
+                    local_coordinate,
+                    incoming: vec![(incoming_edge_a, id_a), (incoming_edge_b, id_b)],
+                });
+            }
+        }
+    }
+    assert_eq!(candidates.len(), 8);
+
+    let dispatched = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(dispatched, scalar);
+    // Sanity: candidates are not all identical, so this exercises real,
+    // differing per-candidate contractions rather than a degenerate case.
+    assert!(dispatched.iter().any(|frame| frame != &dispatched[0]));
 }

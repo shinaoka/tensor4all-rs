@@ -480,8 +480,18 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             );
             let mut frame_data = Vec::with_capacity(incoming_dim * indices.len());
             for &candidate_index in &indices {
-                let (edge, sample) = candidates[candidate_index].incoming[0];
-                debug_assert_eq!(edge, incoming_edge);
+                let incoming = &candidates[candidate_index].incoming;
+                if incoming.len() != 1 {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "single-incoming-edge candidate does not have exactly one incoming sample",
+                    });
+                }
+                let (edge, sample) = incoming[0];
+                if edge != incoming_edge {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "single-incoming-edge candidate's incoming sample is on the wrong directed edge",
+                    });
+                }
                 let values = self.frame_values(input, edge, sample)?;
                 if values.len() != incoming_dim {
                     return Err(TreeAciError::InternalInvariant {

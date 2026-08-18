@@ -714,10 +714,25 @@ guess, whether the batched path still needed to consult/populate that
 cache.
 
 TDD: new tests in `frames/tests/mod.rs` for both Task 3 helpers (matrix
-gather correctness, batched-vs-scalar-loop numerical agreement) and for the
-Task 4 dispatcher's edge-count fallback and its per-group batching against
-the previous scalar path, plus the Task 2 supertrait-implication test in
-`scalar.rs`.
+gather correctness against hand-computed values, plus a genuine cross-check
+against the scalar `accumulate_incoming` accumulator itself) and for the
+Task 4 dispatcher's per-group batching against the previous scalar path
+(`candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges`
+and `candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges`,
+also in `frames/tests/mod.rs`, exercising the dispatcher's 0- and
+\>=2-incoming-edge fallback directly), plus the Task 2 supertrait-implication
+test in `scalar.rs`. The dispatcher's single-incoming-edge batched path
+itself is cross-checked against the scalar path by
+`candidate_frames_batched_path_matches_scalar_path_on_a_chain` in
+`local_update/tests/mod.rs`, not in `frames/tests/mod.rs` -- an earlier draft
+of this update misattributed that test's location. A first draft of this
+paragraph also claimed the fallback branch was covered only transitively
+through full-run integration tests, including for the >=2-incoming-edges
+(genuine branch-point) case; that was false for >=2 specifically -- every
+fixture used elsewhere in the crate at the time was a chain topology, so no
+test, direct or transitive, exercised a node with two or more incoming edges
+on any of its outgoing directed edges. The two fallback tests above close
+that gap with a 4-node star fixture built for the purpose.
 
 **Result**, `treeaci_parity.rs` chi=16/32/64/128, same benchmark invocation
 as the baseline capture. The first pass at this measurement ran on a host
