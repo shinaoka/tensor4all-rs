@@ -673,3 +673,103 @@ discipline this file has followed throughout says to measure the post-fix
 run before deciding whether it is still the largest remaining piece, and
 whether it is inherent (there is no "previous" store to extend from at the
 very start of a run) or has its own redundant-work shape to find.
+
+## Update 6: candidate-frame contraction through BLAS `mat_mul` for single-incoming-edge nodes
+
+Separate plan (`2026-08-18-treeaci-blas-candidate-contraction`), executed as
+four tasks. Root cause targeted here is different in kind from Updates 3-5:
+those were all "redo unrelated work O(n) times" shapes fixed by scoping the
+work correctly; this one is "do the necessary work through a scalar loop
+instead of a BLAS primitive." `frames.rs`'s `accumulate_incoming` /
+`contract_prepared_core` path contracted each pivot-search candidate's
+incoming frame against a node's prepared core one scalar multiply-add at a
+time, once per candidate, even though on a chain every node has exactly one
+incoming edge for its outgoing directed edges -- exactly the shape a single
+BLAS matrix-multiply can batch across the whole candidate set for that edge
+in one call.
+
+**Fix, in four steps.** (1) `TreeAciScalar` widened to require
+`tensor4all_tensorbackend::MatrixScalar` as a supertrait -- a breaking but
+harmless change, since `f32`/`f64`/`Complex32`/`Complex64` already
+independently implement both, so the crate built with zero fallout; proved
+non-vacuous with a test that only typechecks because of the new supertrait
+bound. (2) Two new private helpers in `frames.rs`:
+`single_incoming_core_matrix` gathers a `PreparedCore`'s fixed-physical-value
+slice into a plain `outgoing_dim x incoming_dim` column-major `Matrix<T>`;
+`contract_prepared_core_batched` runs one `mat_mul` against an
+`incoming_dim x n_candidates` matrix of candidate incoming-frame vectors,
+returning `outgoing_dim x n_candidates` in one call. (3) A new
+`pub(crate)` dispatcher, `InputFrameStore::candidate_frames_for_edge`: falls
+back to the existing scalar per-candidate loop whenever an edge has 0 or
+\>=2 incoming edges, and otherwise groups candidates by
+`local_coordinate` (candidates sharing a physical value are strided, not
+contiguous, per `enumerate_candidates`'s mixed-radix encoding in
+`local_update.rs`) and issues one batched `mat_mul` per group.
+`local_update.rs`'s `candidate_frames` was reduced to a one-line dispatch
+over this new method; its own signature and return type are unchanged.
+(4) Before wiring the dispatcher in, measured `candidate_cache`'s hit rate
+on a representative multi-sweep run using the existing
+`candidate_debug_stats` counters to decide, with evidence rather than a
+guess, whether the batched path still needed to consult/populate that
+cache.
+
+TDD: new tests in `frames/tests/mod.rs` for both Task 3 helpers (matrix
+gather correctness, batched-vs-scalar-loop numerical agreement) and for the
+Task 4 dispatcher's edge-count fallback and its per-group batching against
+the previous scalar path, plus the Task 2 supertrait-implication test in
+`scalar.rs`.
+
+**Result**, `treeaci_parity.rs` chi=16/32/64/128, same benchmark invocation
+as the baseline capture. The first pass at this measurement ran on a host
+with heavy, unrelated background CPU contention (post-restart Spotlight/
+ANE/ecosystem-analytics activity, the same class of noise Update 4 already
+documented) and produced numbers that were not independently re-verified
+before being written here; that draft has been superseded by a clean re-run
+after the contention settled, with the controlling session independently
+re-executing every verification command itself rather than trusting the
+implementer's report of having run them:
+
+| chi | ratio before | ratio after | improvement |
+|---:|---:|---:|---:|
+| 16 | 2.53x | 2.70x | -6.7% (regressed, within run-to-run noise) |
+| 32 | 4.03x | 3.91x | 3.0% |
+| 64 | 6.17x | 5.33x | 13.6% |
+| 128 | 13.78x | 9.43x | 31.6% |
+
+The improvement grows with chi, as expected: batching helps most when a
+node's candidate set is large enough that one BLAS call amortizes better
+than the fixed cost of many scalar-loop calls, and per-edge candidate counts
+grow with chi. At chi=16, candidate sets are small enough that this
+overhead is close to a wash, and the small measured regression there is not
+distinguishable from ordinary criterion run-to-run noise (this file's other
+updates have shown similar single-digit-percent noise on unrelated re-runs).
+The gap is smaller than it was but not closed: the crate's own maturity doc
+comment (`lib.rs`) has been updated from "2.5x-13.8x" to "2.7x-9.4x", and
+multi-incoming-edge nodes -- genuine tree branch points, not reachable by
+this chain benchmark -- remain on the original scalar path, unchanged by
+this update and called out explicitly as such in that doc comment.
+
+Full verification, independently re-run by the controlling session (not
+merely reported by an implementer) on the quieted host: `cargo fmt --all
+-- --check` clean; scoped `cargo clippy -p tensor4all-treeaci
+-p tensor4all-aci --all-targets -- -D warnings` clean; `cargo test --release
+-p tensor4all-treeaci --no-fail-fast` green (94 lib tests, 7 integration,
+1 rank-scaling, 18 doctests, all passing); `cargo doc -p tensor4all-treeaci
+-p tensor4all-aci --no-deps` clean (workspace-wide `cargo doc` still fails on
+the unrelated, pre-existing `tensor4all-hdf5`/`hdf5-metno-sys` build script,
+which probes only a fixed list of Homebrew HDF5 formula names --
+`hdf5@2.1`/`hdf5@2.0`/`hdf5@1.14`/down to `hdf5@1.8`/`hdf5-mpi` -- that does
+not include the plain `hdf5` formula (2.2.0) actually installed on this
+host; unrelated to this change, not investigated further here).
+
+## What remains after Update 6
+
+Multi-incoming-edge (genuine tree branch point) nodes still use the scalar
+`contract_prepared_core` path; batching a combinatorial candidate space
+across multiple incoming edges is a materially different and materially
+riskier problem than the single-incoming-edge case handled here, and the
+chain benchmark used throughout this file cannot validate it -- any future
+work there needs its own benchmark with actual branch points, not an
+opportunistic extension of this update. `from_samples`'s initial,
+non-incremental build noted as the likely next hotspot after Update 5
+remains unprofiled against the current code.
