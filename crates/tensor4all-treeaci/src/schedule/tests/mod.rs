@@ -178,37 +178,56 @@ fn failed_update_preserves_all_commits_before_the_failing_edge() {
 }
 
 #[test]
-fn convergence_requires_full_rank_vector_stability_and_minimum_dwell() {
-    let ranks = vec![vec![2, 1], vec![2, 2]];
+fn convergence_requires_stable_max_rank_and_minimum_dwell() {
+    // Network max is 2 at both sweeps (2 and 2), even though this scenario's
+    // real-world equivalent is an individual edge fluctuating underneath
+    // that max -- exactly the scenario `crates/tensor4all-treeaci/src/schedule.rs`'s
+    // old per-edge-vector check used to reject. `max_ranks` is what
+    // `run_local_sweeps` already computes from `state.edge_ranks.iter().max()`
+    // every pass; this test operates directly on that scalar sequence, the
+    // same shape `tensor4all-aci`'s `convergence_criterion_like_julia` takes.
+    let max_ranks = vec![2usize, 2];
     let errors = vec![0.0, 0.0];
     let global = vec![0, 0];
+
+    // Below the minimum dwell (only 1 completed sweep): never converges.
     assert!(!convergence_criterion(
         1,
-        &ranks[..1],
+        &max_ranks[..1],
         &errors[..1],
         &global[..1],
         2,
         1.0e-12
     ));
-    assert!(!convergence_criterion(
-        2, &ranks, &errors, &global, 2, 1.0e-12
+
+    // Two sweeps, stable max rank, error at tolerance, no global pivots
+    // found in the window: must converge.
+    assert!(convergence_criterion(
+        2, &max_ranks, &errors, &global, 2, 1.0e-12
     ));
 
-    let stable = vec![vec![2, 2], vec![2, 2]];
-    assert!(convergence_criterion(
-        2, &stable, &errors, &global, 2, 1.0e-12
+    // A max rank that actually increases within the window must still
+    // block convergence (this part of the rule is unchanged).
+    let growing = vec![2usize, 3];
+    assert!(!convergence_criterion(
+        2, &growing, &errors, &global, 2, 1.0e-12
     ));
+
+    // Error above tolerance still blocks convergence, independent of rank.
     assert!(!convergence_criterion(
         2,
-        &stable,
+        &max_ranks,
         &[0.0, 1.0e-6],
         &global,
         2,
         1.0e-12
     ));
+
+    // A global pivot found within the window still blocks convergence
+    // (its error estimate is stale with respect to the injected pivot).
     assert!(!convergence_criterion(
         2,
-        &stable,
+        &max_ranks,
         &errors,
         &[1, 0],
         2,

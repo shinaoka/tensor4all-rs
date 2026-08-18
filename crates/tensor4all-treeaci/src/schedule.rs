@@ -56,7 +56,6 @@ where
 {
     let mut max_ranks = Vec::with_capacity(options.max_sweeps);
     let mut max_errors = Vec::with_capacity(options.max_sweeps);
-    let mut rank_vectors = Vec::with_capacity(options.max_sweeps);
     let mut global_pivots = Vec::with_capacity(options.max_sweeps);
     let mut rank_limited = Vec::with_capacity(options.max_sweeps);
     let mut evaluated_points = 0u64;
@@ -76,7 +75,6 @@ where
             })?;
         max_ranks.push(report.max_rank);
         max_errors.push(report.max_error);
-        rank_vectors.push(state.edge_ranks.clone());
         rank_limited.push(current_state_is_rank_limited(state, options));
         let injection_edges = global_injection_edges(state, options);
         let found = if options.enable_global_guard
@@ -102,7 +100,7 @@ where
         let completed = pass + 1;
         if convergence_criterion(
             completed,
-            &rank_vectors,
+            &max_ranks,
             &max_errors,
             &global_pivots,
             options.min_sweeps,
@@ -244,7 +242,7 @@ where
 
 fn convergence_criterion(
     completed: usize,
-    ranks: &[Vec<usize>],
+    max_ranks: &[usize],
     errors: &[f64],
     global_pivots: &[usize],
     min_sweeps: usize,
@@ -253,16 +251,10 @@ fn convergence_criterion(
     if min_sweeps == 0 || completed < min_sweeps || errors[completed - 1] > tolerance {
         return false;
     }
-    let baseline = &ranks[completed - min_sweeps];
-    if ranks[(completed - min_sweeps)..completed]
+    let baseline = max_ranks[completed - min_sweeps];
+    if max_ranks[(completed - min_sweeps)..completed]
         .iter()
-        .any(|rank_vector| {
-            rank_vector.len() != baseline.len()
-                || rank_vector
-                    .iter()
-                    .zip(baseline)
-                    .any(|(rank, base)| rank > base)
-        })
+        .any(|&rank| rank > baseline)
     {
         return false;
     }
