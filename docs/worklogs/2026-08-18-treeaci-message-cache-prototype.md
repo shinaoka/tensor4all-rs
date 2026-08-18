@@ -815,12 +815,18 @@ batched entry point rather than reuse of Update 6's.
 
 **Fix, in two tasks.** (1) `FrameBuilder::compute_batch(&mut self, edge:
 DirectedEdgeId, samples: Range<SampleId>) -> Result<()>` (`frames.rs`): the
-single-incoming-edge case gathers the requested sample range's incoming
-frames into one `incoming_dim x n_samples` matrix and issues one `mat_mul`
-against the node's prepared-core matrix, writing every sample's memoized
-result from the single batched result; 0- or >=2-incoming-edge cuts fall back
-to the unchanged per-sample scalar `compute`, mirroring Update 6's
-`candidate_frames_for_edge` dispatcher exactly. (2)
+single-incoming-edge case groups the requested sample range by
+`local_coordinate` -- same rationale as `candidate_frames_for_edge`, samples
+sharing a local coordinate are not guaranteed contiguous in the range -- then
+gathers each group's incoming frames into one `incoming_dim x
+group_size` matrix and issues one `mat_mul` against that local coordinate's
+slice of the node's prepared core, one batched `mat_mul` call per group,
+writing every group's memoized results from that group's batched result; 0-
+or >=2-incoming-edge cuts fall back to the unchanged per-sample scalar
+`compute`, mirroring Update 6's `candidate_frames_for_edge` dispatcher
+exactly -- the same local-coordinate-grouped, one-`mat_mul`-per-group
+strategy, applied to sample materialization instead of candidate
+contraction. (2)
 `InputFrameStore::build_or_extend`'s inner loop was reduced from the
 per-sample `compute` loop above to one `builder.compute_batch(edge,
 known..builder.memo[edge].len())?` call -- a three-line diff in `frames.rs`,
@@ -858,10 +864,12 @@ restart, load average oscillating 4.4-7.7 against 8 cores and not settling
 after several minutes of waiting, the same class of noise Update 4 and
 Update 6 both already documented. Rather than discard the run outright, two
 independent full benchmark invocations were run back to back and their
-per-chi tree/train ratios compared: they agreed to within 2% of each other
-at every chi (e.g. chi=128: 6.01x and 5.97x), even though each run's own
-criterion change-detection against its stored baseline showed inconsistent,
-noise-driven regressed/improved swings on individual arms. Reported numbers
+per-chi tree/train ratios compared: they agreed to within 2.1% of each
+other at every chi (chi=16, the loosest agreement; tighter at chi=64/128,
+within 0.8% or better -- e.g. chi=128: 6.01x and 5.97x), even though each
+run's own criterion change-detection against its stored baseline showed
+inconsistent, noise-driven regressed/improved swings on individual arms.
+Reported numbers
 below are the two runs' average:
 
 | chi | ratio before (Update 6) | ratio after | improvement |
