@@ -35,6 +35,8 @@ pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 /// Dynamic scalar compatibility wrapper built on rank-0 `IdxTensor`.
 pub mod any_scalar;
 pub mod global_default;
+/// Bit-packed integer keys for multi-index maps.
+pub mod index_key;
 pub mod index_like;
 pub mod scalar;
 /// Stack-allocated fixed-capacity string types for ITensors.jl compatibility.
