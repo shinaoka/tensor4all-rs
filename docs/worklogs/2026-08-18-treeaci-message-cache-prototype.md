@@ -1129,3 +1129,162 @@ tensor4all-treeaci -p tensor4all-aci --no-deps` builds clean.
 This closes the sweep-count-gap question Update 7 raised and left open: it
 was the stopping rule, not a real per-sweep algorithmic difference between
 tree and chain traversal.
+
+## Update 10: `InputFrameStore::build_or_extend` was rebuilding every directed edge's frame storage on every call -- unchanged edges now shared via `Rc`
+
+Update 9 closed the sweep-count gap and pointed the remaining 2.1x-3.6x
+wall-time ratio at per-sweep cost. This update is a phase-breakdown of that
+per-sweep cost at the algebraic rank ceiling (chi=256 on `treeaci_parity`'s
+16-site chain, where frame storage is largest: `3,602,144` bytes), followed
+by the fix it identified and this task's fresh measurement of the result.
+
+**The mechanism: `seed` and `reconstruct`, pure data movement.** Before this
+plan, `InputFrameStore::build_or_extend`'s per-input, per-directed-edge loop
+did three things unconditionally, on *every* call, for *every* edge,
+regardless of whether that edge's sample set had changed since the previous
+call:
+
+1. allocate `memo[edge]` and **eagerly seed** it by copying every
+   already-known sample's row out of the previous store (`previous.row(sample)`,
+   an `O(count * bond_dim)` copy plus one `Vec` allocation per sample);
+2. call `compute_batch(edge, known..count)` -- a no-op range when the edge's
+   sample count had not grown, but still a call;
+3. **reconstruct** a brand-new `Matrix` for the edge by copying every row back
+   out of `memo`, a second `O(count * bond_dim)` copy.
+
+For an edge whose sample count had not changed, steps 1 and 3 together
+produced an exact bitwise duplicate of a frame the previous store already
+held, at the cost of two full copies of it -- no arithmetic, purely data
+movement. Informal instrumentation at chi=256 (this session, not committed as
+its own artifact) attributed **36.6% of total ACI wall time** to this
+seed/reconstruct pair. Two adjacent phases were also measured and are
+explicitly out of this plan's scope (see "What this plan deliberately does
+not do" in `docs/superpowers/plans/2026-08-19-treeaci-shared-unchanged-frames.md`):
+first-materialization via scalar priming (~20%, edge-index-vs-topological-order
+gap) and `TreeAciState::initialize`'s non-`build_or_extend` bootstrap/
+canonicalization cost (~20%). This update's fix addresses only the 36.6% share.
+
+**Baseline (Task 1).** Re-ran `treeaci_parity` with `CHI_VALUES` extended to
+`[16, 32, 64, 128, 200, 256]` before any fix landed: wall-time ratio (tree /
+train) at chi=256 was **5.003x** (mean of two clean back-to-back runs; a
+third run's chi=256 tree time was a host-noise outlier at 302 ms against 259
+and 260 ms for the other two, discarded). This became the fix's target.
+
+**The fix (Tasks 2-5 of this plan, commits `d23ceeec`..`cf089f03`).** Four
+increments, each independently tested and committed:
+
+- **Task 2** (`d23ceeec`): `InputFrameStore.cores` changed from
+  `Vec<Vec<PreparedCore<T>>>` to `Vec<Rc<Vec<PreparedCore<T>>>>`. An unchanged
+  input's prepared cores are now shared by reference across `extend` calls
+  instead of cloned by value. New test
+  `extend_reuses_the_same_cores_allocation_instead_of_cloning_it` asserts
+  `Rc::ptr_eq`, not just value equality, since a regression back to `.clone()`
+  would still pass every pre-existing value-equality test.
+- **Task 3** (`500de8a7`): `InputFrameStore.frames` changed from
+  `Vec<Vec<DirectedFrame<T>>>` to `Vec<Vec<Rc<DirectedFrame<T>>>>`. Type-only
+  change -- `build_or_extend` still rebuilt every edge on every call at this
+  point; this just made the storage shareable in preparation for Task 5.
+- **Task 4** (`36bbaa36`): added `FrameBuilder::existing_frames: Option<&'a
+  [Rc<DirectedFrame<T>>]>` and a lazy-pull branch in `FrameBuilder::compute`,
+  inserted between the memo-hit check and the genuine `contract_prepared_core`
+  computation -- a sample already known to the previous store is pulled via
+  `DirectedFrame::row` (one `O(bond_dim)` copy) and memoized, instead of
+  recomputed, and does not increment the `debug_stats` compute-call counter.
+  This added the capability without activating it: `build_or_extend`'s
+  construction site still passed `existing_frames: None` and still eagerly
+  seeded `memo` exactly as before.
+- **Task 5** (`cf089f03`): wired it up and removed the eager seed loop.
+  `build_or_extend` now decides per edge: if the previous store had a frame
+  for that edge *and* its sample count is unchanged, the edge shares the
+  previous store's `Rc<DirectedFrame<T>>` directly -- no `compute_batch` call,
+  no memo fill, no fresh `Matrix`, just an `Rc::clone`. Only edges that grew or
+  are new get rebuilt, using the Task 4 lazy-pull path for any old sample an
+  ancestor-priming recursion still needs to read.
+
+  Two subtleties surfaced during Task 5's implementation and review, both
+  documented in `task-5-report.md`:
+  - **Edge ordering.** A naive two-pass structure ("push reused edges, then
+    push rebuilt edges") would silently reorder `input_frames` relative to
+    `edge_count`, mis-associating frames with edges in every mixed case (the
+    normal case for `extend`) -- a value-corruption bug, not a crash. The fix
+    pre-sizes `input_frames: Vec<Option<Rc<DirectedFrame<T>>>>` to
+    `edge_count` and has both passes write by index (`input_frames[edge] =
+    Some(...)`), never push, so no ordering assumption exists to violate.
+  - **The memo spine must stay allocated for every edge, including reused
+    ones.** A grown edge's `compute_batch` priming recursion walks its
+    ancestor chain and calls `self.compute(incoming_edge, incoming_sample)`
+    regardless of whether `incoming_edge` is itself being reused; the
+    lazy-pull branch (Task 4) writes its pulled row back into
+    `self.memo[incoming_edge][incoming_sample]`, and `compute_batch`'s
+    batched branch reads that slot by direct indexing. An empty spine on a
+    reused edge would therefore panic (`compute`'s write) or index out of
+    bounds (`compute_batch`'s read) the first time a grown edge's ancestor
+    chain passed through it. So `memo` is still allocated at full size for
+    every edge from the pre-computed `sample_counts` -- reused edges'
+    spines simply stay `None`-filled unless something reads through them.
+    The cost is one `Option<Vec<T>>` (24 bytes) per sample of spine, against
+    the `bond_dim * size_of::<T>()` row it would have held (2 KiB at
+    chi=256, `f64`) -- roughly 1% of the movement the fix removes, not
+    worth chasing further.
+
+**This task's measurement (Task 6).** Re-extended `CHI_VALUES` to `[16, 32,
+64, 128, 200, 256]` (same edit as Task 1, reverted afterward), rebuilt in
+`--release`, and ran `cargo bench -p tensor4all-aci --bench treeaci_parity`
+three times back to back. Host load was moderate throughout (load average
+4.2-8.9, 27-31% user CPU at the start, rising toward the end of the third
+run), consistent with Task 1's conditions. Cross-run agreement was good at
+every chi except two individual points flagged by Criterion itself as noisy
+(run 1's chi=64 tree time and chi=128 train time; run 3's chi=256 train
+time -- each shows a wide confidence interval and a "regressed"/outlier flag
+against that same benchmark's own history, both symptomatic of a background
+CPU spike rather than a real change). Using the two agreeing runs per chi
+point:
+
+| chi | train (ms) | tree (ms) | ratio (after) | ratio (before, Task 1) |
+|---:|---:|---:|---:|---:|
+| 16  | 19.66  | 38.44  | 1.96x | 2.33x |
+| 32  | 14.09  | 29.53  | 2.10x | 2.31x |
+| 64  | 25.19  | 44.32  | 1.76x | 2.11x |
+| 128 | 32.74  | 93.04  | 2.84x | 3.61x |
+| 200 | 42.61  | 120.48 | 2.83x | 3.74x |
+| 256 | 52.09  | 153.94 | **2.96x** | **5.003x** |
+
+(chi=16/32/64/128 "before" column from Task 1's cross-run average table;
+chi=200/256 "before" from the same table. chi=256 "after" uses runs 1-2's
+mean, since run 3's train time was the flagged outlier for that point,
+mirroring exactly how Task 1 itself excluded its own run-3 chi=256 outlier.)
+
+The wall-time ratio at chi=256 dropped from **5.003x to 2.96x**, a **~41%
+reduction** -- substantial, and in the direction and rough magnitude the
+36.6%-of-wall-time mechanism predicted (removing a component that was pure
+data movement should show up close to linearly in wall time, since it adds
+no arithmetic and unblocks no other phase). The ratio also improved at every
+other chi point, including the smallest (16 and 64), where frame storage is
+far from its cap -- consistent with the fix mattering on every `extend` call,
+not only at the largest bond dimension where the previous eager-copy volume
+happened to be biggest.
+
+The crate's maturity doc comment (`crates/tensor4all-treeaci/src/lib.rs`) has
+been updated to report the new wall-time range (roughly 1.8x-3.0x across chi
+16 through 256, chi=256 specifically ~2.9x-3.0x, down from 2.1x-3.6x on the
+benchmark's previous default chi 16-128 range and from a measured 5.0x at
+chi=256 alone) and to describe the fix: unchanged directed edges' frame
+storage is now shared via `Rc` instead of rebuilt, with old samples any
+other edge still needs pulled lazily instead of pre-copied.
+
+**Verification.** `cargo fmt --all -- --check` clean. Scoped `cargo clippy -p
+tensor4all-treeaci -p tensor4all-aci --all-targets -- -D warnings` clean.
+`cargo test --release -p tensor4all-treeaci --no-fail-fast`: 104 lib tests, 7
+integration, 1 rank-scaling, 18 doctests, all passing (unchanged from Task
+5's count -- this task touched no `.rs` file other than `lib.rs`'s doc
+comment). `cargo doc -p tensor4all-treeaci -p tensor4all-aci --no-deps`
+builds clean.
+
+This closes the seed/reconstruct question this session's phase breakdown
+raised: the 36.6%-of-wall-time mechanism was real, specific, and fixable
+without touching `InputFrameStore`'s public API, and removing it closed
+roughly two-fifths of the tree/chain wall-time gap at the algebraic rank
+ceiling. What remains -- first-materialization via scalar priming (~20%) and
+`TreeAciState::initialize`'s bootstrap/canonicalization cost (~20%) -- is
+explicitly out of this plan's scope and is each already identified as a
+separate follow-up.

@@ -16,9 +16,24 @@
 //! `tensor4all-aci`'s network-wide scalar max-rank stopping rule instead of
 //! requiring every individual edge's rank to be simultaneously
 //! non-increasing). It still remains several times slower end to end
-//! (roughly 2.1x-3.6x wall time on the same benchmark, down from 2.8x-5.8x
-//! before that fix), but the gap is no longer chiefly a sweep-count effect --
-//! it now reflects the per-sweep cost described below. Candidate/pivot-search
+//! (roughly 1.8x-3.0x wall time on `treeaci_parity`'s chain across bond
+//! dimension 16 through 256, chi=256 specifically ~2.9x-3.0x -- down from
+//! roughly 2.1x-3.6x on the same benchmark's default chi 16-128 range, and
+//! down from a measured 5.0x at chi=256 alone, before unchanged directed
+//! edges' frame storage was shared via `Rc` instead of rebuilt on every
+//! `extend` call), but the gap is no longer chiefly a sweep-count effect --
+//! it now reflects the per-sweep cost described below.
+//! `InputFrameStore::build_or_extend` used to rebuild every directed edge's
+//! frame storage on every call: for an edge whose sample count had not
+//! changed since the previous call, it eagerly copied every already-known
+//! sample out of the previous store into a fresh `Matrix` and back out again
+//! -- pure data movement with zero arithmetic, measured at 36.6% of total
+//! wall time at chi=256. It now decides per edge: an edge whose sample count
+//! is unchanged shares the previous store's `Rc<DirectedFrame<T>>`
+//! allocation directly, with no copy at all, and an old sample that some
+//! other (genuinely changed) edge's ancestor-priming recursion still needs
+//! to read is pulled lazily, one row at a time, instead of being
+//! pre-copied for every edge up front. Candidate/pivot-search
 //! frame contraction, and sample materialization
 //! (`from_samples`/`extend`) for single-incoming-edge nodes (which covers
 //! every node on a chain), route through a BLAS matrix-multiply primitive
