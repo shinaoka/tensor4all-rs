@@ -737,6 +737,7 @@ fn build_frame_builder<'a>(
         arena,
         cores,
         memo,
+        existing_frames: None,
     }
 }
 
@@ -1104,4 +1105,127 @@ fn compute_batch_falls_back_correctly_on_a_branch_edge() {
     // Sanity: this is a meaningful comparison, not a vacuous shape check --
     // the two samples' frames actually differ.
     assert_ne!(scalar_results[0], scalar_results[1]);
+}
+
+/// `FrameBuilder::compute`'s memo-miss path must check `existing_frames`
+/// (the previous store's frames for this same input) before falling through
+/// to a genuine `contract_prepared_core` computation -- this is the lazy-pull
+/// mechanism this task adds. Not yet wired into `build_or_extend` (that is a
+/// later task): this test constructs a `FrameBuilder` directly, mirroring
+/// `build_frame_builder`, but with `existing_frames` set and the grown
+/// edge's memo left as `None` for the old sample indices (not eagerly
+/// seeded, unlike `build_or_extend`'s current per-edge loop).
+///
+/// Reuses the exact fixture and seed sequence
+/// `extend_matches_a_full_rebuild_on_a_chain_with_a_batched_edge` uses (chain
+/// fixture, seed `[0,0,0]` then grown by `[1,0,0]` and `[0,1,0]`), so the
+/// growth shape here is already known to produce both an old sample and a
+/// genuinely new sample on directed edge `1 -> 2` whose own incoming sample
+/// (on edge `0 -> 1`) is itself already known -- letting a single
+/// `compute` call on the new sample cleanly isolate exactly one genuine
+/// `contract_prepared_core` invocation (the outer edge-1->2 record) from one
+/// lazy pull (the inner edge-0->1 incoming record), rather than conflating
+/// them.
+#[test]
+fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputing() {
+    let input = chain_tree_for_batched_compute();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .expect("chain must have a directed edge 1 -> 2");
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 1);
+
+    let seed0 = vec![0, 0, 0];
+    let (mut arena, mut candidates) =
+        SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let known = initial.frames[0][edge].sample_count;
+    assert!(
+        known > 0,
+        "the seed must already produce a sample on the batched edge, or `known` is vacuously 0"
+    );
+
+    for seed in [vec![1, 0, 0], vec![0, 1, 0]] {
+        arena
+            .inject_global_point(&mut candidates, &problem, &seed)
+            .expect("grow the arena with a new global point");
+    }
+    let grown_count = arena.directed_record_count(edge).unwrap();
+    assert!(
+        grown_count > known,
+        "growth must add new samples on the batched edge: known={known} grown={grown_count}"
+    );
+
+    // Build a second `FrameBuilder` directly, mirroring `build_frame_builder`
+    // / `build_or_extend`'s construction, but wiring `existing_frames` to the
+    // initial store's frames for input 0 and leaving the grown edge's memo
+    // as `None` for the old sample indices instead of eagerly seeding them.
+    let cores = Rc::new(super::prepare_cores::<f64, usize>(&input, &problem).unwrap());
+    let memo = problem
+        .directed_edges
+        .iter()
+        .enumerate()
+        .map(|(e, _)| {
+            let count = arena.directed_record_count(e).unwrap();
+            vec![None; count]
+        })
+        .collect::<Vec<_>>();
+    let mut builder = super::FrameBuilder {
+        input: &input,
+        problem: &problem,
+        arena: &arena,
+        cores,
+        memo,
+        existing_frames: Some(initial.frames[0].as_slice()),
+    };
+
+    super::debug_stats::reset();
+    let old_sample: usize = 0;
+    assert!(
+        old_sample < known,
+        "sample 0 on the batched edge must already have been known to the initial store"
+    );
+    let pulled = builder.compute(edge, old_sample).unwrap();
+    assert_eq!(
+        pulled,
+        initial.frame_values(0, edge, old_sample).unwrap(),
+        "a lazily-pulled sample must match the previous store's value for the same sample"
+    );
+    assert_eq!(
+        super::debug_stats::compute_calls(),
+        0,
+        "pulling an already-known sample from `existing_frames` must not invoke \
+         `contract_prepared_core`"
+    );
+
+    // A repeat read of the same sample must hit `self.memo` (populated as a
+    // side effect of the lazy pull above), not pull from `existing_frames`
+    // again -- either way it must not increment `compute_calls`.
+    let pulled_again = builder.compute(edge, old_sample).unwrap();
+    assert_eq!(pulled_again, pulled);
+    assert_eq!(super::debug_stats::compute_calls(), 0);
+
+    // A genuinely new sample -- one the initial store never saw -- must
+    // still be computed via `contract_prepared_core`, not silently skipped
+    // or treated as a lazy-pull miss.
+    let new_sample = grown_count - 1;
+    assert!(
+        new_sample >= known,
+        "test setup must pick a genuinely new sample: new_sample={new_sample} known={known}"
+    );
+    let computed = builder.compute(edge, new_sample).unwrap();
+    assert_eq!(
+        super::debug_stats::compute_calls(),
+        1,
+        "a genuinely new sample must increment compute_calls by exactly 1"
+    );
+    // Sanity: this is a meaningful comparison, not a vacuous shape check --
+    // the new sample's frame actually differs from the old one's.
+    assert_ne!(computed, pulled);
 }

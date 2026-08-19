@@ -232,6 +232,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 arena,
                 cores,
                 memo,
+                // Not wired up yet: `build_or_extend`'s per-edge loop still
+                // eagerly seeds `memo` above from `existing_input` (see the
+                // loop just above), so there is nothing new for a lazy pull
+                // to do here. Passing the previous store's frames through
+                // this field is a later task.
+                existing_frames: None,
             };
             for edge in 0..problem.directed_edges.len() {
                 let known = existing_input
@@ -611,6 +617,17 @@ where
     arena: &'a SampleArena,
     cores: Rc<Vec<PreparedCore<T>>>,
     memo: Vec<Vec<Option<Vec<T>>>>,
+    /// The previous `InputFrameStore`'s frames for this same input, indexed
+    /// by directed edge, when this builder is extending an existing store.
+    ///
+    /// `SampleArena` is append-only (see `samples.rs`): a sample already
+    /// interned when the previous store was built names exactly the same
+    /// component forever, so its frame row can be pulled directly from the
+    /// previous store's `Rc`-shared `DirectedFrame` (a single O(bond_dim)
+    /// copy via [`DirectedFrame::row`]) instead of recomputed via
+    /// `contract_prepared_core`. `None` for a from-scratch build, where there
+    /// is no previous store to pull from.
+    existing_frames: Option<&'a [Rc<DirectedFrame<T>>]>,
 }
 
 impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
@@ -621,6 +638,29 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             .and_then(|samples| samples.get(sample))
             .and_then(Clone::clone)
         {
+            return Ok(values);
+        }
+        // A sample already known to the previous store names exactly the
+        // same component (see `existing_frames`'s doc comment) -- pull its
+        // row directly instead of recomputing it, and memoize the pull so
+        // repeat reads within this builder don't pull twice. This must not
+        // record a `debug_stats` compute call: that counter tracks genuine
+        // `contract_prepared_core` invocations only (see
+        // `frames::tests::compute_pulls_already_known_samples_from_the_previous_store_without_recomputing`).
+        if let Some(values) = self
+            .existing_frames
+            .and_then(|frames| frames.get(edge))
+            .filter(|frame| sample < frame.sample_count)
+            .map(|frame| frame.row(sample))
+        {
+            let slot = self
+                .memo
+                .get_mut(edge)
+                .and_then(|samples| samples.get_mut(sample))
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "computed frame has no memoization slot",
+                })?;
+            *slot = Some(values.clone());
             return Ok(values);
         }
         #[cfg(test)]
