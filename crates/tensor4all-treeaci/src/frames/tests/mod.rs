@@ -1229,3 +1229,120 @@ fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputi
     // the new sample's frame actually differs from the old one's.
     assert_ne!(computed, pulled);
 }
+
+/// A directed edge whose sample count did not change since the previous store
+/// was built must come out of `extend` as the SAME `Rc<DirectedFrame<_>>`
+/// allocation, not a freshly rebuilt copy of an identical frame.
+///
+/// `extend_matches_a_full_rebuild_on_the_grown_arena` above pins the values
+/// and would still pass if every edge were rebuilt from scratch on every
+/// call, which is exactly the redundancy this checks against: at chi=256 the
+/// eager seed copy plus the reconstruction copy for unchanged edges measured
+/// 36.6% of total ACI wall time, all of it pure data movement.
+///
+/// Growth primitive: `SampleArena::project_point_onto_edge`, the narrowest
+/// one this crate has. Unlike `from_global_seeds` / `inject_global_point`
+/// (which project onto every directed edge and so touch every edge on the
+/// point's ancestor chains), it projects onto one directed edge and, through
+/// `project_component`'s recursion, only that edge's own ancestor chain. On
+/// the 5-node chain fixture, projecting onto `1 -> 0` walks
+/// `1->0, 2->1, 3->2, 4->3` and provably leaves the four opposite-direction
+/// edges `0->1, 1->2, 2->3, 3->4` untouched.
+#[test]
+fn extend_reuses_unchanged_edges_via_rc_instead_of_rebuilding_them() {
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let edge_count = problem.directed_edges.len();
+
+    let (mut arena, _candidates) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let counts_before: Vec<usize> = (0..edge_count)
+        .map(|edge| initial.frames[0][edge].sample_count)
+        .collect();
+
+    let leftward = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 0)
+        .expect("chain must have a directed edge 1 -> 0");
+    // Differs from the seed only at node 4, the far end of `1 -> 0`'s
+    // ancestor chain, so every edge on that chain gets a genuinely new
+    // component sample rather than deduplicating back onto the seed's.
+    arena
+        .project_point_onto_edge(&problem, leftward, &[0, 0, 0, 0, 1])
+        .expect("project a new point onto one directed edge's own ancestor chain");
+
+    let counts_after: Vec<usize> = (0..edge_count)
+        .map(|edge| arena.directed_record_count(edge).unwrap())
+        .collect();
+    let unchanged: Vec<usize> = (0..edge_count)
+        .filter(|&edge| counts_after[edge] == counts_before[edge])
+        .collect();
+    let grown: Vec<usize> = (0..edge_count)
+        .filter(|&edge| counts_after[edge] > counts_before[edge])
+        .collect();
+    assert_eq!(
+        grown.len(),
+        4,
+        "expected the four edges on `1 -> 0`'s ancestor chain to grow, got {grown:?}"
+    );
+    assert_eq!(
+        unchanged.len(),
+        4,
+        "expected the four opposite-direction edges to be untouched, got {unchanged:?}"
+    );
+    for &edge in &unchanged {
+        let arc = &problem.directed_edges[edge];
+        assert!(
+            arc.from < arc.to,
+            "the untouched edges must be exactly the rightward ones, but {} -> {} is untouched",
+            arc.from,
+            arc.to
+        );
+    }
+
+    let extended = initial
+        .extend(std::slice::from_ref(&input), &problem, &arena)
+        .expect("extend the store to the grown arena");
+    let rebuilt =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("rebuild from scratch on the grown arena");
+
+    for &edge in &unchanged {
+        assert!(
+            Rc::ptr_eq(&initial.frames[0][edge], &extended.frames[0][edge]),
+            "edge {edge} did not change, so extend must share the initial store's frame \
+             allocation via Rc instead of rebuilding it"
+        );
+    }
+    for &edge in &grown {
+        assert!(
+            !Rc::ptr_eq(&initial.frames[0][edge], &extended.frames[0][edge]),
+            "edge {edge} grew, so extend must produce a new frame covering the new samples"
+        );
+        assert_eq!(
+            extended.frames[0][edge].sample_count, counts_after[edge],
+            "a grown edge's rebuilt frame must cover every sample the arena now holds"
+        );
+    }
+
+    // Sharing must not cost correctness: every edge, old and new, still has
+    // to agree with a from-scratch rebuild on the grown arena.
+    for (edge, &count) in counts_after.iter().enumerate() {
+        for sample in 0..count {
+            assert_eq!(
+                extended.frame_values(0, edge, sample).unwrap(),
+                rebuilt.frame_values(0, edge, sample).unwrap(),
+                "edge {edge} sample {sample} disagrees between extend and full rebuild"
+            );
+        }
+    }
+    // ... and the accounting must still cover the shared edges, which are
+    // real retained memory this store's `frames` references.
+    assert_eq!(extended.records(), rebuilt.records());
+    assert_eq!(extended.retained_bytes(), rebuilt.retained_bytes());
+}

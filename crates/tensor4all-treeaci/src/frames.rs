@@ -194,6 +194,10 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         arena: &SampleArena,
         existing: Option<&Self>,
     ) -> Result<Self> {
+        let edge_count = problem.directed_edges.len();
+        let sample_counts = (0..edge_count)
+            .map(|edge| arena.directed_record_count(edge))
+            .collect::<Result<Vec<_>>>()?;
         let mut all_inputs = Vec::with_capacity(inputs.len());
         let mut all_cores = Vec::with_capacity(inputs.len());
         // `max_frame_elements` bounds one frame; this cache keeps one per input
@@ -209,50 +213,54 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 Some(cores) => Rc::clone(cores),
                 None => Rc::new(prepare_cores::<T, V>(input, problem)?),
             };
-            let memo = problem
-                .directed_edges
+            // Every directed edge gets a memo spine, including the ones this
+            // call will reuse wholesale: a grown edge's `compute_batch`
+            // priming recursion walks its ancestor chain regardless of
+            // whether those ancestor edges are themselves being rebuilt, and
+            // `FrameBuilder::compute` needs a slot to memoize each pulled or
+            // computed row into. A spine slot is one `Option<Vec<T>>`
+            // (a pointer triple), negligible next to the `bond_dim`-wide row
+            // it would hold; the reused edges' spines simply stay empty.
+            //
+            // What is deliberately NOT done here any more is the eager seed
+            // loop this function used to run: copying every already-known
+            // sample's row out of `existing_input` into `memo` up front, for
+            // every edge, on every call. That copy was measured at chi=256 to
+            // be 17.5% of total ACI wall time, all of it pure data movement.
+            // `existing_frames` below replaces it with a lazy pull that only
+            // fires for a row something actually reads.
+            let memo = sample_counts
                 .iter()
-                .enumerate()
-                .map(|(edge, _)| {
-                    let count = arena.directed_record_count(edge)?;
-                    let mut samples = vec![None; count];
-                    if let Some(previous) = existing_input.and_then(|frames| frames.get(edge)) {
-                        for (sample, slot) in
-                            samples.iter_mut().enumerate().take(previous.sample_count)
-                        {
-                            *slot = Some(previous.row(sample));
-                        }
-                    }
-                    Ok(samples)
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(|&count| vec![None; count])
+                .collect::<Vec<_>>();
             let mut builder = FrameBuilder {
                 input,
                 problem,
                 arena,
                 cores,
                 memo,
-                // Not wired up yet: `build_or_extend`'s per-edge loop still
-                // eagerly seeds `memo` above from `existing_input` (see the
-                // loop just above), so there is nothing new for a lazy pull
-                // to do here. Passing the previous store's frames through
-                // this field is a later task.
-                existing_frames: None,
+                existing_frames: existing_input.map(Vec::as_slice),
             };
-            for edge in 0..problem.directed_edges.len() {
-                let known = existing_input
-                    .and_then(|frames| frames.get(edge))
-                    .map(|frame| frame.sample_count)
-                    .unwrap_or(0);
-                builder.compute_batch(edge, known..builder.memo[edge].len())?;
-            }
-            let mut input_frames = Vec::with_capacity(problem.directed_edges.len());
-            let bond_dims = (0..problem.directed_edges.len())
+            let bond_dims = (0..edge_count)
                 .map(|edge| builder.outgoing_bond(edge).map(IndexLike::dim))
                 .collect::<Result<Vec<_>>>()?;
-            let memo = std::mem::take(&mut builder.memo);
-            for (edge, samples) in memo.into_iter().enumerate() {
-                let sample_count = samples.len();
+
+            // Pass 1: account for every edge (in edge-index order, so the
+            // running `retained_bytes` total and the point at which a
+            // resource limit trips are exactly what they were before this
+            // function was restructured), then either reuse the previous
+            // store's frame for that edge or materialize the samples it is
+            // missing.
+            //
+            // Results are written into a pre-sized, edge-indexed slot vector
+            // rather than pushed: the reuse decision happens here but
+            // reconstruction happens in pass 2 below, and two independent
+            // `push` sequences over two differently-filtered loops would
+            // interleave the two kinds of edge out of edge order.
+            let mut input_frames: Vec<Option<Rc<DirectedFrame<T>>>> = vec![None; edge_count];
+            let mut frame_elements = vec![0usize; edge_count];
+            for edge in 0..edge_count {
+                let sample_count = sample_counts[edge];
                 let bond_dim = bond_dims[edge];
                 let elements =
                     sample_count
@@ -260,6 +268,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                         .ok_or(TreeAciError::SizeOverflow {
                             context: "directed frame elements",
                         })?;
+                frame_elements[edge] = elements;
                 if elements > problem.max_frame_elements {
                     return Err(TreeAciError::ResourceLimit {
                         resource: "frame elements",
@@ -289,11 +298,52 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 records = records.checked_add(1).ok_or(TreeAciError::SizeOverflow {
                     context: "retained frame count",
                 })?;
-                let mut data = vec![T::default(); elements];
-                for (sample, values) in samples.into_iter().enumerate() {
-                    let values = values.ok_or(TreeAciError::InternalInvariant {
-                        message: "directed frame memoization left a sample uncomputed",
-                    })?;
+
+                let previous = existing_input.and_then(|frames| frames.get(edge));
+                let known = previous.map_or(0, |frame| frame.sample_count);
+                // `SampleArena` is append-only with immutable `SampleId`s (see
+                // `samples.rs`), so an unchanged sample count means an
+                // identical, identically-ordered sample set: the previous
+                // store's frame for this edge is already exactly the frame
+                // this store needs. Share it instead of recomputing or even
+                // re-copying it -- no `compute_batch` call, no memo fill, no
+                // fresh `Matrix`. The bytes/records accounted above still
+                // count: this store's `frames` genuinely retains them.
+                if let Some(previous) = previous.filter(|frame| frame.sample_count == sample_count)
+                {
+                    input_frames[edge] = Some(Rc::clone(previous));
+                    continue;
+                }
+                builder.compute_batch(edge, known..sample_count)?;
+            }
+
+            // Pass 2: rebuild only the edges pass 1 left empty (grown or
+            // brand new). Reused edges keep the `Rc` pass 1 put in their slot
+            // and are not touched.
+            for edge in 0..edge_count {
+                if input_frames[edge].is_some() {
+                    continue;
+                }
+                let sample_count = sample_counts[edge];
+                let bond_dim = bond_dims[edge];
+                let previous = existing_input.and_then(|frames| frames.get(edge));
+                let mut data = vec![T::default(); frame_elements[edge]];
+                for sample in 0..sample_count {
+                    // Samples at or above `known` were just materialized into
+                    // `memo` by pass 1's `compute_batch`. Samples below it are
+                    // in `memo` only if something read them -- an ancestor
+                    // priming recursion, which lazily pulls through
+                    // `existing_frames` -- so an untouched old sample is
+                    // pulled from the previous store right here instead.
+                    let values = match std::mem::take(&mut builder.memo[edge][sample]) {
+                        Some(values) => values,
+                        None => previous
+                            .filter(|frame| sample < frame.sample_count)
+                            .map(|frame| frame.row(sample))
+                            .ok_or(TreeAciError::InternalInvariant {
+                                message: "directed frame memoization left a sample uncomputed",
+                            })?,
+                    };
                     if values.len() != bond_dim {
                         return Err(TreeAciError::InternalInvariant {
                             message: "computed frame length differs from cut bond dimension",
@@ -303,13 +353,22 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                         data[sample + sample_count * bond] = value;
                     }
                 }
-                input_frames.push(Rc::new(DirectedFrame {
+                input_frames[edge] = Some(Rc::new(DirectedFrame {
                     sample_count,
                     bond_dim,
                     sample_ids: (0..sample_count).collect(),
                     values: Matrix::from_col_major_vec(sample_count, bond_dim, data),
                 }));
             }
+
+            let input_frames = input_frames
+                .into_iter()
+                .map(|frame| {
+                    frame.ok_or(TreeAciError::InternalInvariant {
+                        message: "directed frame reconstruction left an edge unfilled",
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             all_inputs.push(input_frames);
             all_cores.push(builder.cores);
         }
