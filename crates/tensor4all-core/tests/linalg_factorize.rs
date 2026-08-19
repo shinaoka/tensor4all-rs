@@ -1,11 +1,14 @@
 //! Tests for the unified factorize function.
 
+use num_complex::Complex64;
+use tensor4all_core::block_tensor::BlockTensor;
 use tensor4all_core::index::Index;
 use tensor4all_core::{
     factorize, factorize_full_rank, Canonical, DynIndex, FactorizeAlg, FactorizeError,
-    FactorizeOptions, TensorContractionLike,
+    FactorizeOptions, TensorContractionLike, TensorFactorizationLike,
 };
 use tensor4all_core::{IdxTensor, SvdTruncationPolicy};
+use tensor4all_tensorbackend::TensorElement;
 
 // ============================================================================
 // Test Data Helpers
@@ -53,6 +56,52 @@ fn create_non_symmetric_col_major_matrix() -> IdxTensor {
 // ============================================================================
 // Shared Test Helpers
 // ============================================================================
+
+#[test]
+fn factorize_auto_default_validates_and_delegates() {
+    let left = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(2);
+    let dense =
+        IdxTensor::from_dense(vec![left.clone(), right], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+    let block = BlockTensor::new(vec![dense], (1, 1)).unwrap();
+
+    assert!(matches!(
+        block.factorize_auto(std::slice::from_ref(&left), &FactorizeOptions::svd()),
+        Err(FactorizeError::ComputationError(_))
+    ));
+    assert!(matches!(
+        block.factorize_auto(&[left], &FactorizeOptions::qr()),
+        Err(FactorizeError::InvalidOptions(_))
+    ));
+}
+
+#[test]
+fn factorize_auto_matches_svd_for_safe_policy() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let tensor =
+        IdxTensor::from_dense(vec![i.clone(), j], vec![3.0_f64, 0.0, 0.0, 1.0e-3]).unwrap();
+    let options = FactorizeOptions::svd()
+        .with_svd_policy(SvdTruncationPolicy::new(1.0e-2))
+        .with_canonical(Canonical::Left);
+
+    let explicit = tensor
+        .factorize(std::slice::from_ref(&i), &options)
+        .unwrap();
+    let automatic = tensor.factorize_auto(&[i], &options).unwrap();
+
+    assert_eq!(automatic.rank, explicit.rank);
+    assert!(automatic
+        .left
+        .contract_pair(&automatic.right)
+        .unwrap()
+        .isapprox(
+            &explicit.left.contract_pair(&explicit.right).unwrap(),
+            1.0e-10,
+            0.0,
+        )
+        .unwrap());
+}
 
 /// Test factorization with given options and verify reconstruction.
 fn test_factorize_reconstruction(options: &FactorizeOptions) {
@@ -165,6 +214,245 @@ fn test_factorize_svd_rank3() {
 
     let reconstructed = result.left.contract_pair(&result.right).unwrap();
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+}
+
+#[test]
+fn factorize_auto_matches_explicit_svd_for_all_policies_and_shapes() {
+    let policies = [
+        SvdTruncationPolicy::new(5.0e-2),
+        SvdTruncationPolicy::new(5.0e-2).with_discarded_tail_sum(),
+        SvdTruncationPolicy::new(5.0e-2).with_squared_values(),
+        SvdTruncationPolicy::new(5.0e-2)
+            .with_squared_values()
+            .with_discarded_tail_sum(),
+        SvdTruncationPolicy::new(5.0e-2).with_absolute(),
+        SvdTruncationPolicy::new(5.0e-2)
+            .with_absolute()
+            .with_discarded_tail_sum(),
+        SvdTruncationPolicy::new(5.0e-2)
+            .with_absolute()
+            .with_squared_values(),
+        SvdTruncationPolicy::new(5.0e-2)
+            .with_absolute()
+            .with_squared_values()
+            .with_discarded_tail_sum(),
+    ];
+
+    for (m, n, data) in [
+        (
+            4,
+            3,
+            vec![10.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1],
+        ),
+        (
+            3,
+            4,
+            vec![10.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1],
+        ),
+    ] {
+        let left = DynIndex::new_dyn(m);
+        let right = DynIndex::new_dyn(n);
+        let tensor = IdxTensor::from_dense(vec![left.clone(), right], data).unwrap();
+        for canonical in [Canonical::Left, Canonical::Right] {
+            for policy in policies {
+                let options = FactorizeOptions::svd()
+                    .with_canonical(canonical)
+                    .with_svd_policy(policy);
+                let explicit = tensor
+                    .factorize(std::slice::from_ref(&left), &options)
+                    .unwrap();
+                let automatic = tensor
+                    .factorize_auto(std::slice::from_ref(&left), &options)
+                    .unwrap();
+                assert_eq!(automatic.rank, explicit.rank);
+                let explicit_reconstructed = explicit.left.contract_pair(&explicit.right).unwrap();
+                let automatic_reconstructed =
+                    automatic.left.contract_pair(&automatic.right).unwrap();
+                assert_tensors_approx_equal(
+                    &explicit_reconstructed,
+                    &automatic_reconstructed,
+                    1.0e-10,
+                );
+                assert!(
+                    tensor
+                        .sub(&automatic_reconstructed)
+                        .unwrap()
+                        .maxabs()
+                        .unwrap()
+                        <= 1.1
+                );
+                assert_canonical::<f64>(&automatic, canonical, 1.0e-10);
+            }
+        }
+    }
+
+    for (m, n, data) in [
+        (
+            4,
+            2,
+            vec![
+                Complex64::new(10.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.5),
+                Complex64::new(0.0, 0.0),
+            ],
+        ),
+        (
+            2,
+            4,
+            vec![
+                Complex64::new(10.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.5),
+                Complex64::new(0.0, 0.0),
+            ],
+        ),
+    ] {
+        let left = DynIndex::new_dyn(m);
+        let right = DynIndex::new_dyn(n);
+        let tensor = IdxTensor::from_dense(vec![left.clone(), right], data).unwrap();
+        for canonical in [Canonical::Left, Canonical::Right] {
+            let options = FactorizeOptions::svd()
+                .with_canonical(canonical)
+                .with_svd_policy(SvdTruncationPolicy::new(5.0e-2));
+            let explicit = tensor
+                .factorize(std::slice::from_ref(&left), &options)
+                .unwrap();
+            let automatic = tensor
+                .factorize_auto(std::slice::from_ref(&left), &options)
+                .unwrap();
+            assert_eq!(automatic.rank, explicit.rank);
+            let explicit_reconstructed = explicit.left.contract_pair(&explicit.right).unwrap();
+            let automatic_reconstructed = automatic.left.contract_pair(&automatic.right).unwrap();
+            assert_tensors_approx_equal(&explicit_reconstructed, &automatic_reconstructed, 1.0e-10);
+            assert!(
+                tensor
+                    .sub(&automatic_reconstructed)
+                    .unwrap()
+                    .maxabs()
+                    .unwrap()
+                    <= 1.1
+            );
+            assert_canonical::<Complex64>(&automatic, canonical, 1.0e-10);
+        }
+    }
+}
+
+#[test]
+fn factorize_auto_respects_cap_zero_and_rank_deficiency() {
+    let i = DynIndex::new_dyn(3);
+    let j = DynIndex::new_dyn(3);
+    let rank_one = IdxTensor::from_dense(
+        vec![i.clone(), j.clone()],
+        vec![3.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let options = FactorizeOptions::svd()
+        .with_svd_policy(SvdTruncationPolicy::new(1.0e-2))
+        .with_max_bond_dim(2);
+    let result = rank_one
+        .factorize_auto(std::slice::from_ref(&i), &options)
+        .unwrap();
+    assert_eq!(result.rank, 1);
+    assert_tensors_approx_equal(
+        &rank_one,
+        &result.left.contract_pair(&result.right).unwrap(),
+        1.0e-10,
+    );
+
+    let capped = IdxTensor::from_dense(
+        vec![i.clone(), j.clone()],
+        vec![3.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let capped_options = FactorizeOptions::svd()
+        .with_svd_policy(SvdTruncationPolicy::new(1.0e-6))
+        .with_max_bond_dim(2);
+    assert_eq!(
+        capped
+            .factorize_auto(std::slice::from_ref(&i), &capped_options)
+            .unwrap()
+            .rank,
+        2
+    );
+
+    let zero = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![0.0; 9]).unwrap();
+    for canonical in [Canonical::Left, Canonical::Right] {
+        let result = zero
+            .factorize_auto(
+                std::slice::from_ref(&i),
+                &FactorizeOptions::svd()
+                    .with_canonical(canonical)
+                    .with_svd_policy(SvdTruncationPolicy::new(1.0e-2)),
+            )
+            .unwrap();
+        assert_eq!(result.rank, 1);
+        assert_tensors_approx_equal(
+            &zero,
+            &result.left.contract_pair(&result.right).unwrap(),
+            1.0e-12,
+        );
+        assert_canonical::<f64>(&result, canonical, 1.0e-12);
+    }
+}
+
+#[test]
+fn factorize_auto_gate_is_strict_and_preserves_tracked_ad() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let tensor =
+        IdxTensor::from_dense(vec![i.clone(), j], vec![2.0_f64, 0.0, 0.0, 1.0e-3]).unwrap();
+
+    let squared_boundary = FactorizeOptions::svd()
+        .with_svd_policy(SvdTruncationPolicy::new(1.0e-12).with_squared_values());
+    let value_boundary = FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1.0e-6));
+    assert_eq!(
+        tensor
+            .factorize_auto(std::slice::from_ref(&i), &squared_boundary)
+            .unwrap()
+            .rank,
+        tensor
+            .factorize(std::slice::from_ref(&i), &squared_boundary)
+            .unwrap()
+            .rank
+    );
+    assert_eq!(
+        tensor
+            .factorize_auto(std::slice::from_ref(&i), &value_boundary)
+            .unwrap()
+            .rank,
+        tensor
+            .factorize(std::slice::from_ref(&i), &value_boundary)
+            .unwrap()
+            .rank
+    );
+
+    let tracked = tensor.clone().enable_grad().unwrap();
+    let tracked_result = tracked.factorize_auto(
+        std::slice::from_ref(&i),
+        &FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1.0e-2)),
+    );
+    assert!(tracked_result.is_ok());
+    assert!(tracked_result.unwrap().left.tracks_grad());
+
+    let mut invalid = FactorizeOptions::qr();
+    assert!(matches!(
+        tensor.factorize_auto(&[i], &invalid),
+        Err(FactorizeError::InvalidOptions(_))
+    ));
+    invalid.alg = FactorizeAlg::LU;
+    assert!(matches!(
+        tensor.factorize_auto(&[DynIndex::new_dyn(2)], &invalid),
+        Err(FactorizeError::InvalidOptions(_))
+    ));
 }
 
 // ============================================================================
@@ -385,6 +673,76 @@ fn test_diag_dense_contraction_svd_internals() {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+trait TestScalar:
+    TensorElement + Copy + Default + std::ops::Add<Output = Self> + std::ops::Mul<Output = Self>
+{
+    fn conjugate(self) -> Self;
+    fn distance_from(self, target: f64) -> f64;
+}
+
+impl TestScalar for f64 {
+    fn conjugate(self) -> Self {
+        self
+    }
+
+    fn distance_from(self, target: f64) -> f64 {
+        (self - target).abs()
+    }
+}
+
+impl TestScalar for Complex64 {
+    fn conjugate(self) -> Self {
+        self.conj()
+    }
+
+    fn distance_from(self, target: f64) -> f64 {
+        (self - Complex64::new(target, 0.0)).norm()
+    }
+}
+
+fn assert_canonical<T: TestScalar>(
+    result: &tensor4all_core::FactorizeResult<IdxTensor>,
+    canonical: Canonical,
+    tol: f64,
+) {
+    match canonical {
+        Canonical::Left => {
+            let dims = result.left.dims();
+            let rows = dims[0];
+            let rank = dims[1];
+            let data = result.left.to_vec::<T>().unwrap();
+            for a in 0..rank {
+                for b in 0..rank {
+                    let value = (0..rows).fold(T::default(), |sum, row| {
+                        sum + data[row + rows * a].conjugate() * data[row + rows * b]
+                    });
+                    assert!(
+                        value.distance_from((a == b) as usize as f64) < tol,
+                        "left canonical Gram entry ({a}, {b}) was not orthonormal"
+                    );
+                }
+            }
+        }
+        Canonical::Right => {
+            let dims = result.right.dims();
+            let rank = dims[0];
+            let columns = dims[1];
+            let data = result.right.to_vec::<T>().unwrap();
+            for a in 0..rank {
+                for b in 0..rank {
+                    let value = (0..columns).fold(T::default(), |sum, column| {
+                        sum + data[a + rank * column] * data[b + rank * column].conjugate()
+                    });
+                    assert!(
+                        value.distance_from((a == b) as usize as f64) < tol,
+                        "right canonical Gram entry ({a}, {b}) was not orthonormal"
+                    );
+                }
+            }
+        }
+    }
+}
 
 fn assert_tensors_approx_equal(a: &IdxTensor, b: &IdxTensor, tol: f64) {
     assert!(

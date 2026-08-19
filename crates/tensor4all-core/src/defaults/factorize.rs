@@ -34,7 +34,7 @@
 
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
-use crate::{contract_pair, unfold_split, IdxTensor};
+use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor};
 use crate::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use anyhow::Result as AnyhowResult;
 use num_complex::{Complex64, ComplexFloat};
@@ -42,9 +42,13 @@ use tenferro_ad::EagerTensor;
 use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
-use crate::defaults::svd::svd_for_factorize;
+use crate::defaults::svd::{compute_retained_rank, svd_for_factorize};
 use crate::qr::{qr_with, QrOptions};
 use crate::svd::SvdOptions;
+use crate::truncation::{
+    validate_svd_truncation_policy, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
+    TruncationRule,
+};
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{
@@ -106,6 +110,245 @@ pub fn factorize(
             "factorize currently supports only f64 and Complex64 tensors",
         ))
     }
+}
+
+/// Select Gram eigendecomposition for safe untracked SVD truncations.
+///
+/// This is intentionally crate-visible: the public entry point is the
+/// [`TensorFactorizationLike::factorize_auto`] method.
+pub(crate) fn factorize_auto(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg != FactorizeAlg::SVD {
+        return Err(FactorizeError::InvalidOptions(
+            "automatic factorization only supports SVD options",
+        ));
+    }
+    options.validate()?;
+
+    let Some(policy) = options.svd_policy else {
+        return factorize(t, left_inds, options);
+    };
+    validate_svd_truncation_policy(policy).map_err(|error| FactorizeError::InvalidRtol(error.0))?;
+
+    let effective_cutoff = match (policy.scale, policy.measure, policy.rule) {
+        (ThresholdScale::Relative, SingularValueMeasure::SquaredValue, _) => policy.threshold,
+        (ThresholdScale::Relative, SingularValueMeasure::Value, TruncationRule::PerValue) => {
+            policy.threshold * policy.threshold
+        }
+        _ => 0.0,
+    };
+    if effective_cutoff <= 1.0e-12 || t.tracks_grad() || t.is_diag() {
+        return factorize(t, left_inds, options);
+    }
+    if !(t.is_f64() || t.is_c64()) {
+        return factorize(t, left_inds, options);
+    }
+
+    factorize_gram(t, left_inds, options, policy).or_else(|_| factorize(t, left_inds, options))
+}
+
+fn factorize_gram(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    policy: SvdTruncationPolicy,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
+    if m == 0 || n == 0 {
+        return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "cannot factorize a matrix with an empty dimension"
+        )));
+    }
+
+    let row = DynIndex::new_dyn(m);
+    let column = DynIndex::new_dyn(n);
+    let matrix = IdxTensor::from_inner(vec![row.clone(), column.clone()], matrix_inner)
+        .map_err(FactorizeError::ComputationError)?;
+
+    // Form the smaller Gram tensor directly through the native contraction
+    // path. No rectangular host Matrix or Matrix↔backend round-trip is needed.
+    let eigenvectors_left = m <= n;
+    let gram = if eigenvectors_left {
+        let sim_row = DynIndex::new_dyn(m);
+        let adjoint = matrix
+            .conj()
+            .replaceind(&row, &sim_row)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        contract_pair(&matrix, &adjoint)
+    } else {
+        let sim_column = DynIndex::new_dyn(n);
+        let adjoint = matrix
+            .conj()
+            .replaceind(&column, &sim_column)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        contract_pair(&adjoint, &matrix)
+    }
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let decomposition = gram
+        .hermitian_eigendecomposition(1.0e-12)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+
+    let lambda_scale = decomposition
+        .eigenvalues
+        .iter()
+        .map(|lambda| lambda.abs())
+        .fold(0.0_f64, f64::max);
+    if lambda_scale == 0.0 {
+        return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "zero Gram matrix uses the SVD fallback"
+        )));
+    }
+    let negative_tolerance = 1.0e-12 * lambda_scale;
+    let mut eigenpairs: Vec<(f64, usize)> = decomposition
+        .eigenvalues
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(column, mut lambda)| {
+            if !lambda.is_finite() {
+                return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                    "Gram eigendecomposition returned a non-finite eigenvalue"
+                )));
+            }
+            if lambda < -negative_tolerance {
+                return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                    "Gram eigendecomposition returned a materially negative eigenvalue"
+                )));
+            }
+            if lambda < 0.0 {
+                lambda = 0.0;
+            }
+            Ok((lambda, column))
+        })
+        .collect::<Result<_, _>>()?;
+    eigenpairs.sort_by(|(left, _), (right, _)| right.total_cmp(left));
+
+    let all_singular_values: Vec<f64> =
+        eigenpairs.iter().map(|(lambda, _)| lambda.sqrt()).collect();
+    let mut rank = compute_retained_rank(&all_singular_values, &policy);
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        rank = rank.min(max_bond_dim);
+    }
+    rank = rank.max(1).min(m.min(n));
+    let singular_values = all_singular_values[..rank].to_vec();
+    if singular_values.contains(&0.0) {
+        return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "zero retained singular value uses the SVD fallback"
+        )));
+    }
+
+    let retained_columns: Vec<usize> = eigenpairs
+        .iter()
+        .take(rank)
+        .map(|(_, column)| *column)
+        .collect();
+    let basis_inner = decomposition
+        .eigenvectors
+        .as_inner()
+        .map_err(FactorizeError::ComputationError)?
+        .take_cols(&retained_columns)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let bond_index = DynIndex::new_bond(rank)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
+    let basis_index = if eigenvectors_left {
+        row.clone()
+    } else {
+        column.clone()
+    };
+    let basis = IdxTensor::from_inner(vec![basis_index, bond_index.clone()], basis_inner)
+        .map_err(FactorizeError::ComputationError)?;
+
+    let (left_matrix, right_matrix) = if eigenvectors_left {
+        let sigma_vh = contract_pair(&basis.conj(), &matrix)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+            .permute_indices(&[bond_index.clone(), column.clone()])
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        match options.canonical {
+            Canonical::Left => (basis, sigma_vh),
+            Canonical::Right => {
+                let inverse: Vec<f64> = singular_values.iter().map(|sigma| 1.0 / sigma).collect();
+                (
+                    scale_bond(&basis, &bond_index, &singular_values)?,
+                    scale_bond(&sigma_vh, &bond_index, &inverse)?,
+                )
+            }
+        }
+    } else {
+        let u_sigma = contract_pair(&matrix, &basis)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+            .permute_indices(&[row.clone(), bond_index.clone()])
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let vh = basis
+            .conj()
+            .permute_indices(&[bond_index.clone(), column.clone()])
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        match options.canonical {
+            Canonical::Right => (u_sigma, vh),
+            Canonical::Left => {
+                let inverse: Vec<f64> = singular_values.iter().map(|sigma| 1.0 / sigma).collect();
+                (
+                    scale_bond(&u_sigma, &bond_index, &inverse)?,
+                    scale_bond(&vh, &bond_index, &singular_values)?,
+                )
+            }
+        }
+    };
+
+    let mut output_left_indices = left_indices;
+    output_left_indices.push(bond_index.clone());
+    let left = reshape_factor(left_matrix, output_left_indices)?;
+    let mut output_right_indices = vec![bond_index.clone()];
+    output_right_indices.extend(right_indices);
+    let right = reshape_factor(right_matrix, output_right_indices)?;
+
+    Ok(FactorizeResult {
+        left,
+        right,
+        bond_index,
+        singular_values: Some(singular_values),
+        rank,
+    })
+}
+
+fn scale_bond(
+    tensor: &IdxTensor,
+    bond: &DynIndex,
+    values: &[f64],
+) -> Result<IdxTensor, FactorizeError> {
+    let temporary = DynIndex::new_bond(values.len())
+        .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
+    let diagonal_values = values
+        .iter()
+        .map(|value| {
+            if tensor.is_complex() {
+                AnyScalar::new_complex(*value, 0.0)
+            } else {
+                AnyScalar::new_real(*value)
+            }
+        })
+        .collect();
+    let diagonal = IdxTensor::from_diag_any(vec![bond.clone(), temporary.clone()], diagonal_values)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    contract_pair(tensor, &diagonal)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+        .replaceind(&temporary, bond)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+        .permute_indices(tensor.indices())
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+}
+
+fn reshape_factor(tensor: IdxTensor, indices: Vec<DynIndex>) -> Result<IdxTensor, FactorizeError> {
+    let dims: Vec<usize> = indices.iter().map(|index| index.dim).collect();
+    let inner = tensor
+        .as_inner()
+        .map_err(FactorizeError::ComputationError)?
+        .reshape(&dims)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    IdxTensor::from_inner(indices, inner).map_err(FactorizeError::ComputationError)
 }
 
 /// Factorize a tensor without applying algorithm-specific truncation options.

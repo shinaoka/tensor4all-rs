@@ -5436,6 +5436,14 @@ impl TensorFactorizationLike for IdxTensor {
         crate::factorize::factorize(self, left_inds, options)
     }
 
+    fn factorize_auto(
+        &self,
+        left_inds: &[DynIndex],
+        options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_auto(self, left_inds, options)
+    }
+
     fn factorize_full_rank(
         &self,
         left_inds: &[DynIndex],

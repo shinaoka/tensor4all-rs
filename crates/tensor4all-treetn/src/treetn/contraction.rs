@@ -32,6 +32,24 @@ fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
     tensor4all_core::index_ops::unique_inds(indices, excluded)
 }
 
+fn zipup_factorize_options(
+    canonical: Canonical,
+    svd_policy: Option<SvdTruncationPolicy>,
+    max_bond_dim: Option<usize>,
+) -> Result<FactorizeOptions> {
+    let mut options = FactorizeOptions::svd().with_canonical(canonical);
+    if let Some(max_bond_dim) = max_bond_dim {
+        options = options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = svd_policy {
+        options = options.with_svd_policy(policy);
+    }
+    options
+        .validate()
+        .map_err(|err| anyhow::anyhow!("invalid zipup factorization options: {err}"))?;
+    Ok(options)
+}
+
 impl<T, V> TreeTN<T, V>
 where
     T: TensorLike,
@@ -363,6 +381,390 @@ where
         )
     }
 
+    fn chain_order(&self, center: &V) -> Option<Vec<V>>
+    where
+        V: Ord,
+    {
+        let graph = self.graph.graph();
+        let node_count = graph.node_count();
+        if node_count == 0 || self.node_index(center).is_none() {
+            return None;
+        }
+        if node_count == 1 {
+            return Some(vec![center.clone()]);
+        }
+        if graph.edge_count() != node_count - 1 {
+            return None;
+        }
+
+        let mut endpoints: Vec<(NodeIndex, V)> = graph
+            .node_indices()
+            .filter(|node| graph.neighbors_undirected(*node).count() == 1)
+            .filter_map(|node| self.graph.node_name(node).cloned().map(|name| (node, name)))
+            .collect();
+        if endpoints.len() != 2 {
+            return None;
+        }
+        endpoints.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        let (start, end) = if center == &endpoints[0].1 {
+            (endpoints[1].0, endpoints[0].0)
+        } else {
+            (endpoints[0].0, endpoints[1].0)
+        };
+
+        let mut path = Vec::with_capacity(node_count);
+        let mut previous = None;
+        let mut current = start;
+        loop {
+            path.push(self.graph.node_name(current)?.clone());
+            if current == end {
+                break;
+            }
+            let next = graph
+                .neighbors_undirected(current)
+                .find(|node| Some(*node) != previous)?;
+            previous = Some(current);
+            current = next;
+            if path.len() > node_count {
+                return None;
+            }
+        }
+        (path.len() == node_count).then_some(path)
+    }
+
+    // Inspired by ITensorMPS.jl v0.3.45, commit 794c97d, src/mpo.jl;
+    // independently implemented via Rust APIs.
+    fn contract_zipup_chain(
+        &self,
+        other: &Self,
+        center: &V,
+        chain: &[V],
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        topology_mode: ZipupTopologyMode,
+    ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        let node_count = chain.len();
+        if node_count == 0 {
+            return Err(anyhow::anyhow!("contract_zipup: empty chain"));
+        }
+
+        // Put both operands in exact QR form at the first sweep site before
+        // changing their internal indices. This keeps the zip-up remainder
+        // well-conditioned without altering either caller-owned operand.
+        let mut tn_a = self.clone();
+        let mut tn_b = other.clone();
+        tn_a.canonicalize_impl(
+            [chain[0].clone()],
+            CanonicalForm::Unitary,
+            "contract_zipup: first operand QR",
+        )?;
+        tn_b.canonicalize_impl(
+            [chain[0].clone()],
+            CanonicalForm::Unitary,
+            "contract_zipup: second operand QR",
+        )?;
+        let tn_a = tn_a.sim_internal_inds();
+        let tn_b = tn_b.sim_internal_inds();
+
+        if node_count == 1 {
+            let node_a = tn_a
+                .node_index(&chain[0])
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: single node missing"))?;
+            let node_b = tn_b
+                .node_index(&chain[0])
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: single node missing"))?;
+            let tensor_a = tn_a
+                .tensor(node_a)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: single tensor missing"))?;
+            let tensor_b = tn_b
+                .tensor(node_b)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: single tensor missing"))?;
+            let contracted = tensor_a.contract_pair(tensor_b)?;
+            let mut result = TreeTN::new();
+            result.add_tensor(chain[0].clone(), contracted)?;
+            result.set_canonical_region([center.clone()])?;
+            return Ok(result);
+        }
+
+        let factorize_left = zipup_factorize_options(Canonical::Left, svd_policy, max_bond_dim)?;
+        let factorize_right = zipup_factorize_options(Canonical::Right, svd_policy, max_bond_dim)?;
+        let mut remainder: Option<T> = None;
+        let mut result_tensors: HashMap<V, T> = HashMap::new();
+        let mut result_bonds: Vec<Option<T::Index>> = vec![None; node_count - 1];
+
+        // Contract and factorize all but the final two sites. The multi-tensor
+        // planner owns the order of R + A + B.
+        for site in 0..node_count.saturating_sub(2) {
+            let node = &chain[site];
+            let next = &chain[site + 1];
+            let node_a = tn_a.node_index(node).ok_or_else(|| {
+                anyhow::anyhow!("contract_zipup: node missing from first operand")
+            })?;
+            let node_b = tn_b.node_index(node).ok_or_else(|| {
+                anyhow::anyhow!("contract_zipup: node missing from second operand")
+            })?;
+            let tensor_a = tn_a
+                .tensor(node_a)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: first site tensor missing"))?;
+            let tensor_b = tn_b
+                .tensor(node_b)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: second site tensor missing"))?;
+            let right_a = tn_a
+                .edge_between(node, next)
+                .and_then(|edge| tn_a.bond_index(edge))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: first site bond missing"))?;
+            let right_b = tn_b
+                .edge_between(node, next)
+                .and_then(|edge| tn_b.bond_index(edge))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: second site bond missing"))?;
+
+            let contracted = if let Some(ref remainder) = remainder {
+                T::contract(&[remainder, tensor_a, tensor_b])
+                    .context("contract_zipup: site contraction failed")?
+            } else {
+                tensor_a
+                    .contract_pair(tensor_b)
+                    .context("contract_zipup: first site contraction failed")?
+            };
+            let left_inds =
+                indices_except_exact(&contracted.external_indices(), &[right_a, right_b]);
+
+            if left_inds.is_empty() {
+                match topology_mode {
+                    ZipupTopologyMode::PruneScalarSubtrees => {
+                        remainder = Some(contracted);
+                    }
+                    ZipupTopologyMode::PreserveInputTopology => {
+                        let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+                        let left_tensor = T::ones(std::slice::from_ref(&dummy_left))
+                            .context("contract_zipup: dummy left tensor failed")?;
+                        let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
+                            .context("contract_zipup: dummy right tensor failed")?;
+                        let right_tensor = contracted
+                            .outer_product(&dummy_right_tensor)
+                            .context("contract_zipup: dummy bond failed")?;
+                        result_tensors.insert(node.clone(), left_tensor);
+                        result_bonds[site] = Some(dummy_left);
+                        remainder = Some(right_tensor);
+                    }
+                }
+                continue;
+            }
+
+            let factorized = contracted
+                .factorize_auto(&left_inds, &factorize_left)
+                .context("contract_zipup: site factorization failed")?;
+            result_bonds[site] = Some(factorized.bond_index.clone());
+            result_tensors.insert(node.clone(), factorized.left);
+            remainder = Some(factorized.right);
+        }
+
+        // Contract the final two sites as one block, then factorize once. This
+        // is the ITensorMPS schedule and leaves the numerical center at the
+        // penultimate site before the final center reconciliation below.
+        let penultimate = &chain[node_count - 2];
+        let last = &chain[node_count - 1];
+        let penultimate_a = tn_a
+            .node_index(penultimate)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: penultimate node missing"))?;
+        let penultimate_b = tn_b
+            .node_index(penultimate)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: penultimate node missing"))?;
+        let last_a = tn_a
+            .node_index(last)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: last node missing"))?;
+        let last_b = tn_b
+            .node_index(last)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: last node missing"))?;
+        let penultimate_tensor_a = tn_a
+            .tensor(penultimate_a)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: penultimate tensor missing"))?;
+        let penultimate_tensor_b = tn_b
+            .tensor(penultimate_b)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: penultimate tensor missing"))?;
+        let last_tensor_a = tn_a
+            .tensor(last_a)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: last tensor missing"))?;
+        let last_tensor_b = tn_b
+            .tensor(last_b)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: last tensor missing"))?;
+        let final_block = if let Some(ref remainder) = remainder {
+            T::contract(&[
+                remainder,
+                penultimate_tensor_a,
+                penultimate_tensor_b,
+                last_tensor_a,
+                last_tensor_b,
+            ])
+            .context("contract_zipup: final block contraction failed")?
+        } else {
+            let block_a = penultimate_tensor_a
+                .contract_pair(last_tensor_a)
+                .context("contract_zipup: first final operand failed")?;
+            let block_b = penultimate_tensor_b
+                .contract_pair(last_tensor_b)
+                .context("contract_zipup: second final operand failed")?;
+            block_a
+                .contract_pair(&block_b)
+                .context("contract_zipup: final operand contraction failed")?
+        };
+        let final_indices = final_block.external_indices();
+        let last_sites: HashSet<T::Index> = tn_a
+            .site_space(last)
+            .into_iter()
+            .flatten()
+            .chain(tn_b.site_space(last).into_iter().flatten())
+            .cloned()
+            .collect();
+        let left_inds: Vec<T::Index> = final_indices
+            .iter()
+            .filter(|index| !last_sites.contains(*index))
+            .cloned()
+            .collect();
+        let right_inds_exist = final_indices.iter().any(|index| last_sites.contains(index));
+
+        if left_inds.is_empty() || !right_inds_exist {
+            match topology_mode {
+                ZipupTopologyMode::PruneScalarSubtrees => {
+                    result_tensors.insert(
+                        if left_inds.is_empty() {
+                            last.clone()
+                        } else {
+                            penultimate.clone()
+                        },
+                        final_block,
+                    );
+                }
+                ZipupTopologyMode::PreserveInputTopology => {
+                    let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+                    let (left_tensor, right_tensor) = if left_inds.is_empty() {
+                        let left = T::ones(std::slice::from_ref(&dummy_left))
+                            .context("contract_zipup: final dummy left failed")?;
+                        let right_dummy = T::ones(std::slice::from_ref(&dummy_right))
+                            .context("contract_zipup: final dummy right failed")?;
+                        (
+                            left,
+                            final_block
+                                .outer_product(&right_dummy)
+                                .context("contract_zipup: final dummy bond failed")?,
+                        )
+                    } else {
+                        let left_dummy = T::ones(std::slice::from_ref(&dummy_left))
+                            .context("contract_zipup: final dummy left failed")?;
+                        let right = T::ones(std::slice::from_ref(&dummy_right))
+                            .context("contract_zipup: final dummy right failed")?;
+                        (
+                            final_block
+                                .outer_product(&left_dummy)
+                                .context("contract_zipup: final dummy bond failed")?,
+                            right,
+                        )
+                    };
+                    result_tensors.insert(penultimate.clone(), left_tensor);
+                    result_tensors.insert(last.clone(), right_tensor);
+                    result_bonds[node_count - 2] = Some(dummy_left);
+                }
+            }
+        } else {
+            let factorized = final_block
+                .factorize_auto(&left_inds, &factorize_right)
+                .context("contract_zipup: final block factorization failed")?;
+            result_bonds[node_count - 2] = Some(factorized.bond_index);
+            result_tensors.insert(penultimate.clone(), factorized.left);
+            result_tensors.insert(last.clone(), factorized.right);
+        }
+
+        let mut result = TreeTN::new();
+        for node in chain {
+            if let Some(tensor) = result_tensors.remove(node) {
+                result.add_tensor(node.clone(), tensor)?;
+            }
+        }
+        for (site, bond) in result_bonds.into_iter().enumerate() {
+            let Some(bond) = bond else { continue };
+            let Some(left) = result.node_index(&chain[site]) else {
+                continue;
+            };
+            let Some(right) = result.node_index(&chain[site + 1]) else {
+                continue;
+            };
+            if result
+                .tensor(left)
+                .is_some_and(|tensor| tensor.external_indices().contains(&bond))
+                && result
+                    .tensor(right)
+                    .is_some_and(|tensor| tensor.external_indices().contains(&bond))
+            {
+                result.connect_internal(left, &bond, right, &bond)?;
+            }
+        }
+
+        let seed = if result.node_index(penultimate).is_some() {
+            penultimate.clone()
+        } else if result.node_index(center).is_some() {
+            center.clone()
+        } else {
+            result
+                .node_names()
+                .into_iter()
+                .min()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: result has no nodes"))?
+        };
+        result.set_canonical_region([seed.clone()])?;
+
+        let seed_pos = chain.iter().position(|node| node == &seed);
+        let directions: Vec<_> = result
+            .graph
+            .graph()
+            .edge_indices()
+            .filter_map(|edge| {
+                let (a, b) = result.graph.graph().edge_endpoints(edge)?;
+                let a_name = result.graph.node_name(a)?.clone();
+                let b_name = result.graph.node_name(b)?.clone();
+                let a_pos = chain.iter().position(|node| node == &a_name)?;
+                let b_pos = chain.iter().position(|node| node == &b_name)?;
+                let target = match seed_pos {
+                    Some(seed_pos)
+                        if (a_pos as isize - seed_pos as isize).abs()
+                            < (b_pos as isize - seed_pos as isize).abs() =>
+                    {
+                        a_name
+                    }
+                    _ => b_name,
+                };
+                Some((edge, target))
+            })
+            .collect();
+        for (edge, target) in directions {
+            result.set_edge_ortho_towards(edge, Some(target))?;
+        }
+
+        if result.node_index(center).is_some() {
+            match topology_mode {
+                ZipupTopologyMode::PruneScalarSubtrees => result.truncate_impl(
+                    [center.clone()],
+                    svd_policy,
+                    max_bond_dim,
+                    "contract_zipup: final truncate",
+                )?,
+                ZipupTopologyMode::PreserveInputTopology => result.canonicalize_impl(
+                    [center.clone()],
+                    CanonicalForm::Unitary,
+                    "contract_zipup: move center",
+                )?,
+            }
+        }
+        Ok(result)
+    }
+
     fn contract_zipup_impl(
         &self,
         other: &Self,
@@ -382,6 +784,30 @@ where
             return Err(anyhow::anyhow!(
                 "contract_zipup_with: networks have incompatible topologies"
             ));
+        }
+
+        if form == CanonicalForm::Unitary {
+            let has_output_sites = self.node_names().into_iter().any(|node| {
+                let Some(a) = self.site_space(&node) else {
+                    return false;
+                };
+                let Some(b) = other.site_space(&node) else {
+                    return true;
+                };
+                a != b
+            });
+            if has_output_sites {
+                if let Some(chain) = self.chain_order(center) {
+                    return self.contract_zipup_chain(
+                        other,
+                        center,
+                        &chain,
+                        svd_policy,
+                        max_bond_dim,
+                        topology_mode,
+                    );
+                }
+            }
         }
 
         // 2. Replace internal indices with fresh IDs to avoid collision
