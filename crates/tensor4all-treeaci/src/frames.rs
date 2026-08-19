@@ -114,7 +114,7 @@ type CandidateCacheKey = (
 
 #[derive(Clone, Debug)]
 pub(crate) struct InputFrameStore<T> {
-    pub(crate) frames: Vec<Vec<DirectedFrame<T>>>,
+    pub(crate) frames: Vec<Vec<Rc<DirectedFrame<T>>>>,
     cores: Vec<Rc<Vec<PreparedCore<T>>>>,
     /// Number of retained directed frames, across every input and edge.
     records: usize,
@@ -297,12 +297,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                         data[sample + sample_count * bond] = value;
                     }
                 }
-                input_frames.push(DirectedFrame {
+                input_frames.push(Rc::new(DirectedFrame {
                     sample_count,
                     bond_dim,
                     sample_ids: (0..sample_count).collect(),
                     values: Matrix::from_col_major_vec(sample_count, bond_dim, data),
-                });
+                }));
             }
             all_inputs.push(input_frames);
             all_cores.push(builder.cores);
