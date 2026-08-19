@@ -146,6 +146,19 @@ For each compatible projector pair it:
 3. combines duplicate output projectors with strict TreeTN addition and the
    requested truncation policy.
 
+`contract_adaptive` adds the stronger project-first rule inherited from
+`PartitionedMPSs.jl`. A contraction or duplicate-projector sum that reaches the
+patch cap is only a probe and is discarded. The next child projector is chosen,
+each original operand or addend is projected to that child, and contraction or
+addition is retried recursively. It is incorrect to cap-truncate a parent sum
+and split that already lossy value afterward. Equality with the cap counts as
+saturation because a capped probe cannot distinguish an exact rank from a
+truncated one. Each newly projected operand is first compressed without a bond
+cap at a dtype-scaled numerical-rank threshold (`64 * epsilon`). This removes
+projection-created null bond space without spending the caller's truncation
+budget; user-requested approximation remains confined to contraction and
+post-addition truncation.
+
 `SubDomainTreeTN::inner` uses the eagerly masked stored data directly. No
 projector-compatible region may be inferred or lazily remasked during inner
 product evaluation.
@@ -309,6 +322,8 @@ Maintainer decisions recorded in this revision:
 - provenance includes PartitionedMPSs.jl and the adaptive patching paper, but not
   TCIAlgorithms-derived code or license.
 
-The 2026-08-17 issue reviews informed these decisions but do not by themselves
-clear the repository's delegated-implementation gate. Formal cross-model
-reviewer and verdict: pending.
+The 2026-08-17 issue reviews informed these decisions. The final cross-model
+design review used `reviewer-flash-opencode-go` and recorded the verdict
+`Correct-to-merge`. The same reviewer inspected the final combined staged diff;
+after its requested scalar-node path tests were added, the fresh verdict was
+also `Correct-to-merge`.

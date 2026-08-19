@@ -145,7 +145,7 @@ fn singular_value_measure(value: f64, measure: SingularValueMeasure) -> f64 {
 }
 
 /// Compute the retained rank based on an explicit SVD truncation policy.
-fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
+pub(crate) fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
     if s_vec.is_empty() {
         return 1;
     }
