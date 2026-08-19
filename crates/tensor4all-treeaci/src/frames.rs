@@ -115,7 +115,7 @@ type CandidateCacheKey = (
 #[derive(Clone, Debug)]
 pub(crate) struct InputFrameStore<T> {
     pub(crate) frames: Vec<Vec<DirectedFrame<T>>>,
-    cores: Vec<Vec<PreparedCore<T>>>,
+    cores: Vec<Rc<Vec<PreparedCore<T>>>>,
     /// Number of retained directed frames, across every input and edge.
     records: usize,
     /// Logical payload bytes retained by those frames.
@@ -206,8 +206,8 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         for (input_index, input) in inputs.iter().enumerate() {
             let existing_input = existing.and_then(|store| store.frames.get(input_index));
             let cores = match existing.and_then(|store| store.cores.get(input_index)) {
-                Some(cores) => cores.clone(),
-                None => prepare_cores::<T, V>(input, problem)?,
+                Some(cores) => Rc::clone(cores),
+                None => Rc::new(prepare_cores::<T, V>(input, problem)?),
             };
             let memo = problem
                 .directed_edges
@@ -609,7 +609,7 @@ where
     input: &'a TreeTN<IdxTensor, V>,
     problem: &'a PreparedTreeProblem<V>,
     arena: &'a SampleArena,
-    cores: Vec<PreparedCore<T>>,
+    cores: Rc<Vec<PreparedCore<T>>>,
     memo: Vec<Vec<Option<Vec<T>>>>,
 }
 

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
@@ -219,6 +221,41 @@ fn extend_recomputes_only_the_newly_interned_samples() {
         "extend should recompute only the new samples: extend={extend_calls} rebuild={rebuild_calls}"
     );
     assert!(extend_calls > 0, "the new seed must still be computed");
+}
+
+/// The prepared `cores` for one input never change across a run -- they are
+/// derived once from the fixed input operand -- so `extend`'s resulting
+/// store must share the SAME underlying `Rc` allocation as the initial
+/// store's, not a fresh clone of it. A regression back to `.clone()`ing
+/// `cores` on every `build_or_extend` call would still pass
+/// `extend_matches_a_full_rebuild_on_the_grown_arena` above (values would
+/// still be equal), so that test alone cannot catch it; this test checks
+/// allocation identity instead of value equality.
+#[test]
+fn extend_reuses_the_same_cores_allocation_instead_of_cloning_it() {
+    let input = y_tree::<f64>();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let seed0 = vec![0, 0, 0, 0];
+    let seed1 = vec![0, 1, 1, 1];
+    let (mut arena, mut candidates) =
+        SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+
+    arena
+        .inject_global_point(&mut candidates, &problem, &seed1)
+        .expect("grow the arena with a second global point");
+
+    let extended = initial
+        .extend(std::slice::from_ref(&input), &problem, &arena)
+        .expect("extend the store to the grown arena");
+
+    assert!(
+        Rc::ptr_eq(&initial.cores[0], &extended.cores[0]),
+        "extend must share the initial store's prepared cores allocation via Rc, not clone it"
+    );
 }
 
 /// `candidate_frame` must cache: an identical candidate looked up twice
@@ -684,7 +721,7 @@ fn build_frame_builder<'a>(
     problem: &'a PreparedTreeProblem<usize>,
     arena: &'a SampleArena,
 ) -> super::FrameBuilder<'a, f64, usize> {
-    let cores = super::prepare_cores::<f64, usize>(input, problem).unwrap();
+    let cores = Rc::new(super::prepare_cores::<f64, usize>(input, problem).unwrap());
     let memo = problem
         .directed_edges
         .iter()
