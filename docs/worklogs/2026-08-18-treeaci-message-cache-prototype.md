@@ -1217,11 +1217,13 @@ increments, each independently tested and committed:
     lazy-pull branch (Task 4) writes its pulled row back into
     `self.memo[incoming_edge][incoming_sample]`, and `compute_batch`'s
     batched branch reads that slot by direct indexing. An empty spine on a
-    reused edge would therefore panic (`compute`'s write) or index out of
-    bounds (`compute_batch`'s read) the first time a grown edge's ancestor
-    chain passed through it. So `memo` is still allocated at full size for
-    every edge from the pre-computed `sample_counts` -- reused edges'
-    spines simply stay `None`-filled unless something reads through them.
+    reused edge would therefore return a graceful `Result::Err`
+    (`TreeAciError::InternalInvariant`) from `compute`'s write, or panic via
+    an out-of-bounds index from `compute_batch`'s direct-indexed reads, the
+    first time a grown edge's ancestor chain passed through it. So `memo` is
+    still allocated at full size for every edge from the pre-computed
+    `sample_counts` -- reused edges' spines simply stay `None`-filled unless
+    something reads through them.
     The cost is one `Option<Vec<T>>` (24 bytes) per sample of spine, against
     the `bond_dim * size_of::<T>()` row it would have held (2 KiB at
     chi=256, `f64`) -- roughly 1% of the movement the fix removes, not

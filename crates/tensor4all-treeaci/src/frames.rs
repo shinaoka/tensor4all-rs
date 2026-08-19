@@ -220,7 +220,9 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             // `FrameBuilder::compute` needs a slot to memoize each pulled or
             // computed row into. A spine slot is one `Option<Vec<T>>`
             // (a pointer triple), negligible next to the `bond_dim`-wide row
-            // it would hold; the reused edges' spines simply stay empty.
+            // it would hold; the reused edges' spines are allocated at full
+            // length exactly like every other edge's -- they just stay
+            // `None`-filled unless something reads through them.
             //
             // What is deliberately NOT done here any more is the eager seed
             // loop this function used to run: copying every already-known
@@ -309,8 +311,9 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 // re-copying it -- no `compute_batch` call, no memo fill, no
                 // fresh `Matrix`. The bytes/records accounted above still
                 // count: this store's `frames` genuinely retains them.
-                if let Some(previous) = previous.filter(|frame| frame.sample_count == sample_count)
-                {
+                if let Some(previous) = previous.filter(|frame| {
+                    frame.sample_count == sample_count && frame.bond_dim == bond_dim
+                }) {
                     input_frames[edge] = Some(Rc::clone(previous));
                     continue;
                 }
