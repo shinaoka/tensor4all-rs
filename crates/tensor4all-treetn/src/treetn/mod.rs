@@ -49,6 +49,11 @@ pub use cached_evaluator::{
 // Re-export evaluator types
 pub use evaluator::TreeTNEvaluator;
 
+// Re-export fit contraction entry points
+pub use fit::{
+    contract_fit, contract_fit_from_initial, low_rank_initializer_tree_tn, FitContractionOptions,
+};
+
 // Re-export local update types
 pub use localupdate::{
     apply_local_update_sweep, get_boundary_edges, BoundaryEdge, LocalUpdateStep,

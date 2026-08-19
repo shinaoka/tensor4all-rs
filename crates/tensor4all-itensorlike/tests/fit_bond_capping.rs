@@ -10,7 +10,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use tensor4all_core::{DynIndex, IdxTensor};
-use tensor4all_itensorlike::{ContractOptions, TensorTrain};
+use tensor4all_itensorlike::{ContractOptions, FitInitializer, TensorTrain};
 
 const TEST_LENGTH: usize = 4;
 const TEST_PHYS_DIM: usize = 2;
@@ -97,7 +97,7 @@ fn setup_test_mpos(length: usize, phys_dim: usize, bond_dim: usize) -> TestMPOs 
 }
 
 /// fit() with an explicit zero-threshold policy should preserve the same bond
-/// dimensions as fit() without a policy override.
+/// dimensions as fit() without a policy override (with a shared ZipUp initializer).
 ///
 /// Unlike the removed `rtol=0` sentinel API, an explicit
 /// `SvdTruncationPolicy::new(0.0)` is now a real truncation policy. Small
@@ -107,14 +107,15 @@ fn setup_test_mpos(length: usize, phys_dim: usize, bond_dim: usize) -> TestMPOs 
 fn test_fit_zero_threshold_matches_no_policy_bond_dims() {
     let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
-    let result_no_rtol = t.mpo_a.contract(&t.mpo_b, &ContractOptions::fit()).unwrap();
-    let result_rtol_zero = t
-        .mpo_a
-        .contract(
-            &t.mpo_b,
-            &ContractOptions::fit().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(0.0)),
-        )
-        .unwrap();
+    // Both start from the exact zip-up state; the three-tier bond cap then
+    // makes "no policy" and "threshold 0" behave identically.
+    let no_policy = ContractOptions::fit().with_initializer(FitInitializer::ZipUp);
+    let zero_policy = ContractOptions::fit()
+        .with_initializer(FitInitializer::ZipUp)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(0.0));
+
+    let result_no_rtol = t.mpo_a.contract(&t.mpo_b, &no_policy).unwrap();
+    let result_rtol_zero = t.mpo_a.contract(&t.mpo_b, &zero_policy).unwrap();
 
     let bd_no_rtol = result_no_rtol.max_bond_dim();
     let bd_rtol_zero = result_rtol_zero.max_bond_dim();
@@ -258,7 +259,14 @@ fn test_fit_no_params_not_worse_than_zipup() {
         .mpo_a
         .contract(&t.mpo_b, &ContractOptions::zipup())
         .unwrap();
-    let result_fit = t.mpo_a.contract(&t.mpo_b, &ContractOptions::fit()).unwrap();
+    // Starting from the exact zip-up state, fit sweeps must not degrade it.
+    let result_fit = t
+        .mpo_a
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit().with_initializer(FitInitializer::ZipUp),
+        )
+        .unwrap();
 
     let zipup_err = relative_error(&result_zipup, &t.exact, t.exact_norm);
     let fit_err = relative_error(&result_fit, &t.exact, t.exact_norm);
@@ -294,11 +302,13 @@ fn test_fit_not_worse_than_zipup_with_rtol() {
                     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
             )
             .unwrap();
+        // Fit refines the same (zip-up) starting state; it must not degrade it.
         let result_fit = t
             .mpo_a
             .contract(
                 &t.mpo_b,
                 &ContractOptions::fit()
+                    .with_initializer(FitInitializer::ZipUp)
                     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
             )
             .unwrap();
@@ -328,11 +338,13 @@ fn test_fit_cutoff_equivalent_to_rtol() {
         .mpo_a
         .contract(
             &t.mpo_b,
-            &ContractOptions::fit().with_svd_policy(
-                tensor4all_core::SvdTruncationPolicy::new(cutoff)
-                    .with_squared_values()
-                    .with_discarded_tail_sum(),
-            ),
+            &ContractOptions::fit()
+                .with_initializer(FitInitializer::ZipUp)
+                .with_svd_policy(
+                    tensor4all_core::SvdTruncationPolicy::new(cutoff)
+                        .with_squared_values()
+                        .with_discarded_tail_sum(),
+                ),
         )
         .unwrap();
     let result_rtol = t
@@ -340,6 +352,7 @@ fn test_fit_cutoff_equivalent_to_rtol() {
         .contract(
             &t.mpo_b,
             &ContractOptions::fit()
+                .with_initializer(FitInitializer::ZipUp)
                 .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();

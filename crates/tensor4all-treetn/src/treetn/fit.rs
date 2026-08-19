@@ -6,7 +6,8 @@
 //! # Algorithm Overview
 //!
 //! 1. Prepare input TNs with `sim_internal_inds()` to avoid index collision
-//! 2. Initialize C (using zipup result or random)
+//! 2. Initialize C (using zipup result, or a caller-provided [`contract_fit_from_initial`]
+//!    initial state)
 //! 3. For each sweep:
 //!    a. Compute/update environment tensors
 //!    b. For each 2-site step:
@@ -21,15 +22,48 @@
 //! - The contraction of the "from" side subtree of A×B with conj(C)
 //! - Shape: (link_A, link_B, link_C) pointing towards "to"
 //!
+//! The A- and B-link indices stay **separate** inside the environment; the
+//! algorithm never fuses them into a persistent output bond of dimension
+//! `χ_A·χ_B`. The only place the full `χ_A·χ_B` product is materialized is
+//! inside the zip-up *initializer* (see below).
+//!
+//! # Initialization and rank growth
+//!
+//! Initialization is decoupled from the sweeps:
+//!
+//! - [`contract_fit`] initializes `C` with a topology-preserving zip-up
+//!   contraction of `A·B`. Without a truncation policy this constructs the
+//!   exact product, whose bond dimension can reach `χ_A·χ_B` per edge — fine
+//!   for small systems, wasteful for large QTT/MPO bonds.
+//! - [`contract_fit_from_initial`] optimizes from a caller-supplied state. The
+//!   typical adaptive starting state is [`low_rank_initializer_tree_tn`], which
+//!   creates random tensors carrying the surviving output site indices with
+//!   every bond at a small dimension (usually 1). It never forms `χ_A·χ_B`.
+//!
+//! Rank growth during sweeps follows [`FitContractionOptions::max_bond_dim`]:
+//!
+//! * `Some(cap)` → every sweep bond is capped at `cap`;
+//! * `None` plus an SVD truncation policy → bonds grow adaptively up to
+//!   whatever the tolerance demands (no user-supplied rank cap required);
+//! * `None` and no policy → the existing bond dimensions are preserved, so the
+//!   initializer decides the starting rank.
+//!
 //! # References
 //!
 //! - T4AMPOContractions.jl: `contract_fit`, `leftenvironment!`, `rightenvironment!`
+//! - ITensorMPS.jl: `contract`/`apply` with `alg="fit"`, `init` and `cutoff`
 //! - ITensorNetworks.jl: `contract` with fitting algorithm
 
 use crate::error::TreeTNOperationError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::time::{Duration, Instant};
+
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+
+use num_complex::Complex64;
+use tensor4all_core::{DynIndex, IdxTensor};
 
 use anyhow::Result;
 
@@ -1050,26 +1084,84 @@ impl FitContractionOptions {
 /// Contract two TreeTNs using the fit (variational) algorithm.
 ///
 /// This algorithm minimizes `||A*B - C||²` iteratively by optimizing
-/// each local tensor of C while keeping others fixed.
+/// each local tensor of C while keeping others fixed, starting from an
+/// initial state `tn_c`.
 ///
-/// # Arguments
-/// * `tn_a` - First TreeTN
-/// * `tn_b` - Second TreeTN
-/// * `center` - Node to use as canonical center
-/// * `options` - Fit algorithm options
+/// # Argument semantics
+///
+/// * `tn_a`, `tn_b` - The two input TreeTNs with the same topology. Their
+///   shared site indices are contracted; `C` approximates the result.
+/// * `center` - Node to use as canonical center.
+/// * `options` - Fit algorithm options (sweep count, rank/truncation policy).
+/// * `tn_c` - The initial variational state. It must have the same topology
+///   as `tn_a`/`tn_b` and carry the surviving (non-contracted) site indices
+///   that appear in `tn_a` and `tn_b`. It is updated in place.
+///
+/// # Rank growth semantics
+///
+/// * `max_bond_dim = Some(cap)` caps every sweep bond at `cap`.
+/// * `max_bond_dim = None` with an SVD truncation policy allows bonds to grow
+///   adaptively up to whatever the policy demands.
+/// * Neither a cap nor a policy → bonds keep the dimension they already have
+///   in `tn_c` (the initializer decides the starting rank).
+///
+/// Because the initialization is decoupled, a caller can start from a small
+/// rank-1 state (see [`low_rank_initializer_tree_tn`]) without ever forming
+/// the exact A·B product bond.
 ///
 /// # Returns
 /// A new TreeTN representing the contracted result.
 /// # Errors
 ///
 /// Returns an error when the fit contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// mismatch, or a backend failure).
 ///
-pub fn contract_fit<T, V>(
+/// # Examples
+///
+/// Fit a two-node contraction from a low-rank random start, growing the bond
+/// adaptively from tolerance only (`max_bond_dim = None`):
+/// ```
+/// use tensor4all_treetn::{
+///     contract_fit_from_initial, low_rank_initializer_tree_tn, FitContractionOptions,
+/// };
+/// use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
+/// use tensor4all_treetn::TreeTN;
+///
+/// let s0 = DynIndex::new_dyn(2);
+/// let s1 = DynIndex::new_dyn(2);
+/// let a0 = DynIndex::new_dyn(2);
+/// let a1 = DynIndex::new_dyn(2);
+/// let b0 = DynIndex::new_dyn(2);
+/// let b1 = DynIndex::new_dyn(2);
+/// let ba = DynIndex::new_dyn(2);
+/// let bb = DynIndex::new_dyn(2);
+/// let ta = IdxTensor::from_dense(vec![s0.clone(), a0.clone(), ba.clone()],
+///     (1..=8).map(|v| v as f64 / 8.0).collect()).unwrap();
+/// let ta2 = IdxTensor::from_dense(vec![ba, s1.clone(), a1], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.5, 0.5]).unwrap();
+/// let tb = IdxTensor::from_dense(vec![s0, b0.clone(), bb.clone()],
+///     (1..=8).map(|v| (v as f64 - 1.0) / 9.0).collect()).unwrap();
+/// let tb2 = IdxTensor::from_dense(vec![bb, s1, b1], vec![1.0, 1.0, 0.0, 0.0, 0.25, 0.5, 0.25, 0.25]).unwrap();
+/// let tn_a = TreeTN::from_tensors(vec![ta, ta2], vec![0usize, 1]).unwrap();
+/// let tn_b = TreeTN::from_tensors(vec![tb, tb2], vec![0usize, 1]).unwrap();
+/// let center = 1usize;
+/// let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 7).unwrap();
+/// let c = contract_fit_from_initial(
+///     &tn_a,
+///     &tn_b,
+///     &center,
+///     FitContractionOptions::new(2).with_svd_policy(SvdTruncationPolicy::new(1e-8)),
+///     init,
+/// )
+/// .unwrap();
+/// assert_eq!(c.node_count(), 2);
+/// assert!(c.to_dense().unwrap().distance(&tn_a.contract_naive(&tn_b).unwrap()).unwrap() < 1e-6);
+/// ```
+pub fn contract_fit_from_initial<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
+    mut tn_c: TreeTN<T, V>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -1077,13 +1169,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     use super::localupdate::apply_local_update_sweep;
-    use crate::CanonicalForm;
     let profile_enabled = fit_profile_enabled();
-    if profile_enabled {
-        fit_profile_reset();
-    }
-    reset_contract_profile();
-    reset_native_einsum_profile();
 
     // Validate topologies match
     if !tn_a.same_topology(tn_b) {
@@ -1091,28 +1177,18 @@ where
             anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
         );
     }
-
-    // Initialize C using the SVD-based zipup contraction while preserving
-    // the input topology required by variational sweeps.
-    let zipup_started = profile_enabled.then(Instant::now);
-    let mut tn_c = tn_a.contract_zipup_preserving_topology_with(
-        tn_b,
-        center,
-        CanonicalForm::Unitary,
-        options.svd_policy,
-        options.max_bond_dim,
-    )?;
-    if let Some(zipup_started) = zipup_started {
-        with_fit_profile(|profile| {
-            profile.zipup_init_time += zipup_started.elapsed();
-        });
+    if !tn_a.same_topology(&tn_c) {
+        return Err(anyhow::anyhow!(
+            "fit initial TreeTN must have the same topology as the input TreeTNs"
+        )
+        .into());
     }
 
-    // The zip-up initializer already returns a network centered at `center`.
+    // The sweep machinery requires the network to carry a single canonical
+    // center at the requested node.
+    tn_c.set_canonical_region([center.clone()])?;
 
-    // Zero sweeps means "use the zip-up initializer as-is". Positive sweep
-    // counts are honored even when no truncation override is provided, so
-    // callers can explicitly exercise the variational update path.
+    // Zero sweeps means "use the initial state as-is".
     if options.nfullsweeps == 0 {
         return Ok(tn_c);
     }
@@ -1184,6 +1260,258 @@ where
     print_and_reset_native_einsum_profile();
 
     Ok(tn_c)
+}
+
+/// Contract two TreeTNs using the fit (variational) algorithm.
+///
+/// Convenience wrapper over [`contract_fit_from_initial`] that initializes
+/// `C` with the SVD-based zip-up contraction of `A·B` while preserving the
+/// input topology.
+///
+/// # Note on the exact product bond
+///
+/// Zip-up initialization *materializes* the full product bond (up to
+/// χ_A·χ_B per edge) when no truncation policy is supplied. If that is not
+/// desired (large QTT/MPO bonds), construct a small-rank starting state with
+/// [`low_rank_initializer_tree_tn`] and pass it to
+/// [`contract_fit_from_initial`] instead.
+///
+/// # Arguments
+/// * `tn_a` - First TreeTN
+/// * `tn_b` - Second TreeTN
+/// * `center` - Node to use as canonical center
+/// * `options` - Fit algorithm options
+///
+/// # Returns
+/// A new TreeTN representing the contracted result.
+/// # Errors
+///
+/// Returns an error when the fit contraction fails (a shape or index
+/// mismatch, or a backend failure).
+///
+pub fn contract_fit<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    use crate::CanonicalForm;
+    let profile_enabled = fit_profile_enabled();
+    if profile_enabled {
+        fit_profile_reset();
+    }
+    reset_contract_profile();
+    reset_native_einsum_profile();
+
+    // Validate topologies match
+    if !tn_a.same_topology(tn_b) {
+        return Err(
+            anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
+        );
+    }
+
+    // Initialize C using the SVD-based zipup contraction while preserving
+    // the input topology required by variational sweeps.
+    let zipup_started = profile_enabled.then(Instant::now);
+    let tn_c = tn_a.contract_zipup_preserving_topology_with(
+        tn_b,
+        center,
+        CanonicalForm::Unitary,
+        options.svd_policy,
+        options.max_bond_dim,
+    )?;
+    if let Some(zipup_started) = zipup_started {
+        with_fit_profile(|profile| {
+            profile.zipup_init_time += zipup_started.elapsed();
+        });
+    }
+
+    contract_fit_from_initial(tn_a, tn_b, center, options, tn_c)
+}
+
+/// Build a low-rank, topology-compatible initial state `C₀` for fit contraction.
+///
+/// The returned network has the *same topology* as `tn_a`/`tn_b` and carries
+/// the surviving site indices of the product `A·B` (the site indices not
+/// shared between `tn_a` and `tn_b` at each node), with every bond set to
+/// dimension `bond_dim` and filled deterministically from `seed`.
+///
+/// # Why this avoids the product bond
+///
+/// The construction never contracts `A` and `B`: each output tensor is an
+/// independent random tensor over the output site indices plus its small
+/// bonds. No tensor of dimension proportional to χ_A·χ_B is ever formed, so
+/// the subsequent two-site fit sweeps can grow ranks adaptively (with an SVD
+/// truncation policy and `max_bond_dim = None`) without first building the
+/// exact product.
+///
+/// # Arguments
+/// * `tn_a` - First input TreeTN (real or complex `IdxTensor` tensors).
+/// * `tn_b` - Second input TreeTN.
+/// * `center` - Canonical center for the returned network.
+/// * `bond_dim` - Initial bond dimension of every edge (≥ 1; use 1 for the
+///   "start small and grow" behavior).
+/// * `seed` - Deterministic RNG seed. A fixed seed reproduces the exact same
+///   initializer across runs.
+///
+/// # Errors
+///
+/// Returns an error when the input topologies differ, `bond_dim` is zero, the
+/// input tensors use a dtype other than `f64`/`Complex64`, or metadata
+/// construction fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::{
+///     low_rank_initializer_tree_tn, TreeTN,
+/// };
+/// use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+///
+/// // Two-node chains: A = (s0,a0)-(s1,a1), B = (s0,b0)-(s1,b1). The `s` sites
+/// // are shared (contracted in A·B); `a`/`b` survive into the output.
+/// let s0 = DynIndex::new_dyn(2);
+/// let s1 = DynIndex::new_dyn(2);
+/// let a0 = DynIndex::new_dyn(2);
+/// let a1 = DynIndex::new_dyn(2);
+/// let b0 = DynIndex::new_dyn(2);
+/// let b1 = DynIndex::new_dyn(2);
+/// let ba = DynIndex::new_dyn(2);
+/// let bb = DynIndex::new_dyn(2);
+/// let ta0 = IdxTensor::from_dense(vec![s0.clone(), a0.clone(), ba.clone()], vec![1.0; 8]).unwrap();
+/// let ta1 = IdxTensor::from_dense(vec![ba, s1.clone(), a1], vec![1.0; 8]).unwrap();
+/// let tb0 = IdxTensor::from_dense(vec![s0.clone(), b0.clone(), bb.clone()], vec![1.0; 8]).unwrap();
+/// let tb1 = IdxTensor::from_dense(vec![bb, s1.clone(), b1], vec![1.0; 8]).unwrap();
+/// let tn_a = TreeTN::from_tensors(vec![ta0, ta1], vec![0usize, 1]).unwrap();
+/// let tn_b = TreeTN::from_tensors(vec![tb0, tb1], vec![0usize, 1]).unwrap();
+///
+/// let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &1usize, 1, 42).unwrap();
+/// // Node set is preserved and the single bond starts at dimension 1,
+/// // not chi_a*chi_b.
+/// assert_eq!(init.node_count(), 2);
+/// let bond = init
+///     .edge_between(&0usize, &1usize)
+///     .and_then(|e| init.bond_index(e))
+///     .unwrap()
+///     .dim();
+/// assert_eq!(bond, 1);
+/// assert_eq!(init.site_space(&0).unwrap().len(), 2); // {a0, b0} survive
+/// ```
+pub fn low_rank_initializer_tree_tn<V>(
+    tn_a: &TreeTN<IdxTensor, V>,
+    tn_b: &TreeTN<IdxTensor, V>,
+    center: &V,
+    bond_dim: usize,
+    seed: u64,
+) -> std::result::Result<TreeTN<IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if bond_dim == 0 {
+        return Err(anyhow::anyhow!("fit low-rank initializer requires bond_dim >= 1").into());
+    }
+    if !tn_a.same_topology(tn_b) {
+        return Err(
+            anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
+        );
+    }
+
+    // Dtype of the random fill follows the input networks.
+    let complex = network_tensors_complex(tn_a) || network_tensors_complex(tn_b);
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    // 1. Fresh bond indices for each edge, with the requested dimension.
+    let mut edges: Vec<(V, V)> = tn_a.site_index_network().edges().collect();
+    edges.sort();
+    let mut edge_bond: HashMap<(V, V), DynIndex> = HashMap::with_capacity(edges.len());
+    for (a, b) in &edges {
+        let key = if a < b {
+            (a.clone(), b.clone())
+        } else {
+            (b.clone(), a.clone())
+        };
+        edge_bond.insert(key, DynIndex::new_dyn(bond_dim));
+    }
+
+    // 2. Per-node tensor: surviving site indices (symmetric difference of the
+    //    per-node site spaces of A and B) plus the incident bonds.
+    let mut node_names: Vec<V> = tn_a
+        .site_index_network()
+        .node_names()
+        .into_iter()
+        .cloned()
+        .collect();
+    node_names.sort();
+
+    let mut tensors: Vec<IdxTensor> = Vec::with_capacity(node_names.len());
+    for node in &node_names {
+        let a_sites: HashSet<DynIndex> = tn_a
+            .site_index_network()
+            .site_space(node)
+            .cloned()
+            .unwrap_or_default();
+        let b_sites: HashSet<DynIndex> = tn_b
+            .site_index_network()
+            .site_space(node)
+            .cloned()
+            .unwrap_or_default();
+        let shared: HashSet<DynIndex> = a_sites.intersection(&b_sites).cloned().collect();
+
+        let mut indices: Vec<DynIndex> = Vec::new();
+        indices.extend(a_sites.iter().filter(|s| !shared.contains(*s)).cloned());
+        indices.extend(b_sites.iter().filter(|s| !shared.contains(*s)).cloned());
+        sort_indices_deterministic(&mut indices);
+
+        let mut neighbors: Vec<V> = tn_a.site_index_network().neighbors(node).collect();
+        neighbors.sort();
+        for neighbor in &neighbors {
+            let key = if node < neighbor {
+                (node.clone(), neighbor.clone())
+            } else {
+                (neighbor.clone(), node.clone())
+            };
+            if let Some(bond) = edge_bond.get(&key) {
+                indices.push(bond.clone());
+            }
+        }
+
+        let tensor = if complex {
+            IdxTensor::random::<Complex64, _>(&mut rng, indices.clone())
+                .map_err(TreeTNOperationError::from)?
+        } else {
+            IdxTensor::random::<f64, _>(&mut rng, indices.clone())
+                .map_err(TreeTNOperationError::from)?
+        };
+        tensors.push(tensor);
+    }
+
+    let mut tn_c = TreeTN::from_tensors(tensors, node_names)?;
+    tn_c.set_canonical_region([center.clone()])?;
+    Ok(tn_c)
+}
+
+fn network_tensors_complex<V>(tn: &TreeTN<IdxTensor, V>) -> bool
+where
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    let mut complex = false;
+    for node in tn.site_index_network().node_names() {
+        let node = node.clone();
+        if let Some(idx) = tn.node_index(&node) {
+            if let Some(t) = tn.tensor(idx) {
+                if t.is_complex() {
+                    complex = true;
+                    break;
+                }
+            }
+        }
+    }
+    complex
 }
 
 #[cfg(test)]

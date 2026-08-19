@@ -585,3 +585,356 @@ fn test_contract_fit_handles_leaf_site_space_that_contracts_away() {
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
     assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
 }
+
+// ========================================================================
+// Low-rank adaptive initializer tests
+// ========================================================================
+
+/// Bond dimensions of every edge of `tn`, sorted ascending.
+fn sorted_bond_dims<V>(tn: &TreeTN<IdxTensor, V>) -> Vec<usize>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut dims: Vec<usize> = tn
+        .site_index_network()
+        .edges()
+        .map(|(u, v)| {
+            tn.edge_between(&u, &v)
+                .map(|e| tn.bond_index(e).map(|b| b.dim()).unwrap())
+                .unwrap()
+        })
+        .collect();
+    dims.sort_unstable();
+    dims
+}
+
+/// Build a chain of `n` nodes with a shared site `s_i` in both A and B,
+/// a private site `a_i` in A and `b_i` in B, A-bonds of dim `chi_a` and
+/// B-bonds of dim `chi_b`. Node names are `0..n` as `usize`.
+fn make_chain_pair(
+    n: usize,
+    chi_a: usize,
+    chi_b: usize,
+    phys: usize,
+    complex: bool,
+) -> (TreeTN<IdxTensor, usize>, TreeTN<IdxTensor, usize>) {
+    let mut rng = StdRng::seed_from_u64(0xABBAu64 + n as u64);
+    let mut shared: Vec<DynIndex> = Vec::with_capacity(n);
+    let mut a_site: Vec<DynIndex> = Vec::with_capacity(n);
+    let mut b_site: Vec<DynIndex> = Vec::with_capacity(n);
+    for i in 0..n {
+        shared.push(DynIndex::new_dyn_with_tag(phys, &format!("s={}", i)).unwrap());
+        a_site.push(DynIndex::new_dyn_with_tag(phys, &format!("a={}", i)).unwrap());
+        b_site.push(DynIndex::new_dyn_with_tag(phys, &format!("b={}", i)).unwrap());
+    }
+    let la: Vec<DynIndex> = (0..n.saturating_sub(1))
+        .map(|_| DynIndex::new_dyn(chi_a))
+        .collect();
+    let lb: Vec<DynIndex> = (0..n.saturating_sub(1))
+        .map(|_| DynIndex::new_dyn(chi_b))
+        .collect();
+    let (_shared, _a_site, _b_site) = (shared.clone(), a_site.clone(), b_site.clone());
+
+    let mut ta = Vec::with_capacity(n);
+    let mut tb = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut ia = Vec::new();
+        let mut ib = Vec::new();
+        if i > 0 {
+            ia.push(la[i - 1].clone());
+            ib.push(lb[i - 1].clone());
+        }
+        ia.push(shared[i].clone());
+        ib.push(shared[i].clone());
+        ia.push(a_site[i].clone());
+        ib.push(b_site[i].clone());
+        if i < n - 1 {
+            ia.push(la[i].clone());
+            ib.push(lb[i].clone());
+        }
+        let ta_i = if complex {
+            IdxTensor::random::<num_complex::Complex64, _>(&mut rng, ia)
+        } else {
+            IdxTensor::random::<f64, _>(&mut rng, ia)
+        }
+        .unwrap();
+        let tb_i = if complex {
+            IdxTensor::random::<num_complex::Complex64, _>(&mut rng, ib)
+        } else {
+            IdxTensor::random::<f64, _>(&mut rng, ib)
+        }
+        .unwrap();
+        ta.push(ta_i);
+        tb.push(tb_i);
+    }
+    let names: Vec<usize> = (0..n).collect();
+    (
+        TreeTN::from_tensors(ta, names.clone()).unwrap(),
+        TreeTN::from_tensors(tb, names).unwrap(),
+    )
+}
+
+#[test]
+fn test_low_rank_initializer_stays_small_no_product_bond() {
+    // A and B bonds are 6 and 7; an exact product bond would be 42. The
+    // low-rank initializer must never form it: every edge stays at bond_dim.
+    let (tn_a, tn_b) = make_chain_pair(4, 6, 7, 2, false);
+    let center = 3usize;
+
+    let init1 = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 7).unwrap();
+    assert_eq!(sorted_bond_dims(&init1), vec![1, 1, 1]);
+    assert_eq!(init1.node_count(), 4);
+    assert!(init1.same_topology(&tn_a));
+    assert!(tn_a.same_topology(&init1));
+
+    let init3 = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 3, 7).unwrap();
+    assert_eq!(sorted_bond_dims(&init3), vec![3, 3, 3]);
+}
+
+#[test]
+fn test_low_rank_initializer_is_deterministic() {
+    // Bond index identities are freshly allocated per call, so two runs only
+    // agree up to index renaming. The user-visible determinism property is that
+    // fit sweeps from two same-seeded initializers produce identical results.
+    let (tn_a, tn_b) = make_chain_pair(3, 5, 5, 2, false);
+    let center = 2usize;
+
+    let build_init = || {
+        let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 1234).unwrap();
+        contract_fit_from_initial(
+            &tn_a,
+            &tn_b,
+            &center,
+            FitContractionOptions::new(2).with_svd_policy(SvdTruncationPolicy::new(1e-6)),
+            init,
+        )
+        .unwrap()
+    };
+    let r1 = build_init().to_dense().unwrap();
+    let r2 = build_init().to_dense().unwrap();
+    assert!(
+        r1.distance(&r2).unwrap() < 1e-12,
+        "same seed must reproduce the identical fit result"
+    );
+}
+
+#[test]
+fn test_low_rank_initializer_carries_surviving_sites() {
+    let n = 3;
+    let (tn_a, tn_b) = make_chain_pair(n, 4, 4, 2, false);
+    let center = 2usize;
+    let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 5).unwrap();
+
+    // C's site space at node i = (A sites at i ∪ B sites at i) minus the
+    // sites shared between A and B (those are contracted in A·B).
+    for i in 0..n {
+        let a_sites = tn_a.site_index_network().site_space(&i).cloned().unwrap();
+        let b_sites = tn_b.site_index_network().site_space(&i).cloned().unwrap();
+        let shared: HashSet<_> = a_sites.intersection(&b_sites).cloned().collect();
+        let expect: HashSet<DynIndex> = a_sites
+            .iter()
+            .filter(|s| !shared.contains(*s))
+            .chain(b_sites.iter().filter(|s| !shared.contains(*s)))
+            .cloned()
+            .collect();
+        let c_sites = init.site_index_network().site_space(&i).cloned().unwrap();
+        assert_eq!(c_sites, expect, "node {i} site space mismatch");
+    }
+}
+
+#[test]
+fn test_contract_fit_from_rank1_grows_adaptively() {
+    // Two-node pair with surviving sites (from existing helpers). The exact
+    // product needs bond rank > 1; a rank-1 C0 with a tolerance and no
+    // max_bond_dim must grow and converge.
+    let (tn_a, tn_b) = make_contractible_two_node_pair_with_surviving_sites();
+    let center = "A".to_string();
+    let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 9).unwrap();
+
+    // Zero sweeps returns the initializer as-is (rank stays 1).
+    let out0 = contract_fit_from_initial(
+        &tn_a,
+        &tn_b,
+        &center,
+        FitContractionOptions::new(0),
+        init.clone(),
+    )
+    .unwrap();
+    assert_eq!(sorted_bond_dims(&out0), vec![1]);
+    // No option set: ranks are preserved, so the state stays rank-1.
+    let out1 = contract_fit_from_initial(
+        &tn_a,
+        &tn_b,
+        &center,
+        FitContractionOptions::new(2),
+        init.clone(),
+    )
+    .unwrap();
+    assert_eq!(sorted_bond_dims(&out1), vec![1]);
+
+    // With a tolerance and no max_bond_dim the bond must grow beyond rank 1.
+    let opts = FitContractionOptions::new(2).with_svd_policy(SvdTruncationPolicy::new(1e-6));
+    let out = contract_fit_from_initial(&tn_a, &tn_b, &center, opts, init).unwrap();
+    let bd = out
+        .edge_between(&"A".to_string(), &"B".to_string())
+        .map(|e| out.bond_index(e).map(|b| b.dim()).unwrap())
+        .unwrap();
+    assert!(bd > 1, "fit must grow the bond from rank 1, got {bd}");
+
+    let fitted_dense = out.to_dense().unwrap();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    assert!(fitted_dense.distance(&expected).unwrap() < 1e-6);
+}
+
+#[test]
+fn test_contract_fit_from_initial_rejects_wrong_topology() {
+    let (tn_a, tn_b) = make_contractible_two_node_pair_with_surviving_sites();
+    // A three-node tree has a different node set than the two-node pair.
+    let bad_init = make_three_node_treetn();
+    let err = contract_fit_from_initial(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        FitContractionOptions::new(1),
+        bad_init,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("same topology"), "unexpected error: {err}");
+}
+
+#[test]
+fn test_low_rank_initializer_requires_bond_dim_at_least_one() {
+    let (tn_a, tn_b) = make_contractible_two_node_pair_with_surviving_sites();
+    let err = low_rank_initializer_tree_tn(&tn_a, &tn_b, &"A".to_string(), 0, 1)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("bond_dim >= 1"), "unexpected error: {err}");
+}
+
+// ========================================================================
+// Complex and branched-tree adaptive fit tests
+// ========================================================================
+
+/// Build a star tree: a center node 0 connected to leaves 1..=n_leaves.
+/// Each A node and B node carries a shared site (contracted) plus a private
+/// site; A and B have their own bonds with the given dimensions.
+#[allow(clippy::too_many_arguments)]
+fn make_star_pair(
+    n_leaves: usize,
+    chi_a: usize,
+    chi_b: usize,
+    phys: usize,
+    complex: bool,
+) -> (TreeTN<IdxTensor, usize>, TreeTN<IdxTensor, usize>) {
+    let mut rng = StdRng::seed_from_u64(0x51a2u64 + n_leaves as u64);
+    let n_nodes = 1 + n_leaves;
+    let mut shared: Vec<DynIndex> = (0..n_nodes)
+        .map(|i| DynIndex::new_dyn_with_tag(phys, &format!("s={}", i)).unwrap())
+        .collect();
+    let mut a_site: Vec<DynIndex> = (0..n_nodes)
+        .map(|i| DynIndex::new_dyn_with_tag(phys, &format!("a={}", i)).unwrap())
+        .collect();
+    let mut b_site: Vec<DynIndex> = (0..n_nodes)
+        .map(|i| DynIndex::new_dyn_with_tag(phys, &format!("b={}", i)).unwrap())
+        .collect();
+    let mut la: Vec<DynIndex> = (0..n_leaves).map(|_| DynIndex::new_dyn(chi_a)).collect();
+    let mut lb: Vec<DynIndex> = (0..n_leaves).map(|_| DynIndex::new_dyn(chi_b)).collect();
+    let (_s, _a, _b) = (shared.clone(), a_site.clone(), b_site.clone());
+    let (_la, _lb) = (&la, &lb);
+    let _ = (&mut shared, &mut a_site, &mut b_site, &mut la, &mut lb);
+
+    let mut ta = Vec::with_capacity(n_nodes);
+    let mut tb = Vec::with_capacity(n_nodes);
+    // center (node 0): [bonds to each leaf..., shared, a_site] / [...] b_site
+    {
+        let mut ia: Vec<DynIndex> = (0..n_leaves).map(|k| la[k].clone()).collect();
+        ia.push(shared[0].clone());
+        ia.push(a_site[0].clone());
+        let mut ib: Vec<DynIndex> = (0..n_leaves).map(|k| lb[k].clone()).collect();
+        ib.push(shared[0].clone());
+        ib.push(b_site[0].clone());
+        ta.push(pick_random(&mut rng, ia, complex));
+        tb.push(pick_random(&mut rng, ib, complex));
+    }
+    for leaf in 1..=n_leaves {
+        let mut ia: Vec<DynIndex> = vec![
+            la[leaf - 1].clone(),
+            shared[leaf].clone(),
+            a_site[leaf].clone(),
+        ];
+        ia.sort_by_key(|x| x.dim());
+        let mut ib: Vec<DynIndex> = vec![
+            lb[leaf - 1].clone(),
+            shared[leaf].clone(),
+            b_site[leaf].clone(),
+        ];
+        ib.sort_by_key(|x| x.dim());
+        ta.push(pick_random(&mut rng, ia, complex));
+        tb.push(pick_random(&mut rng, ib, complex));
+    }
+    let names: Vec<usize> = (0..n_nodes).collect();
+    (
+        TreeTN::from_tensors(ta, names.clone()).unwrap(),
+        TreeTN::from_tensors(tb, names).unwrap(),
+    )
+}
+
+fn pick_random(rng: &mut StdRng, indices: Vec<DynIndex>, complex: bool) -> IdxTensor {
+    if complex {
+        IdxTensor::random::<num_complex::Complex64, _>(rng, indices).unwrap()
+    } else {
+        IdxTensor::random::<f64, _>(rng, indices).unwrap()
+    }
+}
+
+#[test]
+fn test_low_rank_initializer_and_fit_on_branched_tree() {
+    // Star: center 0 with 3 leaves. Exact product of the two random networks is
+    // compared against the low-rank adaptive fit.
+    let (tn_a, tn_b) = make_star_pair(3, 3, 3, 2, false);
+    let center = 0usize;
+    let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 21).unwrap();
+    assert_eq!(sorted_bond_dims(&init), vec![1, 1, 1]);
+
+    let fit = contract_fit_from_initial(
+        &tn_a,
+        &tn_b,
+        &center,
+        FitContractionOptions::new(3).with_svd_policy(SvdTruncationPolicy::new(1e-8)),
+        init,
+    )
+    .unwrap();
+    let fitted_dense = fit.to_dense().unwrap();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let err = fitted_dense.distance(&expected).unwrap();
+    eprintln!("branched fit rel err = {err:.6e}");
+    assert!(
+        err < 1e-6,
+        "branched adaptive fit should match the exact product, rel_err={err:.6e}"
+    );
+}
+
+#[test]
+fn test_adaptive_fit_complex_matches_naive() {
+    // Two-node chain with surviving sites, complex dtype.
+    let (tn_a, tn_b) = make_chain_pair(2, 3, 3, 2, true);
+    let center = 1usize;
+    let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, &center, 1, 5).unwrap();
+    let fit = contract_fit_from_initial(
+        &tn_a,
+        &tn_b,
+        &center,
+        FitContractionOptions::new(4).with_svd_policy(SvdTruncationPolicy::new(1e-8)),
+        init,
+    )
+    .unwrap();
+    let fitted_dense = fit.to_dense().unwrap();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let err = fitted_dense.distance(&expected).unwrap();
+    eprintln!("complex fit rel err = {err:.6e}");
+    assert!(
+        err < 1e-6,
+        "complex adaptive fit should match the exact product, rel_err={err:.6e}"
+    );
+}

@@ -319,9 +319,12 @@ fn test_contract_fit_nhalfsweeps_zero_ok() {
     let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
+    // nfullsweeps = 0 returns the initializer unchanged; ZipUp makes that
+    // initializer the exact product so the naive match holds.
     let options = ContractOptions::fit()
         .with_nhalfsweeps(0)
-        .with_max_bond_dim(10);
+        .with_max_bond_dim(10)
+        .with_initializer(FitInitializer::ZipUp);
     let result = contract(&tt1, &tt2, &options).unwrap();
     assert_eq!(result.len(), 1);
     assert_matches_naive(&tt1, &tt2, &result);
