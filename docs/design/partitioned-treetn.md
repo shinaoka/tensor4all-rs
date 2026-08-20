@@ -194,11 +194,48 @@ contract_adaptive<V>(
 ) -> Result<PartitionedTreeTN<V>>
 ```
 
-`PatchingOptions` contains `rtol`, `max_bond_dim`, a partial full-index
+`PatchingOptions` contains `cutoff`, `max_bond_dim`, a partial full-index
 `patch_order`, and `split_strategy`. `PatchSplitStrategy::Sequential` follows
 that order; `ExactParameterGain` evaluates all available candidates. Split
 candidates are full external indices and remain independent of tree traversal
 order. Multiple external indices on one node are supported.
+
+### Truncation convention: local discarded-weight `cutoff`
+
+The scalar truncation surface follows the ITensorMPS convention: `cutoff`
+bounds the discarded singular-value **weight** (sum of squared singular
+values) at each local factorization. It is best effort for the final
+whole-network norm error; `max_bond_dim` is a hard cap and takes precedence
+over `cutoff`. No API claims a global relative-error bound.
+
+`cutoff` is a direct discarded-weight threshold, not a re-labelled relative
+tolerance. The default is `cutoff = 1e-24`, the exact square of the superseded
+global `rtol = 1e-12`, so existing callers see behavior-parity compression.
+Core relative singular-value policies remain available as
+`SvdTruncationPolicy`; for the explicit absolute-squared policy used by
+adaptive patching below, callers translating the old root-relative
+interpretation use `cutoff = old_rtol^2` (equivalently `rtol = sqrt(cutoff)`).
+
+The deprecated `tensor4all-partitionedtt` crate keeps its frozen `rtol`
+surface; only the equal-identity/different-dimension correctness fix applies
+in its behavior-frozen migration window.
+
+Volume-proportional allocation is an operation-specific best-effort policy.
+For each operation the reference squared norm `||F||^2` and total patch volume
+are measured once from that operation's input, and each patch receives
+
+```text
+local_cutoff_p = cutoff * ||F||^2 * volume_p / total_volume
+```
+
+That absolute squared-weight threshold is then passed whole to every local SVD
+of the patch (`SvdTruncationPolicy::new(local_cutoff_p)` with absolute,
+squared-values, and discarded-tail-sum semantics). The cutoff is derived once
+per operation and is not divided per bond; reuse across several bonds or
+repeated truncation stages does not provide a global error bound and is
+documented only as best effort. Child patches inherit volume-proportional
+cutoffs when a patch is split. `cutoff = 0` disables threshold-based
+truncation so only the hard `max_bond_dim` cap applies.
 
 `ExactParameterGain` preserves the TT predecessor's meaning: after forming and
 budget-truncating each candidate's children, count the checked sum of each local
@@ -233,8 +270,8 @@ Every public `Result` API documents concrete failure conditions.
 
 ## Dependencies and provenance
 
-The new crate depends on `tensor4all-core`, `tensor4all-tensorbackend`, and
-`tensor4all-treetn`. It does not depend on `tensor4all-itensorlike`,
+The new crate depends on `tensor4all-core` and `tensor4all-treetn`. It does
+not depend on `tensor4all-itensorlike`,
 `tensor4all-simplett`, `tensor4all-tensorci`, or `tensor4all-treetci`. Provider
 features propagate through all direct tensor4all dependencies.
 
@@ -329,20 +366,55 @@ after its requested scalar-node path tests were added, the fresh verdict was
 also `Correct-to-merge`.
 
 The adversarial follow-up review (issue
-[#655](https://github.com/tensor4all/tensor4all-rs/issues/655)) closed with
-these decisions, recorded in the work log
-`docs/worklogs/2026-08-20-partitioned-treetn-followups.md`:
+[#655](https://github.com/tensor4all/tensor4all-rs/issues/655)) closed with the
+maintainer decisions below. The follow-up PR for #651 (#661) implemented
+several remedies that the final maintainer decisions supersede; this revision
+records the authoritative contract and that supersession. See also the
+correction banner on `docs/worklogs/2026-08-20-partitioned-treetn-followups.md`.
 
-- adaptive truncation splits each patch's squared budget across its internal
-  bonds so that summed local SVD discards cannot exceed the advertised global
-  `rtol`; repeated truncations in `add_with_patching` inherit the same bound;
+Superseded by this revision (previously recorded for #661):
+
+- the per-bond budget split and the claim that summed local SVD discards
+  cannot exceed an advertised global `rtol`. The selected contract has **no**
+  whole-network error bound; adaptive truncation uses volume-proportional
+  local discarded-weight `cutoff` values (see the Adaptive patching section),
+  documented only as best effort.
+
+Recorded final decisions:
+
+- the scalar partition truncation surface is `cutoff`, a local
+  discarded-weight threshold applied independently at every local SVD
+  factorization; `max_bond_dim` is a hard cap; the final whole-network norm
+  error is best effort and never advertised as bounded;
+- adaptive patching allocates absolute local thresholds volume-proportionally
+  from one operation-pinned reference norm: `local_cutoff_p =
+  cutoff * ||F||^2 * volume_p / total_volume`;
 - patch site identities must agree in both full identity and dimension;
-  `from_subdomains` and algebra reject equal-identity/different-dimension
-  inputs with `SiteIndexMismatch`;
-- zero-node TreeTNs are rejected as subdomains; an empty `PartitionedTreeTN`
-  is a valid zero-norm object whose algebra requires operands;
+  constructors, projector validation, `patch_order`, and partition algebra
+  reject equal-identity/different-dimension inputs with `SiteIndexMismatch`,
+  and masking and splitting resolve the canonical site index before use;
+- zero-node TreeTNs are rejected as subdomains with a typed `Empty`; an empty
+  `PartitionedTreeTN` is a valid zero-norm object whose algebra requires
+  operands;
 - `add_with_patching` sums equal-key inputs instead of replacing them;
-- non-finite or negative SVD truncation thresholds are rejected before every
-  shortcut, and
+- non-finite or negative SVD cutoff/policy thresholds and `max_bond_dim == 0`
+  are rejected before every shortcut by one shared core validator
+  (`validate_svd_truncation_options`) reused by TreeTN, partition, and
+  adaptive entry points;
 - contraction output regions are not refined; overlapping outputs remain a
-  rejected, documented limitation (see Deferred work below).
+  rejected, documented limitation (see Deferred work below);
+- internal result construction collects, groups, and sorts duplicate projector
+  contributions, exact-adds each group, truncates it once, and validates the
+  full partition once;
+- the deprecated `tensor4all-partitionedtt` crate keeps its frozen `rtol`
+  surface; only the same-identity/different-dimension correctness fix applies
+  to it.
+
+Cross-model design verification for this revision passed before source edits:
+read-only reviewer `deepseek-v4-flash-284b:max` (fork context) returned
+`APPROVE` on the corrected design record with no blocking findings; the
+`PatchingOptions::default().cutoff = 1e-24` value was separately confirmed by
+the maintainer (accepted translation of the superseded `rtol = 1e-12`). A
+fresh read-only review of the complete final diff by the same cross-model
+reviewer also returned `APPROVE` with no blockers. Both verdicts are recorded
+in `docs/worklogs/2026-08-21-partitioned-treetn-cutoff-contract.md`.

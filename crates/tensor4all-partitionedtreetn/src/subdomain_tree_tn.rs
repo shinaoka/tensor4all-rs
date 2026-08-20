@@ -5,10 +5,12 @@ use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+use tensor4all_core::{
+    validate_svd_truncation_options, DynIndex, IdxTensor, IndexLike, SvdTruncationOptionsError,
+};
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
-    SiteIndexNetwork, TreeTN, TreeTNOperationError, TruncationOptions,
+    SiteIndexNetwork, TreeTN, TruncationOptions,
 };
 
 /// A TreeTN together with the projector defining its subdomain.
@@ -180,8 +182,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::InvalidTopology`] for a non-tree or
-    /// zero-node input, [`PartitionedTreeTNError::DTypeMismatch`] for mixed
+    /// Returns [`PartitionedTreeTNError::Empty`] for a zero-node input or
+    /// [`PartitionedTreeTNError::InvalidTopology`] for a non-tree input,
+    /// [`PartitionedTreeTNError::DTypeMismatch`] for mixed
     /// node dtypes, [`PartitionedTreeTNError::ProjectorIndexNotFound`] for an
     /// absent full site identity,
     /// [`PartitionedTreeTNError::ProjectorCoordinateOutOfBounds`] for an
@@ -225,8 +228,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::InvalidTopology`] for a non-tree or
-    /// zero-node input, [`PartitionedTreeTNError::DTypeMismatch`] or
+    /// Returns [`PartitionedTreeTNError::Empty`] for a zero-node input or
+    /// [`PartitionedTreeTNError::InvalidTopology`] for a non-tree input,
+    /// [`PartitionedTreeTNError::DTypeMismatch`] or
     /// [`PartitionedTreeTNError::UnsupportedDType`] for invalid node dtypes,
     /// [`PartitionedTreeTNError::TensorStorage`] or
     /// [`PartitionedTreeTNError::TensorConstruction`] when rebuilding fails,
@@ -686,40 +690,37 @@ fn validate_budget_squared(budget_squared: f64) -> Result<()> {
 }
 
 pub(crate) fn validate_truncation_options(options: &TruncationOptions) -> Result<()> {
-    if options.max_bond_dim() == Some(0) {
-        return Err(PartitionedTreeTNError::InvalidOptions {
-            operation: "truncate",
-            reason: "max_bond_dim must be greater than zero",
-        });
-    }
-    if options
-        .svd_policy()
-        .is_some_and(|policy| !policy.threshold.is_finite() || policy.threshold < 0.0)
-    {
-        return Err(PartitionedTreeTNError::InvalidOptions {
-            operation: "truncate",
-            reason: "SVD truncation threshold must be finite and non-negative",
-        });
-    }
-    Ok(())
+    validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy()).map_err(|error| {
+        match error {
+            SvdTruncationOptionsError::ZeroMaxBondDim => PartitionedTreeTNError::InvalidOptions {
+                operation: "truncate",
+                reason: "max_bond_dim must be greater than zero",
+            },
+            SvdTruncationOptionsError::InvalidThreshold(_) => {
+                PartitionedTreeTNError::InvalidOptions {
+                    operation: "truncate",
+                    reason: "SVD truncation threshold must be finite and non-negative",
+                }
+            }
+        }
+    })
 }
 
 pub(crate) fn validate_contraction_options(options: &ContractionOptions) -> Result<()> {
-    if options.max_bond_dim == Some(0) {
-        return Err(PartitionedTreeTNError::InvalidOptions {
-            operation: "contract",
-            reason: "max_bond_dim must be greater than zero",
-        });
-    }
-    if options
-        .svd_policy
-        .is_some_and(|policy| !policy.threshold.is_finite() || policy.threshold < 0.0)
-    {
-        return Err(PartitionedTreeTNError::InvalidOptions {
-            operation: "contract",
-            reason: "SVD truncation threshold must be finite and non-negative",
-        });
-    }
+    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy).map_err(|error| {
+        match error {
+            SvdTruncationOptionsError::ZeroMaxBondDim => PartitionedTreeTNError::InvalidOptions {
+                operation: "contract",
+                reason: "max_bond_dim must be greater than zero",
+            },
+            SvdTruncationOptionsError::InvalidThreshold(_) => {
+                PartitionedTreeTNError::InvalidOptions {
+                    operation: "contract",
+                    reason: "SVD truncation threshold must be finite and non-negative",
+                }
+            }
+        }
+    })?;
     if matches!(options.method, ContractionMethod::Naive) {
         return Err(PartitionedTreeTNError::InvalidOptions {
             operation: "contract",
@@ -818,11 +819,7 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     if data.node_count() == 0 {
-        return Err(PartitionedTreeTNError::InvalidTopology {
-            source: TreeTNOperationError::from(anyhow::anyhow!(
-                "a subdomain TreeTN must contain at least one node"
-            )),
-        });
+        return Err(PartitionedTreeTNError::Empty);
     }
     data.validate_tree()
         .map_err(PartitionedTreeTNError::invalid_topology)?;
@@ -866,6 +863,13 @@ where
                 index: index.clone(),
             });
         };
+        // `DynIndex` equality excludes the dimension, so an identity-matching
+        // alias with a different dimension must be rejected before masking;
+        // otherwise the alias reaches `mask_index` and fails as an internal
+        // label-shape mismatch instead of a public site mismatch.
+        if index.dim != matched.dim {
+            return Err(PartitionedTreeTNError::SiteIndexMismatch);
+        }
         if value >= matched.dim {
             return Err(PartitionedTreeTNError::ProjectorCoordinateOutOfBounds {
                 index: index.clone(),
@@ -896,8 +900,16 @@ where
             .ok_or_else(|| PartitionedTreeTNError::tree("TreeTN node has no tensor"))?;
         let mut tensor = source.clone();
         for (index, &value) in projector.iter() {
-            if tensor.indices().iter().any(|candidate| candidate == index) {
-                tensor = tensor.mask_index(index, value)?;
+            // Mask using the canonical site index resolved from this tensor,
+            // never the projector key: an identity-equal alias with a
+            // different dimension would otherwise fail below `mask_index` as
+            // an internal label-shape mismatch.
+            if let Some(canonical) = tensor
+                .indices()
+                .iter()
+                .find(|candidate| *candidate == index)
+            {
+                tensor = tensor.mask_index(canonical, value)?;
             }
         }
         tensors.push(tensor);

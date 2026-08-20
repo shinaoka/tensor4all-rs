@@ -1,5 +1,16 @@
 # PartitionedTreeTN follow-up fixes (#655)
 
+> **Superseded record (read this first).** This work log records what the #661
+> PR implemented. After it merged, the maintainer decisions in issue
+> [#655](https://github.com/tensor4all/tensor4all-rs/issues/655) superseded the
+> per-bond budget split described under Decisions and every claimed global
+> `rtol` error bound under Verification. The authoritative contract is a local
+> discarded-weight `cutoff` (`local_cutoff_p =
+> cutoff * ||F||^2 * volume_p / total_volume`) with **no** whole-network error
+> guarantee; see `docs/worklogs/2026-08-21-partitioned-treetn-cutoff-contract.md`
+> and `docs/design/partitioned-treetn.md`. Treat this file as historical
+> context, not current contract.
+
 ## Summary
 
 Addressed the adversarial review of #651 (implementing #648) tracked in issue

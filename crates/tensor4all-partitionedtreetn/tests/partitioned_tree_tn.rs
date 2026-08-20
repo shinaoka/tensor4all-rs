@@ -1,11 +1,12 @@
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
-    PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
+    add_with_patching, PartitionedTreeTN, PartitionedTreeTNError, PatchingOptions, Projector,
+    SubDomainTreeTN,
 };
 use tensor4all_treetn::{
     contraction::{ContractionMethod, ContractionOptions},
-    TreeTN, TreeTNOperationError, TruncationOptions,
+    TreeTN, TruncationOptions,
 };
 
 fn subdomain(site: &DynIndex, values: [f64; 2], coordinate: usize) -> SubDomainTreeTN {
@@ -406,14 +407,120 @@ fn same_index_identity_with_mismatched_dimensions_is_rejected() {
     // A single valid patch still works after the rejection above.
     let valid = PartitionedTreeTN::from_subdomain(make(&dim_two)).unwrap();
     assert_eq!(valid.len(), 1);
+
+    // A projector alias sharing the full identity but with a different
+    // dimension is rejected at the public constructor before `mask_index`.
+    let canonical = DynIndex::new_dyn(2);
+    let mut alias = canonical.clone();
+    alias.dim = 3;
+    let tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![canonical.clone()], vec![1.0, 2.0]).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    assert!(matches!(
+        SubDomainTreeTN::new(tree, Projector::from_pairs([(alias.clone(), 1)]).unwrap()),
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+
+    // `project` with a dimension-mismatched alias is rejected the same way.
+    let source = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![canonical.clone()], vec![1.0, 2.0]).unwrap()],
+            vec![0usize],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        source.project(&Projector::from_pairs([(alias, 0)]).unwrap()),
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+}
+
+#[test]
+fn adaptive_patch_order_rejects_dimension_mismatched_site_aliases() {
+    // `patch_order` entries are matched by full identity; a same-identity
+    // alias with a different dimension must be rejected with
+    // `SiteIndexMismatch` before any split uses the aliased dimension.
+    let site = DynIndex::new_dyn(2);
+    let mut alias = site.clone();
+    alias.dim = 3;
+    let patch = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![site], vec![1.0_f64, 2.0]).unwrap()],
+            vec![0usize],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        add_with_patching(
+            vec![patch],
+            &0,
+            &PatchingOptions {
+                patch_order: vec![alias],
+                ..PatchingOptions::default()
+            },
+        ),
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+}
+
+#[test]
+fn add_with_patching_rejects_invalid_cutoff_and_zero_cap_transactionally() {
+    let site = DynIndex::new_dyn(2);
+    let patch = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![site], vec![1.0_f64, 2.0]).unwrap()],
+            vec![0usize],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for cutoff in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        assert!(
+            matches!(
+                add_with_patching(
+                    vec![patch.clone()],
+                    &0,
+                    &PatchingOptions {
+                        cutoff,
+                        ..PatchingOptions::default()
+                    },
+                ),
+                Err(PartitionedTreeTNError::InvalidOptions { .. })
+            ),
+            "add_with_patching must reject cutoff {cutoff}"
+        );
+    }
+    assert!(matches!(
+        add_with_patching(
+            vec![patch],
+            &0,
+            &PatchingOptions {
+                max_bond_dim: Some(0),
+                ..PatchingOptions::default()
+            },
+        ),
+        Err(PartitionedTreeTNError::InvalidOptions { .. })
+    ));
 }
 
 #[test]
 fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
     let site = DynIndex::new_dyn(2);
     let partition = PartitionedTreeTN::from_subdomain(subdomain(&site, [1.0, 2.0], 0)).unwrap();
+    let mut subdomain = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap()],
+            vec![0usize],
+        )
+        .unwrap(),
+    )
+    .unwrap();
 
-    for threshold in [f64::NAN, f64::INFINITY, -1.0] {
+    for threshold in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
         let options = TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold));
         assert!(
             matches!(
@@ -434,34 +541,54 @@ fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
             ),
             "pairwise contraction shortcut must reject threshold {threshold}"
         );
+        assert!(
+            matches!(
+                subdomain.truncate(
+                    &0,
+                    TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold))
+                ),
+                Err(PartitionedTreeTNError::InvalidOptions { .. })
+            ),
+            "single-node truncate must reject threshold {threshold}"
+        );
     }
 
-    let mut subdomain = SubDomainTreeTN::from_treetn(
-        TreeTN::from_tensors(
-            vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap()],
-            vec![0usize],
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    // `max_bond_dim == 0` is a separate invalid case on every validated path.
     assert!(matches!(
-        subdomain.truncate(
+        partition.add(
+            &partition,
             &0,
-            TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(f64::NAN))
+            TruncationOptions::default().with_max_bond_dim(0)
         ),
+        Err(PartitionedTreeTNError::InvalidOptions { .. })
+    ));
+    assert!(matches!(
+        partition.contract(
+            &partition,
+            &0,
+            ContractionOptions::default().with_max_bond_dim(0)
+        ),
+        Err(PartitionedTreeTNError::InvalidOptions { .. })
+    ));
+    assert!(matches!(
+        subdomain.truncate(&0, TruncationOptions::default().with_max_bond_dim(0)),
         Err(PartitionedTreeTNError::InvalidOptions { .. })
     ));
 }
 
 #[test]
 fn empty_and_zero_node_subdomains_have_consistent_semantics() {
-    // Zero-node TreeTNs are not a valid subdomain; an empty partition is a
-    // distinct, valid zero object whose norm is zero but whose algebra requires
-    // operands.
+    // Zero-node TreeTNs are rejected with a typed `Empty`: a patch must carry
+    // an actual topology. An empty partition is a distinct, valid zero object
+    // whose norm is zero but whose algebra requires operands.
     let empty_tree = TreeTN::<IdxTensor, usize>::new();
     assert!(matches!(
         SubDomainTreeTN::from_treetn(empty_tree),
-        Err(PartitionedTreeTNError::InvalidTopology { .. })
+        Err(PartitionedTreeTNError::Empty)
+    ));
+    assert!(matches!(
+        SubDomainTreeTN::new(TreeTN::<IdxTensor, usize>::new(), Projector::new()),
+        Err(PartitionedTreeTNError::Empty)
     ));
 
     let empty = PartitionedTreeTN::<usize>::new();
@@ -483,17 +610,4 @@ fn empty_and_zero_node_subdomains_have_consistent_semantics() {
         empty.contract(&nonempty, &0, ContractionOptions::default()),
         Err(PartitionedTreeTNError::Empty)
     ));
-}
-
-#[test]
-fn zero_node_input_reports_tree_operator_source_error() {
-    // The zero-node rejection surfaces a typed TreeTN source so callers can
-    // distinguish it from a partition-level Empty error.
-    let empty = TreeTN::<IdxTensor, usize>::new();
-    let error = SubDomainTreeTN::from_treetn(empty).unwrap_err();
-    if let PartitionedTreeTNError::InvalidTopology { source } = error {
-        let _: &TreeTNOperationError = &source;
-    } else {
-        panic!("expected InvalidTopology, got {error:?}");
-    }
 }

@@ -415,25 +415,60 @@ where
         ensure_center(left_template.data(), center)?;
         ensure_center(right_template.data(), center)?;
 
-        let mut result = Self::new();
-        let duplicate_options = truncation_options_from_contraction(&options);
-        for left in self.data.values() {
-            for right in other.data.values() {
+        // Collect pairwise contraction contributions grouped by output
+        // projector. Left/right patches are visited in canonical projector
+        // order and groups are sorted, so the within-group exact-add order (and
+        // therefore the result) is independent of the input HashMap iteration
+        // order.
+        let mut left_patches: Vec<_> = self.data.values().collect();
+        let mut right_patches: Vec<_> = other.data.values().collect();
+        left_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        right_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        let mut groups: Vec<(Projector, Vec<SubDomainTreeTN<V>>)> = Vec::new();
+        let mut positions: HashMap<Projector, usize> = HashMap::new();
+        for left in left_patches {
+            for right in &right_patches {
                 let Some(contracted) = left.contract(right, center, options.clone())? else {
                     continue;
                 };
                 let projector = contracted.projector().clone();
-                if let Some(existing) = result.data.get(&projector) {
-                    let mut combined = existing.add(&contracted)?;
-                    combined.truncate(center, duplicate_options)?;
-                    result.data.remove(&projector);
-                    result.data.insert(projector, combined);
-                } else {
-                    result.insert_prevalidated(contracted)?;
+                match positions.get(&projector) {
+                    Some(&position) => groups[position].1.push(contracted),
+                    None => {
+                        positions.insert(projector.clone(), groups.len());
+                        groups.push((projector, vec![contracted]));
+                    }
                 }
             }
         }
-        Ok(result)
+
+        // Exact-add each completed group with strict TreeTN addition, then
+        // truncate the group once (a single contribution is already the
+        // per-pair contraction result). This replaces repeated
+        // add-and-truncate, which was order dependent and re-approximated the
+        // sum at every contribution.
+        groups.sort_by(|(left, _), (right, _)| left.canonical_cmp(right));
+        let duplicate_options = truncation_options_from_contraction(&options);
+        let mut subdomains = Vec::with_capacity(groups.len());
+        for (_, contributions) in groups {
+            let mut contributions = contributions.into_iter();
+            let first = contributions.next().ok_or(PartitionedTreeTNError::Empty)?;
+            let mut combined = first;
+            let mut contribution_count = 1usize;
+            for contribution in contributions {
+                combined = combined.add(&contribution)?;
+                contribution_count += 1;
+            }
+            if contribution_count > 1 {
+                combined.truncate(center, duplicate_options)?;
+            }
+            subdomains.push(combined);
+        }
+
+        // Build and validate the complete result partition once at the end;
+        // overlapping non-identical output projectors are rejected here with
+        // the documented `OverlappingProjectors` limitation.
+        PartitionedTreeTN::from_subdomains(subdomains)
     }
 
     /// Sum eager patches in deterministic canonical projector order.

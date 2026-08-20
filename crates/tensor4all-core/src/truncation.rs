@@ -222,5 +222,98 @@ pub(crate) fn validate_svd_truncation_policy(
     validate_threshold_value(policy.threshold)
 }
 
+/// Error from validating optional SVD truncation options.
+///
+/// This is the shared typed error for the neutral validation seam reused by
+/// TreeTN truncation/contraction/fit, partition algebra and adaptive patching,
+/// and the low-level SVD entry points.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::SvdTruncationOptionsError;
+///
+/// assert_eq!(
+///     SvdTruncationOptionsError::ZeroMaxBondDim.to_string(),
+///     "max_bond_dim must be at least 1 when set"
+/// );
+/// ```
+#[derive(Debug, Error, Clone, Copy, PartialEq)]
+pub enum SvdTruncationOptionsError {
+    /// `max_bond_dim` is present but zero.
+    #[error("max_bond_dim must be at least 1 when set")]
+    ZeroMaxBondDim,
+    /// The SVD cutoff threshold is not finite or is negative.
+    #[error("invalid SVD truncation threshold: {0}; threshold must be finite and non-negative")]
+    InvalidThreshold(f64),
+}
+
+/// Validate optional SVD truncation options shared by all callers.
+///
+/// `max_bond_dim` must be `None` or at least one, and an explicit SVD policy
+/// threshold must be finite and non-negative. Call this at every public
+/// truncation, contraction, fit, and adaptive entry point **before** any
+/// mutation or no-op shortcut (empty center, single node, zero sweep, disjoint
+/// partition addition, or `Naive`/`Zipup` dispatch), so invalid options are
+/// rejected with the same typed error on every path.
+///
+/// # Arguments
+///
+/// * `max_bond_dim` - Optional maximum retained bond dimension; `Some(0)` is
+///   rejected because a rank cap of zero would silently collapse.
+/// * `policy` - Optional explicit [`SvdTruncationPolicy`]; when present its
+///   threshold must be finite and non-negative.
+///
+/// # Returns
+///
+/// `Ok(())` when both optional fields are valid, otherwise the typed
+/// error naming the failing field.
+///
+/// # Errors
+///
+/// Returns [`SvdTruncationOptionsError::ZeroMaxBondDim`] when `max_bond_dim`
+/// is `Some(0)`, or [`SvdTruncationOptionsError::InvalidThreshold`] when the
+/// explicit policy threshold is non-finite or negative.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     validate_svd_truncation_options, SvdTruncationOptionsError,
+///     SvdTruncationPolicy,
+/// };
+///
+/// assert!(validate_svd_truncation_options(None, None).is_ok());
+/// assert!(validate_svd_truncation_options(
+///     Some(64),
+///     Some(SvdTruncationPolicy::new(1e-8)),
+/// )
+/// .is_ok());
+/// assert_eq!(
+///     validate_svd_truncation_options(Some(0), None),
+///     Err(SvdTruncationOptionsError::ZeroMaxBondDim)
+/// );
+/// assert!(matches!(
+///     validate_svd_truncation_options(
+///         None,
+///         Some(SvdTruncationPolicy::new(f64::NAN))
+///     ),
+///     Err(SvdTruncationOptionsError::InvalidThreshold(_))
+/// ));
+/// ```
+pub fn validate_svd_truncation_options(
+    max_bond_dim: Option<usize>,
+    policy: Option<SvdTruncationPolicy>,
+) -> Result<(), SvdTruncationOptionsError> {
+    if max_bond_dim == Some(0) {
+        return Err(SvdTruncationOptionsError::ZeroMaxBondDim);
+    }
+    if let Some(policy) = policy {
+        validate_svd_truncation_policy(policy)
+            .map_err(|error| SvdTruncationOptionsError::InvalidThreshold(error.0))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

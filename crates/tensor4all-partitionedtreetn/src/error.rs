@@ -227,9 +227,9 @@ mod tests {
         assert_display(
             PartitionedTreeTNError::InvalidOptions {
                 operation: "merge",
-                reason: "rtol must be nonnegative",
+                reason: "cutoff must be nonnegative",
             },
-            "invalid merge options: rtol must be nonnegative",
+            "invalid merge options: cutoff must be nonnegative",
         );
         assert_display(
             PartitionedTreeTNError::VolumeOverflow,

@@ -171,6 +171,6 @@ pub use defaults::svd::{
 // Global default and truncation utilities
 pub use global_default::{GlobalDefault, InvalidRtolError};
 pub use truncation::{
-    DecompositionAlg, InvalidThresholdError, SingularValueMeasure, SvdTruncationPolicy,
-    ThresholdScale, TruncationRule,
+    validate_svd_truncation_options, DecompositionAlg, InvalidThresholdError, SingularValueMeasure,
+    SvdTruncationOptionsError, SvdTruncationPolicy, ThresholdScale, TruncationRule,
 };

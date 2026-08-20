@@ -147,12 +147,15 @@ site indices per node, and does not implement adaptive interpolation.
 - `Projector` — maps full `DynIndex` identities to zero-based coordinates.
 - `SubDomainTreeTN<V>` — eagerly masked TreeTN plus its projector.
 - `PartitionedTreeTN<V>` — homogeneous, pairwise-disjoint patches.
-- `PatchingOptions { rtol, max_bond_dim, patch_order, split_strategy }`.
+- `PatchingOptions { cutoff, max_bond_dim, patch_order, split_strategy }` —
+  `cutoff` is a local discarded-weight cutoff (ITensorMPS convention): each
+  patch gets absolute threshold `cutoff · ‖F‖² · volume_p/total_volume`,
+  applied whole per local SVD, best effort (no global error bound).
 - `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
   checked logical local tensor element counts after child truncation.
 - `add_with_patching(patches, &center, &options)` — split over-cap patches.
-- `truncate_adaptive(&partition, &center, rtol, max_bond_dim)` — assign
-  volume-proportional absolute squared-tail budgets and drop patches below them.
+- `truncate_adaptive(&partition, &center, cutoff, max_bond_dim)` — assign
+  volume-proportional absolute local cutoffs and drop patches at/below theirs.
 - `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
   contract and retruncate against the corrected output norm.
 
