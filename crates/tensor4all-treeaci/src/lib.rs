@@ -15,14 +15,11 @@
 //! 1.7x-2.5x before `convergence_criterion` was changed to match
 //! `tensor4all-aci`'s network-wide scalar max-rank stopping rule instead of
 //! requiring every individual edge's rank to be simultaneously
-//! non-increasing). It still remains several times slower end to end
-//! (roughly 1.8x-3.0x wall time on `treeaci_parity`'s chain across bond
-//! dimension 16 through 256, chi=256 specifically ~2.9x-3.0x -- down from
-//! roughly 2.1x-3.6x on the same benchmark's default chi 16-128 range, and
-//! down from a measured 5.0x at chi=256 alone, before unchanged directed
-//! edges' frame storage was shared via `Rc` instead of rebuilt on every
-//! `extend` call), but the gap is no longer chiefly a sweep-count effect --
-//! it now reflects the per-sweep cost described below.
+//! non-increasing). It still remains slower end to end (a fresh run of
+//! `treeaci_parity` measured roughly 1.5x-2.1x wall time on the chain across
+//! bond dimension 16 through 256, with host-sensitive absolute timings), but
+//! the gap is no longer chiefly a sweep-count effect -- it now reflects the
+//! per-sweep cost described below.
 //! `InputFrameStore::build_or_extend` used to rebuild every directed edge's
 //! frame storage on every call: for an edge whose sample count had not
 //! changed since the previous call, it eagerly copied every already-known
@@ -33,21 +30,17 @@
 //! allocation directly, with no copy at all, and an old sample that some
 //! other (genuinely changed) edge's ancestor-priming recursion still needs
 //! to read is pulled lazily, one row at a time, instead of being
-//! pre-copied for every edge up front. Candidate/pivot-search
-//! frame contraction, and sample materialization
-//! (`from_samples`/`extend`) for single-incoming-edge nodes (which covers
-//! every node on a chain), route through a BLAS matrix-multiply primitive
-//! instead of a per-candidate/per-sample scalar loop *when* that sample is
-//! not already memoized. `InputFrameStore::build_or_extend`'s directed-edge
-//! loop runs in index order, not topological order, so on a chain a
-//! meaningful share of single-incoming-edge samples end up materialized via
-//! the scalar path anyway, as a side effect of an earlier edge's ancestor-
-//! priming recursion reaching them first; a fix keeps this from *also*
-//! redundantly re-materializing those samples through a second, wasted BLAS
-//! call, but does not convert the scalar-primed ones into batched work.
-//! Multi-incoming-edge nodes (genuine tree branch points, not exercised by
-//! the chain benchmark) still use the original per-candidate/per-sample
-//! scalar path throughout.
+//! pre-copied for every edge up front. Candidate/pivot-search frame
+//! contraction, and sample materialization (`from_samples`/`extend`) for
+//! single-incoming-edge nodes (which covers every node on a chain), route
+//! through a BLAS matrix-multiply primitive instead of a
+//! per-candidate/per-sample scalar loop when applicable.
+//! `InputFrameStore::build_or_extend` retains edge-index order for accounting
+//! and reuse decisions, but now materializes missing directed frames in
+//! dependency order, so ancestor samples reach the batched path before a
+//! dependent edge can prime them. Multi-incoming-edge nodes (genuine tree
+//! branch points, not exercised by the chain benchmark) still use the
+//! original per-candidate/per-sample scalar path throughout.
 //!
 //! Prefer `tensor4all-aci` for chain topologies. Use this crate when the
 //! topology is genuinely a tree, where the alternative is not a slower run but

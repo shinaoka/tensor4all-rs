@@ -1290,3 +1290,55 @@ ceiling. What remains -- first-materialization via scalar priming (~20%) and
 `TreeAciState::initialize`'s bootstrap/canonicalization cost (~20%) -- is
 explicitly out of this plan's scope and is each already identified as a
 separate follow-up.
+
+## Update 11: topological frame materialization removes first-materialization scalar priming
+
+Update 10's phase breakdown identified a remaining, measured ~20% cost: on a
+chain, `InputFrameStore::build_or_extend` visited directed edges by numeric id.
+`compute_batch` on an edge with one incoming edge recursively called scalar
+`FrameBuilder::compute` for that incoming frame. Because numeric edge order is
+not dependency order, that recursion could materialize a later single-incoming
+edge through the scalar path before that edge's own batched call ran. This was
+not an inherent tree-branching cost; it was a missed batching opportunity in a
+known sibling call path.
+
+**RED evidence.** A five-node chain fixture with four seeds recorded 6 scalar
+frame contractions, while only 3 samples belonged to non-batchable edges (the
+two leaf directions in this fixture). The new regression
+`from_samples_uses_scalar_only_for_non_batch_edges_on_a_chain` failed with
+`left: 6, right: 3` before the production change. A separate star-topology
+invariant test checks that every `incoming_to_from` dependency precedes its
+dependent in the computed order.
+
+**The fix.** `build_or_extend` now keeps the original numeric edge order for
+resource accounting and reuse decisions, then materializes missing edges in a
+Kahn topological order of the directed-frame dependency graph. Consequently,
+single-incoming ancestors are fully materialized through their grouped BLAS
+path before dependent edges read them. Multi-incoming edges retain the scalar
+fallback. The test-only counters now distinguish scalar contractions from
+batched columns, while the existing aggregate counter remains unchanged.
+
+**Correctness verification.** The targeted regression passed after the fix,
+and the full `tensor4all-treeaci` suite passed: 106 lib tests, 7 integration
+tests, 1 rank-scaling test, and 18 doctests. The existing chain, star, branch,
+extend, cache, and exact-value tests all remained green.
+
+**Fresh efficiency measurement.** Using the committed `treeaci_parity` setup
+(16 sites, local dimension 2, two deterministic TT inputs, chain topology,
+unseeded, global guard disabled), one fresh Criterion run gave these midpoint
+times; the temporary 200/256 entries were reverted after measurement:
+
+| chi | train (ms) | tree (ms) | tree/train |
+|---:|---:|---:|---:|
+| 16 | 22.345 | 46.169 | 2.07x |
+| 32 | 15.708 | 33.103 | 2.11x |
+| 64 | 28.656 | 43.545 | 1.52x |
+| 128 | 35.139 | 68.993 | 1.96x |
+| 200 | 45.156 | 83.601 | 1.85x |
+| 256 | 53.402 | 108.54 | 2.03x |
+
+The run did not show the previous monotonic ratio growth through chi=256; the
+remaining roughly 2x gap is now a separate per-sweep overhead question, not
+evidence that this scalar-priming bug is still present. Absolute values remain
+host-sensitive, and the benchmark still compares chain versus chain rather
+than a genuinely branched tree.

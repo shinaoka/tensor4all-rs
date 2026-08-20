@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::rc::Rc;
 
@@ -14,7 +14,7 @@ use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    problem::{DirectedEdgeId, PreparedTreeProblem},
+    problem::{DirectedEdge, DirectedEdgeId, PreparedTreeProblem},
     samples::{ComponentSample, SampleArena, SampleId},
     Result, TreeAciError, TreeAciNode, TreeAciScalar,
 };
@@ -35,18 +35,36 @@ pub(crate) mod debug_stats {
 
     thread_local! {
         static COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
+        static SCALAR_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
+        static BATCHED_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
     }
 
-    pub(crate) fn record_compute_call() {
+    pub(crate) fn record_scalar_compute_call() {
         COMPUTE_CALLS.with(|count| count.set(count.get() + 1));
+        SCALAR_COMPUTE_CALLS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn record_batched_compute_call() {
+        COMPUTE_CALLS.with(|count| count.set(count.get() + 1));
+        BATCHED_COMPUTE_CALLS.with(|count| count.set(count.get() + 1));
     }
 
     pub(crate) fn compute_calls() -> u64 {
         COMPUTE_CALLS.with(Cell::get)
     }
 
+    pub(crate) fn scalar_compute_calls() -> u64 {
+        SCALAR_COMPUTE_CALLS.with(Cell::get)
+    }
+
+    pub(crate) fn batched_compute_calls() -> u64 {
+        BATCHED_COMPUTE_CALLS.with(Cell::get)
+    }
+
     pub(crate) fn reset() {
         COMPUTE_CALLS.with(|count| count.set(0));
+        SCALAR_COMPUTE_CALLS.with(|count| count.set(0));
+        BATCHED_COMPUTE_CALLS.with(|count| count.set(0));
     }
 }
 
@@ -198,6 +216,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         let sample_counts = (0..edge_count)
             .map(|edge| arena.directed_record_count(edge))
             .collect::<Result<Vec<_>>>()?;
+        let frame_order = dependency_order(&problem.directed_edges)?;
         let mut all_inputs = Vec::with_capacity(inputs.len());
         let mut all_cores = Vec::with_capacity(inputs.len());
         // `max_frame_elements` bounds one frame; this cache keeps one per input
@@ -251,8 +270,8 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             // running `retained_bytes` total and the point at which a
             // resource limit trips are exactly what they were before this
             // function was restructured), then either reuse the previous
-            // store's frame for that edge or materialize the samples it is
-            // missing.
+            // store's frame for that edge or record that it needs
+            // materialization.
             //
             // Results are written into a pre-sized, edge-indexed slot vector
             // rather than pushed: the reuse decision happens here but
@@ -261,6 +280,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             // interleave the two kinds of edge out of edge order.
             let mut input_frames: Vec<Option<Rc<DirectedFrame<T>>>> = vec![None; edge_count];
             let mut frame_elements = vec![0usize; edge_count];
+            let mut known_samples = vec![0usize; edge_count];
             for edge in 0..edge_count {
                 let sample_count = sample_counts[edge];
                 let bond_dim = bond_dims[edge];
@@ -303,6 +323,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
 
                 let previous = existing_input.and_then(|frames| frames.get(edge));
                 let known = previous.map_or(0, |frame| frame.sample_count);
+                known_samples[edge] = known;
                 // `SampleArena` is append-only with immutable `SampleId`s (see
                 // `samples.rs`), so an unchanged sample count means an
                 // identical, identically-ordered sample set: the previous
@@ -317,7 +338,21 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     input_frames[edge] = Some(Rc::clone(previous));
                     continue;
                 }
-                builder.compute_batch(edge, known..sample_count)?;
+            }
+
+            // Materialize missing edges only after their incoming frame
+            // dependencies have been materialized. The old edge-index order
+            // could call `compute_batch` on an edge before its single-
+            // incoming ancestor; that edge then reached the ancestor through
+            // scalar priming, defeating the batched path on the ancestor's
+            // first materialization. `frame_order` is a topological order of
+            // this directed-frame dependency graph, so a single-incoming
+            // ancestor is fully batched before it is read by its dependent.
+            for &edge in &frame_order {
+                if input_frames[edge].is_some() {
+                    continue;
+                }
+                builder.compute_batch(edge, known_samples[edge]..sample_counts[edge])?;
             }
 
             // Pass 2: rebuild only the edges pass 1 left empty (grown or
@@ -669,6 +704,68 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     }
 }
 
+/// Returns an order in which every directed frame's incoming dependencies are
+/// available before the frame itself is materialized.
+///
+/// The dependency graph is acyclic for a validated tree: a directed edge
+/// depends on the other directed edges entering its source node, and following
+/// those dependencies walks away from the edge's source. Kahn's algorithm is
+/// used instead of relying on numeric directed-edge ids, whose construction
+/// order is unrelated to this dependency direction on a chain.
+fn dependency_order<V>(directed_edges: &[DirectedEdge<V>]) -> Result<Vec<DirectedEdgeId>> {
+    let edge_count = directed_edges.len();
+    let mut remaining = directed_edges
+        .iter()
+        .map(|edge| edge.incoming_to_from.len())
+        .collect::<Vec<_>>();
+    let mut dependents = vec![Vec::<DirectedEdgeId>::new(); edge_count];
+
+    for (edge, directed) in directed_edges.iter().enumerate() {
+        for &dependency in &directed.incoming_to_from {
+            if dependency >= edge_count {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "directed frame dependency references an unknown edge",
+                });
+            }
+            dependents[dependency].push(edge);
+        }
+    }
+
+    let mut ready = VecDeque::new();
+    for (edge, &count) in remaining.iter().enumerate() {
+        if count == 0 {
+            ready.push_back(edge);
+        }
+    }
+
+    let mut order = Vec::with_capacity(edge_count);
+    while let Some(edge) = ready.pop_front() {
+        order.push(edge);
+        for &dependent in &dependents[edge] {
+            let count = remaining
+                .get_mut(dependent)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "directed frame dependency has no indegree entry",
+                })?;
+            *count = count
+                .checked_sub(1)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "directed frame dependency indegree underflowed",
+                })?;
+            if *count == 0 {
+                ready.push_back(dependent);
+            }
+        }
+    }
+
+    if order.len() != edge_count {
+        return Err(TreeAciError::InternalInvariant {
+            message: "directed frame dependency graph contains a cycle",
+        });
+    }
+    Ok(order)
+}
+
 struct FrameBuilder<'a, T, V>
 where
     T: TreeAciScalar,
@@ -726,7 +823,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             return Ok(values);
         }
         #[cfg(test)]
-        debug_stats::record_compute_call();
+        debug_stats::record_scalar_compute_call();
         let record = self.arena.record(edge, sample)?.clone();
         let mut incoming_frames = Vec::with_capacity(record.incoming.len());
         for &(incoming_edge, incoming_sample) in &record.incoming {
@@ -781,15 +878,12 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         // re-fetched from `self.arena` in each of three separate loops).
         //
         // The skip matters for correctness-of-effort, not correctness of
-        // result: `InputFrameStore::build_or_extend`'s outer loop visits
-        // directed edges in index order, not topological order, so an
-        // earlier edge's `compute_batch` call can already have primed (via
-        // the scalar `self.compute` recursion below) samples on a *later*
-        // edge that this call's own range also covers, before this call
-        // runs. Without this check those already-memoized samples would be
-        // redundantly re-grouped and re-contracted through a second, wasted
-        // `mat_mul`. Mirrors `candidate_frames_for_edge`'s existing
-        // `candidate_cache` check at the equivalent point in its own loop.
+        // result: dependency priming or a direct caller can already have
+        // memoized a sample in this range before this batch is assembled.
+        // Without this check those samples would be redundantly re-grouped
+        // and re-contracted through a second, wasted `mat_mul`. Mirrors
+        // `candidate_frames_for_edge`'s existing `candidate_cache` check at
+        // the equivalent point in its own loop.
         let mut pending: Vec<(SampleId, ComponentSample)> = Vec::new();
         for sample in samples {
             if self.memo[edge][sample].is_some() {
@@ -897,7 +991,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
                     .map(|row| batched[[row, column]])
                     .collect();
                 #[cfg(test)]
-                debug_stats::record_compute_call();
+                debug_stats::record_batched_compute_call();
                 let slot = self
                     .memo
                     .get_mut(edge)

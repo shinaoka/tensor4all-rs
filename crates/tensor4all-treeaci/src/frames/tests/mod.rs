@@ -899,17 +899,12 @@ fn extend_matches_a_full_rebuild_on_a_chain_with_a_batched_edge() {
 
 /// 5-node chain `0 -- 1 -- 2 -- 3 -- 4`. Used only by
 /// `from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_chain`
-/// below. `build_or_extend`'s outer loop visits directed edges in index
-/// order (`0..problem.directed_edges.len()`), not topological order. On
-/// this chain that index order puts directed edge id 1 (`1 -> 0`) before
-/// ids 3 (`2 -> 1`) and 5 (`3 -> 2`); id 1's `compute_batch` priming
-/// recursion (the scalar `self.compute` calls that materialize its single
-/// incoming sample) walks the ancestor chain `id1 -> id3 -> id5 -> id7` and
-/// so scalar-computes samples on id3 and id5 *before* the outer loop
-/// reaches those edges directly -- exactly the cross-order priming shape
-/// the memo-check fix in `compute_batch` exists to deduplicate. A 3-node
-/// chain (`chain_tree_for_batched_compute`) is too short to reproduce this:
-/// it needs at least one directed edge whose own incoming edge is itself
+/// below. Before the dependency-order fix, numeric edge ids put directed edge
+/// id 1 (`1 -> 0`) before ids 3 (`2 -> 1`) and 5 (`3 -> 2`); id 1's
+/// `compute_batch` priming recursion then scalar-computed samples on those
+/// later single-incoming edges before their own batch calls. A 3-node chain
+/// (`chain_tree_for_batched_compute`) is too short to reproduce this: it needs
+/// at least one directed edge whose own incoming edge is itself
 /// single-incoming (not a leaf), which first appears at 5 nodes.
 fn chain5_tree_for_dedup_regression() -> TreeTN<IdxTensor, usize> {
     let s: Vec<DynIndex> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
@@ -1000,6 +995,69 @@ fn from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_cha
          {total_memo_slots} slots across {} directed edges",
         problem.directed_edges.len()
     );
+}
+
+/// A chain's non-leaf directed edges have exactly one incoming edge and must
+/// therefore be materialized by `compute_batch`, not scalar-primed by an
+/// earlier edge whose dependency has not been processed yet. Before the
+/// dependency-order fix, the numeric edge-id order caused the first
+/// single-incoming edge to recurse through later single-incoming edges and
+/// materialize their samples through the scalar path.
+#[test]
+fn from_samples_uses_scalar_only_for_non_batch_edges_on_a_chain() {
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![1, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 0],
+        vec![0, 0, 1, 0, 0],
+    ];
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+
+    super::debug_stats::reset();
+    InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+        .expect("build the frame store from scratch");
+
+    let expected_scalar_calls: u64 = problem
+        .directed_edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| edge.incoming_to_from.len() != 1)
+        .map(|(edge, _)| arena.directed_record_count(edge).unwrap() as u64)
+        .sum();
+    assert_eq!(
+        super::debug_stats::scalar_compute_calls(),
+        expected_scalar_calls,
+        "only non-batchable edges should use scalar contraction"
+    );
+    assert!(
+        super::debug_stats::batched_compute_calls() > 0,
+        "the chain must exercise the batched single-incoming path"
+    );
+}
+
+#[test]
+fn dependency_order_places_incoming_frames_before_dependents_on_a_star() {
+    let input = star_tree_for_fallback_dispatch();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let order = super::dependency_order(&problem.directed_edges).unwrap();
+    assert_eq!(order.len(), problem.directed_edges.len());
+
+    let mut positions = vec![0usize; order.len()];
+    for (position, &edge) in order.iter().enumerate() {
+        positions[edge] = position;
+    }
+    for (edge, directed) in problem.directed_edges.iter().enumerate() {
+        for &dependency in &directed.incoming_to_from {
+            assert!(
+                positions[dependency] < positions[edge],
+                "dependency edge {dependency} must precede dependent edge {edge}"
+            );
+        }
+    }
 }
 
 /// `compute_batch` on a directed edge with zero incoming edges (a leaf
