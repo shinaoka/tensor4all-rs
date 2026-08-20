@@ -35,11 +35,11 @@
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor};
-use crate::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
-use anyhow::Result as AnyhowResult;
+use crate::{
+    matrix_luci_factors_from_matrix, rrlu, MatrixLuciFactors, RrLUOptions, Scalar as MatrixScalar,
+};
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
 use crate::defaults::svd::{compute_retained_rank, svd_for_factorize};
@@ -806,7 +806,7 @@ where
     let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
-    // Convert to Matrix type for MatrixLUCI
+    // Convert to Matrix type for MatrixLUCI.
     let a_matrix = eager_tensor_to_matrix::<T>(&matrix_inner, m, n)?;
 
     // Set up LU options for CI
@@ -818,69 +818,14 @@ where
         left_orthogonal,
     };
 
-    // Perform CI decomposition
-    let ci = MatrixLUCI::from_matrix(&a_matrix, Some(lu_options))?;
-    let rank = ci.rank();
-
-    let row_indices = ci.row_indices().to_vec();
-    let col_indices = ci.col_indices().to_vec();
-    let cols_inner = matrix_inner.take_cols(&col_indices).map_err(|e| {
-        FactorizeError::ComputationError(anyhow::anyhow!(
-            "fixed-pivot CI column gather failed: {e}"
-        ))
-    })?;
-    let rows_inner = matrix_inner.take_rows(&row_indices).map_err(|e| {
-        FactorizeError::ComputationError(anyhow::anyhow!("fixed-pivot CI row gather failed: {e}"))
-    })?;
-    let pivot_inner = matrix_inner
-        .take_block(&row_indices, &col_indices)
-        .map_err(|e| {
-            FactorizeError::ComputationError(anyhow::anyhow!(
-                "fixed-pivot CI pivot block gather failed: {e}"
-            ))
-        })?;
-    let (left_inner, right_inner) = match canonical {
-        Canonical::Left => {
-            let left = eager_right_solve(&pivot_inner, &cols_inner).map_err(|e| {
-                FactorizeError::ComputationError(anyhow::anyhow!(
-                    "fixed-pivot CI right solve failed: {e}"
-                ))
-            })?;
-            (left, rows_inner)
-        }
-        Canonical::Right => {
-            let right = pivot_inner.full_piv_lu_solve(&rows_inner).map_err(|e| {
-                FactorizeError::ComputationError(anyhow::anyhow!(
-                    "fixed-pivot CI solve failed: {e}"
-                ))
-            })?;
-            (cols_inner, right)
-        }
-    };
-
-    // Create bond index
-    let bond_index = DynIndex::new_bond(rank)
-        .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
-
-    let mut l_indices = left_indices.clone();
-    l_indices.push(bond_index.clone());
-    let l_dims: Vec<usize> = l_indices.iter().map(|idx| idx.dim).collect();
-    let left_inner = left_inner.reshape(&l_dims).map_err(|e| {
-        FactorizeError::ComputationError(anyhow::anyhow!("fixed-pivot CI left reshape failed: {e}"))
-    })?;
-    let left =
-        IdxTensor::from_inner(l_indices, left_inner).map_err(FactorizeError::ComputationError)?;
-
-    let mut r_indices = vec![bond_index.clone()];
-    r_indices.extend_from_slice(&right_indices);
-    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let right_inner = right_inner.reshape(&r_dims).map_err(|e| {
-        FactorizeError::ComputationError(anyhow::anyhow!(
-            "fixed-pivot CI right reshape failed: {e}"
-        ))
-    })?;
-    let right =
-        IdxTensor::from_inner(r_indices, right_inner).map_err(FactorizeError::ComputationError)?;
+    // Perform CI decomposition and reuse its backend factors directly. The
+    // previous path gathered pivot blocks into eager tensors and solved them
+    // element-wise at this boundary, duplicating work already done by the
+    // backend factorization.
+    let factors = matrix_luci_factors_from_matrix(&a_matrix, Some(lu_options))?;
+    let rank = factors.rank;
+    let (left, right, bond_index) =
+        matrix_luci_factors_to_idx_tensors(factors, &left_indices, &right_indices)?;
 
     Ok(FactorizeResult {
         left,
@@ -891,10 +836,28 @@ where
     })
 }
 
-fn eager_right_solve(a: &EagerTensor, rhs: &EagerTensor) -> AnyhowResult<EagerTensor> {
-    let a_t = a.transpose(&[1, 0])?;
-    let rhs_t = rhs.transpose(&[1, 0])?;
-    Ok(a_t.full_piv_lu_solve(&rhs_t)?.transpose(&[1, 0])?)
+fn matrix_luci_factors_to_idx_tensors<T>(
+    factors: MatrixLuciFactors<T>,
+    left_indices: &[DynIndex],
+    right_indices: &[DynIndex],
+) -> Result<(IdxTensor, IdxTensor, DynIndex), FactorizeError>
+where
+    T: TensorElement + Clone,
+{
+    let bond_index = DynIndex::new_bond(factors.rank)
+        .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
+
+    let mut l_indices = left_indices.to_vec();
+    l_indices.push(bond_index.clone());
+    let left = IdxTensor::from_dense(l_indices, matrix_to_vec(&factors.left)?)
+        .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
+
+    let mut r_indices = vec![bond_index.clone()];
+    r_indices.extend_from_slice(right_indices);
+    let right = IdxTensor::from_dense(r_indices, matrix_to_vec(&factors.right)?)
+        .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
+
+    Ok((left, right, bond_index))
 }
 
 /// Convert a native rank-2 tensor into a backend [`Matrix`].
