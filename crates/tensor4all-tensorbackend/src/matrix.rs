@@ -439,7 +439,7 @@ impl<T> Matrix<T> {
             expected.is_some(),
             "matrix shape product overflow: {nrows} rows * {ncols} columns"
         );
-        let expected = expected.map_or(0, |expected| expected);
+        let expected = expected.unwrap_or(0);
         assert_eq!(data.len(), expected);
         Self { data, nrows, ncols }
     }
@@ -939,7 +939,7 @@ impl<T: Clone> Matrix<T> {
             len.is_some(),
             "matrix shape product overflow: {nrows} rows * {ncols} columns"
         );
-        let len = len.map_or(0, |len| len);
+        let len = len.unwrap_or(0);
         Self {
             data: vec![elem; len],
             nrows,
@@ -984,7 +984,7 @@ impl<T: Clone + Zero> Matrix<T> {
             len.is_some(),
             "matrix shape product overflow: {nrows} rows * {ncols} columns"
         );
-        let len = len.map_or(0, |len| len);
+        let len = len.unwrap_or(0);
         Self {
             data: vec![T::zero(); len],
             nrows,
