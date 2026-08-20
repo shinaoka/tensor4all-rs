@@ -327,3 +327,22 @@ design review used `reviewer-flash-opencode-go` and recorded the verdict
 `Correct-to-merge`. The same reviewer inspected the final combined staged diff;
 after its requested scalar-node path tests were added, the fresh verdict was
 also `Correct-to-merge`.
+
+The adversarial follow-up review (issue
+[#655](https://github.com/tensor4all/tensor4all-rs/issues/655)) closed with
+these decisions, recorded in the work log
+`docs/worklogs/2026-08-20-partitioned-treetn-followups.md`:
+
+- adaptive truncation splits each patch's squared budget across its internal
+  bonds so that summed local SVD discards cannot exceed the advertised global
+  `rtol`; repeated truncations in `add_with_patching` inherit the same bound;
+- patch site identities must agree in both full identity and dimension;
+  `from_subdomains` and algebra reject equal-identity/different-dimension
+  inputs with `SiteIndexMismatch`;
+- zero-node TreeTNs are rejected as subdomains; an empty `PartitionedTreeTN`
+  is a valid zero-norm object whose algebra requires operands;
+- `add_with_patching` sums equal-key inputs instead of replacing them;
+- non-finite or negative SVD truncation thresholds are rejected before every
+  shortcut, and
+- contraction output regions are not refined; overlapping outputs remain a
+  rejected, documented limitation (see Deferred work below).

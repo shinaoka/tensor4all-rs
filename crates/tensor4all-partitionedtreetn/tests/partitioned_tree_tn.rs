@@ -1,11 +1,11 @@
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
     PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
 };
 use tensor4all_treetn::{
     contraction::{ContractionMethod, ContractionOptions},
-    TreeTN, TruncationOptions,
+    TreeTN, TreeTNOperationError, TruncationOptions,
 };
 
 fn subdomain(site: &DynIndex, values: [f64; 2], coordinate: usize) -> SubDomainTreeTN {
@@ -305,4 +305,195 @@ fn partition_contract_duplicate_failure_does_not_mutate_inputs() {
     let _ = left.contract(&right, &0, ContractionOptions::default());
     assert_eq!(left.len(), left_before.len());
     assert_eq!(right.len(), right_before.len());
+}
+
+fn single_node_mask(indices: Vec<DynIndex>, projector: Projector) -> SubDomainTreeTN {
+    let dim: usize = indices.iter().map(|index| index.dim).product();
+    let tree = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(indices, vec![1.0_f64; dim]).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    SubDomainTreeTN::new(tree, projector).unwrap()
+}
+
+#[test]
+fn contraction_of_valid_disjoint_inputs_reports_overlapping_output_regions() {
+    // `{a=0}` and `{b=0}` are distinct projector keys that still intersect in
+    // the full (a, b) site space, so valid disjoint inputs can contract into
+    // overlapping outputs. This is a documented limitation: the operation must
+    // reject rather than silently corrupt, and callers refine the output space.
+    let shared = DynIndex::new_dyn(2);
+    let left_external = DynIndex::new_dyn(2);
+    let right_external = DynIndex::new_dyn(2);
+
+    let left = PartitionedTreeTN::from_subdomains(vec![
+        single_node_mask(
+            vec![shared.clone(), left_external.clone()],
+            Projector::from_pairs([(shared.clone(), 0)]).unwrap(),
+        ),
+        single_node_mask(
+            vec![shared.clone(), left_external.clone()],
+            Projector::from_pairs([(shared.clone(), 1), (left_external.clone(), 0)]).unwrap(),
+        ),
+        single_node_mask(
+            vec![shared.clone(), left_external.clone()],
+            Projector::from_pairs([(shared.clone(), 1), (left_external.clone(), 1)]).unwrap(),
+        ),
+    ])
+    .unwrap();
+    let right = PartitionedTreeTN::from_subdomains(vec![
+        single_node_mask(
+            vec![shared.clone(), right_external.clone()],
+            Projector::from_pairs([(shared.clone(), 0), (right_external.clone(), 0)]).unwrap(),
+        ),
+        single_node_mask(
+            vec![shared.clone(), right_external.clone()],
+            Projector::from_pairs([(shared.clone(), 0), (right_external.clone(), 1)]).unwrap(),
+        ),
+        single_node_mask(
+            vec![shared.clone(), right_external.clone()],
+            Projector::from_pairs([(shared, 1)]).unwrap(),
+        ),
+    ])
+    .unwrap();
+
+    let result = left.contract(&right, &0, ContractionOptions::default());
+    assert!(matches!(
+        result,
+        Err(PartitionedTreeTNError::OverlappingProjectors)
+    ));
+}
+
+#[test]
+fn same_index_identity_with_mismatched_dimensions_is_rejected() {
+    // `DynIndex` equality and hashing ignore the dimension, so two patches
+    // with the same logical identity but different dims must be rejected at
+    // the public boundary instead of silently replacing each other.
+    let dim_two = DynIndex::new_dyn(2);
+    let mut dim_three = dim_two.clone();
+    dim_three.dim = 3;
+
+    let make = |index: &DynIndex| {
+        SubDomainTreeTN::new(
+            TreeTN::from_tensors(
+                vec![IdxTensor::from_dense(
+                    vec![index.clone()],
+                    (0..index.dim).map(|v| v as f64).collect(),
+                )
+                .unwrap()],
+                vec![0usize],
+            )
+            .unwrap(),
+            Projector::from_pairs([(index.clone(), 0)]).unwrap(),
+        )
+        .unwrap()
+    };
+    let partition = PartitionedTreeTN::from_subdomains(vec![make(&dim_two), make(&dim_three)]);
+    assert!(matches!(
+        partition,
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+
+    // Strict subdomain addition routes through the same structural check.
+    let left = make(&dim_two);
+    let right = make(&dim_three);
+    assert!(matches!(
+        left.add(&right),
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+
+    // A single valid patch still works after the rejection above.
+    let valid = PartitionedTreeTN::from_subdomain(make(&dim_two)).unwrap();
+    assert_eq!(valid.len(), 1);
+}
+
+#[test]
+fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
+    let site = DynIndex::new_dyn(2);
+    let partition = PartitionedTreeTN::from_subdomain(subdomain(&site, [1.0, 2.0], 0)).unwrap();
+
+    for threshold in [f64::NAN, f64::INFINITY, -1.0] {
+        let options = TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold));
+        assert!(
+            matches!(
+                partition.add(&partition, &0, options),
+                Err(PartitionedTreeTNError::InvalidOptions { .. })
+            ),
+            "disjoint addition must reject threshold {threshold}"
+        );
+        assert!(
+            matches!(
+                partition.contract(
+                    &partition,
+                    &0,
+                    ContractionOptions::default()
+                        .with_svd_policy(SvdTruncationPolicy::new(threshold))
+                ),
+                Err(PartitionedTreeTNError::InvalidOptions { .. })
+            ),
+            "pairwise contraction shortcut must reject threshold {threshold}"
+        );
+    }
+
+    let mut subdomain = SubDomainTreeTN::from_treetn(
+        TreeTN::from_tensors(
+            vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap()],
+            vec![0usize],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        subdomain.truncate(
+            &0,
+            TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(f64::NAN))
+        ),
+        Err(PartitionedTreeTNError::InvalidOptions { .. })
+    ));
+}
+
+#[test]
+fn empty_and_zero_node_subdomains_have_consistent_semantics() {
+    // Zero-node TreeTNs are not a valid subdomain; an empty partition is a
+    // distinct, valid zero object whose norm is zero but whose algebra requires
+    // operands.
+    let empty_tree = TreeTN::<IdxTensor, usize>::new();
+    assert!(matches!(
+        SubDomainTreeTN::from_treetn(empty_tree),
+        Err(PartitionedTreeTNError::InvalidTopology { .. })
+    ));
+
+    let empty = PartitionedTreeTN::<usize>::new();
+    assert!(empty.is_empty());
+    assert_eq!(empty.norm_squared().unwrap(), 0.0);
+    assert_eq!(empty.norm().unwrap(), 0.0);
+    assert!(matches!(
+        empty.to_treetn(),
+        Err(PartitionedTreeTNError::Empty)
+    ));
+
+    let site = DynIndex::new_dyn(2);
+    let nonempty = PartitionedTreeTN::from_subdomain(subdomain(&site, [1.0, 2.0], 0)).unwrap();
+    assert!(matches!(
+        empty.add(&nonempty, &0, TruncationOptions::default()),
+        Err(PartitionedTreeTNError::Empty)
+    ));
+    assert!(matches!(
+        empty.contract(&nonempty, &0, ContractionOptions::default()),
+        Err(PartitionedTreeTNError::Empty)
+    ));
+}
+
+#[test]
+fn zero_node_input_reports_tree_operator_source_error() {
+    // The zero-node rejection surfaces a typed TreeTN source so callers can
+    // distinguish it from a partition-level Empty error.
+    let empty = TreeTN::<IdxTensor, usize>::new();
+    let error = SubDomainTreeTN::from_treetn(empty).unwrap_err();
+    if let PartitionedTreeTNError::InvalidTopology { source } = error {
+        let _: &TreeTNOperationError = &source;
+    } else {
+        panic!("expected InvalidTopology, got {error:?}");
+    }
 }

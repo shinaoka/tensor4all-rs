@@ -82,7 +82,10 @@ pub struct PatchingOptions {
     /// Global finite non-negative relative tolerance used for the total budget.
     ///
     /// The resulting squared budget is `rtol² * ||F||²`; it is then split by
-    /// logical patch volume. Smaller values retain more information.
+    /// logical patch volume and, inside each patch, across the patch's internal
+    /// bonds so that discarded tails from several local SVD truncations cannot
+    /// accumulate past the advertised relative error. Smaller values retain
+    /// more information.
     pub rtol: f64,
 
     /// Optional maximum retained bond dimension. `Some(0)` is invalid.
@@ -114,10 +117,12 @@ impl Default for PatchingOptions {
 
 /// Add subdomains with automatic TreeTN patch splitting.
 ///
-/// The input patches are validated as one homogeneous, exact-topology
-/// partition. Over-cap patches are budget-truncated, split along full site
-/// indices, and retried until no permitted split remains. The explicit `center`
-/// is used for every TreeTN truncation and is never stored in the result.
+/// Input patches that share an equal projector key are first summed by strict
+/// subdomain addition, then the result is validated as one homogeneous,
+/// exact-topology partition. Over-cap patches are budget-truncated, split
+/// along full site indices, and retried until no permitted split remains. The
+/// explicit `center` is used for every TreeTN truncation and is never stored in
+/// the result.
 ///
 /// # Arguments
 ///
@@ -190,6 +195,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_patching_options(options)?;
+    let subdomains = combine_equal_key_subdomains(subdomains)?;
     let partitioned = PartitionedTreeTN::from_subdomains(subdomains)?;
     if partitioned.is_empty() {
         return Ok(partitioned);
@@ -553,6 +559,17 @@ fn truncation_options_from_contract(options: &ContractionOptions) -> TruncationO
 /// its unprojected site dimensions define `volume`, while projected dimensions
 /// contribute one. Patches whose norm is at most their budget are dropped.
 ///
+/// # Error guarantee
+///
+/// Each retained patch's squared budget is further divided across the patch's
+/// internal bonds before the local TreeTN truncation sweep. Each per-bond SVD
+/// may then discard only its own share, so the discarded squared tails of all
+/// local factorizations sum to at most the patch budget. Combined with the
+/// volume-proportional patch budgets (which sum to `rtol² * ||F||²`) and the
+/// drop rule (a dropped patch's norm is at most its own budget), the measured
+/// global relative error satisfies `||F − F_truncated|| / ||F|| ≤ rtol` for
+/// multi-edge TreeTNs and repeated adaptive truncation.
+///
 /// # Arguments
 ///
 /// * `partitioned` - Homogeneous partition with eagerly masked patches.
@@ -661,6 +678,34 @@ where
     }
 
     PartitionedTreeTN::from_subdomains(retained)
+}
+
+/// Sum input patches that share an equal projector key, then return the list.
+///
+/// `add_with_patching` is named for addition, so two patches that describe the
+/// same projector region (for example two unprojected patches over one site)
+/// must be added by strict subdomain addition rather than silently replacing
+/// each other through `from_subdomains`' last-write-wins key semantics.
+fn combine_equal_key_subdomains<V>(
+    subdomains: Vec<SubDomainTreeTN<V>>,
+) -> Result<Vec<SubDomainTreeTN<V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut combined: HashMap<Projector, SubDomainTreeTN<V>> = HashMap::new();
+    for subdomain in subdomains {
+        let projector = subdomain.projector().clone();
+        match combined.remove(&projector) {
+            Some(existing) => {
+                let summed = existing.add(&subdomain)?;
+                combined.insert(projector, summed);
+            }
+            None => {
+                combined.insert(projector, subdomain);
+            }
+        }
+    }
+    Ok(combined.into_values().collect())
 }
 
 fn validate_patching_options(options: &PatchingOptions) -> Result<()> {
@@ -868,7 +913,16 @@ where
     }
 
     let before = subdomain.norm_squared()?;
-    let policy = SvdTruncationPolicy::new(budget_squared)
+    // A TreeTN truncation sweep performs one local SVD per internal bond, and
+    // each SVD is allowed to discard up to its own threshold. Reusing the full
+    // patch budget at every bond lets discarded tails from several bonds
+    // accumulate past the advertised global `rtol`. Split the patch budget
+    // across the internal edges so the sum of all local discards stays within
+    // the patch budget; a bondless single-node patch (no sweep steps) keeps the
+    // full budget, which is moot because there is nothing to truncate.
+    let edges = subdomain.data().node_count().saturating_sub(1).max(1) as f64;
+    let per_bond_budget = budget_squared / edges;
+    let policy = SvdTruncationPolicy::new(per_bond_budget)
         .with_absolute()
         .with_squared_values()
         .with_discarded_tail_sum();
