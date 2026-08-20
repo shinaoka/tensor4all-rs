@@ -31,12 +31,13 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
-    reset_contract_profile, reset_native_einsum_profile, sort_indices_deterministic, Canonical,
-    FactorizeAlg, FactorizeOptions, FactorizeResult, IndexLike, SvdTruncationPolicy, TensorLike,
+    reset_contract_profile, reset_native_einsum_profile, sort_indices_deterministic, AnyScalar,
+    Canonical, FactorizeAlg, FactorizeOptions, FactorizeResult, IndexLike, SvdTruncationPolicy,
+    TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
@@ -509,6 +510,266 @@ where
 // Environment computation helpers
 // ============================================================================
 
+/// Environment cache for one sum target and the current variational state.
+#[derive(Debug, Clone)]
+struct SumFitEnvironment<T, V>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq,
+{
+    envs: HashMap<(V, V), T>,
+}
+
+impl<T, V> SumFitEnvironment<T, V>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    fn new() -> Self {
+        Self {
+            envs: HashMap::new(),
+        }
+    }
+
+    fn get_or_compute(
+        &mut self,
+        from: &V,
+        to: &V,
+        target: &TreeTN<T, V>,
+        psi: &TreeTN<T, V>,
+    ) -> std::result::Result<T, TreeTNOperationError> {
+        if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+            return Ok(env.clone());
+        }
+
+        let child_neighbors = sorted_neighbors_by_node_index(
+            psi,
+            from,
+            Some(to),
+            "SumFitEnvironment::get_or_compute",
+        )?;
+        let child_envs = child_neighbors
+            .iter()
+            .map(|child| self.get_or_compute(child, from, target, psi))
+            .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
+
+        let target_tensor = tensor_at_node(target, from, "sum target")?;
+        let psi_conj = tensor_at_node(psi, from, "fit state")?.conj();
+        let mut tensor_refs = vec![target_tensor, &psi_conj];
+        tensor_refs.extend(child_envs.iter());
+        let env = contract_fit_tensor_refs(&tensor_refs)
+            .map_err(|e| anyhow::anyhow!("sum target environment contraction failed: {e}"))?;
+        self.envs.insert((from.clone(), to.clone()), env.clone());
+        Ok(env)
+    }
+
+    fn prepare(
+        &mut self,
+        target: &TreeTN<T, V>,
+        psi: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        for from in psi.node_names() {
+            let neighbors: Vec<_> = psi.site_index_network().neighbors(&from).collect();
+            for to in neighbors {
+                self.get_or_compute(&from, &to, target, psi)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn invalidate(
+        &mut self,
+        region: &[V],
+        psi: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        for node in region {
+            let neighbors =
+                sorted_neighbors_by_node_index(psi, node, None, "SumFitEnvironment::invalidate")?;
+            for neighbor in neighbors {
+                self.invalidate_recursive(node, &neighbor, psi)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn invalidate_recursive(
+        &mut self,
+        from: &V,
+        to: &V,
+        psi: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
+            let neighbors = sorted_neighbors_by_node_index(
+                psi,
+                to,
+                Some(from),
+                "SumFitEnvironment::invalidate_recursive",
+            )?;
+            for neighbor in neighbors {
+                self.invalidate_recursive(to, &neighbor, psi)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FitFactorizeConfig {
+    max_bond_dim: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
+    qr_rtol: Option<f64>,
+    factorize_alg: FactorizeAlg,
+}
+
+fn fit_factorize_options(config: FitFactorizeConfig) -> Result<FactorizeOptions> {
+    let mut options = match config.factorize_alg {
+        FactorizeAlg::SVD => FactorizeOptions::svd(),
+        FactorizeAlg::QR => FactorizeOptions::qr(),
+        FactorizeAlg::LU => FactorizeOptions::lu(),
+        FactorizeAlg::CI => FactorizeOptions::ci(),
+    }
+    .with_canonical(Canonical::Left);
+    if let Some(max_bond_dim) = config.max_bond_dim {
+        options = options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = config.svd_policy {
+        options = options.with_svd_policy(policy);
+    }
+    if let Some(qr_rtol) = config.qr_rtol {
+        options = options.with_qr_rtol(qr_rtol);
+    }
+    options
+        .validate()
+        .map_err(|e| anyhow::anyhow!("invalid fit factorization options: {e}"))?;
+    Ok(options)
+}
+
+fn fit_two_site_update<T, V>(
+    mut subtree: TreeTN<T, V>,
+    step: &LocalUpdateStep<V>,
+    full_treetn: &TreeTN<T, V>,
+    local_optimum: T,
+    left_bond_indices: &[T::Index],
+    config: FitFactorizeConfig,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let node_u = step
+        .nodes
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("fit two-site update requires a first node"))?;
+    let node_v = step
+        .nodes
+        .get(1)
+        .ok_or_else(|| anyhow::anyhow!("fit two-site update requires a second node"))?;
+    let site_c_u = full_treetn.site_space(node_u).cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "fit two-site update: site space for node {:?} not found in full TreeTN",
+            node_u
+        )
+    })?;
+
+    let local_indices = local_optimum.external_indices();
+    let left_inds_started = fit_profile_enabled().then(Instant::now);
+    let mut left_inds: Vec<_> = local_indices
+        .iter()
+        .filter(|idx| site_c_u.contains(*idx) || left_bond_indices.iter().any(|bond| bond == *idx))
+        .cloned()
+        .collect();
+    sort_indices_deterministic(&mut left_inds);
+    if let Some(left_inds_started) = left_inds_started {
+        with_fit_profile(|profile| {
+            profile.left_inds_time += left_inds_started.elapsed();
+        });
+    }
+
+    let mut options = fit_factorize_options(config)?;
+    let bond_cap = if config.max_bond_dim.is_some() {
+        config.max_bond_dim
+    } else if config.svd_policy.is_some() || config.qr_rtol.is_some() {
+        None
+    } else {
+        subtree
+            .edge_between(node_u, node_v)
+            .and_then(|edge| subtree.bond_index(edge))
+            .map(|bond| bond.dim())
+    };
+    if let Some(bond_cap) = bond_cap {
+        options = options.with_max_bond_dim(bond_cap);
+    }
+
+    let factorize_started = fit_profile_enabled().then(Instant::now);
+    let factorize_result = if left_inds.is_empty() || left_inds.len() == local_indices.len() {
+        let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+        let dummy_left_tensor = T::ones(std::slice::from_ref(&dummy_left))
+            .map_err(|e| anyhow::anyhow!("failed to create dummy left tensor: {e}"))?;
+        let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
+            .map_err(|e| anyhow::anyhow!("failed to create dummy right tensor: {e}"))?;
+        let (left, right) = if left_inds.is_empty() {
+            let right = local_optimum
+                .outer_product(&dummy_right_tensor)
+                .map_err(|e| anyhow::anyhow!("failed to attach dummy right bond: {e}"))?;
+            (dummy_left_tensor, right)
+        } else {
+            let left = local_optimum
+                .outer_product(&dummy_left_tensor)
+                .map_err(|e| anyhow::anyhow!("failed to attach dummy left bond: {e}"))?;
+            (left, dummy_right_tensor)
+        };
+        FactorizeResult {
+            left,
+            right,
+            bond_index: dummy_left,
+            singular_values: None,
+            rank: 1,
+        }
+    } else {
+        local_optimum
+            .factorize(&left_inds, &options)
+            .map_err(|e| anyhow::anyhow!("factorization failed: {e}"))?
+    };
+    if let Some(factorize_started) = factorize_started {
+        with_fit_profile(|profile| {
+            profile.factorize_time += factorize_started.elapsed();
+        });
+    }
+
+    let edge_uv = subtree.edge_between(node_u, node_v).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fit two-site update: subtree is missing edge between {:?} and {:?}",
+            node_u,
+            node_v
+        )
+    })?;
+    let idx_u_sub = subtree
+        .node_index(node_u)
+        .ok_or_else(|| anyhow::anyhow!("fit two-site update: node {:?} not found", node_u))?;
+    let idx_v_sub = subtree
+        .node_index(node_v)
+        .ok_or_else(|| anyhow::anyhow!("fit two-site update: node {:?} not found", node_v))?;
+
+    let replace_started = fit_profile_enabled().then(Instant::now);
+    subtree.replace_edge_bond(edge_uv, factorize_result.bond_index.clone())?;
+    subtree
+        .replace_tensor(idx_u_sub, factorize_result.left)?
+        .ok_or_else(|| anyhow::anyhow!("fit two-site update: first node disappeared"))?;
+    subtree
+        .replace_tensor(idx_v_sub, factorize_result.right)?
+        .ok_or_else(|| anyhow::anyhow!("fit two-site update: second node disappeared"))?;
+    subtree.set_ortho_towards(&factorize_result.bond_index, Some(step.new_center.clone()));
+    subtree.set_canonical_region([step.new_center.clone()])?;
+    if let Some(replace_started) = replace_started {
+        with_fit_profile(|profile| {
+            profile.replace_time += replace_started.elapsed();
+        });
+    }
+    Ok(subtree)
+}
+
 /// Compute environment for a leaf node (no children in subtree).
 fn compute_leaf_environment<T, V>(
     node: &V,
@@ -683,11 +944,10 @@ where
 {
     fn update(
         &mut self,
-        mut subtree: TreeTN<T, V>,
+        subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
     ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
-        // FitUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
                 "FitUpdater requires exactly 2 nodes, got {}",
@@ -701,12 +961,6 @@ where
         with_fit_profile(|profile| {
             profile.step_count += 1;
         });
-
-        // Get tensors
-        let a_u = tensor_at_node(&self.tn_a, node_u, "tn_a")?;
-        let a_v = tensor_at_node(&self.tn_a, node_v, "tn_a")?;
-        let b_u = tensor_at_node(&self.tn_b, node_u, "tn_b")?;
-        let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
 
         if full_treetn.node_index(node_u).is_none() {
             return Err(anyhow::anyhow!("Node {:?} not found in full TreeTN", node_u).into());
@@ -723,11 +977,12 @@ where
             .into());
         }
 
-        // Collect environments from neighbors (excluding the edge between u and v)
-        // Uses lazy evaluation: computes and caches if not already present
-        let mut env_tensors: Vec<T> = Vec::new();
+        let a_u = tensor_at_node(&self.tn_a, node_u, "tn_a")?;
+        let a_v = tensor_at_node(&self.tn_a, node_v, "tn_a")?;
+        let b_u = tensor_at_node(&self.tn_b, node_u, "tn_b")?;
+        let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
 
-        // Environments from u's neighbors (except v)
+        let mut env_tensors = Vec::new();
         let u_neighbors =
             sorted_neighbors_by_node_index(full_treetn, node_u, None, "FitUpdater::update")?;
         let mut left_bond_indices = Vec::new();
@@ -750,192 +1005,52 @@ where
                 )
             })?;
             left_bond_indices.push(bond.clone());
-            let env =
-                self.envs
-                    .get_or_compute(neighbor, node_u, &self.tn_a, &self.tn_b, full_treetn)?;
-            env_tensors.push(env);
+            env_tensors.push(self.envs.get_or_compute(
+                neighbor,
+                node_u,
+                &self.tn_a,
+                &self.tn_b,
+                full_treetn,
+            )?);
         }
 
-        // Environments from v's neighbors (except u)
         let v_neighbors =
             sorted_neighbors_by_node_index(full_treetn, node_v, None, "FitUpdater::update")?;
         for neighbor in &v_neighbors {
-            if neighbor == node_u {
-                continue;
+            if neighbor != node_u {
+                env_tensors.push(self.envs.get_or_compute(
+                    neighbor,
+                    node_v,
+                    &self.tn_a,
+                    &self.tn_b,
+                    full_treetn,
+                )?);
             }
-            let env =
-                self.envs
-                    .get_or_compute(neighbor, node_v, &self.tn_a, &self.tn_b, full_treetn)?;
-            env_tensors.push(env);
         }
 
-        // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env.
-        // Collect all tensors and let contract() find the optimal contraction order.
         let contract_started = fit_profile_enabled().then(Instant::now);
-        let mut tensor_refs: Vec<&T> = vec![a_u, b_u, a_v, b_v];
+        let mut tensor_refs = vec![a_u, b_u, a_v, b_v];
         tensor_refs.extend(env_tensors.iter());
-        let ab_uv = contract_fit_tensor_refs(&tensor_refs)?;
+        let local_optimum = contract_fit_tensor_refs(&tensor_refs)?;
         if let Some(contract_started) = contract_started {
             with_fit_profile(|profile| {
                 profile.two_site_contract_time += contract_started.elapsed();
             });
         }
 
-        // The result ab_uv is the optimal 2-site tensor
-        // Factorize to get new C[u] and C[v]
-
-        // Determine left indices (indices that will remain on u after factorization)
-        let left_inds_started = fit_profile_enabled().then(Instant::now);
-        let site_c_u = full_treetn.site_space(node_u).cloned().ok_or_else(|| {
-            anyhow::anyhow!(
-                "FitUpdater: site space for node {:?} not found in full TreeTN",
-                node_u
-            )
-        })?;
-        let ab_uv_indices = ab_uv.external_indices();
-        let mut left_inds: Vec<_> = ab_uv_indices
-            .iter()
-            .filter(|idx| {
-                // Keep site indices of u and link indices to u's other neighbors
-                site_c_u.contains(*idx) || left_bond_indices.iter().any(|bond| bond == *idx)
-            })
-            .cloned()
-            .collect();
-        sort_indices_deterministic(&mut left_inds);
-        if let Some(left_inds_started) = left_inds_started {
-            with_fit_profile(|profile| {
-                profile.left_inds_time += left_inds_started.elapsed();
-            });
-        }
-
-        // Set up factorization options
-        let mut options = match self.factorize_alg {
-            FactorizeAlg::SVD => FactorizeOptions::svd(),
-            FactorizeAlg::QR => FactorizeOptions::qr(),
-            FactorizeAlg::LU => FactorizeOptions::lu(),
-            FactorizeAlg::CI => FactorizeOptions::ci(),
-        };
-        options = options.with_canonical(Canonical::Left);
-
-        if let Some(policy) = self.svd_policy {
-            options = options.with_svd_policy(policy);
-        }
-        if let Some(qr_rtol) = self.qr_rtol {
-            options = options.with_qr_rtol(qr_rtol);
-        }
-        options
-            .validate()
-            .map_err(|e| anyhow::anyhow!("invalid fit factorization options: {e}"))?;
-
-        // Determine bond dimension cap for this factorization step.
-        // - If max_bond_dim is explicitly specified, use it.
-        // - If an algorithm-specific tolerance is specified (but max_bond_dim is not),
-        //   allow bonds to grow freely and let the factorization policy decide.
-        // - Otherwise, cap at the existing bond dimension to preserve the zipup
-        //   initialization size.
-        let bond_cap = if self.max_bond_dim.is_some() {
-            self.max_bond_dim
-        } else if self.svd_policy.is_some() || self.qr_rtol.is_some() {
-            None
-        } else {
-            subtree
-                .edge_between(node_u, node_v)
-                .and_then(|e| subtree.bond_index(e))
-                .map(|b| b.dim())
-        };
-        if let Some(cap) = bond_cap {
-            options = options.with_max_bond_dim(cap);
-        }
-
-        // Factorize using TensorFactorizationLike::factorize
-        let factorize_started = fit_profile_enabled().then(Instant::now);
-        let factorize_result = if left_inds.is_empty() || left_inds.len() == ab_uv_indices.len() {
-            let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
-            let dummy_left_tensor = T::ones(std::slice::from_ref(&dummy_left))
-                .map_err(|e| anyhow::anyhow!("Failed to create dummy left tensor: {e}"))?;
-            let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
-                .map_err(|e| anyhow::anyhow!("Failed to create dummy right tensor: {e}"))?;
-
-            let (left, right) = if left_inds.is_empty() {
-                let right = ab_uv
-                    .outer_product(&dummy_right_tensor)
-                    .map_err(|e| anyhow::anyhow!("Failed to attach dummy right bond: {e}"))?;
-                (dummy_left_tensor, right)
-            } else {
-                let left = ab_uv
-                    .outer_product(&dummy_left_tensor)
-                    .map_err(|e| anyhow::anyhow!("Failed to attach dummy left bond: {e}"))?;
-                (left, dummy_right_tensor)
-            };
-
-            FactorizeResult {
-                left,
-                right,
-                bond_index: dummy_left,
-                singular_values: None,
-                rank: 1,
-            }
-        } else {
-            ab_uv
-                .factorize(&left_inds, &options)
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?
-        };
-        if let Some(factorize_started) = factorize_started {
-            with_fit_profile(|profile| {
-                profile.factorize_time += factorize_started.elapsed();
-            });
-        }
-
-        let new_tensor_u = factorize_result.left;
-        let new_tensor_v = factorize_result.right;
-        let new_bond = factorize_result.bond_index;
-
-        // Get edge between u and v
-        let edge_uv = subtree.edge_between(node_u, node_v).ok_or_else(|| {
-            anyhow::anyhow!(
-                "FitUpdater: subtree is missing edge between {:?} and {:?}",
-                node_u,
-                node_v
-            )
-        })?;
-
-        // Update subtree with new bond and tensors
-        let idx_u_sub = subtree.node_index(node_u).ok_or_else(|| {
-            anyhow::anyhow!("FitUpdater: node {:?} not found in update subtree", node_u)
-        })?;
-        let idx_v_sub = subtree.node_index(node_v).ok_or_else(|| {
-            anyhow::anyhow!("FitUpdater: node {:?} not found in update subtree", node_v)
-        })?;
-
-        let replace_started = fit_profile_enabled().then(Instant::now);
-        subtree.replace_edge_bond(edge_uv, new_bond.clone())?;
-        subtree
-            .replace_tensor(idx_u_sub, new_tensor_u)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "FitUpdater: node {:?} disappeared before tensor replacement",
-                    node_u
-                )
-            })?;
-        subtree
-            .replace_tensor(idx_v_sub, new_tensor_v)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "FitUpdater: node {:?} disappeared before tensor replacement",
-                    node_v
-                )
-            })?;
-
-        // Set ortho_towards
-        subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
-        subtree.set_canonical_region([step.new_center.clone()])?;
-        if let Some(replace_started) = replace_started {
-            with_fit_profile(|profile| {
-                profile.replace_time += replace_started.elapsed();
-            });
-        }
-
-        Ok(subtree)
+        fit_two_site_update(
+            subtree,
+            step,
+            full_treetn,
+            local_optimum,
+            &left_bond_indices,
+            FitFactorizeConfig {
+                max_bond_dim: self.max_bond_dim,
+                svd_policy: self.svd_policy,
+                qr_rtol: self.qr_rtol,
+                factorize_alg: self.factorize_alg,
+            },
+        )
     }
 
     fn after_step(
@@ -956,29 +1071,315 @@ where
 }
 
 // ============================================================================
+// Shared Euler-tour sweep loop
+// ============================================================================
+fn run_fit_sweeps<T, V, U>(
+    treetn: &mut TreeTN<T, V>,
+    plan: &LocalUpdateSweepPlan<V>,
+    updater: &mut U,
+    nfullsweeps: usize,
+    convergence_tol: Option<f64>,
+) -> Result<()>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    U: LocalUpdater<T, V>,
+{
+    use super::localupdate::apply_local_update_sweep;
+
+    for _sweep in 0..nfullsweeps {
+        with_fit_profile(|profile| {
+            profile.sweep_count += 1;
+        });
+        let log_norm_before = convergence_tol.map(|_| treetn.log_norm()).transpose()?;
+        let sweep_started = fit_profile_enabled().then(Instant::now);
+        apply_local_update_sweep(treetn, plan, updater)?;
+        if let Some(sweep_started) = sweep_started {
+            with_fit_profile(|profile| {
+                profile.sweep_time += sweep_started.elapsed();
+            });
+        }
+
+        if let (Some(log_norm_before), Some(tol)) = (log_norm_before, convergence_tol) {
+            let log_norm_after = treetn.log_norm()?;
+            let relative_change = (f64::exp(log_norm_after - log_norm_before) - 1.0).abs();
+            if relative_change < tol {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn finish_fit_profile(entry_point: &str) {
+    if let Some(profile) = take_fit_profile() {
+        eprintln!("=== {entry_point} Profiling ===");
+        eprintln!("zipup init:        {:?}", profile.zipup_init_time);
+        eprintln!("canonicalize:      {:?}", profile.canonicalize_time);
+        eprintln!("sweeps total:      {:?}", profile.sweep_time);
+        eprintln!("steps:             {}", profile.step_count);
+        eprintln!("sweeps:            {}", profile.sweep_count);
+        eprintln!(
+            "env get:           {:?} (requests={}, hits={}, misses={})",
+            profile.env_get_time, profile.env_requests, profile.env_hits, profile.env_misses
+        );
+        eprintln!("env leaf compute:  {:?}", profile.env_leaf_time);
+        eprintln!("env node compute:  {:?}", profile.env_internal_time);
+        eprintln!("2-site contract:   {:?}", profile.two_site_contract_time);
+        eprintln!("left_inds:         {:?}", profile.left_inds_time);
+        eprintln!("factorize:         {:?}", profile.factorize_time);
+        eprintln!("replace/update:    {:?}", profile.replace_time);
+        eprintln!("invalidate:        {:?}", profile.invalidate_time);
+    }
+    print_and_reset_contract_profile();
+    print_and_reset_native_einsum_profile();
+}
+
+#[derive(Debug)]
+struct SumFitUpdater<T, V>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    targets: Vec<TreeTN<T, V>>,
+    envs: Vec<SumFitEnvironment<T, V>>,
+    factorize_config: FitFactorizeConfig,
+}
+
+impl<T, V> SumFitUpdater<T, V>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    fn new(
+        targets: Vec<TreeTN<T, V>>,
+        max_bond_dim: Option<usize>,
+        svd_policy: Option<SvdTruncationPolicy>,
+        qr_rtol: Option<f64>,
+        factorize_alg: FactorizeAlg,
+    ) -> Self {
+        let envs = targets.iter().map(|_| SumFitEnvironment::new()).collect();
+        Self {
+            targets,
+            envs,
+            factorize_config: FitFactorizeConfig {
+                max_bond_dim,
+                svd_policy,
+                qr_rtol,
+                factorize_alg,
+            },
+        }
+    }
+
+    fn prepare(&mut self, psi: &TreeTN<T, V>) -> std::result::Result<(), TreeTNOperationError> {
+        for (target_index, (target, env)) in
+            self.targets.iter().zip(self.envs.iter_mut()).enumerate()
+        {
+            env.prepare(target, psi).map_err(|error| {
+                anyhow::anyhow!(
+                    "fit_sum: target {target_index} initial environment construction failed: {error}"
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<T, V> LocalUpdater<T, V> for SumFitUpdater<T, V>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    fn update(
+        &mut self,
+        subtree: TreeTN<T, V>,
+        step: &LocalUpdateStep<V>,
+        full_treetn: &TreeTN<T, V>,
+    ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
+        if step.nodes.len() != 2 {
+            return Err(anyhow::anyhow!(
+                "fit_sum updater requires exactly 2 nodes, got {}",
+                step.nodes.len()
+            )
+            .into());
+        }
+        let node_u = &step.nodes[0];
+        let node_v = &step.nodes[1];
+        if full_treetn.node_index(node_u).is_none() || full_treetn.node_index(node_v).is_none() {
+            return Err(anyhow::anyhow!("fit_sum updater step references a missing node").into());
+        }
+        if full_treetn.edge_between(node_u, node_v).is_none() {
+            return Err(anyhow::anyhow!("fit_sum updater step nodes are not adjacent").into());
+        }
+        with_fit_profile(|profile| {
+            profile.step_count += 1;
+        });
+
+        let u_neighbors =
+            sorted_neighbors_by_node_index(full_treetn, node_u, None, "fit_sum updater")?;
+        let v_neighbors =
+            sorted_neighbors_by_node_index(full_treetn, node_v, None, "fit_sum updater")?;
+        let mut left_bond_indices = Vec::new();
+        for neighbor in &u_neighbors {
+            if neighbor == node_v {
+                continue;
+            }
+            let edge = full_treetn.edge_between(node_u, neighbor).ok_or_else(|| {
+                anyhow::anyhow!("fit_sum updater: missing edge to a neighboring node")
+            })?;
+            let bond = full_treetn
+                .bond_index(edge)
+                .ok_or_else(|| anyhow::anyhow!("fit_sum updater: missing neighboring bond"))?;
+            left_bond_indices.push(bond.clone());
+        }
+
+        let mut local_sum: Option<T> = None;
+        for (target_index, (target, env)) in
+            self.targets.iter().zip(self.envs.iter_mut()).enumerate()
+        {
+            let target_u = tensor_at_node(target, node_u, "sum target")
+                .map_err(|error| anyhow::anyhow!("fit_sum: target {target_index}: {error}"))?;
+            let target_v = tensor_at_node(target, node_v, "sum target")
+                .map_err(|error| anyhow::anyhow!("fit_sum: target {target_index}: {error}"))?;
+            let mut env_tensors = Vec::new();
+            for neighbor in &u_neighbors {
+                if neighbor != node_v {
+                    env_tensors.push(
+                        env.get_or_compute(neighbor, node_u, target, full_treetn)
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "fit_sum: target {target_index} environment contraction failed: {error}"
+                                )
+                            })?,
+                    );
+                }
+            }
+            for neighbor in &v_neighbors {
+                if neighbor != node_u {
+                    env_tensors.push(
+                        env.get_or_compute(neighbor, node_v, target, full_treetn)
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "fit_sum: target {target_index} environment contraction failed: {error}"
+                                )
+                            })?,
+                    );
+                }
+            }
+
+            let contract_started = fit_profile_enabled().then(Instant::now);
+            let mut tensor_refs = vec![target_u, target_v];
+            tensor_refs.extend(env_tensors.iter());
+            let contribution = contract_fit_tensor_refs(&tensor_refs).map_err(|error| {
+                anyhow::anyhow!(
+                    "fit_sum: target {target_index} local contribution contraction failed: {error}"
+                )
+            })?;
+            if let Some(contract_started) = contract_started {
+                with_fit_profile(|profile| {
+                    profile.two_site_contract_time += contract_started.elapsed();
+                });
+            }
+
+            local_sum = Some(match local_sum {
+                None => contribution,
+                Some(accumulated) => accumulated
+                    .axpby(
+                        AnyScalar::new_real(1.0),
+                        &contribution,
+                        AnyScalar::new_real(1.0),
+                    )
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "fit_sum: target {target_index} tensor accumulation failed: {error}"
+                        )
+                    })?,
+            });
+        }
+        let local_sum =
+            local_sum.ok_or_else(|| anyhow::anyhow!("fit_sum: no targets to accumulate"))?;
+        fit_two_site_update(
+            subtree,
+            step,
+            full_treetn,
+            local_sum,
+            &left_bond_indices,
+            self.factorize_config,
+        )
+        .map_err(|error| anyhow::anyhow!("fit_sum: two-site update failed: {error}"))
+        .map_err(TreeTNOperationError::from)
+    }
+
+    fn after_step(
+        &mut self,
+        step: &LocalUpdateStep<V>,
+        full_treetn_after: &TreeTN<T, V>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        let started = fit_profile_enabled().then(Instant::now);
+        for (target_index, env) in self.envs.iter_mut().enumerate() {
+            env.invalidate(&step.nodes, full_treetn_after)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "fit_sum: target {target_index} environment invalidation failed: {error}"
+                    )
+                })?;
+        }
+        if let Some(started) = started {
+            with_fit_profile(|profile| {
+                profile.invalidate_time += started.elapsed();
+            });
+        }
+        Ok(())
+    }
+}
+
 // High-level API: contract_fit
 // ============================================================================
 
-/// Options for fit contraction.
+/// Options for [`fit_sum`] and `contract_fit`.
+///
+/// The crate-root [`crate::FitOptions`] alias exposes this type for sum fitting.
+/// A zero sweep count is valid and returns the validated initial state for
+/// [`fit_sum`]. Invalid dimensions or tolerances are rejected before that
+/// short-circuit.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::FitOptions;
+///
+/// let options = FitOptions::new(0).with_max_bond_dim(2);
+/// assert_eq!(options.nfullsweeps, 0);
+/// assert_eq!(options.max_bond_dim, Some(2));
+/// ```
 #[derive(Debug, Clone)]
 pub struct FitContractionOptions {
     /// Number of full sweeps to perform.
     ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
+    /// `0` skips fitting after validation; positive values perform that many sweeps
+    /// unless `convergence_tol` stops earlier.
     pub nfullsweeps: usize,
-    /// Maximum bond dimension.
+    /// Optional maximum output bond dimension. `None` preserves the existing
+    /// bond-space cap when no truncation policy overrides it; `Some(0)` is invalid.
     pub max_bond_dim: Option<usize>,
     /// Legacy relative tolerance retained for same-crate tests and call chains.
     pub(crate) rtol: Option<f64>,
-    /// Explicit SVD truncation policy.
+    /// Explicit SVD truncation policy. Its settings are validated before fitting,
+    /// including when `nfullsweeps == 0`.
     pub svd_policy: Option<SvdTruncationPolicy>,
-    /// QR-specific relative tolerance.
+    /// QR-specific relative tolerance. It must be finite and non-negative and
+    /// must be accepted by the selected factorization algorithm.
     pub qr_rtol: Option<f64>,
-    /// Factorization algorithm.
+    /// Factorization algorithm used for local two-site updates.
     pub factorize_alg: FactorizeAlg,
     /// Tolerance for early termination based on relative change.
-    /// If `None`, run exactly `nfullsweeps` sweeps.
-    /// If `Some(tol)`, stop early if `||C_{i+1} - C_i|| / ||C_i|| < tol`.
+    /// If `None`, run exactly `nfullsweeps` sweeps. If `Some(tol)`, `tol` must
+    /// be finite and non-negative; fitting stops when the relative change in
+    /// the network norm is below `tol`.
     pub convergence_tol: Option<f64>,
 }
 
@@ -1047,6 +1448,201 @@ impl FitContractionOptions {
     }
 }
 
+fn validate_fit_sum_options(options: &FitContractionOptions) -> Result<()> {
+    if let Some(tol) = options.convergence_tol {
+        if !tol.is_finite() || tol < 0.0 {
+            return Err(anyhow::anyhow!(
+                "convergence tolerance must be finite and non-negative"
+            ));
+        }
+    }
+    if let Some(qr_rtol) = options.qr_rtol {
+        if !qr_rtol.is_finite() || qr_rtol < 0.0 {
+            return Err(anyhow::anyhow!(
+                "QR relative tolerance must be finite and non-negative"
+            ));
+        }
+    }
+    fit_factorize_options(FitFactorizeConfig {
+        max_bond_dim: options.max_bond_dim,
+        svd_policy: options.svd_policy,
+        qr_rtol: options.qr_rtol,
+        factorize_alg: options.factorize_alg,
+    })?;
+    Ok(())
+}
+
+/// Fit a TreeTN to the sum of one or more target TreeTNs.
+///
+/// The `initial` network supplies the output topology, site-index identities,
+/// and starting bond spaces. Each target is reindexed to that site space before
+/// the variational sweeps; target bonds remain private to their term.
+///
+/// # Arguments
+/// * `targets` - Non-empty target networks with the same named topology and
+///   per-node site dimensions as `initial`.
+/// * `initial` - The required initial approximation and output topology.
+/// * `center` - The node at which canonicalization and the Euler-tour sweeps
+///   start.
+/// * `options` - Fit sweep, factorization, truncation, and convergence options.
+///   `nfullsweeps == 0` returns an unchanged clone of `initial` after validation.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] when validation, site reindexing,
+/// environment construction, tensor contraction, accumulation, or
+/// factorization fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{fit_sum, FitOptions, TreeTN};
+///
+/// let site = DynIndex::new_dyn(2);
+/// let make = |values| {
+///     TreeTN::<IdxTensor, usize>::from_tensors(
+///         vec![IdxTensor::from_dense(vec![site.clone()], values).unwrap()],
+///         vec![0],
+///     )
+///     .unwrap()
+/// };
+/// let targets = [make(vec![1.0, 2.0]), make(vec![3.0, 4.0])];
+/// let initial = make(vec![0.0, 0.0]);
+/// let fitted = fit_sum(&targets, &initial, &0, FitOptions::new(1)).unwrap();
+/// assert_eq!(
+///     fitted
+///         .to_dense()
+///         .unwrap()
+///         .to_vec::<f64>()
+///         .unwrap(),
+///     vec![4.0, 6.0]
+/// );
+/// ```
+pub fn fit_sum<T, V>(
+    targets: &[TreeTN<T, V>],
+    initial: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let profile_enabled = fit_profile_enabled();
+    if profile_enabled {
+        fit_profile_reset();
+    }
+    reset_contract_profile();
+    reset_native_einsum_profile();
+
+    validate_fit_sum_options(&options).context("fit_sum: invalid options")?;
+    if targets.is_empty() {
+        return Err(anyhow::anyhow!("fit_sum: targets must not be empty").into());
+    }
+    if initial.node_count() == 0 {
+        return Err(anyhow::anyhow!("fit_sum: initial TreeTN must not be empty").into());
+    }
+    initial
+        .verify_internal_consistency()
+        .context("fit_sum: initial TreeTN validation failed")?;
+    if initial.node_index(center).is_none() {
+        return Err(anyhow::anyhow!("fit_sum: center node is not in initial TreeTN").into());
+    }
+
+    let mut aligned_targets = Vec::with_capacity(targets.len());
+    for (target_index, target) in targets.iter().enumerate() {
+        if target.node_count() == 0 {
+            return Err(
+                anyhow::anyhow!("fit_sum: target {target_index} TreeTN must not be empty").into(),
+            );
+        }
+        target
+            .verify_internal_consistency()
+            .with_context(|| format!("fit_sum: target {target_index} TreeTN validation failed"))?;
+        if !target.same_topology(initial) {
+            return Err(anyhow::anyhow!(
+                "fit_sum: target {target_index} has an incompatible named topology"
+            )
+            .into());
+        }
+        let aligned = target.reindex_site_space_like(initial).with_context(|| {
+            format!("fit_sum: target {target_index} site-space validation failed")
+        })?;
+        aligned_targets.push(aligned.sim_internal_inds());
+    }
+
+    if options.nfullsweeps == 0 {
+        finish_fit_profile("fit_sum");
+        return Ok(initial.clone());
+    }
+
+    if initial.node_count() == 1 {
+        let node = initial.node_names().into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("fit_sum: initial node disappeared during validation")
+        })?;
+        let mut local_sum: Option<T> = None;
+        for (target_index, target) in aligned_targets.iter().enumerate() {
+            let tensor = tensor_at_node(target, &node, "sum target")
+                .with_context(|| format!("fit_sum: target {target_index} tensor lookup failed"))?;
+            local_sum = Some(match local_sum {
+                None => tensor.clone(),
+                Some(accumulated) => accumulated
+                    .axpby(AnyScalar::new_real(1.0), tensor, AnyScalar::new_real(1.0))
+                    .with_context(|| {
+                        format!("fit_sum: target {target_index} tensor accumulation failed")
+                    })?,
+            });
+        }
+        let local_sum = local_sum.ok_or_else(|| anyhow::anyhow!("fit_sum: no targets to sum"))?;
+        let node_index = initial
+            .node_index(&node)
+            .ok_or_else(|| anyhow::anyhow!("fit_sum: initial node lookup failed"))?;
+        let mut result = initial.clone();
+        result
+            .replace_tensor(node_index, local_sum)
+            .context("fit_sum: failed to replace one-node result tensor")?
+            .ok_or_else(|| anyhow::anyhow!("fit_sum: one-node result disappeared"))?;
+        finish_fit_profile("fit_sum");
+        return Ok(result);
+    }
+
+    let canonicalize_started = profile_enabled.then(Instant::now);
+    let mut psi = initial.clone();
+    psi.canonicalize_mut(
+        std::iter::once(center.clone()),
+        crate::options::CanonicalizationOptions::forced(),
+    )
+    .context("fit_sum: failed to canonicalize initial TreeTN")?;
+    if let Some(canonicalize_started) = canonicalize_started {
+        with_fit_profile(|profile| {
+            profile.canonicalize_time += canonicalize_started.elapsed();
+        });
+    }
+
+    let mut updater = SumFitUpdater::new(
+        aligned_targets,
+        options.max_bond_dim,
+        options.svd_policy,
+        options.qr_rtol,
+        options.factorize_alg,
+    );
+    updater
+        .prepare(&psi)
+        .context("fit_sum: failed to build initial target environments")?;
+    let plan = LocalUpdateSweepPlan::from_treetn(&psi, center, 2)
+        .ok_or_else(|| anyhow::anyhow!("fit_sum: failed to create two-site sweep plan"))?;
+    run_fit_sweeps(
+        &mut psi,
+        &plan,
+        &mut updater,
+        options.nfullsweeps,
+        options.convergence_tol,
+    )?;
+    finish_fit_profile("fit_sum");
+    Ok(psi)
+}
+
 /// Contract two TreeTNs using the fit (variational) algorithm.
 ///
 /// This algorithm minimizes `||A*B - C||²` iteratively by optimizing
@@ -1076,7 +1672,6 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    use super::localupdate::apply_local_update_sweep;
     use crate::CanonicalForm;
     let profile_enabled = fit_profile_enabled();
     if profile_enabled {
@@ -1114,6 +1709,7 @@ where
     // counts are honored even when no truncation override is provided, so
     // callers can explicitly exercise the variational update path.
     if options.nfullsweeps == 0 {
+        finish_fit_profile("contract_fit");
         return Ok(tn_c);
     }
 
@@ -1127,61 +1723,14 @@ where
     let plan = LocalUpdateSweepPlan::from_treetn(&tn_c, center, 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
 
-    // Perform sweeps
-    for _sweep in 0..options.nfullsweeps {
-        with_fit_profile(|profile| {
-            profile.sweep_count += 1;
-        });
-        let log_norm_before = if options.convergence_tol.is_some() {
-            Some(tn_c.log_norm()?)
-        } else {
-            None
-        };
-
-        let sweep_started = profile_enabled.then(Instant::now);
-        apply_local_update_sweep(&mut tn_c, &plan, &mut updater)?;
-        if let Some(sweep_started) = sweep_started {
-            with_fit_profile(|profile| {
-                profile.sweep_time += sweep_started.elapsed();
-            });
-        }
-
-        // Check convergence using log_norm
-        if let (Some(tol), Some(log_norm_before)) = (options.convergence_tol, log_norm_before) {
-            let log_norm_after = tn_c.log_norm()?;
-            // relative change in norm: |exp(log_after) - exp(log_before)| / exp(log_before)
-            // = |exp(log_after - log_before) - 1|
-            let relative_change = (f64::exp(log_norm_after - log_norm_before) - 1.0).abs();
-            if relative_change < tol {
-                break;
-            }
-        }
-    }
-
-    if let Some(profile) = take_fit_profile() {
-        eprintln!("=== contract_fit Profiling ===");
-        eprintln!("zipup init:        {:?}", profile.zipup_init_time);
-        eprintln!("canonicalize:      {:?}", profile.canonicalize_time);
-        eprintln!("sweeps total:      {:?}", profile.sweep_time);
-        eprintln!("steps:             {}", profile.step_count);
-        eprintln!("sweeps:            {}", profile.sweep_count);
-        eprintln!(
-            "env get:           {:?} (requests={}, hits={}, misses={})",
-            profile.env_get_time, profile.env_requests, profile.env_hits, profile.env_misses
-        );
-        eprintln!("env leaf compute:  {:?}", profile.env_leaf_time);
-        eprintln!("env node compute:  {:?}", profile.env_internal_time);
-        eprintln!("2-site contract:   {:?}", profile.two_site_contract_time);
-        eprintln!("left_inds:         {:?}", profile.left_inds_time);
-        eprintln!("factorize:         {:?}", profile.factorize_time);
-        eprintln!("replace/update:    {:?}", profile.replace_time);
-        eprintln!("invalidate:        {:?}", profile.invalidate_time);
-    }
-    // These are tensor4all-owned profiling hooks, intentionally kept during the
-    // migration so fit profiling still works without the removed tenferro
-    // runtime APIs.
-    print_and_reset_contract_profile();
-    print_and_reset_native_einsum_profile();
+    run_fit_sweeps(
+        &mut tn_c,
+        &plan,
+        &mut updater,
+        options.nfullsweeps,
+        options.convergence_tol,
+    )?;
+    finish_fit_profile("contract_fit");
 
     Ok(tn_c)
 }

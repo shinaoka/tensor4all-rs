@@ -55,6 +55,9 @@ pub use localupdate::{
     LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
 };
 
+// Re-export the variational sum-fit entry point and its contraction options alias.
+pub use fit::{fit_sum, FitContractionOptions as FitOptions};
+
 // Re-export partial contraction types
 pub use partial_contraction::{
     hadamard, partial_contract, partial_contract_to_site_network, sum_over_indices,
