@@ -3,7 +3,7 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
 use super::{tree_elementwise, tree_elementwise_batched};
-use crate::{hadamard_many, TreeAciOptions};
+use crate::{hadamard_many, TreeAciOptions, TreeAciTermination};
 
 fn product_tree<T: crate::TreeAciScalar>(
     edges: &[(usize, usize)],
@@ -144,6 +144,43 @@ fn native_elementwise_addition_runs_on_path_y_binary_and_degree_four() {
         );
         assert_eq!(result.diagnostics.edge_ranks.len(), edges.len());
     }
+}
+
+#[test]
+fn chain_spine_only_return_preserves_values_without_rank_equality() {
+    let edges = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)];
+    let physical = (0..6).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let a = product_tree::<f64>(&edges, &physical, 1.0);
+    let b = product_tree::<f64>(&edges, &physical, 2.0);
+    let reference = a.to_dense().unwrap();
+    let indices = reference.indices().to_vec();
+    let expected = aligned_values::<f64>(&a, &indices)
+        .into_iter()
+        .zip(aligned_values::<f64>(&b, &indices))
+        .map(|(left, right)| left + right)
+        .collect::<Vec<_>>();
+    let options = TreeAciOptions {
+        enable_global_guard: false,
+        ..TreeAciOptions::default()
+    };
+
+    let result =
+        tree_elementwise(|values: &[f64]| values[0] + values[1], &[a, b], &options).unwrap();
+    let actual = aligned_values::<f64>(&result.tree, &indices);
+    let max_error = actual
+        .iter()
+        .zip(&expected)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0, f64::max);
+
+    assert!(max_error < 1.0e-9, "chain max error was {max_error:e}");
+    assert_eq!(result.max_ranks.len(), result.max_errors.len());
+    assert!(matches!(
+        result.termination,
+        TreeAciTermination::Converged
+            | TreeAciTermination::RankLimited
+            | TreeAciTermination::MaxSweeps
+    ));
 }
 
 #[test]

@@ -98,7 +98,11 @@ impl SweepPlan {
         let forward = vec![PathPhase {
             paths: vec![OrientedPath { steps }],
         }];
-        let reverse = reverse_pass(&forward);
+        let reverse = vec![PathPhase {
+            paths: vec![OrientedPath {
+                steps: reverse_spine(&spine, &adjacency)?,
+            }],
+        }];
         let plan = Self {
             start,
             forward,
@@ -112,11 +116,7 @@ impl SweepPlan {
         validate_tree(node_count, edges)?;
         validate_pass(&self.forward, edges)?;
         validate_pass(&self.reverse, edges)?;
-        if self.reverse != reverse_pass(&self.forward) {
-            return Err(PathPlanError::InvalidPlan(
-                "reverse pass is not the exact inverse of the forward pass",
-            ));
-        }
+        validate_round(&self.forward, &self.reverse, edges)?;
         Ok(())
     }
 
@@ -227,10 +227,7 @@ fn continuous_walk(
                     }));
                 }
                 if let Some(next) = designated {
-                    let edge = adjacency[node]
-                        .iter()
-                        .find_map(|&(neighbor, edge)| (neighbor == next).then_some(edge))
-                        .ok_or(PathPlanError::InvalidCover)?;
+                    let edge = edge_between(node, next, adjacency)?;
                     actions.push(WalkAction::Move(OrientedEdgeStep {
                         edge,
                         from: node,
@@ -248,34 +245,40 @@ fn continuous_walk(
     Ok(result)
 }
 
-fn reverse_pass(forward: &[PathPhase]) -> Vec<PathPhase> {
-    forward
-        .iter()
-        .rev()
-        .map(|phase| PathPhase {
-            paths: phase
-                .paths
+fn edge_between(
+    from: usize,
+    to: usize,
+    adjacency: &[Vec<(usize, usize)>],
+) -> Result<usize, PathPlanError> {
+    adjacency
+        .get(from)
+        .and_then(|neighbors| {
+            neighbors
                 .iter()
-                .rev()
-                .map(|path| OrientedPath {
-                    steps: path
-                        .steps
-                        .iter()
-                        .rev()
-                        .map(|step| OrientedEdgeStep {
-                            edge: step.edge,
-                            from: step.to,
-                            to: step.from,
-                        })
-                        .collect(),
-                })
-                .collect(),
+                .find_map(|&(neighbor, edge)| (neighbor == to).then_some(edge))
+        })
+        .ok_or(PathPlanError::InvalidCover)
+}
+
+fn reverse_spine(
+    spine: &[usize],
+    adjacency: &[Vec<(usize, usize)>],
+) -> Result<Vec<OrientedEdgeStep>, PathPlanError> {
+    spine
+        .windows(2)
+        .rev()
+        .map(|pair| {
+            let edge = edge_between(pair[0], pair[1], adjacency)?;
+            Ok(OrientedEdgeStep {
+                edge,
+                from: pair[1],
+                to: pair[0],
+            })
         })
         .collect()
 }
 
 fn validate_pass(phases: &[PathPhase], edges: &[(usize, usize)]) -> Result<(), PathPlanError> {
-    let mut edge_visits = vec![0usize; edges.len()];
     for phase in phases {
         let mut phase_vertices = HashSet::new();
         for path in &phase.paths {
@@ -303,9 +306,6 @@ fn validate_pass(phases: &[PathPhase], edges: &[(usize, usize)]) -> Result<(), P
                 }
                 path_vertices.insert(step.from);
                 path_vertices.insert(step.to);
-                edge_visits[step.edge] = edge_visits[step.edge]
-                    .checked_add(1)
-                    .ok_or(PathPlanError::InvalidPlan("edge visit count overflowed"))?;
             }
             if !phase_vertices.is_disjoint(&path_vertices) {
                 return Err(PathPlanError::InvalidPlan(
@@ -315,12 +315,66 @@ fn validate_pass(phases: &[PathPhase], edges: &[(usize, usize)]) -> Result<(), P
             phase_vertices.extend(path_vertices);
         }
     }
-    if edge_visits.contains(&0) {
+    Ok(())
+}
+
+fn validate_round(
+    forward: &[PathPhase],
+    reverse: &[PathPhase],
+    edges: &[(usize, usize)],
+) -> Result<(), PathPlanError> {
+    let forward_steps = pass_steps(forward);
+    let reverse_steps = pass_steps(reverse);
+    let first_forward = forward_steps
+        .first()
+        .ok_or(PathPlanError::InvalidPlan("forward pass is empty"))?;
+    let last_forward = forward_steps
+        .last()
+        .ok_or(PathPlanError::InvalidPlan("forward pass is empty"))?;
+    let first_reverse = reverse_steps
+        .first()
+        .ok_or(PathPlanError::InvalidPlan("reverse pass is empty"))?;
+    let last_reverse = reverse_steps
+        .last()
+        .ok_or(PathPlanError::InvalidPlan("reverse pass is empty"))?;
+    if last_forward.to != first_reverse.from {
         return Err(PathPlanError::InvalidPlan(
-            "a directional pass must visit every edge at least once",
+            "return pass does not start at the forward endpoint",
+        ));
+    }
+    if last_reverse.to != first_forward.from {
+        return Err(PathPlanError::InvalidPlan(
+            "forward and return passes do not form a closed round",
+        ));
+    }
+
+    let expected_steps = edges
+        .len()
+        .checked_mul(2)
+        .ok_or(PathPlanError::InvalidPlan("round edge count overflowed"))?;
+    let mut directed_steps = HashSet::with_capacity(expected_steps);
+    for step in forward_steps.iter().chain(&reverse_steps) {
+        if !directed_steps.insert((step.edge, step.from, step.to)) {
+            return Err(PathPlanError::InvalidPlan(
+                "a directed edge occurs more than once in a round",
+            ));
+        }
+    }
+    if directed_steps.len() != expected_steps {
+        return Err(PathPlanError::InvalidPlan(
+            "a round does not cover every directed edge exactly once",
         ));
     }
     Ok(())
+}
+
+fn pass_steps(phases: &[PathPhase]) -> Vec<OrientedEdgeStep> {
+    phases
+        .iter()
+        .flat_map(|phase| &phase.paths)
+        .flat_map(|path| &path.steps)
+        .copied()
+        .collect()
 }
 
 fn validate_tree(node_count: usize, edges: &[(usize, usize)]) -> Result<(), PathPlanError> {

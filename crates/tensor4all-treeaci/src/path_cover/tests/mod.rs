@@ -1,4 +1,6 @@
-use super::{SweepPlan, TreeAciTraversalStrategy};
+use std::collections::BTreeMap;
+
+use super::{PathPhase, SweepPlan, TreeAciTraversalStrategy};
 
 fn plan(node_count: usize, edges: &[(usize, usize)]) -> SweepPlan {
     SweepPlan::for_strategy(
@@ -10,13 +12,29 @@ fn plan(node_count: usize, edges: &[(usize, usize)]) -> SweepPlan {
     .unwrap()
 }
 
-fn steps(plan: &SweepPlan) -> Vec<(usize, usize, usize)> {
-    plan.forward
+fn pass_steps(phases: &[PathPhase]) -> Vec<(usize, usize, usize)> {
+    phases
         .iter()
         .flat_map(|phase| &phase.paths)
         .flat_map(|path| &path.steps)
         .map(|step| (step.edge, step.from, step.to))
         .collect()
+}
+
+fn forward_steps(plan: &SweepPlan) -> Vec<(usize, usize, usize)> {
+    pass_steps(&plan.forward)
+}
+
+fn reverse_steps(plan: &SweepPlan) -> Vec<(usize, usize, usize)> {
+    pass_steps(&plan.reverse)
+}
+
+fn directed_counts(steps: &[(usize, usize, usize)]) -> BTreeMap<(usize, usize, usize), usize> {
+    let mut counts = BTreeMap::new();
+    for &step in steps {
+        *counts.entry(step).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn diameter(node_count: usize, edges: &[(usize, usize)]) -> usize {
@@ -51,7 +69,7 @@ fn distance(start: usize, end: usize, adjacency: &[Vec<usize>]) -> usize {
 
 fn assert_minimum_continuous_walk(node_count: usize, edges: &[(usize, usize)], plan: &SweepPlan) {
     plan.validate(node_count, edges).unwrap();
-    let forward = steps(plan);
+    let forward = forward_steps(plan);
     assert_eq!(forward.len(), 2 * edges.len() - diameter(node_count, edges));
     assert_eq!(forward.first().map(|step| step.1), Some(plan.start));
     assert!(forward.windows(2).all(|pair| pair[0].2 == pair[1].1));
@@ -60,19 +78,26 @@ fn assert_minimum_continuous_walk(node_count: usize, edges: &[(usize, usize)], p
         visits[edge] += 1;
     }
     assert!(visits.iter().all(|visits| *visits >= 1 && *visits <= 2));
-    let reverse = plan
-        .reverse
-        .iter()
-        .flat_map(|phase| &phase.paths)
-        .flat_map(|path| &path.steps)
-        .map(|step| (step.edge, step.from, step.to))
-        .collect::<Vec<_>>();
-    let expected_reverse = forward
-        .iter()
-        .rev()
-        .map(|&(edge, from, to)| (edge, to, from))
-        .collect::<Vec<_>>();
-    assert_eq!(reverse, expected_reverse);
+    let reverse = reverse_steps(plan);
+    assert_eq!(
+        reverse.first().map(|step| step.1),
+        forward.last().map(|step| step.2)
+    );
+    assert_eq!(
+        reverse.last().map(|step| step.2),
+        forward.first().map(|step| step.1)
+    );
+    assert!(reverse.windows(2).all(|pair| pair[0].2 == pair[1].1));
+
+    let round = forward.iter().chain(&reverse).copied().collect::<Vec<_>>();
+    assert_eq!(round.len(), 2 * edges.len());
+    assert_eq!(
+        round.first().map(|step| step.1),
+        round.last().map(|step| step.2)
+    );
+    let counts = directed_counts(&round);
+    assert_eq!(counts.len(), 2 * edges.len());
+    assert!(counts.values().all(|count| *count == 1));
 }
 
 #[test]
@@ -80,7 +105,8 @@ fn path_visits_every_edge_once_like_train_aci() {
     let edges = [(0, 1), (1, 2), (2, 3), (3, 4)];
     let plan = plan(5, &edges);
     assert_minimum_continuous_walk(5, &edges, &plan);
-    assert_eq!(steps(&plan).len(), edges.len());
+    assert_eq!(forward_steps(&plan).len(), edges.len());
+    assert_eq!(reverse_steps(&plan).len(), edges.len());
 }
 
 #[test]
@@ -109,10 +135,17 @@ fn explicit_root_is_respected_and_ends_at_a_farthest_node() {
         Some(1),
     )
     .unwrap();
-    let walk = steps(&plan);
+    let walk = forward_steps(&plan);
     assert_eq!(plan.start, 1);
     assert_eq!(walk.first().map(|step| step.1), Some(1));
     assert_eq!(walk.len(), 2 * edges.len() - 2);
+    let reverse = reverse_steps(&plan);
+    assert_eq!(reverse.len(), 2);
+    assert_eq!(
+        reverse.first().map(|step| step.1),
+        walk.last().map(|step| step.2)
+    );
+    assert_eq!(reverse.last().map(|step| step.2), Some(plan.start));
 }
 
 #[test]

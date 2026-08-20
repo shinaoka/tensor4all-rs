@@ -19,25 +19,33 @@ The implementation follows these invariants:
 - The conformance path materializes only a checked, edge-local, column-major
   matrix and calls the same owned dense LUCI contract as train ACI. It never
   materializes the full tensor represented by an input TreeTN.
-- A deterministic minimum-retracing walk keeps consecutive local updates on
-  adjacent edges. With an automatic root it starts at a diameter endpoint and
-  has the graph-theoretically optimal length `2|E| - diameter`; the reverse pass
-  is its exact orientation-reversing inverse.
+- A deterministic minimum-retracing forward walk keeps consecutive local
+  updates on adjacent edges. With an automatic root it starts at a diameter
+  endpoint and has the graph-theoretically optimal open-walk length
+  `2|E| - |P|`, where `P` is the selected spine. The return pass traverses only
+  `P` in reverse order; the complete forward/return round therefore has
+  exactly `2|E|` directed edge updates and is an Euler tour of the bidirected
+  tree.
 - Traversal selection is a public, non-exhaustive strategy enum, while every
   strategy lowers into one internal `SweepPlan`. A common validator checks edge
-  coverage, orientation, walk continuity, and reverse-pass semantics before
-  execution. Only `MinimumRetracingWalk` is implemented initially; no custom
-  planner trait is public while frame-generation semantics are still evolving.
+  references, orientation, walk continuity, complete-round coverage, and the
+  declared forward/return semantics before execution. Only
+  `MinimumRetracingWalk` is implemented initially; no custom planner trait is
+  public while frame-generation semantics are still evolving.
 - Serial execution is the reference semantics. Parallel phases, if enabled
   later, use snapshot-isolated proposals and deterministic commit-time sample
   ID remapping.
 
-For a path topology, `diameter = |E|`, so forward and reverse passes reduce to
-the two train sweeps without extra edge visits. Branch edges outside the chosen
-diameter are visited in both directions. This retracing is required by the
-current LUCI gauge invariant: a bond axis is ordered by its active component
-samples, while a generic TreeTN canonicalization can change that basis without
-updating the sample order.
+For a path topology, `diameter = |E|`, so the forward and spine-only return
+passes reduce to the two train sweeps without extra edge visits. In a branched
+tree, branch edges outside the chosen diameter are visited in both directions
+during the forward excursions, while the return visits only the diameter
+spine. Thus every edge is used once in each direction per complete round;
+the previous full inverse would have repeated the branch excursions. Visiting
+branch edges in both directions during the forward walk remains required by
+the current LUCI gauge invariant: a bond axis is ordered by its active
+component samples, while a generic TreeTN canonicalization can change that
+basis without updating the sample order.
 
 Discontinuous minimum path covers and parallel paths remain mathematically
 possible, but require sample-aware gauge transport or snapshot/merge semantics.

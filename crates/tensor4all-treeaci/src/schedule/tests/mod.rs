@@ -107,10 +107,10 @@ fn path_pass_matches_train_endpoint_order_and_exact_reverse() {
 
 #[test]
 fn branched_topologies_cover_every_edge_with_optimal_retracing() {
-    for (edges, expected_updates) in [
-        (vec![(0, 1), (0, 2), (0, 3)], 4),
-        (vec![(0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6)], 8),
-        (vec![(0, 1), (1, 2), (1, 3), (2, 4), (2, 5)], 7),
+    for (edges, expected_forward_updates, expected_reverse_updates) in [
+        (vec![(0, 1), (0, 2), (0, 3)], 4, 2),
+        (vec![(0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6)], 8, 4),
+        (vec![(0, 1), (1, 2), (1, 3), (2, 4), (2, 5)], 7, 3),
     ] {
         let options = TreeAciOptions::default();
         let inputs = vec![product_tree(&edges, edges.len() + 1)];
@@ -121,28 +121,12 @@ fn branched_topologies_cover_every_edge_with_optimal_retracing() {
         let reverse =
             run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut identity)
                 .unwrap();
-        let forward_edges = forward
-            .updated_edges
-            .iter()
-            .map(|directed| directed / 2)
-            .collect::<HashSet<_>>();
-        let reverse_edges = reverse
-            .updated_edges
-            .iter()
-            .map(|directed| directed / 2)
-            .collect::<HashSet<_>>();
-
-        assert_eq!(forward.update_count(), expected_updates);
-        assert_eq!(reverse.update_count(), expected_updates);
-        assert_eq!(forward_edges, (0..edges.len()).collect());
-        assert_eq!(reverse_edges, (0..edges.len()).collect());
-        let inverse = forward
-            .updated_edges
-            .iter()
-            .rev()
-            .map(|directed| directed ^ 1)
-            .collect::<Vec<_>>();
-        assert_eq!(reverse.updated_edges, inverse);
+        assert_eq!(forward.update_count(), expected_forward_updates);
+        assert_eq!(reverse.update_count(), expected_reverse_updates);
+        let mut round = forward.updated_edges.clone();
+        round.extend(&reverse.updated_edges);
+        round.sort_unstable();
+        assert_eq!(round, (0..2 * edges.len()).collect::<Vec<_>>());
         state.output.verify_internal_consistency().unwrap();
     }
 }
