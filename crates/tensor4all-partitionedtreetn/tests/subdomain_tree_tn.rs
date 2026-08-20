@@ -286,13 +286,12 @@ fn rejects_invalid_projector_identity_coordinate_and_dtype() {
     ));
 
     let larger_same_identity = Index::new_with_tags(site.id, site.dim + 1, site.tags.clone());
+    // Same full identity with a different dimension is rejected as a site
+    // mismatch before the coordinate is ever checked: the alias must never
+    // reach masking.
     let error = SubDomainTreeTN::new(tree, projector([(larger_same_identity.clone(), site.dim)]))
         .unwrap_err();
-    assert!(matches!(
-        error,
-        PartitionedTreeTNError::ProjectorCoordinateOutOfBounds { index, value, dim }
-            if index == larger_same_identity && value == 2 && dim == 2
-    ));
+    assert!(matches!(error, PartitionedTreeTNError::SiteIndexMismatch));
 
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);

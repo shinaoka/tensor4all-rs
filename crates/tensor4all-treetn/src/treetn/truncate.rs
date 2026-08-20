@@ -16,7 +16,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::SvdTruncationPolicy;
+use tensor4all_core::{validate_svd_truncation_options, SvdTruncationPolicy};
 use tensor4all_core::{IndexLike, TensorLike};
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
@@ -137,6 +137,11 @@ where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
     {
+        // Validate before the empty-center no-op shortcut so a NaN policy or
+        // `max_bond_dim == 0` is rejected on single-node and empty sweeps too.
+        validate_svd_truncation_options(max_bond_dim, svd_policy)
+            .with_context(|| format!("{context_name}: invalid truncation options"))?;
+
         // Collect center nodes
         let center_nodes: HashSet<V> = canonical_region.into_iter().collect();
 

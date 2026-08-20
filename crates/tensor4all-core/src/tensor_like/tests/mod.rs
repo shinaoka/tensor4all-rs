@@ -68,6 +68,27 @@ fn factorize_options_validation_rejects_algorithm_specific_mismatches() {
 }
 
 #[test]
+fn factorize_options_validation_rejects_zero_cap_and_invalid_svd_thresholds() {
+    // The shared `validate_svd_truncation_options` seam is delegated from
+    // `FactorizeOptions::validate`; both typed error kinds it maps must be
+    // exercised here (they are validation facts, not algorithm mismatches).
+    assert!(matches!(
+        FactorizeOptions::svd().with_max_bond_dim(0).validate(),
+        Err(FactorizeError::InvalidOptions(
+            "max_bond_dim must be at least 1"
+        ))
+    ));
+    assert!(matches!(
+        FactorizeOptions::svd()
+            .with_svd_policy(SvdTruncationPolicy::new(f64::NAN))
+            .validate(),
+        Err(FactorizeError::InvalidOptions(
+            "SVD truncation threshold must be finite and non-negative"
+        ))
+    ));
+}
+
+#[test]
 fn linearization_order_labels_are_stable() {
     assert_eq!(LinearizationOrder::ColumnMajor.as_str(), "column-major");
     assert_eq!(LinearizationOrder::RowMajor.as_str(), "row-major");

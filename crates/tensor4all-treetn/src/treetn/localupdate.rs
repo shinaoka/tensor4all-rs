@@ -586,6 +586,13 @@ where
             options = options.with_svd_policy(policy);
         }
 
+        // Validate through the shared factorize guard (fit/zipup already do) so
+        // a NaN policy or `max_bond_dim == 0` cannot slip past an updater used
+        // independently of `truncate_impl`.
+        options
+            .validate()
+            .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
+
         // Factorize
         let factorize_result = tensor_ab
             .factorize(&left_inds, &options)
