@@ -99,7 +99,11 @@ applicable.
 Diagnostics and convergence history must continue to count passes as they do
 today. The implementation must audit any logic that assumes every individual
 pass updates every edge, especially `updated_edges`, global-pivot cleanup, and
-rank/error convergence checks.
+rank/error convergence checks. Convergence must follow the original train ACI
+policy: use the network-wide scalar maximum rank together with the latest
+error and global-pivot window, not element-wise monotonicity of the complete
+per-edge rank vector. The current TreeACI scalar `max_ranks` criterion is the
+reference behavior and must not be replaced by a stricter per-edge criterion.
 
 ## Correctness requirements
 
@@ -112,10 +116,15 @@ The implementation is acceptable only if all of the following hold:
 3. The forward walk remains unchanged for all tested topologies.
 4. A chain produces the same edge-update counts as train ACI: one pass in each
    direction and two updates per edge per complete round.
-5. Small star, comb, balanced, and irregular trees produce numerically valid
-   TreeACI results: finite values, acceptable residuals, and no new rank or
-   convergence failures.
-6. Existing branch-point and frame/sample correctness tests remain passing.
+5. Chain results are numerically correct against train ACI or an independent
+   dense/reference evaluation, with acceptable residuals and termination
+   behavior. Exact per-edge bond dimensions need not match another
+   implementation because pivot ordering and the resulting ranks may differ.
+6. Small star, comb, balanced, and irregular trees produce numerically valid
+   TreeACI results: finite values, acceptable residuals, and no new
+   convergence failures. Their exact edge-rank vectors are diagnostic, not a
+   correctness equality requirement.
+7. Existing branch-point and frame/sample correctness tests remain passing.
 
 ## Verification plan
 
@@ -137,9 +146,11 @@ each `(edge, from, to)` directed occurrence appears exactly once.
 
 Run existing TreeACI unit/integration tests and add small deterministic cases
 that compare the proposed schedule against the current schedule or an
-independent dense/reference evaluation. Check values, residuals, edge ranks,
-and termination behavior. Include cases with and without global pivots and
-with a rank cap, because those paths may depend on per-pass edge coverage.
+independent dense/reference evaluation. Check represented values, residuals,
+the scalar max-rank convergence history, and termination behavior. Do not
+require exact per-edge rank equality with the old schedule or train ACI.
+Include cases with and without global pivots and with a rank cap, because
+those paths may depend on per-pass edge coverage.
 
 ### Performance
 
