@@ -192,6 +192,31 @@ fn project_point_onto_edge_materializes_to_the_same_point_as_inject_global_point
 }
 
 #[test]
+fn checkpoint_rollback_removes_appended_records_and_dedup_entries() {
+    let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
+    let mut arena = SampleArena::from_global_seeds(&problem, &[]).unwrap().0;
+    let before_records = arena.record_count();
+    let before_bytes = arena.retained_bytes();
+    let checkpoint = arena.checkpoint();
+
+    let first_id = arena
+        .project_point_onto_edge(&problem, 0, &[1, 1, 1, 1])
+        .unwrap();
+    assert!(arena.record_count() > before_records);
+    assert!(arena.retained_bytes() > before_bytes);
+
+    arena.rollback(checkpoint).unwrap();
+    assert_eq!(arena.record_count(), before_records);
+    assert_eq!(arena.retained_bytes(), before_bytes);
+
+    let repeated_id = arena
+        .project_point_onto_edge(&problem, 0, &[1, 1, 1, 1])
+        .unwrap();
+    assert_eq!(repeated_id, first_id);
+    assert!(arena.record(0, repeated_id).is_ok());
+}
+
+#[test]
 fn replacing_active_sets_does_not_invalidate_old_recursive_ids() {
     let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
     let seeds = vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]];

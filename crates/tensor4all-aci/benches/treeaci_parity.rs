@@ -35,6 +35,7 @@ const MAX_BOND_DIM: usize = 4096;
 const MAX_SWEEPS: usize = 20;
 const MIN_SWEEPS: usize = 2;
 const CHI_VALUES: [usize; 4] = [16, 32, 64, 128];
+const MAX_PARITY_ERROR_FACTOR: f64 = 10.0;
 
 fn link_dims(n_sites: usize, local_dim: usize, chi: usize) -> Vec<usize> {
     (0..n_sites.saturating_sub(1))
@@ -132,6 +133,7 @@ fn multiply_tree(
 struct Case {
     trains: Vec<SimpleTensorTrain<f64>>,
     trees: Vec<TreeTN<IdxTensor, usize>>,
+    sites: Vec<DynIndex>,
 }
 
 fn build(chi: usize) -> Case {
@@ -153,6 +155,64 @@ fn build(chi: usize) -> Case {
     Case {
         trees: trains.iter().map(convert).collect(),
         trains,
+        sites,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AccuracyOracle {
+    exact_scale: f64,
+    train_maxabs: f64,
+    tree_maxabs: f64,
+}
+
+impl AccuracyOracle {
+    fn train_relative(self) -> f64 {
+        self.train_maxabs / self.exact_scale
+    }
+
+    fn tree_relative(self) -> f64 {
+        self.tree_maxabs / self.exact_scale
+    }
+}
+
+fn maxabs_difference(actual: &[f64], expected: &[f64]) -> f64 {
+    actual
+        .iter()
+        .zip(expected)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0, f64::max)
+}
+
+fn accuracy_oracle(
+    case: &Case,
+    train: &tensor4all_aci::AciResult<f64>,
+    tree: &tensor4all_treeaci::TreeAciResult<usize>,
+) -> AccuracyOracle {
+    let dense_inputs = case
+        .trains
+        .iter()
+        .map(|input| input.full_tensor().unwrap().0)
+        .collect::<Vec<_>>();
+    let mut exact = vec![1.0; dense_inputs[0].len()];
+    for input in dense_inputs {
+        for (product, value) in exact.iter_mut().zip(input) {
+            *product *= value;
+        }
+    }
+    let train_dense = train.tensor_train.full_tensor().unwrap().0;
+    let tree_dense = tree
+        .tree
+        .to_dense()
+        .unwrap()
+        .permute_indices(&case.sites)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    AccuracyOracle {
+        exact_scale: exact.iter().map(|value| value.abs()).fold(0.0, f64::max),
+        train_maxabs: maxabs_difference(&train_dense, &exact),
+        tree_maxabs: maxabs_difference(&tree_dense, &exact),
     }
 }
 
@@ -195,6 +255,7 @@ fn bench_parity(c: &mut Criterion) {
         let tree =
             tree_elementwise_batched::<f64, _, _>(multiply_tree, &case.trees, &tree_options(None))
                 .unwrap();
+        let accuracy = accuracy_oracle(&case, &train, &tree);
         println!(
             "chi={chi:<4} train: rank {:>5} err {:.3e} sweeps {:>2} | tree: rank {:>5} err {:.3e} sweeps {:>2} ({:?})",
             train.ranks.iter().copied().max().unwrap_or(0),
@@ -210,6 +271,23 @@ fn bench_parity(c: &mut Criterion) {
             tree.diagnostics.evaluated_points,
             tree.diagnostics.frame_records,
             tree.diagnostics.frame_retained_bytes
+        );
+        println!(
+            "         exact scale {:.3e} | train maxabs {:.3e} rel {:.3e} | tree maxabs {:.3e} rel {:.3e}",
+            accuracy.exact_scale,
+            accuracy.train_maxabs,
+            accuracy.train_relative(),
+            accuracy.tree_maxabs,
+            accuracy.tree_relative(),
+        );
+        assert!(
+            accuracy.tree_relative()
+                <= MAX_PARITY_ERROR_FACTOR
+                    * accuracy.train_relative().max(TOLERANCE),
+            "chi={chi}: TreeACI relative error {:.3e} exceeds the chain parity bound {:.3e} (train {:.3e})",
+            accuracy.tree_relative(),
+            MAX_PARITY_ERROR_FACTOR * accuracy.train_relative().max(TOLERANCE),
+            accuracy.train_relative(),
         );
 
         group.bench_with_input(BenchmarkId::new("train", chi), &case, |b, case| {

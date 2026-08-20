@@ -216,7 +216,7 @@ pub(crate) fn bootstrap_samples<V: TreeAciNode>(
         while candidates.ids[edge].len() < targets[edge] && ordinal < space {
             let mut point = vec![0; problem.node_order.len()];
             let mut encoded = ordinal;
-            for node in &nodes {
+            for node in nodes.iter().rev() {
                 let dim = problem.physical[*node].local_dim;
                 point[*node] = encoded % dim;
                 encoded /= dim;

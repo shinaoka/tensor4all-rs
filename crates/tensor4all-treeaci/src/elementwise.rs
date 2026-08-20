@@ -97,6 +97,7 @@ where
                 context: "final evaluated point count",
             })?;
     }
+    state.output.verify_internal_consistency()?;
     let edge_ranks = state
         .edge_ranks
         .iter()

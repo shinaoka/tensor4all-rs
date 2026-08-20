@@ -5,14 +5,22 @@ use super::{algebraic_edge_bounds, bootstrap_samples};
 use crate::{problem::prepare_problem, TreeAciOptions};
 
 fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
-    let physical = (0..node_count)
-        .map(|_| DynIndex::new_dyn(2))
+    make_tree_with_dims(edges, &vec![2; node_count])
+}
+
+fn make_tree_with_dims(
+    edges: &[(usize, usize)],
+    physical_dims: &[usize],
+) -> TreeTN<IdxTensor, usize> {
+    let physical = physical_dims
+        .iter()
+        .map(|&dim| DynIndex::new_dyn(dim))
         .collect::<Vec<_>>();
     let bonds = edges
         .iter()
         .map(|_| DynIndex::new_dyn(2))
         .collect::<Vec<_>>();
-    let tensors = (0..node_count)
+    let tensors = (0..physical_dims.len())
         .map(|node| {
             let mut indices = vec![physical[node].clone()];
             for (edge, &(left, right)) in edges.iter().enumerate() {
@@ -24,7 +32,7 @@ fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, u
             IdxTensor::from_dense(indices, vec![1.0; len]).unwrap()
         })
         .collect();
-    TreeTN::from_tensors(tensors, (0..node_count).collect()).unwrap()
+    TreeTN::from_tensors(tensors, (0..physical_dims.len()).collect()).unwrap()
 }
 
 /// `bootstrap_samples` must reach exactly the requested rank on every edge
@@ -77,4 +85,35 @@ fn bootstrap_samples_reaches_the_requested_rank_on_every_edge() {
             }
         }
     }
+}
+
+fn middle_cut_bootstrap_points() -> Vec<Vec<usize>> {
+    let edges = [(0, 1), (1, 2), (2, 3)];
+    let tree = make_tree_with_dims(&edges, &[2, 3, 2, 3]);
+    let problem = prepare_problem(std::slice::from_ref(&tree), &TreeAciOptions::default())
+        .expect("prepared problem");
+    let (arena, _, pivots) = bootstrap_samples(&problem, &[1, 4, 1]).expect("bootstrap samples");
+
+    let mut points = Vec::new();
+    for &(left, right) in &pivots.per_edge[1] {
+        points.push(
+            arena
+                .materialize_global_point(&problem, 2, left, right)
+                .expect("pivot pair must materialize"),
+        );
+    }
+    points
+}
+
+#[test]
+fn bootstrap_samples_follow_generalized_digit_reversal() {
+    assert_eq!(
+        middle_cut_bootstrap_points(),
+        vec![
+            vec![0, 0, 0, 0],
+            vec![0, 1, 0, 1],
+            vec![0, 2, 0, 2],
+            vec![1, 0, 1, 0],
+        ]
+    );
 }

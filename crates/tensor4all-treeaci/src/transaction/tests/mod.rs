@@ -14,6 +14,15 @@ fn input_tree() -> TreeTN<IdxTensor, usize> {
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
 }
 
+fn rank_one_tree_with_nonzero_maximum() -> TreeTN<IdxTensor, usize> {
+    let left_site = DynIndex::new_dyn(2);
+    let right_site = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(1);
+    let left = IdxTensor::from_dense(vec![left_site, bond.clone()], vec![1.0, 10.0]).unwrap();
+    let right = IdxTensor::from_dense(vec![bond, right_site], vec![1.0, 10.0]).unwrap();
+    TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
 fn matrix_tree(dimension: usize, values: Vec<f64>) -> TreeTN<IdxTensor, usize> {
     let left_site = DynIndex::new_dyn(dimension);
     let right_site = DynIndex::new_dyn(dimension);
@@ -145,4 +154,45 @@ fn proposal_error_leaves_output_samples_and_generation_unchanged() {
     assert_eq!(state.pivots, pivots_before);
     assert_eq!(state.sample_arena.record_count(), records_before);
     assert_eq!(state.generation, generation_before);
+}
+
+#[test]
+fn frame_extension_error_rolls_back_interned_samples() {
+    let options = TreeAciOptions::default();
+    let inputs = vec![rank_one_tree_with_nonzero_maximum()];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let output_before = state.output.to_dense().unwrap();
+    let candidates_before = state.candidates.clone();
+    let pivots_before = state.pivots.clone();
+    let records_before = state.sample_arena.record_count();
+    let bytes_before = state.sample_arena.retained_bytes();
+    let generation_before = state.generation;
+    state.problem.max_frame_bytes = state.input_frames.retained_bytes();
+    let mut identity = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            *value = batch.get(0, point)?;
+        }
+        Ok(())
+    };
+
+    let result = update_edge_transaction(&mut state, 0, &options, true, &mut identity);
+
+    assert!(matches!(
+        result,
+        Err(TreeAciError::ResourceLimit {
+            resource: "frame bytes",
+            ..
+        })
+    ));
+    assert_eq!(state.sample_arena.record_count(), records_before);
+    assert_eq!(state.sample_arena.retained_bytes(), bytes_before);
+    assert_eq!(state.candidates, candidates_before);
+    assert_eq!(state.pivots, pivots_before);
+    assert_eq!(state.generation, generation_before);
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&output_before, 0.0, 0.0)
+        .unwrap());
 }

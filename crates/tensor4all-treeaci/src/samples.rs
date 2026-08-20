@@ -38,6 +38,12 @@ pub(crate) struct SampleArena {
     max_retained_bytes: usize,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SampleArenaCheckpoint {
+    record_counts: Vec<usize>,
+    retained_bytes: usize,
+}
+
 /// Candidate component samples per directed cut.
 ///
 /// These feed the candidate row and column spaces of *neighbouring* edges. They
@@ -119,6 +125,57 @@ pub(crate) struct InjectionReport {
 }
 
 impl SampleArena {
+    pub(crate) fn checkpoint(&self) -> SampleArenaCheckpoint {
+        SampleArenaCheckpoint {
+            record_counts: self
+                .directed
+                .iter()
+                .map(|arena| arena.records.len())
+                .collect(),
+            retained_bytes: self.retained_bytes,
+        }
+    }
+
+    pub(crate) fn rollback(&mut self, checkpoint: SampleArenaCheckpoint) -> Result<()> {
+        if checkpoint.record_counts.len() != self.directed.len()
+            || checkpoint.retained_bytes > self.retained_bytes
+        {
+            return Err(TreeAciError::InternalInvariant {
+                message: "sample arena checkpoint is incompatible with the current arena",
+            });
+        }
+        for (arena, &keep) in self.directed.iter().zip(&checkpoint.record_counts) {
+            if keep > arena.records.len() {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "sample arena checkpoint exceeds the current record count",
+                });
+            }
+            for (id, sample) in arena.records.iter().enumerate().skip(keep) {
+                let key = ComponentSampleKey {
+                    local_coordinate: sample.local_coordinate,
+                    incoming: sample.incoming.clone(),
+                };
+                if arena.dedup.get(&key) != Some(&id) {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "sample arena dedup index disagrees with appended records",
+                    });
+                }
+            }
+        }
+
+        for (arena, keep) in self.directed.iter_mut().zip(checkpoint.record_counts) {
+            for sample in arena.records.drain(keep..) {
+                let key = ComponentSampleKey {
+                    local_coordinate: sample.local_coordinate,
+                    incoming: sample.incoming,
+                };
+                arena.dedup.remove(&key);
+            }
+        }
+        self.retained_bytes = checkpoint.retained_bytes;
+        Ok(())
+    }
+
     pub(crate) fn from_global_seeds<V: TreeAciNode>(
         problem: &PreparedTreeProblem<V>,
         seeds: &[Vec<usize>],

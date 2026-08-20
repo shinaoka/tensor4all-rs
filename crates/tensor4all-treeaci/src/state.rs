@@ -42,16 +42,20 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         let problem = prepare_problem(inputs, options)?;
         let algebraic_edge_bounds = algebraic_edge_bounds(&problem)?;
         let edge_ranks = initial_edge_ranks(inputs, &problem, options)?;
-        let mut output = if let Some(guess) = &options.initial_guess {
+        let output = if let Some(guess) = &options.initial_guess {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem, options)?;
-            guess.clone()
+            let mut output = guess.clone();
+            output.canonicalize_mut(
+                [problem.root.clone()],
+                CanonicalizationOptions::default().with_form(CanonicalForm::CI),
+            )?;
+            output
         } else {
-            build_random_output::<T, V>(&inputs[0], &problem, &edge_ranks, options)?
+            let mut output =
+                build_random_output::<T, V>(&inputs[0], &problem, &edge_ranks, options)?;
+            output.set_canonical_region([problem.root.clone()])?;
+            output
         };
-        output.canonicalize_mut(
-            [problem.root.clone()],
-            CanonicalizationOptions::default().with_form(CanonicalForm::CI),
-        )?;
         for (edge_number, expected) in edge_ranks.iter().copied().enumerate() {
             let edge = &problem.directed_edges[2 * edge_number];
             let graph_edge = output.edge_between(&edge.from, &edge.to).ok_or(

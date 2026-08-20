@@ -78,25 +78,56 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         });
     }
 
-    let mut proposed_arena = state.sample_arena.clone();
-    let left_ids = proposal
-        .row_samples
-        .iter()
-        .cloned()
-        .map(|sample| proposed_arena.intern_component(&state.problem, forward, sample))
-        .collect::<Result<Vec<_>>>()?;
-    let right_ids = proposal
-        .col_samples
-        .iter()
-        .cloned()
-        .map(|sample| proposed_arena.intern_component(&state.problem, reverse, sample))
-        .collect::<Result<Vec<_>>>()?;
     let next_generation = state
         .generation
         .checked_add(1)
         .ok_or(TreeAciError::SizeOverflow {
             context: "tree ACI state generation",
         })?;
+    let mut proposed_output = state.output.clone();
+    replace_edge_cores(
+        &mut proposed_output,
+        &state.problem,
+        forward,
+        proposal.left,
+        proposal.right,
+    )?;
+    let checkpoint = state.sample_arena.checkpoint();
+    let staged = (|| {
+        let left_ids = proposal
+            .row_samples
+            .iter()
+            .cloned()
+            .map(|sample| {
+                state
+                    .sample_arena
+                    .intern_component(&state.problem, forward, sample)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let right_ids = proposal
+            .col_samples
+            .iter()
+            .cloned()
+            .map(|sample| {
+                state
+                    .sample_arena
+                    .intern_component(&state.problem, reverse, sample)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let frames =
+            state
+                .input_frames
+                .extend(state.inputs, &state.problem, &state.sample_arena)?;
+        Ok((left_ids, right_ids, frames))
+    })();
+    let (left_ids, right_ids, proposed_frames) = match staged {
+        Ok(staged) => staged,
+        Err(error) => {
+            state.sample_arena.rollback(checkpoint)?;
+            return Err(error);
+        }
+    };
+
     let edge_number = forward / 2;
     // The commit rule: pivot pairs set the bond rank and own `P_e`, while the
     // candidate sets are *replaced* by the same selections so that neighbouring
@@ -116,23 +147,8 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     };
     proposed_pivots.set(edge_number, pivot_pairs);
 
-    let mut proposed_output = state.output.clone();
-    replace_edge_cores(
-        &mut proposed_output,
-        &state.problem,
-        forward,
-        proposal.left,
-        proposal.right,
-    )?;
-    proposed_output.verify_internal_consistency()?;
-    let proposed_frames =
-        state
-            .input_frames
-            .extend(state.inputs, &state.problem, &proposed_arena)?;
-
     let pivot_error = proposal.pivot_errors.last().copied().unwrap_or(0.0);
     state.output = proposed_output;
-    state.sample_arena = proposed_arena;
     state.candidates = proposed_candidates;
     state.pivots = proposed_pivots;
     state.input_frames = proposed_frames;

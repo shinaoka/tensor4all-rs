@@ -3,6 +3,8 @@ use tensor4all_treetn::CanonicalForm;
 use tensor4all_treetn::TreeTN;
 
 use super::TreeAciState;
+use crate::initialize::{build_random_output, initial_edge_ranks};
+use crate::problem::prepare_problem;
 use crate::{TreeAciError, TreeAciOptions};
 
 fn two_node_tree(sites: [DynIndex; 2], rank: usize, scale: f64) -> TreeTN<IdxTensor, usize> {
@@ -27,13 +29,15 @@ fn two_node_tree(sites: [DynIndex; 2], rank: usize, scale: f64) -> TreeTN<IdxTen
 }
 
 fn output_values(state: &TreeAciState<'_, f64, usize>) -> Vec<Vec<f64>> {
-    state
-        .problem
-        .node_order
+    tree_values(&state.output, &state.problem.node_order)
+}
+
+fn tree_values(tree: &TreeTN<IdxTensor, usize>, node_order: &[usize]) -> Vec<Vec<f64>> {
+    node_order
         .iter()
         .map(|node| {
-            let index = state.output.node_index(node).unwrap();
-            state.output.tensor(index).unwrap().to_vec::<f64>().unwrap()
+            let index = tree.node_index(node).unwrap();
+            tree.tensor(index).unwrap().to_vec::<f64>().unwrap()
         })
         .collect()
 }
@@ -113,24 +117,31 @@ fn explicit_guess_is_preserved_before_the_first_sweep() {
         .isapprox(&expected, 1.0e-12, 0.0)
         .unwrap());
     assert_eq!(state.edge_ranks, vec![1]);
+    assert_eq!(state.output.canonical_form(), Some(CanonicalForm::CI));
 }
 
 #[test]
-fn initialized_output_is_canonicalized_only_toward_the_prepared_root() {
+fn unseeded_initialization_defers_numeric_canonicalization() {
     let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let inputs = vec![two_node_tree(sites, 2, 1.0)];
-    let state = TreeAciState::<f64, usize>::initialize(
-        &inputs,
-        &TreeAciOptions {
-            root: Some(1),
-            ..TreeAciOptions::default()
-        },
-    )
-    .unwrap();
+    let options = TreeAciOptions {
+        root: Some(1),
+        rng_seed: 7,
+        ..TreeAciOptions::default()
+    };
+    let problem = prepare_problem(&inputs, &options).unwrap();
+    let edge_ranks = initial_edge_ranks(&inputs, &problem, &options).unwrap();
+    let raw =
+        build_random_output::<f64, usize>(&inputs[0], &problem, &edge_ranks, &options).unwrap();
+    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
 
     assert_eq!(state.output.canonical_region().len(), 1);
     assert!(state.output.canonical_region().contains(&1));
-    assert_eq!(state.output.canonical_form(), Some(CanonicalForm::CI));
+    assert_eq!(state.output.canonical_form(), None);
+    assert_eq!(
+        output_values(&state),
+        tree_values(&raw, &state.problem.node_order)
+    );
 }
 
 #[test]

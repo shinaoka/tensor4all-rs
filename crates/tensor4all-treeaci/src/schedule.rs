@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+use tensor4all_treetn::{CanonicalForm, CanonicalizationOptions};
+
 use crate::{
     global_guard::{find_global_pivots, inject_global_pivots, InputEvaluators},
     path_cover::{OrientedEdgeStep, PathPhase},
@@ -158,15 +160,22 @@ where
     let mut evaluated_points = 0u64;
 
     for phase in &phases {
-        run_phase_serial(
+        if let Err(error) = run_phase_serial(
             state,
             options,
             phase,
             operator,
             &mut updated_edges,
             &mut evaluated_points,
-        )?;
+        ) {
+            if !updated_edges.is_empty() {
+                finalize_deferred_canonicalization(state)?;
+            }
+            return Err(error);
+        }
     }
+
+    finalize_deferred_canonicalization(state)?;
 
     let max_rank = state.edge_ranks.iter().copied().max().unwrap_or(1);
     let max_error = state
@@ -189,6 +198,24 @@ where
         rank_changed: state.edge_ranks != ranks_before,
         evaluated_points,
     })
+}
+
+fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
+    state: &mut TreeAciState<'_, T, V>,
+) -> Result<()> {
+    if state.output.canonical_form().is_none() {
+        let center = state
+            .output
+            .canonical_region()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        state.output.canonicalize_mut(
+            center,
+            CanonicalizationOptions::default().with_form(CanonicalForm::CI),
+        )?;
+    }
+    Ok(())
 }
 
 fn run_phase_serial<T, V, F>(
