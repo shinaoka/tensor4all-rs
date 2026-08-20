@@ -45,8 +45,10 @@ densified.
 
 Every truncating or contracting operation takes an explicit existing node name
 as its center. `add_with_patching` first assigns absolute squared-tail budgets
-proportional to logical patch volume, then splits patches that remain above the
-bond cap:
+proportional to logical patch volume, splits each patch budget across the
+patch's internal bonds so local SVD discards cannot accumulate past `rtol`,
+then splits patches that remain above the bond cap. Inputs that share an equal
+projector key are summed before patching:
 
 ```rust
 # use tensor4all_core::{DynIndex, IdxTensor};

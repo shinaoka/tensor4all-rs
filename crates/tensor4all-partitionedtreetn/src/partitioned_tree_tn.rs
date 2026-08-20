@@ -207,14 +207,23 @@ where
             ensure_same_tree_structure(template.data(), subdomain.data())?;
             ensure_same_dtype(template.scalar_kind()?, subdomain.scalar_kind()?)?;
         }
+        self.insert_prevalidated(subdomain)
+    }
 
+    /// Insert a subdomain that has already satisfied every partition invariant.
+    ///
+    /// This private incremental path skips re-validating all existing patches
+    /// and the candidate itself, which internal algebra already produces from
+    /// validated operands, and checks only projector-key overlap. Repeatedly
+    /// calling the public [`Self::insert`] while building a result is cubic in
+    /// the patch count because each call rescans the full partition.
+    fn insert_prevalidated(&mut self, subdomain: SubDomainTreeTN<V>) -> Result<()> {
         let projector = subdomain.projector().clone();
         for existing in self.data.keys() {
             if existing != &projector && existing.is_compatible_with(&projector) {
                 return Err(PartitionedTreeTNError::OverlappingProjectors);
             }
         }
-
         self.data.remove(&projector);
         self.data.insert(projector, subdomain);
         Ok(())
@@ -348,14 +357,14 @@ where
             if let Some(right) = other.data.get(projector) {
                 let mut sum = left.add(right)?;
                 sum.truncate(center, options)?;
-                result.insert(sum)?;
+                result.insert_prevalidated(sum)?;
             } else {
-                result.insert(left.clone())?;
+                result.insert_prevalidated(left.clone())?;
             }
         }
         for (projector, right) in &other.data {
             if !self.data.contains_key(projector) {
-                result.insert(right.clone())?;
+                result.insert_prevalidated(right.clone())?;
             }
         }
         Ok(result)
@@ -370,6 +379,19 @@ where
     /// output site space are pruned, and duplicate output keys are combined by
     /// strict subdomain addition followed by the requested bond truncation.
     ///
+    /// # Known limitation: no output-region refinement
+    ///
+    /// Output regions are the projector intersections of each contracted pair,
+    /// with contracted site indices removed. Two individually valid, internally
+    /// disjoint input partitions can contract into output regions that are not
+    /// mutually disjoint (for example `{i=0}, {i=1,a=0}, {i=1,a=1}` contracted
+    /// with `{i=0,b=0}, {i=0,b=1}, {i=1}`), because a patch such as `{a=0}` and
+    /// `{b=0}` are distinct keys that still intersect in the full site space.
+    /// Such outputs are rejected with
+    /// [`PartitionedTreeTNError::OverlappingProjectors`] rather than silently
+    /// corrupted; combine over a refined disjoint partition of the output
+    /// space before contracting if overlapping outputs are possible.
+    ///
     /// # Errors
     ///
     /// Returns [`PartitionedTreeTNError::Empty`] for an empty operand,
@@ -379,8 +401,9 @@ where
     /// [`PartitionedTreeTNError::InvalidCenter`],
     /// [`PartitionedTreeTNError::InvalidOptions`],
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for incompatible
-    /// non-identical output layouts, or a typed TreeTN/backend error. The
-    /// operation returns a new partition, so failure cannot mutate either input.
+    /// non-identical output layouts (see the limitation note above), or a
+    /// typed TreeTN/backend error. The operation returns a new partition, so
+    /// failure cannot mutate either input.
     pub fn contract(&self, other: &Self, center: &V, options: ContractionOptions) -> Result<Self> {
         validate_contraction_options(&options)?;
         self.validate_contents()?;
@@ -406,7 +429,7 @@ where
                     result.data.remove(&projector);
                     result.data.insert(projector, combined);
                 } else {
-                    result.insert(contracted)?;
+                    result.insert_prevalidated(contracted)?;
                 }
             }
         }

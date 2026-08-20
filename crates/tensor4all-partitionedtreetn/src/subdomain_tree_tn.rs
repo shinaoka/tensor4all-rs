@@ -8,7 +8,7 @@ use crate::projector::Projector;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
-    SiteIndexNetwork, TreeTN, TruncationOptions,
+    SiteIndexNetwork, TreeTN, TreeTNOperationError, TruncationOptions,
 };
 
 /// A TreeTN together with the projector defining its subdomain.
@@ -180,12 +180,13 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::InvalidTopology`] for a non-tree
-    /// input, [`PartitionedTreeTNError::DTypeMismatch`] for mixed node dtypes,
-    /// [`PartitionedTreeTNError::ProjectorIndexNotFound`] for an absent full
-    /// site identity, [`PartitionedTreeTNError::ProjectorCoordinateOutOfBounds`]
-    /// for an invalid coordinate, or a typed backend/TreeTN error when local
-    /// masking or rebuilding fails.
+    /// Returns [`PartitionedTreeTNError::InvalidTopology`] for a non-tree or
+    /// zero-node input, [`PartitionedTreeTNError::DTypeMismatch`] for mixed
+    /// node dtypes, [`PartitionedTreeTNError::ProjectorIndexNotFound`] for an
+    /// absent full site identity,
+    /// [`PartitionedTreeTNError::ProjectorCoordinateOutOfBounds`] for an
+    /// invalid coordinate, or a typed backend/TreeTN error when local masking
+    /// or rebuilding fails.
     ///
     /// # Examples
     ///
@@ -224,8 +225,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`PartitionedTreeTNError::InvalidTopology`] for a non-tree,
-    /// [`PartitionedTreeTNError::DTypeMismatch`] or
+    /// Returns [`PartitionedTreeTNError::InvalidTopology`] for a non-tree or
+    /// zero-node input, [`PartitionedTreeTNError::DTypeMismatch`] or
     /// [`PartitionedTreeTNError::UnsupportedDType`] for invalid node dtypes,
     /// [`PartitionedTreeTNError::TensorStorage`] or
     /// [`PartitionedTreeTNError::TensorConstruction`] when rebuilding fails,
@@ -608,10 +609,42 @@ where
 {
     ensure_same_topology(left, right)?;
     if left.share_equivalent_site_index_network(right) {
-        Ok(())
+        ensure_compatible_site_dimensions(left, right)
     } else {
         Err(PartitionedTreeTNError::SiteIndexMismatch)
     }
+}
+
+/// Require equal dimensions for every site index identity shared by both trees.
+///
+/// [`DynIndex`] equality and hashing include ID, tags, and prime level but
+/// exclude the dimension, so an identity-matching pair with different
+/// dimensions must be rejected explicitly; otherwise two TreeTNs could be
+/// treated as structurally identical while holding incompatible site spaces.
+pub(crate) fn ensure_compatible_site_dimensions<V>(
+    left: &TreeTN<IdxTensor, V>,
+    right: &TreeTN<IdxTensor, V>,
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let (left_indices, _) = left
+        .all_site_indices()
+        .map_err(PartitionedTreeTNError::from)?;
+    let (right_indices, _) = right
+        .all_site_indices()
+        .map_err(PartitionedTreeTNError::from)?;
+    for left_index in &left_indices {
+        if let Some(right_index) = right_indices
+            .iter()
+            .find(|candidate| *candidate == left_index)
+        {
+            if left_index.dim != right_index.dim {
+                return Err(PartitionedTreeTNError::SiteIndexMismatch);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_same_dtype(
@@ -659,6 +692,15 @@ pub(crate) fn validate_truncation_options(options: &TruncationOptions) -> Result
             reason: "max_bond_dim must be greater than zero",
         });
     }
+    if options
+        .svd_policy()
+        .is_some_and(|policy| !policy.threshold.is_finite() || policy.threshold < 0.0)
+    {
+        return Err(PartitionedTreeTNError::InvalidOptions {
+            operation: "truncate",
+            reason: "SVD truncation threshold must be finite and non-negative",
+        });
+    }
     Ok(())
 }
 
@@ -667,6 +709,15 @@ pub(crate) fn validate_contraction_options(options: &ContractionOptions) -> Resu
         return Err(PartitionedTreeTNError::InvalidOptions {
             operation: "contract",
             reason: "max_bond_dim must be greater than zero",
+        });
+    }
+    if options
+        .svd_policy
+        .is_some_and(|policy| !policy.threshold.is_finite() || policy.threshold < 0.0)
+    {
+        return Err(PartitionedTreeTNError::InvalidOptions {
+            operation: "contract",
+            reason: "SVD truncation threshold must be finite and non-negative",
         });
     }
     if matches!(options.method, ContractionMethod::Naive) {
@@ -716,6 +767,7 @@ where
         .all_site_indices()
         .map_err(PartitionedTreeTNError::from)?;
 
+    ensure_compatible_site_dimensions(left, right)?;
     for (left_index, left_node) in left_indices.iter().zip(&left_nodes) {
         for (right_index, right_node) in right_indices.iter().zip(&right_nodes) {
             if left_index.is_contractable(right_index) && left_node != right_node {
@@ -765,6 +817,13 @@ fn validate_data<V>(data: &TreeTN<IdxTensor, V>) -> Result<Option<ScalarKind>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
+    if data.node_count() == 0 {
+        return Err(PartitionedTreeTNError::InvalidTopology {
+            source: TreeTNOperationError::from(anyhow::anyhow!(
+                "a subdomain TreeTN must contain at least one node"
+            )),
+        });
+    }
     data.validate_tree()
         .map_err(PartitionedTreeTNError::invalid_topology)?;
 
