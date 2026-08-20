@@ -7,15 +7,22 @@
 //! ([arXiv:2602.22372](https://arxiv.org/abs/2602.22372)). This module does not
 //! implement adaptive interpolation or copy TCIAlgorithms.jl code.
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
 use crate::partitioned_tree_tn::PartitionedTreeTN;
 use crate::projector::{canonical_index_cmp, Projector};
-use crate::subdomain_tree_tn::{ensure_center, SubDomainTreeTN};
+use crate::subdomain_tree_tn::{ensure_center, ScalarKind, SubDomainTreeTN};
 use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_treetn::{contraction::ContractionOptions, TruncationOptions};
+
+type ContractGroup<V> = (
+    Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
+    Vec<SubDomainTreeTN<V>>,
+);
 
 #[derive(Debug)]
 struct PatchStats<V>
@@ -310,13 +317,233 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_patching_options(patching_options)?;
-    let contracted = left.contract(right, center, contract_options.clone())?;
+    let mut left_patches: Vec<_> = left.values().collect();
+    let mut right_patches: Vec<_> = right.values().collect();
+    left_patches.sort_by(|a, b| {
+        a.projector()
+            .partial_cmp(b.projector())
+            .unwrap_or(Ordering::Equal)
+    });
+    right_patches.sort_by(|a, b| {
+        a.projector()
+            .partial_cmp(b.projector())
+            .unwrap_or(Ordering::Equal)
+    });
+
+    let mut groups: HashMap<Projector, ContractGroup<V>> = HashMap::new();
+    for left_patch in left_patches {
+        for right_patch in &right_patches {
+            if let Some(contribution) =
+                left_patch.contract(right_patch, center, contract_options.clone())?
+            {
+                let entry = groups.entry(contribution.projector().clone()).or_default();
+                entry.0.push((left_patch.clone(), (*right_patch).clone()));
+                entry.1.push(contribution);
+            }
+        }
+    }
+
+    let mut grouped: Vec<_> = groups.into_iter().collect();
+    grouped.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let mut subdomains = Vec::new();
+    for (_, (pairs, contributions)) in grouped {
+        subdomains.extend(contract_group_project_first(
+            pairs,
+            Some(contributions),
+            center,
+            contract_options,
+            patching_options,
+        )?);
+    }
+    let contracted = PartitionedTreeTN::from_subdomains(subdomains)?;
     truncate_adaptive(
         &contracted,
         center,
         patching_options.rtol,
         patching_options.max_bond_dim,
     )
+}
+
+fn contract_group_project_first<V>(
+    pairs: Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
+    precomputed: Option<Vec<SubDomainTreeTN<V>>>,
+    center: &V,
+    contract_options: &ContractionOptions,
+    patching_options: &PatchingOptions,
+) -> Result<Vec<SubDomainTreeTN<V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let contributions = if let Some(contributions) = precomputed {
+        contributions
+    } else {
+        let mut contributions = Vec::with_capacity(pairs.len());
+        for (left, right) in &pairs {
+            if let Some(contribution) = left.contract(right, center, contract_options.clone())? {
+                contributions.push(contribution);
+            }
+        }
+        contributions
+    };
+    let mut iter = contributions.iter();
+    let Some(first) = iter.next() else {
+        return Ok(Vec::new());
+    };
+    let mut probe = first.clone();
+    let truncation = truncation_options_from_contract(contract_options);
+    for contribution in iter {
+        probe = probe.add(contribution)?;
+        probe.truncate(center, truncation)?;
+    }
+
+    let Some(cap) = patching_options.max_bond_dim else {
+        return Ok(vec![probe]);
+    };
+    let saturated = probe.max_bond_dim() >= cap
+        || contributions
+            .iter()
+            .any(|contribution| contribution.max_bond_dim() >= cap);
+    if !saturated {
+        return Ok(vec![probe]);
+    }
+    let probe = assign_volume_budgets(vec![probe], patching_options.rtol)?
+        .pop()
+        .ok_or(PartitionedTreeTNError::Empty)?;
+    let Some(index) = choose_split_index(&probe, center, patching_options)? else {
+        return Ok(vec![probe]);
+    };
+
+    let mut children = Vec::with_capacity(index.dim);
+    for value in 0..index.dim {
+        let mut child_pairs = Vec::with_capacity(pairs.len());
+        let mut projected_left = HashMap::new();
+        let mut projected_right = HashMap::new();
+        for (left, right) in &pairs {
+            let left_key = left.projector().clone();
+            if !projected_left.contains_key(&left_key) {
+                projected_left.insert(
+                    left_key.clone(),
+                    project_if_present(left, &index, value, center)?,
+                );
+            }
+            let right_key = right.projector().clone();
+            if !projected_right.contains_key(&right_key) {
+                projected_right.insert(
+                    right_key.clone(),
+                    project_if_present(right, &index, value, center)?,
+                );
+            }
+            if let (Some(child_left), Some(child_right)) = (
+                projected_left.get(&left_key).cloned().flatten(),
+                projected_right.get(&right_key).cloned().flatten(),
+            ) {
+                child_pairs.push((child_left, child_right));
+            }
+        }
+        children.extend(contract_group_project_first(
+            child_pairs,
+            None,
+            center,
+            contract_options,
+            patching_options,
+        )?);
+    }
+    Ok(children)
+}
+
+#[cfg(test)]
+fn add_project_first<V>(
+    contributions: Vec<SubDomainTreeTN<V>>,
+    center: &V,
+    contract_options: &ContractionOptions,
+    patching_options: &PatchingOptions,
+) -> Result<Vec<SubDomainTreeTN<V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut iter = contributions.iter();
+    let Some(first) = iter.next() else {
+        return Ok(Vec::new());
+    };
+    let mut probe = first.clone();
+    let truncation = truncation_options_from_contract(contract_options);
+    for contribution in iter {
+        probe = probe.add(contribution)?;
+        probe.truncate(center, truncation)?;
+    }
+
+    let Some(cap) = patching_options.max_bond_dim else {
+        return Ok(vec![probe]);
+    };
+    if probe.max_bond_dim() < cap {
+        return Ok(vec![probe]);
+    }
+    let probe = assign_volume_budgets(vec![probe], patching_options.rtol)?
+        .pop()
+        .ok_or(PartitionedTreeTNError::Empty)?;
+    let Some(index) = choose_split_index(&probe, center, patching_options)? else {
+        return Ok(vec![probe]);
+    };
+
+    let mut children = Vec::new();
+    for value in 0..index.dim {
+        let mut projected = Vec::with_capacity(contributions.len());
+        for contribution in &contributions {
+            if let Some(child) = project_if_present(contribution, &index, value, center)? {
+                projected.push(child);
+            }
+        }
+        children.extend(add_project_first(
+            projected,
+            center,
+            contract_options,
+            patching_options,
+        )?);
+    }
+    Ok(children)
+}
+
+fn project_if_present<V>(
+    subdomain: &SubDomainTreeTN<V>,
+    index: &tensor4all_core::DynIndex,
+    value: usize,
+    center: &V,
+) -> Result<Option<SubDomainTreeTN<V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    if !subdomain
+        .all_indices()
+        .iter()
+        .any(|candidate| candidate == index)
+    {
+        return Ok(Some(subdomain.clone()));
+    }
+    let Some(mut projected) =
+        subdomain.project(&Projector::from_pairs([(index.clone(), value)])?)?
+    else {
+        return Ok(None);
+    };
+    let threshold = match projected.scalar_kind()? {
+        Some(ScalarKind::F32 | ScalarKind::C32) => 64.0 * f32::EPSILON as f64,
+        Some(ScalarKind::F64 | ScalarKind::C64) | None => 64.0 * f64::EPSILON,
+    };
+    projected.truncate(
+        center,
+        TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold)),
+    )?;
+    Ok(Some(projected))
+}
+
+fn truncation_options_from_contract(options: &ContractionOptions) -> TruncationOptions {
+    let mut truncation = TruncationOptions::default();
+    if let Some(policy) = options.svd_policy {
+        truncation = truncation.with_svd_policy(policy);
+    }
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        truncation = truncation.with_max_bond_dim(max_bond_dim);
+    }
+    truncation
 }
 
 /// Truncate a partition with volume-proportional absolute squared-tail budgets.
@@ -864,6 +1091,77 @@ mod tests {
         let subdomain = SubDomainTreeTN::from_treetn(tree).unwrap();
 
         assert_eq!(logical_parameter_count(&subdomain).unwrap(), 9);
+    }
+
+    #[test]
+    fn projection_removes_exact_zero_bond_space_without_error_budget() {
+        let site0 = DynIndex::new_dyn(2);
+        let site1 = DynIndex::new_dyn(2);
+        let bond = DynIndex::new_bond(2).unwrap();
+        let left =
+            IdxTensor::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 1.0])
+                .unwrap();
+        let right = IdxTensor::from_dense(vec![bond, site1], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+        let subdomain = SubDomainTreeTN::from_treetn(
+            TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).unwrap(),
+        )
+        .unwrap();
+        let projector = Projector::from_pairs([(site0.clone(), 0)]).unwrap();
+        let projected = subdomain.project(&projector).unwrap().unwrap();
+        let compressed = project_if_present(&subdomain, &site0, 0, &0)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(projected.max_bond_dim(), 2);
+        assert_eq!(compressed.max_bond_dim(), 1);
+        assert!(
+            (compressed.norm_squared().unwrap() - projected.norm_squared().unwrap()).abs()
+                < 1.0e-12
+        );
+    }
+
+    #[test]
+    fn adaptive_add_projects_original_addends_before_retrying() {
+        let site0 = DynIndex::new_dyn(2);
+        let site1 = DynIndex::new_dyn(2);
+        let product_patch = |left_values: Vec<f64>, right_values: Vec<f64>| {
+            let bond = DynIndex::new_bond(1).unwrap();
+            let left =
+                IdxTensor::from_dense(vec![site0.clone(), bond.clone()], left_values).unwrap();
+            let right = IdxTensor::from_dense(vec![bond, site1.clone()], right_values).unwrap();
+            SubDomainTreeTN::from_treetn(
+                TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).unwrap(),
+            )
+            .unwrap()
+        };
+        let contributions = vec![
+            product_patch(vec![1.0, 0.0], vec![1.0, 0.0]),
+            product_patch(vec![0.0, 1.0], vec![0.0, 1.0]),
+        ];
+        let contraction = ContractionOptions::default().with_max_bond_dim(1);
+        let patching = PatchingOptions {
+            rtol: 0.0,
+            max_bond_dim: Some(1),
+            patch_order: vec![site0.clone()],
+            split_strategy: PatchSplitStrategy::Sequential,
+        };
+
+        let result = add_project_first(contributions, &0, &contraction, &patching).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|patch| patch.max_bond_dim() == 1));
+        assert!(result
+            .iter()
+            .all(|patch| patch.projector().get(&site0).is_some()));
+        assert!(
+            (result
+                .iter()
+                .map(|patch| patch.norm_squared().unwrap())
+                .sum::<f64>()
+                - 2.0)
+                .abs()
+                < 1.0e-12
+        );
     }
 
     #[test]

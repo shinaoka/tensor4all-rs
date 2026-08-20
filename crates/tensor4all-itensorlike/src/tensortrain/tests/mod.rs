@@ -133,6 +133,44 @@ fn test_fuse_indices_trait_dispatch_returns_unsupported_error() {
 }
 
 #[test]
+fn trait_dispatch_covers_unsupported_ops_and_constructors() {
+    let i = idx(0, 2);
+    let j = idx(1, 2);
+    let tt = TensorTrain::new(vec![make_tensor(vec![i.clone()])]).unwrap();
+
+    assert!(<TensorTrain as TensorContractionLike>::contract(&[&tt]).is_err());
+    assert!(tt.direct_sum(&tt, &[]).is_err());
+    assert!(tt.outer_product(&tt).is_err());
+    assert!(tt.permuteinds(std::slice::from_ref(&i)).is_err());
+    assert!(matches!(
+        tt.factorize_auto(std::slice::from_ref(&i), &FactorizeOptions::svd()),
+        Err(FactorizeError::UnsupportedStorage(_))
+    ));
+    assert!(matches!(
+        tt.factorize_full_rank(std::slice::from_ref(&i), FactorizeAlg::SVD, Canonical::Left,),
+        Err(FactorizeError::UnsupportedStorage(_))
+    ));
+
+    let diagonal = <TensorTrain as TensorConstructionLike>::diagonal(&i, &j).unwrap();
+    assert_eq!(diagonal.len(), 1);
+    assert!(<TensorTrain as TensorConstructionLike>::scalar_one()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        <TensorTrain as TensorConstructionLike>::ones(std::slice::from_ref(&i))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        <TensorTrain as TensorConstructionLike>::onehot(&[(i, 1)])
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn test_two_site_tt() {
     // Create two tensors with a shared link index
     let s0 = idx(0, 2); // site 0

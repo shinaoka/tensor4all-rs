@@ -104,6 +104,71 @@ fn make_contract_tt(
 }
 
 #[test]
+fn projection_removes_exact_zero_bond_space_without_error_budget() {
+    let site0 = make_index(2);
+    let site1 = make_index(2);
+    let bond = make_index(2);
+    let train = TensorTrain::new(vec![
+        IdxTensor::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+        IdxTensor::from_dense(vec![bond, site1], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+    ])
+    .unwrap();
+    let subdomain = SubDomainTT::from_tt(train);
+    let projector = Projector::from_pairs([(site0.clone(), 0)]).unwrap();
+    let projected = subdomain.project(&projector).unwrap().unwrap();
+    let compressed = project_if_present(&subdomain, &site0, 0).unwrap().unwrap();
+
+    assert_eq!(projected.max_bond_dim(), 2);
+    assert_eq!(compressed.max_bond_dim(), 1);
+    assert_abs_diff_eq!(
+        compressed.norm_squared().unwrap(),
+        projected.norm_squared().unwrap(),
+        epsilon = 1.0e-12
+    );
+}
+
+#[test]
+fn adaptive_add_projects_original_addends_before_retrying() {
+    let site0 = make_index(2);
+    let site1 = make_index(2);
+    let product = |left_values: Vec<f64>, right_values: Vec<f64>| {
+        let bond = make_index(1);
+        TensorTrain::new(vec![
+            IdxTensor::from_dense(vec![site0.clone(), bond.clone()], left_values).unwrap(),
+            IdxTensor::from_dense(vec![bond, site1.clone()], right_values).unwrap(),
+        ])
+        .unwrap()
+    };
+    let contributions = vec![
+        SubDomainTT::from_tt(product(vec![1.0, 0.0], vec![1.0, 0.0])),
+        SubDomainTT::from_tt(product(vec![0.0, 1.0], vec![0.0, 1.0])),
+    ];
+    let contraction = ContractOptions::default().with_max_bond_dim(1);
+    let patching = PatchingOptions {
+        rtol: 0.0,
+        max_bond_dim: Some(1),
+        patch_order: vec![site0.clone()],
+        split_strategy: PatchSplitStrategy::Sequential,
+    };
+
+    let result = add_project_first(contributions, &contraction, &patching).unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert!(result.iter().all(|patch| patch.max_bond_dim() == 1));
+    assert!(result
+        .iter()
+        .all(|patch| patch.projector().get(&site0).is_some()));
+    assert_abs_diff_eq!(
+        result
+            .iter()
+            .map(|patch| patch.norm_squared().unwrap())
+            .sum::<f64>(),
+        2.0,
+        epsilon = 1.0e-12
+    );
+}
+
+#[test]
 fn test_add_with_patching_simple() {
     let (site_inds, link_ind) = make_shared_indices();
 
@@ -221,6 +286,54 @@ fn test_truncate_adaptive_rejects_invalid_options() {
 
     let bad_rank = truncate_adaptive(&empty, 1e-12, Some(0)).unwrap_err();
     assert!(matches!(bad_rank, PartitionedTTError::InvalidOptions(_)));
+}
+
+#[test]
+fn contract_adaptive_recomputes_projected_child_operands() {
+    let shared = [make_index(2), make_index(2)];
+    let output_left = [make_index(2), make_index(2)];
+    let output_right = [make_index(2), make_index(2)];
+    let build = |outputs: &[DynIndex; 2], offset: f64| {
+        let bond = make_index(2);
+        TensorTrain::new(vec![
+            IdxTensor::from_dense(
+                vec![outputs[0].clone(), shared[0].clone(), bond.clone()],
+                (0..8).map(|i| offset + f64::from(i) / 10.0).collect(),
+            )
+            .unwrap(),
+            IdxTensor::from_dense(
+                vec![bond, outputs[1].clone(), shared[1].clone()],
+                (0..8).map(|i| offset + 1.0 + f64::from(i) / 10.0).collect(),
+            )
+            .unwrap(),
+        ])
+        .unwrap()
+    };
+    let left =
+        PartitionedTT::from_subdomain(SubDomainTT::from_tt(build(&output_left, 1.0))).unwrap();
+    let right =
+        PartitionedTT::from_subdomain(SubDomainTT::from_tt(build(&output_right, 2.0))).unwrap();
+    let patching = PatchingOptions {
+        rtol: 0.0,
+        max_bond_dim: Some(1),
+        patch_order: vec![output_left[0].clone()],
+        split_strategy: PatchSplitStrategy::Sequential,
+    };
+
+    let result = contract_adaptive(
+        &left,
+        &right,
+        &ContractOptions::default().with_max_bond_dim(1),
+        &patching,
+    )
+    .unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert!(result
+        .values()
+        .all(|patch| patch.projector().get(&output_left[0]).is_some()));
+    assert!(result.values().all(|patch| patch.max_bond_dim() <= 1));
+    assert!(result.norm().unwrap() > 0.0);
 }
 
 #[test]

@@ -7,12 +7,17 @@
 //! complex use cases. The core functionality relies on TT addition which
 //! is now implemented.
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
 use crate::error::{PartitionedTTError, Result};
 use crate::partitioned_tt::PartitionedTT;
 use crate::projector::Projector;
 use crate::subdomain_tt::SubDomainTT;
 use tensor4all_core::{DynIndex, SvdTruncationPolicy};
 use tensor4all_itensorlike::{ContractOptions, TruncateOptions};
+
+type ContractGroup = (Vec<(SubDomainTT, SubDomainTT)>, Vec<SubDomainTT>);
 
 #[derive(Debug, Clone)]
 struct PatchStats {
@@ -281,12 +286,223 @@ pub fn contract_adaptive(
     patching_options: &PatchingOptions,
 ) -> Result<PartitionedTT> {
     validate_patching_options(patching_options)?;
-    let contracted = left.contract(right, contract_options)?;
+    let mut left_patches: Vec<_> = left.values().collect();
+    let mut right_patches: Vec<_> = right.values().collect();
+    left_patches.sort_by(|a, b| {
+        a.projector()
+            .partial_cmp(b.projector())
+            .unwrap_or(Ordering::Equal)
+    });
+    right_patches.sort_by(|a, b| {
+        a.projector()
+            .partial_cmp(b.projector())
+            .unwrap_or(Ordering::Equal)
+    });
+
+    let mut groups: HashMap<Projector, ContractGroup> = HashMap::new();
+    for left_patch in left_patches {
+        for right_patch in &right_patches {
+            if let Some(contribution) = left_patch.contract(right_patch, contract_options)? {
+                let entry = groups.entry(contribution.projector().clone()).or_default();
+                entry.0.push((left_patch.clone(), (*right_patch).clone()));
+                entry.1.push(contribution);
+            }
+        }
+    }
+
+    let mut grouped: Vec<_> = groups.into_iter().collect();
+    grouped.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let mut subdomains = Vec::new();
+    for (_, (pairs, contributions)) in grouped {
+        subdomains.extend(contract_group_project_first(
+            pairs,
+            Some(contributions),
+            contract_options,
+            patching_options,
+        )?);
+    }
+    let contracted = PartitionedTT::from_subdomains(subdomains)?;
     truncate_adaptive(
         &contracted,
         patching_options.rtol,
         patching_options.max_bond_dim,
     )
+}
+
+fn contract_group_project_first(
+    pairs: Vec<(SubDomainTT, SubDomainTT)>,
+    precomputed: Option<Vec<SubDomainTT>>,
+    contract_options: &ContractOptions,
+    patching_options: &PatchingOptions,
+) -> Result<Vec<SubDomainTT>> {
+    let contributions = if let Some(contributions) = precomputed {
+        contributions
+    } else {
+        let mut contributions = Vec::with_capacity(pairs.len());
+        for (left, right) in &pairs {
+            if let Some(contribution) = left.contract(right, contract_options)? {
+                contributions.push(contribution);
+            }
+        }
+        contributions
+    };
+    let mut iter = contributions.iter();
+    let Some(first) = iter.next() else {
+        return Ok(Vec::new());
+    };
+    let projector = first.projector().clone();
+    let mut sum = first.data().clone();
+    let truncation = truncation_options_from_contract(contract_options);
+    for contribution in iter {
+        sum = sum
+            .add_reindexed_like_self(contribution.data())
+            .map_err(|source| PartitionedTTError::TensorTrain { source })?;
+        sum.truncate(&truncation)
+            .map_err(|source| PartitionedTTError::TensorTrain { source })?;
+    }
+    let probe = SubDomainTT::new(sum, projector)?;
+
+    let Some(cap) = patching_options.max_bond_dim else {
+        return Ok(vec![probe]);
+    };
+    let saturated = probe.max_bond_dim() >= cap
+        || contributions
+            .iter()
+            .any(|contribution| contribution.max_bond_dim() >= cap);
+    if !saturated {
+        return Ok(vec![probe]);
+    }
+    let probe = assign_volume_budgets(vec![probe], patching_options.rtol)?
+        .pop()
+        .ok_or(PartitionedTTError::Empty)?;
+    let Some(index) = choose_split_index(&probe, patching_options)? else {
+        return Ok(vec![probe]);
+    };
+
+    let mut children = Vec::with_capacity(index.dim);
+    for value in 0..index.dim {
+        let mut child_pairs = Vec::with_capacity(pairs.len());
+        let mut projected_left = HashMap::new();
+        let mut projected_right = HashMap::new();
+        for (left, right) in &pairs {
+            let left_key = left.projector().clone();
+            if !projected_left.contains_key(&left_key) {
+                projected_left.insert(left_key.clone(), project_if_present(left, &index, value)?);
+            }
+            let right_key = right.projector().clone();
+            if !projected_right.contains_key(&right_key) {
+                projected_right
+                    .insert(right_key.clone(), project_if_present(right, &index, value)?);
+            }
+            if let (Some(child_left), Some(child_right)) = (
+                projected_left.get(&left_key).cloned().flatten(),
+                projected_right.get(&right_key).cloned().flatten(),
+            ) {
+                child_pairs.push((child_left, child_right));
+            }
+        }
+        children.extend(contract_group_project_first(
+            child_pairs,
+            None,
+            contract_options,
+            patching_options,
+        )?);
+    }
+    Ok(children)
+}
+
+#[cfg(test)]
+fn add_project_first(
+    contributions: Vec<SubDomainTT>,
+    contract_options: &ContractOptions,
+    patching_options: &PatchingOptions,
+) -> Result<Vec<SubDomainTT>> {
+    let mut iter = contributions.iter();
+    let Some(first) = iter.next() else {
+        return Ok(Vec::new());
+    };
+    let projector = first.projector().clone();
+    let mut sum = first.data().clone();
+    let truncation = truncation_options_from_contract(contract_options);
+    for contribution in iter {
+        sum = sum
+            .add_reindexed_like_self(contribution.data())
+            .map_err(|source| PartitionedTTError::TensorTrain { source })?;
+        sum.truncate(&truncation)
+            .map_err(|source| PartitionedTTError::TensorTrain { source })?;
+    }
+    let probe = SubDomainTT::new(sum, projector)?;
+
+    let Some(cap) = patching_options.max_bond_dim else {
+        return Ok(vec![probe]);
+    };
+    if probe.max_bond_dim() < cap {
+        return Ok(vec![probe]);
+    }
+    let probe = assign_volume_budgets(vec![probe], patching_options.rtol)?
+        .pop()
+        .ok_or(PartitionedTTError::Empty)?;
+    let Some(index) = choose_split_index(&probe, patching_options)? else {
+        return Ok(vec![probe]);
+    };
+
+    let mut children = Vec::new();
+    for value in 0..index.dim {
+        let mut projected = Vec::with_capacity(contributions.len());
+        for contribution in &contributions {
+            if let Some(child) = project_if_present(contribution, &index, value)? {
+                projected.push(child);
+            }
+        }
+        children.extend(add_project_first(
+            projected,
+            contract_options,
+            patching_options,
+        )?);
+    }
+    Ok(children)
+}
+
+fn project_if_present(
+    subdomain: &SubDomainTT,
+    index: &DynIndex,
+    value: usize,
+) -> Result<Option<SubDomainTT>> {
+    if !subdomain
+        .all_indices()
+        .iter()
+        .any(|candidate| candidate == index)
+    {
+        return Ok(Some(subdomain.clone()));
+    }
+    let Some(mut projected) =
+        subdomain.project(&Projector::from_pairs([(index.clone(), value)])?)?
+    else {
+        return Ok(None);
+    };
+    let first = projected
+        .data()
+        .tensor(0)
+        .map_err(|source| PartitionedTTError::TensorTrain { source })?;
+    let threshold = if first.is_f32() || first.is_c32() {
+        64.0 * f32::EPSILON as f64
+    } else {
+        64.0 * f64::EPSILON
+    };
+    projected
+        .truncate(&TruncateOptions::svd().with_svd_policy(SvdTruncationPolicy::new(threshold)))?;
+    Ok(Some(projected))
+}
+
+fn truncation_options_from_contract(options: &ContractOptions) -> TruncateOptions {
+    let mut truncation = TruncateOptions::svd();
+    if let Some(policy) = options.svd_policy() {
+        truncation = truncation.with_svd_policy(policy);
+    }
+    if let Some(max_bond_dim) = options.max_bond_dim() {
+        truncation = truncation.with_max_bond_dim(max_bond_dim);
+    }
+    truncation
 }
 
 /// Truncate a partitioned tensor train with volume-proportional absolute budgets.

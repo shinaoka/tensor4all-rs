@@ -798,6 +798,60 @@ pub trait TensorFactorizationLike: TensorIndex {
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
+    /// Factorize this tensor using policy-aware automatic SVD/eigen selection.
+    ///
+    /// Implementations may use Hermitian Gram eigendecomposition when the
+    /// requested SVD policy is numerically suitable. The default delegates to
+    /// [`Self::factorize`], preserving the existing behavior for tensor types
+    /// without an automatic eigendecomposition path.
+    ///
+    /// # Arguments
+    /// * `left_inds` - Indices to place on the left side of the split.
+    /// * `options` - Ordinary SVD factorization options, including canonical
+    ///   direction, truncation policy, and maximum bond dimension.
+    ///
+    /// # Returns
+    /// The same factorization result as [`Self::factorize`], with singular
+    /// values populated for SVD-compatible implementations.
+    ///
+    /// # Errors
+    /// Returns [`FactorizeError::InvalidOptions`] when `options.alg` is not
+    /// [`FactorizeAlg::SVD`], or another [`FactorizeError`] when factorization
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{
+    ///     DynIndex, FactorizeOptions, IdxTensor, SvdTruncationPolicy,
+    ///     TensorFactorizationLike,
+    /// };
+    ///
+    /// let left = DynIndex::new_dyn(2);
+    /// let right = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense(
+    ///     vec![left.clone(), right],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0e-3],
+    /// )?;
+    /// let options = FactorizeOptions::svd()
+    ///     .with_svd_policy(SvdTruncationPolicy::new(1.0e-2));
+    /// let result = tensor.factorize_auto(&[left], &options)?;
+    /// assert_eq!(result.rank, 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn factorize_auto(
+        &self,
+        left_inds: &[<Self as TensorIndex>::Index],
+        options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        if options.alg != FactorizeAlg::SVD {
+            return Err(FactorizeError::InvalidOptions(
+                "automatic factorization only supports SVD options",
+            ));
+        }
+        self.factorize(left_inds, options)
+    }
+
     /// Factorize this tensor without applying truncation controls.
     /// # Errors
     ///
