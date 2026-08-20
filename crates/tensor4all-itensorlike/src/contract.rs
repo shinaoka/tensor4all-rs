@@ -6,10 +6,16 @@
 use tensor4all_treetn::contraction::{
     contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions,
 };
-use tensor4all_treetn::CanonicalForm;
+use tensor4all_treetn::{
+    contract_fit, contract_fit_from_initial, low_rank_initializer_tree_tn, CanonicalForm,
+    FitContractionOptions,
+};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{validate_svd_truncation_options, ContractMethod, ContractOptions};
+use crate::options::{
+    validate_svd_truncation_options, ContractMethod, ContractOptions, FitInitializer,
+    DEFAULT_FIT_INITIALIZER_SEED,
+};
 use crate::tensortrain::TensorTrain;
 
 /// Contract two tensor trains, returning a new tensor train.
@@ -105,6 +111,48 @@ pub fn contract(
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Zip-up contraction failed: {}", e),
             })?
+    } else if matches!(options.method(), ContractMethod::Fit) {
+        // Build fit options directly from the user-facing ContractionOptions.
+        let fit_options = FitContractionOptions::new(nfullsweeps);
+        let fit_options = if let Some(max_bond_dim) = options.max_bond_dim() {
+            fit_options.with_max_bond_dim(max_bond_dim)
+        } else {
+            fit_options
+        };
+        let fit_options = if let Some(policy) = options.svd_policy() {
+            fit_options.with_svd_policy(policy)
+        } else {
+            fit_options
+        };
+
+        let fit_result = match options.initializer() {
+            FitInitializer::ZipUp => {
+                contract_fit(a.as_treetn(), b.as_treetn(), &center, fit_options)
+            }
+            FitInitializer::LowRankRandom { bond_dim, seed } => {
+                let seed = seed.unwrap_or(DEFAULT_FIT_INITIALIZER_SEED);
+                let initial = low_rank_initializer_tree_tn(
+                    a.as_treetn(),
+                    b.as_treetn(),
+                    &center,
+                    bond_dim,
+                    seed,
+                )
+                .map_err(|e| TensorTrainError::InvalidStructure {
+                    message: format!("Fit low-rank initializer construction failed: {}", e),
+                })?;
+                contract_fit_from_initial(
+                    a.as_treetn(),
+                    b.as_treetn(),
+                    &center,
+                    fit_options,
+                    initial,
+                )
+            }
+        };
+        fit_result.map_err(|e| TensorTrainError::InvalidStructure {
+            message: format!("TreeTN fit contraction failed: {}", e),
+        })?
     } else {
         treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options).map_err(|e| {
             TensorTrainError::InvalidStructure {

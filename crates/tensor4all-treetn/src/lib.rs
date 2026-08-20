@@ -79,11 +79,15 @@ pub use tdvp::{tdvp, tdvp_with_treetn_operator, TdvpError, TdvpOptions, TdvpResu
 pub use treetn::{
     // Local update
     apply_local_update_sweep,
+    // Fit contraction
+    contract_fit,
+    contract_fit_from_initial,
     // Decomposition
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
     get_boundary_edges,
     hadamard,
+    low_rank_initializer_tree_tn,
     partial_contract,
     partial_contract_to_site_network,
     sum_over_indices,
@@ -91,6 +95,7 @@ pub use treetn::{
     BoundaryEdge,
     CachedEvaluatorOptions,
     CenterSearchResult,
+    FitContractionOptions,
     // Core type
     GreedyCenterSearch,
     LocalUpdateStep,

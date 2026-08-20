@@ -84,10 +84,15 @@ this change.
 initializer skips the standalone final truncation because the following
 variational sweep is already locally optimal.
 
-A future option may use a looser initialization policy than the fit sweep. No
-hard-coded tolerance transformation is introduced here because
-`SvdTruncationPolicy` supports relative or absolute scaling, values or squared
-values, and per-value or discarded-tail rules.
+The low-rank random initializer is now the default starting state for the
+public `ContractOptions::fit()` path in `tensor4all-itensorlike` — it starts
+every bond at dimension 1 and lets the sweeps grow ranks per the SVD truncation
+policy, so the exact `χ_A·χ_B` product is never materialized during
+initialization. The zip-up initializer remains available explicitly for callers
+who want the exact-start + refine behavior. No hard-coded tolerance
+transformation is introduced here because `SvdTruncationPolicy` supports
+relative or absolute scaling, values or squared values, and per-value or
+discarded-tail rules.
 
 ### Decomposition choice
 
@@ -214,6 +219,10 @@ does not own or commit those benchmark records.
 
 ## Deferred work
 
-- A separately configurable coarse fit-initialization policy.
+- A separately configurable coarse fit-initialization policy. (Implemented:
+  see `FitContractionOptions` / the `FitInitializer`-style split between the
+  topology-preserving zip-up initializer and the deterministic low-rank random
+  initializer used by adaptive tolerance-driven fit. See
+  `benchmarks/results/2026-08-19-adaptive-fit-lowrank-initializer.md`.)
 - Rank-capped or rank-revealing QR suitable for patch-wise initialization.
 - A distinct ITensor-inspired schedule for branched trees.

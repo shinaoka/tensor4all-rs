@@ -12,7 +12,8 @@ pub use contract::contract;
 pub use error::{Result, TensorTrainError};
 pub use linsolve::linsolve;
 pub use options::{
-    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, TruncateOptions,
+    CanonicalForm, ContractMethod, ContractOptions, FitInitializer, LinsolveOptions,
+    TruncateOptions, DEFAULT_FIT_INITIALIZER_SEED,
 };
 pub use tensortrain::TensorTrain;
 

@@ -7,7 +7,7 @@
 //! This blocks using fit() for bubble computations in quanticsnegf-rs.
 
 use tensor4all_core::{factorize, DynIndex, FactorizeOptions, IdxTensor, IndexLike};
-use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
+use tensor4all_itensorlike::{ContractOptions, FitInitializer, TensorTrain, TruncateOptions};
 
 /// Convert a column-major matrix buffer to quantics interleaved bit ordering.
 fn matrix_to_quantics(nbit: usize, data: &[f64]) -> Vec<f64> {
@@ -281,7 +281,12 @@ fn test_fit_wrong_for_elementwise_structured() {
     eprintln!("||ref|| = {:.6e}", ref_norm);
 
     // fit(A,B): this converges to wrong local minimum
-    let result_fit = elementwise_mul(&tt_a, &tt_b, &all_sites, &ContractOptions::fit());
+    let result_fit = elementwise_mul(
+        &tt_a,
+        &tt_b,
+        &all_sites,
+        &ContractOptions::fit().with_initializer(FitInitializer::ZipUp),
+    );
     let fit_err = result_fit
         .axpby(1.0.into(), &result_ref, (-1.0).into())
         .unwrap()
@@ -290,7 +295,12 @@ fn test_fit_wrong_for_elementwise_structured() {
         / ref_norm;
 
     // fit(B,A): swapped order should also work
-    let result_fit_ba = elementwise_mul(&tt_b, &tt_a, &all_sites, &ContractOptions::fit());
+    let result_fit_ba = elementwise_mul(
+        &tt_b,
+        &tt_a,
+        &all_sites,
+        &ContractOptions::fit().with_initializer(FitInitializer::ZipUp),
+    );
     let fit_ba_err = result_fit_ba
         .axpby(1.0.into(), &result_ref, (-1.0).into())
         .unwrap()
@@ -303,7 +313,9 @@ fn test_fit_wrong_for_elementwise_structured() {
         &tt_a,
         &tt_b,
         &all_sites,
-        &ContractOptions::fit().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-30)),
+        &ContractOptions::fit()
+            .with_initializer(FitInitializer::ZipUp)
+            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-30)),
     );
     let fit_rtol_err = result_fit_rtol
         .axpby(1.0.into(), &result_ref, (-1.0).into())
