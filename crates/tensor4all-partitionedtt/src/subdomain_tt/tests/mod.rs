@@ -157,26 +157,23 @@ fn subdomain_new_rejects_same_id_tag_or_prime_variants() {
 }
 
 #[test]
-fn subdomain_new_validates_against_matched_tensor_train_dimension() {
+fn subdomain_new_rejects_same_identity_with_different_dimension() {
     let (tt, site_inds, _) = make_simple_tt();
     let mismatched_dimension =
         tensor4all_core::index::Index::new_with_tags(site_inds[0].id, 5, site_inds[0].tags.clone());
     let projector = projector([(mismatched_dimension.clone(), 2)]);
 
+    // Same full identity with a different dimension must be rejected before
+    // masking ever runs, regardless of the coordinate value.
     let error = SubDomainTT::new(tt, projector).unwrap_err();
-
     assert!(matches!(
         error,
-        PartitionedTTError::ProjectorCoordinateOutOfBounds {
-            index,
-            value: 2,
-            dim: 2,
-        } if index == mismatched_dimension
+        PartitionedTTError::IncompatibleProjectors(_)
     ));
 }
 
 #[test]
-fn project_rejects_out_of_range_coordinate_against_tt_dimension() {
+fn project_rejects_same_identity_with_different_dimension() {
     let (tt, site_inds, _) = make_simple_tt();
     let subdomain = SubDomainTT::from_tt(tt);
     let mismatched_dimension =
@@ -186,11 +183,41 @@ fn project_rejects_out_of_range_coordinate_against_tt_dimension() {
     let error = subdomain.project(&projector).unwrap_err();
     assert!(matches!(
         error,
-        PartitionedTTError::ProjectorCoordinateOutOfBounds {
-            index,
-            value: 2,
-            dim: 2,
-        } if index == mismatched_dimension
+        PartitionedTTError::IncompatibleProjectors(_)
+    ));
+}
+
+#[test]
+fn partition_accepts_matching_dimension_and_rejects_mismatched_dimension_subdomains() {
+    let site = make_index(2);
+    let same_dim = tensor4all_core::index::Index::new_with_tags(site.id, 2, site.tags.clone());
+    let make = |coordinate, projected| {
+        SubDomainTT::new(
+            TensorTrain::new(vec![make_tensor(vec![site.clone()])]).unwrap(),
+            projector([(projected, coordinate)]),
+        )
+        .unwrap()
+    };
+
+    // Two disjoint matching-dimension patches build a 2-patch partition.
+    let partition = crate::PartitionedTT::from_subdomains(vec![
+        make(0, same_dim.clone()),
+        make(1, same_dim.clone()),
+    ])
+    .unwrap();
+    assert_eq!(partition.len(), 2);
+
+    // The same logical identity with a different dimension is rejected at the
+    // subdomain boundary before it can reach partition insertion/masking.
+    let mismatched = tensor4all_core::index::Index::new_with_tags(site.id, 3, site.tags.clone());
+    let error = SubDomainTT::new(
+        TensorTrain::new(vec![make_tensor(vec![site])]).unwrap(),
+        projector([(mismatched, 0)]),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        PartitionedTTError::IncompatibleProjectors(_)
     ));
 }
 

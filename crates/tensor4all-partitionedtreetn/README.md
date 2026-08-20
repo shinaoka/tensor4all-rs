@@ -9,6 +9,15 @@ Adaptive patching is bond-cap-driven and independent of adaptive interpolation:
 this crate does **not** provide TCI, sampled-zero inference, or a dependency on
 `tensor4all-treetci`.
 
+## Truncation convention
+
+The scalar adaptive truncation parameter is `PatchingOptions::cutoff`, a local
+discarded-weight cutoff following the ITensorMPS convention. One absolute local
+threshold `cutoff * ||F||^2 * volume_p / total_volume` is derived per operation
+and applied whole at every local SVD. It is **best effort** for the final
+whole-network error; `max_bond_dim` is a hard cap and takes precedence. No API
+in this crate claims a global relative-error bound.
+
 ## Quick start
 
 ```rust
@@ -35,7 +44,7 @@ let result = add_with_patching(
     vec![patch],
     &0,
     &PatchingOptions {
-        rtol: 0.0,
+        cutoff: 0.0,
         max_bond_dim: Some(1),
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,

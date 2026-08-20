@@ -44,11 +44,13 @@ densified.
 ## Adaptive patching
 
 Every truncating or contracting operation takes an explicit existing node name
-as its center. `add_with_patching` first assigns absolute squared-tail budgets
-proportional to logical patch volume, splits each patch budget across the
-patch's internal bonds so local SVD discards cannot accumulate past `rtol`,
-then splits patches that remain above the bond cap. Inputs that share an equal
-projector key are summed before patching:
+as its center. `add_with_patching` first assigns absolute local discarded-weight
+cutoffs proportional to logical patch volume
+(`cutoff * ||F||^2 * volume_p / total_volume`), applies each whole threshold at
+the patch's local SVD truncations, then splits patches that remain above the
+bond cap. The `cutoff` is best effort for the final whole-network error;
+`max_bond_dim` is a hard cap. Inputs that share an equal projector key are
+summed before patching:
 
 ```rust
 # use tensor4all_core::{DynIndex, IdxTensor};
@@ -75,7 +77,7 @@ let result = add_with_patching(
     vec![patch],
     &0,
     &PatchingOptions {
-        rtol: 0.0,
+        cutoff: 0.0,
         max_bond_dim: Some(1),
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,

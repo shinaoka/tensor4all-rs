@@ -32,6 +32,15 @@ rtol = sqrt(cutoff)
 
 **Example**: ITensors.jl `cutoff=1e-10` corresponds to `rtol=1e-5` in tensor4all-rs.
 
+> **Exception — partitioned TreeTNs.** `tensor4all-partitionedtreetn`'s
+> adaptive surface (`PatchingOptions::cutoff`, `truncate_adaptive`) follows
+> ITensors.jl `cutoff` directly: it is a local discarded-weight cutoff, 1:1
+> with ITensors `cutoff` (for a caller migrating from the old root-relative
+> value, `cutoff = old_rtol²`, equivalently `rtol = sqrt(cutoff)`). The final
+> whole-network error is best effort and is not bounded by `cutoff`;
+> `max_bond_dim` is the hard cap. The deprecated `tensor4all-partitionedtt`
+> crate keeps the `rtol` convention documented above.
+
 ## Bond-Dimension Cap
 
 tensor4all-rs uses one spelling and one type for the bond-dimension cap across

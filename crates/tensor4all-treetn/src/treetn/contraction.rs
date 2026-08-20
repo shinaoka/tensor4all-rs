@@ -16,8 +16,8 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorIndex,
-    TensorLike,
+    validate_svd_truncation_options, Canonical, FactorizeAlg, FactorizeOptions, IndexLike,
+    SvdTruncationPolicy, TensorIndex, TensorLike,
 };
 
 use super::TreeTN;
@@ -1584,6 +1584,12 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    // Validate before method dispatch so an invalid policy or `max_bond_dim ==
+    // 0` is rejected on every method (Zipup, Fit, Naive) including their
+    // single-node / zero-sweep / dense short-cuts.
+    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
+        .context("contract: invalid contraction options")?;
+
     match options.method {
         ContractionMethod::Zipup => {
             tn_a.contract_zipup(tn_b, center, options.svd_policy, options.max_bond_dim)

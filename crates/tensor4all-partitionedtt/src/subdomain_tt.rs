@@ -207,6 +207,16 @@ impl SubDomainTT {
                     index: index.clone(),
                 });
             };
+            // `DynIndex` equality excludes the dimension, so an identity-equal
+            // alias with a different dimension is rejected before masking;
+            // otherwise the alias reaches `mask_index` and fails as an
+            // internal label-shape mismatch.
+            if index.dim != matched.dim {
+                return Err(PartitionedTTError::IncompatibleProjectors(format!(
+                    "projector index {index:?} has dimension {} but the tensor-train site identity has dimension {}",
+                    index.dim, matched.dim
+                )));
+            }
             if value >= matched.dim {
                 return Err(PartitionedTTError::ProjectorCoordinateOutOfBounds {
                     index: index.clone(),
@@ -256,20 +266,34 @@ impl SubDomainTT {
         index: &DynIndex,
         projected_value: usize,
     ) -> Result<IdxTensor> {
-        if !tensor.indices().iter().any(|candidate| candidate == index) {
+        // Mask using the canonical site index resolved from this tensor, never
+        // the projector key: an identity-equal alias with a different dimension
+        // would otherwise fail below `mask_index` as an internal label-shape
+        // mismatch.
+        let Some(canonical) = tensor
+            .indices()
+            .iter()
+            .find(|candidate| *candidate == index)
+        else {
             return Err(PartitionedTTError::ProjectorIndexNotFound {
                 index: index.clone(),
             });
+        };
+        if index.dim != canonical.dim {
+            return Err(PartitionedTTError::IncompatibleProjectors(format!(
+                "projector index {index:?} has dimension {} but the tensor site identity has dimension {}",
+                index.dim, canonical.dim
+            )));
         }
-        if projected_value >= index.dim {
+        if projected_value >= canonical.dim {
             return Err(PartitionedTTError::ProjectorCoordinateOutOfBounds {
                 index: index.clone(),
                 value: projected_value,
-                dim: index.dim,
+                dim: canonical.dim,
             });
         }
         tensor
-            .mask_index(index, projected_value)
+            .mask_index(canonical, projected_value)
             .map_err(Self::tensor_operation_error)
     }
 

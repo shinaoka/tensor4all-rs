@@ -11,8 +11,8 @@ use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::truncation::{
-    validate_svd_truncation_policy, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
-    TruncationRule,
+    validate_svd_truncation_options, validate_svd_truncation_policy, SingularValueMeasure,
+    SvdTruncationOptionsError, SvdTruncationPolicy, ThresholdScale, TruncationRule,
 };
 use crate::IdxTensor;
 use num_complex::Complex64;
@@ -33,6 +33,9 @@ pub enum SvdError {
     /// Invalid truncation threshold value (must be finite and non-negative).
     #[error("Invalid SVD truncation threshold: {0}. Threshold must be finite and non-negative.")]
     InvalidThreshold(f64),
+    /// `max_bond_dim` is set to zero.
+    #[error("max_bond_dim must be at least 1 when set")]
+    InvalidMaxBondDim,
 }
 
 /// Options for SVD decomposition with truncation control.
@@ -264,6 +267,17 @@ fn svd_truncated_inner(
         .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     let s_full = singular_values_from_eager(&s_inner)?;
     let mut r = if options.truncate {
+        // Shared root guard: reject `max_bond_dim == Some(0)` and invalid
+        // explicit policies before any truncation, so the caller cannot
+        // silently clamp every factorization to rank one.
+        validate_svd_truncation_options(options.max_bond_dim, options.policy).map_err(|error| {
+            match error {
+                SvdTruncationOptionsError::ZeroMaxBondDim => SvdError::InvalidMaxBondDim,
+                SvdTruncationOptionsError::InvalidThreshold(threshold) => {
+                    SvdError::InvalidThreshold(threshold)
+                }
+            }
+        })?;
         let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
         validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
 

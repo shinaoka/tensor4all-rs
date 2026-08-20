@@ -15,7 +15,9 @@
 use crate::any_scalar::AnyScalar;
 use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
-use crate::truncation::SvdTruncationPolicy;
+use crate::truncation::{
+    validate_svd_truncation_options, SvdTruncationOptionsError, SvdTruncationPolicy,
+};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -383,11 +385,25 @@ impl FactorizeOptions {
 
     /// Validate that the selected fields make sense for the chosen algorithm.
     ///
+    /// Validates max bond dimension and explicit SVD policy thresholds through
+    /// the shared [`validate_svd_truncation_options`] seam, then checks the
+    /// algorithm/option compatibility rules.
+    ///
     /// # Errors
     ///
     /// Returns [`FactorizeError::InvalidOptions`] if an algorithm is paired with
-    /// unsupported algorithm-specific truncation settings.
+    /// unsupported algorithm-specific truncation settings, or if `max_bond_dim`
+    /// is zero or an SVD policy threshold is non-finite/negative.
     pub fn validate(&self) -> std::result::Result<(), FactorizeError> {
+        validate_svd_truncation_options(self.max_bond_dim, self.svd_policy).map_err(|error| {
+            FactorizeError::InvalidOptions(match error {
+                SvdTruncationOptionsError::ZeroMaxBondDim => "max_bond_dim must be at least 1",
+                SvdTruncationOptionsError::InvalidThreshold(_) => {
+                    "SVD truncation threshold must be finite and non-negative"
+                }
+            })
+        })?;
+
         match self.alg {
             FactorizeAlg::SVD => {
                 if self.qr_rtol.is_some() {

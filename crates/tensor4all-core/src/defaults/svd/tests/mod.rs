@@ -137,3 +137,41 @@ fn svd_with_invalid_rtol_is_rejected_before_linalg() {
     );
     assert!(matches!(negative, Err(SvdError::InvalidThreshold(v)) if v == -1.0));
 }
+
+#[test]
+fn svd_with_rejects_zero_max_bond_dim_and_infinite_thresholds() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let tensor = IdxTensor::from_dense(
+        vec![i.clone(), j.clone()],
+        (0..9).map(|x| x as f64).collect(),
+    )
+    .unwrap();
+
+    // `max_bond_dim == 0` is a typed validation error, never a silent clamp to
+    // rank one.
+    assert!(matches!(
+        svd_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &SvdOptions::new().with_max_bond_dim(0),
+        ),
+        Err(SvdError::InvalidMaxBondDim)
+    ));
+
+    // Positive/negative infinity and NaN thresholds are rejected before any
+    // truncation decision.
+    for threshold in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        assert!(
+            matches!(
+                svd_with::<f64>(
+                    &tensor,
+                    std::slice::from_ref(&i),
+                    &SvdOptions::new().with_policy(SvdTruncationPolicy::new(threshold)),
+                ),
+                Err(SvdError::InvalidThreshold(_))
+            ),
+            "svd_with must reject threshold {threshold}"
+        );
+    }
+}
