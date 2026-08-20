@@ -67,6 +67,151 @@ fn branched_complex_tree() -> (TreeTN<IdxTensor, String>, Vec<DynIndex>) {
     (tree, center_sites.into_iter().chain(leaf_sites).collect())
 }
 
+/// Materialize `patch` and `result` densely and report the Frobenius relative error.
+fn dense_relative_error(source: &SubDomainTreeTN, result: &PartitionedTreeTN) -> f64 {
+    let original = source.data().clone().to_dense().unwrap();
+    let original_vec: Vec<f64> = original.to_vec().unwrap();
+    let truncated = result.to_treetn().unwrap().to_dense().unwrap();
+    let truncated_vec: Vec<f64> = truncated.to_vec().unwrap();
+    let diff_squared: f64 = original_vec
+        .iter()
+        .zip(&truncated_vec)
+        .map(|(x, y)| (x - y) * (x - y))
+        .sum();
+    let norm_squared: f64 = original_vec.iter().map(|x| x * x).sum();
+    (diff_squared / norm_squared).sqrt()
+}
+
+/// Build an unprojected 4-site chain state
+/// `|0000> + a(|1000> + |0011> + |0001>)` with one small Schmidt mode on
+/// every internal bond.
+fn four_site_chain(a: f64) -> SubDomainTreeTN {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(2);
+    let s3 = DynIndex::new_dyn(2);
+    let b01 = DynIndex::new_dyn(2);
+    let b12 = DynIndex::new_dyn(2);
+    let b23 = DynIndex::new_dyn(2);
+    // The state `|0000> + a|1000> + a|0111>` has one small Schmidt mode of
+    // squared weight `a*a` on every internal bond. Before the per-bond budget
+    // split, each local SVD reused the full patch budget and the accumulated
+    // squared error exceeded `rtol^2 * ||F||^2`.
+    let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0, 0.0, 0.0, a]).unwrap();
+    let t1 = IdxTensor::from_dense(
+        vec![b01, s1.clone(), b12.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let t2 = IdxTensor::from_dense(
+        vec![b12, s2.clone(), b23.clone()],
+        vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, a],
+    )
+    .unwrap();
+    let t3 = IdxTensor::from_dense(vec![b23, s3], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let tree = TreeTN::from_tensors(vec![t0, t1, t2, t3], vec![0usize, 1, 2, 3]).unwrap();
+    SubDomainTreeTN::from_treetn(tree).unwrap()
+}
+
+/// Build an unprojected 2-site GHZ-like chain `|00> + a|11>`.
+fn two_site_chain(a: f64) -> SubDomainTreeTN {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0, 0.0, a]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond, s1], vec![1.0, 0.0, 0.0, a]).unwrap();
+    let tree = TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1]).unwrap();
+    SubDomainTreeTN::from_treetn(tree).unwrap()
+}
+
+#[test]
+fn truncate_adaptive_global_error_stays_within_rtol_on_multi_edge_patches() {
+    // A single unprojected 4-site patch with an independent small Schmidt mode
+    // on every bond. Before the per-bond budget split, each local SVD reused
+    // the full patch budget and the accumulated error exceeded rtol.
+    let patch = four_site_chain(0.095);
+    let partition = PartitionedTreeTN::from_subdomain(patch.clone()).unwrap();
+    let rtol = 0.1;
+
+    let result = truncate_adaptive(&partition, &1, rtol, None).unwrap();
+    assert_eq!(result.len(), 1);
+    let relative_error = dense_relative_error(&patch, &result);
+    assert!(
+        relative_error <= rtol,
+        "global relative error {relative_error} exceeds rtol {rtol}"
+    );
+
+    // The same guarantee holds for a single-bond patch, which must still be
+    // truncatable within its full (unsplit) budget.
+    let compact = two_site_chain(0.1);
+    let compact_partition = PartitionedTreeTN::from_subdomain(compact.clone()).unwrap();
+    let compact_result = truncate_adaptive(&compact_partition, &0, rtol, None).unwrap();
+    let compact_error = dense_relative_error(&compact, &compact_result);
+    assert!(
+        compact_error <= rtol,
+        "single-bond relative error {compact_error} exceeds rtol {rtol}"
+    );
+    assert!(compact_result.values().next().unwrap().max_bond_dim() == 1);
+}
+
+#[test]
+fn add_with_patching_sums_equal_key_inputs_instead_of_replacing_them() {
+    let site = DynIndex::new_dyn(2);
+    let make = |values| {
+        SubDomainTreeTN::from_treetn(
+            TreeTN::from_tensors(
+                vec![IdxTensor::from_dense(vec![site.clone()], values).unwrap()],
+                vec![0usize],
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    // Two unprojected patches over the same site: `add_with_patching` must
+    // produce the summed patch [1, 1], not the silent last-write-wins [0, 1].
+    let result = add_with_patching(
+        vec![make(vec![0.0, 1.0_f64]), make(vec![1.0, 0.0])],
+        &0,
+        &PatchingOptions {
+            rtol: 1.0e-12,
+            max_bond_dim: Some(2),
+            ..PatchingOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.len(), 1);
+    let patch = result.values().next().unwrap();
+    let tensor = patch
+        .data()
+        .tensor(patch.data().node_index(&0).unwrap())
+        .unwrap();
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![1.0, 1.0]);
+}
+
+#[test]
+fn add_with_patching_global_error_stays_within_rtol_with_repeated_truncation() {
+    // Run the multi-edge patch through the split path (cap forces site
+    // splitting) and verify the final global error is still within rtol.
+    let patch = four_site_chain(0.09);
+    let rtol = 0.1;
+    let result = add_with_patching(
+        vec![patch.clone()],
+        &1,
+        &PatchingOptions {
+            rtol,
+            max_bond_dim: Some(1),
+            ..PatchingOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(result.len() > 1);
+    let relative_error = dense_relative_error(&patch, &result);
+    assert!(
+        relative_error <= rtol,
+        "global relative error {relative_error} exceeds rtol {rtol}"
+    );
+}
+
 fn assert_branched_complex_patch(patch: &SubDomainTreeTN<String>, sites: &[DynIndex]) {
     assert_eq!(patch.node_count(), 3);
     assert_eq!(patch.all_indices().len(), sites.len());
