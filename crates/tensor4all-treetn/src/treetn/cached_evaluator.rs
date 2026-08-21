@@ -31,7 +31,7 @@ mod phase_timing {
     }
 }
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::{
     contract_with_options,
@@ -397,6 +397,7 @@ where
 /// assert!(options.center.is_none());
 /// assert!(options.initial_centers.is_empty());
 /// assert!(options.max_greedy_steps_per_start.is_none());
+/// assert_eq!(options.message_cache_max_bytes, usize::MAX);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedEvaluatorOptions<V> {
@@ -414,6 +415,13 @@ pub struct CachedEvaluatorOptions<V> {
     ///
     /// `None` means no explicit step limit; the search stops at a local minimum.
     pub max_greedy_steps_per_start: Option<usize>,
+    /// Maximum logical payload bytes retained by the persistent message cache.
+    ///
+    /// A value of `0` disables retention while preserving the same evaluation
+    /// results. The default is `usize::MAX`, which preserves the historical
+    /// unbounded cache policy; callers that evaluate many changing batches
+    /// should set an explicit finite budget or `0`.
+    pub message_cache_max_bytes: usize,
 }
 
 impl<V> Default for CachedEvaluatorOptions<V> {
@@ -422,6 +430,7 @@ impl<V> Default for CachedEvaluatorOptions<V> {
             center: None,
             initial_centers: Vec::new(),
             max_greedy_steps_per_start: None,
+            message_cache_max_bytes: usize::MAX,
         }
     }
 }
@@ -1378,6 +1387,7 @@ where
         };
         let bond_dim = bond_index.dim();
         let assignment_index = DynIndex::new_dyn(keys.len());
+        let message_cache_max_bytes = self.options.message_cache_max_bytes;
 
         // Split into hits and misses without computing anything yet. The
         // cache borrow must not outlive this block: `compute_stacked_message`
@@ -1387,7 +1397,7 @@ where
             let cache = self
                 .message_caches
                 .entry(node.clone())
-                .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
             if let Some(positions) = cache.get_all_cached(&keys) {
                 #[cfg(test)]
                 phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
@@ -1433,7 +1443,7 @@ where
             let cache = self
                 .message_caches
                 .entry(node.clone())
-                .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
             cache.get_all_cached(&hit_keys); // counted above; discard positions here
         }
 
@@ -1486,8 +1496,8 @@ where
         let cache = self
             .message_caches
             .entry(node.clone())
-            .or_insert_with(|| PackedMessageCache::new(bond_dim, usize::MAX));
-        cache.get_or_compute_batch(&missing_keys, |request_keys| {
+            .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
+        let missing_slots = cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
                 .iter()
                 .map(|request_key| {
@@ -1505,17 +1515,48 @@ where
 
         #[cfg(test)]
         let reconstruct_start = std::time::Instant::now();
-        // Merge: every key is now cached (unbounded budget in this phase
-        // guarantees the insert above retained all of them), in original order.
+        // Merge cached and uncached columns in the original point order. A
+        // finite budget may return `CacheSlot::Uncached`; those values are
+        // still valid for this call and must not be looked up again.
         let mut data = Vec::with_capacity(bond_dim * keys.len());
-        for key in &keys {
-            let position = cache.position(key).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "TreeTNCachedEvaluator::evaluate_batched: message cache invariant violated: key missing after insert"
-                )
-            })?;
-            data.extend_from_slice(cache.column(position));
+        let mut missing_slot_iter = missing_slots.into_iter();
+        let mut missing_index_iter = missing_indices.into_iter().peekable();
+        for (point_index, key) in keys.iter().enumerate() {
+            if missing_index_iter.peek() == Some(&point_index) {
+                missing_index_iter.next();
+                let slot = missing_slot_iter.next().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batched: missing cache slot for missing key"
+                    )
+                })?;
+                match slot {
+                    CacheSlot::Cached(position) => data.extend_from_slice(cache.column(position)),
+                    CacheSlot::Uncached(column) => {
+                        ensure!(
+                            column.len() == bond_dim,
+                            "TreeTNCachedEvaluator::evaluate_batched: uncached message column has length {}, expected {bond_dim}",
+                            column.len()
+                        );
+                        data.extend_from_slice(&column);
+                    }
+                }
+            } else {
+                let position = cache.position(key).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batched: cached key missing during merge"
+                    )
+                })?;
+                data.extend_from_slice(cache.column(position));
+            }
         }
+        ensure!(
+            missing_index_iter.next().is_none(),
+            "TreeTNCachedEvaluator::evaluate_batched: missing point index after merge"
+        );
+        ensure!(
+            missing_slot_iter.next().is_none(),
+            "TreeTNCachedEvaluator::evaluate_batched: extra cache slots after merge"
+        );
         let tensor = IdxTensor::from_dense_any(vec![bond_index, assignment_index.clone()], data)?;
         #[cfg(test)]
         phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
@@ -2458,6 +2499,35 @@ mod tests {
             stats.message_cache_hits > 0,
             "expected at least one message cache hit on the second call: {stats:?}"
         );
+    }
+
+    #[test]
+    fn zero_message_cache_budget_preserves_results_without_retaining_payload() {
+        let (tree, indices) = varied_three_node_chain();
+        let values = [0usize, 0, 0, 1, 0, 0];
+        let shape = [3usize, 2usize];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                message_cache_max_bytes: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let actual = evaluator.evaluate_batched(points).unwrap();
+
+        assert_scalars_close(&actual, &expected);
+        assert!(!evaluator.message_caches.is_empty());
+        assert!(evaluator
+            .message_caches
+            .values()
+            .all(|cache| cache.retained_bytes() == 0));
+        assert_eq!(evaluator.stats_for_test().message_cache_hits, 0);
     }
 
     /// Root cause of the cache slowdown (see the message-cache-prototype
