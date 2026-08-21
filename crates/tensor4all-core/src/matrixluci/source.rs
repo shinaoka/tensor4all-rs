@@ -68,7 +68,7 @@ impl<'a, T: Scalar> DenseMatrixSource<'a, T> {
             expected.is_some(),
             "dense matrix source shape product overflow"
         );
-        let expected = expected.map_or(0, |expected| expected);
+        let expected = expected.unwrap_or(0);
         assert_eq!(data.len(), expected);
         Self { data, nrows, ncols }
     }
@@ -104,7 +104,7 @@ impl<T: Scalar> CandidateMatrixSource<T> for DenseMatrixSource<'_, T> {
             expected.is_some(),
             "dense matrix block shape product overflow"
         );
-        let expected = expected.map_or(0, |expected| expected);
+        let expected = expected.unwrap_or(0);
         assert_eq!(out.len(), expected);
         for (j, &col) in cols.iter().enumerate() {
             for (i, &row) in rows.iter().enumerate() {
@@ -136,7 +136,7 @@ where
             expected.is_some(),
             "lazy matrix block shape product overflow"
         );
-        let expected = expected.map_or(0, |expected| expected);
+        let expected = expected.unwrap_or(0);
         assert_eq!(out.len(), expected);
         (self.fill_block)(rows, cols, out);
     }

@@ -19,6 +19,7 @@
 | [partitioned-treetn.md](./partitioned-treetn.md) | Issue #648 migration design for TreeTN-native eager partitioning and adaptive patching |
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
 | [itensormps-compatible-zipup.md](./itensormps-compatible-zipup.md) | ITensorMPS-compatible chain zip-up contraction schedule and policy-aware decomposition follow-up |
+| [fit-sum.md](./fit-sum.md) | Variational fitting of compatible TreeTN sums without exact direct-sum materialization |
 
 ## Automatic Differentiation
 

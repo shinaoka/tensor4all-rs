@@ -84,6 +84,7 @@ pub use treetn::{
     // Decomposition
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
+    fit_sum,
     get_boundary_edges,
     hadamard,
     partial_contract,
@@ -94,6 +95,7 @@ pub use treetn::{
     CachedEvaluatorOptions,
     CenterSearchResult,
     EvaluationHint,
+    FitOptions,
     // Core type
     GreedyCenterSearch,
     LocalUpdateStep,

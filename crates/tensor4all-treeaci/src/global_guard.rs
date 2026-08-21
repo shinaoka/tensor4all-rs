@@ -152,7 +152,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
             injected = injected.checked_add(1).ok_or(TreeAciError::SizeOverflow {
                 context: "injected global pivot count",
             })?;
-            for (edge, added) in report.added_by_edge.chunks_exact(2).enumerate() {
+            for (edge, added) in report.added_by_edge.as_chunks::<2>().0.iter().enumerate() {
                 if added[0] != added[1] {
                     return Err(TreeAciError::InternalInvariant {
                         message: "global pivot changed only one direction of a tree cut",
