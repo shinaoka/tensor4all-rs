@@ -55,6 +55,12 @@ struct SiteEntry {
 }
 
 #[derive(Clone, Debug)]
+struct MessageCacheLayout {
+    input_positions: Vec<usize>,
+    indexer: FlatIndexer,
+}
+
+#[derive(Clone, Debug)]
 struct EvaluatorLayout<V> {
     entries_by_node: HashMap<V, Vec<SiteEntry>>,
     n_indices: usize,
@@ -109,6 +115,7 @@ struct CachedEvaluationStats {
 #[derive(Clone, Debug)]
 struct RootedMessagePlan<V> {
     children: HashMap<V, Vec<V>>,
+    subtree_nodes: HashMap<V, Vec<V>>,
     postorder: Vec<V>,
     parent: ParentMap<V>,
 }
@@ -369,6 +376,18 @@ where
             node_children.sort();
         }
 
+        let mut subtree_nodes = HashMap::<V, Vec<V>>::with_capacity(order.len());
+        for node in order.iter().rev() {
+            let mut subtree = vec![node.clone()];
+            for child in children.get(node).map(Vec::as_slice).unwrap_or(&[]) {
+                let child_subtree = subtree_nodes.get(child).ok_or_else(|| {
+                    anyhow::anyhow!("missing rooted subtree for child {:?}", child)
+                })?;
+                subtree.extend(child_subtree.iter().cloned());
+            }
+            subtree_nodes.insert(node.clone(), subtree);
+        }
+
         let postorder = order
             .into_iter()
             .rev()
@@ -377,6 +396,7 @@ where
 
         Ok(Self {
             children,
+            subtree_nodes,
             postorder,
             parent,
         })
@@ -700,18 +720,14 @@ where
     /// run, so its cache does too; an output-tree evaluator that must be
     /// dropped when pivot injection changes the output is a caller-level
     /// concern (drop this evaluator and build a new one), not this field's.
-    /// Keyed by the full evaluated point for now, which is always correct
-    /// (never collapses two different messages together) even though it is
-    /// coarser than the minimal subtree-restricted key a later pass could use.
+    /// Keyed by the physical assignments in the node's rooted subtree. This
+    /// is the minimal assignment set on which a directed message depends;
+    /// changing a site in another component must not invalidate this entry.
     message_caches: HashMap<V, PackedMessageCache<IndexKey, AnyScalar>>,
     /// Each node's parent-bond `DynIndex`, memoized: it never changes for a
     /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
     /// lookups that cost real time if repeated on every call.
     parent_bond_indices: HashMap<V, DynIndex>,
-    /// Packs one evaluated point into a compact [`IndexKey`] for
-    /// `message_caches`, per #645. Built once from the indices this evaluator
-    /// was constructed with, since their dimensions never change.
-    indexer: FlatIndexer,
     /// The centre `message_caches`/`parent_bond_indices` were built for.
     ///
     /// `evaluate_batched_with_hint` can pass a *different* centre on every
@@ -773,8 +789,6 @@ where
             )?;
         }
         let center = options.center.clone();
-        let local_dims = indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
-        let indexer = FlatIndexer::try_new(&local_dims).map_err(anyhow::Error::from)?;
         Ok(Self {
             tree,
             layout,
@@ -783,7 +797,6 @@ where
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::new(),
             parent_bond_indices: HashMap::new(),
-            indexer,
             rooted_for_center: None,
         })
     }
@@ -972,6 +985,7 @@ where
         }
         self.last_stats = CachedEvaluationStats::default();
         let plan = RootedMessagePlan::new(self.tree, center)?;
+        let message_cache_layouts = self.build_message_cache_layouts(&plan)?;
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
 
         let mut messages = HashMap::<V, StackedMessage>::new();
@@ -986,6 +1000,7 @@ where
                 node,
                 values,
                 &plan,
+                &message_cache_layouts,
                 &assignment_batches,
                 &messages,
             )?;
@@ -1020,6 +1035,43 @@ where
         self.last_stats.directed_message_count = directed_message_count;
         self.last_stats.batched_message_contract_count = batched_message_contract_count;
         Ok((component_batches, cache))
+    }
+
+    fn build_message_cache_layouts(
+        &self,
+        plan: &RootedMessagePlan<V>,
+    ) -> Result<HashMap<V, MessageCacheLayout>> {
+        let mut layouts = HashMap::with_capacity(plan.subtree_nodes.len());
+        for (node, subtree_nodes) in &plan.subtree_nodes {
+            let mut entries = subtree_nodes
+                .iter()
+                .flat_map(|subtree_node| {
+                    self.layout
+                        .entries_by_node
+                        .get(subtree_node)
+                        .into_iter()
+                        .flatten()
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by_key(|entry| entry.input_position);
+            let input_positions = entries
+                .iter()
+                .map(|entry| entry.input_position)
+                .collect::<Vec<_>>();
+            let dimensions = entries
+                .iter()
+                .map(|entry| entry.index.dim())
+                .collect::<Vec<_>>();
+            let indexer = FlatIndexer::try_new(&dimensions).map_err(anyhow::Error::from)?;
+            layouts.insert(
+                node.clone(),
+                MessageCacheLayout {
+                    input_positions,
+                    indexer,
+                },
+            );
+        }
+        Ok(layouts)
     }
 
     fn build_message_assignment_batches(
@@ -1091,10 +1143,12 @@ where
         &self,
         values: ColMajorArrayRef<'_, usize>,
         point: usize,
+        cache_layout: &MessageCacheLayout,
     ) -> Result<IndexKey> {
-        let n_rows = values.shape()[0];
-        let raw = (0..n_rows)
-            .map(|row| {
+        let raw = cache_layout
+            .input_positions
+            .iter()
+            .map(|&row| {
                 value_at(
                     values,
                     row,
@@ -1103,7 +1157,10 @@ where
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        self.indexer.encode(&raw).map_err(anyhow::Error::from)
+        cache_layout
+            .indexer
+            .encode(&raw)
+            .map_err(anyhow::Error::from)
     }
 
     /// Computes a leaf node's message directly from the tree tensor's raw
@@ -1168,6 +1225,64 @@ where
                 entry.input_position,
                 point,
                 "TreeTNCachedEvaluator::try_compute_leaf_message_raw",
+            )?;
+            for parent_value in 0..parent_dim {
+                let mut axis_values = [0usize; 2];
+                axis_values[physical_axis] = physical_value;
+                axis_values[parent_axis] = parent_value;
+                let flat = axis_values[0] * strides[0] + axis_values[1] * strides[1];
+                out.push(raw[flat]);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Complex-valued counterpart of [`Self::try_compute_leaf_message_raw`].
+    ///
+    /// Keeping this path separate from the real-valued helper avoids changing
+    /// the established f64 path while allowing SGW's complex tensors to skip
+    /// the generic contraction/materialization fallback as well.
+    fn try_compute_leaf_message_complex_raw(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+    ) -> Result<Option<Vec<Complex64>>> {
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if !tensor.is_complex() {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != 2 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let parent_axis = 1 - physical_axis;
+
+        let dims = tensor.dims();
+        let parent_dim = dims[parent_axis];
+        let strides = [1usize, dims[0]];
+        let raw = tensor.to_vec::<Complex64>()?;
+
+        let mut out = Vec::with_capacity(parent_dim * points.len());
+        for &point in points {
+            let physical_value = value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_leaf_message_complex_raw",
             )?;
             for parent_value in 0..parent_dim {
                 let mut axis_values = [0usize; 2];
@@ -1312,6 +1427,123 @@ where
         Ok(Some(out))
     }
 
+    /// Complex-valued counterpart of [`Self::try_compute_chain_message_raw`].
+    ///
+    /// This preserves the same postorder message and assignment-batch
+    /// semantics as the real-valued helper, but performs the contraction with
+    /// `Complex64` values directly in host memory.
+    fn try_compute_chain_message_complex_raw(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+    ) -> Result<Option<Vec<Complex64>>> {
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+        let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        let [child] = children else {
+            return Ok(None);
+        };
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if !tensor.is_complex() {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != 3 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let Some(child_edge) = self.tree.edge_between(node, child) else {
+            return Ok(None);
+        };
+        let Some(child_bond_index) = self.tree.bond_index(child_edge) else {
+            return Ok(None);
+        };
+        let Some(child_axis) = tensor_indices
+            .iter()
+            .position(|idx| idx == child_bond_index)
+        else {
+            return Ok(None);
+        };
+        let Some(parent_axis) = (0..3).find(|&axis| axis != physical_axis && axis != child_axis)
+        else {
+            return Ok(None);
+        };
+
+        let child_message = messages.get(child).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw: missing message for child {:?}",
+                child
+            )
+        })?;
+        if !child_message.tensor.is_complex() {
+            return Ok(None);
+        }
+        let child_assignment_batch = assignment_batches.get(child).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw: missing assignment batch for child {:?}",
+                child
+            )
+        })?;
+
+        let dims = tensor.dims();
+        let parent_dim = dims[parent_axis];
+        let child_dim = dims[child_axis];
+        let strides = [1usize, dims[0], dims[0] * dims[1]];
+        let raw = tensor.to_vec::<Complex64>()?;
+        let child_values = child_message.tensor.to_vec::<Complex64>()?;
+
+        let mut out = Vec::with_capacity(parent_dim * points.len());
+        for &point in points {
+            let physical_value = value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw",
+            )?;
+            let child_assignment = child_assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw: missing child assignment for point {point}"
+                    )
+                })?;
+            let child_col =
+                &child_values[child_assignment * child_dim..(child_assignment + 1) * child_dim];
+
+            for parent_value in 0..parent_dim {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for (child_value, &child_amplitude) in child_col.iter().enumerate() {
+                    let mut axis_values = [0usize; 3];
+                    axis_values[physical_axis] = physical_value;
+                    axis_values[parent_axis] = parent_value;
+                    axis_values[child_axis] = child_value;
+                    let flat = axis_values[0] * strides[0]
+                        + axis_values[1] * strides[1]
+                        + axis_values[2] * strides[2];
+                    sum += child_amplitude * raw[flat];
+                }
+                out.push(sum);
+            }
+        }
+        Ok(Some(out))
+    }
+
     /// Computes `node`'s directed message toward its parent, consulting the
     /// per-node persistent cache first.
     ///
@@ -1321,14 +1553,15 @@ where
     /// for everything else, in the caller's original point order. A node
     /// whose whole batch is already cached skips computation entirely.
     ///
-    /// Cache keys are the full evaluated point for now (see the
-    /// `message_caches` field doc): correct but coarser than a
-    /// subtree-restricted key would be.
+    /// Cache keys contain only the physical assignments in `node`'s rooted
+    /// subtree. Sites in another component cannot affect this directed
+    /// message and therefore do not belong in its cache key.
     fn get_or_compute_node_message(
         &mut self,
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         plan: &RootedMessagePlan<V>,
+        message_cache_layouts: &HashMap<V, MessageCacheLayout>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
     ) -> Result<StackedMessage> {
@@ -1341,9 +1574,15 @@ where
         #[cfg(test)]
         let phase_start = std::time::Instant::now();
         let points = assignment_batch.first_points.clone();
+        let cache_layout = message_cache_layouts.get(node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::evaluate_batched: missing message cache layout for {:?}",
+                node
+            )
+        })?;
         let keys = points
             .iter()
-            .map(|&point| self.message_cache_key(values, point))
+            .map(|&point| self.message_cache_key(values, point, cache_layout))
             .collect::<Result<Vec<_>>>()?;
 
         let Some(Some(parent)) = plan.parent.get(node) else {
@@ -1458,30 +1697,63 @@ where
             .collect::<Vec<_>>();
         #[cfg(test)]
         let contract_start = std::time::Instant::now();
-        let raw_missing_values =
-            match self.try_compute_leaf_message_raw(node, values, &missing_points)? {
-                Some(raw) => Some(raw),
-                None => self.try_compute_chain_message_raw(
-                    node,
-                    values,
-                    &missing_points,
-                    plan,
-                    assignment_batches,
-                    messages,
-                )?,
-            };
-        let missing_values: Vec<AnyScalar> = match raw_missing_values {
-            Some(raw) => raw.into_iter().map(AnyScalar::new_real).collect(),
-            None => {
-                let missing_message = self.compute_stacked_message(
-                    node,
-                    values,
-                    &missing_points,
-                    plan,
-                    assignment_batches,
-                    messages,
-                )?;
-                tensor_values_any(&missing_message.tensor)?
+        let tensor_is_complex = tensor_for_node(self.tree, node)?.is_complex();
+        let missing_values = if tensor_is_complex {
+            let raw_missing_values =
+                match self.try_compute_leaf_message_complex_raw(node, values, &missing_points)? {
+                    Some(raw) => Some(raw),
+                    None => self.try_compute_chain_message_complex_raw(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?,
+                };
+            match raw_missing_values {
+                Some(raw) => raw
+                    .into_iter()
+                    .map(|value| AnyScalar::new_complex(value.re, value.im))
+                    .collect(),
+                None => {
+                    let missing_message = self.compute_stacked_message(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?;
+                    tensor_values_any(&missing_message.tensor)?
+                }
+            }
+        } else {
+            let raw_missing_values =
+                match self.try_compute_leaf_message_raw(node, values, &missing_points)? {
+                    Some(raw) => Some(raw),
+                    None => self.try_compute_chain_message_raw(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?,
+                };
+            match raw_missing_values {
+                Some(raw) => raw.into_iter().map(AnyScalar::new_real).collect(),
+                None => {
+                    let missing_message = self.compute_stacked_message(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?;
+                    tensor_values_any(&missing_message.tensor)?
+                }
             }
         };
         #[cfg(test)]
@@ -1771,6 +2043,7 @@ where
     fn stats_for_test(&self) -> CachedEvaluationStats {
         self.last_stats.clone()
     }
+
 }
 
 fn build_layout<V>(tree: &TreeTN<IdxTensor, V>, indices: &[DynIndex]) -> Result<EvaluatorLayout<V>>
@@ -2502,6 +2775,37 @@ mod tests {
     }
 
     #[test]
+    fn message_cache_reuses_a_subtree_when_another_site_changes() {
+        let (tree, indices) = varied_three_node_chain();
+        let shape = [3usize, 1usize];
+        let first_values = [0usize, 0, 0];
+        let second_values = [0usize, 0, 1];
+        let first = ColMajorArrayRef::new(&first_values, &shape).unwrap();
+        let second = ColMajorArrayRef::new(&second_values, &shape).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let actual_first = evaluator.evaluate_batched(first).unwrap();
+        let actual_second = evaluator.evaluate_batched(second).unwrap();
+        let expected_first = tree.evaluate(&indices, first).unwrap();
+        let expected_second = tree.evaluate(&indices, second).unwrap();
+        assert_scalars_close(&actual_first, &expected_first);
+        assert_scalars_close(&actual_second, &expected_second);
+        assert!(
+            evaluator.stats_for_test().message_cache_hits > 0,
+            "changing a site outside node 0's subtree should reuse its cached message: {:?}",
+            evaluator.stats_for_test()
+        );
+    }
+
+    #[test]
     fn zero_message_cache_budget_preserves_results_without_retaining_payload() {
         let (tree, indices) = varied_three_node_chain();
         let values = [0usize, 0, 0, 1, 0, 0];
@@ -2590,6 +2894,53 @@ mod tests {
     }
 
     #[test]
+    fn raw_complex_leaf_message_matches_generic_contraction() {
+        let (tree, indices) = complex_three_node_chain();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [3usize, 2usize];
+        let values = [0usize, 0, 0, 0, 0, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &2,
+                points,
+                &leaf_points,
+                &plan,
+                &assignment_batches,
+                &HashMap::new(),
+            )
+            .unwrap();
+        let expected = tensor_values_any(&expected_message.tensor).unwrap();
+
+        let actual = evaluator
+            .try_compute_leaf_message_complex_raw(&2, points, &leaf_points)
+            .unwrap()
+            .expect("complex leaf message should use the raw path");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!((actual.re - expected.real()).abs() < 1.0e-12);
+            assert!((actual.im - expected.imag()).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
     fn raw_chain_message_matches_generic_contraction() {
         let (tree, indices) = varied_three_node_chain();
         let mut evaluator = TreeTNCachedEvaluator::new(
@@ -2659,6 +3010,102 @@ mod tests {
                 e.real()
             );
         }
+    }
+
+    #[test]
+    fn raw_complex_chain_message_matches_generic_contraction() {
+        let (tree, indices) = complex_three_node_chain();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [3usize, 2usize];
+        let values = [0usize, 0, 0, 0, 0, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+
+        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
+        let node2_message = evaluator
+            .compute_stacked_message(
+                &2,
+                points,
+                &leaf_points,
+                &plan,
+                &assignment_batches,
+                &HashMap::new(),
+            )
+            .unwrap();
+        let mut messages = HashMap::new();
+        messages.insert(2usize, node2_message);
+
+        let node1_points = assignment_batches.get(&1).unwrap().first_points.clone();
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &1,
+                points,
+                &node1_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap();
+        let expected = tensor_values_any(&expected_message.tensor).unwrap();
+
+        let actual = evaluator
+            .try_compute_chain_message_complex_raw(
+                &1,
+                points,
+                &node1_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap()
+            .expect("complex chain message should use the raw path");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!((actual.re - expected.real()).abs() < 1.0e-10);
+            assert!((actual.im - expected.imag()).abs() < 1.0e-10);
+        }
+    }
+
+    #[test]
+    fn fixed_center_and_scan_hint_evaluation_match() {
+        let (tree, indices) = complex_three_node_chain();
+        let shape = [3usize, 2usize];
+        let values = [0usize, 0, 0, 0, 0, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        let mut hinted = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions::<usize>::default(),
+        )
+        .unwrap();
+        let mut fixed_center = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions::<usize>::default(),
+        )
+        .unwrap();
+
+        let hinted_values = hinted
+            .evaluate_batched_with_hint(points, EvaluationHint::around(1))
+            .unwrap();
+        let fixed_center_values = fixed_center.evaluate_batched(points).unwrap();
+
+        assert_scalars_close(&hinted_values, &fixed_center_values);
     }
 
     fn assert_scalars_close(actual: &[AnyScalar], expected: &[AnyScalar]) {
@@ -2733,6 +3180,44 @@ mod tests {
         let t1 =
             IdxTensor::from_dense(vec![b01, s1.clone(), b12.clone()], vec![1.0_f64; 8]).unwrap();
         let t2 = IdxTensor::from_dense(vec![b12, s2.clone()], vec![1.0_f64; 4]).unwrap();
+        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
+        (tree, vec![s0, s1, s2])
+    }
+
+    fn complex_three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let s0 = DynIndex::new_dyn(2);
+        let b01 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let b12 = DynIndex::new_dyn(2);
+        let s2 = DynIndex::new_dyn(2);
+
+        let t0 = IdxTensor::from_dense(
+            vec![s0.clone(), b01.clone()],
+            vec![
+                Complex64::new(1.0, 0.5),
+                Complex64::new(-0.25, 1.5),
+                Complex64::new(2.0, -0.75),
+                Complex64::new(0.5, -1.0),
+            ],
+        )
+        .unwrap();
+        let t1 = IdxTensor::from_dense(
+            vec![b01, s1.clone(), b12.clone()],
+            (0..8)
+                .map(|value| Complex64::new(value as f64 + 0.5, -(value as f64) * 0.25))
+                .collect(),
+        )
+        .unwrap();
+        let t2 = IdxTensor::from_dense(
+            vec![b12, s2.clone()],
+            vec![
+                Complex64::new(0.75, -0.5),
+                Complex64::new(1.25, 0.25),
+                Complex64::new(-1.0, 0.75),
+                Complex64::new(2.5, -1.25),
+            ],
+        )
+        .unwrap();
         let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
         (tree, vec![s0, s1, s2])
     }

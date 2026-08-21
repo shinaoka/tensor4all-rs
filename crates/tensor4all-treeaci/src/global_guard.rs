@@ -7,7 +7,7 @@ use std::mem::size_of;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
+use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
 use crate::{
     frames::InputFrameStore, state::TreeAciState, Result, TreeAciError, TreeAciNode,
@@ -55,7 +55,11 @@ where
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let mut output_evaluator = GuardOutputEvaluator::new(&state.output, &state.problem)?;
+    let mut output_evaluator = GuardOutputEvaluator::new(
+        &state.output,
+        &state.problem,
+        options.message_cache_max_bytes,
+    )?;
     let mut evaluated_points = 0usize;
     let start_inputs = input_evaluators.evaluate::<T>(&starts, None)?;
     let start_batch = TreeElementwiseBatch::new(&start_inputs, state.inputs.len(), nsearch)?;
@@ -376,35 +380,6 @@ pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
     dims: Vec<Vec<usize>>,
     evaluations: usize,
     max_working_bytes: usize,
-    /// Prepared node order, so a varying coordinate maps back to a node name.
-    node_order: Vec<V>,
-}
-
-/// The single node whose coordinate differs across `points`, if there is one.
-///
-/// A floating-zone scan varies one site and holds the rest fixed, so naming that
-/// site lets the evaluator contract around it and compute each incoming message
-/// once instead of once per scanned value. Zero or several varying nodes means
-/// this is not a scan, and the caller falls back to the evaluator's own centre
-/// selection.
-fn sole_varying_node(points: &[Vec<usize>]) -> Option<usize> {
-    let first = points.first()?;
-    let mut varying = None;
-    for point in points.iter().skip(1) {
-        if point.len() != first.len() {
-            return None;
-        }
-        for (site, (a, b)) in first.iter().zip(point).enumerate() {
-            if a != b {
-                match varying {
-                    None => varying = Some(site),
-                    Some(known) if known == site => {}
-                    Some(_) => return None,
-                }
-            }
-        }
-    }
-    varying
 }
 
 impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
@@ -412,12 +387,23 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         inputs: &'a [TreeTN<IdxTensor, V>],
         problem: &crate::problem::PreparedTreeProblem<V>,
     ) -> Result<Self> {
+        Self::new_with_message_cache_max_bytes(inputs, problem, usize::MAX)
+    }
+
+    pub(crate) fn new_with_message_cache_max_bytes(
+        inputs: &'a [TreeTN<IdxTensor, V>],
+        problem: &crate::problem::PreparedTreeProblem<V>,
+        message_cache_max_bytes: usize,
+    ) -> Result<Self> {
         let indices = problem
             .physical
             .iter()
             .flat_map(|physical| physical.indices.iter().cloned())
             .collect::<Vec<_>>();
-        let options = CachedEvaluatorOptions::<V>::default();
+        let options = CachedEvaluatorOptions {
+            message_cache_max_bytes,
+            ..CachedEvaluatorOptions::<V>::default()
+        };
         let inputs = inputs
             .iter()
             .map(|input| TreeTNCachedEvaluator::new(input, &indices, options.clone()))
@@ -441,7 +427,6 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 .collect(),
             evaluations: 0,
             max_working_bytes: problem.max_working_bytes,
-            node_order: problem.node_order.clone(),
         })
     }
 
@@ -454,15 +439,12 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         points: &[Vec<usize>],
         _split: Option<usize>,
     ) -> Result<Vec<T>> {
-        // A floating-zone scan varies one site; contracting around it keeps
-        // every incoming message constant across the batch. `_split` used to be
-        // an unfilled seam here -- the parameter existed and every caller passed
-        // `None` -- so the centre stayed wherever greedy search put it on the
-        // first batch of the run.
-        let hint = sole_varying_node(points)
-            .and_then(|site| self.node_order.get(site).cloned())
-            .map(EvaluationHint::around)
-            .unwrap_or_default();
+        // Keep each evaluator's automatically selected centre fixed across
+        // floating-zone scans. A per-scan centre hint would be locally optimal
+        // for that batch, but changing the root invalidates every directed
+        // message cache entry; a fixed centre lets the persistent cache reuse
+        // messages across the whole guard run. The evaluator remains exact --
+        // the hint only selects a contraction order.
         let cold_evaluators = self
             .inputs
             .iter()
@@ -495,11 +477,8 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         crate::problem::enforce_limit("working bytes", result_bytes, self.max_working_bytes)?;
         let mut result = vec![T::default(); result_elements];
         for (input_number, evaluator) in self.inputs.iter_mut().enumerate() {
-            for (point, value) in evaluator
-                .evaluate_batched_with_hint(values, hint.clone())?
-                .into_iter()
-                .enumerate()
-            {
+            let evaluated = evaluator.evaluate_batched(values)?;
+            for (point, value) in evaluated.into_iter().enumerate() {
                 result[input_number + input_count * point] = T::from_evaluated_scalar(value)
                     .map_err(|message| TreeAciError::ScalarKind {
                         message: message.into(),
@@ -552,14 +531,21 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
     fn new(
         output: &'a TreeTN<IdxTensor, V>,
         problem: &crate::problem::PreparedTreeProblem<V>,
+        message_cache_max_bytes: usize,
     ) -> Result<Self> {
         let indices = problem
             .physical
             .iter()
             .flat_map(|physical| physical.indices.iter().cloned())
             .collect::<Vec<_>>();
-        let evaluator =
-            TreeTNCachedEvaluator::new(output, &indices, CachedEvaluatorOptions::<V>::default())?;
+        let evaluator = TreeTNCachedEvaluator::new(
+            output,
+            &indices,
+            CachedEvaluatorOptions {
+                message_cache_max_bytes,
+                ..CachedEvaluatorOptions::<V>::default()
+            },
+        )?;
         Ok(Self { evaluator })
     }
 

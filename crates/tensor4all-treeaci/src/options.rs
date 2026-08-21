@@ -44,6 +44,14 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     pub root: Option<V>,
     /// Run independent global-pivot searches before convergence. Default: `true`.
     pub enable_global_guard: bool,
+    /// Maximum logical bytes retained by each evaluator's persistent message
+    /// cache. Default: unlimited for backwards compatibility.
+    ///
+    /// This budget applies to both the input evaluators used by global-pivot
+    /// searches and the output evaluator used to validate those searches.
+    /// A finite nonzero value retains useful reuse while preventing repeated
+    /// floating-zone scans from retaining an unbounded set of message payloads.
+    pub message_cache_max_bytes: usize,
     /// Random starts per global search. Default: `5`.
     pub nsearch_global_pivots: usize,
     /// Maximum pivots injected by one global search. Default: `5`.
@@ -97,6 +105,7 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
             rng_seed: 0,
             root: None,
             enable_global_guard: true,
+            message_cache_max_bytes: usize::MAX,
             nsearch_global_pivots: 5,
             max_nglobal_pivots: 5,
             nsweeps_global_search: 100,
@@ -111,5 +120,17 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
             max_working_bytes: 512 << 20,
             traversal_strategy: TreeAciTraversalStrategy::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TreeAciOptions;
+
+    #[test]
+    fn default_message_cache_budget_is_unbounded_for_compatibility() {
+        let options = TreeAciOptions::<usize>::default();
+
+        assert_eq!(options.message_cache_max_bytes, usize::MAX);
     }
 }

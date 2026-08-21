@@ -49,12 +49,18 @@ fn floating_zone_finds_a_feature_missing_from_the_output() {
         max_nglobal_pivots: 2,
         nsweeps_global_search: 4,
         global_tolerance_margin: 1.0,
+        message_cache_max_bytes: 1,
         ..TreeAciOptions::default()
     };
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     state.output = zero_tree(left_site, right_site);
-    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let mut input_evaluators = InputEvaluators::new_with_message_cache_max_bytes(
+        state.inputs,
+        &state.problem,
+        options.message_cache_max_bytes,
+    )
+    .unwrap();
 
     let report =
         find_global_pivots(&state, &mut input_evaluators, &options, 9, &mut identity).unwrap();
@@ -327,30 +333,4 @@ fn padding_refuses_an_over_budget_request() {
         ),
         "unexpected error: {error}"
     );
-}
-
-/// A floating-zone scan names the site it varies, so the evaluator can contract
-/// around it.
-///
-/// `InputEvaluators::evaluate` used to take a split coordinate and discard it;
-/// every caller passed `None`, so the contraction centre stayed wherever greedy
-/// search put it on the first batch of the run. Detection is on the batch
-/// itself, so a batch that is not a scan falls back rather than guessing.
-#[test]
-fn a_scan_batch_names_its_varying_site() {
-    use super::sole_varying_node;
-
-    // A scan: only site 1 differs.
-    assert_eq!(
-        sole_varying_node(&[vec![0, 0, 1], vec![0, 1, 1], vec![0, 2, 1]]),
-        Some(1)
-    );
-    // A single point varies nothing.
-    assert_eq!(sole_varying_node(&[vec![0, 1, 2]]), None);
-    // Two sites differ, so this is not a scan.
-    assert_eq!(sole_varying_node(&[vec![0, 0, 0], vec![1, 1, 0]]), None);
-    // Ragged input is rejected rather than read past the shorter point.
-    assert_eq!(sole_varying_node(&[vec![0, 0], vec![0, 0, 0]]), None);
-    // No points at all.
-    assert_eq!(sole_varying_node(&[]), None);
 }

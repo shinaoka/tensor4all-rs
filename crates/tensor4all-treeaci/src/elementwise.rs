@@ -77,7 +77,11 @@ where
     if state.problem.node_order.len() == 1 {
         return evaluate_single_site(inputs, options, &mut operator);
     }
-    let mut input_evaluators = InputEvaluators::new(inputs, &state.problem)?;
+    let mut input_evaluators = InputEvaluators::new_with_message_cache_max_bytes(
+        inputs,
+        &state.problem,
+        options.message_cache_max_bytes,
+    )?;
     let history = run_local_sweeps(&mut state, &mut input_evaluators, options, &mut operator)?;
     let mut evaluated_points = history.evaluated_points;
     if history
