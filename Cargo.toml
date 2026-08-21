@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/tensor4all-aci",
+    "crates/tensor4all-treeaci",
     "crates/tensor4all-tensorbackend",
     "crates/tensor4all-core",
     "crates/tensor4all-treetn",

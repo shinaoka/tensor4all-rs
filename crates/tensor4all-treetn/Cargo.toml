@@ -8,19 +8,20 @@ repository.workspace = true
 description = "Tree tensor networks with arbitrary graph topology for tensor4all"
 
 [features]
-default = ["tenferro-cpu-faer"]
+default = ["tenferro-cpu-faer", "simplett-bridge"]
+simplett-bridge = ["dep:tensor4all-simplett"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
-    "tensor4all-simplett/tenferro-cpu-faer",
+    "tensor4all-simplett?/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
-    "tensor4all-simplett/tenferro-provider-inject",
+    "tensor4all-simplett?/tenferro-provider-inject",
 ]
 
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
-tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false, optional = true }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 petgraph.workspace = true
 anyhow.workspace = true

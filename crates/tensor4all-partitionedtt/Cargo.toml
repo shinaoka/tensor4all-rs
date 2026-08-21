@@ -37,7 +37,7 @@ tensor4all-itensorlike = { path = "../tensor4all-itensorlike", default-features 
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tensor4all-tensorci = { path = "../tensor4all-tensorci", default-features = false }
-tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 
 [dev-dependencies]
 approx.workspace = true

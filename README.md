@@ -51,6 +51,7 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, contraction, SVD, QR |
 | [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression |
 | [tensor4all-aci](crates/tensor4all-aci/) | Alternating Cross Interpolation for elementwise tensor train operations |
+| [tensor4all-treeaci](crates/tensor4all-treeaci/) | Experimental native TreeTN ACI and simultaneous n-way Hadamard products |
 | [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
 | [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |

@@ -31,7 +31,7 @@ tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false 
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
-tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 quanticsgrids.workspace = true
 num-complex.workspace = true
 thiserror.workspace = true

@@ -586,6 +586,21 @@ fn test_factorize_full_rank_preserves_near_dependent_components() {
 }
 
 #[test]
+fn test_factorize_full_rank_ci_real_and_complex_both_canonical() {
+    let real_data = vec![1.0, 3.0, 2.0, 5.0, 4.0, 6.0];
+    let complex_data = real_data
+        .iter()
+        .enumerate()
+        .map(|(n, &value)| Complex64::new(value, (n as f64 + 1.0) * 0.125))
+        .collect::<Vec<_>>();
+
+    for canonical in [Canonical::Left, Canonical::Right] {
+        assert_full_rank_ci_semantics(real_data.clone(), canonical);
+        assert_full_rank_ci_semantics(complex_data.clone(), canonical);
+    }
+}
+
+#[test]
 fn test_factorize_rejects_tracked_lu_and_ci_before_materialization() {
     let tensor = create_test_matrix().enable_grad().unwrap();
     let left_inds = vec![tensor.indices[0].clone()];
@@ -749,5 +764,32 @@ fn assert_tensors_approx_equal(a: &IdxTensor, b: &IdxTensor, tol: f64) {
         a.isapprox(b, tol, 0.0).unwrap(),
         "Tensors differ: maxabs diff = {}",
         a.sub(b).unwrap().maxabs().unwrap()
+    );
+}
+
+fn assert_full_rank_ci_semantics<T: TestScalar>(data: Vec<T>, canonical: Canonical) {
+    let left_index = DynIndex::new_dyn(2);
+    let right_index = DynIndex::new_dyn(3);
+    let tensor =
+        IdxTensor::from_dense(vec![left_index.clone(), right_index.clone()], data).unwrap();
+
+    let result = factorize_full_rank(
+        &tensor,
+        std::slice::from_ref(&left_index),
+        FactorizeAlg::CI,
+        canonical,
+    )
+    .unwrap();
+
+    assert_eq!(result.rank, 2);
+    assert_eq!(result.left.dims(), vec![2, 2]);
+    assert_eq!(result.right.dims(), vec![2, 3]);
+    assert_eq!(result.left.indices()[0], left_index);
+    assert_eq!(result.right.indices()[1], right_index);
+    assert_eq!(result.left.indices()[1].id, result.right.indices()[0].id);
+    assert_tensors_approx_equal(
+        &tensor,
+        &result.left.contract_pair(&result.right).unwrap(),
+        1.0e-10,
     );
 }
