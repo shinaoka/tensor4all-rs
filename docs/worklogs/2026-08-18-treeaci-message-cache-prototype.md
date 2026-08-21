@@ -1342,3 +1342,124 @@ remaining roughly 2x gap is now a separate per-sweep overhead question, not
 evidence that this scalar-priming bug is still present. Absolute values remain
 host-sensitive, and the benchmark still compares chain versus chain rather
 than a genuinely branched tree.
+
+## Update 12: chain raw-message BLAS dispatch is guarded by batch shape
+
+The remaining downstream-shaped guard cost led to a focused optimization of
+`tensor4all-treetn`'s existing raw interior-chain message path. The general
+tree evaluator and all non-chain eligibility fallbacks remain unchanged. The
+chain path now groups missing message columns by physical value and uses the
+tensorbackend matrix multiply only when the grouped contraction is large
+enough; real and complex paths share the same checked contraction logic.
+
+The first implementation used only a total scalar-work threshold. A direct
+release measurement exposed a second performance bug in that dispatch rule:
+the global guard commonly supplies one or two points per floating-zone callback,
+so the rule created `d x d` matrix-vector backend calls whose setup cost was
+higher than the scalar loop. At bond dimension 128, the measured scalar versus
+grouped times were `0.47 ms` versus `0.95 ms` for one point, and `0.87 ms`
+versus `1.77 ms` for two points. The crossover became consistently favorable
+when each physical-value group had at least four columns (for example, `4.59`
+versus `2.47 ms` at bond 128 with eight points).
+
+The final dispatch therefore keeps the scalar path for batches below eight
+points or whenever any physical group has fewer than four points, in addition
+to the existing work and group-count checks. This is an optimization guard,
+not a deprecation: large chain batches still use BLAS, while branch and
+ineligible tensor layouts still use the original generic contraction.
+
+Correctness coverage includes real and complex large-group contractions, the
+existing raw chain oracle comparisons, and the star-tree fallback comparison.
+The focused BLAS-path tests and the full release suites pass: 439
+`tensor4all-treetn` unit tests and 111 `tensor4all-treeaci` unit tests. The
+fixed-center output guard regression also passes, confirming that the cache
+optimization does not reintroduce per-scan center changes.
+
+An upstream-shaped diagnostic using 15-site and 21-site chains (the R=5/R=7
+site counts), one normalized input, one sweep, and the guard's default
+five-start/100-step search showed guard-on versus guard-off times of
+`0.937 s` versus `0.011 s` and `2.177 s` versus `0.015 s`, respectively; the
+held-out point errors were `3.39e-12` and `2.38e-12`. These are diagnostic
+measurements, not the downstream SGW benchmark, and the low-rank fixture does
+not establish the final R=7 production ratio. The direct cached-evaluator
+workload at bond 128 remains correct and showed cached times around
+`0.98–1.12 s` versus `1.92–1.96 s` uncached across repeated runs; the
+small-batch dispatch change is intentionally reported as no-regression rather
+than as a precise end-to-end speedup because host noise overlaps its modest
+effect.
+
+## Update 13: lightweight cache scalars remove the dominant chain guard cost
+
+The previous update's raw chain kernel was correct, but it still stored every
+new message element in `PackedMessageCache<IndexKey, AnyScalar>`. Although the
+raw real/complex kernels returned primitive values, the cache insertion path
+then converted each element to `AnyScalar`; `AnyScalar::from_value` constructs
+a rank-zero `IdxTensor` for each scalar. This was a second independent
+performance bug: the numerical representation was unnecessarily expensive even
+after the contraction itself had been optimized.
+
+The cache now stores a private `CachedScalar` enum containing either `f64` or
+`Complex64`. Raw real and complex paths populate it directly, and conversion
+back to `AnyScalar` is limited to the mixed-type generic fallback. Message
+reconstruction still returns the same `IdxTensor` and public `AnyScalar`
+values, so this is an internal storage optimization rather than a change to
+the evaluator's type or numerical semantics. The existing generic tree path,
+branch fallback, fixed-center policy, and cache budget behavior are unchanged.
+
+On the same 16-site, local-dimension-2, bond-128 floating-zone walk
+(`NSEARCH=5`, `MAX_SWEEPS=100`), the call pattern was identical in all runs:
+165 calls, 3150 cache hits, 525 misses, and hit rate 0.857. Three sequential
+release runs measured:
+
+| run | cached | uncached | speedup |
+|---:|---:|---:|---:|
+| 1 | 151.45 ms | 2.029 s | 13.40x |
+| 2 | 152.88 ms | 2.048 s | 13.40x |
+| 3 | 154.38 ms | 1.982 s | 12.84x |
+
+The cached path is therefore consistently about 0.15 s and the uncached path
+about 2.0 s on this host, with a measured speedup range of 12.84–13.40x.
+This is the direct cached-evaluator workload, not the downstream `gw-rs`
+benchmark; no downstream source was changed. The measurement is not used as a
+wall-clock pass/fail assertion.
+
+**Verification after the fix.** Rust `1.97.1` (Homebrew) was used. Focused
+real/complex raw-chain, star-tree, and fixed-center tests passed. The complete
+release unit suites passed: 440 `tensor4all-treetn` tests and 111
+`tensor4all-treeaci` tests. Formatting was clean, and the temporary raw-kernel
+timers/counters used during diagnosis were removed before this measurement.
+
+## Update 14: avoid materializing cached chain messages for every guard batch
+
+The downstream-shaped complex chain probe still showed a second independent
+cost after the raw contraction and `CachedScalar` fixes. For every small
+floating-zone batch, `TreeTNCachedEvaluator` rebuilt an `IdxTensor` for every
+directed message from already-packed cache columns, even though the next
+chain contraction could consume those columns directly. A phase probe with 30
+sites, local dimension 2, bond dimension 34, and 300 two-point calls measured
+`reconstruct=151.3 ms` out of the message-building work. The leaf-centre
+contraction also still used a backend tensor contraction for a mathematically
+simple bond-vector dot product (`66.1 ms` before the raw centre path).
+
+The evaluator now memoizes the rooted message plan and cache layouts for the
+fixed centre, keeps eligible chain messages as private `CachedScalar` columns,
+and consumes those columns directly in the parent raw contraction and leaf
+centre contraction. The generic `IdxTensor` materialization remains in place
+for branches, interior centres, mixed scalar kinds, and non-standard layouts.
+The raw mode is therefore an optimization path with explicit eligibility
+checks, not a change to the general tree evaluator.
+
+The same probe remained numerically identical (`2` sweeps, rank `3`, final
+error `7.056e-5`): TreeACI guard-on time moved from `1.557 s` after the earlier
+raw-centre fix to `0.443 s`; guard-off was `38.6 ms`. In the isolated phase
+probe, message reconstruction fell from `151.3 ms` to `1.4 ms`, environment
+build from `192.0 ms` to `28.8 ms`, and centre contraction remained about
+`12.3 ms`. The direct input/output cached replays were `48.5 ms` and `38.0 ms`
+for 300 calls. These are upstream diagnostic measurements, not the downstream
+SGW benchmark; the downstream checkout was not modified.
+
+Correctness after the raw-column path passed the cached-evaluator suite
+(39 focused tests), the complete TreeACI release suite (111 unit tests, 7
+integration tests, 1 rank-scaling test, and 18 doctests), formatting, and
+scoped clippy. The final full-crate release verification remains the gate
+before commit.

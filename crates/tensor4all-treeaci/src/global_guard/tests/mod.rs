@@ -1,7 +1,7 @@
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
-use super::{find_global_pivots, inject_global_pivots, InputEvaluators};
+use super::{find_global_pivots, inject_global_pivots, GuardOutputEvaluator, InputEvaluators};
 use crate::{
     schedule::{run_directional_pass, PassDirection},
     state::TreeAciState,
@@ -295,6 +295,49 @@ fn guard_reuses_input_evaluators_across_invocations() {
         second < first,
         "the second guard run must reuse warm evaluators: {second} vs {first}"
     );
+}
+
+#[test]
+fn output_guard_evaluator_keeps_a_fixed_center_after_warmup() {
+    let (input, left_site, right_site) = delta_tree();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let mut output_evaluator = GuardOutputEvaluator::new(
+        &state.output,
+        &state.problem,
+        options.message_cache_max_bytes,
+    )
+    .unwrap();
+
+    // Warm the reusable output evaluator on a scan through site 0.
+    let first_points = [vec![0, 0], vec![1, 0]];
+    let _: Vec<f64> = output_evaluator
+        .evaluate(&input_evaluators, &first_points)
+        .unwrap();
+    assert_eq!(output_evaluator.evaluator.center(), Some(&0));
+
+    // The next guard scan varies site 1. The output evaluator intentionally
+    // retains its center so persistent message-cache entries remain valid
+    // across the whole guard run.
+    let second_points = [vec![0, 0], vec![0, 1]];
+    let actual: Vec<f64> = output_evaluator
+        .evaluate(&input_evaluators, &second_points)
+        .unwrap();
+    assert_eq!(output_evaluator.evaluator.center(), Some(&0));
+
+    let values = [0usize, 0, 0, 1];
+    let expected = state
+        .output
+        .evaluate(
+            &[left_site, right_site],
+            ColMajorArrayRef::new(&values, &[2, 2]).unwrap(),
+        )
+        .unwrap();
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!((actual - expected.real()).abs() < 1.0e-12);
+    }
 }
 
 /// Padding rejects an over-budget request before allocating any padded core.
