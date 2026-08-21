@@ -2624,30 +2624,24 @@ fn tensor_from_cached_values(
     indices: Vec<DynIndex>,
     values: Vec<CachedScalar>,
 ) -> Result<IdxTensor> {
-    if values
+    if let Some(data) = values
         .iter()
-        .all(|value| matches!(value, CachedScalar::Real(_)))
+        .map(|value| match value {
+            CachedScalar::Real(value) => Some(*value),
+            CachedScalar::Complex(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
     {
-        let data = values
-            .iter()
-            .map(|value| match value {
-                CachedScalar::Real(value) => *value,
-                CachedScalar::Complex(_) => unreachable!("checked all values are real"),
-            })
-            .collect();
         return Ok(IdxTensor::from_dense(indices, data)?);
     }
-    if values
+    if let Some(data) = values
         .iter()
-        .all(|value| matches!(value, CachedScalar::Complex(_)))
+        .map(|value| match value {
+            CachedScalar::Complex(value) => Some(*value),
+            CachedScalar::Real(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
     {
-        let data = values
-            .iter()
-            .map(|value| match value {
-                CachedScalar::Complex(value) => *value,
-                CachedScalar::Real(_) => unreachable!("checked all values are complex"),
-            })
-            .collect();
         return Ok(IdxTensor::from_dense(indices, data)?);
     }
     Ok(IdxTensor::from_dense_any(
@@ -3218,6 +3212,46 @@ where
 mod tests {
     use super::*;
     use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+
+    #[test]
+    fn tensor_from_cached_values_preserves_each_scalar_storage_kind() {
+        let real_index = DynIndex::new_dyn(2);
+        let real = tensor_from_cached_values(
+            vec![real_index],
+            vec![CachedScalar::Real(1.0), CachedScalar::Real(2.0)],
+        )
+        .unwrap();
+        assert_eq!(real.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+
+        let complex_index = DynIndex::new_dyn(2);
+        let complex = tensor_from_cached_values(
+            vec![complex_index],
+            vec![
+                CachedScalar::Complex(Complex64::new(1.0, -2.0)),
+                CachedScalar::Complex(Complex64::new(3.0, -4.0)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            complex.to_vec::<Complex64>().unwrap(),
+            vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, -4.0)]
+        );
+
+        let mixed_index = DynIndex::new_dyn(2);
+        let mixed = tensor_from_cached_values(
+            vec![mixed_index],
+            vec![
+                CachedScalar::Real(5.0),
+                CachedScalar::Complex(Complex64::new(6.0, 7.0)),
+            ],
+        )
+        .unwrap();
+        let mixed_values = tensor_values_any(&mixed).unwrap();
+        assert_eq!(mixed_values[0].real(), 5.0);
+        assert_eq!(mixed_values[0].imag(), 0.0);
+        assert_eq!(mixed_values[1].real(), 6.0);
+        assert_eq!(mixed_values[1].imag(), 7.0);
+    }
 
     #[test]
     fn packed_message_cache_computes_and_stores_new_keys() {
