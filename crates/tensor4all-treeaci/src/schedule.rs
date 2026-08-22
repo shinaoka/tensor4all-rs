@@ -243,7 +243,8 @@ where
                 message: "a scheduled path starts at an unknown node",
             })?
             .clone();
-        if state.output.canonical_region() != &std::collections::HashSet::from([start]) {
+        let region = state.output.canonical_region();
+        if region.len() != 1 || !region.contains(&start) {
             return Err(TreeAciError::InternalInvariant {
                 message: "continuous sweep does not start at the current canonical center",
             });
