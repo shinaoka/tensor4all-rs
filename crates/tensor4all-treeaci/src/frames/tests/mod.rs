@@ -603,6 +603,88 @@ fn star_tree_for_fallback_dispatch() -> TreeTN<IdxTensor, usize> {
 }
 
 #[test]
+fn two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair() {
+    let inputs = vec![star_tree_for_fallback_dispatch()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+    let cores = super::prepare_cores::<f64, usize>(&inputs[0], &problem).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+    let incoming_edge_1 = directed.incoming_to_from[0];
+    let incoming_edge_2 = directed.incoming_to_from[1];
+
+    let node = *problem.node_positions.get(&directed.from).unwrap();
+    let core = &cores[node];
+    let outgoing = super::outgoing_bond(&inputs[0], &problem, edge).unwrap();
+    let outgoing_axis = super::axis_of(&core.indices, outgoing).unwrap();
+    let incoming_bond_1 = super::outgoing_bond(&inputs[0], &problem, incoming_edge_1).unwrap();
+    let incoming_bond_2 = super::outgoing_bond(&inputs[0], &problem, incoming_edge_2).unwrap();
+    let incoming_axis_1 = super::axis_of(&core.indices, incoming_bond_1).unwrap();
+    let incoming_axis_2 = super::axis_of(&core.indices, incoming_bond_2).unwrap();
+    let outgoing_dim = core.dims[outgoing_axis];
+    let incoming_dim_1 = core.dims[incoming_axis_1];
+    let incoming_dim_2 = core.dims[incoming_axis_2];
+
+    // Two arbitrary, non-trivial frame vectors per incoming edge (n1=2, n2=2)
+    // so the test exercises real cross-combination behavior, not a
+    // degenerate 1-candidate case.
+    let v1_cols = [vec![1.0, 0.5], vec![0.25, 2.0]];
+    let v2_cols = [vec![3.0, -1.0], vec![0.1, 4.0]];
+    let mut v1_data = Vec::new();
+    for col in &v1_cols {
+        v1_data.extend(col.iter().copied());
+    }
+    let v1 = tensor4all_tensorbackend::Matrix::from_col_major_vec(incoming_dim_1, 2, v1_data);
+    let mut v2_data = Vec::new();
+    for col in &v2_cols {
+        v2_data.extend(col.iter().copied());
+    }
+    let v2 = tensor4all_tensorbackend::Matrix::from_col_major_vec(incoming_dim_2, 2, v2_data);
+
+    let batched = super::two_incoming_core_matrix_batched(
+        core,
+        outgoing_axis,
+        incoming_axis_1,
+        incoming_axis_2,
+        0,
+        outgoing_dim,
+        incoming_dim_1,
+        incoming_dim_2,
+        &v1,
+        &v2,
+    )
+    .unwrap();
+
+    for (n1, v1_vec) in v1_cols.iter().enumerate() {
+        for (n2, v2_vec) in v2_cols.iter().enumerate() {
+            let incoming_frames = vec![
+                (incoming_edge_1, v1_vec.clone()),
+                (incoming_edge_2, v2_vec.clone()),
+            ];
+            let expected = super::contract_prepared_core(
+                &inputs[0],
+                &problem,
+                &cores,
+                edge,
+                0,
+                &incoming_frames,
+            )
+            .unwrap();
+            let actual: Vec<f64> = (0..outgoing_dim)
+                .map(|out| batched[[out + outgoing_dim * n1, n2]])
+                .collect();
+            assert_eq!(actual, expected, "mismatch at (n1={n1}, n2={n2})");
+        }
+    }
+}
+
+#[test]
 fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();

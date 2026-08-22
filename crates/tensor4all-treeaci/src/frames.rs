@@ -1164,6 +1164,49 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
     })
 }
 
+/// Contracts a core slice's two incoming axes against batches of candidate
+/// frame vectors for both incoming edges, computing every combination in
+/// the cartesian product of `v1`'s and `v2`'s columns via `incoming_dim_2 + 1`
+/// BLAS `mat_mul` calls (`incoming_dim_2` calls fold in `v1` one slice of the
+/// second axis at a time, then one final call folds in `v2`) instead of one
+/// scalar [`accumulate_incoming`] walk per `(n1, n2)` combination.
+///
+/// `v1` is `incoming_dim_1 x n1`, `v2` is `incoming_dim_2 x n2`. Returns an
+/// `(outgoing_dim * n1) x n2` matrix: column `n2`, rows
+/// `[outgoing_dim * n1_index, outgoing_dim * (n1_index + 1))`, holds the
+/// `outgoing_dim`-length frame vector [`contract_prepared_core`] would
+/// produce for the `(n1_index, n2)` candidate alone.
+fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    outgoing_axis: usize,
+    incoming_axis_1: usize,
+    incoming_axis_2: usize,
+    physical_base_offset: usize,
+    outgoing_dim: usize,
+    incoming_dim_1: usize,
+    incoming_dim_2: usize,
+    v1: &Matrix<T>,
+    v2: &Matrix<T>,
+) -> Result<Matrix<T>> {
+    let n1 = v1.ncols();
+    let stride_2 = core.strides[incoming_axis_2];
+    let mut stage1_data = Vec::with_capacity(outgoing_dim * n1 * incoming_dim_2);
+    for i2 in 0..incoming_dim_2 {
+        let core_matrix = single_incoming_core_matrix(
+            core,
+            outgoing_axis,
+            incoming_axis_1,
+            physical_base_offset + i2 * stride_2,
+            outgoing_dim,
+            incoming_dim_1,
+        );
+        let stage1 = contract_prepared_core_batched(&core_matrix, v1)?;
+        stage1_data.extend(stage1.into_col_major_vec());
+    }
+    let stage1_matrix = Matrix::from_col_major_vec(outgoing_dim * n1, incoming_dim_2, stage1_data);
+    contract_prepared_core_batched(&stage1_matrix, v2)
+}
+
 fn outgoing_bond<'a, V: TreeAciNode>(
     input: &'a TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
