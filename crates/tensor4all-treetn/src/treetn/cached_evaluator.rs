@@ -1236,7 +1236,10 @@ where
         if neighbors.get(center).map(Vec::len) != Some(1) {
             return Ok(false);
         }
-        if neighbors.values().any(|neighbors| neighbors.len() > 2) {
+        // A leaf center turns every degree-3 node into at most a two-child
+        // rooted branch, which is covered by the raw branch message path.
+        // Degree-4 nodes would still require a generic multi-child message.
+        if neighbors.values().any(|neighbors| neighbors.len() > 3) {
             return Ok(false);
         }
         if self
@@ -4897,6 +4900,65 @@ mod tests {
         }
     }
 
+    #[test]
+    fn degree_three_hub_keeps_raw_messages_when_center_is_a_leaf() {
+        let (tree, indices) = star_tree();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [4usize, 2usize];
+        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        let (_, environments) = evaluator.build_environment_cache(&1, points).unwrap();
+        let hub_message = environments
+            .get(&0)
+            .expect("leaf-centered star must expose the hub environment");
+
+        assert!(
+            hub_message.raw_values.is_some(),
+            "a degree-3 hub rooted at a leaf should retain its raw branch message"
+        );
+        assert!(
+            hub_message.tensor.is_none(),
+            "raw branch messages should not be materialized into an IdxTensor"
+        );
+    }
+
+    #[test]
+    fn degree_four_hub_does_not_keep_raw_messages_when_center_is_a_leaf() {
+        let (tree, indices) = four_arm_star_tree();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let values = vec![0usize; 5];
+        let shape = [5usize, 1usize];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        let (_, environments) = evaluator.build_environment_cache(&1, points).unwrap();
+        let hub_message = environments
+            .get(&0)
+            .expect("leaf-centered star must expose the hub environment");
+
+        assert!(
+            hub_message.raw_values.is_none(),
+            "a degree-4 hub needs the generic multi-child message path"
+        );
+        assert!(hub_message.tensor.is_some());
+    }
+
     fn complex_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
         let sc = DynIndex::new_dyn(2);
         let s0 = DynIndex::new_dyn(2);
@@ -5208,6 +5270,35 @@ mod tests {
             TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
                 .unwrap();
         (tree, vec![sc, s0, s1, s2])
+    }
+
+    fn four_arm_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let sc = DynIndex::new_dyn(2);
+        let sites = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+        let bonds = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+        let center = IdxTensor::from_dense(
+            vec![
+                sc.clone(),
+                bonds[0].clone(),
+                bonds[1].clone(),
+                bonds[2].clone(),
+                bonds[3].clone(),
+            ],
+            vec![1.0_f64; 32],
+        )
+        .unwrap();
+        let leaves = bonds
+            .into_iter()
+            .zip(sites.iter().cloned())
+            .map(|(bond, site)| IdxTensor::from_dense(vec![bond, site], vec![1.0_f64; 4]))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let mut tensors = vec![center];
+        tensors.extend(leaves);
+        let tree = TreeTN::<_, usize>::from_tensors(tensors, vec![0, 1, 2, 3, 4]).unwrap();
+        let mut indices = vec![sc];
+        indices.extend(sites);
+        (tree, indices)
     }
 
     #[test]

@@ -126,6 +126,27 @@ Bond dimensions and truncation errors match the baseline closely (sigma_rtau's
 bond is exactly identical), so this is a genuine wall-time win at matched
 accuracy, not a "converged to a cheaper answer" artifact.
 
+## Follow-up diagnosis: the raw-message eligibility gate
+
+The first rerun still showed a substantial Comb-vs-NBlock gap at smaller
+bond dimensions. Instrumenting the evaluator showed that the Comb topology
+was not retaining raw messages at all: `can_use_raw_chain_leaf_center` rejected
+the entire evaluator whenever it saw a degree-3 node. With a leaf as the
+fixed centre, however, a degree-3 node has only two rooted children, exactly
+the shape handled by the new branch raw-message path. The old all-or-nothing
+gate therefore forced every cached message through `IdxTensor` materialization
+and generic contraction, even though the tree's rooted messages were eligible
+for the optimized leaf/chain/two-child-branch representation.
+
+The gate now permits degree-3 nodes while still rejecting degree-4 nodes and
+above, whose leaf-centred rooted form has at least three children and is not
+covered by the two-child branch kernel. The permanent regression tests
+`degree_three_hub_keeps_raw_messages_when_center_is_a_leaf` and
+`degree_four_hub_does_not_keep_raw_messages_when_center_is_a_leaf` cover both
+sides of this boundary. A same-configuration R=6 downstream run completed
+the Pi, W, and Sigma treeaci stages successfully after the change, with the
+raw branch path active for the Comb topology and no numerical failure.
+
 ## Verification
 
 - TDD throughout, same discipline as the `frames.rs` fix: every new
@@ -140,7 +161,10 @@ accuracy, not a "converged to a cheaper answer" artifact.
   `cached_evaluator_matches_tree_evaluate_on_star_tree_with_fixed_leaf_center`
   (end-to-end through the public `evaluate_batched` API -- the existing
   star-tree test fixed centre to the hub itself and never reached the branch
-  dispatch at all).
+  dispatch at all), plus
+  `degree_three_hub_keeps_raw_messages_when_center_is_a_leaf` and
+  `degree_four_hub_does_not_keep_raw_messages_when_center_is_a_leaf` for the
+  raw-message eligibility boundary.
 - `cargo fmt --all -- --check` clean.
 - `cargo clippy --manifest-path crates/tensor4all-treetn/Cargo.toml --all-targets -- -D warnings`
   clean (one fix needed: a `needless_range_loop` in the diagnostic's comb-tree
@@ -156,10 +180,11 @@ accuracy, not a "converged to a cheaper answer" artifact.
   at this local checkout for that validation; remove it once this PR merges
   and gw-rs's existing `branch = "main"` git dependencies pick up the merged
   commit on their own.
-- Nodes with 3+ children (degree >= 5) remain on the scalar/generic path,
-  same scope decision as the `frames.rs` fix and for the same reason: not
-  needed for #671's reported topology, and a general N-child version would
-  need an inter-step buffer transpose this 2-child case avoids.
+- Nodes with 3+ rooted children (degree >= 4 in the leaf-centred topology)
+  remain on the scalar/generic path, same scope decision as the `frames.rs`
+  fix and for the same reason: not needed for #671's reported topology, and a
+  general N-child version would need an inter-step buffer transpose this
+  2-child case avoids.
 - The synthetic same-bond diagnostic's numbers (25.84x / 29.26x / 44.24x)
   are kept as a regression-style measurement tool
   (`diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk`,
