@@ -461,11 +461,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     }
 
     /// Computes every candidate's frame vector for one input and directed
-    /// edge, using the batched BLAS path (one `mat_mul` call per distinct
-    /// `local_coordinate`) when the edge's source node has exactly one
-    /// incoming edge, and falling back to the scalar
-    /// [`Self::candidate_frame`] path (called once per candidate, and still
-    /// consulting/populating `candidate_cache`) otherwise.
+    /// edge. Dispatches to a batched BLAS path when the edge's source node
+    /// has exactly one incoming edge (one `mat_mul` call per distinct
+    /// `local_coordinate`) or exactly two incoming edges (see
+    /// [`Self::candidate_frames_for_edge_two_incoming`] and
+    /// [`two_incoming_core_matrix_batched`]), and falls back to the scalar
+    /// [`Self::candidate_frame`] path (called once per candidate, still
+    /// consulting/populating `candidate_cache`) for a leaf edge (zero
+    /// incoming edges) or a node with three or more incoming edges (out of
+    /// scope for the batched paths -- see issue #671 and
+    /// `docs/worklogs/2026-08-22-treeaci-branch-batched-frames.md`).
     ///
     /// The batched path also consults `candidate_cache` per candidate before
     /// grouping it into a BLAS call. A one-off instrumented run of
@@ -493,6 +498,15 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .ok_or(TreeAciError::InternalInvariant {
                     message: "candidate frame references an unknown directed edge",
                 })?;
+        if directed.incoming_to_from.len() == 2 {
+            return self.candidate_frames_for_edge_two_incoming(
+                inputs,
+                problem,
+                input,
+                directed_edge,
+                candidates,
+            );
+        }
         if directed.incoming_to_from.len() != 1 {
             return candidates
                 .iter()
@@ -636,6 +650,206 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             .map(|value| {
                 value.ok_or(TreeAciError::InternalInvariant {
                     message: "candidate frame batching left a candidate unfilled",
+                })
+            })
+            .collect()
+    }
+
+    /// Batched counterpart to [`Self::candidate_frames_for_edge`]'s
+    /// single-incoming-edge path, for directed edges whose source node has
+    /// exactly two incoming edges (every hub of a 3-valent tree branch
+    /// point). Groups candidates by `local_coordinate` exactly as the
+    /// single-incoming path does, then for each group gathers the distinct
+    /// sample ids referenced on each incoming edge, builds one frame-vector
+    /// matrix per incoming edge, and contracts both via
+    /// [`two_incoming_core_matrix_batched`] in one shot -- computing the
+    /// full cartesian product of the group's distinct incoming ids (a
+    /// superset of the group's actual candidates whenever the group is not
+    /// already the full product) and reading back only the entries the
+    /// group's candidates actually need.
+    fn candidate_frames_for_edge_two_incoming<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        input: usize,
+        directed_edge: DirectedEdgeId,
+        candidates: &[ComponentSample],
+    ) -> Result<Vec<Vec<T>>> {
+        let directed =
+            problem
+                .directed_edges
+                .get(directed_edge)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate frame references an unknown directed edge",
+                })?;
+        let node =
+            *problem
+                .node_positions
+                .get(&directed.from)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate source has no prepared node position",
+                })?;
+        let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame references an unknown input",
+        })?;
+        let cores = self
+            .cores
+            .get(input)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "candidate frame has no prepared input cores",
+            })?;
+        let core = cores.get(node).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame source node has no prepared core",
+        })?;
+        let outgoing = outgoing_bond(tree, problem, directed_edge)?;
+        let outgoing_axis = axis_of(&core.indices, outgoing)?;
+        let physical = &problem.physical[node];
+        let physical_axes = physical
+            .indices
+            .iter()
+            .map(|index| axis_of(&core.indices, index))
+            .collect::<Result<Vec<_>>>()?;
+        let incoming_edge_1 = directed.incoming_to_from[0];
+        let incoming_edge_2 = directed.incoming_to_from[1];
+        let incoming_bond_1 = outgoing_bond(tree, problem, incoming_edge_1)?;
+        let incoming_bond_2 = outgoing_bond(tree, problem, incoming_edge_2)?;
+        let incoming_axis_1 = axis_of(&core.indices, incoming_bond_1)?;
+        let incoming_axis_2 = axis_of(&core.indices, incoming_bond_2)?;
+        let outgoing_dim = core.dims[outgoing_axis];
+        let incoming_dim_1 = core.dims[incoming_axis_1];
+        let incoming_dim_2 = core.dims[incoming_axis_2];
+
+        let mut groups: std::collections::BTreeMap<usize, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        let mut results: Vec<Option<Vec<T>>> = vec![None; candidates.len()];
+        for (candidate_index, candidate) in candidates.iter().enumerate() {
+            let key: CandidateCacheKey = (
+                input,
+                directed_edge,
+                candidate.local_coordinate,
+                candidate.incoming.clone(),
+            );
+            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+                #[cfg(test)]
+                candidate_debug_stats::record_hit();
+                results[candidate_index] = Some(cached.clone());
+                continue;
+            }
+            #[cfg(test)]
+            candidate_debug_stats::record_miss();
+            if candidate.incoming.len() != 2
+                || candidate.incoming[0].0 != incoming_edge_1
+                || candidate.incoming[1].0 != incoming_edge_2
+            {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "two-incoming-edge candidate does not match the edge's incoming order",
+                });
+            }
+            groups
+                .entry(candidate.local_coordinate)
+                .or_default()
+                .push(candidate_index);
+        }
+
+        for (local_coordinate, indices) in groups {
+            let mut base_offset = 0usize;
+            for (physical_axis, &axis) in physical_axes.iter().enumerate() {
+                let wanted = (local_coordinate / physical.strides[physical_axis])
+                    % physical.dims[physical_axis];
+                base_offset += wanted * core.strides[axis];
+            }
+
+            let mut ids_1: Vec<SampleId> = Vec::new();
+            let mut position_1: HashMap<SampleId, usize> = HashMap::new();
+            let mut ids_2: Vec<SampleId> = Vec::new();
+            let mut position_2: HashMap<SampleId, usize> = HashMap::new();
+            for &candidate_index in &indices {
+                let (_, sample_1) = candidates[candidate_index].incoming[0];
+                let (_, sample_2) = candidates[candidate_index].incoming[1];
+                position_1.entry(sample_1).or_insert_with(|| {
+                    ids_1.push(sample_1);
+                    ids_1.len() - 1
+                });
+                position_2.entry(sample_2).or_insert_with(|| {
+                    ids_2.push(sample_2);
+                    ids_2.len() - 1
+                });
+            }
+
+            let mut v1_data = Vec::with_capacity(incoming_dim_1 * ids_1.len());
+            for &sample in &ids_1 {
+                let values = self.frame_values(input, incoming_edge_1, sample)?;
+                if values.len() != incoming_dim_1 {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "incoming frame length differs from its bond dimension",
+                    });
+                }
+                v1_data.extend(values);
+            }
+            let v1 = Matrix::from_col_major_vec(incoming_dim_1, ids_1.len(), v1_data);
+
+            let mut v2_data = Vec::with_capacity(incoming_dim_2 * ids_2.len());
+            for &sample in &ids_2 {
+                let values = self.frame_values(input, incoming_edge_2, sample)?;
+                if values.len() != incoming_dim_2 {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "incoming frame length differs from its bond dimension",
+                    });
+                }
+                v2_data.extend(values);
+            }
+            let v2 = Matrix::from_col_major_vec(incoming_dim_2, ids_2.len(), v2_data);
+
+            let batched = two_incoming_core_matrix_batched(
+                core,
+                outgoing_axis,
+                incoming_axis_1,
+                incoming_axis_2,
+                base_offset,
+                outgoing_dim,
+                incoming_dim_1,
+                incoming_dim_2,
+                &v1,
+                &v2,
+            )?;
+
+            for &candidate_index in &indices {
+                let (_, sample_1) = candidates[candidate_index].incoming[0];
+                let (_, sample_2) = candidates[candidate_index].incoming[1];
+                let n1 = position_1[&sample_1];
+                let n2 = position_2[&sample_2];
+                let values: Vec<T> = (0..outgoing_dim)
+                    .map(|out| batched[[out + outgoing_dim * n1, n2]])
+                    .collect();
+                let entry_bytes = values.len().saturating_mul(size_of::<T>());
+                let candidate_bytes = self.candidate_cache_bytes.get();
+                let projected = self
+                    .retained_bytes
+                    .saturating_add(candidate_bytes)
+                    .saturating_add(entry_bytes);
+                if projected <= problem.max_frame_bytes {
+                    let candidate = &candidates[candidate_index];
+                    let key: CandidateCacheKey = (
+                        input,
+                        directed_edge,
+                        candidate.local_coordinate,
+                        candidate.incoming.clone(),
+                    );
+                    self.candidate_cache_bytes
+                        .set(candidate_bytes.saturating_add(entry_bytes));
+                    self.candidate_cache
+                        .borrow_mut()
+                        .insert(key, values.clone());
+                }
+                results[candidate_index] = Some(values);
+            }
+        }
+
+        results
+            .into_iter()
+            .map(|value| {
+                value.ok_or(TreeAciError::InternalInvariant {
+                    message: "two-incoming candidate frame batching left a candidate unfilled",
                 })
             })
             .collect()
@@ -852,8 +1066,10 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
     /// batched BLAS path ([`contract_prepared_core_batched`]) when `edge`'s
     /// source node has exactly one incoming edge -- the same precondition and
     /// grouping strategy [`InputFrameStore::candidate_frames_for_edge`]
-    /// already uses for pivot-search candidates -- and falling back to
-    /// [`Self::compute`] per sample otherwise (0 or >=2 incoming edges).
+    /// already uses for pivot-search candidates -- delegating to
+    /// [`Self::compute_batch_two_incoming`] for exactly two incoming edges,
+    /// and falling back to [`Self::compute`] per sample otherwise (0
+    /// incoming edges, or 3+).
     ///
     /// Unlike `compute`, this has no return value: every result lands in
     /// `self.memo[edge]`, which is where `build_or_extend`'s caller reads
@@ -864,6 +1080,9 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         samples: std::ops::Range<SampleId>,
     ) -> Result<()> {
         let directed = &self.problem.directed_edges[edge];
+        if directed.incoming_to_from.len() == 2 {
+            return self.compute_batch_two_incoming(edge, samples);
+        }
         if directed.incoming_to_from.len() != 1 {
             for sample in samples {
                 self.compute(edge, sample)?;
@@ -989,6 +1208,174 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             for (column, &(sample, _)) in group_samples.iter().enumerate() {
                 let values: Vec<T> = (0..outgoing_dim)
                     .map(|row| batched[[row, column]])
+                    .collect();
+                #[cfg(test)]
+                debug_stats::record_batched_compute_call();
+                let slot = self
+                    .memo
+                    .get_mut(edge)
+                    .and_then(|s| s.get_mut(sample))
+                    .ok_or(TreeAciError::InternalInvariant {
+                        message: "computed frame has no memoization slot",
+                    })?;
+                *slot = Some(values);
+            }
+        }
+        Ok(())
+    }
+
+    /// Batched counterpart to [`Self::compute_batch`]'s single-incoming-edge
+    /// path, for directed edges whose source node has exactly two incoming
+    /// edges. Primes both incoming edges' needed samples via [`Self::compute`]
+    /// (as `compute_batch` already does for its one incoming edge), then
+    /// groups the pending samples by `local_coordinate` and contracts each
+    /// group via [`two_incoming_core_matrix_batched`], mirroring
+    /// [`InputFrameStore::candidate_frames_for_edge_two_incoming`]'s
+    /// structure but reading incoming frame vectors from `self.memo` instead
+    /// of a committed `InputFrameStore`.
+    fn compute_batch_two_incoming(
+        &mut self,
+        edge: DirectedEdgeId,
+        samples: std::ops::Range<SampleId>,
+    ) -> Result<()> {
+        let directed = &self.problem.directed_edges[edge];
+        let incoming_edge_1 = directed.incoming_to_from[0];
+        let incoming_edge_2 = directed.incoming_to_from[1];
+
+        let mut pending: Vec<(SampleId, ComponentSample)> = Vec::new();
+        for sample in samples {
+            if self.memo[edge][sample].is_some() {
+                continue;
+            }
+            let record = self.arena.record(edge, sample)?.clone();
+            if record.incoming.len() != 2
+                || record.incoming[0].0 != incoming_edge_1
+                || record.incoming[1].0 != incoming_edge_2
+            {
+                return Err(TreeAciError::InternalInvariant {
+                    message:
+                        "two-incoming-edge sample does not have exactly two incoming samples on the expected edges",
+                });
+            }
+            pending.push((sample, record));
+        }
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        for (_, record) in &pending {
+            self.compute(incoming_edge_1, record.incoming[0].1)?;
+            self.compute(incoming_edge_2, record.incoming[1].1)?;
+        }
+
+        let node = *self.problem.node_positions.get(&directed.from).ok_or(
+            TreeAciError::InternalInvariant {
+                message: "frame source has no prepared node position",
+            },
+        )?;
+        let core = &self.cores[node];
+        let outgoing = self.outgoing_bond(edge)?;
+        let outgoing_axis = axis_of(&core.indices, outgoing)?;
+        let physical = &self.problem.physical[node];
+        let physical_axes = physical
+            .indices
+            .iter()
+            .map(|index| axis_of(&core.indices, index))
+            .collect::<Result<Vec<_>>>()?;
+        let incoming_bond_1 = self.outgoing_bond(incoming_edge_1)?;
+        let incoming_bond_2 = self.outgoing_bond(incoming_edge_2)?;
+        let incoming_axis_1 = axis_of(&core.indices, incoming_bond_1)?;
+        let incoming_axis_2 = axis_of(&core.indices, incoming_bond_2)?;
+        let outgoing_dim = core.dims[outgoing_axis];
+        let incoming_dim_1 = core.dims[incoming_axis_1];
+        let incoming_dim_2 = core.dims[incoming_axis_2];
+
+        let mut groups: std::collections::BTreeMap<usize, Vec<(SampleId, SampleId, SampleId)>> =
+            std::collections::BTreeMap::new();
+        for (sample, record) in &pending {
+            let (_, sample_1) = record.incoming[0];
+            let (_, sample_2) = record.incoming[1];
+            groups
+                .entry(record.local_coordinate)
+                .or_default()
+                .push((*sample, sample_1, sample_2));
+        }
+
+        for (local_coordinate, group_samples) in groups {
+            let mut base_offset = 0usize;
+            for (physical_axis, &axis) in physical_axes.iter().enumerate() {
+                let wanted = (local_coordinate / physical.strides[physical_axis])
+                    % physical.dims[physical_axis];
+                base_offset += wanted * core.strides[axis];
+            }
+
+            let mut ids_1: Vec<SampleId> = Vec::new();
+            let mut position_1: HashMap<SampleId, usize> = HashMap::new();
+            let mut ids_2: Vec<SampleId> = Vec::new();
+            let mut position_2: HashMap<SampleId, usize> = HashMap::new();
+            for &(_, sample_1, sample_2) in &group_samples {
+                position_1.entry(sample_1).or_insert_with(|| {
+                    ids_1.push(sample_1);
+                    ids_1.len() - 1
+                });
+                position_2.entry(sample_2).or_insert_with(|| {
+                    ids_2.push(sample_2);
+                    ids_2.len() - 1
+                });
+            }
+
+            let mut v1_data = Vec::with_capacity(incoming_dim_1 * ids_1.len());
+            for &sample_1 in &ids_1 {
+                let values = self.memo[incoming_edge_1][sample_1].clone().ok_or(
+                    TreeAciError::InternalInvariant {
+                        message:
+                            "incoming sample frame was not memoized before batched contraction",
+                    },
+                )?;
+                if values.len() != incoming_dim_1 {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "incoming frame length differs from its bond dimension",
+                    });
+                }
+                v1_data.extend(values);
+            }
+            let v1 = Matrix::from_col_major_vec(incoming_dim_1, ids_1.len(), v1_data);
+
+            let mut v2_data = Vec::with_capacity(incoming_dim_2 * ids_2.len());
+            for &sample_2 in &ids_2 {
+                let values = self.memo[incoming_edge_2][sample_2].clone().ok_or(
+                    TreeAciError::InternalInvariant {
+                        message:
+                            "incoming sample frame was not memoized before batched contraction",
+                    },
+                )?;
+                if values.len() != incoming_dim_2 {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "incoming frame length differs from its bond dimension",
+                    });
+                }
+                v2_data.extend(values);
+            }
+            let v2 = Matrix::from_col_major_vec(incoming_dim_2, ids_2.len(), v2_data);
+
+            let batched = two_incoming_core_matrix_batched(
+                core,
+                outgoing_axis,
+                incoming_axis_1,
+                incoming_axis_2,
+                base_offset,
+                outgoing_dim,
+                incoming_dim_1,
+                incoming_dim_2,
+                &v1,
+                &v2,
+            )?;
+
+            for (sample, sample_1, sample_2) in group_samples {
+                let n1 = position_1[&sample_1];
+                let n2 = position_2[&sample_2];
+                let values: Vec<T> = (0..outgoing_dim)
+                    .map(|out| batched[[out + outgoing_dim * n1, n2]])
                     .collect();
                 #[cfg(test)]
                 debug_stats::record_batched_compute_call();
@@ -1162,6 +1549,50 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
             message: error.to_string(),
         }
     })
+}
+
+/// Contracts a core slice's two incoming axes against batches of candidate
+/// frame vectors for both incoming edges, computing every combination in
+/// the cartesian product of `v1`'s and `v2`'s columns via `incoming_dim_2 + 1`
+/// BLAS `mat_mul` calls (`incoming_dim_2` calls fold in `v1` one slice of the
+/// second axis at a time, then one final call folds in `v2`) instead of one
+/// scalar [`accumulate_incoming`] walk per `(n1, n2)` combination.
+///
+/// `v1` is `incoming_dim_1 x n1`, `v2` is `incoming_dim_2 x n2`. Returns an
+/// `(outgoing_dim * n1) x n2` matrix: column `n2`, rows
+/// `[outgoing_dim * n1_index, outgoing_dim * (n1_index + 1))`, holds the
+/// `outgoing_dim`-length frame vector [`contract_prepared_core`] would
+/// produce for the `(n1_index, n2)` candidate alone.
+#[allow(clippy::too_many_arguments)]
+fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    outgoing_axis: usize,
+    incoming_axis_1: usize,
+    incoming_axis_2: usize,
+    physical_base_offset: usize,
+    outgoing_dim: usize,
+    incoming_dim_1: usize,
+    incoming_dim_2: usize,
+    v1: &Matrix<T>,
+    v2: &Matrix<T>,
+) -> Result<Matrix<T>> {
+    let n1 = v1.ncols();
+    let stride_2 = core.strides[incoming_axis_2];
+    let mut stage1_data = Vec::with_capacity(outgoing_dim * n1 * incoming_dim_2);
+    for i2 in 0..incoming_dim_2 {
+        let core_matrix = single_incoming_core_matrix(
+            core,
+            outgoing_axis,
+            incoming_axis_1,
+            physical_base_offset + i2 * stride_2,
+            outgoing_dim,
+            incoming_dim_1,
+        );
+        let stage1 = contract_prepared_core_batched(&core_matrix, v1)?;
+        stage1_data.extend(stage1.into_col_major_vec());
+    }
+    let stage1_matrix = Matrix::from_col_major_vec(outgoing_dim * n1, incoming_dim_2, stage1_data);
+    contract_prepared_core_batched(&stage1_matrix, v2)
 }
 
 fn outgoing_bond<'a, V: TreeAciNode>(
