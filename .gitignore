@@ -57,6 +57,3 @@ experimental/
 
 # Agent session infrastructure (never commit)
 .pi-subagents/
-
-# Local debugging transcript (never commit)
-/2026-08-22-161024-gw-rsbugissue-671syst.txt
