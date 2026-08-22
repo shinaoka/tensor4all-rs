@@ -41,7 +41,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
     ) -> Result<Self> {
         let problem = prepare_problem(inputs, options)?;
         let algebraic_edge_bounds = algebraic_edge_bounds(&problem)?;
-        let edge_ranks = initial_edge_ranks(inputs, &problem, options)?;
+        let initial_edge_ranks = initial_edge_ranks(inputs, &problem, options)?;
         let output = if let Some(guess) = &options.initial_guess {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem, options)?;
             let mut output = guess.clone();
@@ -52,9 +52,43 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             output
         } else {
             let mut output =
-                build_random_output::<T, V>(&inputs[0], &problem, &edge_ranks, options)?;
+                build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, options)?;
             output.set_canonical_region([problem.root.clone()])?;
             output
+        };
+        // INVARIANT: canonicalizing an initial guess may expose a smaller
+        // numerical bond rank, so active ranks must describe the canonical
+        // output used to bootstrap samples and frames rather than the raw
+        // pre-canonicalization guess.
+        let edge_ranks = if options.initial_guess.is_some() {
+            let configured = options.max_bond_dim.unwrap_or(usize::MAX);
+            problem
+                .directed_edges
+                .iter()
+                .step_by(2)
+                .enumerate()
+                .map(|(edge_number, edge)| {
+                    let graph_edge = output.edge_between(&edge.from, &edge.to).ok_or(
+                        crate::TreeAciError::InternalInvariant {
+                            message: "initialized output is missing a prepared edge",
+                        },
+                    )?;
+                    let rank = output
+                        .bond_index(graph_edge)
+                        .ok_or(crate::TreeAciError::InternalInvariant {
+                            message: "initialized output edge has no bond index",
+                        })?
+                        .dim();
+                    if rank > algebraic_edge_bounds[edge_number] || rank > configured {
+                        return Err(crate::TreeAciError::InternalInvariant {
+                            message: "canonicalized initial guess exceeds an active rank bound",
+                        });
+                    }
+                    Ok(rank)
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            initial_edge_ranks
         };
         for (edge_number, expected) in edge_ranks.iter().copied().enumerate() {
             let edge = &problem.directed_edges[2 * edge_number];

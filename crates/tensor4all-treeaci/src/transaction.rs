@@ -134,23 +134,27 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     // edges see them. Replacement rather than union is what keeps candidate
     // growth bounded without an eviction policy, mirroring train ACI rebuilding
     // its frames from the selected pivots.
-    let mut proposed_candidates = state.candidates.clone();
-    proposed_candidates.ids[forward] = left_ids.clone();
-    proposed_candidates.ids[reverse] = right_ids.clone();
-    proposed_candidates.generation = next_generation;
+    //
+    // `state.candidates`/`state.pivots` are mutated in place rather than
+    // cloned-then-swapped: every step above this point that could fail (the
+    // `staged` closure) has already returned, so nothing below can fail and a
+    // clone-for-rollback buys no atomicity. These two hold one entry list per
+    // directed edge (`CandidateSets::ids`, `PivotPairs::per_edge`), each up to
+    // `max_bond_dim` long, so cloning them here was O(edges * bond_dim) of
+    // pure waste on every single edge commit.
+    state.candidates.ids[forward] = left_ids.clone();
+    state.candidates.ids[reverse] = right_ids.clone();
+    state.candidates.generation = next_generation;
 
-    let mut proposed_pivots = state.pivots.clone();
     let pivot_pairs = if forward.is_multiple_of(2) {
         left_ids.into_iter().zip(right_ids).collect()
     } else {
         right_ids.into_iter().zip(left_ids).collect()
     };
-    proposed_pivots.set(edge_number, pivot_pairs);
+    state.pivots.set(edge_number, pivot_pairs);
 
     let pivot_error = proposal.pivot_errors.last().copied().unwrap_or(0.0);
     state.output = proposed_output;
-    state.candidates = proposed_candidates;
-    state.pivots = proposed_pivots;
     state.input_frames = proposed_frames;
     state.edge_ranks[edge_number] = state.pivots.rank(edge_number);
     state.edge_errors[edge_number] = pivot_error;

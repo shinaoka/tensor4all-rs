@@ -8,7 +8,7 @@ use std::mem::size_of;
 
 use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
 use tensor4all_core::{IdxTensor, IndexLike};
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{mat_mul, transpose, Matrix};
 use tensor4all_treetn::TreeTN;
 
 use crate::{
@@ -150,22 +150,49 @@ where
     let row_frames = candidate_frames(inputs, problem, frames, forward, &row_candidates)?;
     let col_frames = candidate_frames(inputs, problem, frames, reverse, &col_candidates)?;
     let mut input_values = vec![T::default(); inputs.len() * point_count];
-    for (col, _) in col_candidates.iter().enumerate() {
-        for (row, _) in row_candidates.iter().enumerate() {
-            let point = row + row_count * col;
-            for input in 0..inputs.len() {
-                let left = &row_frames[input][row];
-                let right = &col_frames[input][col];
-                if left.len() != right.len() {
+    // Per input, `input_values[.., point] = row_frames[row] . col_frames[col]`
+    // is one (row_count x chi) times (chi x col_count) matrix product, not a
+    // per-point scalar dot product: pack each side's candidate frame vectors
+    // into a dense matrix (they are already contiguous per candidate, so this
+    // is a flatten, not a transpose) and let BLAS do the O(row*col*chi)
+    // contraction in one `mat_mul` call. Only the O(row*col) scatter into the
+    // batch's interleaved-by-input layout remains a plain loop.
+    if point_count > 0 {
+        for (input, (row_input_frames, col_input_frames)) in
+            row_frames.iter().zip(col_frames.iter()).enumerate()
+        {
+            let bond_dim = row_input_frames.first().map_or(0, |frame| frame.len());
+            for frame in row_input_frames.iter().chain(col_input_frames.iter()) {
+                if frame.len() != bond_dim {
                     return Err(TreeAciError::InternalInvariant {
                         message: "opposite input frames have different cut bond dimensions",
                     });
                 }
-                input_values[input + inputs.len() * point] = left
-                    .iter()
-                    .copied()
-                    .zip(right.iter().copied())
-                    .fold(T::default(), |sum, (lhs, rhs)| sum + lhs * rhs);
+            }
+            if bond_dim == 0 {
+                continue;
+            }
+            let row_flat: Vec<T> = row_input_frames
+                .iter()
+                .flat_map(|frame| frame.iter().copied())
+                .collect();
+            let col_flat: Vec<T> = col_input_frames
+                .iter()
+                .flat_map(|frame| frame.iter().copied())
+                .collect();
+            let row_bond_matrix = Matrix::from_col_major_vec(bond_dim, row_count, row_flat);
+            let col_bond_matrix = Matrix::from_col_major_vec(bond_dim, col_count, col_flat);
+            let row_candidate_matrix = transpose(&row_bond_matrix);
+            let product = mat_mul(&row_candidate_matrix, &col_bond_matrix).map_err(|error| {
+                TreeAciError::Numerical {
+                    message: error.to_string(),
+                }
+            })?;
+            for col in 0..col_count {
+                for row in 0..row_count {
+                    let point = row + row_count * col;
+                    input_values[input + inputs.len() * point] = product[[row, col]];
+                }
             }
         }
     }
