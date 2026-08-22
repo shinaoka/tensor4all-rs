@@ -469,6 +469,7 @@ mod tests {
     #[test]
     fn explicit_plain_graph_and_eager_paths_share_only_the_supplied_backend() {
         let context = context();
+        assert!(format!("{context:?}").contains("graph_initialized: false"));
         assert_eq!(context.with_backend(|backend| backend.num_threads()), 1);
 
         let mut trace = TraceContext::new();

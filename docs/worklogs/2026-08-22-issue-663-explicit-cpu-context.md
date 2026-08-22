@@ -36,6 +36,9 @@ reconstruction. Legacy process-global operations remain behind the opt-in
   clarified; final verdict **Correct-to-implement**.
 - Post-implementation diff review: `reviewer-flash` verified the full diff;
   verdict **Correct-to-merge**. One Minor documentation overstatement was fixed.
+- After CI exposed standalone HDF5 feature forwarding and coverage gaps, the
+  focused fixes were re-reviewed by `reviewer-flash-opencode-go`; verdict
+  **Correct-to-merge**.
 
 ## Verification
 
@@ -43,6 +46,8 @@ reconstruction. Legacy process-global operations remain behind the opt-in
 - explicit-only release tests
 - default tensorbackend release tests
 - workspace `cargo check`
+- standalone HDF5 tests
+- workspace and tensorbackend per-file coverage gates
 - formatting and clippy gates
 
 ## Remaining risk
