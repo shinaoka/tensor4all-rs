@@ -68,13 +68,14 @@ struct ChainContractionSpec {
     child_dim: usize,
 }
 
-/// Minimum scalar multiply count / group size before the backend setup cost
-/// is amortized by the grouped branch kernel, mirroring
-/// `CHAIN_BLAS_WORK_THRESHOLD` / `CHAIN_BLAS_MIN_GROUP_POINTS` but tuned
-/// independently: a branch step does two contractions per group instead of
-/// one, so its fixed per-call setup cost differs from the chain kernel's.
+/// Minimum scalar multiply count before the backend setup cost is amortized
+/// by the grouped branch kernel. Unlike the chain kernel, there is no
+/// separate minimum-group-points gate: a branch step's per-point work is
+/// O(parent_dim * child_dim_1 * child_dim_2), an extra bond-dimension factor
+/// over the chain kernel's O(parent_dim * child_dim), so at realistic bond
+/// dimensions `scalar_work` alone already justifies BLAS even for a single
+/// point per group (see `grouped_branch_message_contraction`).
 const BRANCH_BLAS_WORK_THRESHOLD: usize = 4096;
-const BRANCH_BLAS_MIN_GROUP_POINTS: usize = 4;
 
 #[derive(Clone, Copy, Debug)]
 struct BranchContractionSpec {
@@ -1603,7 +1604,21 @@ where
             child_dim_2
         );
 
-        if point_count < 2 * BRANCH_BLAS_MIN_GROUP_POINTS {
+        // Unlike the chain kernel (O(parent_dim * child_dim) work per point),
+        // a branch step is O(parent_dim * child_dim_1 * child_dim_2) per
+        // point -- an extra bond-dimension factor. At realistic bond
+        // dimensions that alone already dwarfs BLAS's fixed per-call setup
+        // cost even for a single point (a single Step-A `mat_mul_owned` call
+        // is still a large, worthwhile matrix-vector product), so gating on
+        // point/group count the way `CHAIN_BLAS_MIN_GROUP_POINTS` does is
+        // the wrong heuristic here: it would force every small
+        // floating-zone-walk batch (the common case) onto the scalar
+        // fallback regardless of how large `scalar_work` actually is, which
+        // was measured to *regress* wall time at bond=128 (see
+        // `docs/worklogs/2026-08-22-treetn-branch-message-raw-path.md`).
+        // `scalar_work` alone is the right gate.
+        let scalar_work = parent_dim * child_dim_1 * child_dim_2 * point_count;
+        if scalar_work < BRANCH_BLAS_WORK_THRESHOLD {
             return scalar_branch_message_contraction(
                 spec,
                 raw,
@@ -1616,21 +1631,6 @@ where
         let mut groups = HashMap::<usize, Vec<usize>>::new();
         for (point, &physical_value) in physical_values.iter().enumerate() {
             groups.entry(physical_value).or_default().push(point);
-        }
-        let scalar_work = parent_dim * child_dim_1 * child_dim_2 * point_count;
-        if scalar_work < BRANCH_BLAS_WORK_THRESHOLD
-            || groups.len() > 8
-            || groups
-                .values()
-                .any(|points| points.len() < BRANCH_BLAS_MIN_GROUP_POINTS)
-        {
-            return scalar_branch_message_contraction(
-                spec,
-                raw,
-                physical_values,
-                child1_columns,
-                child2_columns,
-            );
         }
 
         let mut output = vec![T::default(); point_count * parent_dim];
@@ -5834,17 +5834,28 @@ mod tests {
         assert!(total > 0);
     }
 
-    // TEMPORARY diagnostic for gw-rs issue tensor4all-rs#671's downstream
-    // follow-up -- not a regression test, revert after root-cause
-    // confirmation. Compares this evaluator's realistic floating-zone-walk
-    // wall time on a plain 16-site chain against a same-size comb tree (one
-    // degree-3 hub, three 5-site arms), both under the SAME cached
-    // evaluate_batched path used by `message_cache_wall_time_on_realistic_floating_zone_walk`
-    // above. Isolates whether `compute_stacked_message`'s generic multi-child
-    // fallback (hit only by the hub node, since `try_compute_chain_message_raw`
-    // requires exactly one child) is a meaningful wall-time cost at this
-    // evaluator's actual small-batch call pattern, independent of whether the
-    // frames.rs fix (tensor4all-treeaci) helped.
+    // Measurement tooling rather than a wall-clock regression assertion
+    // (mirroring `message_cache_wall_time_on_realistic_floating_zone_walk`'s
+    // own framing above), kept from the investigation for gw-rs issue
+    // tensor4all-rs#671's downstream follow-up. Compares this evaluator's
+    // realistic floating-zone-walk wall time on a plain 16-site chain
+    // against a same-size comb tree (one degree-3 hub, three 5-site arms),
+    // both at the same bond dimension, under the same cached evaluate_batched
+    // path used by `message_cache_wall_time_on_realistic_floating_zone_walk`
+    // above.
+    //
+    // Read this test's ratio as "does branching cost something at matched
+    // bond dimension," not as a proxy for real downstream wall time: this
+    // investigation measured 25.84x before the two-child raw path
+    // (`try_compute_branch_message_raw`) existed, a regression to 44.24x
+    // from an initial version of that path's wrong point-count-based BLAS
+    // gate, 29.26x after fixing the gate -- yet the real gw-rs downstream
+    // pipeline (which does not have equal bond dimensions between its chain
+    // and comb topologies) measured a genuine 2.96x-3.15x wall-time
+    // improvement per treeaci stage from the same fix. See
+    // `docs/worklogs/2026-08-22-treetn-branch-message-raw-path.md` for the
+    // full trace, including why the same-bond assumption here does not
+    // represent the real workload's shape.
     #[test]
     #[ignore]
     fn diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk() {
@@ -5907,8 +5918,8 @@ mod tests {
             let mut next_node = 1usize;
             let mut center = 0usize;
 
-            for arm in 0..3 {
-                let mut prev_bond = hub_bonds[arm].clone();
+            for (arm, hub_bond) in hub_bonds.iter().enumerate() {
+                let mut prev_bond = hub_bond.clone();
                 for depth in 0..ARM_LEN {
                     let s = DynIndex::new_dyn(LOCAL_DIM);
                     let is_tip = depth == ARM_LEN - 1;

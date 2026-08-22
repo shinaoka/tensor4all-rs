@@ -71,7 +71,7 @@ Every task below ends with, at minimum: `cargo fmt --all -- --check` clean and `
   `child1_columns` is `point_count * child_dim_1` (point-major, i.e. point `p`'s column is `child1_columns[p*child_dim_1..(p+1)*child_dim_1]`, matching `try_compute_chain_message_raw`'s existing `child_columns` convention). Same for `child2_columns` with `child_dim_2`. Returns `point_count * parent_dim` (point-major, matching `grouped_chain_message_contraction`'s output convention exactly, since callers treat both outputs identically).
 - Consumes: `Matrix`, `mat_mul_owned` (`tensor4all_tensorbackend`, already imported in this file).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the `tests` module, near `grouped_chain_contraction_matches_scalar_reference_for_real_values`:
 
@@ -128,12 +128,12 @@ fn grouped_branch_contraction_matches_direct_reference_for_real_values() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator::tests::grouped_branch_contraction_matches_direct_reference_for_real_values`
 Expected: FAIL to compile -- `BranchContractionSpec`/`grouped_branch_message_contraction` do not exist yet.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Insert near `ChainContractionSpec` (after its definition):
 
@@ -357,16 +357,16 @@ where
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator::tests::grouped_branch_contraction_matches_direct_reference_for_real_values -- --nocapture`
 Expected: PASS (this small test always takes the scalar fallback since `point_count=3 < 2*BRANCH_BLAS_MIN_GROUP_POINTS=8`, so it validates `scalar_branch_message_contraction`'s indexing first).
 
-- [ ] **Step 5: Add a large-group test that forces the BLAS path, and a complex-value variant**
+- [x] **Step 5: Add a large-group test that forces the BLAS path, and a complex-value variant**
 
 Mirror `grouped_chain_contraction_large_real_groups_match_scalar_reference` / `grouped_chain_contraction_large_complex_groups_match_scalar_reference`: build a `BranchContractionSpec` with `parent_dim`/`child_dim_1`/`child_dim_2` large enough that `scalar_work >= BRANCH_BLAS_WORK_THRESHOLD` and at least one physical-value group with `>= BRANCH_BLAS_MIN_GROUP_POINTS` points (e.g. `parent_dim=8, child_dim_1=8, child_dim_2=8`, physical dim 2, `point_count=40` split across the 2 physical values), random `f64` raw/child columns via `rand::rngs::StdRng` (seeded, matching this file's existing test RNG usage), and assert `grouped_branch_message_contraction(...)` equals `scalar_branch_message_contraction(...)` (the untouched reference) element-wise via `assert_eq!` for `f64`, or `Complex64` with the same structure for the complex variant (`T: BlasMul` must hold for `Complex64` too -- confirm by checking `grouped_chain_contraction_matches_scalar_reference_for_complex_values`'s existing pattern and mirror its `Complex64` construction).
 
-- [ ] **Step 6: Run full test module, commit**
+- [x] **Step 6: Run full test module, commit**
 
 ```bash
 cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator:: --no-fail-fast
@@ -408,7 +408,7 @@ git commit -m "feat(treetn): add batched two-child branch message contraction pr
   Same `Ok(None)` escape-hatch contract as `try_compute_chain_message_raw`: return `None` when `node` is not eligible, so the caller falls back to `compute_stacked_message`.
 - Consumes: `grouped_branch_message_contraction` (Task 1), the same tree/plan/message-cache accessors `try_compute_chain_message_raw` already uses (`self.layout.entries_by_node`, `plan.children`, `tensor_for_node`, `self.tree.edge_between`/`bond_index`, `messages.get(child)`, `assignment_batches.get(child)`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the `tests` module, near `raw_chain_message_matches_generic_contraction`. First read that existing test in full (`crates/tensor4all-treetn/src/treetn/cached_evaluator.rs`, search `fn raw_chain_message_matches_generic_contraction`) to copy its exact setup pattern (how it builds a small tree, a `RootedMessagePlan`, `assignment_batches`, and calls both the raw and generic paths on the SAME inputs to compare). Build an analogous test using a **star-shaped** tree (hub + 3 leaves, mirroring this file's existing `star_tree()` fixture) with `center` set to one leaf (so the hub has 2 children, the other 2 leaves), and assert:
 
@@ -425,12 +425,12 @@ fn raw_branch_message_matches_generic_contraction() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator::tests::raw_branch_message_matches_generic_contraction`
 Expected: FAIL to compile -- `try_compute_branch_message_raw` does not exist yet.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Insert after `try_compute_chain_message_complex_raw`'s closing `}`:
 
@@ -617,12 +617,12 @@ Write `try_compute_branch_message_complex_raw` as the direct `Complex64` counter
 
 Wire both into `get_or_compute_node_message`: in the `tensor_is_complex` branch, insert `try_compute_branch_message_complex_raw` between the existing `try_compute_chain_message_complex_raw` attempt and the `compute_stacked_message` fallback (same `if leaf.is_some() { leaf } else { chain_result }` chaining pattern, extended to `if chain_result.is_some() { chain_result } else { branch_result }`); mirror in the real (non-complex) branch with `try_compute_branch_message_raw`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator::tests::raw_branch_message_matches_generic_contraction -- --nocapture`
 Expected: PASS. If it fails on a value mismatch, re-check `strides`/axis assignment against `try_compute_chain_message_raw`'s exact convention (`dims[0]` fastest) and `grouped_branch_message_contraction`'s row/column layout (Task 1 Step 4 already validated that function in isolation, so a mismatch here points at this method's tensor-slicing/assignment-lookup glue, not the contraction math itself).
 
-- [ ] **Step 5: Add a complex-value variant, run full module, commit**
+- [x] **Step 5: Add a complex-value variant, run full module, commit**
 
 Mirror `raw_complex_chain_message_matches_generic_contraction` for `try_compute_branch_message_complex_raw`.
 
@@ -643,7 +643,7 @@ git commit -m "feat(treetn): wire the two-child branch raw message path into get
 **Interfaces:**
 - Consumes: `star_tree()` (existing fixture), `TreeTNCachedEvaluator::evaluate_batched`, `tree.evaluate` (ground truth), `assert_scalars_close` (existing helper).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[test]
@@ -676,12 +676,12 @@ fn cached_evaluator_matches_tree_evaluate_on_star_tree_with_fixed_leaf_center() 
 
 This is deliberately close to the existing `cached_evaluator_matches_tree_evaluate_on_star_tree` test (check whether that test already exists and already fixes `center: Some(1)` or lets greedy search pick it -- read it first; if it already covers this exact scenario, skip this task and note in the commit message that Task 2's dispatch change is already covered by existing end-to-end tests instead of adding a redundant one).
 
-- [ ] **Step 2: Run to verify it currently passes (it should -- Task 2 didn't change correctness, only which internal path computes the same result) and would have failed before Task 2 if the new path had a bug**
+- [x] **Step 2: Run to verify it currently passes (it should -- Task 2 didn't change correctness, only which internal path computes the same result) and would have failed before Task 2 if the new path had a bug**
 
 Run: `cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator::tests::cached_evaluator_matches_tree_evaluate_on_star_tree_with_fixed_leaf_center -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 cargo fmt --all
@@ -698,7 +698,7 @@ git commit -m "test(treetn): add end-to-end star-tree coverage pinning the branc
 - Modify: `crates/tensor4all-treetn/src/treetn/cached_evaluator.rs` (update the temporary diagnostic in place; keep it, matching how `frames.rs`'s equivalent diagnostic became a kept measurement in the prior fix)
 - Create: `docs/worklogs/2026-08-22-treetn-branch-message-raw-path.md`
 
-- [ ] **Step 1: Full crate verification**
+- [x] **Step 1: Full crate verification**
 
 ```bash
 cargo fmt --all -- --check
@@ -707,17 +707,17 @@ cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --no-fa
 cargo doc --manifest-path crates/tensor4all-treetn/Cargo.toml --no-deps
 ```
 
-- [ ] **Step 2: Re-run the diagnostic to measure the fix**
+- [x] **Step 2: Re-run the diagnostic to measure the fix**
 
 Run: `cargo test --release --manifest-path crates/tensor4all-treetn/Cargo.toml --lib treetn::cached_evaluator::tests::diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk -- --ignored --nocapture`
 
 Record the new `ratio (comb/chain)` -- compare against the pre-fix 25.84x. Update the test's doc comment from "TEMPORARY... revert after root-cause confirmation" to a permanent doc comment describing it as a kept regression-style measurement (mirroring `message_cache_wall_time_on_realistic_floating_zone_walk`'s own framing: "measurement tooling rather than a wall-clock regression assertion").
 
-- [ ] **Step 3: Write the worklog**
+- [x] **Step 3: Write the worklog**
 
 Create `docs/worklogs/2026-08-22-treetn-branch-message-raw-path.md`: root cause (this plan's own root cause section), the 25.84x pre-fix measurement, the fix (Tasks 1-3), the post-fix measurement from Step 2, and an explicit note that this is a *different* crate/bug from `docs/worklogs/2026-08-22-treeaci-branch-batched-frames.md`'s fix -- the two are structurally analogous but independent, and closing this one is what should actually move `pi_rtau` wall time on the downstream gw-rs `aci_global_guard=true` pipeline, per the user's own re-run finding that the first fix alone did not.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cargo fmt --all
