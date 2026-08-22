@@ -1997,6 +1997,433 @@ where
         Ok(Some(result))
     }
 
+    /// Computes a branch node's (exactly two children) message directly from
+    /// raw data, generalizing [`Self::try_compute_chain_message_raw`] from
+    /// one child to two via [`Self::grouped_branch_message_contraction`].
+    ///
+    /// Returns `Ok(None)` when `node` is not eligible (not exactly one
+    /// physical index and exactly two children, a complex-valued tensor, or
+    /// an unexpected axis count), so the caller falls back to
+    /// [`Self::compute_stacked_message`].
+    fn try_compute_branch_message_raw(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+    ) -> Result<Option<Vec<f64>>> {
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+        let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        let [child_1, child_2] = children else {
+            return Ok(None);
+        };
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if tensor.is_complex() {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != 4 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let Some(child_1_edge) = self.tree.edge_between(node, child_1) else {
+            return Ok(None);
+        };
+        let Some(child_1_bond_index) = self.tree.bond_index(child_1_edge) else {
+            return Ok(None);
+        };
+        let Some(child_axis_1) = tensor_indices
+            .iter()
+            .position(|idx| idx == child_1_bond_index)
+        else {
+            return Ok(None);
+        };
+        let Some(child_2_edge) = self.tree.edge_between(node, child_2) else {
+            return Ok(None);
+        };
+        let Some(child_2_bond_index) = self.tree.bond_index(child_2_edge) else {
+            return Ok(None);
+        };
+        let Some(child_axis_2) = tensor_indices
+            .iter()
+            .position(|idx| idx == child_2_bond_index)
+        else {
+            return Ok(None);
+        };
+        let Some(parent_axis) = (0..4)
+            .find(|&axis| axis != physical_axis && axis != child_axis_1 && axis != child_axis_2)
+        else {
+            return Ok(None);
+        };
+
+        let child_1_message = messages.get(child_1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing message for child {:?}",
+                child_1
+            )
+        })?;
+        let child_1_values = if let Some(raw_values) = &child_1_message.raw_values {
+            let mut values = Vec::with_capacity(raw_values.len());
+            for value in raw_values {
+                let CachedScalar::Real(value) = value else {
+                    return Ok(None);
+                };
+                values.push(*value);
+            }
+            values
+        } else {
+            let Some(tensor) = child_1_message.tensor.as_ref() else {
+                return Ok(None);
+            };
+            if tensor.is_complex() {
+                return Ok(None);
+            }
+            tensor.to_vec::<f64>()?
+        };
+        let child_2_message = messages.get(child_2).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing message for child {:?}",
+                child_2
+            )
+        })?;
+        let child_2_values = if let Some(raw_values) = &child_2_message.raw_values {
+            let mut values = Vec::with_capacity(raw_values.len());
+            for value in raw_values {
+                let CachedScalar::Real(value) = value else {
+                    return Ok(None);
+                };
+                values.push(*value);
+            }
+            values
+        } else {
+            let Some(tensor) = child_2_message.tensor.as_ref() else {
+                return Ok(None);
+            };
+            if tensor.is_complex() {
+                return Ok(None);
+            }
+            tensor.to_vec::<f64>()?
+        };
+
+        let child_1_assignment_batch = assignment_batches.get(child_1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing assignment batch for child {:?}",
+                child_1
+            )
+        })?;
+        let child_2_assignment_batch = assignment_batches.get(child_2).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing assignment batch for child {:?}",
+                child_2
+            )
+        })?;
+
+        let dims = tensor.dims();
+        let parent_dim = dims[parent_axis];
+        let child_dim_1 = dims[child_axis_1];
+        let child_dim_2 = dims[child_axis_2];
+        let strides = [
+            1usize,
+            dims[0],
+            dims[0]
+                .checked_mul(dims[1])
+                .ok_or_else(|| anyhow::anyhow!("branch tensor strides overflow usize"))?,
+            dims[0]
+                .checked_mul(dims[1])
+                .and_then(|value| value.checked_mul(dims[2]))
+                .ok_or_else(|| anyhow::anyhow!("branch tensor strides overflow usize"))?,
+        ];
+        let spec = BranchContractionSpec {
+            strides,
+            physical_axis,
+            parent_axis,
+            child_axis_1,
+            child_axis_2,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        };
+        let raw = tensor.to_vec::<f64>()?;
+
+        let mut physical_values = Vec::with_capacity(points.len());
+        let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
+        let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
+        for &point in points {
+            let physical_value = value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_branch_message_raw",
+            )?;
+            physical_values.push(physical_value);
+
+            let child_1_assignment = child_1_assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing child-1 assignment for point {point}"))?;
+            let start_1 = child_1_assignment.checked_mul(child_dim_1).ok_or_else(|| {
+                anyhow::anyhow!("branch child-1 assignment offset overflows usize")
+            })?;
+            let end_1 = start_1
+                .checked_add(child_dim_1)
+                .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment end overflows usize"))?;
+            child_1_columns.extend_from_slice(
+                child_1_values
+                    .get(start_1..end_1)
+                    .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment is out of bounds"))?,
+            );
+
+            let child_2_assignment = child_2_assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing child-2 assignment for point {point}"))?;
+            let start_2 = child_2_assignment.checked_mul(child_dim_2).ok_or_else(|| {
+                anyhow::anyhow!("branch child-2 assignment offset overflows usize")
+            })?;
+            let end_2 = start_2
+                .checked_add(child_dim_2)
+                .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment end overflows usize"))?;
+            child_2_columns.extend_from_slice(
+                child_2_values
+                    .get(start_2..end_2)
+                    .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
+            );
+        }
+        let result = Self::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child_1_columns,
+            &child_2_columns,
+        )?;
+        Ok(Some(result))
+    }
+
+    /// Complex-valued counterpart of [`Self::try_compute_branch_message_raw`].
+    fn try_compute_branch_message_complex_raw(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+    ) -> Result<Option<Vec<Complex64>>> {
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+        let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        let [child_1, child_2] = children else {
+            return Ok(None);
+        };
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if !tensor.is_complex() {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != 4 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let Some(child_1_edge) = self.tree.edge_between(node, child_1) else {
+            return Ok(None);
+        };
+        let Some(child_1_bond_index) = self.tree.bond_index(child_1_edge) else {
+            return Ok(None);
+        };
+        let Some(child_axis_1) = tensor_indices
+            .iter()
+            .position(|idx| idx == child_1_bond_index)
+        else {
+            return Ok(None);
+        };
+        let Some(child_2_edge) = self.tree.edge_between(node, child_2) else {
+            return Ok(None);
+        };
+        let Some(child_2_bond_index) = self.tree.bond_index(child_2_edge) else {
+            return Ok(None);
+        };
+        let Some(child_axis_2) = tensor_indices
+            .iter()
+            .position(|idx| idx == child_2_bond_index)
+        else {
+            return Ok(None);
+        };
+        let Some(parent_axis) = (0..4)
+            .find(|&axis| axis != physical_axis && axis != child_axis_1 && axis != child_axis_2)
+        else {
+            return Ok(None);
+        };
+
+        let child_1_message = messages.get(child_1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing message for child {:?}",
+                child_1
+            )
+        })?;
+        let child_1_values = if let Some(raw_values) = &child_1_message.raw_values {
+            let mut values = Vec::with_capacity(raw_values.len());
+            for value in raw_values {
+                let CachedScalar::Complex(value) = value else {
+                    return Ok(None);
+                };
+                values.push(*value);
+            }
+            values
+        } else {
+            let Some(tensor) = child_1_message.tensor.as_ref() else {
+                return Ok(None);
+            };
+            if !tensor.is_complex() {
+                return Ok(None);
+            }
+            tensor.to_vec::<Complex64>()?
+        };
+        let child_2_message = messages.get(child_2).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing message for child {:?}",
+                child_2
+            )
+        })?;
+        let child_2_values = if let Some(raw_values) = &child_2_message.raw_values {
+            let mut values = Vec::with_capacity(raw_values.len());
+            for value in raw_values {
+                let CachedScalar::Complex(value) = value else {
+                    return Ok(None);
+                };
+                values.push(*value);
+            }
+            values
+        } else {
+            let Some(tensor) = child_2_message.tensor.as_ref() else {
+                return Ok(None);
+            };
+            if !tensor.is_complex() {
+                return Ok(None);
+            }
+            tensor.to_vec::<Complex64>()?
+        };
+
+        let child_1_assignment_batch = assignment_batches.get(child_1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing assignment batch for child {:?}",
+                child_1
+            )
+        })?;
+        let child_2_assignment_batch = assignment_batches.get(child_2).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing assignment batch for child {:?}",
+                child_2
+            )
+        })?;
+
+        let dims = tensor.dims();
+        let parent_dim = dims[parent_axis];
+        let child_dim_1 = dims[child_axis_1];
+        let child_dim_2 = dims[child_axis_2];
+        let strides = [
+            1usize,
+            dims[0],
+            dims[0]
+                .checked_mul(dims[1])
+                .ok_or_else(|| anyhow::anyhow!("branch tensor strides overflow usize"))?,
+            dims[0]
+                .checked_mul(dims[1])
+                .and_then(|value| value.checked_mul(dims[2]))
+                .ok_or_else(|| anyhow::anyhow!("branch tensor strides overflow usize"))?,
+        ];
+        let spec = BranchContractionSpec {
+            strides,
+            physical_axis,
+            parent_axis,
+            child_axis_1,
+            child_axis_2,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        };
+        let raw = tensor.to_vec::<Complex64>()?;
+
+        let mut physical_values = Vec::with_capacity(points.len());
+        let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
+        let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
+        for &point in points {
+            let physical_value = value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw",
+            )?;
+            physical_values.push(physical_value);
+
+            let child_1_assignment = child_1_assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing child-1 assignment for point {point}"))?;
+            let start_1 = child_1_assignment.checked_mul(child_dim_1).ok_or_else(|| {
+                anyhow::anyhow!("branch child-1 assignment offset overflows usize")
+            })?;
+            let end_1 = start_1
+                .checked_add(child_dim_1)
+                .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment end overflows usize"))?;
+            child_1_columns.extend_from_slice(
+                child_1_values
+                    .get(start_1..end_1)
+                    .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment is out of bounds"))?,
+            );
+
+            let child_2_assignment = child_2_assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing child-2 assignment for point {point}"))?;
+            let start_2 = child_2_assignment.checked_mul(child_dim_2).ok_or_else(|| {
+                anyhow::anyhow!("branch child-2 assignment offset overflows usize")
+            })?;
+            let end_2 = start_2
+                .checked_add(child_dim_2)
+                .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment end overflows usize"))?;
+            child_2_columns.extend_from_slice(
+                child_2_values
+                    .get(start_2..end_2)
+                    .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
+            );
+        }
+        let result = Self::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child_1_columns,
+            &child_2_columns,
+        )?;
+        Ok(Some(result))
+    }
+
     /// Computes `node`'s directed message toward its parent, consulting the
     /// per-node persistent cache first.
     ///
@@ -2163,10 +2590,22 @@ where
         let tensor_is_complex = tensor_for_node(self.tree, node)?.is_complex();
         let missing_values: Vec<CachedScalar> = if tensor_is_complex {
             let leaf = self.try_compute_leaf_message_complex_raw(node, values, &missing_points)?;
-            let raw_missing_values = if leaf.is_some() {
+            let chain = if leaf.is_some() {
                 leaf
             } else {
                 self.try_compute_chain_message_complex_raw(
+                    node,
+                    values,
+                    &missing_points,
+                    plan,
+                    assignment_batches,
+                    messages,
+                )?
+            };
+            let raw_missing_values = if chain.is_some() {
+                chain
+            } else {
+                self.try_compute_branch_message_complex_raw(
                     node,
                     values,
                     &missing_points,
@@ -2196,10 +2635,22 @@ where
             }
         } else {
             let leaf = self.try_compute_leaf_message_raw(node, values, &missing_points)?;
-            let raw_missing_values = if leaf.is_some() {
+            let chain = if leaf.is_some() {
                 leaf
             } else {
                 self.try_compute_chain_message_raw(
+                    node,
+                    values,
+                    &missing_points,
+                    plan,
+                    assignment_batches,
+                    messages,
+                )?
+            };
+            let raw_missing_values = if chain.is_some() {
+                chain
+            } else {
+                self.try_compute_branch_message_raw(
                     node,
                     values,
                     &missing_points,
@@ -4372,6 +4823,203 @@ mod tests {
     }
 
     #[test]
+    fn raw_branch_message_matches_generic_contraction() {
+        let (tree, indices) = star_tree();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [4usize, 2usize];
+        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &1).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+
+        // Nodes 2 and 3 (leaves, the hub's two children when rooted at leaf
+        // 1) via the generic oracle path.
+        let mut messages = HashMap::new();
+        for leaf in [2usize, 3usize] {
+            let leaf_points = assignment_batches.get(&leaf).unwrap().first_points.clone();
+            let leaf_message = evaluator
+                .compute_stacked_message(
+                    &leaf,
+                    points,
+                    &leaf_points,
+                    &plan,
+                    &assignment_batches,
+                    &HashMap::new(),
+                )
+                .unwrap();
+            messages.insert(leaf, leaf_message);
+        }
+
+        let hub_points = assignment_batches.get(&0).unwrap().first_points.clone();
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &0,
+                points,
+                &hub_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap();
+        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
+
+        let actual = evaluator
+            .try_compute_branch_message_raw(
+                &0,
+                points,
+                &hub_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap()
+            .expect("branch node with two children and one physical index must be eligible");
+
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (a - e.real()).abs() < 1.0e-10,
+                "raw={a} generic={}",
+                e.real()
+            );
+        }
+    }
+
+    fn complex_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let sc = DynIndex::new_dyn(2);
+        let s0 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let s2 = DynIndex::new_dyn(2);
+        let b0 = DynIndex::new_dyn(2);
+        let b1 = DynIndex::new_dyn(2);
+        let b2 = DynIndex::new_dyn(2);
+        let center_data: Vec<Complex64> = (0..16)
+            .map(|value| Complex64::new(value as f64 + 1.0, -(value as f64) * 0.25))
+            .collect();
+        let center = IdxTensor::from_dense(
+            vec![sc.clone(), b0.clone(), b1.clone(), b2.clone()],
+            center_data,
+        )
+        .unwrap();
+        let leaf0 = IdxTensor::from_dense(
+            vec![b0, s0.clone()],
+            vec![
+                Complex64::new(1.0, 0.5),
+                Complex64::new(0.5, -0.25),
+                Complex64::new(1.5, 0.75),
+                Complex64::new(2.0, -1.0),
+            ],
+        )
+        .unwrap();
+        let leaf1 = IdxTensor::from_dense(
+            vec![b1, s1.clone()],
+            vec![
+                Complex64::new(0.25, -0.5),
+                Complex64::new(1.0, 0.25),
+                Complex64::new(1.25, -0.75),
+                Complex64::new(2.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let leaf2 = IdxTensor::from_dense(
+            vec![b2, s2.clone()],
+            vec![
+                Complex64::new(2.0, 0.5),
+                Complex64::new(1.0, -0.25),
+                Complex64::new(0.75, 0.5),
+                Complex64::new(1.5, -1.0),
+            ],
+        )
+        .unwrap();
+        let tree =
+            TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
+                .unwrap();
+        (tree, vec![sc, s0, s1, s2])
+    }
+
+    #[test]
+    fn raw_complex_branch_message_matches_generic_contraction() {
+        let (tree, indices) = complex_star_tree();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [4usize, 2usize];
+        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &1).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+
+        let mut messages = HashMap::new();
+        for leaf in [2usize, 3usize] {
+            let leaf_points = assignment_batches.get(&leaf).unwrap().first_points.clone();
+            let leaf_message = evaluator
+                .compute_stacked_message(
+                    &leaf,
+                    points,
+                    &leaf_points,
+                    &plan,
+                    &assignment_batches,
+                    &HashMap::new(),
+                )
+                .unwrap();
+            messages.insert(leaf, leaf_message);
+        }
+
+        let hub_points = assignment_batches.get(&0).unwrap().first_points.clone();
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &0,
+                points,
+                &hub_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap();
+        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
+
+        let actual = evaluator
+            .try_compute_branch_message_complex_raw(
+                &0,
+                points,
+                &hub_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap()
+            .expect("complex branch message should use the raw path");
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!((actual.re - expected.real()).abs() < 1.0e-10);
+            assert!((actual.im - expected.imag()).abs() < 1.0e-10);
+        }
+    }
+
+    #[test]
     fn fixed_center_and_scan_hint_evaluation_match() {
         let (tree, indices) = complex_three_node_chain();
         let shape = [3usize, 2usize];
@@ -4829,6 +5477,42 @@ mod tests {
             &indices,
             CachedEvaluatorOptions {
                 center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let actual = evaluator.evaluate_batched(points).unwrap();
+
+        assert_scalars_close(&actual, &expected);
+    }
+
+    /// `cached_evaluator_matches_tree_evaluate_on_star_tree` fixes `center`
+    /// to the hub itself, so the hub's combination goes through the
+    /// separate one-shot centre contraction, not `get_or_compute_node_message`
+    /// -- it never exercises `try_compute_branch_message_raw`. This test
+    /// fixes `center` to a leaf instead, so the hub (rooted toward that
+    /// leaf) has two children and its message must go through the new
+    /// branch dispatch, verified end-to-end through the public
+    /// `evaluate_batched` API rather than by manually driving the message
+    /// plan (unlike `raw_branch_message_matches_generic_contraction`).
+    #[test]
+    fn cached_evaluator_matches_tree_evaluate_on_star_tree_with_fixed_leaf_center() {
+        let (tree, indices) = star_tree();
+        let values = vec![
+            0, 0, 0, 0, //
+            1, 1, 0, 1, //
+            0, 1, 1, 0, //
+            1, 0, 1, 1,
+        ];
+        let shape = [4, 4];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
                 ..Default::default()
             },
         )
