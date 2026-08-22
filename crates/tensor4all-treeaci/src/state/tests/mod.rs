@@ -28,6 +28,18 @@ fn two_node_tree(sites: [DynIndex; 2], rank: usize, scale: f64) -> TreeTN<IdxTen
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
 }
 
+fn rank_deficient_two_node_tree(sites: [DynIndex; 2]) -> TreeTN<IdxTensor, usize> {
+    let bond = DynIndex::new_dyn(2);
+    let left = IdxTensor::from_dense(
+        vec![sites[0].clone(), bond.clone()],
+        vec![1.0, 2.0, 1.0, 2.0],
+    )
+    .unwrap();
+    let right =
+        IdxTensor::from_dense(vec![bond, sites[1].clone()], vec![3.0, 4.0, 3.0, 4.0]).unwrap();
+    TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
 fn output_values(state: &TreeAciState<'_, f64, usize>) -> Vec<Vec<f64>> {
     tree_values(&state.output, &state.problem.node_order)
 }
@@ -118,6 +130,32 @@ fn explicit_guess_is_preserved_before_the_first_sweep() {
         .unwrap());
     assert_eq!(state.edge_ranks, vec![1]);
     assert_eq!(state.output.canonical_form(), Some(CanonicalForm::CI));
+}
+
+#[test]
+fn rank_deficient_initial_guess_uses_canonicalized_active_rank() {
+    let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let inputs = vec![two_node_tree(sites.clone(), 1, 1.0)];
+    let guess = rank_deficient_two_node_tree(sites);
+
+    let state = TreeAciState::<f64, usize>::initialize(
+        &inputs,
+        &TreeAciOptions {
+            initial_guess: Some(guess),
+            ..TreeAciOptions::default()
+        },
+    )
+    .expect("rank-deficient initial guess should initialize");
+
+    assert_eq!(state.edge_ranks, vec![1]);
+    assert_eq!(
+        state
+            .output
+            .bond_index(state.output.edge_between(&0, &1).unwrap())
+            .unwrap()
+            .dim(),
+        1
+    );
 }
 
 #[test]
