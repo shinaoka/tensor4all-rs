@@ -573,14 +573,13 @@ fn batched_path_matches_scalar_path_on_random_core() {
 
 /// Builds a 4-node star `1 -- 0 -- 2`, `0 -- 3`, whose center (node `0`) has
 /// three neighbors. Directed edge `1 -> 0` has zero incoming edges (node `1`
-/// is a leaf), and directed edge `0 -> 1` has two incoming edges (`2 -> 0`
-/// and `3 -> 0`, node `0`'s other two neighbors) -- the two shapes of
-/// `InputFrameStore::candidate_frames_for_edge`'s fallback branch, which
-/// dispatches away from the batched BLAS path whenever a directed edge's
-/// source does not have exactly one incoming edge. See
+/// is a leaf) -- `InputFrameStore::candidate_frames_for_edge`'s scalar
+/// fallback branch -- and directed edge `0 -> 1` has two incoming edges
+/// (`2 -> 0` and `3 -> 0`, node `0`'s other two neighbors) -- its batched
+/// two-incoming-edge branch. See
 /// `candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges`
 /// and
-/// `candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges`.
+/// `candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges`.
 fn star_tree_for_fallback_dispatch() -> TreeTN<IdxTensor, usize> {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
@@ -733,7 +732,7 @@ fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges(
 }
 
 #[test]
-fn candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges() {
+fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
     let problem = prepare_problem(&inputs, &options).unwrap();
@@ -790,6 +789,89 @@ fn candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges
     // Sanity: candidates are not all identical, so this exercises real,
     // differing per-candidate contractions rather than a degenerate case.
     assert!(dispatched.iter().any(|frame| frame != &dispatched[0]));
+}
+
+/// 4-arm star: hub node 0 with three leaves plus a fourth arm, so directed
+/// edge `0 -> 1` has exactly three incoming edges (`2 -> 0`, `3 -> 0`,
+/// `4 -> 0`). Used to pin that 3+-incoming-edge dispatch still uses the
+/// scalar fallback once the two-incoming case gets a batched path.
+fn four_arm_star_tree_for_three_incoming_fallback() -> TreeTN<IdxTensor, usize> {
+    let s0 = DynIndex::new_dyn(1);
+    let s1 = DynIndex::new_dyn(1);
+    let s2 = DynIndex::new_dyn(2);
+    let s3 = DynIndex::new_dyn(2);
+    let s4 = DynIndex::new_dyn(2);
+    let bond01 = DynIndex::new_dyn(2);
+    let bond02 = DynIndex::new_dyn(2);
+    let bond03 = DynIndex::new_dyn(2);
+    let bond04 = DynIndex::new_dyn(2);
+
+    let node0 = IdxTensor::from_dense(
+        vec![
+            s0,
+            bond01.clone(),
+            bond02.clone(),
+            bond03.clone(),
+            bond04.clone(),
+        ],
+        (1..=16).map(|value| value as f64).collect(),
+    )
+    .unwrap();
+    let node1 = IdxTensor::from_dense(vec![bond01, s1], vec![1.0, 2.0]).unwrap();
+    let node2 = IdxTensor::from_dense(vec![bond02, s2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let node3 = IdxTensor::from_dense(vec![bond03, s3], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
+    let node4 = IdxTensor::from_dense(vec![bond04, s4], vec![9.0, 10.0, 11.0, 12.0]).unwrap();
+
+    TreeTN::from_tensors(vec![node0, node1, node2, node3, node4], vec![0, 1, 2, 3, 4]).unwrap()
+}
+
+#[test]
+fn candidate_frames_for_edge_still_falls_back_on_three_incoming_edges() {
+    let inputs = vec![four_arm_star_tree_for_three_incoming_fallback()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("4-arm star must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 3);
+
+    let seeds = vec![vec![0, 0, 0, 0, 0], vec![0, 0, 1, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    let mut candidates = Vec::new();
+    let incoming: Vec<_> = directed.incoming_to_from.clone();
+    for &id_a in &candidate_sets.ids[incoming[0]] {
+        for &id_b in &candidate_sets.ids[incoming[1]] {
+            for &id_c in &candidate_sets.ids[incoming[2]] {
+                candidates.push(ComponentSample {
+                    local_coordinate: 0,
+                    incoming: vec![
+                        (incoming[0], id_a),
+                        (incoming[1], id_b),
+                        (incoming[2], id_c),
+                    ],
+                });
+            }
+        }
+    }
+
+    let dispatched = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(dispatched, scalar);
 }
 
 /// Builds a `FrameBuilder` the same way `InputFrameStore::build_or_extend`
@@ -1200,7 +1282,7 @@ fn compute_batch_falls_back_correctly_on_a_leaf_edge() {
 /// `compute_batch` on a directed edge with two incoming edges (a branch
 /// point) must fall back to `compute` per sample and produce identical
 /// results, mirroring
-/// `candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges`'s
+/// `candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges`'s
 /// coverage of the analogous candidate-frame dispatcher. Reuses
 /// `star_tree_for_fallback_dispatch` rather than a new branch-point fixture.
 #[test]
