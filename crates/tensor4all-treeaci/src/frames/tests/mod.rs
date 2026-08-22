@@ -1280,13 +1280,13 @@ fn compute_batch_falls_back_correctly_on_a_leaf_edge() {
 }
 
 /// `compute_batch` on a directed edge with two incoming edges (a branch
-/// point) must fall back to `compute` per sample and produce identical
-/// results, mirroring
+/// point) must batch via `compute_batch_two_incoming` and produce results
+/// identical to `compute` per sample, mirroring
 /// `candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges`'s
 /// coverage of the analogous candidate-frame dispatcher. Reuses
 /// `star_tree_for_fallback_dispatch` rather than a new branch-point fixture.
 #[test]
-fn compute_batch_falls_back_correctly_on_a_branch_edge() {
+fn compute_batch_batches_a_branch_edge_with_two_incoming_edges() {
     let input = star_tree_for_fallback_dispatch();
     let problem =
         prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
@@ -1327,6 +1327,42 @@ fn compute_batch_falls_back_correctly_on_a_branch_edge() {
     // Sanity: this is a meaningful comparison, not a vacuous shape check --
     // the two samples' frames actually differ.
     assert_ne!(scalar_results[0], scalar_results[1]);
+}
+
+#[test]
+fn compute_batch_still_falls_back_on_three_incoming_edges() {
+    let input = four_arm_star_tree_for_three_incoming_fallback();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("4-arm star must have a directed edge 0 -> 1");
+    assert_eq!(problem.directed_edges[edge].incoming_to_from.len(), 3);
+
+    let seeds = vec![vec![0, 0, 0, 0, 0], vec![0, 0, 1, 1, 1]];
+    let (arena, _candidates) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+
+    let mut scalar_builder = build_frame_builder(&input, &problem, &arena);
+    let sample_count = arena.directed_record_count(edge).unwrap();
+    for sample in 0..sample_count {
+        scalar_builder.compute(edge, sample).unwrap();
+    }
+    let scalar_values: Vec<Vec<f64>> = (0..sample_count)
+        .map(|sample| scalar_builder.memo[edge][sample].clone().unwrap())
+        .collect();
+
+    let mut batched_builder = build_frame_builder(&input, &problem, &arena);
+    batched_builder
+        .compute_batch(edge, 0..sample_count)
+        .unwrap();
+    let batched_values: Vec<Vec<f64>> = (0..sample_count)
+        .map(|sample| batched_builder.memo[edge][sample].clone().unwrap())
+        .collect();
+
+    assert_eq!(batched_values, scalar_values);
 }
 
 /// `FrameBuilder::compute`'s memo-miss path must check `existing_frames`
