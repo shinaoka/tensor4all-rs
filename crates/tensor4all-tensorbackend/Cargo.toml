@@ -11,7 +11,12 @@ categories = ["science", "mathematics"]
 
 [features]
 default = ["backend-tenferro", "tenferro-cpu-faer"]
-backend-tenferro = []
+# Compatibility alias for the legacy process-global operation surface.
+backend-tenferro = ["global-defaults"]
+# Canonical caller-supplied CPU context without process-global fallbacks.
+explicit-context = []
+# Opt-in legacy operations backed by one process-global context.
+global-defaults = ["explicit-context"]
 tenferro-cpu-faer = [
     "tenferro/cpu-faer",
     "tenferro-ad/cpu-faer",
@@ -58,3 +63,7 @@ tenferro-tensor.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
+
+[[test]]
+name = "bench_einsum_native"
+required-features = ["global-defaults"]

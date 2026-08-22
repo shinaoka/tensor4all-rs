@@ -11,11 +11,13 @@ default = ["link", "tenferro-cpu-faer"]
 link = ["dep:hdf5-metno", "dep:hdf5-metno-sys"]
 runtime-loading = ["dep:hdf5-rt"]
 tenferro-cpu-faer = [
+    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-itensorlike/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
+    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-itensorlike/tenferro-provider-inject",
     "tensor4all-treetn/tenferro-provider-inject",

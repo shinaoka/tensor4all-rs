@@ -211,9 +211,10 @@ fn test_op_c64() { test_op_generic::<Complex64>(); }
 - Use tenferro-backed `tensor4all-tensorbackend` / existing tensor4all
   abstractions for SVD, QR, einsum, and dense tensor linear algebra instead of
   local reimplementations.
-- Do not instantiate `CpuBackend` directly outside `tensor4all-tensorbackend`.
-  Use tensorbackend wrappers or `with_default_backend` so CPU execution shares
-  the repository's process-global tenferro `CpuContext`.
+- Canonical integrations supply a configured `CpuBackend` to
+  `tensor4all_tensorbackend::CpuExecutionContext`; legacy convenience APIs may
+  use `with_default_backend` behind the `global-defaults` feature. Do not create
+  an unconfigured fallback backend in downstream operation code.
 - `Tensor3Ops::slice_site`, `Tensor4Ops::slice_site`, and dense/full-tensor
   exports return column-major flat data.
 

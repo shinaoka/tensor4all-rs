@@ -30,6 +30,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check explicit-context-only build
+        run: |
+          cargo check -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer
+          cargo doc -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context,tenferro-cpu-faer
+
       - name: Run clippy
         # The public-error-doc backlog is burned down; error/panic doc
         # requirements are now repository-wide blocking (issue #566 PR3).

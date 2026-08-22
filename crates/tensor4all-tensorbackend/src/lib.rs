@@ -1,40 +1,58 @@
 #![warn(missing_docs)]
 //! Tensor storage and linear algebra backend for tensor4all.
 //!
-//! This crate provides:
-//! - [`Storage`]: Dynamic snapshot storage for logical tensor values
-//! - [`StructuredStorage`]: `axis_classes`-aware materialized snapshots
-//! - [`AnyScalar`]: Dynamic scalar type backed by rank-0 `tenferro::Tensor`
-//! - tenferro-backed execution helpers for tensor algebra
+//! [`CpuExecutionContext`] is the canonical CPU integration path. It requires a
+//! caller-supplied backend and owns plain, graph, and eager-AD runtime state.
 //!
-//! ## Feature Flags
+//! ## Feature flags
 //!
-//! - `backend-tenferro` (default): Use tenferro backend for linalg/einsum
+//! - `explicit-context`: explicit CPU execution and logical tensor transfer.
+//! - `global-defaults`: legacy process-global tensor operations.
+//! - `backend-tenferro` (default): compatibility alias for `global-defaults`.
 
+#[cfg(feature = "global-defaults")]
 /// Dynamic scalar types supporting f32, f64, Complex32, and Complex64.
 mod any_scalar;
+#[cfg(feature = "global-defaults")]
 /// Backend dispatch for dense linear algebra operations.
 mod backend;
-/// Process-global tenferro execution helpers.
+#[cfg(feature = "explicit-context")]
+/// Explicit and optional process-global tenferro execution helpers.
 mod context;
+#[cfg(feature = "explicit-context")]
+/// Backend-free tensor snapshots for execution-domain transfer.
+mod logical_tensor;
+#[cfg(feature = "global-defaults")]
 /// Dense column-major matrix type and backend-backed matrix utilities.
 mod matrix;
+#[cfg(feature = "global-defaults")]
 /// Process-level memory pressure helpers.
 mod memory;
+#[cfg(feature = "global-defaults")]
 /// Tensor snapshot storage types and low-level dense/diagonal kernels.
 mod storage;
+#[cfg(feature = "global-defaults")]
 pub(crate) mod tenferro_bridge;
+#[cfg(feature = "global-defaults")]
 /// Supported public tensor element types and native constructor hooks.
 mod tensor_element;
 
+#[cfg(feature = "global-defaults")]
 pub use any_scalar::AnyScalar;
+#[cfg(feature = "global-defaults")]
 pub use backend::{
     full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,
     solve_matrix_owned, svd_backend, triangular_solve_backend, triangular_solve_matrix,
     triangular_solve_matrix_owned, BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult,
     FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
 };
+#[cfg(feature = "global-defaults")]
 pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
+#[cfg(feature = "explicit-context")]
+pub use context::{CpuExecutionContext, CpuExecutionContextError};
+#[cfg(feature = "explicit-context")]
+pub use logical_tensor::{LogicalTensor, LogicalTensorData, LogicalTensorError};
+#[cfg(feature = "global-defaults")]
 pub use matrix::{
     batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d,
     hermitian_eigendecomposition, hermitian_exponential_first_column, lowest_hermitian_eigenpair,
@@ -43,11 +61,14 @@ pub use matrix::{
     HermitianEigendecomposition, HermitianEigenpair, Matrix, MatrixScalar, MatrixShapeError,
     MatrixTensorConversionError,
 };
+#[cfg(feature = "global-defaults")]
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
+#[cfg(feature = "global-defaults")]
 pub use storage::{
     contract_storage, make_mut_storage, min_dim, Storage, StorageError, StorageKind, StorageResult,
     StorageScalar, StructuredStorage, SumFromStorage,
 };
+#[cfg(feature = "global-defaults")]
 pub use tenferro_bridge::{
     axpby_native_tensor, axpby_storage_native, conj_native_tensor, contract_native_tensor,
     contract_storage_native, dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
@@ -60,9 +81,11 @@ pub use tenferro_bridge::{
     storage_to_native_tensor, sum_native_tensor, svd_native_tensor, tangent_native_tensor,
     BridgeError, NativeTensorReadInput,
 };
+#[cfg(feature = "global-defaults")]
 pub use tensor_element::TensorElement;
 
 /// Extract a result whose error branch means validated internal state is inconsistent.
+#[cfg(feature = "global-defaults")]
 pub(crate) fn require_invariant<T, E: std::fmt::Display>(
     result: std::result::Result<T, E>,
     context: &str,
@@ -79,7 +102,7 @@ pub(crate) fn require_invariant<T, E: std::fmt::Display>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod invariant_tests {
     use super::require_invariant;
 
