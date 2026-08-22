@@ -68,6 +68,26 @@ struct ChainContractionSpec {
     child_dim: usize,
 }
 
+/// Minimum scalar multiply count / group size before the backend setup cost
+/// is amortized by the grouped branch kernel, mirroring
+/// `CHAIN_BLAS_WORK_THRESHOLD` / `CHAIN_BLAS_MIN_GROUP_POINTS` but tuned
+/// independently: a branch step does two contractions per group instead of
+/// one, so its fixed per-call setup cost differs from the chain kernel's.
+const BRANCH_BLAS_WORK_THRESHOLD: usize = 4096;
+const BRANCH_BLAS_MIN_GROUP_POINTS: usize = 4;
+
+#[derive(Clone, Copy, Debug)]
+struct BranchContractionSpec {
+    strides: [usize; 4],
+    physical_axis: usize,
+    parent_axis: usize,
+    child_axis_1: usize,
+    child_axis_2: usize,
+    parent_dim: usize,
+    child_dim_1: usize,
+    child_dim_2: usize,
+}
+
 #[derive(Clone, Debug)]
 struct SiteEntry {
     index: DynIndex,
@@ -1529,6 +1549,154 @@ where
         Ok(output)
     }
 
+    /// Contracts a branch node's raw tensor data against two children's
+    /// already-computed raw message columns, generalizing
+    /// [`Self::grouped_chain_message_contraction`] from one child to two.
+    ///
+    /// Unlike the cartesian-product batching in `tensor4all-treeaci/frames.rs`'s
+    /// analogous fix (`two_incoming_core_matrix_batched`), this evaluator's
+    /// `points` are independent per-point assignments -- point `p` names one
+    /// specific `(child1_assignment, child2_assignment)` pair, not every
+    /// combination -- so only the first child's contraction reduces to a
+    /// single shared-matrix `mat_mul_owned` call per physical-value group
+    /// (the node's raw tensor slice at that physical value is the same for
+    /// every point in the group, so all of the group's child-1 columns can
+    /// be batched against it in one matmul). The second child's contraction
+    /// cannot share a single matrix across points this way -- the
+    /// intermediate from step one already differs per point -- so it is
+    /// folded in via a vectorized accumulate loop over `child_dim_2`
+    /// instead: still allocation-free, per-element-function-call-free array
+    /// arithmetic, just not a single BLAS call.
+    fn grouped_branch_message_contraction<T>(
+        spec: BranchContractionSpec,
+        raw: &[T],
+        physical_values: &[usize],
+        child1_columns: &[T],
+        child2_columns: &[T],
+    ) -> Result<Vec<T>>
+    where
+        T: BlasMul + Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+    {
+        let BranchContractionSpec {
+            strides,
+            physical_axis,
+            parent_axis,
+            child_axis_1,
+            child_axis_2,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        } = spec;
+        let point_count = physical_values.len();
+        anyhow::ensure!(
+            child1_columns.len() == point_count * child_dim_1,
+            "branch child-1 message length {} does not match {} points x {} child values",
+            child1_columns.len(),
+            point_count,
+            child_dim_1
+        );
+        anyhow::ensure!(
+            child2_columns.len() == point_count * child_dim_2,
+            "branch child-2 message length {} does not match {} points x {} child values",
+            child2_columns.len(),
+            point_count,
+            child_dim_2
+        );
+
+        if point_count < 2 * BRANCH_BLAS_MIN_GROUP_POINTS {
+            return scalar_branch_message_contraction(
+                spec,
+                raw,
+                physical_values,
+                child1_columns,
+                child2_columns,
+            );
+        }
+
+        let mut groups = HashMap::<usize, Vec<usize>>::new();
+        for (point, &physical_value) in physical_values.iter().enumerate() {
+            groups.entry(physical_value).or_default().push(point);
+        }
+        let scalar_work = parent_dim * child_dim_1 * child_dim_2 * point_count;
+        if scalar_work < BRANCH_BLAS_WORK_THRESHOLD
+            || groups.len() > 8
+            || groups
+                .values()
+                .any(|points| points.len() < BRANCH_BLAS_MIN_GROUP_POINTS)
+        {
+            return scalar_branch_message_contraction(
+                spec,
+                raw,
+                physical_values,
+                child1_columns,
+                child2_columns,
+            );
+        }
+
+        let mut output = vec![T::default(); point_count * parent_dim];
+        for (physical_value, points) in groups {
+            // Step A: fold in child 1 via one matmul for the whole group.
+            // `left` is (parent_dim*child_dim_2) x child_dim_1, laid out so
+            // child_dim_1 is the trailing (column) axis -- child2 rides
+            // along in "rows", ordered slower than parent so a fixed c2
+            // selects a contiguous parent_dim-length row block within each
+            // column below.
+            let left_len = parent_dim * child_dim_2 * child_dim_1;
+            let mut left = vec![T::default(); left_len];
+            for c1 in 0..child_dim_1 {
+                for c2 in 0..child_dim_2 {
+                    for parent in 0..parent_dim {
+                        let mut axis_values = [0usize; 4];
+                        axis_values[physical_axis] = physical_value;
+                        axis_values[parent_axis] = parent;
+                        axis_values[child_axis_1] = c1;
+                        axis_values[child_axis_2] = c2;
+                        let flat = axis_values[0] * strides[0]
+                            + axis_values[1] * strides[1]
+                            + axis_values[2] * strides[2]
+                            + axis_values[3] * strides[3];
+                        let left_row = parent + parent_dim * c2;
+                        let left_offset = left_row + parent_dim * child_dim_2 * c1;
+                        left[left_offset] = *raw.get(flat).ok_or_else(|| {
+                            anyhow::anyhow!("branch tensor offset {flat} is out of bounds")
+                        })?;
+                    }
+                }
+            }
+            let mut right = Vec::with_capacity(child_dim_1 * points.len());
+            for &point in &points {
+                let start = point * child_dim_1;
+                right.extend_from_slice(&child1_columns[start..start + child_dim_1]);
+            }
+            let intermediate = mat_mul_owned(
+                Matrix::from_col_major_vec(parent_dim * child_dim_2, child_dim_1, left),
+                Matrix::from_col_major_vec(child_dim_1, points.len(), right),
+            )
+            .map_err(anyhow::Error::from)?;
+            let intermediate = intermediate.as_col_major_slice();
+
+            // Step B: fold in child 2 via a vectorized accumulate over
+            // child_dim_2 -- the intermediate's "rows" already interleave
+            // parent (fast) and c2 (slow) per group column, so for a fixed
+            // c2 the parent_dim-length slice at rows
+            // [c2*parent_dim, (c2+1)*parent_dim) within each group-column is
+            // contiguous.
+            for (column, &point) in points.iter().enumerate() {
+                let column_base = column * parent_dim * child_dim_2;
+                let destination = point * parent_dim;
+                for c2 in 0..child_dim_2 {
+                    let child2_value = child2_columns[point * child_dim_2 + c2];
+                    let row_base = column_base + c2 * parent_dim;
+                    for parent in 0..parent_dim {
+                        output[destination + parent] +=
+                            intermediate[row_base + parent] * child2_value;
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+
     /// Computes an interior chain node's (exactly one child) message directly
     /// from raw data, generalizing [`Self::try_compute_leaf_message_raw`] the
     /// way `row_vector_times_matrix`
@@ -2706,6 +2874,56 @@ where
     Ok(output)
 }
 
+fn scalar_branch_message_contraction<T>(
+    spec: BranchContractionSpec,
+    raw: &[T],
+    physical_values: &[usize],
+    child1_columns: &[T],
+    child2_columns: &[T],
+) -> Result<Vec<T>>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let BranchContractionSpec {
+        strides,
+        physical_axis,
+        parent_axis,
+        child_axis_1,
+        child_axis_2,
+        parent_dim,
+        child_dim_1,
+        child_dim_2,
+    } = spec;
+    let point_count = physical_values.len();
+    let mut output = vec![T::default(); point_count * parent_dim];
+    for (point, &physical_value) in physical_values.iter().enumerate() {
+        for parent in 0..parent_dim {
+            let mut sum = T::default();
+            for c1 in 0..child_dim_1 {
+                let child1_value = child1_columns[point * child_dim_1 + c1];
+                for c2 in 0..child_dim_2 {
+                    let child2_value = child2_columns[point * child_dim_2 + c2];
+                    let mut axis_values = [0usize; 4];
+                    axis_values[physical_axis] = physical_value;
+                    axis_values[parent_axis] = parent;
+                    axis_values[child_axis_1] = c1;
+                    axis_values[child_axis_2] = c2;
+                    let flat = axis_values[0] * strides[0]
+                        + axis_values[1] * strides[1]
+                        + axis_values[2] * strides[2]
+                        + axis_values[3] * strides[3];
+                    sum += *raw.get(flat).ok_or_else(|| {
+                        anyhow::anyhow!("branch tensor offset {flat} is out of bounds")
+                    })? * child1_value
+                        * child2_value;
+                }
+            }
+            output[point * parent_dim + parent] = sum;
+        }
+    }
+    Ok(output)
+}
+
 fn build_layout<V>(tree: &TreeTN<IdxTensor, V>, indices: &[DynIndex]) -> Result<EvaluatorLayout<V>>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
@@ -3503,6 +3721,53 @@ mod tests {
     }
 
     #[test]
+    fn grouped_branch_contraction_matches_direct_reference_for_real_values() {
+        // 2x2x2x2 tensor (physical=2, parent=2, child1=2, child2=2), axis
+        // order [physical, parent, child1, child2] so strides = [1, 2, 4, 8].
+        let raw: Vec<f64> = (0..16).map(|v| v as f64 + 1.0).collect();
+        let spec = BranchContractionSpec {
+            strides: [1, 2, 4, 8],
+            physical_axis: 0,
+            parent_axis: 1,
+            child_axis_1: 2,
+            child_axis_2: 3,
+            parent_dim: 2,
+            child_dim_1: 2,
+            child_dim_2: 2,
+        };
+        // 3 points (below the BLAS-group threshold, so this always exercises
+        // scalar_branch_message_contraction): point 0 at physical=0, points
+        // 1-2 at physical=1.
+        let physical_values = [0usize, 1, 1];
+        let child1_columns = [1.0, 0.5, 2.0, 1.0, 0.25, 3.0];
+        let child2_columns = [1.0, 1.0, 0.5, 2.0, 1.5, 0.5];
+
+        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+
+        let mut expected = vec![0.0f64; 3 * 2];
+        for (p, &v) in physical_values.iter().enumerate() {
+            for parent in 0..2 {
+                let mut sum = 0.0;
+                for c1 in 0..2 {
+                    for c2 in 0..2 {
+                        let flat = v + 2 * parent + 4 * c1 + 8 * c2;
+                        sum += raw[flat] * child1_columns[p * 2 + c1] * child2_columns[p * 2 + c2];
+                    }
+                }
+                expected[p * 2 + parent] = sum;
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn grouped_chain_contraction_large_real_groups_match_scalar_reference() {
         let parent_dim = 64;
         let child_dim = 64;
@@ -3572,6 +3837,106 @@ mod tests {
             .iter()
             .zip(expected)
             .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-8));
+    }
+
+    #[test]
+    fn grouped_branch_contraction_large_real_groups_match_scalar_reference() {
+        let parent_dim = 8;
+        let child_dim_1 = 8;
+        let child_dim_2 = 8;
+        let point_count = 16;
+        let spec = BranchContractionSpec {
+            strides: [1, 2, 2 * parent_dim, 2 * parent_dim * child_dim_1],
+            physical_axis: 0,
+            parent_axis: 1,
+            child_axis_1: 2,
+            child_axis_2: 3,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        };
+        let raw: Vec<f64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
+            .map(|value| (value % 19) as f64 - 9.0)
+            .collect();
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
+        let child1_columns: Vec<f64> = (0..point_count * child_dim_1)
+            .map(|value| (value % 13) as f64 - 6.0)
+            .collect();
+        let child2_columns: Vec<f64> = (0..point_count * child_dim_2)
+            .map(|value| (value % 11) as f64 - 5.0)
+            .collect();
+
+        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+        let expected = scalar_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+
+        assert!(actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn grouped_branch_contraction_large_complex_groups_match_scalar_reference() {
+        let parent_dim = 8;
+        let child_dim_1 = 8;
+        let child_dim_2 = 8;
+        let point_count = 16;
+        let spec = BranchContractionSpec {
+            strides: [1, 2, 2 * parent_dim, 2 * parent_dim * child_dim_1],
+            physical_axis: 0,
+            parent_axis: 1,
+            child_axis_1: 2,
+            child_axis_2: 3,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        };
+        let raw: Vec<Complex64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
+            .map(|value| Complex64::new((value % 19) as f64 - 9.0, (value % 11) as f64 - 5.0))
+            .collect();
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
+        let child1_columns: Vec<Complex64> = (0..point_count * child_dim_1)
+            .map(|value| Complex64::new((value % 13) as f64 - 6.0, (value % 7) as f64 - 3.0))
+            .collect();
+        let child2_columns: Vec<Complex64> = (0..point_count * child_dim_2)
+            .map(|value| Complex64::new((value % 9) as f64 - 4.0, (value % 5) as f64 - 2.0))
+            .collect();
+
+        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+        let expected = scalar_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+
+        assert!(actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-6));
     }
 
     fn scalar_grouped_chain_reference<
@@ -4783,5 +5148,190 @@ mod tests {
             total as f64 / 1e6,
         );
         assert!(total > 0);
+    }
+
+    // TEMPORARY diagnostic for gw-rs issue tensor4all-rs#671's downstream
+    // follow-up -- not a regression test, revert after root-cause
+    // confirmation. Compares this evaluator's realistic floating-zone-walk
+    // wall time on a plain 16-site chain against a same-size comb tree (one
+    // degree-3 hub, three 5-site arms), both under the SAME cached
+    // evaluate_batched path used by `message_cache_wall_time_on_realistic_floating_zone_walk`
+    // above. Isolates whether `compute_stacked_message`'s generic multi-child
+    // fallback (hit only by the hub node, since `try_compute_chain_message_raw`
+    // requires exactly one child) is a meaningful wall-time cost at this
+    // evaluator's actual small-batch call pattern, independent of whether the
+    // frames.rs fix (tensor4all-treeaci) helped.
+    #[test]
+    #[ignore]
+    fn diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+        use std::time::Instant;
+        use tensor4all_core::floating_zone_walk;
+        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
+
+        const N_SITES: usize = 16;
+        const LOCAL_DIM: usize = 2;
+        const BOND_DIM: usize = 128;
+        const NSEARCH: usize = 5;
+        const MAX_SWEEPS: usize = 100;
+        const ARM_LEN: usize = 5; // hub + 3*5 = 16 sites, matching N_SITES
+
+        fn build_chain(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
+            for site in 0..N_SITES {
+                let left_dim = if site == 0 { 1 } else { BOND_DIM };
+                let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
+                let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+                for l in 0..left_dim {
+                    for s in 0..LOCAL_DIM {
+                        for r in 0..right_dim {
+                            tensor.set3(l, s, r, rng.random::<f64>());
+                        }
+                    }
+                }
+                tensors.push(tensor);
+            }
+            let tt = SimpleTensorTrain::new(tensors).unwrap();
+            crate::tensor_train_to_treetn(&tt).unwrap()
+        }
+
+        // Hub (node 0) + three arms of ARM_LEN sites each: arm a's sites are
+        // named `1 + a*ARM_LEN ..= a*ARM_LEN + ARM_LEN`. Center is fixed to
+        // the tip of arm 0, so the hub (rooted toward that tip) has exactly
+        // one parent (arm 0's first site) and two children (arms 1 and 2's
+        // first sites) -- the one node in this tree that cannot use
+        // `try_compute_chain_message_raw`'s single-child fast path.
+        fn build_comb(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>, usize) {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let mut gen = |n: usize| -> Vec<f64> { (0..n).map(|_| rng.random::<f64>()).collect() };
+
+            let s_hub = DynIndex::new_dyn(LOCAL_DIM);
+            let hub_bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(BOND_DIM)).collect();
+            let hub = IdxTensor::from_dense(
+                std::iter::once(s_hub.clone())
+                    .chain(hub_bonds.iter().cloned())
+                    .collect(),
+                gen(LOCAL_DIM * BOND_DIM * BOND_DIM * BOND_DIM),
+            )
+            .unwrap();
+
+            let mut tensors = vec![hub];
+            let mut node_labels = vec![0usize];
+            let mut indices = vec![s_hub];
+            let mut next_node = 1usize;
+            let mut center = 0usize;
+
+            for arm in 0..3 {
+                let mut prev_bond = hub_bonds[arm].clone();
+                for depth in 0..ARM_LEN {
+                    let s = DynIndex::new_dyn(LOCAL_DIM);
+                    let is_tip = depth == ARM_LEN - 1;
+                    let tensor = if is_tip {
+                        IdxTensor::from_dense(
+                            vec![prev_bond.clone(), s.clone()],
+                            gen(BOND_DIM * LOCAL_DIM),
+                        )
+                        .unwrap()
+                    } else {
+                        let next_bond = DynIndex::new_dyn(BOND_DIM);
+                        let tensor = IdxTensor::from_dense(
+                            vec![prev_bond.clone(), s.clone(), next_bond.clone()],
+                            gen(BOND_DIM * LOCAL_DIM * BOND_DIM),
+                        )
+                        .unwrap();
+                        prev_bond = next_bond;
+                        tensor
+                    };
+                    tensors.push(tensor);
+                    node_labels.push(next_node);
+                    indices.push(s);
+                    if arm == 0 && is_tip {
+                        center = next_node;
+                    }
+                    next_node += 1;
+                }
+            }
+
+            let tree = TreeTN::<_, usize>::from_tensors(tensors, node_labels).unwrap();
+            (tree, indices, center)
+        }
+
+        fn starts(n_sites: usize) -> Vec<Vec<usize>> {
+            let mut rng = ChaCha8Rng::seed_from_u64(11);
+            (0..NSEARCH)
+                .map(|_| {
+                    (0..n_sites)
+                        .map(|_| rng.random_range(0..LOCAL_DIM))
+                        .collect()
+                })
+                .collect()
+        }
+        let site_dims = vec![LOCAL_DIM; N_SITES];
+
+        fn timed_walk(
+            mut evaluator: TreeTNCachedEvaluator<'_, usize>,
+            n_sites: usize,
+        ) -> std::time::Duration {
+            let warm_values = vec![0usize; n_sites];
+            let warm_shape = [n_sites, 1];
+            let warm_points = ColMajorArrayRef::new(&warm_values, &warm_shape).unwrap();
+            evaluator.evaluate_batched(warm_points).unwrap();
+            let start_time = Instant::now();
+            for start in &starts(n_sites) {
+                floating_zone_walk(
+                    &vec![LOCAL_DIM; n_sites],
+                    start,
+                    MAX_SWEEPS,
+                    f64::INFINITY,
+                    |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                        let mut values = vec![0usize; n_sites * points.len()];
+                        for (p, point) in points.iter().enumerate() {
+                            for (site, &v) in point.iter().enumerate() {
+                                values[site + n_sites * p] = v;
+                            }
+                        }
+                        let shape = [n_sites, points.len()];
+                        let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
+                        let out = evaluator.evaluate_batched(arr)?;
+                        Ok(out.iter().map(|v| v.real().abs()).collect())
+                    },
+                )
+                .unwrap();
+            }
+            start_time.elapsed()
+        }
+
+        let (chain_tree, chain_indices) = build_chain(7);
+        let chain_evaluator = TreeTNCachedEvaluator::new(
+            &chain_tree,
+            &chain_indices,
+            CachedEvaluatorOptions::default(),
+        )
+        .unwrap();
+        let chain_elapsed = timed_walk(chain_evaluator, N_SITES);
+        let _ = &site_dims;
+
+        let (comb_tree, comb_indices, comb_center) = build_comb(7);
+        let comb_evaluator = TreeTNCachedEvaluator::new(
+            &comb_tree,
+            &comb_indices,
+            CachedEvaluatorOptions {
+                center: Some(comb_center),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let comb_elapsed = timed_walk(comb_evaluator, N_SITES);
+
+        println!(
+            "chain (N={N_SITES}, bond={BOND_DIM}): {chain_elapsed:?}\n\
+             comb  (N={N_SITES}, bond={BOND_DIM}, 1 hub): {comb_elapsed:?}\n\
+             ratio (comb/chain): {:.2}x",
+            comb_elapsed.as_secs_f64() / chain_elapsed.as_secs_f64()
+        );
+        assert!(chain_elapsed.as_nanos() > 0);
+        assert!(comb_elapsed.as_nanos() > 0);
     }
 }
