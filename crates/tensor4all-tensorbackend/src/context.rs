@@ -1,355 +1,566 @@
-//! Process-global tenferro CPU execution helpers.
-//!
-//! tensor4all-rs routes tenferro CPU execution through one process-global
-//! `CpuContext`, matching tenferro's `cpu:0` default-global thread-pool model.
-//! Plain tensor operations, cached traced execution, and eager AD currently use
-//! separate `CpuBackend` values because tenferro does not expose a public API
-//! for borrowing the backend owned by an `EagerRuntime`. All backends are
-//! created from the same global CPU context, so thread-pool configuration is
-//! shared.
+//! Explicit and optional process-global tenferro CPU execution contexts.
 
-#[cfg(test)]
-use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use anyhow::anyhow;
-use tenferro::{GraphCompiler, Runtime};
+use tenferro::{CompiledGraph, GraphCompiler, Runtime, Tensor, TracedGraph};
 use tenferro_ad::{AdContext, EagerRuntime};
-use tenferro_cpu::{BufferPoolStats, CpuBackend, CpuContext};
+use tenferro_cpu::{BufferPoolStats, CpuBackend};
 
-static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
-static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
-
-struct DefaultGraphRuntime {
-    compiler: GraphCompiler,
-    runtime: Runtime,
-    backend: CpuBackend,
-}
-
-static DEFAULT_GRAPH_RUNTIME: OnceLock<std::result::Result<Mutex<DefaultGraphRuntime>, String>> =
-    OnceLock::new();
-/// Error returned when the process-global eager AD runtime cannot be initialized.
+/// Error returned by explicit CPU context graph or eager-runtime operations.
 ///
-/// The original backend error is retained as the [`std::error::Error::source`]
-/// so callers can inspect the registration failure without parsing a string.
+/// The original tenferro diagnostic is retained as the error source.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::error::Error;
 /// use std::sync::Arc;
-/// use tensor4all_tensorbackend::EagerContextError;
+/// use tensor4all_tensorbackend::CpuExecutionContextError;
 ///
-/// let error = EagerContextError::Registration {
+/// let error = CpuExecutionContextError::Initialization {
+///     component: "graph runtime",
 ///     source: Arc::new(std::io::Error::other("registration failed")),
 /// };
 /// assert!(error.source().is_some());
-/// assert!(error.to_string().contains("registration failed"));
 /// ```
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum EagerContextError {
-    /// The tenferro linalg AD extension rule could not be registered.
-    #[error("failed to register tenferro linalg AD rule: {source}")]
-    Registration {
-        /// Original diagnostic returned by tenferro.
+pub enum CpuExecutionContextError {
+    /// A context-owned graph or eager runtime could not be initialized.
+    #[error("failed to initialize {component}: {source}")]
+    Initialization {
+        /// Context component being initialized.
+        component: &'static str,
+        /// Original tenferro diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// Graph compilation or execution failed.
+    #[error("CPU graph {operation} failed: {source}")]
+    Graph {
+        /// Graph operation that failed.
+        operation: &'static str,
+        /// Original tenferro diagnostic.
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
 
-static DEFAULT_EAGER_RUNTIME: OnceLock<std::result::Result<Arc<EagerRuntime>, EagerContextError>> =
-    OnceLock::new();
+impl CpuExecutionContextError {
+    fn initialization(
+        component: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Initialization {
+            component,
+            source: Arc::new(source),
+        }
+    }
 
-#[cfg(test)]
-thread_local! {
-    static FORCE_EAGER_CONTEXT_FAILURE: Cell<bool> = const { Cell::new(false) };
-}
-
-fn default_cpu_context() -> Arc<CpuContext> {
-    DEFAULT_CPU_CONTEXT
-        .get_or_init(|| Arc::new(CpuContext::from_env()))
-        .clone()
-}
-
-fn default_backend() -> &'static Mutex<CpuBackend> {
-    DEFAULT_BACKEND.get_or_init(|| Mutex::new(CpuBackend::from_context(default_cpu_context())))
-}
-
-fn build_graph_runtime(backend: &CpuBackend) -> std::result::Result<Runtime, String> {
-    let mut builder = Runtime::builder();
-    builder
-        .register_engine(
-            tenferro_cpu::runtime_engine_registration(backend).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-    builder
-        .install_extension_module(
-            tenferro_einsum::extension_module::<CpuBackend>(
-                tenferro_cpu::runtime_engine_id().map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-    builder.build().map_err(|e| e.to_string())
-}
-
-fn default_graph_runtime() -> anyhow::Result<&'static Mutex<DefaultGraphRuntime>> {
-    match DEFAULT_GRAPH_RUNTIME.get_or_init(|| {
-        let backend = CpuBackend::from_context(default_cpu_context());
-        build_graph_runtime(&backend).map(|runtime| {
-            Mutex::new(DefaultGraphRuntime {
-                compiler: GraphCompiler::new(),
-                runtime,
-                backend,
-            })
-        })
-    }) {
-        Ok(runtime) => Ok(runtime),
-        Err(error) => Err(anyhow!("failed to initialize graph runtime: {error}")),
+    fn graph(
+        operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Graph {
+            operation,
+            source: Arc::new(source),
+        }
     }
 }
 
-fn lock_default_graph_runtime(
-) -> anyhow::Result<std::sync::MutexGuard<'static, DefaultGraphRuntime>> {
-    match default_graph_runtime()?.lock() {
-        Ok(guard) => Ok(guard),
-        Err(poisoned) => Ok(poisoned.into_inner()),
-    }
+struct GraphState {
+    compiler: GraphCompiler,
+    runtime: Runtime,
+    backend: CpuBackend,
 }
 
-/// Run a closure against the process-global CPU backend.
+/// Caller-owned CPU execution domain for plain, graph, and eager-AD work.
 ///
-/// This is the canonical entry point for typed and untyped tenferro tensor
-/// operations inside `tensor4all-tensorbackend`.
-pub fn with_default_backend<R>(f: impl FnOnce(&mut CpuBackend) -> R) -> R {
-    let mut backend = match default_backend().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    f(&mut backend)
-}
-
-/// Run a closure against the process-global tenferro graph compiler/executor.
-///
-/// This is used for native tensor operations that benefit from tenferro's
-/// persistent execution caches, such as N-ary einsum contraction paths.
-pub(crate) fn with_default_graph_runtime<R>(
-    f: impl FnOnce(&mut GraphCompiler, &Runtime, &mut CpuBackend) -> R,
-) -> anyhow::Result<R> {
-    let mut graph = lock_default_graph_runtime()?;
-    let graph = &mut *graph;
-    let compiler = &mut graph.compiler;
-    let runtime = &graph.runtime;
-    let backend = &mut graph.backend;
-    Ok(f(compiler, runtime, backend))
-}
-
-/// Return retained-buffer statistics for the process-global graph runtime.
-pub(crate) fn default_engine_buffer_pool_stats() -> anyhow::Result<BufferPoolStats> {
-    let graph = lock_default_graph_runtime()?;
-    graph
-        .backend
-        .buffer_pool_stats()
-        .map_err(|e| anyhow!("failed to read graph buffer-pool statistics: {e}"))
-}
-
-/// Reset retained buffers in the process-global graph runtime.
-pub(crate) fn reset_default_engine_buffer_pool() -> anyhow::Result<()> {
-    let mut graph = lock_default_graph_runtime()?;
-    graph
-        .backend
-        .reset_buffer_pool()
-        .map_err(|e| anyhow!("failed to reset graph buffer pool: {e}"))
-}
-
-/// Drop and recreate the process-global graph compiler/runtime.
-///
-/// This releases tenferro's retained execution buffers and cached contraction
-/// paths. It is intended for diagnostics and memory-pressure recovery, not for
-/// normal hot loops where the caches are valuable.
-pub(crate) fn reset_default_engine() -> anyhow::Result<()> {
-    let mut graph = lock_default_graph_runtime()?;
-    let runtime = build_graph_runtime(&graph.backend)
-        .map_err(|e| anyhow!("failed to reset graph runtime: {e}"))?;
-    graph.compiler = GraphCompiler::new();
-    graph.runtime = runtime;
-    graph
-        .backend
-        .reset_buffer_pool()
-        .map_err(|e| anyhow!("failed to reset graph buffer pool: {e}"))
-}
-
-/// Return the process-global eager context used for reverse-mode AD.
-///
-/// This context owns a separate `CpuBackend` from [`with_default_backend`] and
-/// the cached graph executor, but all backends share the same process-global
-/// tenferro CPU context.
-///
-/// # Errors
-///
-/// Returns [`EagerContextError::Registration`] if the tenferro linalg AD rule
-/// cannot be registered.
+/// The supplied backend is the only source of CPU execution resources. Backend
+/// clones preserve its runtime identity; this constructor never uses
+/// `CpuBackend::new`, `CpuContext::from_env`, or a process-global fallback.
+/// Graph preparation caches and the eager runtime are owned by this context and
+/// are released when it is dropped.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::default_eager_ctx;
-/// use std::sync::Arc;
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
 ///
-/// let first = default_eager_ctx().unwrap();
-/// let second = default_eager_ctx().unwrap();
-/// assert!(Arc::ptr_eq(&first, &second));
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let threads = context.with_backend(|backend| backend.num_threads());
+/// assert_eq!(threads, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn default_eager_ctx() -> std::result::Result<Arc<EagerRuntime>, EagerContextError> {
-    #[cfg(test)]
-    if FORCE_EAGER_CONTEXT_FAILURE.with(Cell::get) {
-        return Err(EagerContextError::Registration {
-            source: Arc::new(std::io::Error::other(
-                "forced default eager context registration failure",
-            )),
-        });
+pub struct CpuExecutionContext {
+    backend: Mutex<CpuBackend>,
+    graph: OnceLock<Result<Mutex<GraphState>, CpuExecutionContextError>>,
+    eager: OnceLock<Result<Arc<EagerRuntime>, CpuExecutionContextError>>,
+}
+
+impl std::fmt::Debug for CpuExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CpuExecutionContext")
+            .field("graph_initialized", &self.graph.get().is_some())
+            .field("eager_initialized", &self.eager.get().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CpuExecutionContext {
+    /// Create an execution context from a caller-selected CPU backend.
+    ///
+    /// Runtime construction is lazy, so creating a context cannot fail and does
+    /// not allocate another executor or consult environment configuration.
+    pub fn from_backend(backend: CpuBackend) -> Self {
+        Self {
+            backend: Mutex::new(backend),
+            graph: OnceLock::new(),
+            eager: OnceLock::new(),
+        }
     }
 
-    match DEFAULT_EAGER_RUNTIME.get_or_init(|| {
-        let ad_context = AdContext::builder()
-            .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().map_err(
-                |source| EagerContextError::Registration {
-                    source: Arc::new(source),
-                },
-            )?)
-            .map_err(|source| EagerContextError::Registration {
-                source: Arc::new(source),
-            })?
-            .build()
-            .map_err(|source| EagerContextError::Registration {
-                source: Arc::new(source),
-            })?;
-        EagerRuntime::with_cpu_backend_and_ad_context(
-            CpuBackend::from_context(default_cpu_context()),
-            &ad_context,
+    /// Run a plain tensor operation with this context's backend.
+    ///
+    /// The closure runs while the context-local backend lock is held. A poisoned
+    /// lock is recovered because tenferro validates every new backend session.
+    pub fn with_backend<R>(&self, f: impl FnOnce(&mut CpuBackend) -> R) -> R {
+        let mut backend = match self.backend.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        f(&mut backend)
+    }
+
+    fn backend_clone(&self) -> CpuBackend {
+        self.with_backend(|backend| backend.clone())
+    }
+
+    fn graph_state(&self) -> Result<&Mutex<GraphState>, CpuExecutionContextError> {
+        self.graph
+            .get_or_init(|| {
+                let backend = self.backend_clone();
+                build_graph_runtime(&backend).map(|runtime| {
+                    Mutex::new(GraphState {
+                        compiler: GraphCompiler::new(),
+                        runtime,
+                        backend,
+                    })
+                })
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn with_graph_state<R>(
+        &self,
+        f: impl FnOnce(&mut GraphCompiler, &mut Runtime, &mut CpuBackend) -> R,
+    ) -> Result<R, CpuExecutionContextError> {
+        let mut graph = match self.graph_state()?.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let GraphState {
+            compiler,
+            runtime,
+            backend,
+        } = &mut *graph;
+        Ok(f(compiler, runtime, backend))
+    }
+
+    /// Compile a backend-neutral traced graph using this context's compiler cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when graph-runtime initialization or
+    /// graph compilation fails.
+    pub fn compile_graph(
+        &self,
+        graph: &TracedGraph,
+    ) -> Result<CompiledGraph, CpuExecutionContextError> {
+        self.with_graph_state(|compiler, _, _| compiler.compile_traced_graph(graph))?
+            .map_err(|source| CpuExecutionContextError::graph("compilation", source))
+    }
+
+    /// Execute a compiled graph in this context's runtime and prepared-plan cache.
+    ///
+    /// `CompiledGraph` is backend-neutral. Backend-prepared executables and
+    /// workspaces never leave this context-owned runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when runtime initialization,
+    /// preparation, or execution fails.
+    pub fn run_graph(
+        &self,
+        graph: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> Result<Vec<Tensor>, CpuExecutionContextError> {
+        self.with_graph_state(|_, runtime, _| runtime.run_compiled(graph, inputs))?
+            .map_err(|source| CpuExecutionContextError::graph("execution", source))
+    }
+
+    /// Return this context's eager reverse-AD runtime.
+    ///
+    /// Repeated calls return the same runtime and therefore the same eager
+    /// compilation cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when linalg AD-rule or eager-runtime
+    /// registration fails.
+    pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
+        self.eager
+            .get_or_init(|| build_eager_runtime(self.backend_clone()))
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(Clone::clone)
+    }
+
+    /// Return statistics for this context's runtime-owned graph caches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when graph initialization or the
+    /// cache statistics query fails.
+    pub fn graph_cache_stats(
+        &self,
+    ) -> Result<tenferro::RuntimeCacheStats, CpuExecutionContextError> {
+        self.with_graph_state(|_, runtime, _| runtime.cache_stats())?
+            .map_err(|source| CpuExecutionContextError::graph("cache statistics", source))
+    }
+
+    /// Return retained-buffer statistics for this context's graph backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when graph initialization or the
+    /// backend statistics query fails.
+    pub fn graph_buffer_pool_stats(&self) -> Result<BufferPoolStats, CpuExecutionContextError> {
+        self.with_graph_state(|_, _, backend| backend.buffer_pool_stats())?
+            .map_err(|source| CpuExecutionContextError::graph("buffer-pool statistics", source))
+    }
+
+    /// Release retained buffers owned by this context's graph backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when graph initialization or reset
+    /// fails.
+    pub fn reset_graph_buffer_pool(&self) -> Result<(), CpuExecutionContextError> {
+        self.with_graph_state(|_, _, backend| backend.reset_buffer_pool())?
+            .map_err(|source| CpuExecutionContextError::graph("buffer-pool reset", source))
+    }
+
+    /// Recreate this context's graph runtime and release its prepared caches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when runtime reconstruction or
+    /// buffer release fails.
+    pub fn reset_graph_runtime(&self) -> Result<(), CpuExecutionContextError> {
+        self.with_graph_state(|compiler, runtime, backend| {
+            let replacement = build_graph_runtime(backend)?;
+            *compiler = GraphCompiler::new();
+            let old = std::mem::replace(runtime, replacement);
+            drop(old);
+            backend
+                .reset_buffer_pool()
+                .map_err(|source| CpuExecutionContextError::graph("buffer-pool reset", source))
+        })??;
+        Ok(())
+    }
+}
+
+fn build_graph_runtime(backend: &CpuBackend) -> Result<Runtime, CpuExecutionContextError> {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            tenferro_cpu::runtime_engine_registration(backend).map_err(|source| {
+                CpuExecutionContextError::initialization("graph CPU engine", source)
+            })?,
         )
-        .map_err(|source| EagerContextError::Registration {
-            source: Arc::new(source),
+        .map_err(|source| CpuExecutionContextError::initialization("graph CPU engine", source))?;
+    builder
+        .install_extension_module(
+            tenferro_einsum::extension_module::<CpuBackend>(
+                tenferro_cpu::runtime_engine_id().map_err(|source| {
+                    CpuExecutionContextError::initialization("einsum extension", source)
+                })?,
+            )
+            .map_err(|source| {
+                CpuExecutionContextError::initialization("einsum extension", source)
+            })?,
+        )
+        .map_err(|source| CpuExecutionContextError::initialization("einsum extension", source))?;
+    builder
+        .build()
+        .map_err(|source| CpuExecutionContextError::initialization("graph runtime", source))
+}
+
+fn build_eager_runtime(backend: CpuBackend) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
+    let ad_context = AdContext::builder()
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().map_err(|source| {
+            CpuExecutionContextError::initialization("linalg AD rules", source)
+        })?)
+        .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?
+        .build()
+        .map_err(|source| CpuExecutionContextError::initialization("AD context", source))?;
+    EagerRuntime::with_cpu_backend_and_ad_context(backend, &ad_context)
+        .map_err(|source| CpuExecutionContextError::initialization("eager runtime", source))
+}
+
+#[cfg(feature = "global-defaults")]
+mod defaults {
+    use super::*;
+    use tenferro_cpu::CpuContext;
+
+    static DEFAULT_CONTEXT: OnceLock<Arc<CpuExecutionContext>> = OnceLock::new();
+
+    #[cfg(test)]
+    thread_local! {
+        static FORCE_EAGER_CONTEXT_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[cfg(test)]
+    static DEFAULT_CONTEXT_HITS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    fn default_context() -> &'static Arc<CpuExecutionContext> {
+        DEFAULT_CONTEXT.get_or_init(|| {
+            #[cfg(test)]
+            DEFAULT_CONTEXT_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Arc::new(CpuExecutionContext::from_backend(CpuBackend::from_context(
+                Arc::new(CpuContext::from_env()),
+            )))
         })
-    }) {
-        Ok(context) => Ok(Arc::clone(context)),
-        Err(error) => Err(error.clone()),
+    }
+
+    /// Error returned when the process-global eager AD runtime cannot be initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    /// use std::sync::Arc;
+    /// use tensor4all_tensorbackend::EagerContextError;
+    ///
+    /// let error = EagerContextError::Registration {
+    ///     source: Arc::new(std::io::Error::other("registration failed")),
+    /// };
+    /// assert!(error.source().is_some());
+    /// ```
+    #[derive(Debug, Clone, thiserror::Error)]
+    pub enum EagerContextError {
+        /// The tenferro linalg AD extension rule could not be registered.
+        #[error("failed to register tenferro linalg AD rule: {source}")]
+        Registration {
+            /// Original diagnostic returned by tenferro.
+            #[source]
+            source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+        },
+    }
+
+    /// Run a closure against the optional process-global CPU backend.
+    pub fn with_default_backend<R>(f: impl FnOnce(&mut CpuBackend) -> R) -> R {
+        default_context().with_backend(f)
+    }
+
+    pub(crate) fn with_default_graph_runtime<R>(
+        f: impl FnOnce(&mut GraphCompiler, &Runtime, &mut CpuBackend) -> R,
+    ) -> anyhow::Result<R> {
+        default_context()
+            .with_graph_state(|compiler, runtime, backend| f(compiler, runtime, backend))
+            .map_err(anyhow::Error::new)
+    }
+
+    pub(crate) fn default_engine_buffer_pool_stats() -> anyhow::Result<BufferPoolStats> {
+        default_context()
+            .graph_buffer_pool_stats()
+            .map_err(anyhow::Error::new)
+    }
+
+    pub(crate) fn reset_default_engine_buffer_pool() -> anyhow::Result<()> {
+        default_context()
+            .reset_graph_buffer_pool()
+            .map_err(anyhow::Error::new)
+    }
+
+    pub(crate) fn reset_default_engine() -> anyhow::Result<()> {
+        default_context()
+            .reset_graph_runtime()
+            .map_err(anyhow::Error::new)
+    }
+
+    /// Return the optional process-global eager context used by convenience APIs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EagerContextError::Registration`] when eager runtime
+    /// initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_tensorbackend::default_eager_ctx;
+    ///
+    /// let first = default_eager_ctx().unwrap();
+    /// let second = default_eager_ctx().unwrap();
+    /// assert!(Arc::ptr_eq(&first, &second));
+    /// ```
+    pub fn default_eager_ctx() -> Result<Arc<EagerRuntime>, EagerContextError> {
+        #[cfg(test)]
+        if FORCE_EAGER_CONTEXT_FAILURE.with(std::cell::Cell::get) {
+            return Err(EagerContextError::Registration {
+                source: Arc::new(std::io::Error::other(
+                    "forced default eager context registration failure",
+                )),
+            });
+        }
+        default_context()
+            .eager_runtime()
+            .map_err(|source| EagerContextError::Registration {
+                source: Arc::new(source),
+            })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn default_context_hits() -> usize {
+        DEFAULT_CONTEXT_HITS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_forced_eager_context_failure<T>(f: impl FnOnce() -> T) -> T {
+        let previous = FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.replace(true));
+        let result = f();
+        FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.set(previous));
+        result
     }
 }
 
-#[cfg(test)]
-pub(crate) fn with_forced_eager_context_failure<T>(f: impl FnOnce() -> T) -> T {
-    let previous = FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.replace(true));
-    let result = f();
-    FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.set(previous));
-    result
-}
+#[cfg(all(test, feature = "global-defaults"))]
+pub(crate) use defaults::with_forced_eager_context_failure;
+#[cfg(feature = "global-defaults")]
+pub use defaults::{default_eager_ctx, with_default_backend, EagerContextError};
+#[cfg(feature = "global-defaults")]
+pub(crate) use defaults::{
+    default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
+    with_default_graph_runtime,
+};
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
     use super::*;
-    use tenferro_cpu::linalg_interop::PoolScalar;
+    use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
+    use tenferro::{DType, TraceContext};
+    use tenferro_ad::EagerTensor;
+    use tenferro_cpu::{CpuContext, ExternalCpuDomain};
+    use tenferro_tensor::CpuDomainId;
+
+    fn context() -> CpuExecutionContext {
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
+    }
 
     #[test]
-    fn eager_context_error_preserves_source_chain() {
-        let source = std::io::Error::other("forced registration failure");
-        let error = EagerContextError::Registration {
-            source: Arc::new(source),
-        };
+    fn explicit_plain_graph_and_eager_paths_share_only_the_supplied_backend() {
+        let context = context();
+        assert_eq!(context.with_backend(|backend| backend.num_threads()), 1);
 
-        assert!(std::error::Error::source(&error).is_some());
+        let mut trace = TraceContext::new();
+        let input = trace
+            .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
+            .unwrap();
+        let output = trace.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+        let graph = trace.finish(&[output]).unwrap();
+        let compiled = context.compile_graph(&graph).unwrap();
+        let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap();
+        let output = context.run_graph(&compiled, &[&input]).unwrap();
+        assert_eq!(output[0].as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+        context.run_graph(&compiled, &[&input]).unwrap();
+        let cached = context.graph_cache_stats().unwrap().prepared_plans;
+        assert!(cached.entries > 0);
+        assert!(cached.hits > 0);
+        context.reset_graph_runtime().unwrap();
         assert_eq!(
-            std::error::Error::source(&error).unwrap().to_string(),
-            "forced registration failure"
+            context.graph_cache_stats().unwrap().prepared_plans.entries,
+            0
         );
+
+        let eager = context.eager_runtime().unwrap();
+        assert!(Arc::ptr_eq(&eager, &context.eager_runtime().unwrap()));
     }
 
     #[test]
-    fn eager_context_has_typed_error_contract() {
-        let result: std::result::Result<Arc<EagerRuntime>, EagerContextError> = default_eager_ctx();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn eager_context_failure_uses_production_path_and_preserves_source() {
-        with_forced_eager_context_failure(|| {
-            let error = match default_eager_ctx() {
-                Ok(_) => panic!("forced eager context failure unexpectedly succeeded"),
-                Err(error) => error,
-            };
-            assert!(matches!(error, EagerContextError::Registration { .. }));
-            let source = std::error::Error::source(&error).unwrap();
-            assert_eq!(
-                source.to_string(),
-                "forced default eager context registration failure"
-            );
-            assert!(source.source().is_none());
-        });
-    }
-
-    #[test]
-    fn eager_context_is_process_global() {
-        let first = default_eager_ctx().unwrap();
-        let second = default_eager_ctx().unwrap();
-
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn eager_context_is_shared_across_threads() {
-        let main_context = default_eager_ctx().unwrap();
-        let worker_context = std::thread::spawn(|| default_eager_ctx().unwrap())
-            .join()
-            .expect("worker thread should complete");
-
-        assert!(Arc::ptr_eq(&main_context, &worker_context));
-    }
-
-    #[test]
-    fn default_backend_is_shared_across_threads() {
-        let main_threads = with_default_backend(|backend| backend.num_threads());
-        let worker_threads =
-            std::thread::spawn(|| with_default_backend(|backend| backend.num_threads()))
-                .join()
-                .expect("worker thread should complete");
-
-        assert_eq!(main_threads, worker_threads);
-    }
-
-    #[test]
-    fn reset_default_engine_releases_retained_backend_buffers() {
-        reset_default_engine_buffer_pool().unwrap();
-        with_default_graph_runtime(|_, _, backend| {
-            backend.with_linalg_pool(|_, pool| {
-                let buffer = <f64 as PoolScalar>::pool_acquire_zeroed(pool, 1024);
-                <f64 as PoolScalar>::pool_release(pool, buffer);
-                Ok(())
-            })
-        })
-        .unwrap()
+    fn separate_eager_contexts_reject_cross_context_operations() {
+        let first = context().eager_runtime().unwrap();
+        let second = context().eager_runtime().unwrap();
+        let a = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+            first,
+        )
         .unwrap();
-
-        let before = default_engine_buffer_pool_stats().unwrap();
-        assert!(
-            before.capacity_bytes > 0,
-            "operation should retain a buffer"
-        );
-        reset_default_engine().unwrap();
-        let after = default_engine_buffer_pool_stats().unwrap();
-        assert_eq!(after.buffers, 0);
-        assert_eq!(after.capacity_bytes, 0);
+        let b = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+            second,
+        )
+        .unwrap();
+        assert!(matches!(
+            a.add(&b),
+            Err(tenferro_ad::Error::ContextMismatch { .. })
+        ));
     }
 
     #[test]
-    fn default_engine_is_shared_across_threads() {
-        let main_threads =
-            with_default_graph_runtime(|_, _, backend| backend.num_threads()).unwrap();
-        let worker_threads = std::thread::spawn(|| {
-            with_default_graph_runtime(|_, _, backend| backend.num_threads()).unwrap()
-        })
-        .join()
-        .expect("worker thread should complete");
+    fn caller_managed_backend_remains_caller_owned_after_context_drop() {
+        let executor = Arc::new(CpuContext::with_threads(1).unwrap());
+        let id = CpuDomainId::new(7);
+        let domain =
+            ExternalCpuDomain::new_caller_managed(id, executor.clone(), NonZeroUsize::MIN).unwrap();
+        let backend = CpuBackend::from_external_managed_domains(id, [domain]).unwrap();
+        let context = CpuExecutionContext::from_backend(backend);
+        assert_eq!(context.with_backend(|backend| backend.num_threads()), 1);
+        drop(context);
+        assert_eq!(executor.num_threads(), 1);
+    }
 
-        assert_eq!(main_threads, worker_threads);
+    #[test]
+    fn independent_contexts_do_not_share_a_backend_mutex() {
+        let first = Arc::new(context());
+        let second = Arc::new(context());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let handles = [first, second].map(|context| {
+            let entered_tx = entered_tx.clone();
+            let release_rx = Arc::clone(&release_rx);
+            std::thread::spawn(move || {
+                context.with_backend(|_| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.lock().unwrap().recv().unwrap();
+                });
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        release_tx.send(()).unwrap();
+        release_tx.send(()).unwrap();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    #[cfg(feature = "global-defaults")]
+    #[test]
+    fn explicit_paths_do_not_initialize_the_default_context() {
+        let before = defaults::default_context_hits();
+        let context = context();
+        context.with_backend(|backend| assert_eq!(backend.num_threads(), 1));
+        context.eager_runtime().unwrap();
+        assert_eq!(defaults::default_context_hits(), before);
     }
 }
