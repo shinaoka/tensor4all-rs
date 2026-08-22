@@ -53,7 +53,7 @@ Every task below ends with, at minimum: `cargo fmt --all -- --check` clean and `
 - Produces: `fn two_incoming_core_matrix_batched<T: TreeAciScalar>(core: &PreparedCore<T>, outgoing_axis: usize, incoming_axis_1: usize, incoming_axis_2: usize, physical_base_offset: usize, outgoing_dim: usize, incoming_dim_1: usize, incoming_dim_2: usize, v1: &Matrix<T>, v2: &Matrix<T>) -> Result<Matrix<T>>` — `v1` is `incoming_dim_1 x n1`, `v2` is `incoming_dim_2 x n2`; returns a `(outgoing_dim * n1) x n2` matrix where `result[[outgoing_dim * n1_index + out, n2_index]]` equals what `contract_prepared_core` would produce at `out` for the `(n1_index, n2_index)` pair.
 - Consumes: existing `single_incoming_core_matrix`, `contract_prepared_core_batched`, `PreparedCore` (all already in `frames.rs`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `crates/tensor4all-treeaci/src/frames/tests/mod.rs`, near `star_tree_for_fallback_dispatch`:
 
@@ -144,12 +144,12 @@ fn two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --release -p tensor4all-treeaci --lib frames::tests::two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair`
 Expected: FAIL to compile — `two_incoming_core_matrix_batched` does not exist yet.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Insert into `crates/tensor4all-treeaci/src/frames.rs`, immediately after `contract_prepared_core_batched`'s closing `}` (currently line 1165) and before `fn outgoing_bond<'a, V: TreeAciNode>`:
 
@@ -200,12 +200,12 @@ fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
 
 Also make `contract_prepared_core`, `outgoing_bond`, `axis_of`, and `prepare_cores` reachable from the test module at their current `pub(crate)`/private visibility — they already are, since `frames/tests/mod.rs` uses `super::` to reach other private items in this file (see existing use of `super::InputFrameStore`, `super::prepare_cores` pattern already present in `build_frame_builder`). No visibility changes should be needed; if the compiler disagrees, add `pub(crate)` (or `pub(super)`) only to the specific item that fails to resolve, not broadly.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --release -p tensor4all-treeaci --lib frames::tests::two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair -- --nocapture`
 Expected: PASS. If it fails with a numeric mismatch (not a compile error), the bug is in the offset/reshape bookkeeping in `two_incoming_core_matrix_batched` — check `stride_2` is `core.strides[incoming_axis_2]` (not axis_1), and that `stage1_data` is appended in `i2` order (so `stage1_matrix`'s columns are indexed by `i2`, matching `contract_prepared_core_batched`'s expectation that its second argument's rows are the axis being contracted).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cargo fmt --all
@@ -225,13 +225,13 @@ git commit -m "feat(treeaci): add batched two-incoming-edge core contraction pri
 - Consumes: `two_incoming_core_matrix_batched` (Task 1), `InputFrameStore::frame_values` (existing), `InputFrameStore::candidate_cache`/`candidate_cache_bytes` (existing fields).
 - Produces: `InputFrameStore::candidate_frames_for_edge_two_incoming(&self, inputs, problem, input, directed_edge, candidates: &[ComponentSample]) -> Result<Vec<Vec<T>>>` — same contract as `candidate_frames_for_edge` (one frame vector per input candidate, same order), used only when the edge has exactly two incoming edges.
 
-- [ ] **Step 1: Adapt the existing branch test to assert against the new path (still red — the code hasn't changed yet)**
+- [x] **Step 1: Adapt the existing branch test to assert against the new path (still red — the code hasn't changed yet)**
 
 In `crates/tensor4all-treeaci/src/frames/tests/mod.rs`, rename
 `candidate_frames_for_edge_falls_back_on_a_branch_edge_with_two_incoming_edges`
 to `candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges` and update its doc comment (the one above `star_tree_for_fallback_dispatch` references it by name, at line 583 — update that cross-reference too). The test body's assertions (`dispatched == scalar`) stay exactly as they are — they already compare `candidate_frames_for_edge`'s output against `candidate_frame`'s scalar output, which is exactly what proves the new batched path is correct once wired in. This step is a rename/doc-only change; it does not need to "fail" first since the behavior under test doesn't change yet — skip to Step 2.
 
-- [ ] **Step 2: Write the new 3-incoming-edges-still-scalar fixture and test**
+- [x] **Step 2: Write the new 3-incoming-edges-still-scalar fixture and test**
 
 Add to `crates/tensor4all-treeaci/src/frames/tests/mod.rs`, after the (renamed) two-incoming test:
 
@@ -314,12 +314,12 @@ fn candidate_frames_for_edge_still_falls_back_on_three_incoming_edges() {
 }
 ```
 
-- [ ] **Step 3: Run both tests to confirm current (pre-wiring) behavior**
+- [x] **Step 3: Run both tests to confirm current (pre-wiring) behavior**
 
 Run: `cargo test --release -p tensor4all-treeaci --lib frames::tests::candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges frames::tests::candidate_frames_for_edge_still_falls_back_on_three_incoming_edges -- --nocapture`
 Expected: both PASS already (the dispatch hasn't changed yet, so both still exercise the old scalar fallback and trivially agree with themselves). This confirms the test fixtures compile and are meaningful before the dispatch change makes the two-incoming one actually exercise new code.
 
-- [ ] **Step 4: Add the new orchestration method and wire the dispatch**
+- [x] **Step 4: Add the new orchestration method and wire the dispatch**
 
 In `crates/tensor4all-treeaci/src/frames.rs`, replace the fallback check at the top of `candidate_frames_for_edge` (currently):
 
@@ -560,12 +560,12 @@ Then insert this new method into the `impl<T: TreeAciScalar> InputFrameStore<T>`
     }
 ```
 
-- [ ] **Step 5: Run tests to verify the new path is correct**
+- [x] **Step 5: Run tests to verify the new path is correct**
 
 Run: `cargo test --release -p tensor4all-treeaci --lib frames:: -- --nocapture`
 Expected: PASS, including `candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges` (now genuinely exercising the new batched code, since `directed.incoming_to_from.len() == 2` on that fixture's edge `0 -> 1`) and `candidate_frames_for_edge_still_falls_back_on_three_incoming_edges` (unaffected, still scalar). If the two-incoming test fails on a value mismatch, re-check `candidate_frames_for_edge_two_incoming`'s `n1`/`n2` indexing against `two_incoming_core_matrix_batched`'s documented output layout (`out + outgoing_dim * n1`, column `n2`).
 
-- [ ] **Step 6: Update the function's doc comment**
+- [x] **Step 6: Update the function's doc comment**
 
 `candidate_frames_for_edge`'s doc comment (currently starting "Computes every candidate's frame vector for one input and directed edge, using the batched BLAS path ... when the edge's source node has exactly one incoming edge, and falling back to the scalar ... path ... otherwise.") needs updating to describe the new three-way dispatch. Replace the first paragraph with:
 
@@ -583,7 +583,7 @@ Expected: PASS, including `candidate_frames_for_edge_batches_a_branch_edge_with_
     /// `docs/worklogs/2026-08-22-treeaci-branch-batched-frames.md`).
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cargo fmt --all
@@ -603,11 +603,11 @@ git commit -m "feat(treeaci): batch candidate_frames_for_edge's two-incoming-edg
 - Consumes: `two_incoming_core_matrix_batched` (Task 1), `FrameBuilder::compute` (existing, for priming), `FrameBuilder::outgoing_bond` (existing), `FrameBuilder::memo` (existing field).
 - Produces: `FrameBuilder::compute_batch_two_incoming(&mut self, edge: DirectedEdgeId, samples: std::ops::Range<SampleId>) -> Result<()>` — same contract as `compute_batch`: every result lands in `self.memo[edge]`.
 
-- [ ] **Step 1: Rename the existing branch test**
+- [x] **Step 1: Rename the existing branch test**
 
 In `crates/tensor4all-treeaci/src/frames/tests/mod.rs`, rename `compute_batch_falls_back_correctly_on_a_branch_edge` (around line 1125) to `compute_batch_batches_a_branch_edge_with_two_incoming_edges`. Update its doc comment and the cross-reference in `compute_batch`'s own doc comment (the one describing its dispatch) accordingly. Leave the test body's assertions unchanged for now — same rationale as Task 2 Step 1.
 
-- [ ] **Step 2: Add a 3-incoming-edges-still-scalar test for `compute_batch`**
+- [x] **Step 2: Add a 3-incoming-edges-still-scalar test for `compute_batch`**
 
 Add to `crates/tensor4all-treeaci/src/frames/tests/mod.rs`, near the renamed test:
 
@@ -647,12 +647,12 @@ fn compute_batch_still_falls_back_on_three_incoming_edges() {
 }
 ```
 
-- [ ] **Step 3: Run both tests to confirm current (pre-wiring) behavior**
+- [x] **Step 3: Run both tests to confirm current (pre-wiring) behavior**
 
 Run: `cargo test --release -p tensor4all-treeaci --lib frames::tests::compute_batch_batches_a_branch_edge_with_two_incoming_edges frames::tests::compute_batch_still_falls_back_on_three_incoming_edges -- --nocapture`
 Expected: both PASS (dispatch not yet changed).
 
-- [ ] **Step 4: Add the new orchestration method and wire the dispatch**
+- [x] **Step 4: Add the new orchestration method and wire the dispatch**
 
 In `crates/tensor4all-treeaci/src/frames.rs`, inside `FrameBuilder::compute_batch`, replace:
 
@@ -853,7 +853,7 @@ Then insert this new method into `impl<T: TreeAciScalar, V: TreeAciNode> FrameBu
     }
 ```
 
-- [ ] **Step 5: Run tests to verify the new path is correct**
+- [x] **Step 5: Run tests to verify the new path is correct**
 
 Run: `cargo test --release -p tensor4all-treeaci --lib frames:: -- --nocapture`
 Expected: PASS, including `compute_batch_batches_a_branch_edge_with_two_incoming_edges` (now genuinely exercising the new code) and `compute_batch_still_falls_back_on_three_incoming_edges`. Also re-run the full crate suite once here, since `compute_batch` is used by `InputFrameStore::from_samples`/`extend`, which many other existing tests (`extend_matches_a_full_rebuild_on_the_grown_arena`, `extend_reuses_unchanged_edges_via_rc_instead_of_rebuilding_them`, etc.) depend on transitively for any fixture with a 2-incoming-edge node (e.g. `y_tree`, `star_tree_for_fallback_dispatch`):
@@ -861,11 +861,11 @@ Expected: PASS, including `compute_batch_batches_a_branch_edge_with_two_incoming
 Run: `cargo test --release -p tensor4all-treeaci --no-fail-fast`
 Expected: all green, no regressions in the extend/rebuild parity tests.
 
-- [ ] **Step 6: Update `compute_batch`'s doc comment**
+- [x] **Step 6: Update `compute_batch`'s doc comment**
 
 `compute_batch`'s doc comment currently says: "using the batched BLAS path ... when `edge`'s source node has exactly one incoming edge ... and falling back to [`Self::compute`] per sample otherwise (0 or >=2 incoming edges)." Update the parenthetical to: "and falling back to [`Self::compute`] per sample otherwise (0 incoming edges, or 3+)." and add a sentence referencing the new two-incoming case and `compute_batch_two_incoming`, matching Task 2 Step 6's edit to `candidate_frames_for_edge`'s doc comment in tone.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cargo fmt --all
@@ -885,7 +885,7 @@ git commit -m "feat(treeaci): batch compute_batch's two-incoming-edge branch dis
 - Consumes: everything from Tasks 1-3.
 - Produces: a worklog entry following this repo's existing treeaci worklog convention (see `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`, `docs/worklogs/2026-08-21-treeaci-message-cache-budget.md` for style/structure).
 
-- [ ] **Step 1: Full crate verification**
+- [x] **Step 1: Full crate verification**
 
 ```bash
 cargo fmt --all -- --check
@@ -896,7 +896,7 @@ cargo doc -p tensor4all-treeaci --no-deps
 
 Expected: all clean/green. If clippy flags the new `HashMap<SampleId, usize>` closures (`or_insert_with` capturing `ids_1`/`ids_2` by mutable reference) with a lint about entry-API style, resolve by following clippy's suggestion rather than allowing the lint, unless the suggestion would change behavior (it should not here).
 
-- [ ] **Step 2: Measure the actual improvement**
+- [x] **Step 2: Measure the actual improvement**
 
 Reuse the star fixture at larger scale (mirroring the investigation's diagnostic, this time comparing the *now-fixed* `candidate_frames_for_edge` against a manual per-candidate loop over the still-unchanged `candidate_frame` scalar method, both reachable through the existing public-to-the-module API — no temporary test code needed, since both entry points are permanent). Write a small `#[ignore]`d benchmark-style test (kept this time, not reverted, since it directly answers issue #671's "Suggested next step" for a reproducible branching-tree measurement) in `crates/tensor4all-treeaci/src/frames/tests/mod.rs`:
 
@@ -992,11 +992,11 @@ Run: `cargo test --release -p tensor4all-treeaci --lib frames::tests::branch_poi
 
 Record the printed speedup number for the worklog (Step 3). Note this test intentionally shares `assert_eq!(batched, scalar)` as a correctness belt-and-braces check even though Tasks 1-3's tests already cover this; keep it since it's the number that answers #671.
 
-- [ ] **Step 3: Write the worklog**
+- [x] **Step 3: Write the worklog**
 
 Create `docs/worklogs/2026-08-22-treeaci-branch-batched-frames.md` with: the root cause (dispatch condition in `frames.rs`, cross-referencing `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`'s prior note that this was left unresolved), the matched-FLOP diagnostic numbers from the investigation (1.76x/3.61x/4.17x at D=64/256/1024), the fix (this plan's Tasks 1-3), and the Step 2 measurement's actual speedup number -- fill in the real number from the run, do not estimate it. Follow the existing worklog files' structure (problem statement, root cause, fix, verification, results table).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cargo fmt --all
