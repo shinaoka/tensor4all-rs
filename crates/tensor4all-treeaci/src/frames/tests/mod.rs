@@ -1604,3 +1604,96 @@ fn extend_reuses_unchanged_edges_via_rc_instead_of_rebuilding_them() {
     assert_eq!(extended.records(), rebuilt.records());
     assert_eq!(extended.retained_bytes(), rebuilt.retained_bytes());
 }
+
+/// Reproduces #671's core question directly inside the crate: at a
+/// 2-incoming-edge branch point, how much faster is the batched path
+/// (`candidate_frames_for_edge`, since the two-incoming dispatch fix) than
+/// looping the scalar `candidate_frame` path per candidate (the code path
+/// every branch point used before this fix, and what 3+-incoming nodes
+/// still use today)? Not run by default (`#[ignore]`): it is a timing
+/// report, not a correctness gate. Run explicitly with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
+    use std::time::Instant;
+
+    let s0 = DynIndex::new_dyn(1);
+    let s1 = DynIndex::new_dyn(1);
+    let m = 40usize;
+    let d = 32usize;
+    let s2 = DynIndex::new_dyn(m);
+    let s3 = DynIndex::new_dyn(m);
+    let bond01 = DynIndex::new_dyn(4);
+    let bond02 = DynIndex::new_dyn(d);
+    let bond03 = DynIndex::new_dyn(d);
+    let node0 = IdxTensor::from_dense(
+        vec![s0, bond01.clone(), bond02.clone(), bond03.clone()],
+        (0..4 * d * d).map(|v| v as f64).collect(),
+    )
+    .unwrap();
+    let node1 =
+        IdxTensor::from_dense(vec![bond01, s1], (0..4).map(|v| v as f64).collect()).unwrap();
+    let node2 =
+        IdxTensor::from_dense(vec![bond02, s2], (0..d * m).map(|v| v as f64).collect()).unwrap();
+    let node3 =
+        IdxTensor::from_dense(vec![bond03, s3], (0..d * m).map(|v| v as f64).collect()).unwrap();
+    let star = TreeTN::from_tensors(vec![node0, node1, node2, node3], vec![0, 1, 2, 3]).unwrap();
+
+    let inputs = vec![star];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .unwrap();
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+
+    let seeds: Vec<Vec<usize>> = (0..m).map(|i| vec![0, 0, i, i]).collect();
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+
+    let incoming_a = directed.incoming_to_from[0];
+    let incoming_b = directed.incoming_to_from[1];
+    let ids_a = &candidate_sets.ids[incoming_a];
+    let ids_b = &candidate_sets.ids[incoming_b];
+    let mut candidates = Vec::new();
+    for &id_a in ids_a {
+        for &id_b in ids_b {
+            candidates.push(ComponentSample {
+                local_coordinate: 0,
+                incoming: vec![(incoming_a, id_a), (incoming_b, id_b)],
+            });
+        }
+    }
+
+    // Independent `InputFrameStore`s, each with its own fresh
+    // `candidate_cache`: sharing one store across both timed sections would
+    // let whichever path runs first populate the cache and make the second
+    // path measure cache hits instead of real computation.
+    let batched_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let batched_start = Instant::now();
+    let batched = batched_frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let batched_elapsed = batched_start.elapsed();
+
+    let scalar_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let scalar_start = Instant::now();
+    let scalar: Vec<Vec<f64>> = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect();
+    let scalar_elapsed = scalar_start.elapsed();
+
+    assert_eq!(batched, scalar);
+    eprintln!(
+        "batched (two-incoming fix): {batched_elapsed:?}\nscalar (old fallback, still used for 3+ incoming): {scalar_elapsed:?}\nspeedup: {:.2}x",
+        scalar_elapsed.as_secs_f64() / batched_elapsed.as_secs_f64()
+    );
+}
