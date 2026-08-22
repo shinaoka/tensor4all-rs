@@ -1563,6 +1563,7 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
 /// `[outgoing_dim * n1_index, outgoing_dim * (n1_index + 1))`, holds the
 /// `outgoing_dim`-length frame vector [`contract_prepared_core`] would
 /// produce for the `(n1_index, n2)` candidate alone.
+#[allow(clippy::too_many_arguments)]
 fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
     core: &PreparedCore<T>,
     outgoing_axis: usize,
