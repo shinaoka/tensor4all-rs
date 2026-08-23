@@ -1,12 +1,14 @@
 //! Native TreeTN initialization for tree ACI state.
 
+use std::collections::HashMap;
+
 use rand::{rngs::StdRng, SeedableRng};
 use rand_distr::{Distribution, StandardNormal};
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    problem::{DirectedEdgeId, PreparedTreeProblem},
+    problem::{enforce_limit, DirectedEdgeId, PreparedTreeProblem},
     samples::{CandidateSets, PivotPairs, SampleArena},
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar,
 };
@@ -66,13 +68,12 @@ pub(crate) fn initial_edge_ranks<V: TreeAciNode>(
 pub(crate) fn algebraic_edge_bounds<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
 ) -> Result<Vec<usize>> {
+    let dimensions = component_dimensions(problem)?;
     (0..problem.directed_edges.len())
         .step_by(2)
         .map(|forward| {
             let reverse = problem.directed_edges[forward].reverse;
-            Ok(component_dimension(problem, forward)?
-                .min(component_dimension(problem, reverse)?)
-                .max(1))
+            Ok(dimensions[forward].min(dimensions[reverse]).max(1))
         })
         .collect()
 }
@@ -112,16 +113,28 @@ pub(crate) fn validate_initial_guess<T: TreeAciScalar, V: TreeAciNode>(
             })?;
         let elements = checked_product(tensor.indices().iter().map(IndexLike::dim), "guess core")?;
         enforce_limit("core elements", elements, options.max_core_elements)?;
-        tensor
-            .to_vec::<T>()
-            .map_err(|error| TreeAciError::InvalidInitialGuess {
-                message: error.to_string(),
-            })?;
+        validate_initial_guess_scalar_kind::<T>(tensor)?;
     }
     guess
         .verify_internal_consistency()
         .map_err(|error| TreeAciError::InvalidInitialGuess {
             message: error.to_string(),
+        })
+}
+
+fn validate_initial_guess_scalar_kind<T: TreeAciScalar>(tensor: &IdxTensor) -> Result<()> {
+    // `to_vec::<T>()` also validates the dtype, but doing so here would copy
+    // every core only to discard its values. A representative scalar exercises
+    // the same `TreeAciScalar` conversion contract without rank-dependent work.
+    let representative = if tensor.is_complex() {
+        AnyScalar::new_complex(0.0, 1.0)
+    } else {
+        AnyScalar::new_real(0.0)
+    };
+    T::from_evaluated_scalar(representative)
+        .map(|_| ())
+        .map_err(|message| TreeAciError::InvalidInitialGuess {
+            message: message.into(),
         })
 }
 
@@ -135,6 +148,21 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
         .iter()
         .map(|rank| DynIndex::new_dyn(*rank))
         .collect::<Vec<_>>();
+    let mut replacement_bonds = HashMap::with_capacity(ranks.len());
+    for (edge_number, replacement) in output_bonds.iter().enumerate() {
+        let edge = &problem.directed_edges[2 * edge_number];
+        let graph_edge = reference.edge_between(&edge.from, &edge.to).ok_or(
+            TreeAciError::InternalInvariant {
+                message: "output reference is missing a prepared edge",
+            },
+        )?;
+        let bond = reference
+            .bond_index(graph_edge)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "output reference edge has no bond index",
+            })?;
+        replacement_bonds.insert(bond.clone(), replacement.clone());
+    }
     let mut rng = StdRng::seed_from_u64(options.rng_seed);
     let mut tensors = Vec::with_capacity(problem.node_order.len());
     for node in &problem.node_order {
@@ -160,18 +188,11 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
                 indices.push(index.clone());
                 continue;
             }
-            let replacement = (0..ranks.len()).find_map(|edge_number| {
-                let edge = &problem.directed_edges[2 * edge_number];
-                if &edge.from != node && &edge.to != node {
-                    return None;
-                }
-                let graph_edge = reference.edge_between(&edge.from, &edge.to)?;
-                (reference.bond_index(graph_edge)? == index)
-                    .then(|| output_bonds[edge_number].clone())
-            });
-            indices.push(replacement.ok_or(TreeAciError::InternalInvariant {
-                message: "reference tensor has a nonphysical axis with no tree edge",
-            })?);
+            indices.push(replacement_bonds.get(index).cloned().ok_or(
+                TreeAciError::InternalInvariant {
+                    message: "reference tensor has a nonphysical axis with no tree edge",
+                },
+            )?);
         }
         let elements = checked_product(indices.iter().map(IndexLike::dim), "output core")?;
         enforce_limit("core elements", elements, options.max_core_elements)?;
@@ -208,10 +229,16 @@ pub(crate) fn bootstrap_samples<V: TreeAciNode>(
             });
         }
         let nodes = component_nodes(problem, edge)?;
-        let space = checked_product(
-            nodes.iter().map(|node| problem.physical[*node].local_dim),
-            "component sample space",
-        )?;
+        // Bootstrap only needs to know whether the component contains enough
+        // distinct points to reach this edge's finite target rank. Computing
+        // the full physical-space product rejects long valid chains once the
+        // mathematical dimension exceeds `usize`, even when the requested
+        // bond rank is tiny. Cap the product at the only value this loop uses.
+        let space = nodes.iter().fold(1usize, |product, node| {
+            product
+                .saturating_mul(problem.physical[*node].local_dim)
+                .min(targets[edge])
+        });
         let mut ordinal = 1usize;
         while candidates.ids[edge].len() < targets[edge] && ordinal < space {
             let mut point = vec![0; problem.node_order.len()];
@@ -251,27 +278,44 @@ pub(crate) fn bootstrap_samples<V: TreeAciNode>(
     Ok((arena, candidates, pivots))
 }
 
-fn component_dimension<V: TreeAciNode>(
-    problem: &PreparedTreeProblem<V>,
-    edge: DirectedEdgeId,
-) -> Result<usize> {
-    checked_product(
-        component_nodes(problem, edge)?
-            .into_iter()
-            .map(|node| problem.physical[node].local_dim),
-        "algebraic cut dimension",
-    )
+fn component_dimensions<V: TreeAciNode>(problem: &PreparedTreeProblem<V>) -> Result<Vec<usize>> {
+    let edge_count = problem.directed_edges.len();
+    let mut dimensions = vec![0usize; edge_count];
+    for &edge_id in &problem.directed_dependency_order {
+        let edge = &problem.directed_edges[edge_id];
+        let node =
+            *problem
+                .node_positions
+                .get(&edge.from)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "component edge source has no prepared node position",
+                })?;
+        dimensions[edge_id] = edge.incoming_to_from.iter().try_fold(
+            problem.physical[node].local_dim,
+            |dimension, incoming| {
+                // This is an algebraic rank ceiling, not an allocation size.
+                // Once the exact mathematical dimension exceeds `usize`, the
+                // largest representable ceiling is sufficient for every later
+                // min with an actual/configured bond rank.
+                Ok::<usize, TreeAciError>(dimension.saturating_mul(dimensions[*incoming]))
+            },
+        )?;
+    }
+    if dimensions.contains(&0) {
+        return Err(TreeAciError::InternalInvariant {
+            message: "directed component dependencies contain a cycle",
+        });
+    }
+    Ok(dimensions)
 }
 
 fn component_nodes<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     edge: DirectedEdgeId,
 ) -> Result<Vec<usize>> {
-    fn visit<V: TreeAciNode>(
-        problem: &PreparedTreeProblem<V>,
-        edge: DirectedEdgeId,
-        nodes: &mut Vec<usize>,
-    ) -> Result<()> {
+    let mut nodes = Vec::new();
+    let mut pending = vec![edge];
+    while let Some(edge) = pending.pop() {
         let directed = &problem.directed_edges[edge];
         let node =
             *problem
@@ -281,13 +325,8 @@ fn component_nodes<V: TreeAciNode>(
                     message: "component edge source has no prepared node position",
                 })?;
         nodes.push(node);
-        for incoming in &directed.incoming_to_from {
-            visit(problem, *incoming, nodes)?;
-        }
-        Ok(())
+        pending.extend(directed.incoming_to_from.iter().copied());
     }
-    let mut nodes = Vec::new();
-    visit(problem, edge, &mut nodes)?;
     nodes.sort_unstable();
     Ok(nodes)
 }
@@ -301,17 +340,6 @@ fn checked_product(
             .checked_mul(value)
             .ok_or(TreeAciError::SizeOverflow { context })
     })
-}
-
-fn enforce_limit(resource: &'static str, requested: usize, limit: usize) -> Result<()> {
-    if requested > limit {
-        return Err(TreeAciError::ResourceLimit {
-            resource,
-            requested,
-            limit,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

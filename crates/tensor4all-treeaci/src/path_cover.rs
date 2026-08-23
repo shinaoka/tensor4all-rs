@@ -1,9 +1,5 @@
 //! Deterministic continuous minimum-retracing walks for tree sweeps.
 
-// INVARIANT: this module is the tested scheduler seam consumed by the next
-// prepared-problem implementation phase; no public entry point exists yet.
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 
 use thiserror::Error;
@@ -118,11 +114,6 @@ impl SweepPlan {
         validate_pass(&self.reverse, edges)?;
         validate_round(&self.forward, &self.reverse, edges)?;
         Ok(())
-    }
-
-    #[cfg(test)]
-    fn path_count(&self) -> usize {
-        self.forward.iter().map(|phase| phase.paths.len()).sum()
     }
 }
 

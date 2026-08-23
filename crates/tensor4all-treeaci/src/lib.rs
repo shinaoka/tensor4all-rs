@@ -7,23 +7,14 @@
 //!
 //! # Maturity
 //!
-//! **This is not yet a drop-in replacement for `tensor4all-aci`.** On a chain,
-//! where the two are directly comparable, it reaches the same accuracy at the
-//! same or lower rank for no more function evaluations, and now converges in
-//! a comparable number of sweeps (0.7x-1.3x `tensor4all-aci`'s sweep count on
-//! `treeaci_parity`'s chain, bond dimension 16 through 128 -- down from
-//! 1.7x-2.5x before `convergence_criterion` was changed to match
-//! `tensor4all-aci`'s network-wide scalar max-rank stopping rule instead of
-//! requiring every individual edge's rank to be simultaneously
-//! non-increasing). It still remains slower end to end (a fresh run of
-//! `treeaci_parity` measured roughly 1.5x-2.1x wall time on the chain across
-//! bond dimension 16 through 256, with host-sensitive absolute timings), but
-//! the gap is no longer chiefly a sweep-count effect -- it now reflects the
-//! per-sweep cost described below.
+//! **This is not yet a drop-in replacement for `tensor4all-aci`.** Chain
+//! parity tests cover accuracy, rank, and function-evaluation behavior, but
+//! end-to-end timing remains host- and workload-sensitive and should be
+//! measured for the intended problem.
 //! `InputFrameStore::build_or_extend` used to rebuild every directed edge's
 //! frame storage on every call: for an edge whose sample count had not
 //! changed since the previous call, it eagerly copied every already-known
-//! sample out of the previous store into a fresh `Matrix` and back out again
+//! sample out of the previous store into a fresh matrix and back out again
 //! -- pure data movement with zero arithmetic, measured at 36.6% of total
 //! wall time at chi=256. It now decides per edge: an edge whose sample count
 //! is unchanged shares the previous store's `Rc<DirectedFrame<T>>`
@@ -38,13 +29,17 @@
 //! `InputFrameStore::build_or_extend` retains edge-index order for accounting
 //! and reuse decisions, but now materializes missing directed frames in
 //! dependency order, so ancestor samples reach the batched path before a
-//! dependent edge can prime them. Multi-incoming-edge nodes (genuine tree
-//! branch points, not exercised by the chain benchmark) still use the
-//! original per-candidate/per-sample scalar path throughout.
+//! dependent edge can prime them. Nodes with exactly two incoming edges use a
+//! batched branch contraction; leaf nodes and nodes with three or more incoming
+//! edges retain the scalar fallback.
+//! Guard input evaluators persist across scans, reuse directed messages, and
+//! share a bounded aggregate message-cache budget with each scan's output
+//! evaluator.
 //!
-//! Prefer `tensor4all-aci` for chain topologies. Use this crate when the
-//! topology is genuinely a tree, where the alternative is not a slower run but
-//! no run at all.
+//! `tensor4all-aci` remains the narrower chain-specific API. Chain performance
+//! between the two implementations is workload-dependent, so use the paired
+//! benchmark when that distinction matters. This crate is the native choice
+//! for genuinely branched trees.
 
 mod batch;
 mod elementwise;

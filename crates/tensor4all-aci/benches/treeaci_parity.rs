@@ -7,13 +7,9 @@
 //! would fix. At small bond dimension almost all of the cost is a per-call
 //! constant, so such a defect is invisible there; this runs at 16 through 128.
 //!
-//! Neither arm is given an initial guess. The registered design seeded both from
-//! the same converted guess, but `tree_elementwise` rejects a guess whose rank
-//! matches the inputs' with `canonicalize: factorization failed` (a singular
-//! fixed-pivot solve), while `tensor4all-aci` accepts the same object. Guesses of
-//! rank 1 and 2 are accepted, so the failure is rank-dependent. Running both arms
-//! unseeded keeps the comparison paired; the rejection is reported separately as
-//! a defect rather than worked around silently.
+//! Both arms start from the same first input, converted to their native network
+//! type. This keeps initialization, numerical state, and canonicalization work
+//! matched rather than comparing two unrelated random pivot trajectories.
 //!
 //! It lives here rather than beside `tensor4all-treeaci` because that crate's
 //! own test asserts its manifest does not mention `tensor4all-aci`. The
@@ -51,9 +47,8 @@ fn link_dims(n_sites: usize, local_dim: usize, chi: usize) -> Vec<usize> {
 /// Deterministic, well-conditioned cores, verbatim from the neighbouring
 /// `elementwise_scaling` benchmark so the two are comparable.
 ///
-/// The full mixing matters: a shortened version of this made the bond matrices
-/// rank-deficient at chi = 128 and the tree arm's canonicalization failed with a
-/// singular solve.
+/// The full mixing keeps the high-rank cases non-degenerate, so the benchmark
+/// measures interpolation work instead of accidental rank collapse.
 #[allow(clippy::too_many_arguments)]
 fn core_value(
     input_index: usize,
@@ -250,11 +245,23 @@ fn bench_parity(c: &mut Criterion) {
         // Report rank and termination once per case, outside the timing loop, so
         // a case where an arm failed to converge is visible rather than merely
         // fast.
-        let train =
-            elementwise_batched(multiply_train, &case.trains, &train_options(None)).unwrap();
-        let tree =
-            tree_elementwise_batched::<f64, _, _>(multiply_tree, &case.trees, &tree_options(None))
-                .unwrap();
+        let mut train_evaluated_points = 0u64;
+        let train = elementwise_batched(
+            |batch, output| {
+                train_evaluated_points = train_evaluated_points
+                    .saturating_add(u64::try_from(batch.n_points()).unwrap_or(u64::MAX));
+                multiply_train(batch, output)
+            },
+            &case.trains,
+            &train_options(Some(case.trains[0].clone())),
+        )
+        .unwrap();
+        let tree = tree_elementwise_batched::<f64, _, _>(
+            multiply_tree,
+            &case.trees,
+            &tree_options(Some(case.trees[0].clone())),
+        )
+        .unwrap();
         let accuracy = accuracy_oracle(&case, &train, &tree);
         println!(
             "chi={chi:<4} train: rank {:>5} err {:.3e} sweeps {:>2} | tree: rank {:>5} err {:.3e} sweeps {:>2} ({:?})",
@@ -267,7 +274,8 @@ fn bench_parity(c: &mut Criterion) {
             tree.termination,
         );
         println!(
-            "         tree: evaluated_points {} | frame records {} | frame bytes {}",
+            "         evaluated_points: train {} | tree {} | tree frame records {} | frame bytes {}",
+            train_evaluated_points,
             tree.diagnostics.evaluated_points,
             tree.diagnostics.frame_records,
             tree.diagnostics.frame_retained_bytes
@@ -295,7 +303,7 @@ fn bench_parity(c: &mut Criterion) {
                 elementwise_batched(
                     multiply_train,
                     black_box(&case.trains),
-                    &train_options(None),
+                    &train_options(Some(case.trains[0].clone())),
                 )
                 .unwrap()
             })
@@ -305,7 +313,7 @@ fn bench_parity(c: &mut Criterion) {
                 tree_elementwise_batched::<f64, _, _>(
                     multiply_tree,
                     black_box(&case.trees),
-                    &tree_options(None),
+                    &tree_options(Some(case.trees[0].clone())),
                 )
                 .unwrap()
             })

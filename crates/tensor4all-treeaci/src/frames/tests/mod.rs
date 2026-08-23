@@ -341,6 +341,59 @@ fn candidate_frame_stays_correct_when_the_shared_budget_has_no_headroom_for_cach
     assert_eq!(super::candidate_debug_stats::hits(), 0);
 }
 
+/// Growing mandatory directed frames must reclaim an older optional
+/// candidate cache before publishing a store over `max_frame_bytes`.
+#[test]
+fn extend_reclaims_candidate_cache_when_base_frames_consume_its_budget() {
+    let input = two_node_tree::<f64>();
+    let candidate_entry_bytes =
+        std::mem::size_of::<super::CandidateCacheKey>() + 2 * std::mem::size_of::<f64>();
+    let initial_frame_bytes = 32;
+    let frame_budget = initial_frame_bytes + candidate_entry_bytes;
+    let problem = prepare_problem(
+        std::slice::from_ref(&input),
+        &TreeAciOptions {
+            max_frame_bytes: frame_budget,
+            ..TreeAciOptions::default()
+        },
+    )
+    .unwrap();
+    let seed0 = vec![0, 0];
+    let seed1 = vec![1, 1];
+    let (mut arena, mut candidates) =
+        SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+    let frames =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .unwrap();
+    let candidate = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![],
+    };
+
+    frames
+        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .unwrap();
+    assert_eq!(frames.retained_bytes(), frame_budget);
+
+    arena
+        .inject_global_point(&mut candidates, &problem, &seed1)
+        .unwrap();
+    let extended = frames
+        .extend(std::slice::from_ref(&input), &problem, &arena)
+        .unwrap();
+
+    assert_eq!(extended.retained_bytes(), 64);
+    assert_eq!(extended.candidate_cache_bytes.get(), 0);
+    assert!(extended.candidate_cache.borrow().is_empty());
+
+    super::candidate_debug_stats::reset();
+    extended
+        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .unwrap();
+    assert_eq!(super::candidate_debug_stats::misses(), 1);
+    assert_eq!(super::candidate_debug_stats::hits(), 0);
+}
+
 /// The frame cache is bounded in aggregate, not only per frame.
 ///
 /// `max_frame_elements` bounds one directed frame, but the cache retains one
@@ -791,6 +844,52 @@ fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     assert!(dispatched.iter().any(|frame| frame != &dispatched[0]));
 }
 
+#[test]
+fn two_incoming_candidate_batch_obeys_the_working_byte_limit() {
+    let inputs = vec![star_tree_for_fallback_dispatch()];
+    let mut problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .unwrap();
+    let directed = &problem.directed_edges[edge];
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let mut candidates = Vec::new();
+    for &sample_1 in &candidate_sets.ids[directed.incoming_to_from[0]] {
+        for &sample_2 in &candidate_sets.ids[directed.incoming_to_from[1]] {
+            candidates.push(ComponentSample {
+                local_coordinate: 0,
+                incoming: vec![
+                    (directed.incoming_to_from[0], sample_1),
+                    (directed.incoming_to_from[1], sample_2),
+                ],
+            });
+        }
+    }
+    let scratch_bytes = frames
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .unwrap()
+        * std::mem::size_of::<f64>();
+    assert!(scratch_bytes > 0);
+    problem.max_working_bytes = scratch_bytes - 1;
+
+    let error = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::TreeAciError::ResourceLimit {
+            resource: "working bytes",
+            requested,
+            limit,
+        } if requested == scratch_bytes && limit == scratch_bytes - 1
+    ));
+}
+
 /// 4-arm star: hub node 0 with three leaves plus a fourth arm, so directed
 /// edge `0 -> 1` has exactly three incoming edges (`2 -> 0`, `3 -> 0`,
 /// `4 -> 0`). Used to pin that 3+-incoming-edge dispatch still uses the
@@ -929,6 +1028,39 @@ fn chain_tree_for_batched_compute() -> TreeTN<IdxTensor, usize> {
     let node2 = IdxTensor::from_dense(vec![bond12, s2], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
 
     TreeTN::from_tensors(vec![node0, node1, node2], vec![0, 1, 2]).unwrap()
+}
+
+#[test]
+fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
+    let input = chain_tree_for_batched_compute();
+    let inputs = vec![input];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .unwrap();
+    let incoming_edge = problem.directed_edges[edge].incoming_to_from[0];
+    let (arena, candidate_sets) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let candidate = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![(incoming_edge, candidate_sets.ids[incoming_edge][0])],
+    };
+    let retained_before = frames.retained_bytes();
+
+    let result = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &[candidate.clone(), candidate])
+        .unwrap();
+
+    assert_eq!(result[0], result[1]);
+    assert_eq!(
+        frames.retained_bytes() - retained_before,
+        result[0].len() * std::mem::size_of::<f64>()
+            + std::mem::size_of::<super::CandidateCacheKey>()
+    );
+    assert_eq!(frames.candidate_cache.borrow().len(), 1);
 }
 
 /// `compute_batch` on a single-incoming-edge cut must produce exactly the
@@ -1207,7 +1339,7 @@ fn dependency_order_places_incoming_frames_before_dependents_on_a_star() {
     let input = star_tree_for_fallback_dispatch();
     let problem =
         prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
-    let order = super::dependency_order(&problem.directed_edges).unwrap();
+    let order = crate::problem::dependency_order(&problem.directed_edges).unwrap();
     assert_eq!(order.len(), problem.directed_edges.len());
 
     let mut positions = vec![0usize; order.len()];

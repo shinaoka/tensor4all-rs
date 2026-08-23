@@ -5,9 +5,9 @@ use tensor4all_treetn::{CanonicalForm, TreeTN};
 
 use super::{
     convergence_criterion, current_state_is_rank_limited, edge_error_metric,
-    global_injection_edges, run_directional_pass, run_local_sweeps, PassDirection,
+    global_injection_capacities, run_directional_pass, run_local_sweeps, PassDirection,
 };
-use crate::global_guard::InputEvaluators;
+use crate::global_guard::input_evaluator_debug_stats;
 use crate::transaction::update_edge_transaction;
 use crate::{state::TreeAciState, TreeAciError, TreeAciOptions, TreeAciTermination};
 
@@ -233,7 +233,7 @@ fn algebraically_saturated_cut_cannot_receive_global_rank_growth() {
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     assert_eq!(state.edge_ranks, vec![2]);
     assert_eq!(state.algebraic_edge_bounds, vec![2]);
-    assert_eq!(global_injection_edges(&state, &options), vec![false]);
+    assert_eq!(global_injection_capacities(&state, &options), vec![0]);
 
     state.edge_errors[0] = 1.0;
     state.edge_scales[0] = 1.0;
@@ -251,18 +251,13 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
     let converged_inputs = vec![product_tree(&[(0, 1), (1, 2)], 3)];
     let mut converged_state =
         TreeAciState::<f64, usize>::initialize(&converged_inputs, &converged_options).unwrap();
-    let mut converged_evaluators =
-        InputEvaluators::new(converged_state.inputs, &converged_state.problem).unwrap();
-    let converged = run_local_sweeps(
-        &mut converged_state,
-        &mut converged_evaluators,
-        &converged_options,
-        &mut identity,
-    )
-    .unwrap();
+    input_evaluator_debug_stats::reset();
+    let converged =
+        run_local_sweeps(&mut converged_state, &converged_options, &mut identity).unwrap();
     assert_eq!(converged.termination, TreeAciTermination::Converged);
     assert_eq!(converged.max_ranks.len(), 2);
     assert_eq!(converged.max_errors.len(), 2);
+    assert_eq!(input_evaluator_debug_stats::constructions(), 0);
 
     let limited_options = TreeAciOptions {
         enable_global_guard: false,
@@ -274,15 +269,7 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
     let limited_inputs = vec![rank_two_delta_tree()];
     let mut limited_state =
         TreeAciState::<f64, usize>::initialize(&limited_inputs, &limited_options).unwrap();
-    let mut limited_evaluators =
-        InputEvaluators::new(limited_state.inputs, &limited_state.problem).unwrap();
-    let limited = run_local_sweeps(
-        &mut limited_state,
-        &mut limited_evaluators,
-        &limited_options,
-        &mut identity,
-    )
-    .unwrap();
+    let limited = run_local_sweeps(&mut limited_state, &limited_options, &mut identity).unwrap();
     assert_eq!(limited.termination, TreeAciTermination::RankLimited);
     assert_eq!(limited.max_ranks, vec![1, 1]);
     assert!(limited.max_errors.iter().all(|error| *error > 1.0e-12));

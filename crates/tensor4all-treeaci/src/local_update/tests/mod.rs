@@ -3,7 +3,7 @@ use std::cell::Cell;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
-use super::{enumerate_candidates, materialize_and_factor_edge};
+use super::{enumerate_candidates, materialize_and_factor_edge, select_pivot_samples};
 use crate::{
     frames::InputFrameStore, problem::prepare_problem, samples::SampleArena, TreeAciError,
     TreeAciOptions,
@@ -29,6 +29,22 @@ fn two_node_tree_with_indices(
     .unwrap();
     let right = IdxTensor::from_dense(vec![bond, s1], vec![3.0, 4.0, 30.0, 40.0]).unwrap();
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
+#[test]
+fn pivot_indices_are_checked_before_selecting_samples() {
+    let candidate = crate::samples::ComponentSample {
+        local_coordinate: 1,
+        incoming: Vec::new(),
+    };
+    assert_eq!(
+        select_pivot_samples(vec![0], std::slice::from_ref(&candidate)).unwrap(),
+        vec![candidate]
+    );
+    assert!(matches!(
+        select_pivot_samples(vec![1], &[]),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
 }
 
 #[test]
@@ -61,7 +77,6 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
     let update = materialize_and_factor_edge(
         &inputs,
         &problem,
-        &arena,
         &active,
         &frames,
         0,
@@ -95,7 +110,6 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
         let update = materialize_and_factor_edge(
             &inputs,
             &problem,
-            &arena,
             &active,
             &frames,
             0,
@@ -133,7 +147,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
     };
     assert!(matches!(
         materialize_and_factor_edge(
-            &inputs, &problem, &arena, &active, &frames, 0, &options, true, &mut failing,
+            &inputs, &problem, &active, &frames, 0, &options, true, &mut failing,
         ),
         Err(TreeAciError::Callback { message }) if message == "sentinel"
     ));
@@ -147,7 +161,6 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
         materialize_and_factor_edge(
             &inputs,
             &problem,
-            &arena,
             &active,
             &frames,
             0,

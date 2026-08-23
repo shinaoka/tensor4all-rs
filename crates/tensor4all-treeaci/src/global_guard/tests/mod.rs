@@ -2,8 +2,8 @@ use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
 use super::{
-    find_global_pivots, inject_global_pivots, sole_varying_site, GuardOutputEvaluator,
-    InputEvaluators,
+    find_global_pivots, inject_global_pivots, per_evaluator_message_cache_budget,
+    sole_varying_site, GuardOutputEvaluator, InputEvaluators,
 };
 use crate::{
     schedule::{run_directional_pass, PassDirection},
@@ -35,6 +35,95 @@ fn zero_tree(left_site: DynIndex, right_site: DynIndex) -> TreeTN<IdxTensor, usi
     let left = IdxTensor::from_dense(vec![left_site, bond.clone()], vec![0.0, 0.0]).unwrap();
     let right = IdxTensor::from_dense(vec![bond, right_site], vec![1.0, 1.0]).unwrap();
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
+#[test]
+fn message_cache_budget_is_shared_by_all_guard_evaluators() {
+    assert_eq!(per_evaluator_message_cache_budget(256, 3).unwrap(), 64);
+    assert_eq!(per_evaluator_message_cache_budget(3, 1).unwrap(), 1);
+    assert_eq!(per_evaluator_message_cache_budget(0, 2).unwrap(), 0);
+}
+
+#[test]
+fn guard_working_budget_counts_all_coexisting_evaluation_buffers() {
+    let (input, _, _) = delta_tree();
+    let inputs = vec![input];
+    let options = TreeAciOptions::default();
+    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let point_count = 2;
+    let expected = point_count * std::mem::size_of::<Vec<usize>>()
+        + 2 * point_count * std::mem::size_of::<usize>()
+        + 2 * point_count * std::mem::size_of::<usize>()
+        + 3 * point_count * std::mem::size_of::<f64>()
+        + point_count
+            * std::mem::size_of::<tensor4all_core::AnyScalar>().max(std::mem::size_of::<f64>());
+
+    evaluators.max_working_bytes = expected;
+    evaluators
+        .enforce_guard_batch_budget::<f64>(point_count)
+        .unwrap();
+    evaluators.max_working_bytes = expected - 1;
+    let error = evaluators
+        .enforce_guard_batch_budget::<f64>(point_count)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::TreeAciError::ResourceLimit {
+            resource: "working bytes",
+            requested,
+            limit,
+        } if requested == expected && limit == expected - 1
+    ));
+}
+
+#[test]
+fn guard_rejects_out_of_range_local_coordinates_instead_of_wrapping_them() {
+    let (input, _, _) = delta_tree();
+    let inputs = vec![input];
+    let state =
+        TreeAciState::<f64, usize>::initialize(&inputs, &TreeAciOptions::default()).unwrap();
+    let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+
+    assert!(matches!(
+        evaluators.evaluate::<f64>(&[vec![2, 0]]),
+        Err(crate::TreeAciError::PhysicalCoordinateOutOfBounds {
+            node: 0,
+            coordinate: 2,
+            local_dim: 2,
+        })
+    ));
+}
+
+#[test]
+fn global_search_rejects_the_start_batch_before_calling_the_operator() {
+    let (input, _, _) = delta_tree();
+    let options = TreeAciOptions {
+        nsearch_global_pivots: 4,
+        max_working_bytes: 64,
+        ..TreeAciOptions::default()
+    };
+    let inputs = vec![input];
+    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let mut operator_called = false;
+    let mut operator = |_: crate::TreeElementwiseBatch<'_, f64>, _: &mut [f64]| {
+        operator_called = true;
+        Ok(())
+    };
+
+    let error = find_global_pivots(&state, &mut evaluators, &options, 0, &mut operator)
+        .expect_err("the start vectors must be budgeted before allocation/evaluation");
+
+    assert!(matches!(
+        error,
+        crate::TreeAciError::ResourceLimit {
+            resource: "working bytes",
+            limit: 64,
+            ..
+        }
+    ));
+    assert!(!operator_called);
 }
 
 fn identity(batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]) -> crate::Result<()> {
@@ -102,8 +191,6 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
     let inputs = vec![input];
     let mut injection_state =
         TreeAciState::<f64, usize>::initialize(&inputs, &injection_options).unwrap();
-    let mut input_evaluators =
-        InputEvaluators::new(injection_state.inputs, &injection_state.problem).unwrap();
     let lengths_before = injection_state
         .candidates
         .ids
@@ -111,13 +198,7 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         .map(Vec::len)
         .collect::<Vec<_>>();
     let generation_before = injection_state.generation;
-    let injected = inject_global_pivots(
-        &mut injection_state,
-        &mut input_evaluators,
-        &[vec![1, 1]],
-        &[true],
-    )
-    .unwrap();
+    let injected = inject_global_pivots(&mut injection_state, &[vec![1, 1]], &[1]).unwrap();
     assert_eq!(injected, 1);
     assert!(injection_state
         .candidates
@@ -141,11 +222,12 @@ fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
     let options = TreeAciOptions::default();
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let pivots_before = state.pivots.clone();
 
-    inject_global_pivots(&mut state, &mut input_evaluators, &[vec![1, 1]], &[true]).unwrap();
-    inject_global_pivots(&mut state, &mut input_evaluators, &[vec![1, 1]], &[true]).unwrap();
+    inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap();
+    let records_after_first = state.sample_arena.record_count();
+    inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap();
+    assert_eq!(state.sample_arena.record_count(), records_after_first);
 
     assert_eq!(state.pivots, pivots_before);
     for edge_number in 0..state.pivots.per_edge.len() {
@@ -205,12 +287,10 @@ fn an_already_represented_point_adds_nothing() {
     let options = TreeAciOptions::default();
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let seed_point = vec![0, 0];
     let generation_before = state.generation;
 
-    let injected =
-        inject_global_pivots(&mut state, &mut input_evaluators, &[seed_point], &[true]).unwrap();
+    let injected = inject_global_pivots(&mut state, &[seed_point], &[1]).unwrap();
 
     assert_eq!(injected, 0);
     assert_eq!(state.generation, generation_before);
@@ -238,22 +318,17 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
     };
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let before = state
         .candidates
         .ids
         .iter()
         .map(Vec::len)
         .collect::<Vec<_>>();
+    let saturated_edge = state.output.edge_between(&0, &1).unwrap();
+    let saturated_bond = state.output.bond_index(saturated_edge).unwrap().clone();
     let records_before = state.sample_arena.record_count();
 
-    let injected = inject_global_pivots(
-        &mut state,
-        &mut input_evaluators,
-        &[vec![1, 1, 1]],
-        &[false, true],
-    )
-    .unwrap();
+    let injected = inject_global_pivots(&mut state, &[vec![1, 1, 1]], &[0, 1]).unwrap();
 
     assert_eq!(injected, 1);
     assert_eq!(state.candidates.ids[0].len(), before[0]);
@@ -262,6 +337,11 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
     assert_eq!(state.candidates.ids[3].len(), before[3] + 1);
     assert_eq!(state.edge_ranks, vec![1, 2]);
     assert_eq!(state.output.link_dims(), vec![1, 2]);
+    assert_eq!(
+        state.output.bond_index(saturated_edge),
+        Some(&saturated_bond),
+        "padding another cut must not replace an inactive bond"
+    );
     assert!(state.sample_arena.record_count() > records_before);
     run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
     let edge_one_pivots_before = state.pivots.per_edge[1].clone();
@@ -271,33 +351,33 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
 }
 
 #[test]
-fn guard_reuses_input_evaluators_across_invocations() {
-    let (input, left_site, right_site) = delta_tree();
+fn injection_never_exceeds_the_remaining_cut_capacity() {
+    let (_, left_site, right_site) = delta_tree();
+    let input = zero_tree(left_site, right_site);
     let options = TreeAciOptions {
-        nsearch_global_pivots: 4,
-        max_nglobal_pivots: 2,
-        nsweeps_global_search: 4,
-        global_tolerance_margin: 1.0,
+        max_bond_dim: Some(2),
         ..TreeAciOptions::default()
     };
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    state.output = zero_tree(left_site, right_site);
-    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let candidate_sizes_before = state
+        .candidates
+        .ids
+        .iter()
+        .map(Vec::len)
+        .collect::<Vec<_>>();
 
-    let before_first = input_evaluators.evaluations();
-    find_global_pivots(&state, &mut input_evaluators, &options, 9, &mut identity).unwrap();
-    let first = input_evaluators.evaluations() - before_first;
+    let injected = inject_global_pivots(&mut state, &[vec![1, 1], vec![0, 1]], &[1]).unwrap();
 
-    let before_second = input_evaluators.evaluations();
-    find_global_pivots(&state, &mut input_evaluators, &options, 10, &mut identity).unwrap();
-    let second = input_evaluators.evaluations() - before_second;
-
-    assert!(first > 0);
-    assert!(
-        second < first,
-        "the second guard run must reuse warm evaluators: {second} vs {first}"
-    );
+    assert_eq!(injected, 1);
+    assert_eq!(state.edge_ranks, vec![2]);
+    assert_eq!(state.output.link_dims(), vec![2]);
+    assert!(state
+        .candidates
+        .ids
+        .iter()
+        .zip(candidate_sizes_before)
+        .all(|(ids, before)| ids.len() == before + 1));
 }
 
 #[test]
@@ -370,12 +450,10 @@ fn padding_refuses_an_over_budget_request() {
     };
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
-
     // Tighten after preparation so this exercises the padding check rather than
     // the preparation-time one, which would reject the run before injection.
     state.problem.max_working_bytes = 1;
-    let error = inject_global_pivots(&mut state, &mut input_evaluators, &[vec![1, 1]], &[true])
+    let error = inject_global_pivots(&mut state, &[vec![1, 1]], &[1])
         .expect_err("a one-byte working ceiling must refuse padding");
     assert!(
         matches!(

@@ -1,7 +1,5 @@
 //! Test-only pivot state transitions for edge-order experiments.
 
-#![allow(dead_code)]
-
 use crate::{
     frames::InputFrameStore,
     local_update::materialize_and_factor_edge,
@@ -24,7 +22,6 @@ where
     let proposal = materialize_and_factor_edge(
         state.inputs,
         &state.problem,
-        &state.sample_arena,
         &state.candidates,
         &state.input_frames,
         forward,

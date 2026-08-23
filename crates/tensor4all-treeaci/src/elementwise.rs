@@ -4,7 +4,6 @@ use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    global_guard::InputEvaluators,
     schedule::{run_directional_pass, run_local_sweeps, PassDirection},
     single_site::evaluate_single_site,
     state::TreeAciState,
@@ -73,16 +72,14 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
-    let mut state = TreeAciState::<T, V>::initialize(inputs, options)?;
-    if state.problem.node_order.len() == 1 {
+    // The exact one-node path needs neither bootstrap samples nor frame/state
+    // caches. Branch before `TreeAciState::initialize`; `evaluate_single_site`
+    // performs the complete public-input and initial-guess validation itself.
+    if inputs.first().is_some_and(|input| input.node_count() == 1) {
         return evaluate_single_site(inputs, options, &mut operator);
     }
-    let mut input_evaluators = InputEvaluators::new_with_message_cache_max_bytes(
-        inputs,
-        &state.problem,
-        options.message_cache_max_bytes,
-    )?;
-    let history = run_local_sweeps(&mut state, &mut input_evaluators, options, &mut operator)?;
+    let mut state = TreeAciState::<T, V>::initialize(inputs, options)?;
+    let history = run_local_sweeps(&mut state, options, &mut operator)?;
     let mut evaluated_points = history.evaluated_points;
     if history
         .global_pivots_found
@@ -204,15 +201,13 @@ where
     V: TreeAciNode,
     F: FnMut(&[T]) -> T,
 {
-    let mut scratch = Vec::with_capacity(inputs.len());
     tree_elementwise_batched(
         |batch, output| {
-            for (point, value) in output.iter_mut().enumerate() {
-                scratch.clear();
-                for input in 0..batch.n_inputs() {
-                    scratch.push(batch.get(input, point)?);
-                }
-                *value = operator(&scratch);
+            for (value, point_inputs) in output
+                .iter_mut()
+                .zip(batch.as_col_major_slice().chunks_exact(batch.n_inputs()))
+            {
+                *value = operator(point_inputs);
             }
             Ok(())
         },

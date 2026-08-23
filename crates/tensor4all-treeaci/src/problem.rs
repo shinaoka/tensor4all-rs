@@ -1,8 +1,6 @@
 //! Validated topology and physical-index preparation for tree ACI.
 
-#![allow(dead_code)]
-
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
@@ -33,10 +31,12 @@ pub(crate) struct PreparedTreeProblem<V> {
     pub(crate) node_order: Vec<V>,
     pub(crate) node_positions: HashMap<V, usize>,
     pub(crate) directed_edges: Vec<DirectedEdge<V>>,
+    /// Directed cuts in dependency-first order. Every edge's incoming cuts
+    /// occur before it, so frame and sample construction can be iterative.
+    pub(crate) directed_dependency_order: Vec<DirectedEdgeId>,
     pub(crate) physical: Vec<LocalPhysicalPlan>,
     pub(crate) root: V,
     pub(crate) schedule: SweepPlan,
-    pub(crate) is_path: bool,
     pub(crate) max_sample_arena_bytes: usize,
     pub(crate) max_frame_elements: usize,
     pub(crate) max_frame_bytes: usize,
@@ -227,26 +227,82 @@ pub(crate) fn prepare_problem<V: TreeAciNode>(
     })?;
     let root = node_order[schedule.start].clone();
     let directed_edges = build_directed_edges(&node_order, &edges);
-    let mut degrees = vec![0usize; node_order.len()];
-    for &(left, right) in &edges {
-        degrees[left] += 1;
-        degrees[right] += 1;
-    }
-
+    let directed_dependency_order = dependency_order(&directed_edges)?;
     Ok(PreparedTreeProblem {
         node_order,
         node_positions,
         directed_edges,
+        directed_dependency_order,
         physical,
         root,
         schedule,
-        is_path: degrees.into_iter().all(|degree| degree <= 2),
         max_sample_arena_bytes: options.max_sample_arena_bytes,
         max_frame_elements: options.max_frame_elements,
         max_frame_bytes: options.max_frame_bytes,
         max_core_elements: options.max_core_elements,
         max_working_bytes: options.max_working_bytes,
     })
+}
+
+/// Returns a dependency-first order for directed component construction.
+///
+/// A directed cut depends on the other cuts entering its source node. The
+/// validated tree makes this dependency graph acyclic, so Kahn's algorithm
+/// visits every dependency before its consumer without recursive traversal.
+pub(crate) fn dependency_order<V>(
+    directed_edges: &[DirectedEdge<V>],
+) -> Result<Vec<DirectedEdgeId>> {
+    let edge_count = directed_edges.len();
+    let mut remaining = directed_edges
+        .iter()
+        .map(|edge| edge.incoming_to_from.len())
+        .collect::<Vec<_>>();
+    let mut dependents = vec![Vec::<DirectedEdgeId>::new(); edge_count];
+
+    for (edge, directed) in directed_edges.iter().enumerate() {
+        for &dependency in &directed.incoming_to_from {
+            if dependency >= edge_count {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "directed component dependency references an unknown edge",
+                });
+            }
+            dependents[dependency].push(edge);
+        }
+    }
+
+    let mut ready = VecDeque::new();
+    for (edge, &count) in remaining.iter().enumerate() {
+        if count == 0 {
+            ready.push_back(edge);
+        }
+    }
+
+    let mut order = Vec::with_capacity(edge_count);
+    while let Some(edge) = ready.pop_front() {
+        order.push(edge);
+        for &dependent in &dependents[edge] {
+            let count = remaining
+                .get_mut(dependent)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "directed component dependency has no indegree entry",
+                })?;
+            *count = count
+                .checked_sub(1)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "directed component dependency indegree underflowed",
+                })?;
+            if *count == 0 {
+                ready.push_back(dependent);
+            }
+        }
+    }
+
+    if order.len() != edge_count {
+        return Err(TreeAciError::InternalInvariant {
+            message: "directed component dependency graph contains a cycle",
+        });
+    }
+    Ok(order)
 }
 
 fn validate_options<V: TreeAciNode>(options: &TreeAciOptions<V>) -> Result<()> {
@@ -445,7 +501,6 @@ mod tests {
         assert!(away_from_center
             .iter()
             .all(|arc| arc.incoming_to_from.len() == 2));
-        assert!(!prepared.is_path);
     }
 
     #[test]

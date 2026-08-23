@@ -1,7 +1,5 @@
 //! Atomic proposal and commit of one directed edge update.
 
-#![allow(dead_code)]
-
 use tensor4all_core::{DynIndex, IdxTensor};
 
 use crate::{
@@ -33,10 +31,11 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
+    #[cfg(test)]
+    let proposal_started = std::time::Instant::now();
     let proposal = materialize_and_factor_edge(
         state.inputs,
         &state.problem,
-        &state.sample_arena,
         &state.candidates,
         &state.input_frames,
         forward,
@@ -44,6 +43,10 @@ where
         left_orthogonal,
         operator,
     )?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.proposals += proposal_started.elapsed();
+    });
     commit_edge_proposal(state, forward, proposal)
 }
 
@@ -84,6 +87,8 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         .ok_or(TreeAciError::SizeOverflow {
             context: "tree ACI state generation",
         })?;
+    #[cfg(test)]
+    let output_started = std::time::Instant::now();
     let mut proposed_output = state.output.clone();
     replace_edge_cores(
         &mut proposed_output,
@@ -92,8 +97,14 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         proposal.left,
         proposal.right,
     )?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_staging += output_started.elapsed();
+    });
     let checkpoint = state.sample_arena.checkpoint();
     let staged = (|| {
+        #[cfg(test)]
+        let samples_started = std::time::Instant::now();
         let left_ids = proposal
             .row_samples
             .iter()
@@ -114,10 +125,20 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
                     .intern_component(&state.problem, reverse, sample)
             })
             .collect::<Result<Vec<_>>>()?;
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.sample_staging += samples_started.elapsed();
+        });
+        #[cfg(test)]
+        let frames_started = std::time::Instant::now();
         let frames =
             state
                 .input_frames
                 .extend(state.inputs, &state.problem, &state.sample_arena)?;
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.frame_extension += frames_started.elapsed();
+        });
         Ok((left_ids, right_ids, frames))
     })();
     let (left_ids, right_ids, proposed_frames) = match staged {
@@ -160,6 +181,8 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     state.edge_errors[edge_number] = pivot_error;
     state.edge_scales[edge_number] = proposal.sampled_scale;
     state.generation = next_generation;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| stats.commits += 1);
     Ok(EdgeCommitReport {
         forward,
         new_rank,
@@ -209,7 +232,7 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
         .ok_or(TreeAciError::InternalInvariant {
             message: "output is missing the committed target node",
         })?;
-    output.replace_edge_bond(graph_edge, new_bond.clone())?;
+    output.replace_edge_bond(graph_edge, new_bond)?;
     output.replace_tensor(left_node, left_tensor)?;
     output.replace_tensor(right_node, right_tensor)?;
     output.set_edge_ortho_towards(graph_edge, Some(directed.to.clone()))?;
