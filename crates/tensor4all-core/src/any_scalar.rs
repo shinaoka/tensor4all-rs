@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use tenferro::DType;
-use tensor4all_tensorbackend::AnyScalar as BackendScalar;
+use tensor4all_tensorbackend::BackendScalar;
 
 use crate::defaults::idx_tensor::IdxTensor;
 use crate::TensorElement;

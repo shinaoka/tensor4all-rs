@@ -26,7 +26,7 @@ pub enum InterpolativeQttError {
 
     /// Underlying tensor train operation failed.
     #[error(transparent)]
-    SimpleTensorTrain(#[from] tensor4all_simplett::TensorTrainError),
+    SimpleTensorTrain(#[from] tensor4all_simplett::SimpleTensorTrainError),
 }
 
 pub(crate) fn invalid_argument(message: impl Into<String>) -> InterpolativeQttError {

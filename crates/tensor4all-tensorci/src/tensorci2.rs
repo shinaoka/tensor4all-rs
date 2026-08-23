@@ -656,7 +656,7 @@ where
     ///
     pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
         let tensors = self.site_tensors.clone();
-        SimpleTensorTrain::new(tensors).map_err(TCIError::TensorTrainError)
+        SimpleTensorTrain::new(tensors).map_err(TCIError::SimpleTensorTrain)
     }
 
     /// Add global pivots to the TCI

@@ -1,7 +1,7 @@
 //! Compression algorithms for tensor trains
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
@@ -241,18 +241,18 @@ where
     let n = matrix.ncols();
 
     if m == 0 || n == 0 {
-        return Err(crate::error::TensorTrainError::InvalidOperation {
+        return Err(crate::error::SimpleTensorTrainError::InvalidOperation {
             message: "Cannot factorize empty matrix".to_string(),
         });
     }
 
     let a_tensor = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[m, n])
-        .map_err(|err| TensorTrainError::InvalidOperation {
+        .map_err(|err| SimpleTensorTrainError::InvalidOperation {
             message: format!("Failed to prepare SVD input matrix: {err}"),
         })?;
 
     let svd_result = tensor4all_tensorbackend::svd_backend(&a_tensor).map_err(|e| {
-        crate::error::TensorTrainError::InvalidOperation {
+        crate::error::SimpleTensorTrainError::InvalidOperation {
             message: format!("SVD computation failed: {e:?}"),
         }
     })?;
@@ -261,13 +261,13 @@ where
         svd_result.u().shape()[0],
         svd_result.u().shape()[1],
         tensor_to_col_major_vec(svd_result.u()).map_err(|err| {
-            TensorTrainError::InvalidOperation {
+            SimpleTensorTrainError::InvalidOperation {
                 message: format!("Failed to read SVD left singular vectors: {err}"),
             }
         })?,
     );
     let s_data: Vec<f64> = tensor_to_col_major_vec(svd_result.s())
-        .map_err(|err| TensorTrainError::InvalidOperation {
+        .map_err(|err| SimpleTensorTrainError::InvalidOperation {
             message: format!("Failed to read SVD singular values: {err}"),
         })?
         .into_iter()
@@ -277,7 +277,7 @@ where
         svd_result.vt().shape()[0],
         svd_result.vt().shape()[1],
         tensor_to_col_major_vec(svd_result.vt()).map_err(|err| {
-            TensorTrainError::InvalidOperation {
+            SimpleTensorTrainError::InvalidOperation {
                 message: format!("Failed to read SVD right singular vectors: {err}"),
             }
         })?,
@@ -425,7 +425,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
 
             // Multiply: right_factor * next_mat
             let contracted = mat_mul(&right_factor, &next_mat).map_err(|err| {
-                TensorTrainError::InvalidOperation {
+                SimpleTensorTrainError::InvalidOperation {
                     message: format!("left-to-right compression multiply failed: {err}"),
                 }
             })?;
@@ -480,7 +480,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
 
             // Multiply: prev_mat * left_factor
             let contracted = mat_mul(&prev_mat, &left_factor).map_err(|err| {
-                TensorTrainError::InvalidOperation {
+                SimpleTensorTrainError::InvalidOperation {
                     message: format!("right-to-left compression multiply failed: {err}"),
                 }
             })?;

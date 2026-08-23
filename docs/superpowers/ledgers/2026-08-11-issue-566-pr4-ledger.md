@@ -1,6 +1,12 @@
 > [!NOTE] Superseded (2026-08, #639)
 > `tensor4all-tcicore` was dissolved into `tensor4all-core`; the crate no
 > longer exists. References below describe the pre-dissolution state.
+>
+> [!IMPORTANT] Corrected (2026-08, #659)
+> The original item 31 and “39/39” conclusion overstated PR #595. That PR
+> renamed `SimpleTensorTrain` but did not resolve the duplicate error name,
+> backend `AnyScalar` alias, or duplicated MatrixLUCI scalar methods. The
+> corrected disposition is recorded below.
 
 # Issue #566 — PR 4 Evidence Ledger and Final Audit
 
@@ -61,7 +67,7 @@ Basis: `origin/main` at 69a24e7 (2026-08-02 audit), remediated across PR #589,
 ## Phase 4 — API unification
 
 30. **Resolve the four semantic traps** — DONE (PR #595: `TreeTN::scale` split into `scale`/`scale_mut`; `evaluate` unsuffixed + `_batched`; `truncate`/`compress` documented; `norm` documented).
-31. **Collapse duplicate types** — DONE (PR #595: simplett positional type renamed `SimpleTensorTrain`; naming resolution documented; no compat aliases).
+31. **Collapse duplicate types** — CORRECTED by #659. PR #595 completed only the positional `SimpleTensorTrain` rename. The #659 remediation renames its error to `SimpleTensorTrainError`, removes tensorbackend's `AnyScalar` compatibility alias in favor of `BackendScalar`, and makes `MatrixLuciScalar` extend core `Scalar` instead of duplicating its arithmetic methods. Purpose-specific storage, backend, TT, and ACI capability traits remain distinct with their dependency-boundary rationale documented in `docs/book/src/architecture.md`.
 32. **Julia-style concatenated names to snake_case** — DONE (PR #595: `link_indices`, `site_indices`, `max_bond_dim`, `full_tensor`, `min_dim`, `replace_indices`, …). Residual completed 2026-08 (#616, PR #643): `hasinds`→`has_inds`, `hascommoninds`→`has_common_inds` (core), `isortho`→`is_ortho`, `orthocenter`→`ortho_center` (itensorlike), `maxiter`→`max_iter`, `nrandominitpivot`→`n_random_init_pivot`, `unfoldingscheme`→`unfolding_scheme` (QtciOptions), each with `#[doc(alias)]` on the old name.
 33. **Unify densification / inner-product / canonicalization / options vocabulary** — DONE (PR #595: `inner_product` everywhere; `full_tensor` vs `to_dense` documented; options `max_bond_dim`/`SvdTruncationPolicy` unified; `canonicalize` vs `orthogonalize` documented per stack).
 34. **Remove scalar-suffixed Rust entry points outside capi** — DONE (PR #595: `native_tensor_primal_to_diag<T>`/`dense_col_major<T>` generics; `as_slice_f64/c64` removed; `as_`/`is_` dtype accessors documented as exempt). Residual completed 2026-08 (#616, PR #643): `Storage::from_dense_f64_col_major` / `from_dense_c64_col_major` removed in favor of the generic `from_dense_col_major<T>`.
@@ -96,8 +102,10 @@ reproducible).
 
 ## Final audit
 
-- 39/39 Phase 0–5 checklist items have a disposition; all required behavior
-  items are DONE (no item is deferred, narrowed, or "good enough").
+- Correction (#659): at this ledger's original publication, item 31 was not
+  complete, so the “39/39” claim was inaccurate. The #659 remediation supplies
+  the missing error-name, backend-scalar, and MatrixLUCI-trait disposition and
+  documents why the remaining capability traits are intentionally distinct.
 - Residual risk: none for required behavior. Performance candidates 1–3 and 5
   are resolved by recorded evidence as immaterial; candidate 4 is resolved by
   measured evidence that `TTCache` helps only duplicate-heavy workloads while

@@ -22,7 +22,7 @@ use crate::scalar::AciScalar;
 use crate::{AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use tensor4all_core::{floating_zone_walk, MatrixLuciScalar};
+use tensor4all_core::floating_zone_walk;
 use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
 
 /// Search for global multi-indices where the current solution is wrong.
@@ -95,7 +95,7 @@ where
 
     let max_op_abs = start_op_values
         .iter()
-        .map(|&value| MatrixLuciScalar::abs_val(value))
+        .map(|&value| tensor4all_core::Scalar::abs_val(value))
         .fold(0.0f64, f64::max);
     let abs_tol = if options.scale_tolerance && max_op_abs > 0.0 {
         options.tolerance * max_op_abs
@@ -156,7 +156,7 @@ where
                 let solution_values = solution_cache.evaluate_many(points, split)?;
                 let errors = (0..n_points)
                     .map(|point| {
-                        MatrixLuciScalar::abs_val(op_values[point] - solution_values[point])
+                        tensor4all_core::Scalar::abs_val(op_values[point] - solution_values[point])
                     })
                     .collect::<Vec<f64>>();
                 Ok(errors)

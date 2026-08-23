@@ -8,7 +8,7 @@ backed by tenferro-rs.
 
 ## Key Types
 
-- `AnyScalar` — dynamic scalar type covering `f32`, `f64`, `Complex32`, and `Complex64`
+- `BackendScalar` — dynamic scalar type covering `f32`, `f64`, `Complex32`, and `Complex64`
 - `Matrix` — shared column-major dense matrix boundary for tensor4all crates
 - `Storage` — compact `f64`/`Complex64` dense, diagonal, and structured payload snapshots
 - `StructuredStorage` — axis-class-aware compact payload storage

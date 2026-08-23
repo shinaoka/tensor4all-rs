@@ -5,14 +5,14 @@
 //! provides methods to compute the left and right CI factors.
 
 use crate::matrixluci::error::MatrixLuciError;
-use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::scalar::MatrixLuciScalar;
 use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::PivotSelectionCore;
 use crate::matrixluci::Result;
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 
 /// Gather a dense column-major block from a source.
-pub(crate) fn load_block<T: Scalar, S: CandidateMatrixSource<T>>(
+pub(crate) fn load_block<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
     rows: &[usize],
     cols: &[usize],
@@ -23,7 +23,7 @@ pub(crate) fn load_block<T: Scalar, S: CandidateMatrixSource<T>>(
 }
 
 /// Subtract one dense matrix from another in place.
-pub(crate) fn subtract_inplace<T: Scalar>(lhs: &mut Matrix<T>, rhs: &Matrix<T>) {
+pub(crate) fn subtract_inplace<T: MatrixLuciScalar>(lhs: &mut Matrix<T>, rhs: &Matrix<T>) {
     assert_eq!(lhs.nrows(), rhs.nrows());
     assert_eq!(lhs.ncols(), rhs.ncols());
     for j in 0..lhs.ncols() {
@@ -40,7 +40,7 @@ pub(crate) fn subtract_inplace<T: Scalar>(lhs: &mut Matrix<T>, rhs: &Matrix<T>) 
 /// right CI factors for the cross interpolation approximation
 /// `A ~ A[:, J] * A[I, J]^{-1} * A[I, :]`.
 #[derive(Debug, Clone)]
-pub(crate) struct CrossFactors<T: Scalar> {
+pub(crate) struct CrossFactors<T: MatrixLuciScalar> {
     /// Pivot block `A[I, J]`.
     pub pivot: Matrix<T>,
     /// Columns through selected pivot columns `A[:, J]`.
@@ -49,7 +49,7 @@ pub(crate) struct CrossFactors<T: Scalar> {
     pub pivot_rows: Matrix<T>,
 }
 
-impl<T: Scalar> CrossFactors<T> {
+impl<T: MatrixLuciScalar> CrossFactors<T> {
     /// Gather a dense block from a source.
     #[cfg(test)]
     pub fn gather<S: CandidateMatrixSource<T>>(

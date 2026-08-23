@@ -1043,8 +1043,7 @@ impl SumFromStorage for Complex64 {
     }
 }
 
-// AnyScalar is now in its own module
-pub use crate::any_scalar::AnyScalar;
+use crate::any_scalar::BackendScalar;
 
 impl Storage {
     pub(crate) fn from_repr(repr: StorageRepr) -> Self {
@@ -1775,7 +1774,7 @@ impl Storage {
         }
     }
 
-    /// Return one compact payload value as a dynamic [`AnyScalar`].
+    /// Return one compact payload value as a dynamic [`BackendScalar`].
     ///
     /// `payload_coords` are column-major payload coordinates, not logical
     /// coordinates. Repeated logical axis classes are represented once in the
@@ -1802,14 +1801,14 @@ impl Storage {
     /// assert_eq!(complex.scalar_at(&[0]).unwrap().as_c64(),
     ///     Some(Complex64::new(1.0, -2.0)));
     /// ```
-    pub fn scalar_at(&self, payload_coords: &[usize]) -> StorageResult<AnyScalar> {
+    pub fn scalar_at(&self, payload_coords: &[usize]) -> StorageResult<BackendScalar> {
         match &self.0 {
             StorageRepr::F64(value) => value
                 .payload_scalar_at(payload_coords)
-                .map(AnyScalar::from_value),
+                .map(BackendScalar::from_value),
             StorageRepr::C64(value) => value
                 .payload_scalar_at(payload_coords)
-                .map(AnyScalar::from_value),
+                .map(BackendScalar::from_value),
         }
     }
 
@@ -2263,13 +2262,13 @@ impl Storage {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tensorbackend::{AnyScalar, Storage};
+    /// use tensor4all_tensorbackend::{BackendScalar, Storage};
     ///
     /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0, 3.0], &[3]).unwrap();
-    /// let scaled = s.scale(&AnyScalar::new_real(2.0));
+    /// let scaled = s.scale(&BackendScalar::new_real(2.0));
     /// assert_eq!(scaled.to_dense_f64_col_major_vec(&[3]).unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
-    pub fn scale(&self, scalar: &crate::AnyScalar) -> Storage {
+    pub fn scale(&self, scalar: &crate::BackendScalar) -> Storage {
         self * scalar.clone()
     }
 
@@ -2283,21 +2282,21 @@ impl Storage {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tensorbackend::{AnyScalar, Storage};
+    /// use tensor4all_tensorbackend::{BackendScalar, Storage};
     ///
     /// let x = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
     /// let y = Storage::from_dense_col_major(vec![3.0_f64, 4.0], &[2]).unwrap();
-    /// let a = AnyScalar::new_real(2.0);
-    /// let b = AnyScalar::new_real(3.0);
+    /// let a = BackendScalar::new_real(2.0);
+    /// let b = BackendScalar::new_real(3.0);
     /// // result = 2*[1,2] + 3*[3,4] = [11, 16]
     /// let result = x.axpby(&a, &y, &b).unwrap();
     /// assert_eq!(result.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![11.0, 16.0]);
     /// ```
     pub fn axpby(
         &self,
-        a: &crate::AnyScalar,
+        a: &crate::BackendScalar,
         other: &Storage,
-        b: &crate::AnyScalar,
+        b: &crate::BackendScalar,
     ) -> StorageResult<Storage> {
         // First check lengths match
         if self.len() != other.len() {
@@ -2588,12 +2587,12 @@ impl Mul<Complex64> for &Storage {
     }
 }
 
-/// Multiply storage by a scalar (AnyScalar).
+/// Multiply storage by a scalar (BackendScalar).
 /// May promote f64 storage to Complex64 when scalar is complex.
-impl Mul<AnyScalar> for &Storage {
+impl Mul<BackendScalar> for &Storage {
     type Output = Storage;
 
-    fn mul(self, scalar: AnyScalar) -> Self::Output {
+    fn mul(self, scalar: BackendScalar) -> Self::Output {
         if scalar.is_complex() {
             let z: Complex64 = scalar.into();
             self * z

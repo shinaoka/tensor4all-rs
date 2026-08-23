@@ -485,7 +485,7 @@ where
     let init_vals = batch_eval(init_batch)?;
     tci.max_sample_value = init_vals
         .iter()
-        .map(|v| <V as tensor4all_core::MatrixLuciScalar>::abs_val(*v))
+        .map(|v| <V as tensor4all_core::Scalar>::abs_val(*v))
         .fold(0.0f64, f64::max);
     if tci.max_sample_value <= 0.0 {
         return Err(QuanticsTCIError::InvalidConfiguration {
@@ -849,7 +849,7 @@ where
     let init_vals = batch_eval(init_batch)?;
     tci.max_sample_value = init_vals
         .iter()
-        .map(|v| <V as tensor4all_core::MatrixLuciScalar>::abs_val(*v))
+        .map(|v| <V as tensor4all_core::Scalar>::abs_val(*v))
         .fold(0.0f64, f64::max);
     if tci.max_sample_value <= 0.0 {
         return Err(QuanticsTCIError::InvalidConfiguration {

@@ -25,7 +25,7 @@ pub(crate) use error::{MatrixLuciError, Result};
 pub(crate) use factors::CrossFactors;
 #[allow(unused_imports)]
 pub(crate) use kernel::PivotKernel;
-pub use scalar::Scalar;
+pub use scalar::MatrixLuciScalar;
 #[allow(unused_imports)]
 pub(crate) use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
 #[allow(unused_imports)]

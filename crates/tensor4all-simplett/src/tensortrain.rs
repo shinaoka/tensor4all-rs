@@ -1,6 +1,6 @@
 //! SimpleTensorTrain implementation
 
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 
@@ -68,8 +68,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::DimensionMismatch`] if adjacent bond
-    /// dimensions do not match, or [`TensorTrainError::InvalidOperation`] if
+    /// Returns [`SimpleTensorTrainError::DimensionMismatch`] if adjacent bond
+    /// dimensions do not match, or [`SimpleTensorTrainError::InvalidOperation`] if
     /// boundary dimensions are not 1.
     ///
     /// # Examples
@@ -98,13 +98,13 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // Validate dimensions
         for i in 0..tensors.len().saturating_sub(1) {
             if tensors[i].right_dim() != tensors[i + 1].left_dim() {
-                return Err(TensorTrainError::DimensionMismatch { site: i });
+                return Err(SimpleTensorTrainError::DimensionMismatch { site: i });
             }
         }
 
         // First tensor should have left_dim = 1
         if !tensors.is_empty() && tensors[0].left_dim() != 1 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: "First tensor must have left dimension 1".to_string(),
             });
         }
@@ -112,7 +112,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // Last tensor should have right_dim = 1
         if let Some(last) = tensors.last() {
             if last.right_dim() != 1 {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: "Last tensor must have right dimension 1".to_string(),
                 });
             }
@@ -356,7 +356,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// problems. Only use this for small tensors or debugging.
     ///
     /// # Errors
-    /// Returns [`TensorTrainError::InvalidOperation`] when the dense element
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the dense element
     /// count overflows or an evaluation fails.
     ///
     /// # Examples
@@ -379,7 +379,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         let site_dims: Vec<usize> = self.site_dims();
         let total_size = site_dims.iter().try_fold(1usize, |acc, &dim| {
             acc.checked_mul(dim)
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                     message: "full tensor element count overflowed usize".to_string(),
                 })
         })?;
@@ -459,7 +459,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // Validate dims
         for &d in dims {
             if d >= n {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: format!("Dimension {} out of range (0..{})", d, n),
                 });
             }
@@ -492,7 +492,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                 }
                 // Tprod = Tprod * site_sum
                 tprod = mat_mul(&tprod, &site_sum).map_err(|err| {
-                    TensorTrainError::InvalidOperation {
+                    SimpleTensorTrainError::InvalidOperation {
                         message: format!("dimension summation matrix multiply failed: {err}"),
                     }
                 })?;
@@ -509,7 +509,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                     }
                 }
                 let product = mat_mul(&tprod, &t_reshaped).map_err(|err| {
-                    TensorTrainError::InvalidOperation {
+                    SimpleTensorTrainError::InvalidOperation {
                         message: format!("dimension retention matrix multiply failed: {err}"),
                     }
                 })?;
@@ -544,7 +544,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         }
 
         // Contract final Tprod into last result tensor
-        let last = result_tensors.last().ok_or(TensorTrainError::Empty)?;
+        let last = result_tensors.last().ok_or(SimpleTensorTrainError::Empty)?;
         let last_left = last.left_dim();
         let last_site = last.site_dim();
         let last_right = last.right_dim();
@@ -562,7 +562,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
         // Multiply: last_mat * Tprod → (last_left * last_site, tprod_cols)
         let contracted =
-            mat_mul(&last_mat, &tprod).map_err(|err| TensorTrainError::InvalidOperation {
+            mat_mul(&last_mat, &tprod).map_err(|err| SimpleTensorTrainError::InvalidOperation {
                 message: format!("final dimension summation multiply failed: {err}"),
             })?;
 
@@ -575,7 +575,9 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                 }
             }
         }
-        *result_tensors.last_mut().ok_or(TensorTrainError::Empty)? = new_last;
+        *result_tensors
+            .last_mut()
+            .ok_or(SimpleTensorTrainError::Empty)? = new_last;
 
         SimpleTensorTrain::new(result_tensors)
     }

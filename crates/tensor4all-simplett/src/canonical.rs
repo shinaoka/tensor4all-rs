@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
@@ -22,9 +22,10 @@ fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Mat
         abs_tol: 0.0,
         left_orthogonal: true,
     };
-    let lu = rrlu(matrix, Some(options)).map_err(|err| TensorTrainError::InvalidOperation {
-        message: format!("QR decomposition failed: {err}"),
-    })?;
+    let lu =
+        rrlu(matrix, Some(options)).map_err(|err| SimpleTensorTrainError::InvalidOperation {
+            message: format!("QR decomposition failed: {err}"),
+        })?;
     Ok((lu.left(true), lu.right(true)))
 }
 
@@ -118,10 +119,10 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     pub fn new(tensors: Vec<Tensor3<T>>, center: usize) -> Result<Self> {
         let n = tensors.len();
         if n == 0 {
-            return Err(TensorTrainError::Empty);
+            return Err(SimpleTensorTrainError::Empty);
         }
         if center >= n {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!("Center {} is out of range for {} tensors", center, n),
             });
         }
@@ -129,7 +130,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         // Validate dimensions
         for i in 0..n.saturating_sub(1) {
             if tensors[i].right_dim() != tensors[i + 1].left_dim() {
-                return Err(TensorTrainError::DimensionMismatch { site: i });
+                return Err(SimpleTensorTrainError::DimensionMismatch { site: i });
             }
         }
 
@@ -223,7 +224,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
 
         // R * next_mat
         let contracted =
-            mat_mul(&r, &next_mat).map_err(|err| TensorTrainError::InvalidOperation {
+            mat_mul(&r, &next_mat).map_err(|err| SimpleTensorTrainError::InvalidOperation {
                 message: format!("left-orthogonalization matrix multiply failed: {err}"),
             })?;
 
@@ -273,7 +274,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
 
         // prev_mat * L
         let contracted =
-            mat_mul(&prev_mat, &l_mat).map_err(|err| TensorTrainError::InvalidOperation {
+            mat_mul(&prev_mat, &l_mat).map_err(|err| SimpleTensorTrainError::InvalidOperation {
                 message: format!("right-orthogonalization matrix multiply failed: {err}"),
             })?;
 
@@ -298,7 +299,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     ///
     pub fn move_center_right(&mut self) -> Result<()> {
         if self.center >= self.len() - 1 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: "Cannot move center right: already at rightmost position".to_string(),
             });
         }
@@ -316,7 +317,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     ///
     pub fn move_center_left(&mut self) -> Result<()> {
         if self.center == 0 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: "Cannot move center left: already at leftmost position".to_string(),
             });
         }
@@ -334,7 +335,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     ///
     pub fn set_center(&mut self, new_center: usize) -> Result<()> {
         if new_center >= self.len() {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "New center {} is out of range for {} tensors",
                     new_center,
@@ -377,7 +378,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         tensor2: Tensor3<T>,
     ) -> Result<()> {
         if i >= self.len() - 1 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot set two-site tensors at site {} (max {})",
                     i,
@@ -476,7 +477,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             let next_mat = tensor3_to_right_matrix(&tensors[i + 1]);
 
             let contracted =
-                mat_mul(&r, &next_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                mat_mul(&r, &next_mat).map_err(|err| SimpleTensorTrainError::InvalidOperation {
                     message: format!("left sweep matrix multiply failed: {err}"),
                 })?;
 
@@ -524,10 +525,11 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             let prev_site_dim = tensors[i - 1].site_dim();
             let prev_mat = tensor3_to_left_matrix(&tensors[i - 1]);
 
-            let contracted =
-                mat_mul(&prev_mat, &l_mat).map_err(|err| TensorTrainError::InvalidOperation {
+            let contracted = mat_mul(&prev_mat, &l_mat).map_err(|err| {
+                SimpleTensorTrainError::InvalidOperation {
                     message: format!("right sweep matrix multiply failed: {err}"),
-                })?;
+                }
+            })?;
 
             let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
             for l in 0..prev_left_dim {

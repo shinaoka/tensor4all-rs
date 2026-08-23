@@ -66,7 +66,7 @@ use crate::error::{Result, TCIError};
 /// # Errors
 /// Returns [`TCIError::InvalidConfiguration`] for an invalid site dimension,
 /// [`TCIError::InvalidPivot`] for an invalid starting point, or
-/// [`TCIError::TensorTrainError`] when tensor-train evaluation fails.
+/// [`TCIError::SimpleTensorTrain`] when tensor-train evaluation fails.
 pub fn estimate_true_error<T, F>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
@@ -159,7 +159,7 @@ where
 /// # Errors
 /// Returns [`TCIError::InvalidConfiguration`] for invalid dimensions,
 /// [`TCIError::InvalidPivot`] for invalid coordinates, or
-/// [`TCIError::TensorTrainError`] when tensor-train evaluation fails.
+/// [`TCIError::SimpleTensorTrain`] when tensor-train evaluation fails.
 pub fn floating_zone<T, F>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
@@ -221,7 +221,7 @@ where
             // evaluated pointwise (no batch API in this signature).
             let tt_values = tt_cache
                 .evaluate_many(points, None)
-                .map_err(TCIError::TensorTrainError)?;
+                .map_err(TCIError::SimpleTensorTrain)?;
             let errors = points
                 .iter()
                 .zip(tt_values.iter())

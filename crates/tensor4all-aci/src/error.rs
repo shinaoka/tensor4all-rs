@@ -107,5 +107,5 @@ pub enum AciError {
 
     /// Error propagated from tensor-train construction or manipulation.
     #[error("Tensor train error: {0}")]
-    SimpleTensorTrain(#[from] tensor4all_simplett::TensorTrainError),
+    SimpleTensorTrain(#[from] tensor4all_simplett::SimpleTensorTrainError),
 }

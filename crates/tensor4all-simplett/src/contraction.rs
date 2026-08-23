@@ -7,20 +7,20 @@ use crate::compression::CompressionMethod;
 use crate::einsum_helper::{
     einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
 };
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
 use tensor4all_core::Scalar;
 use tensor4all_tensorbackend::Matrix;
 
-fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> TensorTrainError {
-    TensorTrainError::InvalidOperation {
+fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> SimpleTensorTrainError {
+    SimpleTensorTrainError::InvalidOperation {
         message: format!("{context}: {err}"),
     }
 }
 
-fn inner_product_read_error(err: impl std::fmt::Display) -> TensorTrainError {
+fn inner_product_read_error(err: impl std::fmt::Display) -> SimpleTensorTrainError {
     contraction_helper_error("Failed to read inner_product result", err)
 }
 
@@ -81,7 +81,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
     /// ```
     pub fn inner_product(&self, other: &Self) -> Result<T> {
         if self.len() != other.len() {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot compute inner_product product of tensor trains with different lengths: {} vs {}",
                     self.len(),
@@ -102,7 +102,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
         let b0 = other.site_tensor(0);
 
         if a0.site_dim() != b0.site_dim() {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Site dimensions mismatch at site 0: {} vs {}",
                     a0.site_dim(),
@@ -128,7 +128,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
             let b = other.site_tensor(i);
 
             if a.site_dim() != b.site_dim() {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: format!(
                         "Site dimensions mismatch at site {}: {} vs {}",
                         i,

@@ -172,7 +172,7 @@ where
     // `tensor4all-tensorci`'s `fill_site_tensors`.
     if p_values
         .iter()
-        .all(|value| Scalar::abs_val(*value) < f64::EPSILON)
+        .all(|value| tensor4all_core::Scalar::abs_val(*value) < f64::EPSILON)
     {
         let len = rows
             .checked_mul(cols)

@@ -58,7 +58,7 @@ pub mod matrixlu;
 pub mod matrixluci;
 pub mod traits;
 
-pub use self::matrixluci::Scalar as MatrixLuciScalar;
+pub use self::matrixluci::MatrixLuciScalar;
 pub use cached_function::cache_key::CacheKey;
 pub use cached_function::error::CacheKeyError;
 pub use cached_function::index_int::IndexInt;

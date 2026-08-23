@@ -114,6 +114,37 @@ Rules:
   itensorlike type inside that crate, and simplett code must write
   `SimpleTensorTrain`.
 
+The corresponding errors follow the representation names:
+
+| Error | Owner | Covers |
+|-------|-------|--------|
+| `tensor4all_simplett::SimpleTensorTrainError` | `SimpleTensorTrain` | positional shapes, flat indices, and MatrixCI failures |
+| `tensor4all_itensorlike::TensorTrainError` | itensorlike `TensorTrain` | named indices, TreeTN structure, orthogonality, and factorization |
+
+They are deliberately separate because combining them would couple the two
+independent stacks. The distinct names prevent ambiguous imports.
+
+## Scalar capability boundaries
+
+Scalar traits are layered capabilities rather than interchangeable numeric
+aliases:
+
+| Capability | Purpose |
+|------------|---------|
+| `tensor4all_core::Scalar` | common value arithmetic and conversion |
+| `tensor4all_core::MatrixLuciScalar` | core `Scalar` plus MatrixLUCI backend dispatch |
+| `tensor4all_tensorbackend::TensorElement` | supported Rust scalar ↔ native tensor conversion |
+| `tensor4all_tensorbackend::StorageScalar` | compact storage construction |
+| tensorbackend matrix/linalg traits | individual backend kernel capabilities |
+| `tensor4all_simplett::TTScalar` | positional tensor-train arithmetic requirements |
+| ACI/TreeACI scalar traits | sealed algorithm-supported types and algorithm-only operations |
+
+`tensor4all_core::AnyScalar` is the only public `AnyScalar`; it may retain an
+AD-tracked rank-0 tensor. The internal tensorbackend value is named `BackendScalar`
+and is an untracked compact scalar. Do not replace these capability boundaries
+with one all-purpose supertrait: that would force storage and algorithm
+requirements onto unrelated generic code.
+
 ## Layer descriptions
 
 ### Foundation (internal)
