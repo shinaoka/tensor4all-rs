@@ -1,6 +1,6 @@
 //! Core types for tensor train operations
 
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensor::Tensor;
 pub use crate::tensor::Tensor3;
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
@@ -63,8 +63,8 @@ pub trait Tensor3Ops<T: Clone + Default> {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::IndexOutOfBounds`] when `s >= site_dim()`.
-    /// Returns [`TensorTrainError::InvalidOperation`] when the slice shape
+    /// Returns [`SimpleTensorTrainError::IndexOutOfBounds`] when `s >= site_dim()`.
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the slice shape
     /// product overflows `usize`.
     fn try_slice_site(&self, s: usize) -> Result<Vec<T>>;
 
@@ -80,7 +80,7 @@ pub trait Tensor3Ops<T: Clone + Default> {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidOperation`] when either
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when either
     /// `left_dim * site_dim` or the resulting matrix size overflows `usize`.
     fn try_as_left_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
 
@@ -96,7 +96,7 @@ pub trait Tensor3Ops<T: Clone + Default> {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidOperation`] when either
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when either
     /// `site_dim * right_dim` or the resulting matrix size overflows `usize`.
     fn try_as_right_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
 }
@@ -140,7 +140,7 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
 
     fn try_slice_site(&self, s: usize) -> Result<Vec<T>> {
         if s >= self.site_dim() {
-            return Err(TensorTrainError::IndexOutOfBounds {
+            return Err(SimpleTensorTrainError::IndexOutOfBounds {
                 site: 1,
                 index: s,
                 max: self.site_dim(),
@@ -148,12 +148,11 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         }
         let left_dim = self.left_dim();
         let right_dim = self.right_dim();
-        let len =
-            left_dim
-                .checked_mul(right_dim)
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
-                    message: "site slice shape product overflowed usize".to_string(),
-                })?;
+        let len = left_dim.checked_mul(right_dim).ok_or_else(|| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: "site slice shape product overflowed usize".to_string(),
+            }
+        })?;
         let mut result = Vec::with_capacity(len);
         for r in 0..right_dim {
             for l in 0..left_dim {
@@ -184,17 +183,16 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let left_dim = self.left_dim();
         let site_dim = self.site_dim();
         let right_dim = self.right_dim();
-        let rows =
-            left_dim
-                .checked_mul(site_dim)
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
-                    message: "left matrix row count overflowed usize".to_string(),
-                })?;
-        let len =
-            rows.checked_mul(right_dim)
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
-                    message: "left matrix size overflowed usize".to_string(),
-                })?;
+        let rows = left_dim.checked_mul(site_dim).ok_or_else(|| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: "left matrix row count overflowed usize".to_string(),
+            }
+        })?;
+        let len = rows.checked_mul(right_dim).ok_or_else(|| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: "left matrix size overflowed usize".to_string(),
+            }
+        })?;
         let mut result = Vec::with_capacity(len);
         for r in 0..right_dim {
             for l in 0..left_dim {
@@ -227,17 +225,17 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let left_dim = self.left_dim();
         let site_dim = self.site_dim();
         let right_dim = self.right_dim();
-        let cols =
-            site_dim
-                .checked_mul(right_dim)
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
-                    message: "right matrix column count overflowed usize".to_string(),
+        let cols = site_dim.checked_mul(right_dim).ok_or_else(|| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: "right matrix column count overflowed usize".to_string(),
+            }
+        })?;
+        let len =
+            left_dim
+                .checked_mul(cols)
+                .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
+                    message: "right matrix size overflowed usize".to_string(),
                 })?;
-        let len = left_dim
-            .checked_mul(cols)
-            .ok_or_else(|| TensorTrainError::InvalidOperation {
-                message: "right matrix size overflowed usize".to_string(),
-            })?;
         let mut result = Vec::with_capacity(len);
         for s in 0..site_dim {
             for r in 0..right_dim {
@@ -280,7 +278,7 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
 ///
 /// # Errors
 ///
-/// Returns [`TensorTrainError::InvalidOperation`] when the shape product
+/// Returns [`SimpleTensorTrainError::InvalidOperation`] when the shape product
 /// overflows `usize`, allocation fails, or the backend rejects the shape.
 ///
 /// # Examples
@@ -289,7 +287,7 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
 ///
 /// let t = try_tensor3_zeros::<f64>(2, 3, 4)?;
 /// assert_eq!((t.left_dim(), t.site_dim(), t.right_dim()), (2, 3, 4));
-/// # Ok::<(), tensor4all_simplett::TensorTrainError>(())
+/// # Ok::<(), tensor4all_simplett::SimpleTensorTrainError>(())
 /// ```
 pub fn try_tensor3_zeros<T: Clone + Default + TensorScalar>(
     left_dim: usize,
@@ -325,18 +323,18 @@ pub fn tensor3_from_data<T: TensorScalar>(
     let expected = left_dim
         .checked_mul(site_dim)
         .and_then(|value| value.checked_mul(right_dim))
-        .ok_or_else(|| TensorTrainError::InvalidOperation {
+        .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
             message: "rank-3 tensor shape product overflowed usize".to_string(),
         })?;
     if data.len() != expected {
-        return Err(TensorTrainError::DataLengthMismatch {
+        return Err(SimpleTensorTrainError::DataLengthMismatch {
             expected,
             got: data.len(),
         });
     }
     let dims = [left_dim, site_dim, right_dim];
     let inner = TfTensor::from_vec_col_major(dims.to_vec(), data).map_err(|error| {
-        TensorTrainError::InvalidOperation {
+        SimpleTensorTrainError::InvalidOperation {
             message: format!("rank-3 tensor construction failed: {error}"),
         }
     })?;

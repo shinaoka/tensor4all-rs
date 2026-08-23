@@ -533,7 +533,7 @@ fn native_einsum_profile_print_and_c32_arithmetic_paths() {
 
     let scaled = scale_native_tensor(
         &lhs,
-        &crate::AnyScalar::from_value(Complex32::new(2.0, -1.0)),
+        &crate::BackendScalar::from_value(Complex32::new(2.0, -1.0)),
     )
     .unwrap();
     assert_eq!(scaled.dtype(), DType::C32);
@@ -546,9 +546,9 @@ fn native_einsum_profile_print_and_c32_arithmetic_paths() {
 
     let combined = axpby_native_tensor(
         &lhs,
-        &crate::AnyScalar::from_value(Complex32::new(1.0, 0.0)),
+        &crate::BackendScalar::from_value(Complex32::new(1.0, 0.0)),
         &rhs,
-        &crate::AnyScalar::from_value(Complex32::new(0.0, 1.0)),
+        &crate::BackendScalar::from_value(Complex32::new(0.0, 1.0)),
     )
     .unwrap();
     assert_eq!(combined.dtype(), DType::C32);
@@ -621,7 +621,7 @@ fn scale_native_tensor_promotes_real_scalar_for_complex_tensor() {
         &[2],
     )
     .unwrap();
-    let scalar = crate::AnyScalar::new_real(2.0);
+    let scalar = crate::BackendScalar::new_real(2.0);
     let scaled = scale_native_tensor(&native, &scalar).unwrap();
     let values = native_tensor_primal_to_dense_col_major::<Complex64>(&scaled).unwrap();
 
@@ -636,15 +636,15 @@ fn scale_and_axpby_native_tensor_cover_f32_paths() {
     let lhs = dense_native_tensor_from_col_major(&[1.0_f32, -2.0_f32], &[2]).unwrap();
     let rhs = dense_native_tensor_from_col_major(&[0.5_f32, 4.0_f32], &[2]).unwrap();
 
-    let scaled = scale_native_tensor(&lhs, &crate::AnyScalar::from_value(0.5_f32)).unwrap();
+    let scaled = scale_native_tensor(&lhs, &crate::BackendScalar::from_value(0.5_f32)).unwrap();
     let scaled_values = native_tensor_primal_to_dense_col_major::<f32>(&scaled).unwrap();
     assert_eq!(scaled_values, vec![0.5_f32, -1.0_f32]);
 
     let combined = axpby_native_tensor(
         &lhs,
-        &crate::AnyScalar::from_value(2.0_f32),
+        &crate::BackendScalar::from_value(2.0_f32),
         &rhs,
-        &crate::AnyScalar::from_value(-1.0_f32),
+        &crate::BackendScalar::from_value(-1.0_f32),
     )
     .unwrap();
     let combined_values = native_tensor_primal_to_dense_col_major::<f32>(&combined).unwrap();
@@ -663,8 +663,8 @@ fn axpby_native_tensor_promotes_real_scalars_for_complex_tensors() {
         &[2],
     )
     .unwrap();
-    let a = crate::AnyScalar::new_real(2.0);
-    let b = crate::AnyScalar::new_real(-1.0);
+    let a = crate::BackendScalar::new_real(2.0);
+    let b = crate::BackendScalar::new_real(-1.0);
     let combined = axpby_native_tensor(&lhs, &a, &rhs, &b).unwrap();
     let values = native_tensor_primal_to_dense_col_major::<Complex64>(&combined).unwrap();
 
@@ -677,7 +677,7 @@ fn axpby_native_tensor_promotes_real_scalars_for_complex_tensors() {
 #[test]
 fn scale_and_axpby_storage_native_roundtrip() {
     let storage = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
-    let scalar = crate::AnyScalar::new_real(2.0);
+    let scalar = crate::BackendScalar::new_real(2.0);
     let scaled = scale_storage_native(&storage, &[3], &scalar).unwrap();
     let expected_scaled = Storage::from_dense_col_major(vec![2.0, 4.0, 6.0], &[3]).unwrap();
     assert_storage_eq(&scaled, &expected_scaled);
@@ -686,10 +686,10 @@ fn scale_and_axpby_storage_native_roundtrip() {
     let combined = axpby_storage_native(
         &storage,
         &[3],
-        &crate::AnyScalar::new_real(2.0),
+        &crate::BackendScalar::new_real(2.0),
         &rhs,
         &[3],
-        &crate::AnyScalar::new_real(3.0),
+        &crate::BackendScalar::new_real(3.0),
     )
     .unwrap();
     let expected_combined = Storage::from_dense_col_major(vec![11.0, 16.0, 21.0], &[3]).unwrap();

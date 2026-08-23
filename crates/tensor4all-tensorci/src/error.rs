@@ -82,7 +82,7 @@ pub enum TCIError {
     #[error("Matrix CI error: {0}")]
     MatrixCIError(#[from] tensor4all_core::MatrixCIError),
 
-    /// Tensor train error
-    #[error("Tensor train error: {0}")]
-    TensorTrainError(#[from] tensor4all_simplett::TensorTrainError),
+    /// Positional tensor train error.
+    #[error("simple tensor train error: {0}")]
+    SimpleTensorTrain(#[from] tensor4all_simplett::SimpleTensorTrainError),
 }

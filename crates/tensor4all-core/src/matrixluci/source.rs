@@ -4,7 +4,7 @@
 //! implementations: [`DenseMatrixSource`] (borrowed column-major data) and
 //! [`LazyMatrixSource`] (callback-backed block evaluation).
 
-use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::scalar::MatrixLuciScalar;
 use std::marker::PhantomData;
 use tensor4all_tensorbackend::Matrix;
 
@@ -12,7 +12,7 @@ use tensor4all_tensorbackend::Matrix;
 ///
 /// Implementors provide block-level access (filling column-major sub-blocks)
 /// so that kernels can select pivots without materializing the full matrix.
-pub(crate) trait CandidateMatrixSource<T: Scalar> {
+pub(crate) trait CandidateMatrixSource<T: MatrixLuciScalar> {
     /// Number of rows.
     fn nrows(&self) -> usize;
 
@@ -41,7 +41,7 @@ pub(crate) trait CandidateMatrixSource<T: Scalar> {
 ///
 /// Wraps a column-major data slice for use with pivot kernels.
 #[allow(dead_code)]
-pub(crate) struct DenseMatrixSource<'a, T: Scalar> {
+pub(crate) struct DenseMatrixSource<'a, T: MatrixLuciScalar> {
     data: &'a [T],
     nrows: usize,
     ncols: usize,
@@ -52,14 +52,14 @@ pub(crate) struct DenseMatrixSource<'a, T: Scalar> {
 /// Evaluates matrix blocks on demand via a user-supplied closure,
 /// avoiding full materialization. The closure fills a column-major
 /// output buffer for a given set of rows and columns.
-pub(crate) struct LazyMatrixSource<T: Scalar, F> {
+pub(crate) struct LazyMatrixSource<T: MatrixLuciScalar, F> {
     nrows: usize,
     ncols: usize,
     fill_block: F,
     _marker: PhantomData<T>,
 }
 
-impl<'a, T: Scalar> DenseMatrixSource<'a, T> {
+impl<'a, T: MatrixLuciScalar> DenseMatrixSource<'a, T> {
     /// Create a dense source from a column-major slice.
     #[allow(dead_code)]
     pub fn from_column_major(data: &'a [T], nrows: usize, ncols: usize) -> Self {
@@ -74,7 +74,7 @@ impl<'a, T: Scalar> DenseMatrixSource<'a, T> {
     }
 }
 
-impl<T: Scalar, F> LazyMatrixSource<T, F>
+impl<T: MatrixLuciScalar, F> LazyMatrixSource<T, F>
 where
     F: Fn(&[usize], &[usize], &mut [T]),
 {
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<T: Scalar> CandidateMatrixSource<T> for DenseMatrixSource<'_, T> {
+impl<T: MatrixLuciScalar> CandidateMatrixSource<T> for DenseMatrixSource<'_, T> {
     fn nrows(&self) -> usize {
         self.nrows
     }
@@ -118,7 +118,7 @@ impl<T: Scalar> CandidateMatrixSource<T> for DenseMatrixSource<'_, T> {
     }
 }
 
-impl<T: Scalar, F> CandidateMatrixSource<T> for LazyMatrixSource<T, F>
+impl<T: MatrixLuciScalar, F> CandidateMatrixSource<T> for LazyMatrixSource<T, F>
 where
     F: Fn(&[usize], &[usize], &mut [T]),
 {
@@ -143,7 +143,9 @@ where
 }
 
 #[allow(dead_code)]
-pub(crate) fn materialize_source<T: Scalar, S: CandidateMatrixSource<T>>(source: &S) -> Matrix<T> {
+pub(crate) fn materialize_source<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
+    source: &S,
+) -> Matrix<T> {
     let nrows = source.nrows();
     let ncols = source.ncols();
     let rows: Vec<usize> = (0..nrows).collect();

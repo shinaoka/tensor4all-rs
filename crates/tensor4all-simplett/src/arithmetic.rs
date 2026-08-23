@@ -32,10 +32,10 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert_eq!(c.rank(), 2);
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
-        use crate::error::TensorTrainError;
+        use crate::error::SimpleTensorTrainError;
 
         if self.len() != other.len() {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot add tensor trains of different lengths: {} vs {}",
                     self.len(),
@@ -56,7 +56,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             let b = other.site_tensor(i);
 
             if a.site_dim() != b.site_dim() {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: format!(
                         "Site dimensions mismatch at site {}: {} vs {}",
                         i,

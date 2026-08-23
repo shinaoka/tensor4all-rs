@@ -693,7 +693,7 @@ fn test_structured_storage_permute_logical_axes_basic() {
 #[test]
 fn test_storage_scale_f64() {
     let s = Storage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
-    let scaled = s.scale(&crate::AnyScalar::new_real(3.0));
+    let scaled = s.scale(&crate::BackendScalar::new_real(3.0));
     let data = extract_f64(&scaled);
     assert!((data[0] - 3.0).abs() < 1e-10);
     assert!((data[1] - 6.0).abs() < 1e-10);
@@ -705,9 +705,9 @@ fn test_storage_axpby_dense_f64() {
     let b = Storage::from_dense_col_major(vec![3.0, 4.0], &[2]).unwrap();
     let result = a
         .axpby(
-            &crate::AnyScalar::new_real(2.0),
+            &crate::BackendScalar::new_real(2.0),
             &b,
-            &crate::AnyScalar::new_real(3.0),
+            &crate::BackendScalar::new_real(3.0),
         )
         .unwrap();
     let data = extract_f64(&result);
@@ -722,9 +722,9 @@ fn test_storage_axpby_diag_f64() {
     let b = Storage::from_diag_col_major(vec![3.0, 4.0], 2).unwrap();
     let result = a
         .axpby(
-            &crate::AnyScalar::new_real(2.0),
+            &crate::BackendScalar::new_real(2.0),
             &b,
-            &crate::AnyScalar::new_real(3.0),
+            &crate::BackendScalar::new_real(3.0),
         )
         .unwrap();
     match result.repr() {
@@ -742,9 +742,9 @@ fn test_storage_axpby_complex_promotion() {
     let b = Storage::from_dense_col_major(vec![3.0, 4.0], &[2]).unwrap();
     let result = a
         .axpby(
-            &crate::AnyScalar::new_complex(1.0, 1.0),
+            &crate::BackendScalar::new_complex(1.0, 1.0),
             &b,
-            &crate::AnyScalar::new_real(1.0),
+            &crate::BackendScalar::new_real(1.0),
         )
         .unwrap();
     let data = extract_c64(&result);

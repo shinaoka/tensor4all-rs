@@ -41,7 +41,7 @@ pub(crate) mod tenferro_bridge;
 mod tensor_element;
 
 #[cfg(feature = "global-defaults")]
-pub use any_scalar::AnyScalar;
+pub use any_scalar::BackendScalar;
 #[cfg(feature = "global-defaults")]
 pub use backend::{
     full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,

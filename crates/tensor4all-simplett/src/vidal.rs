@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
@@ -26,9 +26,10 @@ fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Mat
         abs_tol: 0.0,
         left_orthogonal: true,
     };
-    let lu = rrlu(matrix, Some(options)).map_err(|err| TensorTrainError::InvalidOperation {
-        message: format!("QR decomposition failed: {err}"),
-    })?;
+    let lu =
+        rrlu(matrix, Some(options)).map_err(|err| SimpleTensorTrainError::InvalidOperation {
+            message: format!("QR decomposition failed: {err}"),
+        })?;
     Ok((lu.left(true), lu.right(true)))
 }
 
@@ -37,7 +38,7 @@ where
     T: TTScalar + Scalar + Default,
 {
     if tensor.shape().len() != 2 {
-        return Err(TensorTrainError::InvalidOperation {
+        return Err(SimpleTensorTrainError::InvalidOperation {
             message: format!(
                 "{op} returned rank-{} tensor, expected matrix",
                 tensor.shape().len()
@@ -50,8 +51,10 @@ where
     Ok(Matrix::from_col_major_vec(
         rows,
         cols,
-        tensor_to_col_major_vec(tensor).map_err(|err| TensorTrainError::InvalidOperation {
-            message: format!("Failed to read {op} matrix: {err}"),
+        tensor_to_col_major_vec(tensor).map_err(|err| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: format!("Failed to read {op} matrix: {err}"),
+            }
         })?,
     ))
 }
@@ -60,15 +63,16 @@ fn typed_real_values_to_f64<R>(tensor: &TypedTensor<R>, op: &'static str) -> Res
 where
     R: TensorScalar + ToPrimitive,
 {
-    let data =
-        tensor_to_col_major_vec(tensor).map_err(|err| TensorTrainError::InvalidOperation {
+    let data = tensor_to_col_major_vec(tensor).map_err(|err| {
+        SimpleTensorTrainError::InvalidOperation {
             message: format!("Failed to read {op} singular values: {err}"),
-        })?;
+        }
+    })?;
     data.iter()
         .map(|value| {
             value
                 .to_f64()
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                     message: format!(
                         "{op} returned a singular value that cannot be represented as f64"
                     ),
@@ -85,16 +89,16 @@ where
     let rows = matrix.nrows();
     let cols = matrix.ncols();
     if rows == 0 || cols == 0 {
-        return Err(TensorTrainError::InvalidOperation {
+        return Err(SimpleTensorTrainError::InvalidOperation {
             message: "Cannot compute Vidal singular values for an empty bond matrix".to_string(),
         });
     }
 
     let typed = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[rows, cols])
-        .map_err(|err| TensorTrainError::InvalidOperation {
+        .map_err(|err| SimpleTensorTrainError::InvalidOperation {
             message: format!("Failed to prepare Vidal bond SVD input matrix: {err}"),
         })?;
-    let decomp = svd_backend(&typed).map_err(|e| TensorTrainError::InvalidOperation {
+    let decomp = svd_backend(&typed).map_err(|e| SimpleTensorTrainError::InvalidOperation {
         message: format!("Failed to compute Vidal bond SVD: {e}"),
     })?;
 
@@ -244,7 +248,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
         }
 
         if partition.end > n {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Partition end {} exceeds tensor train length {}",
                     partition.end, n
@@ -285,7 +289,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let next_mat = tensor3_to_right_matrix(&tensors[i + 1]);
 
             let contracted =
-                mat_mul(&r, &next_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                mat_mul(&r, &next_mat).map_err(|err| SimpleTensorTrainError::InvalidOperation {
                     message: format!("Vidal left sweep matrix multiply failed: {err}"),
                 })?;
 
@@ -335,10 +339,11 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                 let prev_left_dim = tensors[i - 1].left_dim();
                 let prev_site_dim = tensors[i - 1].site_dim();
                 let prev_mat = tensor3_to_left_matrix(&tensors[i - 1]);
-                let contracted =
-                    mat_mul(&prev_mat, &us).map_err(|err| TensorTrainError::InvalidOperation {
+                let contracted = mat_mul(&prev_mat, &us).map_err(|err| {
+                    SimpleTensorTrainError::InvalidOperation {
                         message: format!("Vidal right sweep matrix multiply failed: {err}"),
-                    })?;
+                    }
+                })?;
 
                 let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
                 for l in 0..prev_left_dim {
@@ -411,7 +416,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
         }
 
         if singular_values.len() != n - 1 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Expected {} singular value vectors, got {}",
                     n - 1,
@@ -711,7 +716,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
         tensor2: Tensor3<T>,
     ) -> Result<()> {
         if i >= self.len() - 1 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot set two-site tensors at site {} (max {})",
                     i,

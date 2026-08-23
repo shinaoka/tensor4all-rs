@@ -6,7 +6,7 @@
 //! [`LazyBlockRookKernel`](super::LazyBlockRookKernel) (residual-based
 //! rook search for lazy sources).
 
-use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::scalar::MatrixLuciScalar;
 use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 
@@ -14,7 +14,7 @@ use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 ///
 /// Different implementations choose pivots using different strategies
 /// (dense full-pivoting LU, lazy rook search, etc.).
-pub(crate) trait PivotKernel<T: Scalar> {
+pub(crate) trait PivotKernel<T: MatrixLuciScalar> {
     /// Factorize the candidate matrix and return pivot-only output.
     fn factorize<S: CandidateMatrixSource<T>>(
         &self,

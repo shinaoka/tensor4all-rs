@@ -63,7 +63,7 @@ use crate::storage::Storage;
 #[cfg(test)]
 use crate::storage::StorageRepr;
 use crate::tensor_element::TensorElement;
-use crate::AnyScalar;
+use crate::BackendScalar;
 
 /// Read-only native tensor input that can either borrow external payload data
 /// or own a temporary materialized tensor.
@@ -1181,7 +1181,7 @@ pub fn svd_native_tensor(
 /// # Errors
 ///
 /// Returns an error when the native reduction fails (a backend or dtype mismatch failure).
-pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<AnyScalar, BridgeError> {
+pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<BackendScalar, BridgeError> {
     let reduced = if tensor.shape().is_empty() {
         tensor
             .duplicate()
@@ -1191,7 +1191,7 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<AnyScalar
         with_default_session(|session| tensor.reduce_sum(&axes, session))
             .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
-    Ok(AnyScalar::from_native(reduced)?)
+    Ok(BackendScalar::from_native(reduced)?)
 }
 
 /// Return the tangent tensor when present.
@@ -1208,7 +1208,7 @@ pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
 /// Returns an error when the native scaling fails (a backend or dtype mismatch failure).
 pub fn scale_native_tensor(
     tensor: &NativeTensor,
-    scalar: &AnyScalar,
+    scalar: &BackendScalar,
 ) -> std::result::Result<NativeTensor, BridgeError> {
     let target = common_dtype(&[tensor.dtype(), scalar.as_native().dtype()]);
     let tensor = convert_tensor(tensor, target)?;
@@ -1271,9 +1271,9 @@ pub fn scale_native_tensor(
 /// Returns an error when the native axpby fails (a shape or dtype mismatch, or a backend failure).
 pub fn axpby_native_tensor(
     lhs: &NativeTensor,
-    a: &AnyScalar,
+    a: &BackendScalar,
     rhs: &NativeTensor,
-    b: &AnyScalar,
+    b: &BackendScalar,
 ) -> std::result::Result<NativeTensor, BridgeError> {
     if lhs.shape() != rhs.shape() {
         return Err(BridgeError::from(anyhow!(
@@ -1735,7 +1735,7 @@ pub fn outer_product_storage_native(
 pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
-    scalar: &AnyScalar,
+    scalar: &BackendScalar,
 ) -> std::result::Result<Storage, BridgeError> {
     let native = storage_to_native_tensor(storage, logical_dims)?;
     let scaled = scale_native_tensor(&native, scalar)?;
@@ -1749,10 +1749,10 @@ pub fn scale_storage_native(
 pub fn axpby_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
-    a: &AnyScalar,
+    a: &BackendScalar,
     rhs: &Storage,
     rhs_dims: &[usize],
-    b: &AnyScalar,
+    b: &BackendScalar,
 ) -> std::result::Result<Storage, BridgeError> {
     let lhs = storage_to_native_tensor(lhs, lhs_dims)?;
     let rhs = storage_to_native_tensor(rhs, rhs_dims)?;

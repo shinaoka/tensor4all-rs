@@ -260,7 +260,7 @@ pub enum AciError {
 
     /// Tensor train operation failed.
     #[error("tensor train error: {0}")]
-    TensorTrain(#[from] tensor4all_simplett::TensorTrainError),
+    TensorTrain(#[from] tensor4all_simplett::SimpleTensorTrainError),
 }
 ```
 

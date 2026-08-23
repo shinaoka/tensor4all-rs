@@ -1,7 +1,7 @@
 //! Dense pivot-kernel implementations.
 
 use crate::matrixluci::kernel::PivotKernel;
-use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::scalar::MatrixLuciScalar;
 use crate::matrixluci::source::{materialize_source, CandidateMatrixSource};
 use crate::matrixluci::{MatrixLuciError, PivotKernelOptions, PivotSelectionCore, Result};
 use crate::scalar::Scalar as LegacyScalar;
@@ -90,7 +90,7 @@ impl DenseLuKernel {
         accepted
     }
 
-    fn factorize_with_rrlu<T: Scalar + LegacyScalar>(
+    fn factorize_with_rrlu<T: MatrixLuciScalar + LegacyScalar>(
         data: &[T],
         nrows: usize,
         ncols: usize,
@@ -116,7 +116,7 @@ impl DenseLuKernel {
         })
     }
 
-    fn permutation_indices_from_matrix<T: Scalar>(
+    fn permutation_indices_from_matrix<T: MatrixLuciScalar>(
         data: &[T],
         n: usize,
         name: &str,
@@ -138,7 +138,7 @@ impl DenseLuKernel {
         Ok(indices)
     }
 
-    fn factorize_square_with_tenferro<T: Scalar + TensorScalar>(
+    fn factorize_square_with_tenferro<T: MatrixLuciScalar + TensorScalar>(
         data: &[T],
         n: usize,
         options: &PivotKernelOptions,

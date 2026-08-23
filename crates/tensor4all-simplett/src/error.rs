@@ -3,40 +3,33 @@
 use thiserror::Error;
 
 /// Result type for tensor train operations
-pub type Result<T> = std::result::Result<T, TensorTrainError>;
+pub type Result<T> = std::result::Result<T, SimpleTensorTrainError>;
 
 /// Errors that can occur during tensor train operations
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{TensorTrainError, SimpleTensorTrain, AbstractTensorTrain};
+/// use tensor4all_simplett::{SimpleTensorTrainError, SimpleTensorTrain, AbstractTensorTrain};
 ///
 /// // Empty index set triggers IndexLengthMismatch
 /// let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
 /// let err = tt.evaluate(&[0]).unwrap_err();
-/// assert!(matches!(err, TensorTrainError::IndexLengthMismatch { expected: 2, got: 1 }));
+/// assert!(matches!(err, SimpleTensorTrainError::IndexLengthMismatch { expected: 2, got: 1 }));
 ///
 /// // DimensionMismatch can be constructed directly
-/// let err = TensorTrainError::DimensionMismatch { site: 3 };
+/// let err = SimpleTensorTrainError::DimensionMismatch { site: 3 };
 /// assert!(err.to_string().contains("site 3"));
 ///
 /// // InvalidOperation carries an arbitrary message
-/// let err = TensorTrainError::InvalidOperation {
+/// let err = SimpleTensorTrainError::InvalidOperation {
 ///     message: "test error".to_string(),
 /// };
 /// assert!(err.to_string().contains("test error"));
 /// ```
-/// Error type for `SimpleTensorTrain` operations.
-///
-/// Note: `tensor4all-itensorlike` also defines a public type named
-/// `TensorTrainError` (see its
-/// [rustdoc](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_itensorlike/error/enum.TensorTrainError.html))
-/// with different variants (its tree-based `TensorTrain`). When both crates
-/// are in scope, qualify the path (e.g. `tensor4all_simplett::TensorTrainError`
-/// vs `tensor4all_itensorlike::TensorTrainError`).
+/// Error type for [`SimpleTensorTrain`](crate::SimpleTensorTrain) operations.
 #[derive(Error, Debug)]
-pub enum TensorTrainError {
+pub enum SimpleTensorTrainError {
     /// Dimension mismatch between tensors
     #[error("Dimension mismatch: tensor at site {site} has incompatible dimensions")]
     DimensionMismatch {

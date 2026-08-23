@@ -1,5 +1,6 @@
 use super::*;
 use crate::matrix_luci::MatrixLuciFactors;
+use crate::Scalar;
 use tensor4all_tensorbackend::Matrix;
 
 fn identity2<T: Scalar>() -> Matrix<T> {
@@ -51,13 +52,14 @@ fn assert_identity2_factor_shapes<T>(factors: &MatrixLuciFactors<T>) {
 
 fn test_matrix_luci_factor_dispatch_supported<T>()
 where
-    T: Scalar + crate::scalar::Scalar,
+    T: MatrixLuciScalar,
 {
     let matrix = identity2::<T>();
-    let dense = <T as Scalar>::matrix_luci_factors_from_matrix(&matrix, options()).unwrap();
+    let dense =
+        <T as MatrixLuciScalar>::matrix_luci_factors_from_matrix(&matrix, options()).unwrap();
     assert_identity2_factor_shapes(&dense);
 
-    let lazy = <T as Scalar>::matrix_luci_factors_from_blocks(
+    let lazy = <T as MatrixLuciScalar>::matrix_luci_factors_from_blocks(
         matrix.nrows(),
         matrix.ncols(),
         |rows, cols, out| {

@@ -9,7 +9,7 @@ use bnum::types::{U1024, U256, U512};
 
 use crate::einsum_helper::EinsumScalar;
 use crate::einsum_helper::{matrix_times_col_vector, row_vector_times_matrix};
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 
@@ -95,7 +95,7 @@ impl FlatIndexer {
     fn new(local_dims: &[usize]) -> Result<Self> {
         let total_bits = compute_total_bits(local_dims);
         if total_bits > 1024 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "cache index space requires {total_bits} bits, exceeding the 1024-bit key limit"
                 ),
@@ -282,7 +282,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     ) -> Result<Self> {
         let n = tt.len();
         if site_dims.len() != n {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "site_dims length {} doesn't match tensor train length {}",
                     site_dims.len(),
@@ -294,7 +294,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         // Validate that site_dims products match tensor site dimensions
         for (i, (tensor, dims)) in tt.site_tensors().iter().zip(site_dims.iter()).enumerate() {
             if dims.is_empty() {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: format!("site_dims at site {i} must contain at least one dimension"),
                 });
             }
@@ -302,12 +302,12 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
                 .iter()
                 .try_fold(1usize, |acc, &dim| acc.checked_mul(dim));
             let Some(expected) = expected else {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: format!("site_dims product overflows usize at site {i}"),
                 });
             };
             if expected != tensor.site_dim() {
-                return Err(TensorTrainError::InvalidOperation {
+                return Err(SimpleTensorTrainError::InvalidOperation {
                     message: format!(
                         "site_dims product {} doesn't match tensor site dim {} at site {}",
                         expected,
@@ -374,19 +374,19 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         let mut flat = 0usize;
         let mut stride = 1usize;
         for (i, &idx) in indices.iter().rev().enumerate() {
-            let term =
-                idx.checked_mul(stride)
-                    .ok_or_else(|| TensorTrainError::InvalidOperation {
+            let term = idx.checked_mul(stride).ok_or_else(|| {
+                SimpleTensorTrainError::InvalidOperation {
+                    message: format!("flat index offset overflowed at site {site}"),
+                }
+            })?;
+            flat =
+                flat.checked_add(term)
+                    .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                         message: format!("flat index offset overflowed at site {site}"),
                     })?;
-            flat = flat
-                .checked_add(term)
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
-                    message: format!("flat index offset overflowed at site {site}"),
-                })?;
             stride = stride
                 .checked_mul(dims[dims.len() - 1 - i])
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                     message: format!("flat index stride overflowed at site {site}"),
                 })?;
         }
@@ -397,20 +397,19 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         self.site_dims[site]
             .iter()
             .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-            .ok_or_else(|| TensorTrainError::InvalidOperation {
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                 message: format!("Site dimension product overflowed at site {site}"),
             })
     }
 
     fn validate_partial_indices(&self, start: usize, indices: &[LocalIndex]) -> Result<()> {
-        let end =
-            start
-                .checked_add(indices.len())
-                .ok_or_else(|| TensorTrainError::InvalidOperation {
-                    message: "Partial index range overflowed usize".to_string(),
-                })?;
+        let end = start.checked_add(indices.len()).ok_or_else(|| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: "Partial index range overflowed usize".to_string(),
+            }
+        })?;
         if end > self.len() {
-            return Err(TensorTrainError::IndexLengthMismatch {
+            return Err(SimpleTensorTrainError::IndexLengthMismatch {
                 expected: self.len(),
                 got: end,
             });
@@ -420,7 +419,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             let site = start + offset;
             let max = self.flat_site_dim(site)?;
             if index >= max {
-                return Err(TensorTrainError::IndexOutOfBounds { site, index, max });
+                return Err(SimpleTensorTrainError::IndexOutOfBounds { site, index, max });
             }
         }
 
@@ -463,7 +462,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             let tensor = &self.tensors[ell - 1];
             let slice = tensor.slice_site(flat_idx);
             row_vector_times_matrix(&left, &slice, tensor.left_dim(), tensor.right_dim()).map_err(
-                |err| TensorTrainError::InvalidOperation {
+                |err| SimpleTensorTrainError::InvalidOperation {
                     message: format!("Failed to evaluate left environment at site {ell}: {err}"),
                 },
             )?
@@ -488,7 +487,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         let n = self.len();
         let ell = indices.len();
         if ell > n {
-            return Err(TensorTrainError::IndexLengthMismatch {
+            return Err(SimpleTensorTrainError::IndexLengthMismatch {
                 expected: n,
                 got: ell,
             });
@@ -520,7 +519,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             let tensor = &self.tensors[start];
             let slice = tensor.slice_site(flat_idx);
             matrix_times_col_vector(&slice, tensor.left_dim(), tensor.right_dim(), &right).map_err(
-                |err| TensorTrainError::InvalidOperation {
+                |err| SimpleTensorTrainError::InvalidOperation {
                     message: format!("Failed to evaluate right environment at site {start}: {err}"),
                 },
             )?
@@ -540,14 +539,14 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
     pub fn evaluate(&mut self, indices: &[LocalIndex]) -> Result<T> {
         let n = self.len();
         if indices.len() != n {
-            return Err(TensorTrainError::IndexLengthMismatch {
+            return Err(SimpleTensorTrainError::IndexLengthMismatch {
                 expected: n,
                 got: indices.len(),
             });
         }
 
         if n == 0 {
-            return Err(TensorTrainError::Empty);
+            return Err(SimpleTensorTrainError::Empty);
         }
 
         // Split at midpoint for efficiency
@@ -557,7 +556,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Contract left and right
         if left.len() != right.len() {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Left/right shape mismatch: {} vs {}",
                     left.len(),
@@ -602,11 +601,11 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         let n = self.len();
         if n == 0 {
-            return Err(TensorTrainError::Empty);
+            return Err(SimpleTensorTrainError::Empty);
         }
         for idx in indices {
             if idx.len() != n {
-                return Err(TensorTrainError::IndexLengthMismatch {
+                return Err(SimpleTensorTrainError::IndexLengthMismatch {
                     expected: n,
                     got: idx.len(),
                 });
@@ -621,7 +620,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         };
 
         if split == 0 || split > n {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!("Invalid split position: {} (n_sites={})", split, n),
             });
         }
@@ -701,7 +700,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
                     .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| TensorTrainError::InvalidOperation {
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                 message: "cache heuristic site-dimension product overflowed usize".to_string(),
             })?;
 
@@ -734,7 +733,7 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             .into_iter()
             .min_by_key(|&(_, c)| c)
             .map(|(p, _)| p)
-            .ok_or_else(|| TensorTrainError::InvalidOperation {
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                 message: "cache heuristic could not choose a valid split".to_string(),
             })
     }

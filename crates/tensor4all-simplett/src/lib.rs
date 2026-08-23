@@ -72,7 +72,7 @@ pub use canonical::{center_canonicalize, SiteTensorTrain};
 pub use compression::{CompressionMethod, CompressionOptions};
 pub use contraction::{inner_product, ContractionOptions};
 pub use einsum_helper::EinsumScalar;
-pub use error::{Result, TensorTrainError};
+pub use error::{Result, SimpleTensorTrainError};
 pub use tensortrain::SimpleTensorTrain;
 
 // Re-export the tenferro tensor type used by the public `from_tenferro` /

@@ -144,24 +144,24 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// assert!(tt.evaluate(&[0]).is_err());
     /// ```
     fn evaluate(&self, indices: &[LocalIndex]) -> Result<T> {
-        use crate::error::TensorTrainError;
+        use crate::error::SimpleTensorTrainError;
 
         if indices.len() != self.len() {
-            return Err(TensorTrainError::IndexLengthMismatch {
+            return Err(SimpleTensorTrainError::IndexLengthMismatch {
                 expected: self.len(),
                 got: indices.len(),
             });
         }
 
         if self.is_empty() {
-            return Err(TensorTrainError::Empty);
+            return Err(SimpleTensorTrainError::Empty);
         }
 
         // Start with the first tensor slice
         let first = self.site_tensor(0);
         let idx0 = indices[0];
         if idx0 >= first.site_dim() {
-            return Err(TensorTrainError::IndexOutOfBounds {
+            return Err(SimpleTensorTrainError::IndexOutOfBounds {
                 site: 0,
                 index: idx0,
                 max: first.site_dim(),
@@ -175,7 +175,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
         for (site, &idx) in indices.iter().enumerate().skip(1) {
             let tensor = self.site_tensor(site);
             if idx >= tensor.site_dim() {
-                return Err(TensorTrainError::IndexOutOfBounds {
+                return Err(SimpleTensorTrainError::IndexOutOfBounds {
                     site,
                     index: idx,
                     max: tensor.site_dim(),
@@ -200,7 +200,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
 
         // Should have a single element
         if current.len() != 1 {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Final contraction resulted in {} elements, expected 1",
                     current.len()

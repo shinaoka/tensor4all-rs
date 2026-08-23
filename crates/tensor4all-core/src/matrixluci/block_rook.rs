@@ -3,7 +3,7 @@
 use crate::matrixluci::error::MatrixLuciError;
 use crate::matrixluci::factors::{load_block, subtract_inplace};
 use crate::matrixluci::kernel::PivotKernel;
-use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::scalar::MatrixLuciScalar;
 use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::Result;
@@ -18,7 +18,7 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
 
-fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
+fn residual_block<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
     rows: &[usize],
     cols: &[usize],
@@ -43,7 +43,7 @@ fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
     Ok(residual)
 }
 
-fn argmax_abs<T: Scalar>(matrix: &Matrix<T>) -> (usize, usize, f64) {
+fn argmax_abs<T: MatrixLuciScalar>(matrix: &Matrix<T>) -> (usize, usize, f64) {
     let mut best_row = 0usize;
     let mut best_col = 0usize;
     let mut best_abs = -1.0f64;
@@ -68,7 +68,7 @@ fn remaining_indices(total: usize, selected: &[usize]) -> Vec<usize> {
     (0..total).filter(|&idx| !used[idx]).collect()
 }
 
-fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
+fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
     remaining_rows: &[usize],
     remaining_cols: &[usize],
@@ -117,7 +117,7 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
     Ok((current_row, remaining_cols[best_col_pos], best_abs))
 }
 
-fn factorize_lazy<T: Scalar, S: CandidateMatrixSource<T>>(
+fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
     options: &PivotKernelOptions,
 ) -> Result<PivotSelectionCore> {

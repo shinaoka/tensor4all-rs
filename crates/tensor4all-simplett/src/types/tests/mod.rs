@@ -83,7 +83,10 @@ fn test_slice_site() {
     let fallible_slice = t.try_slice_site(1).unwrap();
     assert_eq!(fallible_slice, slice);
     let error = t.try_slice_site(3).unwrap_err();
-    assert!(matches!(error, TensorTrainError::IndexOutOfBounds { .. }));
+    assert!(matches!(
+        error,
+        SimpleTensorTrainError::IndexOutOfBounds { .. }
+    ));
 }
 
 #[test]

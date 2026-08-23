@@ -8,7 +8,7 @@ use std::ops::{Index, IndexMut};
 
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
-use crate::error::{Result, TensorTrainError};
+use crate::error::{Result, SimpleTensorTrainError};
 
 /// Rank-N host-backed tensor backed by `tenferro_tensor::TypedTensor<T>`.
 #[derive(Debug)]
@@ -78,7 +78,7 @@ fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     data: Vec<T>,
 ) -> Result<Tensor<T, N>> {
     let inner = TfTensor::from_vec_col_major(dims.to_vec(), data).map_err(|error| {
-        TensorTrainError::InvalidOperation {
+        SimpleTensorTrainError::InvalidOperation {
             message: format!("invalid tensor shape or data: {error}"),
         }
     })?;
@@ -301,7 +301,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// ```
     pub fn from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
         if tensor.shape().len() != N {
-            return Err(TensorTrainError::InvalidOperation {
+            return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "tensor rank mismatch: expected rank {N}, got {}",
                     tensor.shape().len()
@@ -310,7 +310,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         }
         tensor
             .host_data()
-            .map_err(|error| TensorTrainError::InvalidOperation {
+            .map_err(|error| SimpleTensorTrainError::InvalidOperation {
                 message: format!("simplett tensors must be host-backed: {error}"),
             })?;
         let mut dims = [0usize; N];
@@ -325,7 +325,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidOperation`] when the shape product
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the shape product
     /// overflows, allocation cannot reserve the required capacity, or tenferro
     /// rejects the generated shape and data.
     ///
@@ -336,20 +336,21 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// let tensor = Tensor2::try_from_fn([2, 2], |[i, j]| (i + 2 * j) as f64)?;
     /// assert_eq!(tensor.to_col_major_vec(), vec![0.0, 1.0, 2.0, 3.0]);
-    /// # Ok::<(), tensor4all_simplett::TensorTrainError>(())
+    /// # Ok::<(), tensor4all_simplett::SimpleTensorTrainError>(())
     /// ```
     pub fn try_from_fn(dims: [usize; N], mut f: impl FnMut([usize; N]) -> T) -> Result<Self> {
         let total = dims
             .iter()
             .try_fold(1usize, |total, &dim| total.checked_mul(dim))
-            .ok_or_else(|| TensorTrainError::InvalidOperation {
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                 message: format!("tensor shape product overflows usize: {dims:?}"),
             })?;
         let mut data = Vec::new();
-        data.try_reserve_exact(total)
-            .map_err(|error| TensorTrainError::InvalidOperation {
+        data.try_reserve_exact(total).map_err(|error| {
+            SimpleTensorTrainError::InvalidOperation {
                 message: format!("cannot allocate tensor shape {dims:?}: {error}"),
-            })?;
+            }
+        })?;
 
         for linear in 0..total {
             data.push(f(col_major_index_from_linear(linear, &dims)));
@@ -375,7 +376,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidOperation`] when the shape product
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the shape product
     /// overflows, allocation cannot reserve the required capacity, or tenferro
     /// rejects the generated shape and data.
     ///
@@ -386,20 +387,21 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     ///
     /// let tensor = Tensor2::try_from_elem([2, 3], 4.0_f64)?;
     /// assert_eq!(tensor.to_col_major_vec(), vec![4.0; 6]);
-    /// # Ok::<(), tensor4all_simplett::TensorTrainError>(())
+    /// # Ok::<(), tensor4all_simplett::SimpleTensorTrainError>(())
     /// ```
     pub fn try_from_elem(dims: [usize; N], value: T) -> Result<Self> {
         let total = dims
             .iter()
             .try_fold(1usize, |total, &dim| total.checked_mul(dim))
-            .ok_or_else(|| TensorTrainError::InvalidOperation {
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                 message: format!("tensor shape product overflows usize: {dims:?}"),
             })?;
         let mut data = Vec::new();
-        data.try_reserve_exact(total)
-            .map_err(|error| TensorTrainError::InvalidOperation {
+        data.try_reserve_exact(total).map_err(|error| {
+            SimpleTensorTrainError::InvalidOperation {
                 message: format!("cannot allocate tensor shape {dims:?}: {error}"),
-            })?;
+            }
+        })?;
         data.resize(total, value);
         col_major_data_to_tensor(dims, data)
     }
