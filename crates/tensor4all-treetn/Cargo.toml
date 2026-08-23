@@ -44,5 +44,9 @@ name = "cached_evaluator"
 harness = false
 
 [[example]]
+name = "cuda_quickstart"
+required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
+
+[[example]]
 name = "cuda_tree_contraction"
 required-features = ["tenferro-cuda", "tenferro-cpu-faer"]

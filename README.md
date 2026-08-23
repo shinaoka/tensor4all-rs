@@ -12,6 +12,7 @@ Related project: [tenferro-rs](https://github.com/tensor4all/tenferro-rs) provid
 - **Tensor Cross Interpolation**: TCI2 primary algorithm plus legacy TCI1 compatibility for efficient high-dimensional function approximation
 - **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
 - **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
+- **Experimental CUDA contraction**: Explicit upload, dense TreeTN full contraction, and download on one GPU
 - **Partitioned TreeTNs**: Eagerly masked subdomains and volume-budgeted adaptive patching
 - **C API**: Minimal Julia-facing FFI surface for indices, structured tensors, TreeTN, and quantics materialization
 
@@ -67,6 +68,7 @@ validated in CI. Longer runnable examples live in the
 ## Documentation
 
 - **[User Guide](https://tensor4all.org/tensor4all-rs/)** — tutorials, architecture, conventions
+- **[CUDA TreeTN Tutorial](https://tensor4all.org/tensor4all-rs/tutorials/gpu/cuda-tree-contraction.html)** — explicit GPU transfer and dense full contraction
 - **[API Reference (rustdoc)](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/)** — generated API documentation
 - **[Julia Bindings](https://github.com/tensor4all/Tensor4all.jl)** — Tensor4all.jl wrapper
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
