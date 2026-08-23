@@ -1729,7 +1729,7 @@ fn test_cumsum_operator_creation() {
 
 /// Test cumsum operator for all x values.
 ///
-/// cumsum is a strict upper triangular matrix:
+/// cumsum is a strict lower triangular matrix:
 /// cumsum(|x⟩) = Σ_{y > x} |y⟩
 ///
 /// The comparison y > x is done in big-endian bit order (MSB to LSB).
@@ -1781,7 +1781,7 @@ fn test_cumsum_all_values() {
 
         eprintln!("cumsum(|{}⟩):", x);
 
-        // For cumsum, result[y] = 1 iff y > x (strict upper triangular)
+        // For cumsum, result[y] = 1 iff y > x (strict lower triangular)
         // Now that contract_treetn_to_vector uses big-endian, result[y] corresponds to value y
         let mut count_positive = 0;
         for y in 0..n {
@@ -2705,7 +2705,7 @@ fn test_cumsum_matches_lower_triangle() {
             for j in 0..n {
                 if (cumsum_mat[i][j] - triangle_mat[i][j]).norm() > 1e-10 {
                     panic!(
-                        "cumsum vs upper_triangle mismatch at r={} [{},{}]: \
+                        "cumsum vs lower_triangle mismatch at r={} [{},{}]: \
                          cumsum=({:.6},{:.6}) triangle=({:.6},{:.6})",
                         r,
                         i,

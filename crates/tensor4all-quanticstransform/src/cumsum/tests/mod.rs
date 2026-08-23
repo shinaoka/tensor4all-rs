@@ -2,8 +2,8 @@ use super::*;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
-fn test_upper_triangle_tensor() {
-    let t = upper_triangle_tensor();
+fn test_lower_triangle_tensor() {
+    let t = lower_triangle_tensor();
 
     // State 0 -> State 0: diagonal
     assert_eq!(t[0][0][0][0], Complex64::one());
