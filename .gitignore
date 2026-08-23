@@ -31,6 +31,7 @@ benchmarks/results/*.h5
 # Avoid accidentally committing ad-hoc analysis notes at repo root
 /*.md
 !README.md
+!CONTRIBUTING.md
 !AGENTS.md
 !CLAUDE.md
 
