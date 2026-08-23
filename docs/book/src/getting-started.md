@@ -14,6 +14,10 @@ crates.io yet, so use git dependencies from an external project:
 # Basic tensor train construction and manipulation
 tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
 
+# Indexed tensors and ITensors-like TensorTrain/TT-SVD
+tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-core" }
+tensor4all-itensorlike = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-itensorlike" }
+
 # Tensor Cross Interpolation (TCI)
 tensor4all-tensorci = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-tensorci" }
 
@@ -32,6 +36,8 @@ relative to your project's `Cargo.toml`; adjust `../tensor4all-rs` as needed:
 ```toml
 [dependencies]
 tensor4all-simplett = { path = "../tensor4all-rs/crates/tensor4all-simplett" }
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core" }
+tensor4all-itensorlike = { path = "../tensor4all-rs/crates/tensor4all-itensorlike" }
 tensor4all-tensorci = { path = "../tensor4all-rs/crates/tensor4all-tensorci" }
 tensor4all-quanticstci = { path = "../tensor4all-rs/crates/tensor4all-quanticstci" }
 tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn" }
@@ -79,4 +85,5 @@ cargo run
 ## Next Steps
 
 - [Concepts](concepts.md) — learn about tensor trains, bond dimensions, and TCI before diving deeper.
+- [Dense Tensor to Tensor Train with TT-SVD](guides/dense-tt-svd.md) — decompose an existing full indexed tensor with sequential SVD.
 - [Guides](guides/tensor-basics.md) — step-by-step walkthroughs for tensor basics, TCI, quantics transforms, and tree tensor networks.

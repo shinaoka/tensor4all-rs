@@ -2,7 +2,9 @@ use super::*;
 use std::error::Error;
 use std::io;
 use std::time::Duration;
-use tensor4all_core::{DynId, Index, LinearizationOrder, TensorContractionLike, TensorVectorSpace};
+use tensor4all_core::{
+    DynId, Index, LinearizationOrder, SvdTruncationPolicy, TensorContractionLike, TensorVectorSpace,
+};
 
 /// Helper to create a simple tensor for testing
 fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
@@ -43,6 +45,118 @@ fn test_single_site_tt() {
     assert_eq!(tt.len(), 1);
     assert!(!tt.is_ortho());
     assert_eq!(tt.bond_dims(), Vec::<usize>::new());
+}
+
+fn dense_tt_svd_round_trip<T: TensorElement>(data: Vec<T>, tolerance: f64) {
+    let sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let dense = IdxTensor::from_dense(sites.to_vec(), data).unwrap();
+    let options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(0.0));
+    let train = TensorTrain::from_dense(&dense, &sites, &options).unwrap();
+    let reconstructed = train.to_dense().unwrap();
+
+    assert!(dense.distance(&reconstructed).unwrap() < tolerance);
+    assert_eq!(train.ortho_center(), Some(2));
+    assert_eq!(train.canonical_form(), Some(CanonicalForm::Unitary));
+}
+
+#[test]
+fn dense_tt_svd_round_trips_f64() {
+    dense_tt_svd_round_trip(vec![1.0_f64, 2.0, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0], 1.0e-12);
+}
+
+#[test]
+fn dense_tt_svd_round_trips_complex64() {
+    dense_tt_svd_round_trip(
+        (0..8)
+            .map(|value| Complex64::new(value as f64 + 1.0, (value % 3) as f64 - 1.0))
+            .collect(),
+        1.0e-12,
+    );
+}
+
+#[test]
+fn dense_tt_svd_caps_bonds_and_reports_expected_truncation_error() {
+    let sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let mut data = vec![0.0_f64; 8];
+    data[0] = 1.0;
+    data[7] = 0.1;
+    let dense = IdxTensor::from_dense(sites.to_vec(), data).unwrap();
+    let options = SvdOptions::new()
+        .with_policy(SvdTruncationPolicy::new(0.0))
+        .with_max_bond_dim(1);
+    let train = TensorTrain::from_dense(&dense, &sites, &options).unwrap();
+    let error = dense.distance(&train.to_dense().unwrap()).unwrap();
+
+    assert_eq!(train.bond_dims(), vec![1, 1]);
+    assert!(error > 0.09 && error < 0.11, "relative error = {error}");
+}
+
+#[test]
+fn dense_tt_svd_uses_full_index_identity_for_site_order() {
+    let site = DynIndex::new_dyn(2);
+    let primed = site.prime();
+    let dense = IdxTensor::from_dense(
+        vec![primed.clone(), site.clone()],
+        vec![1.0_f64, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
+    let train = TensorTrain::from_dense(
+        &dense,
+        &[site, primed],
+        &SvdOptions::new().with_policy(SvdTruncationPolicy::new(0.0)),
+    )
+    .unwrap();
+
+    assert!(dense.distance(&train.to_dense().unwrap()).unwrap() < 1.0e-12);
+    assert_eq!(train.site_indices()[0][0].plev(), 0);
+    assert_eq!(train.site_indices()[1][0].plev(), 1);
+}
+
+#[test]
+fn dense_tt_svd_rejects_invalid_sites_and_options_before_single_site_shortcut() {
+    let site = DynIndex::new_dyn(2);
+    let dense = IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap();
+
+    assert!(matches!(
+        TensorTrain::from_dense(&dense, &[], &SvdOptions::new()).unwrap_err(),
+        TensorTrainError::InvalidStructure { .. }
+    ));
+    assert!(matches!(
+        TensorTrain::from_dense(&dense, &[site.clone(), site.clone()], &SvdOptions::new(),)
+            .unwrap_err(),
+        TensorTrainError::InvalidStructure { .. }
+    ));
+    assert!(matches!(
+        TensorTrain::from_dense(&dense, &[DynIndex::new_dyn(2)], &SvdOptions::new(),).unwrap_err(),
+        TensorTrainError::InvalidStructure { .. }
+    ));
+    assert!(matches!(
+        TensorTrain::from_dense(&dense, &[site], &SvdOptions::new().with_max_bond_dim(0))
+            .unwrap_err(),
+        TensorTrainError::Factorize(FactorizeError::InvalidOptions(_))
+    ));
+
+    let diag_sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let diagonal = IdxTensor::from_diag(diag_sites.to_vec(), vec![1.0_f64, 2.0]).unwrap();
+    assert!(matches!(
+        TensorTrain::from_dense(&diagonal, &diag_sites, &SvdOptions::new()).unwrap_err(),
+        TensorTrainError::Factorize(FactorizeError::UnsupportedStorage(_))
+    ));
+
+    let f32_site = DynIndex::new_dyn(1);
+    let f32_dense = IdxTensor::from_dense(vec![f32_site.clone()], vec![1.0_f32]).unwrap();
+    assert!(matches!(
+        TensorTrain::from_dense(&f32_dense, &[f32_site], &SvdOptions::new()).unwrap_err(),
+        TensorTrainError::Factorize(FactorizeError::UnsupportedStorage(_))
+    ));
 }
 
 #[test]

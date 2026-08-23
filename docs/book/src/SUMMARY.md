@@ -7,6 +7,7 @@
 - [Guides]()
   - [Tensor Basics](guides/tensor-basics.md)
   - [Tensor Train](guides/tensor-train.md)
+  - [Dense Tensor to Tensor Train with TT-SVD](guides/dense-tt-svd.md)
   - [Tensor Cross Interpolation](guides/tci.md)
   - [TCI Advanced Topics](guides/tci-advanced.md)
   - [Compressing Existing Data](guides/compress.md)
