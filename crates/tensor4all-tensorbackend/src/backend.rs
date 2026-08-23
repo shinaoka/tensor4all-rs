@@ -7,9 +7,8 @@ use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_tensor::BackendSessionHost;
 
-use crate::context::with_default_backend;
+use crate::context::with_default_session;
 use crate::matrix::Matrix;
 
 /// Result of SVD decomposition `A = U * diag(S) * Vt`.
@@ -226,10 +225,8 @@ macro_rules! impl_full_piv_lu_scalar {
                 let lhs_tensor =
                     tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t)
                         .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
-                let solved_t = with_default_backend(|backend| {
-                    backend.with_backend_session(|session| {
-                        pivot_tensor.full_piv_lu_solve(&lhs_tensor, session)
-                    })
+                let solved_t = with_default_session(|session| {
+                    pivot_tensor.full_piv_lu_solve(&lhs_tensor, session)
                 })
                 .map_err(|e| {
                     BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {e}"))
@@ -369,10 +366,8 @@ where
 {
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_backend(|backend| {
-        backend.with_backend_session(|session| a_tensor.solve(&b_tensor, session))
-    })
-    .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
+    let result = with_default_session(|session| a_tensor.solve(&b_tensor, session))
+        .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("solve", result)?;
     typed_tensor_to_matrix("solve", x)
 }
@@ -413,17 +408,15 @@ where
 {
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_backend(|backend| {
-        backend.with_backend_session(|session| {
-            a_tensor.triangular_solve(
-                &b_tensor,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-                session,
-            )
-        })
+    let result = with_default_session(|session| {
+        a_tensor.triangular_solve(
+            &b_tensor,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            session,
+        )
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("triangular_solve", result)?;
@@ -668,10 +661,8 @@ fn convert_for_typed<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Resul
     let tensor = if tensor.dtype() == expected {
         tensor
     } else {
-        with_default_backend(|backend| {
-            backend.with_backend_session(|session| tensor.convert(expected, session))
-        })
-        .map_err(|e| anyhow!("{op}: dtype conversion to {expected:?} failed: {e}"))?
+        with_default_session(|session| tensor.convert(expected, session))
+            .map_err(|e| anyhow!("{op}: dtype conversion to {expected:?} failed: {e}"))?
     };
     try_into_typed_result::<T>(op, tensor)
 }
@@ -723,9 +714,8 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("SVD input tensor construction failed: {e}"))?;
-    let (u, s, vt) =
-        with_default_backend(|backend| backend.with_backend_session(|session| tensor.svd(session)))
-            .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
+    let (u, s, vt) = with_default_session(|session| tensor.svd(session))
+        .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
     Ok(SvdResult {
         u: require_host_linalg_tensor("svd", convert_for_typed::<T>("svd", u)?)?,
         s: require_host_linalg_tensor("svd", convert_for_typed::<T::Real>("svd", s)?)?,
@@ -752,9 +742,8 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
-    let (q, r) =
-        with_default_backend(|backend| backend.with_backend_session(|session| tensor.qr(session)))
-            .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
+    let (q, r) = with_default_session(|session| tensor.qr(session))
+        .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((
         convert_for_typed::<T>("qr", q)?,
         convert_for_typed::<T>("qr", r)?,
@@ -787,10 +776,8 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("solve rhs tensor construction failed: {e}"))?;
-    let result = with_default_backend(|backend| {
-        backend.with_backend_session(|session| a_tensor.solve(&b_tensor, session))
-    })
-    .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
+    let result = with_default_session(|session| a_tensor.solve(&b_tensor, session))
+        .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     try_into_typed_result::<T>("solve", result).map_err(BackendLinalgError::from)
 }
 
@@ -828,17 +815,15 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("triangular solve rhs tensor construction failed: {e}"))?;
-    let result = with_default_backend(|backend| {
-        backend.with_backend_session(|session| {
-            a_tensor.triangular_solve(
-                &b_tensor,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-                session,
-            )
-        })
+    let result = with_default_session(|session| {
+        a_tensor.triangular_solve(
+            &b_tensor,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            session,
+        )
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
     try_into_typed_result::<T>("triangular_solve", result).map_err(BackendLinalgError::from)
@@ -990,10 +975,8 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("LU input tensor construction failed: {e}"))?;
-    let (p, l, u, q, _parity) = with_default_backend(|backend| {
-        backend.with_backend_session(|session| tensor.full_piv_lu(session))
-    })
-    .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
+    let (p, l, u, q, _parity) = with_default_session(|session| tensor.full_piv_lu(session))
+        .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
     Ok(FullPivLuResult {
         p: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", p)?)?,
         l: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", l)?)?,

@@ -26,7 +26,6 @@ use std::ops::{Index, IndexMut};
 use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
 use tenferro_ad::EagerTensor;
 use tenferro_linalg::EagerTensorLinalgExt;
-use tenferro_tensor::BackendSessionHost;
 
 /// A dense 2D matrix in column-major layout.
 ///
@@ -1328,13 +1327,11 @@ fn dot_general_matrices<T>(
 where
     T: TensorScalar,
 {
-    use crate::with_default_backend;
+    use crate::context::with_default_session;
     use tenferro::TensorSessionOpsExt;
 
-    let c = with_default_backend(|backend| {
-        backend.with_backend_session(|session| a_tensor.matmul(&b_tensor, session))
-    })
-    .context("matrix multiplication failed")?;
+    let c = with_default_session(|session| a_tensor.matmul(&b_tensor, session))
+        .context("matrix multiplication failed")?;
     let c = T::into_typed(c)
         .map_err(|error| anyhow::anyhow!("matrix multiplication returned wrong dtype: {error}"))?;
     let result = Matrix::try_from_typed_tensor(c)?;
