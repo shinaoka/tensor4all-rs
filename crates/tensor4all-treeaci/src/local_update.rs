@@ -1,20 +1,16 @@
 //! Budgeted dense edge-local matrices and LUCI factors.
 
-// INVARIANT: this conformance implementation materializes only one checked
-// edge-local matrix and always uses the owned dense LUCI entry point.
-#![allow(dead_code)]
-
 use std::mem::size_of;
 
+use tensor4all_core::IdxTensor;
 use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
-use tensor4all_core::{IdxTensor, IndexLike};
-use tensor4all_tensorbackend::{mat_mul, transpose, Matrix};
+use tensor4all_tensorbackend::{mat_mul, Matrix};
 use tensor4all_treetn::TreeTN;
 
 use crate::{
     frames::InputFrameStore,
-    problem::{DirectedEdgeId, PreparedTreeProblem},
-    samples::{CandidateSets, ComponentSample, SampleArena},
+    problem::{enforce_limit, DirectedEdgeId, PreparedTreeProblem},
+    samples::{CandidateSets, ComponentSample},
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar, TreeElementwiseBatch,
 };
 
@@ -28,6 +24,7 @@ pub(crate) struct LocalUpdateResult<T> {
     pub(crate) sampled_scale: f64,
     pub(crate) row_count: usize,
     pub(crate) col_count: usize,
+    #[cfg(test)]
     pub(crate) local_values: Vec<T>,
 }
 
@@ -35,7 +32,6 @@ pub(crate) struct LocalUpdateResult<T> {
 pub(crate) fn materialize_and_factor_edge<T, V, F>(
     inputs: &[TreeTN<IdxTensor, V>],
     problem: &PreparedTreeProblem<V>,
-    _arena: &SampleArena,
     candidates: &CandidateSets,
     frames: &InputFrameStore<T>,
     forward: DirectedEdgeId,
@@ -48,6 +44,8 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
+    #[cfg(test)]
+    let preparation_started = std::time::Instant::now();
     if inputs.is_empty() {
         return Err(TreeAciError::NoInputs);
     }
@@ -84,38 +82,43 @@ where
         point_count,
         options.max_local_matrix_elements,
     )?;
-    let matrix_working_elements = inputs
-        .len()
-        .checked_add(2)
-        .and_then(|factor| factor.checked_mul(point_count))
-        .ok_or(TreeAciError::SizeOverflow {
-            context: "local matrix working elements",
-        })?;
-    let cut_rank_sum = inputs.iter().try_fold(0usize, |sum, input| {
-        let graph_edge =
-            input
-                .edge_between(&edge.from, &edge.to)
-                .ok_or(TreeAciError::InternalInvariant {
-                    message: "local update input is missing its cut edge",
-                })?;
-        let bond_dim = input
-            .bond_index(graph_edge)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "local update input cut is missing its bond index",
-            })?
-            .dim();
-        sum.checked_add(bond_dim).ok_or(TreeAciError::SizeOverflow {
-            context: "input cut-rank sum",
-        })
+    let input_value_elements =
+        inputs
+            .len()
+            .checked_mul(point_count)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "local input value elements",
+            })?;
+    let max_cut_rank = (0..inputs.len()).try_fold(0usize, |max_rank, input| {
+        Ok::<usize, TreeAciError>(max_rank.max(frames.bond_dim(input, forward)?))
     })?;
     let candidate_frame_elements = row_count
         .checked_add(col_count)
-        .and_then(|count| count.checked_mul(cut_rank_sum))
+        .and_then(|count| count.checked_mul(max_cut_rank))
+        // Candidate vectors and their packed BLAS matrices coexist for one
+        // input at a time. Other inputs are streamed and dropped.
+        .and_then(|count| count.checked_mul(2))
         .ok_or(TreeAciError::SizeOverflow {
             context: "candidate frame working elements",
         })?;
-    let working_elements = matrix_working_elements
-        .checked_add(candidate_frame_elements)
+    let candidate_frame_scratch =
+        inputs
+            .iter()
+            .enumerate()
+            .try_fold(0usize, |peak, (input, _)| {
+                let row_scratch = frames.enumerated_candidate_frame_scratch_elements(
+                    problem, input, forward, candidates,
+                )?;
+                let col_scratch = frames.enumerated_candidate_frame_scratch_elements(
+                    problem, input, reverse, candidates,
+                )?;
+                Ok::<usize, TreeAciError>(peak.max(row_scratch).max(col_scratch))
+            })?;
+    let working_elements = input_value_elements
+        // One point-sized output/product buffer coexists with input values.
+        .checked_add(point_count)
+        .and_then(|count| count.checked_add(candidate_frame_elements))
+        .and_then(|count| count.checked_add(candidate_frame_scratch))
         .ok_or(TreeAciError::SizeOverflow {
             context: "local update working elements",
         })?;
@@ -147,9 +150,13 @@ where
     enforce_limit("core elements", left_elements, options.max_core_elements)?;
     enforce_limit("core elements", right_elements, options.max_core_elements)?;
 
-    let row_frames = candidate_frames(inputs, problem, frames, forward, &row_candidates)?;
-    let col_frames = candidate_frames(inputs, problem, frames, reverse, &col_candidates)?;
-    let mut input_values = vec![T::default(); inputs.len() * point_count];
+    let mut input_values = vec![T::default(); input_value_elements];
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.local_preparation += preparation_started.elapsed();
+    });
+    #[cfg(test)]
+    let input_frames_started = std::time::Instant::now();
     // Per input, `input_values[.., point] = row_frames[row] . col_frames[col]`
     // is one (row_count x chi) times (chi x col_count) matrix product, not a
     // per-point scalar dot product: pack each side's candidate frame vectors
@@ -158,9 +165,21 @@ where
     // contraction in one `mat_mul` call. Only the O(row*col) scatter into the
     // batch's interleaved-by-input layout remains a plain loop.
     if point_count > 0 {
-        for (input, (row_input_frames, col_input_frames)) in
-            row_frames.iter().zip(col_frames.iter()).enumerate()
-        {
+        for input in 0..inputs.len() {
+            let row_input_frames = frames.candidate_frames_for_edge(
+                inputs,
+                problem,
+                input,
+                forward,
+                &row_candidates,
+            )?;
+            let col_input_frames = frames.candidate_frames_for_edge(
+                inputs,
+                problem,
+                input,
+                reverse,
+                &col_candidates,
+            )?;
             let bond_dim = row_input_frames.first().map_or(0, |frame| frame.len());
             for frame in row_input_frames.iter().chain(col_input_frames.iter()) {
                 if frame.len() != bond_dim {
@@ -172,17 +191,18 @@ where
             if bond_dim == 0 {
                 continue;
             }
-            let row_flat: Vec<T> = row_input_frames
-                .iter()
-                .flat_map(|frame| frame.iter().copied())
-                .collect();
+            let mut row_flat = Vec::with_capacity(row_count * bond_dim);
+            for bond in 0..bond_dim {
+                for frame in &row_input_frames {
+                    row_flat.push(frame[bond]);
+                }
+            }
             let col_flat: Vec<T> = col_input_frames
                 .iter()
                 .flat_map(|frame| frame.iter().copied())
                 .collect();
-            let row_bond_matrix = Matrix::from_col_major_vec(bond_dim, row_count, row_flat);
+            let row_candidate_matrix = Matrix::from_col_major_vec(row_count, bond_dim, row_flat);
             let col_bond_matrix = Matrix::from_col_major_vec(bond_dim, col_count, col_flat);
-            let row_candidate_matrix = transpose(&row_bond_matrix);
             let product = mat_mul(&row_candidate_matrix, &col_bond_matrix).map_err(|error| {
                 TreeAciError::Numerical {
                     message: error.to_string(),
@@ -196,13 +216,27 @@ where
             }
         }
     }
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.local_input_frames += input_frames_started.elapsed();
+    });
     let batch = TreeElementwiseBatch::new(&input_values, inputs.len(), point_count)?;
     let mut local_values = vec![T::default(); point_count];
+    #[cfg(test)]
+    let operator_started = std::time::Instant::now();
     operator(batch, &mut local_values)?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.operator += operator_started.elapsed();
+    });
     let sampled_scale = local_values.iter().copied().fold(0.0_f64, |scale, value| {
         scale.max(tensor4all_core::Scalar::abs_val(value))
     });
-    let matrix = Matrix::from_col_major_vec(row_count, col_count, local_values.clone());
+    #[cfg(test)]
+    let retained_local_values = local_values.clone();
+    let matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
+    #[cfg(test)]
+    let luci_started = std::time::Instant::now();
     let factors = matrix_luci_factors_from_matrix_owned(
         matrix,
         Some(RrLUOptions {
@@ -223,6 +257,10 @@ where
     .map_err(|error| TreeAciError::Numerical {
         message: error.to_string(),
     })?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.luci += luci_started.elapsed();
+    });
     let (left, right, row_indices, col_indices) = if factors.rank == 0 {
         (
             Matrix::zeros(row_count, 1),
@@ -238,14 +276,8 @@ where
             factors.col_indices,
         )
     };
-    let row_samples = row_indices
-        .into_iter()
-        .map(|index| row_candidates[index].clone())
-        .collect();
-    let col_samples = col_indices
-        .into_iter()
-        .map(|index| col_candidates[index].clone())
-        .collect();
+    let row_samples = select_pivot_samples(row_indices, &row_candidates)?;
+    let col_samples = select_pivot_samples(col_indices, &col_candidates)?;
     Ok(LocalUpdateResult {
         row_samples,
         col_samples,
@@ -255,8 +287,26 @@ where
         sampled_scale,
         row_count,
         col_count,
-        local_values,
+        #[cfg(test)]
+        local_values: retained_local_values,
     })
+}
+
+fn select_pivot_samples(
+    indices: Vec<usize>,
+    candidates: &[ComponentSample],
+) -> Result<Vec<ComponentSample>> {
+    indices
+        .into_iter()
+        .map(|index| {
+            candidates
+                .get(index)
+                .cloned()
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "LUCI returned a pivot index outside the candidate matrix",
+                })
+        })
+        .collect()
 }
 
 fn enumerate_candidates<V: TreeAciNode>(
@@ -311,29 +361,6 @@ fn enumerate_candidates<V: TreeAciNode>(
         });
     }
     Ok(candidates)
-}
-
-fn candidate_frames<T: TreeAciScalar, V: TreeAciNode>(
-    inputs: &[TreeTN<IdxTensor, V>],
-    problem: &PreparedTreeProblem<V>,
-    frames: &InputFrameStore<T>,
-    edge: DirectedEdgeId,
-    candidates: &[ComponentSample],
-) -> Result<Vec<Vec<Vec<T>>>> {
-    (0..inputs.len())
-        .map(|input| frames.candidate_frames_for_edge(inputs, problem, input, edge, candidates))
-        .collect()
-}
-
-fn enforce_limit(resource: &'static str, requested: usize, limit: usize) -> Result<()> {
-    if requested > limit {
-        return Err(TreeAciError::ResourceLimit {
-            resource,
-            requested,
-            limit,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -72,6 +72,69 @@ fn scalar_node_without_physical_indices_is_one_point() {
     assert_eq!(result.diagnostics.evaluated_points, 1);
 }
 
+#[test]
+fn public_single_site_entry_skips_general_tree_state_construction() {
+    let site = DynIndex::new_dyn(2);
+    let input = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![site], vec![2.0_f64, 3.0]).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    crate::state::profile_debug_stats::reset();
+
+    let result = crate::tree_elementwise_batched::<f64, _, _>(
+        |batch, output| {
+            for (point, value) in output.iter_mut().enumerate() {
+                *value = batch.get(0, point)?.powi(2);
+            }
+            Ok(())
+        },
+        &[input],
+        &TreeAciOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.tree.to_dense().unwrap().to_vec::<f64>().unwrap(),
+        vec![4.0, 9.0]
+    );
+    let stats = crate::state::profile_debug_stats::snapshot();
+    assert_eq!(stats.preparation, std::time::Duration::ZERO);
+    assert_eq!(stats.output, std::time::Duration::ZERO);
+    assert_eq!(stats.bootstrap, std::time::Duration::ZERO);
+    assert_eq!(stats.frames, std::time::Duration::ZERO);
+}
+
+#[test]
+fn public_single_site_entry_still_validates_an_explicit_guess() {
+    let input = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![2.0_f64, 3.0]).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    let incompatible_guess = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0_f64, 1.0]).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    let options = TreeAciOptions {
+        initial_guess: Some(incompatible_guess),
+        ..TreeAciOptions::default()
+    };
+
+    assert!(matches!(
+        crate::tree_elementwise_batched::<f64, _, _>(
+            |batch, output| {
+                output[0] = batch.get(0, 0)?;
+                Ok(())
+            },
+            &[input],
+            &options,
+        ),
+        Err(crate::TreeAciError::InvalidInitialGuess { .. })
+    ));
+}
+
 /// The exact single-node path is charged against `max_working_bytes` like every
 /// other allocation site.
 ///
@@ -94,26 +157,26 @@ fn the_exact_path_respects_the_working_budget() {
         Ok(())
     };
 
-    // One input of four points is 4 * size_of::<f64>() = 32 bytes.
+    // The four-point input and output buffers coexist: 2 * 4 * 8 = 64 bytes.
     let generous = TreeAciOptions::<usize> {
-        max_working_bytes: 32,
+        max_working_bytes: 64,
         ..TreeAciOptions::default()
     };
     assert!(evaluate_single_site(std::slice::from_ref(&tree), &generous, &mut square).is_ok());
 
     let tight = TreeAciOptions::<usize> {
-        max_working_bytes: 31,
+        max_working_bytes: 63,
         ..TreeAciOptions::default()
     };
     let error = evaluate_single_site(std::slice::from_ref(&tree), &tight, &mut square)
-        .expect_err("a 31-byte ceiling must reject a 32-byte buffer");
+        .expect_err("a 63-byte ceiling must reject two 32-byte buffers");
     assert!(
         matches!(
             error,
             crate::TreeAciError::ResourceLimit {
                 resource: "working bytes",
-                requested: 32,
-                limit: 31,
+                requested: 64,
+                limit: 63,
             }
         ),
         "unexpected error: {error}"

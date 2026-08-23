@@ -55,11 +55,11 @@ pub struct TreeAciDiagnostics<V> {
     pub frame_records: usize,
     /// Logical bytes retained by those frames.
     ///
-    /// Together with the `sample_arena_*` fields this is the aggregate cache
-    /// report for a run: both caches TreeACI owns are accounted here in the
-    /// same units, so a caller sizing `max_frame_bytes` or
-    /// `max_sample_arena_bytes` reads both from one place. Both figures are the
-    /// caches' own payload accounting, not allocator or process measurements.
+    /// Includes directed input frames and the candidate-frame cache sharing
+    /// `max_frame_bytes`. Together with the `sample_arena_*` fields this
+    /// reports the state-owned retained caches. Guard evaluator messages have
+    /// their separate aggregate `message_cache_max_bytes` bound. These figures
+    /// are logical payload accounting, not allocator or process measurements.
     pub frame_retained_bytes: usize,
     /// Candidate component samples retained per directed cut, as
     /// `(from, to, len)`.

@@ -608,6 +608,35 @@ fn test_canonicalize_simple() {
 }
 
 #[test]
+fn canonicalize_mut_preserves_network_when_form_validation_fails() {
+    let (mut tn, n1, n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    tn.canonicalize_mut([n1], CanonicalizationOptions::default())
+        .unwrap();
+    let expected = tn.contract_to_tensor().unwrap();
+    let expected_region = tn.canonical_region().clone();
+    let expected_form = tn.canonical_form();
+
+    let error = tn
+        .canonicalize_mut(
+            [n2],
+            CanonicalizationOptions::default().with_form(CanonicalForm::LU),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("form mismatch"));
+    assert_eq!(tn.node_count(), 2);
+    assert_eq!(tn.canonical_region(), &expected_region);
+    assert_eq!(tn.canonical_form(), expected_form);
+    assert!(
+        tn.contract_to_tensor()
+            .unwrap()
+            .distance(&expected)
+            .unwrap()
+            < 1.0e-12
+    );
+}
+
+#[test]
 fn canonicalize_preserves_near_dependent_components() {
     let mut tn = TreeTN::<IdxTensor, NodeIndex>::new();
 

@@ -1,10 +1,10 @@
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::CanonicalForm;
 use tensor4all_treetn::TreeTN;
 
 use super::TreeAciState;
 use crate::initialize::{build_random_output, initial_edge_ranks};
 use crate::problem::prepare_problem;
+use crate::schedule::run_local_sweeps;
 use crate::{TreeAciError, TreeAciOptions};
 
 fn two_node_tree(sites: [DynIndex; 2], rank: usize, scale: f64) -> TreeTN<IdxTensor, usize> {
@@ -38,6 +38,65 @@ fn rank_deficient_two_node_tree(sites: [DynIndex; 2]) -> TreeTN<IdxTensor, usize
     let right =
         IdxTensor::from_dense(vec![bond, sites[1].clone()], vec![3.0, 4.0, 3.0, 4.0]).unwrap();
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
+fn full_rank_chain_guess(n_sites: usize, chi: usize) -> TreeTN<IdxTensor, usize> {
+    let sites = (0..n_sites)
+        .map(|_| DynIndex::new_dyn(2))
+        .collect::<Vec<_>>();
+    let link_dims = (0..n_sites - 1)
+        .map(|bond| {
+            let exact = 2usize.pow((bond + 1).min(n_sites - bond - 1) as u32);
+            chi.min(exact)
+        })
+        .collect::<Vec<_>>();
+    let bonds = link_dims
+        .iter()
+        .map(|&dim| DynIndex::new_dyn(dim))
+        .collect::<Vec<_>>();
+    let tensors = (0..n_sites)
+        .map(|site| {
+            let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
+            let right_dim = link_dims.get(site).copied().unwrap_or(1);
+            let mut indices = Vec::with_capacity(3);
+            if site > 0 {
+                indices.push(bonds[site - 1].clone());
+            }
+            indices.push(sites[site].clone());
+            if site + 1 < n_sites {
+                indices.push(bonds[site].clone());
+            }
+            let mut values = Vec::with_capacity(left_dim * 2 * right_dim);
+            for right in 0..right_dim {
+                for physical in 0..2 {
+                    for left in 0..left_dim {
+                        let input_f = 2.0;
+                        let site_f = site as f64 + 1.0;
+                        let physical_f = physical as f64 + 1.0;
+                        let left_f = left as f64 + 1.0;
+                        let right_f = right as f64 + 1.0;
+                        let phase = 0.173 * input_f * site_f
+                            + 0.193 * physical_f
+                            + 0.071 * left_f * right_f
+                            + 0.109 * input_f * left_f
+                            + 0.131 * site_f * right_f;
+                        let mixing = 0.29 * phase.sin()
+                            + 0.23
+                                * (0.157 * input_f * physical_f * right_f
+                                    + 0.211 * site_f * left_f)
+                                    .cos()
+                            + 0.17
+                                * (left_f / (left_dim as f64 + 1.0)
+                                    - right_f / (right_dim as f64 + 1.0))
+                                * physical_f;
+                        values.push((0.31 + mixing) / ((left_dim * right_dim) as f64).powf(0.25));
+                    }
+                }
+            }
+            IdxTensor::from_dense(indices, values).unwrap()
+        })
+        .collect::<Vec<_>>();
+    TreeTN::from_tensors(tensors, (0..n_sites).collect()).unwrap()
 }
 
 fn output_values(state: &TreeAciState<'_, f64, usize>) -> Vec<Vec<f64>> {
@@ -129,11 +188,12 @@ fn explicit_guess_is_preserved_before_the_first_sweep() {
         .isapprox(&expected, 1.0e-12, 0.0)
         .unwrap());
     assert_eq!(state.edge_ranks, vec![1]);
-    assert_eq!(state.output.canonical_form(), Some(CanonicalForm::CI));
+    assert_eq!(state.output.canonical_form(), None);
+    assert_eq!(state.output.canonical_region().len(), 1);
 }
 
 #[test]
-fn rank_deficient_initial_guess_uses_canonicalized_active_rank() {
+fn rank_deficient_initial_guess_defers_rank_reduction_to_the_first_sweep() {
     let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let inputs = vec![two_node_tree(sites.clone(), 1, 1.0)];
     let guess = rank_deficient_two_node_tree(sites);
@@ -147,15 +207,96 @@ fn rank_deficient_initial_guess_uses_canonicalized_active_rank() {
     )
     .expect("rank-deficient initial guess should initialize");
 
-    assert_eq!(state.edge_ranks, vec![1]);
+    assert_eq!(state.edge_ranks, vec![2]);
     assert_eq!(
         state
             .output
             .bond_index(state.output.edge_between(&0, &1).unwrap())
             .unwrap()
             .dim(),
-        1
+        2
     );
+    assert_eq!(state.output.canonical_form(), None);
+}
+
+#[test]
+fn full_rank_chain_initial_guess_is_accepted_and_preserved() {
+    let guess = full_rank_chain_guess(16, 128);
+    let expected = guess.to_dense().unwrap();
+    let inputs = vec![guess.clone()];
+    let state = TreeAciState::<f64, usize>::initialize(
+        &inputs,
+        &TreeAciOptions {
+            initial_guess: Some(guess),
+            ..TreeAciOptions::default()
+        },
+    )
+    .expect("a valid full-rank chain guess should initialize");
+
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&expected, 1.0e-10, 1.0e-12)
+        .unwrap());
+    assert_eq!(state.edge_ranks.iter().copied().max(), Some(128));
+}
+
+/// Opt-in phase timing and candidate-cache telemetry for the high-rank chain
+/// parity workload. Run with `--ignored --nocapture`; wall time is diagnostic,
+/// while the hit/miss counts expose whether persistent candidate retention is
+/// doing useful work on this path.
+#[test]
+#[ignore]
+fn profile_high_rank_chain_phases_and_candidate_cache() {
+    let guess = full_rank_chain_guess(16, 128);
+    let inputs = vec![guess.clone(), guess.clone()];
+    let options = TreeAciOptions {
+        tolerance: 1.0e-8,
+        max_bond_dim: Some(4096),
+        max_sweeps: 20,
+        min_sweeps: 2,
+        initial_guess: Some(guess),
+        enable_global_guard: false,
+        ..TreeAciOptions::default()
+    };
+
+    crate::frames::candidate_debug_stats::reset();
+    super::profile_debug_stats::reset();
+    let initialize_started = std::time::Instant::now();
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let initialize_elapsed = initialize_started.elapsed();
+    let sweep_started = std::time::Instant::now();
+    let history = run_local_sweeps(&mut state, &options, &mut |batch, output| {
+        for (point, value) in output.iter_mut().enumerate() {
+            *value = batch.get(0, point)? * batch.get(1, point)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let sweep_elapsed = sweep_started.elapsed();
+    let profile = super::profile_debug_stats::snapshot();
+
+    eprintln!(
+        "high-rank chain: initialize={initialize_elapsed:?} [prepare={:?}, output={:?}, bootstrap={:?}, frames={:?}], sweeps={sweep_elapsed:?} [proposals={:?}: prepare={:?}, input_frames={:?}, operator={:?}, luci={:?}; output_staging={:?}, sample_staging={:?}, frame_extension={:?}, commits={}], completed={}, candidate_hits={}, candidate_misses={}",
+        profile.preparation,
+        profile.output,
+        profile.bootstrap,
+        profile.frames,
+        profile.proposals,
+        profile.local_preparation,
+        profile.local_input_frames,
+        profile.operator,
+        profile.luci,
+        profile.output_staging,
+        profile.sample_staging,
+        profile.frame_extension,
+        profile.commits,
+        history.max_ranks.len(),
+        crate::frames::candidate_debug_stats::hits(),
+        crate::frames::candidate_debug_stats::misses(),
+    );
+    assert_eq!(history.max_ranks.len(), 2);
 }
 
 #[test]

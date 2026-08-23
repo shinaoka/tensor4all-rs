@@ -44,13 +44,14 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     pub root: Option<V>,
     /// Run independent global-pivot searches before convergence. Default: `true`.
     pub enable_global_guard: bool,
-    /// Maximum logical bytes retained by each evaluator's persistent message
-    /// cache. Default: unlimited for backwards compatibility.
+    /// Maximum logical bytes retained by all guard evaluators' persistent
+    /// message caches combined. Default: 256 MiB.
     ///
-    /// This budget applies to both the input evaluators used by global-pivot
-    /// searches and the output evaluator used to validate those searches.
-    /// A finite nonzero value retains useful reuse while preventing repeated
-    /// floating-zone scans from retaining an unbounded set of message payloads.
+    /// The budget is divided evenly among all input evaluators and the output
+    /// evaluator used by global-pivot searches. A finite nonzero value retains
+    /// useful reuse while preventing repeated floating-zone scans from
+    /// retaining an unbounded set of message payloads. Set it to zero to
+    /// disable message retention without disabling the guard itself.
     pub message_cache_max_bytes: usize,
     /// Random starts per global search. Default: `5`.
     pub nsearch_global_pivots: usize,
@@ -105,7 +106,7 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
             rng_seed: 0,
             root: None,
             enable_global_guard: true,
-            message_cache_max_bytes: usize::MAX,
+            message_cache_max_bytes: 256 << 20,
             nsearch_global_pivots: 5,
             max_nglobal_pivots: 5,
             nsweeps_global_search: 100,
@@ -128,9 +129,9 @@ mod tests {
     use super::TreeAciOptions;
 
     #[test]
-    fn default_message_cache_budget_is_unbounded_for_compatibility() {
+    fn default_message_cache_budget_is_bounded() {
         let options = TreeAciOptions::<usize>::default();
 
-        assert_eq!(options.message_cache_max_bytes, usize::MAX);
+        assert_eq!(options.message_cache_max_bytes, 256 << 20);
     }
 }

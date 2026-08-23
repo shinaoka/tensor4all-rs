@@ -1,13 +1,12 @@
 //! Exact direct evaluation for trees with one node and no bonds.
 
-#![allow(dead_code)]
-
 use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    problem::prepare_problem, Result, TreeAciDiagnostics, TreeAciError, TreeAciNode,
-    TreeAciOptions, TreeAciResult, TreeAciScalar, TreeAciTermination, TreeElementwiseBatch,
+    initialize::validate_initial_guess, problem::prepare_problem, Result, TreeAciDiagnostics,
+    TreeAciError, TreeAciNode, TreeAciOptions, TreeAciResult, TreeAciScalar, TreeAciTermination,
+    TreeElementwiseBatch,
 };
 
 pub(crate) fn evaluate_single_site<T, V, F>(
@@ -26,6 +25,9 @@ where
             message: "single-site evaluation received a multi-node tree",
         });
     }
+    if let Some(guess) = &options.initial_guess {
+        validate_initial_guess::<T, V>(guess, &inputs[0], &problem, options)?;
+    }
     let node = &problem.node_order[0];
     let indices = problem.physical[0].indices.clone();
     let point_count = problem.physical[0].local_dim;
@@ -39,13 +41,19 @@ where
             .ok_or(TreeAciError::SizeOverflow {
                 context: "single-site input buffer",
             })?;
-    let input_bytes =
-        input_elements
-            .checked_mul(std::mem::size_of::<T>())
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "single-site input bytes",
-            })?;
-    crate::problem::enforce_limit("working bytes", input_bytes, problem.max_working_bytes)?;
+    let working_elements = inputs
+        .len()
+        .checked_add(1)
+        .and_then(|buffers| buffers.checked_mul(point_count))
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "single-site working elements",
+        })?;
+    let working_bytes = working_elements
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "single-site working bytes",
+        })?;
+    crate::problem::enforce_limit("working bytes", working_bytes, problem.max_working_bytes)?;
     let mut input_values = vec![T::default(); input_elements];
     for (input_number, input) in inputs.iter().enumerate() {
         let node_index = input

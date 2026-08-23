@@ -1,9 +1,5 @@
 //! Immutable recursive component samples for directed tree cuts.
 
-// INVARIANT: this staged internal state becomes live through Task 5 frame
-// construction and Task 7 initialization; until then only its unit tests use it.
-#![allow(dead_code)]
-
 use std::{collections::HashMap, mem::size_of};
 
 use crate::{
@@ -12,6 +8,27 @@ use crate::{
 };
 
 pub(crate) type SampleId = usize;
+
+#[cfg(test)]
+pub(crate) mod projection_debug_stats {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PROJECTED_EDGES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record_edge() {
+        PROJECTED_EDGES.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn projected_edges() -> u64 {
+        PROJECTED_EDGES.with(Cell::get)
+    }
+
+    pub(crate) fn reset() {
+        PROJECTED_EDGES.with(|count| count.set(0));
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ComponentSampleKey {
@@ -103,6 +120,7 @@ impl PivotPairs {
         self.per_edge[edge_number] = pairs;
     }
 
+    #[cfg(test)]
     pub(crate) fn forward_ids(&self, edge_number: usize) -> Vec<SampleId> {
         self.per_edge[edge_number]
             .iter()
@@ -110,6 +128,7 @@ impl PivotPairs {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn reverse_ids(&self, edge_number: usize) -> Vec<SampleId> {
         self.per_edge[edge_number]
             .iter()
@@ -193,18 +212,21 @@ impl SampleArena {
             max_retained_bytes: problem.max_sample_arena_bytes,
         };
         let mut candidates = CandidateSets::new(problem.directed_edges.len());
+        let all_cuts = vec![true; problem.directed_edges.len()];
         for point in seeds {
             arena.validate_point(problem, point)?;
-            for directed_edge in 0..problem.directed_edges.len() {
-                let id = arena.project_component(problem, directed_edge, point)?;
+            let projected = arena.project_components(problem, point, &all_cuts)?;
+            for (directed_edge, id) in projected.into_iter().enumerate() {
+                let id = id.ok_or(TreeAciError::InternalInvariant {
+                    message: "all-cut projection omitted a directed component",
+                })?;
                 candidates.push_unique(directed_edge, id);
             }
         }
         Ok((arena, candidates))
     }
 
-    /// Projects `point` onto exactly `edge` (and, through
-    /// [`Self::project_component`]'s recursion, `edge`'s ancestor chain only),
+    /// Projects `point` onto exactly `edge` and its dependency subtree,
     /// interning any newly-needed component samples by direct mutation.
     ///
     /// Unlike [`Self::inject_global_point`], this does not clone the arena
@@ -223,9 +245,59 @@ impl SampleArena {
         point: &[usize],
     ) -> Result<SampleId> {
         self.validate_point(problem, point)?;
-        self.project_component(problem, edge, point)
+        if edge >= problem.directed_edges.len() {
+            return Err(TreeAciError::InternalInvariant {
+                message: "component projection references an unknown directed edge",
+            });
+        }
+        let mut projected = vec![None; problem.directed_edges.len()];
+        let mut stack = vec![(edge, false)];
+        while let Some((edge_id, dependencies_ready)) = stack.pop() {
+            let directed = &problem.directed_edges[edge_id];
+            if !dependencies_ready {
+                stack.push((edge_id, true));
+                stack.extend(
+                    directed
+                        .incoming_to_from
+                        .iter()
+                        .rev()
+                        .map(|&incoming| (incoming, false)),
+                );
+                continue;
+            }
+
+            #[cfg(test)]
+            projection_debug_stats::record_edge();
+            let node = *problem.node_positions.get(&directed.from).ok_or(
+                TreeAciError::InternalInvariant {
+                    message: "directed edge source has no prepared node position",
+                },
+            )?;
+            let incoming = directed
+                .incoming_to_from
+                .iter()
+                .map(|&incoming_edge| {
+                    projected[incoming_edge]
+                        .map(|sample| (incoming_edge, sample))
+                        .ok_or(TreeAciError::InternalInvariant {
+                            message: "component dependency was not projected before its consumer",
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            projected[edge_id] = Some(self.intern_key(
+                edge_id,
+                ComponentSampleKey {
+                    local_coordinate: point[node],
+                    incoming,
+                },
+            )?);
+        }
+        projected[edge].ok_or(TreeAciError::InternalInvariant {
+            message: "requested directed component was not projected",
+        })
     }
 
+    #[cfg(test)]
     pub(crate) fn inject_global_point<V: TreeAciNode>(
         &mut self,
         candidates: &mut CandidateSets,
@@ -271,21 +343,33 @@ impl SampleArena {
             });
         }
 
-        // INVARIANT: failed projection must not leave records that are invisible
-        // to the caller's generation. Clone-and-commit is intentionally simple
-        // in phase one; later profiling may replace it with a journal rollback.
-        let mut proposed = self.clone();
-        let projected = (0..problem.directed_edges.len())
-            .map(|edge| proposed.project_component(problem, edge, point))
-            .collect::<Result<Vec<_>>>()?;
+        // Projection appends immutable records. A checkpoint therefore gives
+        // the same failure atomicity as cloning the complete arena, without an
+        // O(retained records) copy for every global-pivot candidate.
+        let checkpoint = self.checkpoint();
+        let projected = self.project_components(problem, point, activate_directed_cut);
+        let projected = match projected {
+            Ok(projected) => projected,
+            Err(error) => {
+                self.rollback(checkpoint)?;
+                return Err(error);
+            }
+        };
         let mut added_by_edge = vec![0; projected.len()];
         if pair_opposite_cuts {
             for forward in (0..projected.len()).step_by(2) {
                 let reverse = problem.directed_edges[forward].reverse;
                 if activate_directed_cut[forward]
                     && activate_directed_cut[reverse]
-                    && (!candidates.ids[forward].contains(&projected[forward])
-                        || !candidates.ids[reverse].contains(&projected[reverse]))
+                    && (!candidates.ids[forward].contains(&projected[forward].ok_or(
+                        TreeAciError::InternalInvariant {
+                            message: "active directed cut has no projected component sample",
+                        },
+                    )?) || !candidates.ids[reverse].contains(&projected[reverse].ok_or(
+                        TreeAciError::InternalInvariant {
+                            message: "active reverse cut has no projected component sample",
+                        },
+                    )?))
                 {
                     added_by_edge[forward] = 1;
                     added_by_edge[reverse] = 1;
@@ -293,8 +377,10 @@ impl SampleArena {
             }
         } else {
             for (edge, id) in projected.iter().copied().enumerate() {
-                if activate_directed_cut[edge] && !candidates.ids[edge].contains(&id) {
-                    added_by_edge[edge] = 1;
+                if let Some(id) = id {
+                    if !candidates.ids[edge].contains(&id) {
+                        added_by_edge[edge] = 1;
+                    }
                 }
             }
         }
@@ -306,14 +392,26 @@ impl SampleArena {
                     .checked_add(1)
                     .ok_or(TreeAciError::SizeOverflow {
                         context: "sample generation",
-                    })?;
+                    });
+            let next_generation = match next_generation {
+                Ok(generation) => generation,
+                Err(error) => {
+                    self.rollback(checkpoint)?;
+                    return Err(error);
+                }
+            };
             for (edge, id) in projected.into_iter().enumerate() {
-                if added_by_edge[edge] == 1 {
-                    candidates.ids[edge].push(id);
+                if let Some(id) = id {
+                    if added_by_edge[edge] == 1 {
+                        candidates.ids[edge].push(id);
+                    }
                 }
             }
             candidates.generation = next_generation;
-            *self = proposed;
+        } else {
+            // A point that adds no candidate must not leave unreachable arena
+            // records behind merely because its projections were inspected.
+            self.rollback(checkpoint)?;
         }
         Ok(InjectionReport {
             added_by_edge,
@@ -321,6 +419,7 @@ impl SampleArena {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn materialize_global_point<V: TreeAciNode>(
         &self,
         problem: &PreparedTreeProblem<V>,
@@ -432,37 +531,74 @@ impl SampleArena {
         Ok(())
     }
 
-    fn project_component<V: TreeAciNode>(
+    /// Projects the requested cuts and their transitive dependencies in one
+    /// dependency-ordered pass.
+    ///
+    /// A per-request recursive projection repeats the same component walk for
+    /// every cut and can overflow the stack on long chains. The prepared
+    /// dependency order makes the union of all requested walks iterative and
+    /// visits every required directed cut exactly once.
+    fn project_components<V: TreeAciNode>(
         &mut self,
         problem: &PreparedTreeProblem<V>,
-        directed_edge: DirectedEdgeId,
         point: &[usize],
-    ) -> Result<SampleId> {
-        let edge =
-            problem
-                .directed_edges
-                .get(directed_edge)
-                .ok_or(TreeAciError::InternalInvariant {
-                    message: "component projection references an unknown directed edge",
-                })?;
-        let node =
-            *problem
-                .node_positions
-                .get(&edge.from)
-                .ok_or(TreeAciError::InternalInvariant {
-                    message: "directed edge source has no prepared node position",
-                })?;
-        let incoming_edges = edge.incoming_to_from.clone();
-        let mut incoming = Vec::with_capacity(incoming_edges.len());
-        for child_edge in incoming_edges {
-            let child_id = self.project_component(problem, child_edge, point)?;
-            incoming.push((child_edge, child_id));
+        requested: &[bool],
+    ) -> Result<Vec<Option<SampleId>>> {
+        let edge_count = problem.directed_edges.len();
+        if requested.len() != edge_count {
+            return Err(TreeAciError::InternalInvariant {
+                message: "component projection mask differs from directed edge count",
+            });
         }
-        let key = ComponentSampleKey {
-            local_coordinate: point[node],
-            incoming,
-        };
-        self.intern_key(directed_edge, key)
+
+        let mut required = requested.to_vec();
+        // Consumers occur after their dependencies in the prepared order.
+        // Walking it backwards propagates each request to its complete
+        // dependency closure without recursion.
+        for &edge_id in problem.directed_dependency_order.iter().rev() {
+            if required[edge_id] {
+                for &incoming in &problem.directed_edges[edge_id].incoming_to_from {
+                    required[incoming] = true;
+                }
+            }
+        }
+
+        let mut projected = vec![None; edge_count];
+        for &edge_id in &problem.directed_dependency_order {
+            if !required[edge_id] {
+                continue;
+            }
+            #[cfg(test)]
+            projection_debug_stats::record_edge();
+            let edge = &problem.directed_edges[edge_id];
+            let node =
+                *problem
+                    .node_positions
+                    .get(&edge.from)
+                    .ok_or(TreeAciError::InternalInvariant {
+                        message: "directed edge source has no prepared node position",
+                    })?;
+            let incoming = edge
+                .incoming_to_from
+                .iter()
+                .map(|&incoming_edge| {
+                    projected[incoming_edge]
+                        .map(|sample| (incoming_edge, sample))
+                        .ok_or(TreeAciError::InternalInvariant {
+                            message: "component dependency was not projected before its consumer",
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let id = self.intern_key(
+                edge_id,
+                ComponentSampleKey {
+                    local_coordinate: point[node],
+                    incoming,
+                },
+            )?;
+            projected[edge_id] = Some(id);
+        }
+        Ok(projected)
     }
 
     fn intern_key(
@@ -498,6 +634,7 @@ impl SampleArena {
         Ok(id)
     }
 
+    #[cfg(test)]
     fn write_component<V: TreeAciNode>(
         &self,
         problem: &PreparedTreeProblem<V>,

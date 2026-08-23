@@ -1,11 +1,7 @@
 //! Owned native state for tree ACI sweeps.
 
-// INVARIANT: the state is crate-private until the directional sweep executor
-// and public elementwise entry point are complete.
-#![allow(dead_code)]
-
 use tensor4all_core::{IdxTensor, IndexLike};
-use tensor4all_treetn::{CanonicalForm, CanonicalizationOptions, TreeTN};
+use tensor4all_treetn::TreeTN;
 
 use crate::{
     frames::InputFrameStore,
@@ -17,6 +13,44 @@ use crate::{
     samples::{CandidateSets, PivotPairs, SampleArena},
     Result, TreeAciNode, TreeAciOptions, TreeAciScalar,
 };
+
+#[cfg(test)]
+pub(crate) mod profile_debug_stats {
+    use std::{cell::RefCell, time::Duration};
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(crate) struct Snapshot {
+        pub(crate) preparation: Duration,
+        pub(crate) output: Duration,
+        pub(crate) bootstrap: Duration,
+        pub(crate) frames: Duration,
+        pub(crate) proposals: Duration,
+        pub(crate) local_preparation: Duration,
+        pub(crate) local_input_frames: Duration,
+        pub(crate) operator: Duration,
+        pub(crate) luci: Duration,
+        pub(crate) output_staging: Duration,
+        pub(crate) sample_staging: Duration,
+        pub(crate) frame_extension: Duration,
+        pub(crate) commits: usize,
+    }
+
+    thread_local! {
+        static STATS: RefCell<Snapshot> = RefCell::new(Snapshot::default());
+    }
+
+    pub(crate) fn reset() {
+        STATS.with(|stats| *stats.borrow_mut() = Snapshot::default());
+    }
+
+    pub(crate) fn record(update: impl FnOnce(&mut Snapshot)) {
+        STATS.with(|stats| update(&mut stats.borrow_mut()));
+    }
+
+    pub(crate) fn snapshot() -> Snapshot {
+        STATS.with(|stats| *stats.borrow())
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct TreeAciState<'a, T: TreeAciScalar, V: TreeAciNode> {
@@ -39,57 +73,32 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         inputs: &'a [TreeTN<IdxTensor, V>],
         options: &TreeAciOptions<V>,
     ) -> Result<Self> {
+        #[cfg(test)]
+        let stage_started = std::time::Instant::now();
         let problem = prepare_problem(inputs, options)?;
         let algebraic_edge_bounds = algebraic_edge_bounds(&problem)?;
         let initial_edge_ranks = initial_edge_ranks(inputs, &problem, options)?;
-        let output = if let Some(guess) = &options.initial_guess {
+        #[cfg(test)]
+        profile_debug_stats::record(|stats| stats.preparation = stage_started.elapsed());
+        #[cfg(test)]
+        let stage_started = std::time::Instant::now();
+        let mut output = if let Some(guess) = &options.initial_guess {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem, options)?;
-            let mut output = guess.clone();
-            output.canonicalize_mut(
-                [problem.root.clone()],
-                CanonicalizationOptions::default().with_form(CanonicalForm::CI),
-            )?;
-            output
+            guess.clone()
         } else {
-            let mut output =
-                build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, options)?;
-            output.set_canonical_region([problem.root.clone()])?;
-            output
+            build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, options)?
         };
-        // INVARIANT: canonicalizing an initial guess may expose a smaller
-        // numerical bond rank, so active ranks must describe the canonical
-        // output used to bootstrap samples and frames rather than the raw
-        // pre-canonicalization guess.
-        let edge_ranks = if options.initial_guess.is_some() {
-            let configured = options.max_bond_dim.unwrap_or(usize::MAX);
-            problem
-                .directed_edges
-                .iter()
-                .step_by(2)
-                .enumerate()
-                .map(|(edge_number, edge)| {
-                    let graph_edge = output.edge_between(&edge.from, &edge.to).ok_or(
-                        crate::TreeAciError::InternalInvariant {
-                            message: "initialized output is missing a prepared edge",
-                        },
-                    )?;
-                    let rank = output
-                        .bond_index(graph_edge)
-                        .ok_or(crate::TreeAciError::InternalInvariant {
-                            message: "initialized output edge has no bond index",
-                        })?
-                        .dim();
-                    if rank > algebraic_edge_bounds[edge_number] || rank > configured {
-                        return Err(crate::TreeAciError::InternalInvariant {
-                            message: "canonicalized initial guess exceeds an active rank bound",
-                        });
-                    }
-                    Ok(rank)
-                })
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            initial_edge_ranks
-        };
+        // A complete first directional pass replaces every core with CI
+        // factors before `finalize_deferred_canonicalization` establishes the
+        // numerical form. Doing a full-rank CI canonicalization here is both
+        // redundant and pathological for a high-rank explicit guess. The
+        // generated-output path has always deferred this work; explicit
+        // guesses follow the same state transition because bootstrap depends
+        // only on their validated bond dimensions, not on their gauge.
+        output.set_canonical_region([problem.root.clone()])?;
+        #[cfg(test)]
+        profile_debug_stats::record(|stats| stats.output = stage_started.elapsed());
+        let edge_ranks = initial_edge_ranks;
         for (edge_number, expected) in edge_ranks.iter().copied().enumerate() {
             let edge = &problem.directed_edges[2 * edge_number];
             let graph_edge = output.edge_between(&edge.from, &edge.to).ok_or(
@@ -109,8 +118,16 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
                 });
             }
         }
+        #[cfg(test)]
+        let stage_started = std::time::Instant::now();
         let (sample_arena, candidates, pivots) = bootstrap_samples(&problem, &edge_ranks)?;
+        #[cfg(test)]
+        profile_debug_stats::record(|stats| stats.bootstrap = stage_started.elapsed());
+        #[cfg(test)]
+        let stage_started = std::time::Instant::now();
         let input_frames = InputFrameStore::from_samples(inputs, &problem, &sample_arena)?;
+        #[cfg(test)]
+        profile_debug_stats::record(|stats| stats.frames = stage_started.elapsed());
         let generation = candidates.generation;
         let edge_count = edge_ranks.len();
         Ok(Self {

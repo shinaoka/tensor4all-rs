@@ -1,11 +1,12 @@
 //! Deterministic execution of directional tree ACI passes.
 
-#![allow(dead_code)]
-
 use tensor4all_treetn::{CanonicalForm, CanonicalizationOptions};
 
 use crate::{
-    global_guard::{find_global_pivots, inject_global_pivots, InputEvaluators},
+    global_guard::{
+        find_global_pivots, inject_global_pivots, per_evaluator_message_cache_budget,
+        InputEvaluators,
+    },
     path_cover::{OrientedEdgeStep, PathPhase},
     problem::DirectedEdgeId,
     state::TreeAciState,
@@ -40,6 +41,7 @@ pub(crate) struct SweepHistory {
 }
 
 impl PassReport {
+    #[cfg(test)]
     pub(crate) fn update_count(&self) -> usize {
         self.updated_edges.len()
     }
@@ -47,7 +49,6 @@ impl PassReport {
 
 pub(crate) fn run_local_sweeps<'a, T, V, F>(
     state: &mut TreeAciState<'a, T, V>,
-    input_evaluators: &mut InputEvaluators<'a, V>,
     options: &TreeAciOptions<V>,
     operator: &mut F,
 ) -> Result<SweepHistory>
@@ -62,6 +63,10 @@ where
     let mut rank_limited = Vec::with_capacity(options.max_sweeps);
     let mut evaluated_points = 0u64;
     let mut termination = TreeAciTermination::MaxSweeps;
+    // Guard evaluators own sizeable topology/message-cache state and are not
+    // part of local ACI. Keep them lazy so disabling Guard (or configuring a
+    // zero-search Guard) does not pay an input-rank-dependent setup cost.
+    let mut input_evaluators: Option<InputEvaluators<'a, V>> = None;
 
     for pass in 0..options.max_sweeps {
         let direction = if pass % 2 == 0 {
@@ -78,13 +83,30 @@ where
         max_ranks.push(report.max_rank);
         max_errors.push(report.max_error);
         rank_limited.push(current_state_is_rank_limited(state, options));
-        let injection_edges = global_injection_edges(state, options);
+        let injection_capacities = global_injection_capacities(state, options);
         let found = if options.enable_global_guard
             && options.nsearch_global_pivots > 0
             && options.max_nglobal_pivots > 0
             && !rank_limited[pass]
-            && injection_edges.iter().any(|activate| *activate)
+            && injection_capacities.iter().any(|capacity| *capacity > 0)
         {
+            if input_evaluators.is_none() {
+                let per_evaluator_budget = per_evaluator_message_cache_budget(
+                    options.message_cache_max_bytes,
+                    state.inputs.len(),
+                )?;
+                input_evaluators = Some(InputEvaluators::new_with_message_cache_max_bytes(
+                    state.inputs,
+                    &state.problem,
+                    per_evaluator_budget,
+                )?);
+            }
+            let input_evaluators =
+                input_evaluators
+                    .as_mut()
+                    .ok_or(TreeAciError::InternalInvariant {
+                        message: "enabled global Guard has no input evaluators",
+                    })?;
             let seed = options.rng_seed.wrapping_add((pass + 1) as u64);
             let search = find_global_pivots(state, input_evaluators, options, seed, operator)?;
             evaluated_points = evaluated_points
@@ -93,7 +115,7 @@ where
                     context: "sweep evaluated point count",
                 })?;
             let found = search.pivots.len();
-            inject_global_pivots(state, input_evaluators, &search.pivots, &injection_edges)?;
+            inject_global_pivots(state, &search.pivots, &injection_capacities)?;
             found
         } else {
             0
@@ -125,17 +147,17 @@ where
     })
 }
 
-fn global_injection_edges<T: TreeAciScalar, V: TreeAciNode>(
+fn global_injection_capacities<T: TreeAciScalar, V: TreeAciNode>(
     state: &TreeAciState<'_, T, V>,
     options: &TreeAciOptions<V>,
-) -> Vec<bool> {
+) -> Vec<usize> {
     state
         .edge_ranks
         .iter()
         .zip(&state.algebraic_edge_bounds)
         .map(|(&rank, &algebraic)| {
             let limit = options.max_bond_dim.unwrap_or(usize::MAX).min(algebraic);
-            rank < limit
+            limit.saturating_sub(rank)
         })
         .collect()
 }

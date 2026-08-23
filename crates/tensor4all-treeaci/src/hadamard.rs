@@ -62,12 +62,14 @@ where
 {
     tree_elementwise_batched(
         |batch, output| {
-            for (point, value) in output.iter_mut().enumerate() {
-                let mut product = <T as tensor4all_core::Scalar>::from_f64(1.0);
-                for input in 0..batch.n_inputs() {
-                    product = product * batch.get(input, point)?;
-                }
-                *value = product;
+            for (value, point_inputs) in output
+                .iter_mut()
+                .zip(batch.as_col_major_slice().chunks_exact(batch.n_inputs()))
+            {
+                *value = point_inputs.iter().copied().fold(
+                    <T as tensor4all_core::Scalar>::from_f64(1.0),
+                    |product, input| product * input,
+                );
             }
             Ok(())
         },

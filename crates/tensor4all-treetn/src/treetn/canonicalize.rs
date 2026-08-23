@@ -37,7 +37,28 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// /// SVD or non-convergence failure, or a backend failure).
+    /// SVD or non-convergence failure, or a backend failure). The network is
+    /// left unchanged when an error is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_treetn::{CanonicalizationOptions, TreeTN};
+    ///
+    /// let left = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(2);
+    /// let right = DynIndex::new_dyn(2);
+    /// let mut tree = TreeTN::<_, usize>::from_tensors(
+    ///     vec![
+    ///         IdxTensor::from_dense(vec![left, bond.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+    ///         IdxTensor::from_dense(vec![bond, right], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+    ///     ],
+    ///     vec![0, 1],
+    /// ).unwrap();
+    /// tree.canonicalize_mut([0], CanonicalizationOptions::default()).unwrap();
+    /// assert_eq!(tree.canonical_region().iter().copied().collect::<Vec<_>>(), vec![0]);
+    /// ```
     ///
     /// # Examples
     ///
@@ -118,13 +139,22 @@ where
     where
         Self: Default,
     {
+        // Keep a snapshot until canonicalization commits: the previous
+        // take-based implementation left `self` as an empty default network
+        // whenever validation or factorization failed. The standard
+        // `IdxTensor` payload is reference-counted, so its snapshot shares the
+        // numerical storage while copying topology and metadata.
+        let original = self.clone();
         let taken = std::mem::take(self);
         match taken.canonicalize(canonical_region, options) {
             Ok(result) => {
                 *self = result;
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                *self = original;
+                Err(e)
+            }
         }
     }
 

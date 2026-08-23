@@ -1,7 +1,7 @@
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
-use super::{CandidateSets, PivotPairs, SampleArena};
+use super::{projection_debug_stats, CandidateSets, PivotPairs, SampleArena};
 use crate::{problem::prepare_problem, TreeAciError, TreeAciOptions};
 
 fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
@@ -62,6 +62,24 @@ fn every_seed_materializes_across_every_cut() {
             }
         }
     }
+}
+
+#[test]
+fn all_cut_seed_projection_visits_each_directed_edge_once() {
+    let node_count = 64;
+    let edges = (0..node_count - 1)
+        .map(|node| (node, node + 1))
+        .collect::<Vec<_>>();
+    let problem = prepare(&edges, node_count);
+    projection_debug_stats::reset();
+
+    SampleArena::from_global_seeds(&problem, &[vec![1; node_count]]).unwrap();
+
+    assert_eq!(
+        projection_debug_stats::projected_edges(),
+        problem.directed_edges.len() as u64,
+        "one global point must be lowered by one iterative dependency pass"
+    );
 }
 
 #[test]
@@ -134,6 +152,7 @@ fn project_point_onto_edge_touches_only_the_requested_edges_ancestor_chain() {
     // this star topology, so at least one other edge's candidate set must
     // stay untouched by a single-edge projection.
     let target_edge = 0;
+    projection_debug_stats::reset();
     let id = arena
         .project_point_onto_edge(&problem, target_edge, &[1, 1, 1, 1])
         .unwrap();
@@ -148,6 +167,56 @@ fn project_point_onto_edge_touches_only_the_requested_edges_ancestor_chain() {
         untouched_edges > 0,
         "a single-edge projection must not populate every directed edge's candidate set"
     );
+    let mut expected_edges = 0usize;
+    let mut stack = vec![target_edge];
+    while let Some(edge) = stack.pop() {
+        expected_edges += 1;
+        stack.extend(
+            problem.directed_edges[edge]
+                .incoming_to_from
+                .iter()
+                .copied(),
+        );
+    }
+    assert_eq!(
+        projection_debug_stats::projected_edges(),
+        expected_edges as u64
+    );
+    assert!(expected_edges < problem.directed_edges.len());
+}
+
+#[test]
+fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
+    let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
+    let point = [1, 1, 1, 1];
+    let forward = 0;
+    let reverse = problem.directed_edges[forward].reverse;
+
+    let mut expected = SampleArena::from_global_seeds(&problem, &[]).unwrap().0;
+    expected
+        .project_point_onto_edge(&problem, forward, &point)
+        .unwrap();
+    expected
+        .project_point_onto_edge(&problem, reverse, &point)
+        .unwrap();
+
+    let (mut actual, mut candidates) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
+    let candidates_before = candidates.clone();
+    let mut active = vec![false; problem.directed_edges.len()];
+    active[forward] = true;
+    active[reverse] = true;
+    let report = actual
+        .inject_global_point_masked(&mut candidates, &problem, &point, &active)
+        .unwrap();
+
+    assert_eq!(report.total_added, 2);
+    assert_eq!(actual.record_count(), expected.record_count());
+    assert!(candidates
+        .ids
+        .iter()
+        .zip(&candidates_before.ids)
+        .enumerate()
+        .all(|(edge, (ids, before))| { (edge == forward || edge == reverse) || ids == before }));
 }
 
 /// The projected sample must still materialize back to the correct point,

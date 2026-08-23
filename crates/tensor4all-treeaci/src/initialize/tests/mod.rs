@@ -1,7 +1,8 @@
+use num_complex::{Complex32, Complex64};
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
-use super::{algebraic_edge_bounds, bootstrap_samples};
+use super::{algebraic_edge_bounds, bootstrap_samples, validate_initial_guess_scalar_kind};
 use crate::{problem::prepare_problem, TreeAciOptions};
 
 fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
@@ -33,6 +34,21 @@ fn make_tree_with_dims(
         })
         .collect();
     TreeTN::from_tensors(tensors, (0..physical_dims.len()).collect()).unwrap()
+}
+
+#[test]
+fn initial_guess_scalar_validation_checks_kind_without_reading_values() {
+    let index = DynIndex::new_dyn(1);
+    let real = IdxTensor::from_dense(vec![index.clone()], vec![1.0_f32]).unwrap();
+    let complex = IdxTensor::from_dense(vec![index], vec![Complex64::new(1.0, -2.0)]).unwrap();
+
+    validate_initial_guess_scalar_kind::<f32>(&real).unwrap();
+    validate_initial_guess_scalar_kind::<f64>(&real).unwrap();
+    validate_initial_guess_scalar_kind::<Complex32>(&real).unwrap();
+    validate_initial_guess_scalar_kind::<Complex64>(&real).unwrap();
+    assert!(validate_initial_guess_scalar_kind::<f64>(&complex).is_err());
+    validate_initial_guess_scalar_kind::<Complex32>(&complex).unwrap();
+    validate_initial_guess_scalar_kind::<Complex64>(&complex).unwrap();
 }
 
 /// `bootstrap_samples` must reach exactly the requested rank on every edge
@@ -85,6 +101,28 @@ fn bootstrap_samples_reaches_the_requested_rank_on_every_edge() {
             }
         }
     }
+}
+
+#[test]
+fn long_chain_algebraic_bounds_saturate_without_rejecting_small_active_ranks() {
+    let node_count = 130;
+    let edges = (0..node_count - 1)
+        .map(|node| (node, node + 1))
+        .collect::<Vec<_>>();
+    let tree = make_tree(&edges, node_count);
+    let problem = prepare_problem(std::slice::from_ref(&tree), &TreeAciOptions::default())
+        .expect("long rank-two chain must prepare");
+
+    let bounds = algebraic_edge_bounds(&problem)
+        .expect("an unrepresentably large physical space is still a valid rank ceiling");
+    assert_eq!(bounds.len(), edges.len());
+    assert_eq!(bounds[edges.len() / 2], usize::MAX);
+
+    let targets = vec![1; edges.len()];
+    let (_, candidates, pivots) = bootstrap_samples(&problem, &targets)
+        .expect("rank-one bootstrap must not materialize the full physical space");
+    assert!(candidates.ids.iter().all(|ids| ids.len() == 1));
+    assert!(pivots.per_edge.iter().all(|pairs| pairs.len() == 1));
 }
 
 fn middle_cut_bootstrap_points() -> Vec<Vec<usize>> {
