@@ -58,8 +58,8 @@ pub enum TriangleType {
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// Returns an error when the operator construction fails (an overflow,
+/// invalid-configuration failure, or shape mismatch).
 ///
 /// # Examples
 ///
@@ -97,8 +97,8 @@ pub fn cumsum_operator(r: usize) -> std::result::Result<QuanticsOperator, Quanti
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// Returns an error when the operator construction fails (an overflow,
+/// invalid-configuration failure, or shape mismatch).
 ///
 /// # Examples
 ///
@@ -129,7 +129,7 @@ pub fn triangle_operator(
 
 /// Create the cumulative sum MPO as a SimpleTensorTrain.
 ///
-/// The cumulative sum is implemented as an upper triangular matrix.
+/// The cumulative sum is implemented as a strict lower triangular matrix.
 /// The MPO tracks whether a comparison has been made:
 /// - State 0: No comparison yet (y and x equal so far)
 /// - State 1: Comparison made (y > x, so this entry is 1)
@@ -146,7 +146,7 @@ fn cumsum_mpo(r: usize) -> Result<SimpleTensorTrain<Complex64>> {
         ));
     }
 
-    let single_tensor = upper_triangle_tensor();
+    let single_tensor = lower_triangle_tensor();
     let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "cumulative-sum MPO site list",
         r,
@@ -170,7 +170,7 @@ fn cumsum_mpo(r: usize) -> Result<SimpleTensorTrain<Complex64>> {
         } else if n == r - 1 {
             // Last tensor: select entries where state is 1 (y > x)
             // The output is 1 only if comparison was made (state 1)
-            // For upper triangle (strict), diagonal is excluded
+            // For the strict lower triangle, the diagonal is excluded
             let mut t = tensor3_zeros(2, 4, 1);
             for cin in 0..2 {
                 for y_bit in 0..2 {
@@ -224,11 +224,9 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<SimpleTensorTrain<Co
         ));
     }
 
-    // upper_triangle_tensor() has y>x transition → M[i,j]=1 when i>j = Lower triangle
-    // lower_triangle_tensor() has y<x transition → M[i,j]=1 when i<j = Upper triangle
     let single_tensor = match triangle {
-        TriangleType::Lower => upper_triangle_tensor(),
-        TriangleType::Upper => lower_triangle_tensor(),
+        TriangleType::Lower => lower_triangle_tensor(),
+        TriangleType::Upper => upper_triangle_tensor(),
     };
     let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "triangle MPO site list",
@@ -287,18 +285,12 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<SimpleTensorTrain<Co
         .map_err(|e| anyhow::anyhow!("Failed to create triangle MPO: {}", e))
 }
 
-/// Create the single-site tensor for upper triangular matrix.
+/// Create the single-site tensor for the strict lower triangle.
 ///
-/// Returns a 4D tensor [cin][cout][y_bit][x_bit] where:
-/// - cin: input state (0 = no comparison yet, 1 = comparison made)
-/// - cout: output state
-/// - y_bit: output (row) bit
-/// - x_bit: input (column) bit
-///
-/// The tensor implements strict upper triangle comparison:
-/// - State 0: Comparing bits. If y > x, transition to state 1.
-/// - State 1: Comparison made. All remaining entries are 1.
-fn upper_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
+/// Returns a 4D tensor `[cin][cout][y_bit][x_bit]` where `y_bit` is the
+/// output row bit and `x_bit` is the input column bit. A `y > x` transition
+/// produces `M[i,j] = 1` when `i > j`.
+fn lower_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     let mut tensor = [[[[Complex64::zero(); 2]; 2]; 2]; 2];
 
     // State 0 -> State 0: y == x (continue comparing)
@@ -308,7 +300,7 @@ fn upper_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     // State 0 -> State 1: y > x (comparison made, y is greater)
     tensor[0][1][1][0] = Complex64::one(); // y=1, x=0 (y > x at this bit)
 
-    // State 0 -> nowhere: y < x (this entry is 0, not in upper triangle)
+    // State 0 -> nowhere: y < x (this entry is 0, not in lower triangle)
     // tensor[0][*][0][1] = 0 (implicit)
 
     // State 1 -> State 1: Comparison already made, all entries are 1
@@ -320,13 +312,11 @@ fn upper_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     tensor
 }
 
-/// Create the single-site tensor for strict upper triangle (i < j).
+/// Create the single-site tensor for the strict upper triangle.
 ///
-/// M[i,j] = 1 when i < j (suffix sum: y_i = Σ_{j > i} x_j).
-///
-/// The tensor is identical to lower_triangle but with the transition
-/// on y < x (y=0, x=1) instead of y > x (y=1, x=0).
-fn lower_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
+/// A `y < x` transition produces `M[i,j] = 1` when `i < j`, corresponding
+/// to the suffix sum `y_i = Σ_{j > i} x_j`.
+fn upper_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     let mut tensor = [[[[Complex64::zero(); 2]; 2]; 2]; 2];
 
     // State 0 -> State 0: y == x (continue comparing)
