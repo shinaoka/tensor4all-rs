@@ -433,31 +433,49 @@ fn matrix_public_precondition_assertions_reject_invalid_axes() {
 
     assert!(std::panic::catch_unwind(|| submatrix(&matrix, &[2], &[0])).is_err());
     assert!(std::panic::catch_unwind(|| submatrix(&matrix, &[0], &[2])).is_err());
-
-    let mut rows = matrix.clone();
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        swap_rows(&mut rows, 2, 0);
-    }))
-    .is_err());
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        swap_rows(&mut rows, 0, 2);
-    }))
-    .is_err());
-
-    let mut cols = matrix.clone();
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        swap_cols(&mut cols, 2, 0);
-    }))
-    .is_err());
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        swap_cols(&mut cols, 0, 2);
-    }))
-    .is_err());
-
     assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..0, 0..2)).is_err());
     assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..2, 0..0)).is_err());
     assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..3, 0..2)).is_err());
     assert!(std::panic::catch_unwind(|| submatrix_argmax(&matrix, 0..2, 0..3)).is_err());
+}
+
+#[test]
+fn matrix_swaps_are_fallible_and_never_mutate_on_invalid_indices() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
+
+    let mut rows = matrix.clone();
+    swap_rows(&mut rows, 0, 1).unwrap();
+    assert_eq!(rows.as_col_major_slice(), &[3.0, 1.0, 4.0, 2.0]);
+    swap_rows(&mut rows, 1, 1).unwrap();
+    assert_eq!(rows.as_col_major_slice(), &[3.0, 1.0, 4.0, 2.0]);
+    for (a, b, rejected) in [(2, 0, 2), (0, 2, 2), (2, 2, 2)] {
+        let mut invalid = matrix.clone();
+        assert_eq!(
+            swap_rows(&mut invalid, a, b),
+            Err(MatrixShapeError::RowIndexOutOfBounds {
+                index: rejected,
+                nrows: 2,
+            })
+        );
+        assert_eq!(invalid.as_col_major_slice(), matrix.as_col_major_slice());
+    }
+
+    let mut cols = matrix.clone();
+    swap_cols(&mut cols, 0, 1).unwrap();
+    assert_eq!(cols.as_col_major_slice(), &[2.0, 4.0, 1.0, 3.0]);
+    swap_cols(&mut cols, 1, 1).unwrap();
+    assert_eq!(cols.as_col_major_slice(), &[2.0, 4.0, 1.0, 3.0]);
+    for (a, b, rejected) in [(2, 0, 2), (0, 2, 2), (2, 2, 2)] {
+        let mut invalid = matrix.clone();
+        assert_eq!(
+            swap_cols(&mut invalid, a, b),
+            Err(MatrixShapeError::ColumnIndexOutOfBounds {
+                index: rejected,
+                ncols: 2,
+            })
+        );
+        assert_eq!(invalid.as_col_major_slice(), matrix.as_col_major_slice());
+    }
 }
 
 #[test]
