@@ -90,11 +90,11 @@ pub enum MatrixTensorConversionError {
     },
 }
 
-/// Error returned when row-shaped input cannot be converted into a [`Matrix`].
+/// Error returned when matrix shape or index validation fails.
 ///
-/// Use this when accepting user-provided row data. It reports the first row
-/// whose length differs from the first row, so callers can reject malformed
-/// input before any values are dropped or indexed out of bounds.
+/// Constructors use this type for malformed dimensions or payloads. In-place
+/// mutation helpers use it to reject caller-supplied indices before changing
+/// any matrix values.
 ///
 /// # Examples
 ///
@@ -129,6 +129,22 @@ pub enum MatrixShapeError {
         /// Number of rows.
         nrows: usize,
         /// Number of columns.
+        ncols: usize,
+    },
+    /// The requested row index is outside the matrix.
+    #[error("row index {index} is out of bounds for {nrows} rows")]
+    RowIndexOutOfBounds {
+        /// Rejected zero-based row index.
+        index: usize,
+        /// Number of rows in the matrix.
+        nrows: usize,
+    },
+    /// The requested column index is outside the matrix.
+    #[error("column index {index} is out of bounds for {ncols} columns")]
+    ColumnIndexOutOfBounds {
+        /// Rejected zero-based column index.
+        index: usize,
+        /// Number of columns in the matrix.
         ncols: usize,
     },
     /// The flat data length did not match the matrix shape.
@@ -1148,11 +1164,12 @@ pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize])
 
 /// Swap two rows in a matrix in-place.
 ///
-/// No-op if `a == b`.
+/// No-op if `a == b`, after validating that the index exists.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `a` or `b` is not less than `m.nrows()` when they differ.
+/// Returns [`MatrixShapeError::RowIndexOutOfBounds`] if either index is not
+/// less than `m.nrows()`.
 ///
 /// # Examples
 ///
@@ -1160,31 +1177,39 @@ pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize])
 /// use tensor4all_tensorbackend::{from_vec2d, swap_rows};
 ///
 /// let mut m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
-/// swap_rows(&mut m, 0, 1);
+/// swap_rows(&mut m, 0, 1).unwrap();
 /// assert_eq!(m[[0, 0]], 3.0);
 /// assert_eq!(m[[1, 0]], 1.0);
 /// ```
-pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
-    if a == b {
-        return;
+pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) -> Result<(), MatrixShapeError> {
+    for index in [a, b] {
+        if index >= m.nrows {
+            return Err(MatrixShapeError::RowIndexOutOfBounds {
+                index,
+                nrows: m.nrows,
+            });
+        }
     }
-    assert!(a < m.nrows, "row index out of bounds");
-    assert!(b < m.nrows, "row index out of bounds");
+    if a == b {
+        return Ok(());
+    }
     let nrows = m.nrows;
     let ncols = m.ncols;
     let data = m.as_col_major_mut_slice();
     for j in 0..ncols {
         data.swap(a + nrows * j, b + nrows * j);
     }
+    Ok(())
 }
 
 /// Swap two columns in a matrix in-place.
 ///
-/// No-op if `a == b`.
+/// No-op if `a == b`, after validating that the index exists.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `a` or `b` is not less than `m.ncols()` when they differ.
+/// Returns [`MatrixShapeError::ColumnIndexOutOfBounds`] if either index is not
+/// less than `m.ncols()`.
 ///
 /// # Examples
 ///
@@ -1192,16 +1217,22 @@ pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
 /// use tensor4all_tensorbackend::{from_vec2d, swap_cols};
 ///
 /// let mut m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
-/// swap_cols(&mut m, 0, 1);
+/// swap_cols(&mut m, 0, 1).unwrap();
 /// assert_eq!(m[[0, 0]], 2.0);
 /// assert_eq!(m[[0, 1]], 1.0);
 /// ```
-pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
-    if a == b {
-        return;
+pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) -> Result<(), MatrixShapeError> {
+    for index in [a, b] {
+        if index >= m.ncols {
+            return Err(MatrixShapeError::ColumnIndexOutOfBounds {
+                index,
+                ncols: m.ncols,
+            });
+        }
     }
-    assert!(a < m.ncols, "column index out of bounds");
-    assert!(b < m.ncols, "column index out of bounds");
+    if a == b {
+        return Ok(());
+    }
     let nrows = m.nrows;
     let start_a = nrows * a;
     let start_b = nrows * b;
@@ -1213,6 +1244,7 @@ pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
         let (left, right) = data.split_at_mut(start_a);
         right[..nrows].swap_with_slice(&mut left[start_b..start_b + nrows]);
     }
+    Ok(())
 }
 
 /// Transpose the matrix.
