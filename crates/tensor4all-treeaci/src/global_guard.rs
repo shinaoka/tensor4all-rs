@@ -7,7 +7,7 @@ use std::mem::size_of;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
+use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
 use crate::{
     frames::InputFrameStore, state::TreeAciState, Result, TreeAciError, TreeAciNode,
@@ -380,6 +380,32 @@ pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
     dims: Vec<Vec<usize>>,
     evaluations: usize,
     max_working_bytes: usize,
+    node_order: Vec<V>,
+}
+
+/// Returns the one logical site that varies across a floating-zone batch.
+///
+/// Single-point or multi-site batches do not provide enough scan structure and
+/// deliberately fall back to the evaluator's ordinary center selection.
+fn sole_varying_site(points: &[Vec<usize>]) -> Option<usize> {
+    let first = points.first()?;
+    let mut varying = None;
+    for point in points.iter().skip(1) {
+        if point.len() != first.len() {
+            return None;
+        }
+        for (site, (left, right)) in first.iter().zip(point).enumerate() {
+            if left == right {
+                continue;
+            }
+            match varying {
+                None => varying = Some(site),
+                Some(known) if known == site => {}
+                Some(_) => return None,
+            }
+        }
+    }
+    varying
 }
 
 impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
@@ -427,6 +453,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 .collect(),
             evaluations: 0,
             max_working_bytes: problem.max_working_bytes,
+            node_order: problem.node_order.clone(),
         })
     }
 
@@ -439,12 +466,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         points: &[Vec<usize>],
         _split: Option<usize>,
     ) -> Result<Vec<T>> {
-        // Keep each evaluator's automatically selected centre fixed across
-        // floating-zone scans. A per-scan centre hint would be locally optimal
-        // for that batch, but changing the root invalidates every directed
-        // message cache entry; a fixed centre lets the persistent cache reuse
-        // messages across the whole guard run. The evaluator remains exact --
-        // the hint only selects a contraction order.
+        let hint = self.evaluation_hint(points);
         let cold_evaluators = self
             .inputs
             .iter()
@@ -477,7 +499,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         crate::problem::enforce_limit("working bytes", result_bytes, self.max_working_bytes)?;
         let mut result = vec![T::default(); result_elements];
         for (input_number, evaluator) in self.inputs.iter_mut().enumerate() {
-            let evaluated = evaluator.evaluate_batched(values)?;
+            let evaluated = evaluator.evaluate_batched_with_hint(values, hint.clone())?;
             for (point, value) in evaluated.into_iter().enumerate() {
                 result[input_number + input_count * point] = T::from_evaluated_scalar(value)
                     .map_err(|message| TreeAciError::ScalarKind {
@@ -496,6 +518,13 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 context: "global guard evaluator count",
             })?;
         Ok(result)
+    }
+
+    fn evaluation_hint(&self, points: &[Vec<usize>]) -> EvaluationHint<V> {
+        sole_varying_site(points)
+            .and_then(|site| self.node_order.get(site).cloned())
+            .map(EvaluationHint::around)
+            .unwrap_or_default()
     }
 
     fn expand_points(&self, points: &[Vec<usize>]) -> Result<Vec<usize>> {
@@ -562,7 +591,7 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
             }
         })?;
         self.evaluator
-            .evaluate_batched(values)?
+            .evaluate_batched_with_hint(values, input_evaluators.evaluation_hint(points))?
             .into_iter()
             .map(|value| {
                 T::from_evaluated_scalar(value).map_err(|message| TreeAciError::ScalarKind {

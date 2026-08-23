@@ -1,7 +1,10 @@
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
-use super::{find_global_pivots, inject_global_pivots, GuardOutputEvaluator, InputEvaluators};
+use super::{
+    find_global_pivots, inject_global_pivots, sole_varying_site, GuardOutputEvaluator,
+    InputEvaluators,
+};
 use crate::{
     schedule::{run_directional_pass, PassDirection},
     state::TreeAciState,
@@ -298,7 +301,7 @@ fn guard_reuses_input_evaluators_across_invocations() {
 }
 
 #[test]
-fn output_guard_evaluator_keeps_a_fixed_center_after_warmup() {
+fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
     let (input, left_site, right_site) = delta_tree();
     let options = TreeAciOptions::default();
     let inputs = vec![input];
@@ -316,16 +319,13 @@ fn output_guard_evaluator_keeps_a_fixed_center_after_warmup() {
     let _: Vec<f64> = output_evaluator
         .evaluate(&input_evaluators, &first_points)
         .unwrap();
-    assert_eq!(output_evaluator.evaluator.center(), Some(&0));
 
-    // The next guard scan varies site 1. The output evaluator intentionally
-    // retains its center so persistent message-cache entries remain valid
-    // across the whole guard run.
+    // The next guard scan varies site 1. Re-rooting around that site changes
+    // contraction order only; exact values must remain unchanged.
     let second_points = [vec![0, 0], vec![0, 1]];
     let actual: Vec<f64> = output_evaluator
         .evaluate(&input_evaluators, &second_points)
         .unwrap();
-    assert_eq!(output_evaluator.evaluator.center(), Some(&0));
 
     let values = [0usize, 0, 0, 1];
     let expected = state
@@ -338,6 +338,17 @@ fn output_guard_evaluator_keeps_a_fixed_center_after_warmup() {
     for (actual, expected) in actual.iter().zip(expected) {
         assert!((actual - expected.real()).abs() < 1.0e-12);
     }
+}
+
+#[test]
+fn varying_site_detection_rejects_non_scan_batches() {
+    assert_eq!(
+        sole_varying_site(&[vec![0, 0, 0], vec![0, 1, 0], vec![0, 2, 0]]),
+        Some(1)
+    );
+    assert_eq!(sole_varying_site(&[vec![0, 0], vec![1, 1]]), None);
+    assert_eq!(sole_varying_site(&[vec![0, 0]]), None);
+    assert_eq!(sole_varying_site(&[vec![0, 0], vec![0]]), None);
 }
 
 /// Padding rejects an over-budget request before allocating any padded core.

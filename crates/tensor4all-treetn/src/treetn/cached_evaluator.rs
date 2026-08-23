@@ -90,6 +90,14 @@ struct BranchContractionSpec {
 }
 
 #[derive(Clone, Debug)]
+struct RawCenterComponent<T> {
+    axis: usize,
+    dim: usize,
+    point_to_assignment: Vec<usize>,
+    values: Vec<T>,
+}
+
+#[derive(Clone, Debug)]
 struct SiteEntry {
     index: DynIndex,
     input_position: usize,
@@ -500,7 +508,7 @@ pub struct CachedEvaluatorOptions<V> {
     ///
     /// `None` means no explicit step limit; the search stops at a local minimum.
     pub max_greedy_steps_per_start: Option<usize>,
-    /// Maximum logical payload bytes retained by the persistent message cache.
+    /// Maximum logical payload bytes retained by each directed message cache.
     ///
     /// A value of `0` disables retention while preserving the same evaluation
     /// results. The default is `usize::MAX`, which preserves the historical
@@ -788,27 +796,17 @@ where
     /// Keyed by the physical assignments in the node's rooted subtree. This
     /// is the minimal assignment set on which a directed message depends;
     /// changing a site in another component must not invalidate this entry.
-    message_caches: HashMap<V, PackedMessageCache<IndexKey, CachedScalar>>,
+    message_caches: HashMap<(V, V), PackedMessageCache<IndexKey, CachedScalar>>,
     /// Each node's parent-bond `DynIndex`, memoized: it never changes for a
     /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
     /// lookups that cost real time if repeated on every call.
-    parent_bond_indices: HashMap<V, DynIndex>,
-    /// The centre `message_caches`/`parent_bond_indices` were built for.
-    ///
-    /// `evaluate_batched_with_hint` can pass a *different* centre on every
-    /// call (`EvaluationHint::around`, used by `global_guard.rs` to pin the
-    /// contraction centre to whichever site a batch varies). A node's
-    /// "message toward its parent" means a different neighbour under a
-    /// different rooting, so a cache built under one centre is not just
-    /// stale but wrong under another -- both caches are cleared whenever the
-    /// centre actually used changes.
-    rooted_for_center: Option<V>,
-    /// Rooting and cache layouts depend only on the fixed centre and tree
-    /// topology. Keep them across batches; rebuilding them for every small
-    /// floating-zone callback otherwise adds an O(nodes) allocation tax.
-    rooted_plan: Option<Arc<RootedMessagePlan<V>>>,
-    message_cache_layouts: Option<Arc<HashMap<V, MessageCacheLayout>>>,
-    raw_chain_messages: bool,
+    parent_bond_indices: HashMap<(V, V), DynIndex>,
+    /// Rootings and cache layouts depend only on the center and tree topology.
+    /// Keep one immutable plan per center so scan-aware callers can move the
+    /// center without rebuilding O(nodes) metadata for every small batch.
+    rooted_plans: HashMap<V, Arc<RootedMessagePlan<V>>>,
+    message_cache_layouts_by_center: HashMap<V, Arc<HashMap<V, MessageCacheLayout>>>,
+    raw_messages: bool,
 }
 
 impl<'a, V> TreeTNCachedEvaluator<'a, V>
@@ -868,10 +866,9 @@ where
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::new(),
             parent_bond_indices: HashMap::new(),
-            rooted_for_center: None,
-            rooted_plan: None,
-            message_cache_layouts: None,
-            raw_chain_messages: false,
+            rooted_plans: HashMap::new(),
+            message_cache_layouts_by_center: HashMap::new(),
+            raw_messages: false,
         })
     }
 
@@ -948,9 +945,8 @@ where
     ///
     /// A caller that scans one site while holding the rest fixed knows which
     /// node that is. Contracting around it makes every incoming message
-    /// constant across the batch, so each is contracted once; contracting
-    /// around any other node recontracts the messages on the path between them
-    /// once per scanned value.
+    /// constant across the batch, so each is contracted once. Directed-message
+    /// caches remain valid when successive calls name different centers.
     ///
     /// The hint applies to this call only and does not replace a centre already
     /// chosen by [`CachedEvaluatorOptions::center`] or by greedy search, so a
@@ -1049,35 +1045,25 @@ where
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<CacheBuildResult<V>> {
-        if self.rooted_for_center.as_ref() != Some(center) {
-            // A node's cached "message toward parent" means a different
-            // neighbour under a different rooting, so a cache built for one
-            // centre is wrong, not merely stale, once the centre changes.
-            self.message_caches.clear();
-            self.parent_bond_indices.clear();
-            self.rooted_plan = None;
-            self.message_cache_layouts = None;
-            self.rooted_for_center = Some(center.clone());
-        }
         self.last_stats = CachedEvaluationStats::default();
-        if self.rooted_plan.is_none() {
+        if !self.rooted_plans.contains_key(center) {
             let plan = Arc::new(RootedMessagePlan::new(self.tree, center)?);
             let layouts = Arc::new(self.build_message_cache_layouts(&plan)?);
-            self.rooted_plan = Some(plan);
-            self.message_cache_layouts = Some(layouts);
+            self.rooted_plans.insert(center.clone(), plan);
+            self.message_cache_layouts_by_center
+                .insert(center.clone(), layouts);
         }
         let plan = Arc::clone(
-            self.rooted_plan
-                .as_ref()
+            self.rooted_plans
+                .get(center)
                 .ok_or_else(|| anyhow::anyhow!("missing rooted message plan"))?,
         );
         let message_cache_layouts = Arc::clone(
-            self.message_cache_layouts
-                .as_ref()
+            self.message_cache_layouts_by_center
+                .get(center)
                 .ok_or_else(|| anyhow::anyhow!("missing message cache layouts"))?,
         );
-        let raw_chain = self.can_use_raw_chain_leaf_center(center)?;
-        self.raw_chain_messages = raw_chain;
+        self.raw_messages = self.can_use_raw_messages(center)?;
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
 
         let mut messages = HashMap::<V, StackedMessage>::new();
@@ -1231,14 +1217,14 @@ where
         Ok(assignment_batches)
     }
 
-    fn can_use_raw_chain_leaf_center(&self, center: &V) -> Result<bool> {
+    fn can_use_raw_messages(&self, center: &V) -> Result<bool> {
         let neighbors = sorted_neighbors(self.tree);
-        if neighbors.get(center).map(Vec::len) != Some(1) {
+        if !neighbors.contains_key(center) {
             return Ok(false);
         }
-        // A leaf center turns every degree-3 node into at most a two-child
-        // rooted branch, which is covered by the raw branch message path.
-        // Degree-4 nodes would still require a generic multi-child message.
+        // Every non-center node then has at most two children, which is covered
+        // by the raw branch-message kernel. The center itself is handled by the
+        // degree-1/2/3 raw center kernel.
         if neighbors.values().any(|neighbors| neighbors.len() > 3) {
             return Ok(false);
         }
@@ -2482,7 +2468,11 @@ where
             );
         };
         let parent = parent.clone();
-        let bond_index = match self.parent_bond_indices.get(node) {
+        // A cached message is identified by its direction, not just its source
+        // node. Re-rooting the tree changes some source -> parent directions,
+        // while every unchanged direction remains an exact reusable message.
+        let directed_edge = (node.clone(), parent.clone());
+        let bond_index = match self.parent_bond_indices.get(&directed_edge) {
             Some(index) => index.clone(),
             None => {
                 let edge = self.tree.edge_between(node, &parent).ok_or_else(|| {
@@ -2503,7 +2493,8 @@ where
                         )
                     })?
                     .clone();
-                self.parent_bond_indices.insert(node.clone(), index.clone());
+                self.parent_bond_indices
+                    .insert(directed_edge.clone(), index.clone());
                 index
             }
         };
@@ -2518,7 +2509,7 @@ where
         let (hit_keys, missing_indices) = {
             let cache = self
                 .message_caches
-                .entry(node.clone())
+                .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
             if let Some(positions) = cache.get_all_cached(&keys) {
                 #[cfg(test)]
@@ -2529,7 +2520,7 @@ where
                 for position in positions {
                     data.extend_from_slice(cache.column(position));
                 }
-                let (tensor, raw_values) = if self.raw_chain_messages {
+                let (tensor, raw_values) = if self.raw_messages {
                     (None, Some(data))
                 } else {
                     (
@@ -2567,14 +2558,12 @@ where
         if !hit_keys.is_empty() {
             // `entry().or_insert_with()` rather than `get_mut().expect(...)`:
             // the entry for `node` was inserted above and nothing removes
-            // entries from `message_caches` (the only other mutator is
-            // `Self::message_caches.clear()`, gated to run once at the top
-            // of `build_environment_cache`, before this function's only
-            // caller). `or_insert_with`'s closure is never invoked here, so
-            // this cannot fail rather than merely being checked not to.
+            // entries from `message_caches`. `or_insert_with`'s closure is
+            // never invoked here, so this cannot fail rather than merely
+            // being checked not to.
             let cache = self
                 .message_caches
-                .entry(node.clone())
+                .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
             cache.get_all_cached(&hit_keys); // counted above; discard positions here
         }
@@ -2693,7 +2682,7 @@ where
         // cannot fail rather than merely being checked not to.
         let cache = self
             .message_caches
-            .entry(node.clone())
+            .entry(directed_edge)
             .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
         let missing_slots = cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
@@ -2755,7 +2744,7 @@ where
             missing_slot_iter.next().is_none(),
             "TreeTNCachedEvaluator::evaluate_batched: extra cache slots after merge"
         );
-        let (tensor, raw_values) = if self.raw_chain_messages {
+        let (tensor, raw_values) = if self.raw_messages {
             (None, Some(data))
         } else {
             (
@@ -3116,6 +3105,173 @@ where
         Ok(Some(result))
     }
 
+    /// Contracts a degree-2 or degree-3 center directly from raw core and
+    /// directed-message buffers.
+    ///
+    /// Moving a floating-zone scan's center to its varying node makes every
+    /// incoming component invariant across that batch. The message evaluator
+    /// already represents those components as raw columns; keeping the center
+    /// raw as well avoids falling back to the generic `IdxTensor` contraction
+    /// solely because the varying node is not a leaf.
+    fn try_contract_internal_center_raw(
+        &self,
+        center: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        component_batches: &[ComponentBatch<V>],
+        environment_cache: &EnvironmentCache<V>,
+    ) -> Result<Option<Vec<AnyScalar>>> {
+        if !(2..=3).contains(&component_batches.len()) {
+            return Ok(None);
+        }
+        let entries = self
+            .layout
+            .entries_by_node
+            .get(center)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+        let center_tensor = tensor_for_node(self.tree, center)?;
+        if center_tensor.indices().len() != component_batches.len() + 1 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = center_tensor
+            .indices()
+            .iter()
+            .position(|index| index == &entry.index)
+        else {
+            return Ok(None);
+        };
+        let physical_values = (0..values.shape()[1])
+            .map(|point| {
+                value_at(
+                    values,
+                    entry.input_position,
+                    point,
+                    "TreeTNCachedEvaluator::try_contract_internal_center_raw",
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if center_tensor.is_complex() {
+            let Some(components) = self.raw_center_components::<Complex64>(
+                center,
+                component_batches,
+                environment_cache,
+                |value| match value {
+                    CachedScalar::Complex(value) => Some(*value),
+                    CachedScalar::Real(_) => None,
+                },
+            )?
+            else {
+                return Ok(None);
+            };
+            let result = center_tensor.with_dense_slice::<Complex64, _>(|core| {
+                contract_raw_center(
+                    core,
+                    &center_tensor.dims(),
+                    physical_axis,
+                    &physical_values,
+                    &components,
+                )
+            })??;
+            return Ok(Some(
+                result
+                    .into_iter()
+                    .map(|value| AnyScalar::new_complex(value.re, value.im))
+                    .collect(),
+            ));
+        }
+
+        let Some(components) = self.raw_center_components::<f64>(
+            center,
+            component_batches,
+            environment_cache,
+            |value| match value {
+                CachedScalar::Real(value) => Some(*value),
+                CachedScalar::Complex(_) => None,
+            },
+        )?
+        else {
+            return Ok(None);
+        };
+        let result = center_tensor.with_dense_slice::<f64, _>(|core| {
+            contract_raw_center(
+                core,
+                &center_tensor.dims(),
+                physical_axis,
+                &physical_values,
+                &components,
+            )
+        })??;
+        Ok(Some(result.into_iter().map(AnyScalar::new_real).collect()))
+    }
+
+    fn raw_center_components<T>(
+        &self,
+        center: &V,
+        component_batches: &[ComponentBatch<V>],
+        environment_cache: &EnvironmentCache<V>,
+        convert: impl Fn(&CachedScalar) -> Option<T>,
+    ) -> Result<Option<Vec<RawCenterComponent<T>>>> {
+        let center_tensor = tensor_for_node(self.tree, center)?;
+        let mut components = Vec::with_capacity(component_batches.len());
+        for batch in component_batches {
+            let edge = self
+                .tree
+                .edge_between(center, &batch.neighbor)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batched: no edge between {:?} and {:?}",
+                        center,
+                        batch.neighbor
+                    )
+                })?;
+            let bond = self.tree.bond_index(edge).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batched: missing center bond index"
+                )
+            })?;
+            let Some(axis) = center_tensor
+                .indices()
+                .iter()
+                .position(|index| index == bond)
+            else {
+                return Ok(None);
+            };
+            let dim = bond.dim();
+            let environment = environment_cache.get(&batch.neighbor).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batched: missing cached environment"
+                )
+            })?;
+            let Some(raw_values) = environment.raw_values.as_ref() else {
+                return Ok(None);
+            };
+            let Some(values) = raw_values.iter().map(&convert).collect::<Option<Vec<_>>>() else {
+                return Ok(None);
+            };
+            ensure!(
+                dim > 0 && values.len() % dim == 0,
+                "raw center environment length {} is incompatible with bond dimension {dim}",
+                values.len()
+            );
+            components.push(RawCenterComponent {
+                axis,
+                dim,
+                point_to_assignment: batch.point_to_assignment.clone(),
+                values,
+            });
+        }
+        // Column-major storage makes the lowest-numbered bond axis the
+        // smallest-stride one. Put it in the innermost contraction loop so a
+        // center scan streams through the core instead of jumping between
+        // distant columns at every scalar multiply.
+        components.sort_by_key(|component| std::cmp::Reverse(component.axis));
+        Ok(Some(components))
+    }
+
     fn contract_center_for_points(
         &self,
         center: &V,
@@ -3130,6 +3286,14 @@ where
         if let Some(result) =
             self.try_contract_leaf_center_raw(center, values, component_batches, environment_cache)?
         {
+            return Ok(result);
+        }
+        if let Some(result) = self.try_contract_internal_center_raw(
+            center,
+            values,
+            component_batches,
+            environment_cache,
+        )? {
             return Ok(result);
         }
         let center_entries = self
@@ -3270,6 +3434,125 @@ fn tensor_from_cached_values(
         indices,
         values.into_iter().map(CachedScalar::into_any).collect(),
     )?)
+}
+
+fn contract_raw_center<T>(
+    core: &[T],
+    dims: &[usize],
+    physical_axis: usize,
+    physical_values: &[usize],
+    components: &[RawCenterComponent<T>],
+) -> Result<Vec<T>>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    ensure!(
+        (2..=3).contains(&components.len()),
+        "raw internal center needs two or three components"
+    );
+    ensure!(
+        physical_axis < dims.len(),
+        "raw center physical axis is out of bounds"
+    );
+    let mut strides = Vec::with_capacity(dims.len());
+    let mut stride = 1usize;
+    for &dim in dims {
+        strides.push(stride);
+        stride = stride
+            .checked_mul(dim)
+            .ok_or_else(|| anyhow::anyhow!("raw center strides overflow usize"))?;
+    }
+    ensure!(
+        core.len() == stride,
+        "raw center core length does not match its shape"
+    );
+    for component in components {
+        ensure!(
+            component.axis < dims.len() && dims[component.axis] == component.dim,
+            "raw center component shape does not match its core axis"
+        );
+        ensure!(
+            component.axis != physical_axis,
+            "raw center component axis overlaps its physical axis"
+        );
+        ensure!(
+            component.point_to_assignment.len() == physical_values.len(),
+            "raw center component assignment count does not match point count"
+        );
+        ensure!(
+            component.dim > 0 && component.values.len() % component.dim == 0,
+            "raw center component values do not contain complete bond columns"
+        );
+        let assignment_count = component.values.len() / component.dim;
+        ensure!(
+            component
+                .point_to_assignment
+                .iter()
+                .all(|&assignment| assignment < assignment_count),
+            "raw center component assignment is out of bounds"
+        );
+    }
+    for (position, component) in components.iter().enumerate() {
+        ensure!(
+            components[position + 1..]
+                .iter()
+                .all(|other| component.axis != other.axis),
+            "raw center components overlap the same core axis"
+        );
+    }
+
+    let component_value = |component: &RawCenterComponent<T>, point: usize, bond: usize| {
+        let assignment = component.point_to_assignment[point];
+        component.values[assignment * component.dim + bond]
+    };
+    let mut output = Vec::with_capacity(physical_values.len());
+    for (point, &physical) in physical_values.iter().enumerate() {
+        ensure!(
+            physical < dims[physical_axis],
+            "raw center physical value is out of bounds"
+        );
+        let physical_offset = physical * strides[physical_axis];
+        let mut sum = T::default();
+        match components {
+            [first, second] => {
+                for first_bond in 0..first.dim {
+                    let first_value = component_value(first, point, first_bond);
+                    let mut inner = T::default();
+                    for second_bond in 0..second.dim {
+                        let second_value = component_value(second, point, second_bond);
+                        let offset = physical_offset
+                            + first_bond * strides[first.axis]
+                            + second_bond * strides[second.axis];
+                        inner += core[offset] * second_value;
+                    }
+                    sum += inner * first_value;
+                }
+            }
+            [first, second, third] => {
+                for first_bond in 0..first.dim {
+                    let first_value = component_value(first, point, first_bond);
+                    let mut middle = T::default();
+                    for second_bond in 0..second.dim {
+                        let second_value = component_value(second, point, second_bond);
+                        let mut inner = T::default();
+                        for third_bond in 0..third.dim {
+                            let third_value = component_value(third, point, third_bond);
+                            let offset = physical_offset
+                                + first_bond * strides[first.axis]
+                                + second_bond * strides[second.axis]
+                                + third_bond * strides[third.axis];
+                            inner += core[offset] * third_value;
+                        }
+                        middle += inner * second_value;
+                    }
+                    sum += middle * first_value;
+                }
+            }
+            _ => bail!("raw internal center needs two or three components"),
+        }
+        output.push(sum);
+    }
+    Ok(output)
 }
 
 fn scalar_chain_message_contraction<T>(
@@ -5103,14 +5386,81 @@ mod tests {
         assert_scalars_close(&hinted_values, &fixed_center_values);
     }
 
+    #[test]
+    fn raw_degree_three_center_matches_exact_real_evaluation() {
+        let (tree, indices) = star_tree();
+        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &[4, 2]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
+                .unwrap();
+
+        let actual = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+            .unwrap();
+
+        assert_scalars_close(&actual, &expected);
+    }
+
+    #[test]
+    fn raw_degree_three_center_matches_exact_complex_evaluation() {
+        let (tree, indices) = complex_star_tree();
+        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &[4, 2]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
+                .unwrap();
+
+        let actual = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+            .unwrap();
+
+        assert_scalars_close(&actual, &expected);
+    }
+
+    #[test]
+    fn changing_center_hint_reuses_unchanged_directed_messages() {
+        let (tree, indices) = complex_three_node_chain();
+        let shape = [3usize, 1usize];
+        let values = [0usize, 0, 0];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
+                .unwrap();
+
+        let first = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+            .unwrap();
+        let second = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(1))
+            .unwrap();
+
+        assert_scalars_close(&first, &expected);
+        assert_scalars_close(&second, &expected);
+        let stats = evaluator.stats_for_test();
+        assert_eq!(
+            stats.message_cache_hits, 1,
+            "the 2 -> 1 message is independent of whether 0 or 1 is the center: {stats:?}"
+        );
+        assert_eq!(
+            stats.message_cache_misses, 1,
+            "only the new 0 -> 1 direction should be cold: {stats:?}"
+        );
+    }
+
     fn assert_scalars_close(actual: &[AnyScalar], expected: &[AnyScalar]) {
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert!(
                 (actual.real() - expected.real()).abs() < 1.0e-12,
-                "actual={} expected={}",
-                actual.real(),
-                expected.real()
+                "actual={actual:?} expected={expected:?}"
+            );
+            assert!(
+                (actual.imag() - expected.imag()).abs() < 1.0e-12,
+                "actual={actual:?} expected={expected:?}"
             );
         }
     }
@@ -5744,7 +6094,7 @@ mod tests {
         }
         let site_dims = vec![LOCAL_DIM; N_SITES];
 
-        // Cached path: the real evaluate_batched, as find_global_pivots uses it.
+        // Cached scan-aware path used by TreeACI's global guard.
         let (tree, site_indices) = build_tree(7);
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &site_indices, CachedEvaluatorOptions::default())
@@ -5773,7 +6123,15 @@ mod tests {
                     }
                     let shape = [N_SITES, points.len()];
                     let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
-                    let out = evaluator.evaluate_batched(arr)?;
+                    let hint = (0..N_SITES)
+                        .find(|&site| {
+                            points[1..]
+                                .iter()
+                                .any(|point| point[site] != points[0][site])
+                        })
+                        .map(EvaluationHint::around)
+                        .unwrap_or_default();
+                    let out = evaluator.evaluate_batched_with_hint(arr, hint)?;
                     let stats = evaluator.stats_for_test();
                     total_hits += stats.message_cache_hits;
                     total_misses += stats.message_cache_misses;
@@ -5785,7 +6143,7 @@ mod tests {
         }
         let cached_elapsed = cached_start.elapsed();
 
-        // Uncached path: identical tree, identical walk, direct compute.
+        // Uncached path: identical tree, walk, and varying-site center.
         let (tree2, site_indices2) = build_tree(7);
         let mut evaluator2 =
             TreeTNCachedEvaluator::new(&tree2, &site_indices2, CachedEvaluatorOptions::default())
@@ -5812,7 +6170,16 @@ mod tests {
                     }
                     let shape = [N_SITES, points.len()];
                     let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
-                    let out = evaluate_batched_uncached(&mut evaluator2, arr, &center)?;
+                    let varying_center = (0..N_SITES).find(|&site| {
+                        points[1..]
+                            .iter()
+                            .any(|point| point[site] != points[0][site])
+                    });
+                    let out = evaluate_batched_uncached(
+                        &mut evaluator2,
+                        arr,
+                        varying_center.as_ref().unwrap_or(&center),
+                    )?;
                     Ok(out.iter().map(|v| v.real().abs()).collect())
                 },
             )

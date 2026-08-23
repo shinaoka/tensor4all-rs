@@ -6177,6 +6177,55 @@ impl IdxTensor {
             .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))
     }
 
+    /// Reads dense column-major tensor values without copying them into a new vector.
+    ///
+    /// The callback receives the same logical dense values and ordering as
+    /// [`Self::to_vec`], with the first tensor index varying fastest. Use this
+    /// for read-only kernels that can finish while the callback is active;
+    /// use [`Self::to_vec`] when the values must outlive the call.
+    ///
+    /// # Arguments
+    ///
+    /// * `read` - A callback that consumes the temporary dense value slice and
+    ///   returns the caller's result.
+    ///
+    /// # Returns
+    ///
+    /// Returns the callback's result without allocating a result vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tensor dtype does not match `T` or dense
+    /// materialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense(
+    ///     vec![i, j],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0],
+    /// )?;
+    /// let weighted_sum = tensor.with_dense_slice::<f64, _>(|values| {
+    ///     values.iter().enumerate().map(|(i, value)| (i + 1) as f64 * value).sum::<f64>()
+    /// })?;
+    /// assert_eq!(weighted_sum, 30.0);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn with_dense_slice<T: TensorElement, R>(
+        &self,
+        read: impl FnOnce(&[T]) -> R,
+    ) -> std::result::Result<R, IdxTensorError> {
+        let values = self.as_inner()?.duplicate_value()?;
+        let values = values
+            .as_slice::<T>()
+            .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))?;
+        Ok(read(values))
+    }
+
     /// Consume the tensor and return its indices with dense column-major values.
     ///
     /// Use this when a caller needs to move index metadata and dense payload
