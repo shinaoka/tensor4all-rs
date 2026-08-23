@@ -268,9 +268,11 @@ Run before pushing. CI runs the same checks, but local = faster feedback:
 ```bash
 cargo fmt --all                        # Auto-fix formatting
 cargo fmt --all -- --check             # Dry-run (matches CI)
-cargo clippy --workspace --all-targets -- -D warnings   # Matches CI
-cargo test -p <changed-crate>          # Quick check first
-cargo nextest run --release --workspace # Full test suite
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+cargo test -p <changed-crate> --release # Quick check first
+cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
+cargo test --profile ci -p tensor4all-hdf5
+cargo test --doc --profile ci --workspace -j 8
 cargo doc --workspace --no-deps        # Build rustdoc
 ```
 

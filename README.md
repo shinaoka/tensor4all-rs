@@ -73,6 +73,7 @@ validated in CI. Longer runnable examples live in the
 - **[Julia Bindings](https://github.com/tensor4all/Tensor4all.jl)** — Tensor4all.jl wrapper
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
 - **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
+- **[Contributing](CONTRIBUTING.md)** — issue intake, development conventions, validation, and pull requests
 
 ## Agent Skill
 
