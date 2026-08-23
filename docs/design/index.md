@@ -7,6 +7,7 @@
 | [t4a_unified_tensor_backend.md](./t4a_unified_tensor_backend.md) | Unified tensor backend design (tenferro-rs integration) |
 | [tenferro-main-session-migration.md](./tenferro-main-session-migration.md) | First issue #623 slice: pin current tenferro main and migrate internal CPU calls to its canonical session API |
 | [explicit-cpu-execution-context.md](./explicit-cpu-execution-context.md) | Issue #663 explicit plain, graph, eager-AD, and logical reconstruction context |
+| [tensorbackend-session-entry.md](./tensorbackend-session-entry.md) | Issue #623 slice: centralize concrete CPU sessions on explicit contexts before CUDA dispatch |
 | [torch_backend.md](./torch_backend.md) | PyTorch backend design exploration |
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
 | [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles and the opt-in full-debug release profile |

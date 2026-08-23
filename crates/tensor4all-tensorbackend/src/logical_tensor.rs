@@ -2,7 +2,6 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro::{DType, Tensor, TensorRead};
-use tenferro_tensor::BackendSessionHost;
 
 use crate::CpuExecutionContext;
 
@@ -275,15 +274,11 @@ impl CpuExecutionContext {
     /// dtype payload.
     pub fn reconstruct(&self, tensor: &LogicalTensor) -> Result<Tensor, LogicalTensorError> {
         let host = tensor.to_native()?;
-        self.with_backend(|backend| {
-            backend.with_backend_session(|session| {
-                session.upload_host_tensor(TensorRead::from_tensor(&host))
+        self.with_session(|session| session.upload_host_tensor(TensorRead::from_tensor(&host)))
+            .map_err(|source| LogicalTensorError::Tensor {
+                operation: "target-context upload",
+                source,
             })
-        })
-        .map_err(|source| LogicalTensorError::Tensor {
-            operation: "target-context upload",
-            source,
-        })
     }
 }
 

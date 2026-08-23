@@ -19,7 +19,6 @@ use tenferro_einsum::{
     TraceContextEinsumExt,
 };
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_tensor::BackendSessionHost;
 
 use crate::any_scalar::promote_scalar_native;
 /// Error returned by the storage/tensor bridge helpers.
@@ -57,7 +56,7 @@ fn native_tensor_from_vec<T: TensorScalar>(
 
 use crate::context::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_backend, with_default_graph_runtime,
+    with_default_graph_runtime, with_default_session,
 };
 use crate::memory::release_process_allocator_cached_memory;
 use crate::storage::Storage;
@@ -585,10 +584,8 @@ fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
             .duplicate()
             .map_err(|e| anyhow!("tensor duplication failed: {e}"));
     }
-    with_default_backend(|backend| {
-        backend.with_backend_session(|session| tensor.convert(to, session))
-    })
-    .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
+    with_default_session(|session| tensor.convert(to, session))
+        .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
 }
 
 fn ids_to_subscript(ids: &[u32]) -> Result<String> {
@@ -1152,10 +1149,8 @@ pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
 ) -> Result<NativeTensor> {
-    with_default_backend(|backend| {
-        backend.with_backend_session(|session| tensor.reshape(logical_dims, session))
-    })
-    .map_err(|e| anyhow!("native reshape failed: {e}"))
+    with_default_session(|session| tensor.reshape(logical_dims, session))
+        .map_err(|e| anyhow!("native reshape failed: {e}"))
 }
 
 /// Compute a QR decomposition on a native tensor.
@@ -1165,9 +1160,8 @@ pub fn reshape_col_major_native_tensor(
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
 ) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
-    let (q, r) =
-        with_default_backend(|backend| backend.with_backend_session(|session| tensor.qr(session)))
-            .map_err(|e| anyhow!("native QR failed: {e}"))?;
+    let (q, r) = with_default_session(|session| tensor.qr(session))
+        .map_err(|e| anyhow!("native QR failed: {e}"))?;
     Ok((q, r))
 }
 
@@ -1178,9 +1172,8 @@ pub fn qr_native_tensor(
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
-    let (u, s, vt) =
-        with_default_backend(|backend| backend.with_backend_session(|session| tensor.svd(session)))
-            .map_err(|e| anyhow!("native SVD failed: {e}"))?;
+    let (u, s, vt) = with_default_session(|session| tensor.svd(session))
+        .map_err(|e| anyhow!("native SVD failed: {e}"))?;
     Ok((u, s, vt))
 }
 
@@ -1195,10 +1188,8 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<AnyScalar
             .map_err(|e| anyhow!("native scalar duplication failed: {e}"))?
     } else {
         let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-        with_default_backend(|backend| {
-            backend.with_backend_session(|session| tensor.reduce_sum(&axes, session))
-        })
-        .map_err(|e| anyhow!("native sum failed: {e}"))?
+        with_default_session(|session| tensor.reduce_sum(&axes, session))
+            .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
     Ok(AnyScalar::from_native(reduced)?)
 }
@@ -1622,11 +1613,9 @@ pub fn permute_native_tensor(
     tensor: &NativeTensor,
     perm: &[usize],
 ) -> std::result::Result<NativeTensor, BridgeError> {
-    with_default_backend(|backend| {
-        backend.with_backend_session(|session| tensor.transpose(perm, session))
-    })
-    .map_err(|e| anyhow!("native permute failed: {e}"))
-    .map_err(BridgeError::from)
+    with_default_session(|session| tensor.transpose(perm, session))
+        .map_err(|e| anyhow!("native permute failed: {e}"))
+        .map_err(BridgeError::from)
 }
 
 /// Contract two native tensors along matching axes.

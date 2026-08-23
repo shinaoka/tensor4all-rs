@@ -1,10 +1,12 @@
 //! Explicit and optional process-global tenferro CPU execution contexts.
 
+use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{CompiledGraph, GraphCompiler, Runtime, Tensor, TracedGraph};
 use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuBackend};
+use tenferro_tensor::{BackendSession, BackendSessionHost};
 
 /// Error returned by explicit CPU context graph or eager-runtime operations.
 ///
@@ -43,6 +45,37 @@ pub enum CpuExecutionContextError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+const CANONICAL_SESSION_REENTRY_MESSAGE: &str = "recursive tensorbackend canonical session entry";
+
+thread_local! {
+    static CANONICAL_SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+struct CanonicalSessionGuard {
+    previous: bool,
+}
+
+impl CanonicalSessionGuard {
+    fn assert_inactive() {
+        CANONICAL_SESSION_ACTIVE.with(|active| {
+            assert!(!active.get(), "{CANONICAL_SESSION_REENTRY_MESSAGE}");
+        });
+    }
+
+    fn enter() -> Self {
+        Self::assert_inactive();
+        CANONICAL_SESSION_ACTIVE.with(|active| Self {
+            previous: active.replace(true),
+        })
+    }
+}
+
+impl Drop for CanonicalSessionGuard {
+    fn drop(&mut self) {
+        CANONICAL_SESSION_ACTIVE.with(|active| active.set(self.previous));
+    }
 }
 
 impl CpuExecutionContextError {
@@ -130,6 +163,21 @@ impl CpuExecutionContext {
             Err(poisoned) => poisoned.into_inner(),
         };
         f(&mut backend)
+    }
+
+    pub(crate) fn with_session<R: Send>(
+        &self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        CanonicalSessionGuard::assert_inactive();
+        let mut backend = match self.backend.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        backend.with_backend_session(|session| {
+            let _guard = CanonicalSessionGuard::enter();
+            f(session)
+        })
     }
 
     fn backend_clone(&self) -> CpuBackend {
@@ -366,6 +414,12 @@ mod defaults {
         default_context().with_backend(f)
     }
 
+    pub(crate) fn with_default_session<R: Send>(
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        default_context().with_session(f)
+    }
+
     pub(crate) fn with_default_graph_runtime<R>(
         f: impl FnOnce(&mut GraphCompiler, &Runtime, &mut CpuBackend) -> R,
     ) -> anyhow::Result<R> {
@@ -446,7 +500,7 @@ pub use defaults::{default_eager_ctx, with_default_backend, EagerContextError};
 #[cfg(feature = "global-defaults")]
 pub(crate) use defaults::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_graph_runtime,
+    with_default_graph_runtime, with_default_session,
 };
 
 #[cfg(test)]
@@ -457,13 +511,42 @@ mod tests {
 
     use super::*;
     use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
-    use tenferro::{DType, TraceContext};
+    use tenferro::{DType, TensorSessionOpsExt, TraceContext};
     use tenferro_ad::EagerTensor;
     use tenferro_cpu::{CpuContext, ExternalCpuDomain};
     use tenferro_tensor::CpuDomainId;
 
     fn context() -> CpuExecutionContext {
         CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
+    }
+
+    #[test]
+    fn explicit_session_runs_a_concrete_operation() {
+        let context = context();
+        let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap();
+        let result = context
+            .with_session(|session| lhs.matmul(&rhs, session))
+            .unwrap();
+
+        assert_eq!(result.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
+    }
+
+    #[test]
+    fn recursive_session_entry_fails_before_lock_and_restores_guard() {
+        let context = context();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            context.with_session(|_| context.with_session(|_| ()))
+        }))
+        .expect_err("recursive canonical session entry should panic");
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .expect("recursive entry panic should contain a string message");
+        assert_eq!(message, CANONICAL_SESSION_REENTRY_MESSAGE);
+
+        assert_eq!(context.with_session(|_| 7usize), 7);
     }
 
     #[test]
