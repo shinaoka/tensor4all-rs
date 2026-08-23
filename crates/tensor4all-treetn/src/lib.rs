@@ -26,6 +26,8 @@ pub struct ReadmeDoctests;
 pub mod prelude;
 
 mod algorithm;
+#[cfg(feature = "tenferro-cuda")]
+mod cuda;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
 mod dmrg;
@@ -46,6 +48,8 @@ mod tdvp;
 mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
+#[cfg(feature = "tenferro-cuda")]
+pub use cuda::CudaTreeTNError;
 pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};
 pub use error::{
     LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,

@@ -3057,6 +3057,23 @@ impl IdxTensor {
         self.storage.axis_classes()
     }
 
+    #[cfg(feature = "tenferro-cuda")]
+    pub(crate) fn deferred_storage_error(&self) -> Option<&TensorStorageError> {
+        self.storage.deferred_error()
+    }
+
+    #[cfg(feature = "tenferro-cuda")]
+    pub(crate) fn cuda_eager_inner(&self) -> Option<&EagerTensor> {
+        self.storage
+            .eager()
+            .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
+    }
+
+    #[cfg(feature = "tenferro-cuda")]
+    pub(crate) fn cuda_duplicate_native(&self) -> Result<NativeTensor> {
+        Ok(self.try_materialized_inner()?.duplicate_value()?)
+    }
+
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     /// # Errors
     /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
@@ -3270,6 +3287,39 @@ impl IdxTensor {
     /// ```
     pub fn storage_kind(&self) -> StorageKind {
         self.storage.storage_kind()
+    }
+
+    /// Return the exact eager scalar dtype without reading tensor values.
+    ///
+    /// This feature-gated accessor is used by the CUDA TreeTN boundary to
+    /// reject mixed dtypes before the first device contraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the dtype cannot be determined from the
+    /// tensor metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "tenferro-cuda")]
+    /// # {
+    /// use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
+    ///
+    /// let tensor = IdxTensor::from_dense(vec![DynIndex::new_dyn(1)], vec![1.0_f32]).unwrap();
+    /// let dtype = tensor.cuda_dtype().unwrap();
+    /// assert_eq!(dtype, tenferro::DType::F32);
+    /// let accessor: fn(&IdxTensor) -> Result<tenferro::DType, IdxTensorError> =
+    ///     IdxTensor::cuda_dtype;
+    /// assert_eq!(
+    ///     std::mem::size_of_val(&accessor),
+    ///     std::mem::size_of::<fn(&IdxTensor) -> Result<tenferro::DType, IdxTensorError>>(),
+    /// );
+    /// # }
+    /// ```
+    #[cfg(feature = "tenferro-cuda")]
+    pub fn cuda_dtype(&self) -> std::result::Result<DType, IdxTensorError> {
+        self.scalar_dtype().map_err(IdxTensorError::from)
     }
 
     /// Sum all elements, returning `AnyScalar`.

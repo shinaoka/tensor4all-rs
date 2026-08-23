@@ -17,6 +17,17 @@ backend-tenferro = ["global-defaults"]
 explicit-context = []
 # Opt-in legacy operations backed by one process-global context.
 global-defaults = ["explicit-context"]
+tenferro-cuda = [
+    "explicit-context",
+    "tenferro-cpu-faer",
+    "dep:tenferro-gpu",
+    "tenferro-gpu/cuda",
+    "tenferro-ad/cuda",
+    "tenferro-einsum/autodiff",
+    "tenferro-einsum/cuda",
+    "tenferro-linalg/autodiff",
+    "tenferro-linalg/cuda",
+]
 tenferro-cpu-faer = [
     "tenferro/cpu-faer",
     "tenferro-ad/cpu-faer",
@@ -60,6 +71,7 @@ tenferro-cpu.workspace = true
 tenferro-einsum.workspace = true
 tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
+tenferro-gpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true

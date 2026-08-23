@@ -10,6 +10,10 @@ description = "Tree tensor networks with arbitrary graph topology for tensor4all
 [features]
 default = ["tenferro-cpu-faer", "simplett-bridge"]
 simplett-bridge = ["dep:tensor4all-simplett"]
+tenferro-cuda = [
+    "tensor4all-core/tenferro-cuda",
+    "tensor4all-tensorbackend/tenferro-cuda",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-simplett?/tenferro-cpu-faer",
@@ -38,3 +42,7 @@ rand_chacha.workspace = true
 [[bench]]
 name = "cached_evaluator"
 harness = false
+
+[[example]]
+name = "cuda_tree_contraction"
+required-features = ["tenferro-cuda", "tenferro-cpu-faer"]

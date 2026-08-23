@@ -88,3 +88,4 @@ tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a
 tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }
 tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }
 tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }
+tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }
