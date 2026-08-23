@@ -117,10 +117,14 @@ pub use defaults::idx_tensor::{
     compute_permutation_from_indices, diag_idx_tensor, unfold_split, IdxTensor, IdxTensorError,
     StructuredSelectorError, TensorStorageError,
 };
+#[cfg(feature = "tenferro-cuda")]
+pub use defaults::IdxTensorCudaError;
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{
     print_and_reset_native_einsum_profile, reset_native_einsum_profile,
 };
+#[cfg(feature = "tenferro-cuda")]
+pub use tensor4all_tensorbackend::{CudaExecutionContext, CudaExecutionContextError, CUDA_ORDINAL};
 pub use tensor_like::{
     Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
     LinearizationOrder, TensorConstructionLike, TensorContractionLike, TensorFactorizationLike,

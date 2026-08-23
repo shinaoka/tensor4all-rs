@@ -17,6 +17,8 @@
 //! These types are suitable for most tensor network applications and provide
 //! a good balance of flexibility and performance.
 
+#[cfg(feature = "tenferro-cuda")]
+mod cuda;
 /// Dynamic-length tensor implementation.
 pub mod idx_tensor;
 pub mod index;
@@ -36,6 +38,8 @@ pub use contract::{
     contract_pair_with_options, contract_with_options, outer_product,
     print_and_reset_contract_profile, reset_contract_profile, tensordot, ContractionOptions,
 };
+#[cfg(feature = "tenferro-cuda")]
+pub use cuda::IdxTensorCudaError;
 pub use idx_tensor::{
     compute_permutation_from_indices, diag_idx_tensor, print_and_reset_pairwise_contract_profile,
     reset_pairwise_contract_profile, unfold_split, IdxTensor, IdxTensorError, TensorStorageError,
