@@ -1805,8 +1805,6 @@ where
             parent_dim,
             child_dim,
         };
-        let raw = tensor.to_vec::<f64>()?;
-
         let mut physical_values = Vec::with_capacity(points.len());
         let mut child_columns = Vec::with_capacity(child_dim * points.len());
         for &point in points {
@@ -1838,8 +1836,9 @@ where
                     .ok_or_else(|| anyhow::anyhow!("chain child assignment is out of bounds"))?,
             );
         }
-        let result =
-            Self::grouped_chain_message_contraction(spec, &raw, &physical_values, &child_columns)?;
+        let result = tensor.with_dense_slice::<f64, _>(|raw| {
+            Self::grouped_chain_message_contraction(spec, raw, &physical_values, &child_columns)
+        })??;
         Ok(Some(result))
     }
 
@@ -1948,8 +1947,6 @@ where
             parent_dim,
             child_dim,
         };
-        let raw = tensor.to_vec::<Complex64>()?;
-
         let mut physical_values = Vec::with_capacity(points.len());
         let mut child_columns = Vec::with_capacity(child_dim * points.len());
         for &point in points {
@@ -1981,8 +1978,9 @@ where
                     .ok_or_else(|| anyhow::anyhow!("chain child assignment is out of bounds"))?,
             );
         }
-        let result =
-            Self::grouped_chain_message_contraction(spec, &raw, &physical_values, &child_columns)?;
+        let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
+            Self::grouped_chain_message_contraction(spec, raw, &physical_values, &child_columns)
+        })??;
         Ok(Some(result))
     }
 
@@ -2145,8 +2143,6 @@ where
             child_dim_1,
             child_dim_2,
         };
-        let raw = tensor.to_vec::<f64>()?;
-
         let mut physical_values = Vec::with_capacity(points.len());
         let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
         let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
@@ -2193,13 +2189,15 @@ where
                     .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
             );
         }
-        let result = Self::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child_1_columns,
-            &child_2_columns,
-        )?;
+        let result = tensor.with_dense_slice::<f64, _>(|raw| {
+            Self::grouped_branch_message_contraction(
+                spec,
+                raw,
+                &physical_values,
+                &child_1_columns,
+                &child_2_columns,
+            )
+        })??;
         Ok(Some(result))
     }
 
@@ -2355,8 +2353,6 @@ where
             child_dim_1,
             child_dim_2,
         };
-        let raw = tensor.to_vec::<Complex64>()?;
-
         let mut physical_values = Vec::with_capacity(points.len());
         let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
         let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
@@ -2403,13 +2399,15 @@ where
                     .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
             );
         }
-        let result = Self::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child_1_columns,
-            &child_2_columns,
-        )?;
+        let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
+            Self::grouped_branch_message_contraction(
+                spec,
+                raw,
+                &physical_values,
+                &child_1_columns,
+                &child_2_columns,
+            )
+        })??;
         Ok(Some(result))
     }
 

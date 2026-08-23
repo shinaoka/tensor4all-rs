@@ -737,6 +737,109 @@ fn two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair() {
 }
 
 #[test]
+fn two_incoming_core_matrix_batched_matches_complex_reference_for_every_axis_order() {
+    use num_complex::Complex64;
+    use tensor4all_tensorbackend::Matrix;
+
+    const PHYSICAL_DIM: usize = 2;
+    const OUTGOING_DIM: usize = 3;
+    const INCOMING_DIM_1: usize = 4;
+    const INCOMING_DIM_2: usize = 5;
+    const N1: usize = 2;
+    const N2: usize = 3;
+
+    let v1 = Matrix::from_col_major_vec(
+        INCOMING_DIM_1,
+        N1,
+        (0..INCOMING_DIM_1 * N1)
+            .map(|i| Complex64::new((i + 1) as f64 / 7.0, (i % 3) as f64 / 11.0))
+            .collect(),
+    );
+    let v2 = Matrix::from_col_major_vec(
+        INCOMING_DIM_2,
+        N2,
+        (0..INCOMING_DIM_2 * N2)
+            .map(|i| Complex64::new((i + 2) as f64 / 13.0, -((i % 4) as f64) / 17.0))
+            .collect(),
+    );
+
+    for physical_axis in 0..4 {
+        for outgoing_axis in 0..4 {
+            if outgoing_axis == physical_axis {
+                continue;
+            }
+            for incoming_axis_1 in 0..4 {
+                if incoming_axis_1 == physical_axis || incoming_axis_1 == outgoing_axis {
+                    continue;
+                }
+                let incoming_axis_2 = (0..4)
+                    .find(|axis| {
+                        *axis != physical_axis && *axis != outgoing_axis && *axis != incoming_axis_1
+                    })
+                    .unwrap();
+                let mut dims = vec![0; 4];
+                dims[physical_axis] = PHYSICAL_DIM;
+                dims[outgoing_axis] = OUTGOING_DIM;
+                dims[incoming_axis_1] = INCOMING_DIM_1;
+                dims[incoming_axis_2] = INCOMING_DIM_2;
+                let mut strides = Vec::with_capacity(4);
+                let mut stride = 1;
+                for &dim in &dims {
+                    strides.push(stride);
+                    stride *= dim;
+                }
+                let core = super::PreparedCore {
+                    indices: dims.iter().map(|&dim| DynIndex::new_dyn(dim)).collect(),
+                    dims,
+                    strides,
+                    values: (0..stride)
+                        .map(|i| Complex64::new((i + 1) as f64 / 19.0, (i % 7) as f64 / 23.0))
+                        .collect(),
+                };
+                let physical_base_offset = core.strides[physical_axis];
+                let actual = super::two_incoming_core_matrix_batched(
+                    &core,
+                    outgoing_axis,
+                    incoming_axis_1,
+                    incoming_axis_2,
+                    physical_base_offset,
+                    OUTGOING_DIM,
+                    INCOMING_DIM_1,
+                    INCOMING_DIM_2,
+                    &v1,
+                    &v2,
+                )
+                .unwrap();
+
+                for candidate_2 in 0..N2 {
+                    for candidate_1 in 0..N1 {
+                        for outgoing in 0..OUTGOING_DIM {
+                            let mut expected = Complex64::new(0.0, 0.0);
+                            for incoming_2 in 0..INCOMING_DIM_2 {
+                                for incoming_1 in 0..INCOMING_DIM_1 {
+                                    let offset = physical_base_offset
+                                        + outgoing * core.strides[outgoing_axis]
+                                        + incoming_1 * core.strides[incoming_axis_1]
+                                        + incoming_2 * core.strides[incoming_axis_2];
+                                    expected += core.values[offset]
+                                        * v1[[incoming_1, candidate_1]]
+                                        * v2[[incoming_2, candidate_2]];
+                                }
+                            }
+                            let got = actual[[outgoing + OUTGOING_DIM * candidate_1, candidate_2]];
+                            assert!(
+                                (got - expected).norm() <= 1.0e-11,
+                                "axis order ({physical_axis}, {outgoing_axis}, {incoming_axis_1}, {incoming_axis_2}) mismatch at ({outgoing}, {candidate_1}, {candidate_2}): got {got}, expected {expected}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();

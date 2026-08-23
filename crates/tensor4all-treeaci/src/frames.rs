@@ -30,6 +30,29 @@ fn checked_sum(terms: &[usize], context: &'static str) -> Result<usize> {
     })
 }
 
+fn two_incoming_scratch_elements(
+    outgoing_dim: usize,
+    incoming_dim_1: usize,
+    incoming_dim_2: usize,
+    n1: usize,
+    n2: usize,
+) -> Result<usize> {
+    checked_sum(
+        &[
+            checked_product(&[incoming_dim_1, n1], "two-incoming first frame matrix")?,
+            checked_product(&[incoming_dim_2, n2], "two-incoming second frame matrix")?,
+            checked_product(&[outgoing_dim, incoming_dim_1], "two-incoming core matrix")?,
+            checked_product(
+                &[outgoing_dim, n1, incoming_dim_2],
+                "two-incoming stage-one matrix",
+            )?,
+            checked_product(&[outgoing_dim, n1], "two-incoming stage-one slice")?,
+            checked_product(&[outgoing_dim, n1, n2], "two-incoming output matrix")?,
+        ],
+        "two-incoming scratch elements",
+    )
+}
+
 fn enforce_frame_working_elements<T: TreeAciScalar, V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     elements: usize,
@@ -632,35 +655,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                         message: "candidate sets are missing the second incoming directed edge",
                     })?
                     .len();
-                checked_sum(
-                    &[
-                        checked_product(
-                            &[incoming_dim_1, n1],
-                            "two-incoming first candidate frame matrix",
-                        )?,
-                        checked_product(
-                            &[incoming_dim_2, n2],
-                            "two-incoming second candidate frame matrix",
-                        )?,
-                        checked_product(
-                            &[outgoing_dim, n1, incoming_dim_2],
-                            "two-incoming candidate stage-one matrix",
-                        )?,
-                        checked_product(
-                            &[outgoing_dim, n1, n2],
-                            "two-incoming candidate output matrix",
-                        )?,
-                        checked_product(
-                            &[outgoing_dim, incoming_dim_1],
-                            "two-incoming candidate core matrix",
-                        )?,
-                        checked_product(
-                            &[outgoing_dim, n1],
-                            "two-incoming candidate stage-one slice",
-                        )?,
-                    ],
-                    "two-incoming candidate scratch elements",
-                )
+                two_incoming_scratch_elements(outgoing_dim, incoming_dim_1, incoming_dim_2, n1, n2)
             }
             incoming_edges => incoming_edges.iter().try_fold(0usize, |sum, &edge| {
                 let dimension = self.bond_dim(input, edge)?;
@@ -1033,34 +1028,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
 
             let n1 = ids_1.len();
             let n2 = ids_2.len();
-            let scratch = checked_sum(
-                &[
-                    checked_product(
-                        &[incoming_dim_1, n1],
-                        "two-incoming first candidate frame matrix",
-                    )?,
-                    checked_product(
-                        &[incoming_dim_2, n2],
-                        "two-incoming second candidate frame matrix",
-                    )?,
-                    checked_product(
-                        &[outgoing_dim, n1, incoming_dim_2],
-                        "two-incoming candidate stage-one matrix",
-                    )?,
-                    checked_product(
-                        &[outgoing_dim, n1, n2],
-                        "two-incoming candidate output matrix",
-                    )?,
-                    checked_product(
-                        &[outgoing_dim, incoming_dim_1],
-                        "two-incoming candidate core matrix",
-                    )?,
-                    checked_product(
-                        &[outgoing_dim, n1],
-                        "two-incoming candidate stage-one slice",
-                    )?,
-                ],
-                "two-incoming candidate scratch elements",
+            let scratch = two_incoming_scratch_elements(
+                outgoing_dim,
+                incoming_dim_1,
+                incoming_dim_2,
+                n1,
+                n2,
             )?;
             enforce_frame_working_elements::<T, V>(problem, scratch)?;
 
@@ -1537,22 +1510,12 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
 
             let n1 = ids_1.len();
             let n2 = ids_2.len();
-            let scratch = checked_sum(
-                &[
-                    checked_product(&[incoming_dim_1, n1], "two-incoming first frame matrix")?,
-                    checked_product(&[incoming_dim_2, n2], "two-incoming second frame matrix")?,
-                    checked_product(
-                        &[outgoing_dim, n1, incoming_dim_2],
-                        "two-incoming frame stage-one matrix",
-                    )?,
-                    checked_product(&[outgoing_dim, n1, n2], "two-incoming frame output matrix")?,
-                    checked_product(
-                        &[outgoing_dim, incoming_dim_1],
-                        "two-incoming frame core matrix",
-                    )?,
-                    checked_product(&[outgoing_dim, n1], "two-incoming frame stage-one slice")?,
-                ],
-                "two-incoming frame scratch elements",
+            let scratch = two_incoming_scratch_elements(
+                outgoing_dim,
+                incoming_dim_1,
+                incoming_dim_2,
+                n1,
+                n2,
             )?;
             enforce_frame_working_elements::<T, V>(self.problem, scratch)?;
 
@@ -1754,16 +1717,8 @@ fn accumulate_incoming<T: TreeAciScalar>(
     sum
 }
 
-/// Gathers a `PreparedCore`'s fixed-physical-value slice into a plain
-/// `outgoing_dim x incoming_dim` column-major matrix, for nodes with exactly
-/// one incoming directed edge.
-///
-/// This exists so the slice can be fed to a single BLAS `mat_mul` call
-/// against every candidate's incoming frame vector at once, instead of the
-/// scalar per-candidate loop in [`accumulate_incoming`]. It is only valid
-/// for the single-incoming-edge case: with two or more incoming edges the
-/// "matrix" this node's core induces is not two-dimensional, and
-/// [`contract_prepared_core`] must be used instead.
+/// Gathers one fixed-physical, single-incoming core slice into a column-major
+/// matrix for the one- and two-incoming batched contraction kernels.
 fn single_incoming_core_matrix<T: TreeAciScalar>(
     core: &PreparedCore<T>,
     outgoing_axis: usize,

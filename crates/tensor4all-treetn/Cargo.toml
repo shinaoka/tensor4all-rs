@@ -15,12 +15,18 @@ tenferro-cuda = [
     "tensor4all-tensorbackend/tenferro-cuda",
 ]
 tenferro-cpu-faer = [
+    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-simplett?/tenferro-cpu-faer",
+    "tensor4all-tensorbackend/backend-tenferro",
+    "tensor4all-tensorbackend/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
+    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-simplett?/tenferro-provider-inject",
+    "tensor4all-tensorbackend/backend-tenferro",
+    "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
 [dependencies]
