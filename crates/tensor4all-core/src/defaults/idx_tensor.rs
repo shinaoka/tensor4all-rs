@@ -6269,7 +6269,18 @@ impl IdxTensor {
         &self,
         read: impl FnOnce(&[T]) -> R,
     ) -> std::result::Result<R, IdxTensorError> {
-        let values = self.as_inner()?.duplicate_value()?;
+        let inner = self.as_inner()?;
+        let value = inner.value()?;
+        if let Ok(values) = value.as_slice::<T>() {
+            return Ok(read(values));
+        }
+
+        // Backend-resident and non-contiguous values cannot be borrowed as a
+        // host slice. Preserve the previous materializing behavior for those
+        // cases while avoiding a full payload copy for the ordinary
+        // host-contiguous path above.
+        drop(value);
+        let values = inner.duplicate_value()?;
         let values = values
             .as_slice::<T>()
             .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))?;
