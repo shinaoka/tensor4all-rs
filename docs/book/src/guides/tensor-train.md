@@ -13,6 +13,8 @@ complementary implementations:
 Use `tensor4all-simplett` when you want fast numerics with minimal boilerplate
 (no named indices needed). Use `tensor4all-itensorlike` when you need named
 indices, automatic orthogonality tracking, or ITensors.jl compatibility.
+If you already have a full `IdxTensor`, follow [Dense Tensor to Tensor Train
+with TT-SVD](dense-tt-svd.md).
 
 ---
 

@@ -8,6 +8,7 @@
 
 use num_complex::Complex64;
 use std::any::TypeId;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ops::Range;
 use std::sync::OnceLock;
@@ -18,11 +19,14 @@ use tensor4all_core::{
 };
 use tensor4all_core::{
     AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg, FactorizeError,
-    FactorizeOptions, FactorizeResult, IdxTensor, IdxTensorError, LinearizationOrder,
+    FactorizeOptions, FactorizeResult, IdxTensor, IdxTensorError, LinearizationOrder, SvdOptions,
     TensorConstructionLike, TensorContractionLike, TensorElement, TensorFactorizationLike,
     TensorIndex, TensorVectorSpace,
 };
-use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
+use tensor4all_treetn::{
+    factorize_tensor_to_treetn_with, CanonicalizationOptions, TreeTN, TreeTopology,
+    TruncationOptions,
+};
 
 use crate::error::{Result, TensorTrainError};
 use crate::options::{validate_svd_truncation_options, CanonicalForm, TruncateOptions};
@@ -226,6 +230,130 @@ impl TensorTrain {
             canonical_form: None,
         };
         Ok(tt)
+    }
+
+    /// Decompose a dense indexed tensor into a left-canonical tensor train with TT-SVD.
+    ///
+    /// `site_indices` defines the tensor-train order and must contain every index
+    /// of `dense` exactly once. Dense values retain the column-major convention of
+    /// [`IdxTensor::from_dense`]: the first index of `dense` varies fastest.
+    /// The sweep splits sites from left to right, carries `S Vᴴ` into the next
+    /// split, and leaves the orthogonality center at the final site.
+    ///
+    /// `options.policy` controls each local SVD truncation and
+    /// `options.max_bond_dim` independently caps every resulting bond. A local
+    /// cutoff is not the final global reconstruction error; measure the latter by
+    /// reconstructing with [`Self::to_dense`] and comparing with `dense`.
+    ///
+    /// This explicitly dense algorithm can require several times the input size
+    /// in working memory because each sequential SVD materializes decomposition
+    /// workspaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TensorTrainError::InvalidStructure`] when `site_indices` is
+    /// empty, duplicated, or differs from the indices of `dense`. Returns
+    /// [`TensorTrainError::Factorize`] for invalid SVD options or unsupported
+    /// input storage, and an operation error if a split or chain construction
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
+    /// use tensor4all_itensorlike::{CanonicalForm, SvdOptions, TensorTrain};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let sites = [
+    ///     DynIndex::new_dyn(2),
+    ///     DynIndex::new_dyn(2),
+    ///     DynIndex::new_dyn(2),
+    /// ];
+    /// // Column-major outer product [1, 2] ⊗ [1, 3] ⊗ [1, 4].
+    /// let dense = IdxTensor::from_dense(
+    ///     sites.to_vec(),
+    ///     vec![1.0, 2.0, 3.0, 6.0, 4.0, 8.0, 12.0, 24.0],
+    /// )?;
+    /// let options = SvdOptions::new()
+    ///     .with_policy(SvdTruncationPolicy::new(1.0e-12))
+    ///     .with_max_bond_dim(8);
+    /// let train = TensorTrain::from_dense(&dense, &sites, &options)?;
+    /// let reconstructed = train.to_dense()?;
+    ///
+    /// assert!(dense.distance(&reconstructed)? < 1.0e-12);
+    /// assert_eq!(train.bond_dims(), vec![1, 1]);
+    /// assert_eq!(train.ortho_center(), Some(2));
+    /// assert_eq!(train.canonical_form(), Some(CanonicalForm::Unitary));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_dense(
+        dense: &IdxTensor,
+        site_indices: &[DynIndex],
+        options: &SvdOptions,
+    ) -> Result<Self> {
+        let mut factorize_options = FactorizeOptions::svd();
+        if let Some(policy) = options.policy {
+            factorize_options = factorize_options.with_svd_policy(policy);
+        }
+        if let Some(max_bond_dim) = options.max_bond_dim {
+            factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
+        }
+        factorize_options.validate()?;
+        if dense.is_diag() {
+            return Err(FactorizeError::UnsupportedStorage(
+                "dense TT-SVD does not accept diagonal storage",
+            )
+            .into());
+        }
+        if !(dense.is_f64() || dense.is_c64()) {
+            return Err(FactorizeError::UnsupportedStorage(
+                "dense TT-SVD currently supports only f64 and Complex64 tensors",
+            )
+            .into());
+        }
+
+        if site_indices.is_empty() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "dense TT-SVD requires at least one site index".into(),
+            });
+        }
+        let requested: HashSet<_> = site_indices.iter().cloned().collect();
+        if requested.len() != site_indices.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "dense TT-SVD site indices must be unique".into(),
+            });
+        }
+        let dense_indices: HashSet<_> = dense.indices().iter().cloned().collect();
+        if dense_indices.len() != dense.indices().len()
+            || requested.len() != dense_indices.len()
+            || requested != dense_indices
+        {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "dense TT-SVD site indices must match every dense tensor index exactly"
+                    .into(),
+            });
+        }
+
+        let nodes: HashMap<_, _> = site_indices
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(site, index)| (site, vec![index]))
+            .collect();
+        let edges = (0..site_indices.len().saturating_sub(1))
+            .map(|site| (site, site + 1))
+            .collect();
+        let topology = TreeTopology::new(nodes, edges);
+        let center = site_indices.len() - 1;
+        let tree = factorize_tensor_to_treetn_with(dense, &topology, factorize_options, &center)
+            .map_err(|error| {
+                TensorTrainError::operation_source(
+                    "Dense TT-SVD decomposition failed",
+                    anyhow::Error::new(error),
+                )
+            })?;
+        Self::from_inner(tree, Some(CanonicalForm::Unitary))
     }
 
     /// Create a new tensor train with specified orthogonality center.

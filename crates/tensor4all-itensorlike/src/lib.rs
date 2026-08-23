@@ -14,6 +14,7 @@ pub use linsolve::linsolve;
 pub use options::{
     CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, TruncateOptions,
 };
+pub use tensor4all_core::SvdOptions;
 pub use tensortrain::TensorTrain;
 
 /// Type alias for Matrix Product State (MPS).

@@ -5,6 +5,7 @@ ITensors.jl-inspired TensorTrain API with orthogonality tracking and multiple ca
 ## Key Types
 
 - `TensorTrain` — tensor train with orthogonality center tracking
+- `TensorTrain::from_dense()` — sequential TT-SVD of an existing indexed tensor
 - `orthogonalize()` — move orthogonality center to a given site
 - `truncate()` — SVD-based bond dimension truncation
 - `inner()` — inner product `<self|other>` with complex conjugation on `self`
@@ -87,4 +88,5 @@ assert!(inner.imag().abs() < 1e-12);
 ## Documentation
 
 - [User Guide: Tensor Train](https://tensor4all.org/tensor4all-rs/guides/tensor-train.html)
+- [Dense Tensor to Tensor Train with TT-SVD](https://tensor4all.org/tensor4all-rs/guides/dense-tt-svd.html)
 - [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_itensorlike/)
