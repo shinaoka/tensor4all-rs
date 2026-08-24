@@ -334,6 +334,54 @@ fn global_guard_recovers_a_separated_feature_end_to_end() {
         .any(|&count| count > 0));
 }
 
+/// Regression guard for a real downstream confusion: `tensor4all_treetn::
+/// diagnostics::record_guard` correctly fires when the global-pivot search
+/// finds a pivot, with real nonzero `guard_ns`/hit/miss counts. A downstream
+/// caller (gw-rs's R=10 isolation harness) reported "Guard is always zero"
+/// across 8 real runs; tracing it down to this point confirmed the
+/// instrumentation itself was never the problem -- the caller was filtering
+/// Guard's un-namespaced node keys out of its own snapshot (Guard's key has
+/// no per-operand prefix; see `record_guard`'s doc comment). This test pins
+/// the actual behavior so that claim can't silently regress again.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn guard_diagnostics_record_nonzero_activity_when_global_pivots_are_found() {
+    use tensor4all_treetn::diagnostics;
+    let (input, _physical) = separated_two_peak_tree(10);
+    diagnostics::reset();
+    let with_guard = tree_elementwise(
+        |values: &[f64]| values[0],
+        std::slice::from_ref(&input),
+        &TreeAciOptions {
+            rng_seed: 0,
+            enable_global_guard: true,
+            nsearch_global_pivots: 30,
+            tolerance: 1.0e-4,
+            ..TreeAciOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        with_guard.global_pivots_found.iter().any(|&c| c > 0),
+        "fixture must actually exercise global-pivot search, or this test proves nothing"
+    );
+
+    let snapshot = diagnostics::snapshot();
+    let total_guard_activity: u64 = snapshot
+        .iter()
+        .map(|record| record.guard_cache_hits + record.guard_cache_misses)
+        .sum();
+    let total_guard_ns: u64 = snapshot.iter().map(|record| record.guard_ns).sum();
+    assert!(
+        total_guard_activity > 0,
+        "expected nonzero guard_cache_hits/misses across the snapshot, got 0 on every node"
+    );
+    assert!(
+        total_guard_ns > 0,
+        "expected nonzero guard_ns across the snapshot, got 0 on every node"
+    );
+}
+
 /// The guard's recovery guarantee at the **default** search count.
 ///
 /// `enable_global_guard` defaults to `true` and `nsearch_global_pivots` to 5, so
