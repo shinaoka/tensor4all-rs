@@ -16,15 +16,32 @@ use std::time::Duration;
 /// Per-node branch-point timing and cache statistics.
 #[derive(Clone, Debug, Default)]
 pub struct NodeDiagnostics {
-    /// The tree node's `Debug` string.
+    /// The registry key for this node. TreeACI's frame records use
+    /// `"{input}:{node:?}"`, namespacing the node by its operand index;
+    /// Guard records use the bare `"{node:?}"` (see [`record_guard`]).
     pub node: String,
     /// Number of tree edges incident to this node.
     pub coordination_number: usize,
     /// Bond dimensions for each incident edge.
+    ///
+    /// Always has exactly `coordination_number` entries; an edge whose bond
+    /// dimension could not be looked up contributes a `0` sentinel rather
+    /// than being skipped. The order of the entries is not guaranteed to be
+    /// stable across calls or between the Guard and frame recording sites,
+    /// so treat this as a multiset of incident bond dimensions.
     pub bond_dims: Vec<usize>,
-    /// Total nanoseconds spent in Guard message-cache operations.
+    /// Total nanoseconds spent computing this node's Guard message: cache
+    /// lookup plus any miss computation.
+    ///
+    /// This is NOT cache-lookup time alone -- a large value here can mean
+    /// genuine `chi^z` contraction cost rather than cache overhead.
     pub guard_ns: u64,
-    /// Total nanoseconds spent in TreeACI frame-cache operations.
+    /// Total nanoseconds spent computing this node's TreeACI candidate
+    /// frames: frame-cache lookup plus any miss computation, including the
+    /// BLAS contraction work.
+    ///
+    /// This is NOT cache-lookup time alone -- a large value here can mean
+    /// genuine `chi^z` contraction cost rather than cache overhead.
     pub frame_ns: u64,
     /// Number of Guard message-cache hits.
     pub guard_cache_hits: u64,
@@ -46,6 +63,10 @@ pub fn reset() {
 }
 
 /// Read back the current accumulated diagnostics as a snapshot.
+///
+/// The returned `Vec`'s order is not guaranteed to be stable across calls:
+/// it reflects `HashMap` iteration order. A caller that needs deterministic
+/// output should sort the result (for example by `node`).
 pub fn snapshot() -> Vec<NodeDiagnostics> {
     REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
 }
@@ -70,7 +91,19 @@ fn with_entry(
     });
 }
 
-/// Record a Guard message-cache operation and its cache hit/miss counts.
+/// Record a Guard message computation and its cache hit/miss counts.
+///
+/// # Known limitation
+///
+/// The `node` key carries no per-operand namespace: it is just the tree
+/// node's `Debug` label. If a caller's diagnostics window spans more than
+/// one distinct tree -- as `TreeAciProduct::combine` does, since it builds
+/// one `TreeTNCachedEvaluator` per input tree -- colliding node labels
+/// across those trees merge into a single registry entry. TreeACI's
+/// frame-side key does not have this problem, because the operand index
+/// `input` is available there and is included in the key. Fixing this on
+/// the Guard side would require threading an operand identity through
+/// `TreeTNCachedEvaluator`'s constructor.
 pub fn record_guard(
     node: &str,
     coordination_number: usize,
@@ -86,7 +119,8 @@ pub fn record_guard(
     });
 }
 
-/// Record a TreeACI frame-cache operation and its cache hit/miss counts.
+/// Record a TreeACI candidate-frame computation and its cache hit/miss
+/// counts. The `node` key is namespaced by the operand index (`input`).
 pub fn record_frame(
     node: &str,
     coordination_number: usize,

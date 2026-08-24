@@ -2447,13 +2447,15 @@ where
         #[cfg(feature = "diagnostics")]
         let (diag_coordination_number, diag_bond_dims) = {
             let neighbors: Vec<V> = self.tree.site_index_network().neighbors(node).collect();
+            // One entry per neighbor, so `bond_dims.len()` always equals the
+            // coordination number; an unavailable dimension records `0`.
             let bond_dims = neighbors
                 .iter()
-                .filter_map(|neighbor| {
+                .map(|neighbor| {
                     self.tree
                         .edge_between(node, neighbor)
                         .and_then(|edge| self.tree.bond_index(edge))
-                        .map(|index| index.dim())
+                        .map_or(0, |index| index.dim())
                 })
                 .collect::<Vec<_>>();
             (neighbors.len(), bond_dims)

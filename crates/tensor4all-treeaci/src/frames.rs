@@ -914,18 +914,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         }
 
         #[cfg(feature = "diagnostics")]
-        {
-            let (node, coordination_number, bond_dims) =
-                diagnostics_node_topology(tree, problem, directed, directed_edge);
-            diagnostics::record_frame(
-                &node,
-                coordination_number,
-                &bond_dims,
-                diag_start.elapsed(),
-                diag_hits,
-                diag_misses,
-            );
-        }
+        diagnostics_record_frame(
+            tree,
+            problem,
+            directed,
+            directed_edge,
+            input,
+            diag_start.elapsed(),
+            diag_hits,
+            diag_misses,
+        );
 
         results
             .into_iter()
@@ -1137,18 +1135,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         }
 
         #[cfg(feature = "diagnostics")]
-        {
-            let (node, coordination_number, bond_dims) =
-                diagnostics_node_topology(tree, problem, directed, directed_edge);
-            diagnostics::record_frame(
-                &node,
-                coordination_number,
-                &bond_dims,
-                diag_start.elapsed(),
-                diag_hits,
-                diag_misses,
-            );
-        }
+        diagnostics_record_frame(
+            tree,
+            problem,
+            directed,
+            directed_edge,
+            input,
+            diag_start.elapsed(),
+            diag_hits,
+            diag_misses,
+        );
 
         results
             .into_iter()
@@ -1169,30 +1165,38 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         sample: &ComponentSample,
     ) -> Result<Vec<T>> {
         let cache_key = self.candidate_cache_key(problem, input, directed_edge, sample)?;
+        // Fetched before the cache-hit check so the diagnostics hit path can
+        // read the tree's topology. Safe to hoist: a cache entry can only
+        // exist for an `input` that already passed this same fetch when the
+        // entry was first computed on the miss path below.
         let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
             message: "candidate frame references an unknown input",
         })?;
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
-        let directed = &problem.directed_edges[directed_edge];
+        let directed =
+            problem
+                .directed_edges
+                .get(directed_edge)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate frame references an unknown directed edge",
+                })?;
         if let Some(key) = cache_key {
             if let Some(cached) = self.candidate_cache.borrow().get(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
-                {
-                    let (node, coordination_number, bond_dims) =
-                        diagnostics_node_topology(tree, problem, directed, directed_edge);
-                    diagnostics::record_frame(
-                        &node,
-                        coordination_number,
-                        &bond_dims,
-                        diag_start.elapsed(),
-                        1,
-                        0,
-                    );
-                }
+                diagnostics_record_frame(
+                    tree,
+                    problem,
+                    directed,
+                    directed_edge,
+                    input,
+                    diag_start.elapsed(),
+                    1,
+                    0,
+                );
                 return Ok(cached.clone());
             }
         }
@@ -1224,18 +1228,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             self.cache_candidate_if_fits(problem, key, &values);
         }
         #[cfg(feature = "diagnostics")]
-        {
-            let (node, coordination_number, bond_dims) =
-                diagnostics_node_topology(tree, problem, directed, directed_edge);
-            diagnostics::record_frame(
-                &node,
-                coordination_number,
-                &bond_dims,
-                diag_start.elapsed(),
-                0,
-                1,
-            );
-        }
+        diagnostics_record_frame(
+            tree,
+            problem,
+            directed,
+            directed_edge,
+            input,
+            diag_start.elapsed(),
+            0,
+            1,
+        );
         Ok(values)
     }
 }
@@ -1933,31 +1935,61 @@ fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
 }
 
 /// Summarizes a directed edge's source node for the branch diagnostics
-/// registry: its `Debug` label, coordination number (incoming edges plus
+/// registry: its registry key, coordination number (incoming edges plus
 /// the one outgoing edge), and the bond dimensions of every incident edge
 /// (outgoing first, then each incoming edge in order).
+///
+/// The key is namespaced by the operand index `input` so that identically
+/// labelled nodes of two different input trees do not merge into a single
+/// registry entry. `bond_dims` always has exactly `coordination_number`
+/// entries; an edge whose bond index cannot be resolved contributes a `0`
+/// sentinel.
 #[cfg(feature = "diagnostics")]
 fn diagnostics_node_topology<V: TreeAciNode>(
     tree: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
     directed: &DirectedEdge<V>,
     directed_edge: DirectedEdgeId,
+    input: usize,
 ) -> (String, usize, Vec<usize>) {
     let coordination_number = directed.incoming_to_from.len() + 1;
     let mut bond_dims = Vec::with_capacity(coordination_number);
-    if let Ok(index) = outgoing_bond(tree, problem, directed_edge) {
-        bond_dims.push(index.dim());
-    }
+    bond_dims.push(outgoing_bond(tree, problem, directed_edge).map_or(0, |index| index.dim()));
     for &incoming in &directed.incoming_to_from {
-        if let Ok(index) = outgoing_bond(tree, problem, incoming) {
-            bond_dims.push(index.dim());
-        }
+        bond_dims.push(outgoing_bond(tree, problem, incoming).map_or(0, |index| index.dim()));
     }
     (
-        format!("{:?}", directed.from),
+        format!("{input}:{:?}", directed.from),
         coordination_number,
         bond_dims,
     )
+}
+
+/// Records one batched/single candidate-frame computation into the branch
+/// diagnostics registry, keyed by the operand index and the directed edge's
+/// source node.
+#[cfg(feature = "diagnostics")]
+#[allow(clippy::too_many_arguments)]
+fn diagnostics_record_frame<V: TreeAciNode>(
+    tree: &TreeTN<IdxTensor, V>,
+    problem: &PreparedTreeProblem<V>,
+    directed: &DirectedEdge<V>,
+    directed_edge: DirectedEdgeId,
+    input: usize,
+    elapsed: std::time::Duration,
+    hits: u64,
+    misses: u64,
+) {
+    let (node, coordination_number, bond_dims) =
+        diagnostics_node_topology(tree, problem, directed, directed_edge, input);
+    diagnostics::record_frame(
+        &node,
+        coordination_number,
+        &bond_dims,
+        elapsed,
+        hits,
+        misses,
+    );
 }
 
 fn outgoing_bond<'a, V: TreeAciNode>(

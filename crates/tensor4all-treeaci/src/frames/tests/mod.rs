@@ -993,11 +993,69 @@ fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_num
     let snapshot = branch_diagnostics::snapshot();
     let hub_record = snapshot
         .iter()
-        .find(|record| record.node == "0")
-        .expect("hub node (0) recorded in branch diagnostics");
+        .find(|record| record.node == "0:0")
+        .expect("hub node (0) of input 0 recorded in branch diagnostics");
     assert_eq!(hub_record.coordination_number, 3);
     assert_eq!(hub_record.bond_dims.len(), 3);
     assert!(hub_record.frame_cache_hits + hub_record.frame_cache_misses > 0);
+}
+
+/// The same hub node of two different input trees must produce two separate
+/// registry entries: the diagnostics key is namespaced by the operand index.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn frame_diagnostics_keys_are_namespaced_per_input_operand() {
+    use crate::branch_diagnostics;
+
+    // Two operands sharing the same physical indices, as a product's two
+    // inputs do; the clone gives input 1 the same node labels as input 0.
+    let tree = star_tree_for_fallback_dispatch();
+    let inputs = vec![tree.clone(), tree];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    let incoming_edge_a = directed.incoming_to_from[0];
+    let incoming_edge_b = directed.incoming_to_from[1];
+    let id_a = candidate_sets.ids[incoming_edge_a][0];
+    let id_b = candidate_sets.ids[incoming_edge_b][0];
+    let candidate = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![(incoming_edge_a, id_a), (incoming_edge_b, id_b)],
+    };
+
+    branch_diagnostics::reset();
+    let from_input_0 = frames
+        .candidate_frame(&inputs, &problem, 0, edge, &candidate)
+        .unwrap();
+    let from_input_1 = frames
+        .candidate_frame(&inputs, &problem, 1, edge, &candidate)
+        .unwrap();
+    assert_eq!(from_input_0.len(), from_input_1.len());
+
+    let mut snapshot = branch_diagnostics::snapshot();
+    snapshot.sort_by(|a, b| a.node.cmp(&b.node));
+    let nodes: Vec<&str> = snapshot.iter().map(|record| record.node.as_str()).collect();
+    assert_eq!(
+        nodes,
+        vec!["0:0", "1:0"],
+        "the same hub node of two operands must not merge into one entry"
+    );
+    for record in &snapshot {
+        assert_eq!(record.coordination_number, 3);
+        assert_eq!(record.bond_dims.len(), record.coordination_number);
+        assert_eq!(record.frame_cache_hits + record.frame_cache_misses, 1);
+    }
 }
 
 #[test]
