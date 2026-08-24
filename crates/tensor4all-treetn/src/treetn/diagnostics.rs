@@ -136,6 +136,19 @@ pub fn record_frame(
     });
 }
 
+/// Reset the branch-vs-chain contraction-kernel counters (issue #671's
+/// scratch investigation into where the branch kernel's per-call BLAS setup
+/// cost goes; see `crate::treetn::cached_evaluator::contraction_diagnostics`).
+pub fn reset_contraction() {
+    super::cached_evaluator::contraction_diagnostics::reset_all();
+}
+
+/// One human-readable line summarizing the branch-vs-chain contraction
+/// counters accumulated since the last [`reset_contraction`].
+pub fn contraction_summary() -> String {
+    super::cached_evaluator::contraction_diagnostics::summary()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

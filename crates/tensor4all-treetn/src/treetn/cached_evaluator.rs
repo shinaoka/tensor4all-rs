@@ -32,6 +32,85 @@ mod phase_timing {
     }
 }
 
+/// Temporary counters for issue #671's root-cause investigation: whether the
+/// branch contraction kernel's per-physical-value BLAS setup (building the
+/// `left` intermediate in [`TreeTNCachedEvaluator::grouped_branch_message_contraction`])
+/// is a fixed cost that amortizes poorly against Guard's typically small
+/// per-call point counts, unlike the chain kernel
+/// ([`TreeTNCachedEvaluator::grouped_chain_message_contraction`]), which has
+/// an explicit `CHAIN_BLAS_MIN_GROUP_POINTS`/`groups.len() > 8` safeguard the
+/// branch kernel does not. Not on the hot path unless `diagnostics` is
+/// enabled.
+#[cfg(feature = "diagnostics")]
+pub(crate) mod contraction_diagnostics {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static BRANCH_SETUP_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_MATMUL_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_ACCUMULATE_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_BLAS_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_BLAS_POINTS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_BLAS_GROUPS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_SCALAR_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_SCALAR_POINTS: AtomicU64 = AtomicU64::new(0);
+
+    pub static CHAIN_CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static CHAIN_BLAS_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static CHAIN_BLAS_POINTS: AtomicU64 = AtomicU64::new(0);
+    pub static CHAIN_SCALAR_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static CHAIN_SCALAR_POINTS: AtomicU64 = AtomicU64::new(0);
+
+    pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
+        counter.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    pub fn inc(counter: &AtomicU64, by: usize) {
+        counter.fetch_add(by as u64, Ordering::Relaxed);
+    }
+
+    pub fn reset_all() {
+        for counter in [
+            &BRANCH_SETUP_NS,
+            &BRANCH_MATMUL_NS,
+            &BRANCH_ACCUMULATE_NS,
+            &BRANCH_BLAS_CALLS,
+            &BRANCH_BLAS_POINTS,
+            &BRANCH_BLAS_GROUPS,
+            &BRANCH_SCALAR_CALLS,
+            &BRANCH_SCALAR_POINTS,
+            &CHAIN_CONTRACT_NS,
+            &CHAIN_BLAS_CALLS,
+            &CHAIN_BLAS_POINTS,
+            &CHAIN_SCALAR_CALLS,
+            &CHAIN_SCALAR_POINTS,
+        ] {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Renders every counter as one human-readable line.
+    pub fn summary() -> String {
+        format!(
+            "branch: blas_calls={} blas_points={} blas_groups={} setup_ns={} matmul_ns={} accumulate_ns={} \
+             scalar_calls={} scalar_points={} | chain: blas_calls={} blas_points={} contract_ns={} \
+             scalar_calls={} scalar_points={}",
+            BRANCH_BLAS_CALLS.load(Ordering::Relaxed),
+            BRANCH_BLAS_POINTS.load(Ordering::Relaxed),
+            BRANCH_BLAS_GROUPS.load(Ordering::Relaxed),
+            BRANCH_SETUP_NS.load(Ordering::Relaxed),
+            BRANCH_MATMUL_NS.load(Ordering::Relaxed),
+            BRANCH_ACCUMULATE_NS.load(Ordering::Relaxed),
+            BRANCH_SCALAR_CALLS.load(Ordering::Relaxed),
+            BRANCH_SCALAR_POINTS.load(Ordering::Relaxed),
+            CHAIN_BLAS_CALLS.load(Ordering::Relaxed),
+            CHAIN_BLAS_POINTS.load(Ordering::Relaxed),
+            CHAIN_CONTRACT_NS.load(Ordering::Relaxed),
+            CHAIN_SCALAR_CALLS.load(Ordering::Relaxed),
+            CHAIN_SCALAR_POINTS.load(Ordering::Relaxed),
+        )
+    }
+}
+
 use anyhow::{bail, ensure, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::{
@@ -1449,6 +1528,14 @@ where
             .ok_or_else(|| anyhow::anyhow!("chain parent-message shape overflows usize"))?;
 
         if point_count < 2 * CHAIN_BLAS_MIN_GROUP_POINTS {
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_SCALAR_CALLS, 1);
+                contraction_diagnostics::inc(
+                    &contraction_diagnostics::CHAIN_SCALAR_POINTS,
+                    point_count,
+                );
+            }
             return scalar_chain_message_contraction(spec, raw, physical_values, child_columns);
         }
 
@@ -1466,7 +1553,22 @@ where
                 .values()
                 .any(|points| points.len() < CHAIN_BLAS_MIN_GROUP_POINTS)
         {
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_SCALAR_CALLS, 1);
+                contraction_diagnostics::inc(
+                    &contraction_diagnostics::CHAIN_SCALAR_POINTS,
+                    point_count,
+                );
+            }
             return scalar_chain_message_contraction(spec, raw, physical_values, child_columns);
+        }
+        #[cfg(feature = "diagnostics")]
+        let diag_start = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_CALLS, 1);
+            contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_POINTS, point_count);
         }
 
         let matrix_len = parent_dim
@@ -1538,6 +1640,11 @@ where
                     .copy_from_slice(&product.as_col_major_slice()[source..source_end]);
             }
         }
+        #[cfg(feature = "diagnostics")]
+        contraction_diagnostics::add(
+            &contraction_diagnostics::CHAIN_CONTRACT_NS,
+            diag_start.elapsed(),
+        );
         Ok(output)
     }
 
@@ -1610,6 +1717,14 @@ where
         // `scalar_work` alone is the right gate.
         let scalar_work = parent_dim * child_dim_1 * child_dim_2 * point_count;
         if scalar_work < BRANCH_BLAS_WORK_THRESHOLD {
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_SCALAR_CALLS, 1);
+                contraction_diagnostics::inc(
+                    &contraction_diagnostics::BRANCH_SCALAR_POINTS,
+                    point_count,
+                );
+            }
             return scalar_branch_message_contraction(
                 spec,
                 raw,
@@ -1623,6 +1738,15 @@ where
         for (point, &physical_value) in physical_values.iter().enumerate() {
             groups.entry(physical_value).or_default().push(point);
         }
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_CALLS, 1);
+            contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_POINTS, point_count);
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_BLAS_GROUPS,
+                groups.len(),
+            );
+        }
 
         let mut output = vec![T::default(); point_count * parent_dim];
         for (physical_value, points) in groups {
@@ -1632,6 +1756,8 @@ where
             // along in "rows", ordered slower than parent so a fixed c2
             // selects a contiguous parent_dim-length row block within each
             // column below.
+            #[cfg(feature = "diagnostics")]
+            let setup_start = std::time::Instant::now();
             let left_len = parent_dim * child_dim_2 * child_dim_1;
             let mut left = vec![T::default(); left_len];
             for c1 in 0..child_dim_1 {
@@ -1659,12 +1785,28 @@ where
                 let start = point * child_dim_1;
                 right.extend_from_slice(&child1_columns[start..start + child_dim_1]);
             }
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::add(
+                    &contraction_diagnostics::BRANCH_SETUP_NS,
+                    setup_start.elapsed(),
+                );
+            }
+            #[cfg(feature = "diagnostics")]
+            let matmul_start = std::time::Instant::now();
             let intermediate = mat_mul_owned(
                 Matrix::from_col_major_vec(parent_dim * child_dim_2, child_dim_1, left),
                 Matrix::from_col_major_vec(child_dim_1, points.len(), right),
             )
             .map_err(anyhow::Error::from)?;
             let intermediate = intermediate.as_col_major_slice();
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::add(
+                    &contraction_diagnostics::BRANCH_MATMUL_NS,
+                    matmul_start.elapsed(),
+                );
+            }
 
             // Step B: fold in child 2 via a vectorized accumulate over
             // child_dim_2 -- the intermediate's "rows" already interleave
@@ -1672,6 +1814,8 @@ where
             // c2 the parent_dim-length slice at rows
             // [c2*parent_dim, (c2+1)*parent_dim) within each group-column is
             // contiguous.
+            #[cfg(feature = "diagnostics")]
+            let accumulate_start = std::time::Instant::now();
             for (column, &point) in points.iter().enumerate() {
                 let column_base = column * parent_dim * child_dim_2;
                 let destination = point * parent_dim;
@@ -1683,6 +1827,13 @@ where
                             intermediate[row_base + parent] * child2_value;
                     }
                 }
+            }
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::add(
+                    &contraction_diagnostics::BRANCH_ACCUMULATE_NS,
+                    accumulate_start.elapsed(),
+                );
             }
         }
         Ok(output)

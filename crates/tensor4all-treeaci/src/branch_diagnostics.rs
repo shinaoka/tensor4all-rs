@@ -6,5 +6,6 @@
 //! (issue #671); `TreeAciDiagnostics` is about ACI convergence history.
 
 pub use tensor4all_treetn::diagnostics::{
-    record_frame, record_guard, reset, snapshot, NodeDiagnostics,
+    contraction_summary, record_frame, record_guard, reset, reset_contraction, snapshot,
+    NodeDiagnostics,
 };
