@@ -1777,13 +1777,31 @@ where
                 for c2 in 0..child_dim_2 {
                     let base_after_c2 = base_after_c1 + c2 * strides[child_axis_2];
                     let left_c2_offset = left_c1_offset + parent_dim * c2;
-                    let mut flat = base_after_c2;
-                    for parent in 0..parent_dim {
-                        let left_offset = left_c2_offset + parent;
-                        left[left_offset] = *raw.get(flat).ok_or_else(|| {
-                            anyhow::anyhow!("branch tensor offset {flat} is out of bounds")
+                    if strides[parent_axis] == 1 {
+                        // `parent` happens to be `raw`'s fastest (contiguous)
+                        // axis for this node's tensor -- read the whole
+                        // parent_dim run as one slice instead of one
+                        // bounds-checked element at a time. Same values,
+                        // same write offsets as the general branch below;
+                        // just lets the compiler emit a vectorized copy.
+                        let end = base_after_c2.checked_add(parent_dim).ok_or_else(|| {
+                            anyhow::anyhow!("branch tensor offset overflows usize")
                         })?;
-                        flat += strides[parent_axis];
+                        let slice = raw.get(base_after_c2..end).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "branch tensor offset {base_after_c2}..{end} is out of bounds"
+                            )
+                        })?;
+                        left[left_c2_offset..left_c2_offset + parent_dim].copy_from_slice(slice);
+                    } else {
+                        let mut flat = base_after_c2;
+                        for parent in 0..parent_dim {
+                            let left_offset = left_c2_offset + parent;
+                            left[left_offset] = *raw.get(flat).ok_or_else(|| {
+                                anyhow::anyhow!("branch tensor offset {flat} is out of bounds")
+                            })?;
+                            flat += strides[parent_axis];
+                        }
                     }
                 }
             }
@@ -4789,6 +4807,69 @@ mod tests {
             child_dim_2,
         };
         let raw: Vec<f64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
+            .map(|value| (value % 19) as f64 - 9.0)
+            .collect();
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
+        let child1_columns: Vec<f64> = (0..point_count * child_dim_1)
+            .map(|value| (value % 13) as f64 - 6.0)
+            .collect();
+        let child2_columns: Vec<f64> = (0..point_count * child_dim_2)
+            .map(|value| (value % 11) as f64 - 5.0)
+            .collect();
+
+        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+        let expected = scalar_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+
+        assert!(actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6));
+    }
+
+    /// Same shape as `grouped_branch_contraction_large_real_groups_match_scalar_reference`,
+    /// but with `parent_axis` mapped to `raw`'s stride-1 (fastest) position
+    /// instead of `physical_axis` -- the contiguous-read fast path added
+    /// alongside the loop-invariant-hoisting fix (both for issue #671) only
+    /// runs when `strides[parent_axis] == 1`, and no existing test happened
+    /// to exercise that case (every other fixture puts `physical_axis` at
+    /// stride 1).
+    #[test]
+    fn grouped_branch_contraction_matches_scalar_reference_when_parent_axis_is_contiguous() {
+        let parent_dim = 8;
+        let child_dim_1 = 8;
+        let child_dim_2 = 8;
+        let physical_dim = 2;
+        let point_count = 16;
+        let spec = BranchContractionSpec {
+            strides: [
+                1,
+                parent_dim,
+                parent_dim * physical_dim,
+                parent_dim * physical_dim * child_dim_1,
+            ],
+            parent_axis: 0,
+            physical_axis: 1,
+            child_axis_1: 2,
+            child_axis_2: 3,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        };
+        let raw: Vec<f64> = (0..parent_dim * physical_dim * child_dim_1 * child_dim_2)
             .map(|value| (value % 19) as f64 - 9.0)
             .collect();
         let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
