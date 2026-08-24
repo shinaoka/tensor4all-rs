@@ -42,6 +42,8 @@ use tensor4all_core::{
 };
 use tensor4all_tensorbackend::{mat_mul_owned, BlasMul, Matrix};
 
+#[cfg(feature = "diagnostics")]
+use super::diagnostics;
 use super::TreeTN;
 
 type KeyId = usize;
@@ -2440,6 +2442,22 @@ where
         })?;
         #[cfg(test)]
         let phase_start = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let diag_start = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let (diag_coordination_number, diag_bond_dims) = {
+            let neighbors: Vec<V> = self.tree.site_index_network().neighbors(node).collect();
+            let bond_dims = neighbors
+                .iter()
+                .filter_map(|neighbor| {
+                    self.tree
+                        .edge_between(node, neighbor)
+                        .and_then(|edge| self.tree.bond_index(edge))
+                        .map(|index| index.dim())
+                })
+                .collect::<Vec<_>>();
+            (neighbors.len(), bond_dims)
+        };
         let points = assignment_batch.first_points.clone();
         let cache_layout = message_cache_layouts.get(node).ok_or_else(|| {
             anyhow::anyhow!(
@@ -2532,6 +2550,15 @@ where
                 #[cfg(test)]
                 phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
                 self.last_stats.message_cache_hits += keys.len();
+                #[cfg(feature = "diagnostics")]
+                diagnostics::record_guard(
+                    &format!("{node:?}"),
+                    diag_coordination_number,
+                    &diag_bond_dims,
+                    diag_start.elapsed(),
+                    keys.len() as u64,
+                    0,
+                );
                 return Ok(StackedMessage {
                     assignment_index,
                     tensor,
@@ -2553,6 +2580,8 @@ where
         phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
         self.last_stats.message_cache_hits += hit_keys.len();
         self.last_stats.message_cache_misses += missing_indices.len();
+        #[cfg(feature = "diagnostics")]
+        let (diag_hits, diag_misses) = (hit_keys.len() as u64, missing_indices.len() as u64);
         if !hit_keys.is_empty() {
             // `entry().or_insert_with()` rather than `get_mut().expect(...)`:
             // the entry for `node` was inserted above and nothing removes
@@ -2755,6 +2784,15 @@ where
         };
         #[cfg(test)]
         phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
+        #[cfg(feature = "diagnostics")]
+        diagnostics::record_guard(
+            &format!("{node:?}"),
+            diag_coordination_number,
+            &diag_bond_dims,
+            diag_start.elapsed(),
+            diag_hits,
+            diag_misses,
+        );
         Ok(StackedMessage {
             assignment_index,
             tensor,
@@ -5210,6 +5248,47 @@ mod tests {
             hub_message.tensor.is_none(),
             "raw branch messages should not be materialized into an IdxTensor"
         );
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn build_environment_cache_records_guard_diagnostics_per_node_with_correct_coordination_numbers(
+    ) {
+        use crate::treetn::diagnostics;
+
+        let (tree, indices) = star_tree();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shape = [4usize, 2usize];
+        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        diagnostics::reset();
+        let _ = evaluator.build_environment_cache(&1, points).unwrap();
+
+        let snapshot = diagnostics::snapshot();
+        let hub_record = snapshot
+            .iter()
+            .find(|record| record.node == "0")
+            .expect("hub node (0) recorded");
+        assert_eq!(hub_record.coordination_number, 3);
+        assert_eq!(hub_record.bond_dims.len(), 3);
+        assert!(hub_record.guard_cache_hits + hub_record.guard_cache_misses > 0);
+
+        for leaf in ["2", "3"] {
+            let leaf_record = snapshot
+                .iter()
+                .find(|record| record.node == leaf)
+                .unwrap_or_else(|| panic!("leaf node ({leaf}) recorded"));
+            assert_eq!(leaf_record.coordination_number, 1);
+        }
     }
 
     #[test]
