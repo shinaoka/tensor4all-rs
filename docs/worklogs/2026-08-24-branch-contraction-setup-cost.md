@@ -137,14 +137,57 @@ still take the general per-element path.
 - Downstream: re-ran the same real R=10 Comb `pi_rtau` checkpoint via gw-rs's
   `isolate_aci_stage` harness after each fix; results in the tables above.
 
+## Third fix: measure which axis is actually fast before generalizing further
+
+Before extending the fast path further, checked whether a prior attempt at
+this specific angle already existed and failed (the min-group-points gate
+above is a different, already-known rejection). None found in this branch's
+worklogs or git history for the memory-access-pattern angle specifically.
+
+Rather than guessing which of `child_axis_1`/`child_axis_2` to add a fast
+path for, added scratch counters (`BRANCH_FAST_AXIS_IS_{PARENT,CHILD1,CHILD2,PHYSICAL}`,
+not wired into `summary()`'s stable output) tallying which axis is actually
+stride-1 once per BLAS call, and re-ran the same checkpoint. Result, out of
+11392 branch BLAS calls: `parent=3986` (35%, already covered),
+`child1=0` (never), `child2=5824` (51%, uncovered), `physical=1582` (14%, no
+axis available to help). `child_axis_2`, not `parent_axis`, is the single
+most common fast axis -- and `child_axis_1` needs no fast path at all.
+
+Added a fast path for `strides[child_axis_2] == 1`: read the contiguous
+`child_dim_2` run per `(c1, parent)` as one slice, then scatter it into
+`left` at its `parent_dim` write-stride. `child_axis_2` is not `left`'s
+contiguous write axis (`parent` is), so unlike the `parent_axis` fast path,
+this trades a strided read for a strided write rather than eliminating both.
+New test `grouped_branch_contraction_matches_scalar_reference_when_child_axis_2_is_contiguous`
+(again, no existing fixture put `child_axis_2` at stride 1) exercises the
+scatter-write path specifically.
+
+Measured, same checkpoint, same call, on top of the first two fixes:
+
+| | + contiguous-read (parent) | + contiguous-read (child_axis_2) |
+|---|---:|---:|
+| `setup_ns` | 73.8s | 69.0s (**-6.4%**, -41.4% cumulative from 117.8s) |
+| `pi_rtau` total | 262.8s | 257.8s (**-1.9%**, -14.0% cumulative from 299.8s) |
+| max_bond / final_err | 228 / 9.478e-5 | 228 / 9.478e-5 (unchanged) |
+
+Despite covering more calls (51% vs. 35%), this fix's wall-time win is
+smaller than the `parent_axis` fast path's -- consistent with the
+scatter-write cost eating most of the contiguous-read benefit. Three fixes in
+a row now show shrinking `setup_ns` reductions (23% -> 18% -> 6.4%):
+diminishing returns, stopping this optimization thread here rather than
+continuing to chase the remaining `setup_ns` (still 68% of the branch
+kernel's own time after all three fixes).
+
 ## Follow-up
 
-- `setup_ns` is still the majority of the branch kernel's own time. Further
-  reduction would need either extending the fast path to more axis
-  arrangements (e.g. detecting when `child_axis_1`/`child_axis_2` -- not just
-  `parent_axis` -- lands on the fast axis, and restructuring the loop nesting
-  accordingly) or accepting that the general path's scattered reads are
-  inherent to this contraction's shape. Not pursued further in this session.
+- Further `setup_ns` reduction from here would need either a genuinely
+  different data layout for `raw` (out of scope: it is this node's `IdxTensor`
+  storage, shared with every other consumer, not something this contraction
+  alone can choose), or accepting the general path's scattered
+  reads-and-writes as inherent to this contraction's shape for the ~14% of
+  calls where `physical_axis` is the fast axis (no loop-axis fast path can
+  help there) and whatever fraction still falls through the general path for
+  other reasons. Not pursued further in this session.
 - This fix, the `diagnostics`/`branch_diagnostics` feature, and gw-rs's
   `isolate_aci_stage` harness are all still local to this session's branches
   (`optimize-treeaci-branched-hotpaths` here, `aci-stage-isolation-harness`
