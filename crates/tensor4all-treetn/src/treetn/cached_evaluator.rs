@@ -1758,25 +1758,32 @@ where
             // column below.
             #[cfg(feature = "diagnostics")]
             let setup_start = std::time::Instant::now();
+            // Loop-invariant-hoisted rewrite of the original per-(c1,c2,parent)
+            // `axis_values` array + 4-term stride dot product: mathematically
+            // identical to `physical_value*strides[physical_axis] +
+            // c1*strides[child_axis_1] + c2*strides[child_axis_2] +
+            // parent*strides[parent_axis]`, just accumulated incrementally
+            // instead of recomputed from scratch on every one of the up to
+            // `parent_dim*child_dim_1*child_dim_2` iterations -- issue #671's
+            // downstream data showed this loop, not the BLAS call after it,
+            // dominates a branch node's contraction time at realistic bond
+            // dimensions (setup_ns >> matmul_ns).
             let left_len = parent_dim * child_dim_2 * child_dim_1;
             let mut left = vec![T::default(); left_len];
+            let physical_base = physical_value * strides[physical_axis];
             for c1 in 0..child_dim_1 {
+                let base_after_c1 = physical_base + c1 * strides[child_axis_1];
+                let left_c1_offset = parent_dim * child_dim_2 * c1;
                 for c2 in 0..child_dim_2 {
+                    let base_after_c2 = base_after_c1 + c2 * strides[child_axis_2];
+                    let left_c2_offset = left_c1_offset + parent_dim * c2;
+                    let mut flat = base_after_c2;
                     for parent in 0..parent_dim {
-                        let mut axis_values = [0usize; 4];
-                        axis_values[physical_axis] = physical_value;
-                        axis_values[parent_axis] = parent;
-                        axis_values[child_axis_1] = c1;
-                        axis_values[child_axis_2] = c2;
-                        let flat = axis_values[0] * strides[0]
-                            + axis_values[1] * strides[1]
-                            + axis_values[2] * strides[2]
-                            + axis_values[3] * strides[3];
-                        let left_row = parent + parent_dim * c2;
-                        let left_offset = left_row + parent_dim * child_dim_2 * c1;
+                        let left_offset = left_c2_offset + parent;
                         left[left_offset] = *raw.get(flat).ok_or_else(|| {
                             anyhow::anyhow!("branch tensor offset {flat} is out of bounds")
                         })?;
+                        flat += strides[parent_axis];
                     }
                 }
             }
