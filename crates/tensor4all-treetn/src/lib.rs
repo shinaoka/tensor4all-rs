@@ -82,6 +82,8 @@ pub use simplett_bridge::{
 };
 pub use site_index_network::SiteIndexNetwork;
 pub use tdvp::{tdvp, tdvp_with_treetn_operator, TdvpError, TdvpOptions, TdvpResult};
+#[cfg(feature = "diagnostics")]
+pub use treetn::diagnostics;
 pub use treetn::{
     // Local update
     apply_local_update_sweep,

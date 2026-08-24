@@ -11,6 +11,8 @@ mod cached_evaluator;
 mod canonicalize;
 pub mod contraction;
 mod decompose;
+#[cfg(feature = "diagnostics")]
+pub mod diagnostics;
 mod evaluator;
 mod fit;
 mod localupdate;

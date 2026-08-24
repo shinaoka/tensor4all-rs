@@ -28,6 +28,7 @@ tenferro-provider-inject = [
     "tensor4all-tensorbackend/backend-tenferro",
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
+diagnostics = []
 
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
