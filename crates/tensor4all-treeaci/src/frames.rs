@@ -15,6 +15,11 @@ use crate::{
     Result, TreeAciError, TreeAciNode, TreeAciScalar,
 };
 
+#[cfg(feature = "diagnostics")]
+use crate::problem::DirectedEdge;
+#[cfg(feature = "diagnostics")]
+use tensor4all_treetn::diagnostics;
+
 fn checked_product(factors: &[usize], context: &'static str) -> Result<usize> {
     factors.iter().try_fold(1usize, |product, &factor| {
         product
@@ -805,6 +810,10 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         // per physical coordinate.
         let mut pending = Vec::new();
         let mut results: Vec<Option<Vec<T>>> = vec![None; candidates.len()];
+        #[cfg(feature = "diagnostics")]
+        let diag_start = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let (mut diag_hits, mut diag_misses) = (0u64, 0u64);
         for (candidate_index, candidate) in candidates.iter().enumerate() {
             let key = self
                 .candidate_cache_key(problem, input, directed_edge, candidate)?
@@ -814,11 +823,19 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             if let Some(cached) = self.candidate_cache.borrow().get(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
+                #[cfg(feature = "diagnostics")]
+                {
+                    diag_hits += 1;
+                }
                 results[candidate_index] = Some(cached.clone());
                 continue;
             }
             #[cfg(test)]
             candidate_debug_stats::record_miss();
+            #[cfg(feature = "diagnostics")]
+            {
+                diag_misses += 1;
+            }
             if candidate.local_coordinate >= physical.local_dim
                 || candidate.incoming.len() != 1
                 || candidate.incoming[0].0 != incoming_edge
@@ -894,6 +911,20 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 self.cache_candidate_if_fits(problem, key, &values);
                 results[candidate_index] = Some(values);
             }
+        }
+
+        #[cfg(feature = "diagnostics")]
+        {
+            let (node, coordination_number, bond_dims) =
+                diagnostics_node_topology(tree, problem, directed, directed_edge);
+            diagnostics::record_frame(
+                &node,
+                coordination_number,
+                &bond_dims,
+                diag_start.elapsed(),
+                diag_hits,
+                diag_misses,
+            );
         }
 
         results
@@ -973,6 +1004,10 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         let mut groups: std::collections::BTreeMap<usize, Vec<usize>> =
             std::collections::BTreeMap::new();
         let mut results: Vec<Option<Vec<T>>> = vec![None; candidates.len()];
+        #[cfg(feature = "diagnostics")]
+        let diag_start = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let (mut diag_hits, mut diag_misses) = (0u64, 0u64);
         for (candidate_index, candidate) in candidates.iter().enumerate() {
             let key = self
                 .candidate_cache_key(problem, input, directed_edge, candidate)?
@@ -982,11 +1017,19 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             if let Some(cached) = self.candidate_cache.borrow().get(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
+                #[cfg(feature = "diagnostics")]
+                {
+                    diag_hits += 1;
+                }
                 results[candidate_index] = Some(cached.clone());
                 continue;
             }
             #[cfg(test)]
             candidate_debug_stats::record_miss();
+            #[cfg(feature = "diagnostics")]
+            {
+                diag_misses += 1;
+            }
             if candidate.incoming.len() != 2
                 || candidate.incoming[0].0 != incoming_edge_1
                 || candidate.incoming[1].0 != incoming_edge_2
@@ -1093,6 +1136,20 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
         }
 
+        #[cfg(feature = "diagnostics")]
+        {
+            let (node, coordination_number, bond_dims) =
+                diagnostics_node_topology(tree, problem, directed, directed_edge);
+            diagnostics::record_frame(
+                &node,
+                coordination_number,
+                &bond_dims,
+                diag_start.elapsed(),
+                diag_hits,
+                diag_misses,
+            );
+        }
+
         results
             .into_iter()
             .map(|value| {
@@ -1112,18 +1169,35 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         sample: &ComponentSample,
     ) -> Result<Vec<T>> {
         let cache_key = self.candidate_cache_key(problem, input, directed_edge, sample)?;
+        let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame references an unknown input",
+        })?;
+        #[cfg(feature = "diagnostics")]
+        let diag_start = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let directed = &problem.directed_edges[directed_edge];
         if let Some(key) = cache_key {
             if let Some(cached) = self.candidate_cache.borrow().get(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
+                #[cfg(feature = "diagnostics")]
+                {
+                    let (node, coordination_number, bond_dims) =
+                        diagnostics_node_topology(tree, problem, directed, directed_edge);
+                    diagnostics::record_frame(
+                        &node,
+                        coordination_number,
+                        &bond_dims,
+                        diag_start.elapsed(),
+                        1,
+                        0,
+                    );
+                }
                 return Ok(cached.clone());
             }
         }
         #[cfg(test)]
         candidate_debug_stats::record_miss();
-        let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
-            message: "candidate frame references an unknown input",
-        })?;
         let cores = self
             .cores
             .get(input)
@@ -1148,6 +1222,19 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         )?;
         if let Some(key) = cache_key {
             self.cache_candidate_if_fits(problem, key, &values);
+        }
+        #[cfg(feature = "diagnostics")]
+        {
+            let (node, coordination_number, bond_dims) =
+                diagnostics_node_topology(tree, problem, directed, directed_edge);
+            diagnostics::record_frame(
+                &node,
+                coordination_number,
+                &bond_dims,
+                diag_start.elapsed(),
+                0,
+                1,
+            );
         }
         Ok(values)
     }
@@ -1843,6 +1930,34 @@ fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
     }
     let stage1_matrix = Matrix::from_col_major_vec(outgoing_dim * n1, incoming_dim_2, stage1_data);
     contract_prepared_core_batched(&stage1_matrix, v2)
+}
+
+/// Summarizes a directed edge's source node for the branch diagnostics
+/// registry: its `Debug` label, coordination number (incoming edges plus
+/// the one outgoing edge), and the bond dimensions of every incident edge
+/// (outgoing first, then each incoming edge in order).
+#[cfg(feature = "diagnostics")]
+fn diagnostics_node_topology<V: TreeAciNode>(
+    tree: &TreeTN<IdxTensor, V>,
+    problem: &PreparedTreeProblem<V>,
+    directed: &DirectedEdge<V>,
+    directed_edge: DirectedEdgeId,
+) -> (String, usize, Vec<usize>) {
+    let coordination_number = directed.incoming_to_from.len() + 1;
+    let mut bond_dims = Vec::with_capacity(coordination_number);
+    if let Ok(index) = outgoing_bond(tree, problem, directed_edge) {
+        bond_dims.push(index.dim());
+    }
+    for &incoming in &directed.incoming_to_from {
+        if let Ok(index) = outgoing_bond(tree, problem, incoming) {
+            bond_dims.push(index.dim());
+        }
+    }
+    (
+        format!("{:?}", directed.from),
+        coordination_number,
+        bond_dims,
+    )
 }
 
 fn outgoing_bond<'a, V: TreeAciNode>(

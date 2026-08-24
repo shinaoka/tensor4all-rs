@@ -947,6 +947,59 @@ fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     assert!(dispatched.iter().any(|frame| frame != &dispatched[0]));
 }
 
+#[cfg(feature = "diagnostics")]
+#[test]
+fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_number_three() {
+    use crate::branch_diagnostics;
+
+    let inputs = vec![star_tree_for_fallback_dispatch()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    let incoming_edge_a = directed.incoming_to_from[0];
+    let incoming_edge_b = directed.incoming_to_from[1];
+    let ids_a = &candidate_sets.ids[incoming_edge_a];
+    let ids_b = &candidate_sets.ids[incoming_edge_b];
+
+    let mut candidates = Vec::new();
+    for local_coordinate in 0..2 {
+        for &id_a in ids_a {
+            for &id_b in ids_b {
+                candidates.push(ComponentSample {
+                    local_coordinate,
+                    incoming: vec![(incoming_edge_a, id_a), (incoming_edge_b, id_b)],
+                });
+            }
+        }
+    }
+
+    branch_diagnostics::reset();
+    let _dispatched = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+
+    let snapshot = branch_diagnostics::snapshot();
+    let hub_record = snapshot
+        .iter()
+        .find(|record| record.node == "0")
+        .expect("hub node (0) recorded in branch diagnostics");
+    assert_eq!(hub_record.coordination_number, 3);
+    assert_eq!(hub_record.bond_dims.len(), 3);
+    assert!(hub_record.frame_cache_hits + hub_record.frame_cache_misses > 0);
+}
+
 #[test]
 fn two_incoming_candidate_batch_obeys_the_working_byte_limit() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
