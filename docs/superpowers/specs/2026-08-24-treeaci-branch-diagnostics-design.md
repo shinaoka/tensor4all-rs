@@ -81,14 +81,19 @@ and this design does not fold it in.
 
 ### Data model
 
-Both crates report through a shared, serializable record. It lives in
-`tensor4all-treetn` (the lower crate) so `tensor4all-treeaci` can extend the
-same entries rather than keeping a parallel table.
+Both crates report through a shared record. It lives in `tensor4all-treetn`
+(the lower crate) so `tensor4all-treeaci` can extend the same entries rather
+than keeping a parallel table. The struct is a plain, non-`serde` type: the
+workspace has no `serde` derive dependency today (only `serde_json` at the
+top level, unused for domain-type derives), and `gw-rs` already depends on
+both `serde` and `serde_json` directly, so it is cheaper and avoids a new
+workspace dependency for `gw-rs`'s isolation harness to build its own JSON
+from the plain fields than for this feature to add one.
 
 ```rust
 // tensor4all-treetn/src/treetn/diagnostics.rs, cfg(feature = "diagnostics")
 
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct NodeDiagnostics {
     /// `format!("{node:?}")` of the tree node. A string, not the generic
     /// `V`, so downstream crates (gw-rs) do not need `V: Serialize` or to
@@ -99,8 +104,9 @@ pub struct NodeDiagnostics {
     /// Bond dimension of each incident edge, in the same order as
     /// discovered (not guaranteed stable across calls).
     pub bond_dims: Vec<usize>,
-    /// Nanoseconds spent building this node's Guard environment/message
-    /// during `build_environment_cache` and its callers.
+    /// Nanoseconds spent building this node's Guard environment/message in
+    /// `get_or_compute_node_message`, `build_environment_cache`'s per-node
+    /// worker.
     pub guard_ns: u64,
     /// Nanoseconds spent in this node's TreeACI LUCI/frame construction
     /// (`candidate_frame`, `directed_frame`, and the batched equivalents in
@@ -126,10 +132,15 @@ thread_local! {
 }
 
 pub fn reset();
-pub fn record_guard(node: &str, coordination_number: usize, bond_dims: &[usize], elapsed: Duration, hit: bool);
-pub fn record_frame(node: &str, elapsed: Duration, hit: bool);
+pub fn record_guard(node: &str, coordination_number: usize, bond_dims: &[usize], elapsed: Duration, hits: u64, misses: u64);
+pub fn record_frame(node: &str, coordination_number: usize, bond_dims: &[usize], elapsed: Duration, hits: u64, misses: u64);
 pub fn snapshot() -> Vec<NodeDiagnostics>;
 ```
+
+`hits`/`misses` as counts, not a single `hit: bool`: a call can cover a batch
+of sample points that is partly cached and partly not (Guard's message cache
+looks up a batch of points per node in one call), so the record needs both
+counts to stay accurate rather than collapsing to one flag.
 
 `thread_local`, not a `Mutex`-guarded global: both Guard and TreeACI already
 run single-threaded per `tree_elementwise` call in the code paths this
@@ -143,23 +154,30 @@ as a known limitation, not silently wrong data.
 
 Call sites:
 
-- `cached_evaluator.rs`'s `build_environment_cache` (~line 1043): wrap each
-  per-node message construction with a timer; call `record_guard` with the
-  node's `Debug` string, its coordination number (`self.neighbors[node].len()`,
-  from the existing `ComponentCostIndex`/ evaluator's `neighbors: HashMap<V,
-  Vec<V>>`), and the bond dimensions read off the constructed `StackedMessage`.
-  `hit: false` here, since this call site is a cache *miss* by construction
-  (it is the rebuild path); a `hit: true` record is added wherever an
-  existing `EnvironmentCache` entry is reused instead of rebuilt.
-- `frames.rs`'s three `candidate_cache.borrow().get(&key)` sites (lines 814,
-  982, 1116): record a frame-cache hit when `Some`, and wrap the
-  corresponding compute-and-insert fallback (around line 530) with a timer
-  and a miss record. The node identity for a `CandidateCacheKey` is derived
-  from `problem.directed_edges[key.directed_edge].to` (or `.from`, whichever
-  is the node the frame is being built *at* -- confirm against
-  `PreparedTreeProblem`'s existing edge-orientation convention during
-  implementation). Coordination number is the count of directed edges in
-  `problem.directed_edges` sharing that node.
+- `cached_evaluator.rs`'s `get_or_compute_node_message` (~line 2426, called
+  once per node from `build_environment_cache`'s postorder loop at ~line
+  1077): this function already distinguishes a full-batch cache hit (an
+  early return around line 2535) from a partial/full miss (the function's
+  normal end, ~line 2758) against its persistent `message_caches:
+  HashMap<(V, V), PackedMessageCache>` -- the actual hit/miss cache, keyed by
+  directed edge, that `self.last_stats.message_cache_hits`/`_misses` already
+  aggregate over a whole call. Attribute those same counts per node instead
+  of only summing them, and wrap the function body in a timer. Coordination
+  number and bond dimensions come from `self.tree`'s own edge structure
+  (`site_index_network().neighbors(node)`, `edge_between`, `bond_index`), not
+  from a stored `neighbors` map -- no such field exists on
+  `TreeTNCachedEvaluator` itself; `ComponentCostIndex`'s `neighbors` field is
+  a separate, `GreedyCenterSearch`-only structure.
+- `frames.rs`'s three `candidate_cache.borrow().get(&key)` sites (~lines
+  814, 982, 1116, alongside the existing `#[cfg(test)]
+  candidate_debug_stats::record_hit`/`record_miss` calls at the same three
+  sites): record a frame-cache hit/miss per call, aggregated over that
+  call's candidates, not per individual candidate. The node identity is
+  `problem.directed_edges[directed_edge].from` (the node the frame is being
+  built *at* -- confirmed against `candidate_frames_for_edge`'s existing
+  `problem.node_positions.get(&directed.from)` lookup). Coordination number
+  is `directed.incoming_to_from.len() + 1` (already-incoming edges plus the
+  one outgoing edge being built), avoiding a scan of `problem.directed_edges`.
 
 All of the above only executes inside `#[cfg(feature = "diagnostics")]`
 blocks; the non-diagnostic build keeps exactly the code it has today.
@@ -167,15 +185,20 @@ blocks; the non-diagnostic build keeps exactly the code it has today.
 ### Public accessors
 
 ```rust
-// re-exported from tensor4all_treetn::diagnostics (feature = "diagnostics")
+// tensor4all_treetn::diagnostics (feature = "diagnostics")
 pub fn reset();
 pub fn snapshot() -> Vec<NodeDiagnostics>;
+pub fn record_guard(...);
+pub fn record_frame(...);
 ```
 
-`tensor4all_treeaci` re-exports the same two functions (or gw-rs depends on
-`tensor4all_treetn` directly for them -- an implementation-time choice with no
-design impact, since `tensor4all-treeaci` already depends on
-`tensor4all-treetn`).
+`tensor4all_treeaci` re-exports all four under `tensor4all_treeaci::
+branch_diagnostics`, not `tensor4all_treeaci::diagnostics`: the crate already
+publicly exports an unrelated `TreeAciDiagnostics` struct (sweep/convergence
+history, from `result.rs`), and a module literally named `diagnostics`
+sitting next to it would read as the same concern. `branch_diagnostics` names
+what this data is actually about -- branch-point performance -- and keeps the
+two apart.
 
 ## Error handling
 
