@@ -13,16 +13,26 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Per-node branch-point timing and cache statistics.
 #[derive(Clone, Debug, Default)]
 pub struct NodeDiagnostics {
+    /// The tree node's `Debug` string.
     pub node: String,
+    /// Number of tree edges incident to this node.
     pub coordination_number: usize,
+    /// Bond dimensions for each incident edge.
     pub bond_dims: Vec<usize>,
+    /// Total nanoseconds spent in Guard message-cache operations.
     pub guard_ns: u64,
+    /// Total nanoseconds spent in TreeACI frame-cache operations.
     pub frame_ns: u64,
+    /// Number of Guard message-cache hits.
     pub guard_cache_hits: u64,
+    /// Number of Guard message-cache misses.
     pub guard_cache_misses: u64,
+    /// Number of TreeACI frame-cache hits.
     pub frame_cache_hits: u64,
+    /// Number of TreeACI frame-cache misses.
     pub frame_cache_misses: u64,
 }
 
@@ -30,27 +40,37 @@ thread_local! {
     static REGISTRY: RefCell<HashMap<String, NodeDiagnostics>> = RefCell::new(HashMap::new());
 }
 
+/// Clear the thread-local diagnostics registry.
 pub fn reset() {
     REGISTRY.with(|registry| registry.borrow_mut().clear());
 }
 
+/// Read back the current accumulated diagnostics as a snapshot.
 pub fn snapshot() -> Vec<NodeDiagnostics> {
     REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
 }
 
-fn with_entry(node: &str, coordination_number: usize, bond_dims: &[usize], f: impl FnOnce(&mut NodeDiagnostics)) {
+fn with_entry(
+    node: &str,
+    coordination_number: usize,
+    bond_dims: &[usize],
+    f: impl FnOnce(&mut NodeDiagnostics),
+) {
     REGISTRY.with(|registry| {
         let mut map = registry.borrow_mut();
-        let entry = map.entry(node.to_string()).or_insert_with(|| NodeDiagnostics {
-            node: node.to_string(),
-            ..Default::default()
-        });
+        let entry = map
+            .entry(node.to_string())
+            .or_insert_with(|| NodeDiagnostics {
+                node: node.to_string(),
+                ..Default::default()
+            });
         entry.coordination_number = coordination_number;
         entry.bond_dims = bond_dims.to_vec();
         f(entry);
     });
 }
 
+/// Record a Guard message-cache operation and its cache hit/miss counts.
 pub fn record_guard(
     node: &str,
     coordination_number: usize,
@@ -66,6 +86,7 @@ pub fn record_guard(
     });
 }
 
+/// Record a TreeACI frame-cache operation and its cache hit/miss counts.
 pub fn record_frame(
     node: &str,
     coordination_number: usize,
