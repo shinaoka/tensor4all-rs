@@ -90,28 +90,61 @@ still 76% of the branch kernel's own time after this change. The arithmetic
 was not the dominant cost -- the per-element write `left[left_offset] =
 raw[flat]` itself, at a `flat` stride pattern that is not contiguous across
 the innermost loop, is the more likely remaining bottleneck (cache-unfriendly
-scalar writes at this scale: up to ~1.35M elements for the hub's peak
-observed dims `[247, 20, 273]`). Not pursued further in this session.
+scalar reads at this scale: up to ~1.35M elements for the hub's peak
+observed dims `[247, 20, 273]`).
+
+## Second fix: contiguous-read fast path
+
+`raw`'s strides are `[1, dims[0], dims[0]*dims[1], dims[0]*dims[1]*dims[2]]`
+(column-major, axis 0 fastest). `flat` steps by `strides[parent_axis]` in the
+innermost loop, which is contiguous (stride 1) only when `parent_axis`
+happens to land on axis 0 for that particular node's tensor -- data-dependent
+per node, not a fixed convention. Added a fast path: when
+`strides[parent_axis] == 1`, read the whole `parent_dim`-length run as one
+slice and `copy_from_slice` it into `left`, instead of one bounds-checked
+element at a time; falls back to the existing per-element loop otherwise.
+Same values, same write offsets either way.
+
+No existing branch-kernel test happened to exercise `strides[parent_axis] ==
+1` -- every fixture put `physical_axis` at stride 1 instead. Added
+`grouped_branch_contraction_matches_scalar_reference_when_parent_axis_is_contiguous`
+(same shape as the existing large-groups test, with `parent_axis`/`physical_axis`
+swapped) before relying on the new path.
+
+Measured, same checkpoint, same call, on top of the first fix:
+
+| | first fix | + contiguous-read fast path |
+|---|---:|---:|
+| `setup_ns` | 90.5s | 73.8s (**-18%**, -37% cumulative from 117.8s) |
+| `pi_rtau` total | 275.6s | 262.8s (**-5%**, -12.3% cumulative from 299.8s) |
+| max_bond / final_err | 228 / 9.478e-5 | 228 / 9.478e-5 (unchanged) |
+
+`setup_ns` is now 72% of the branch kernel's own time (down from 81% before
+either fix). The fast path only fires for whichever nodes happen to have
+`parent_axis` on the fast tensor axis; most calls in this particular run
+still take the general per-element path.
 
 ## Verification
 
 - `cargo test --manifest-path crates/tensor4all-treetn/Cargo.toml --release branch`:
-  all 7 matching tests pass, including every branch-kernel correctness test
-  listed above.
+  all matching tests pass, including every branch-kernel correctness test
+  listed above and the new contiguous-axis test.
 - `cargo test --manifest-path crates/tensor4all-treetn/Cargo.toml --release`
-  (default and `--features diagnostics`): full suite green, no change from
-  before this fix.
+  (default and `--features diagnostics`): full suite green (453/457 passed,
+  1 ignored), no change from before either fix.
 - `cargo clippy --manifest-path crates/tensor4all-treetn/Cargo.toml --all-targets -- -D warnings`
-  clean, default and `--features diagnostics`.
+  clean, default and `--features diagnostics`, after both fixes.
 - Downstream: re-ran the same real R=10 Comb `pi_rtau` checkpoint via gw-rs's
-  `isolate_aci_stage` harness before and after; results in the table above.
+  `isolate_aci_stage` harness after each fix; results in the tables above.
 
 ## Follow-up
 
-- The remaining `setup_ns` cost (still the majority of branch's own time) is
-  a plausible next target, but would need profiling at the memory-access
-  level (or a differently-shaped write pattern) rather than more arithmetic
-  hoisting, which is now largely exhausted.
+- `setup_ns` is still the majority of the branch kernel's own time. Further
+  reduction would need either extending the fast path to more axis
+  arrangements (e.g. detecting when `child_axis_1`/`child_axis_2` -- not just
+  `parent_axis` -- lands on the fast axis, and restructuring the loop nesting
+  accordingly) or accepting that the general path's scattered reads are
+  inherent to this contraction's shape. Not pursued further in this session.
 - This fix, the `diagnostics`/`branch_diagnostics` feature, and gw-rs's
   `isolate_aci_stage` harness are all still local to this session's branches
   (`optimize-treeaci-branched-hotpaths` here, `aci-stage-isolation-harness`
