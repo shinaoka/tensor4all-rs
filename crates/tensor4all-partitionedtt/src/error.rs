@@ -78,6 +78,40 @@ pub enum PartitionedTTError {
     #[error("Tensor cross interpolation error: {0}")]
     TensorCrossInterpolation(#[from] tensor4all_tensorci::TCIError),
 
+    /// Error from rank-local Hataori patch scheduling.
+    #[cfg(feature = "adaptive-hataori-rayon")]
+    #[error("Hataori patch scheduling failed at path {path:?}: {source}")]
+    HataoriLocal {
+        /// Patch path when the scheduling error identifies one input.
+        path: Option<Vec<usize>>,
+        /// Original Hataori diagnostic.
+        #[source]
+        source: hataori::MapInError,
+    },
+
+    /// Error from MPI Hataori patch scheduling.
+    #[cfg(feature = "adaptive-hataori-mpi")]
+    #[error("MPI Hataori patch scheduling failed: {source}")]
+    HataoriMpiPmap {
+        /// Original converged Hataori diagnostic.
+        #[source]
+        source: hataori::PmapError,
+    },
+
+    /// Error from an MPI Hataori placement collective.
+    #[cfg(feature = "adaptive-hataori-mpi")]
+    #[error("MPI Hataori placement failed: {source}")]
+    HataoriMpiPlacement {
+        /// Original converged Hataori diagnostic.
+        #[source]
+        source: hataori::PlacementError,
+    },
+
+    /// Adaptive interpolation failure converged across MPI ranks.
+    #[cfg(feature = "adaptive-hataori-mpi")]
+    #[error("Distributed adaptive interpolation failed: {0}")]
+    DistributedAdaptiveInterpolation(String),
+
     /// Invalid site-index or pivot input for adaptive interpolation
     #[error("Invalid adaptive interpolation input: {0}")]
     InvalidAdaptiveInterpolationInput(String),

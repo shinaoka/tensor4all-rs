@@ -8,7 +8,15 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["tenferro-cpu-faer"]
+default = ["tenferro-cpu-faer", "adaptive-hataori-rayon"]
+adaptive-hataori-rayon = ["dep:hataori", "hataori/rayon"]
+adaptive-hataori-mpi = [
+    "adaptive-hataori-rayon",
+    "hataori/mpi",
+    "dep:mpi",
+    "dep:serde",
+    "num-complex/serde",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-itensorlike/tenferro-cpu-faer",
@@ -32,6 +40,9 @@ num-traits.workspace = true
 rand.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+hataori = { workspace = true, optional = true }
+mpi = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
@@ -41,3 +52,8 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, f
 
 [dev-dependencies]
 approx.workspace = true
+rayon.workspace = true
+
+[[example]]
+name = "adaptive_mpi_smoke"
+required-features = ["adaptive-hataori-mpi"]

@@ -189,7 +189,8 @@ Split a function's domain into non-overlapping projected patches, each its own T
   - `PatchingOptions { rtol: 1e-12, max_bond_dim: 100, patch_order: Vec<DynIndex>, split_strategy: ExactParameterGain }`.
   - `PatchSplitStrategy::{Sequential, ExactParameterGain (default)}` — `ExactParameterGain` forms + counts child cores to pick the smallest split; `Sequential` takes the first unprojected `patch_order` index.
 - Adaptive TCI interpolation — ports TCIAlgorithms.jl `adaptiveinterpolate` / `createpatch` / `_globalpivots`:
-  - `adaptiveinterpolate::<T, F, B>(f, batched_f: Option<B>, site_indices: Vec<DynIndex>, initial_pivots: Vec<MultiIndex>, AdaptiveInterpolateOptions) -> Result<PartitionedTT>`.
+  - `adaptiveinterpolate::<T, F, B>(f, batched_f: Option<B>, site_indices: Vec<DynIndex>, initial_pivots: Vec<MultiIndex>, AdaptiveInterpolateOptions) -> Result<AdaptiveInterpolationResult<T>>`; use `.partitioned_tt()` and `.patch_caches()`.
+  - Default feature `adaptive-hataori-rayon` provides `adaptiveinterpolate_in(&Domain, ...)` with `LocalMode::Outer`; `adaptive-hataori-mpi` is default-off and provides collective `adaptiveinterpolate_mpi`.
     - `f: &MultiIndex -> T` receives one **full, 0-based** multi-index (tensorci territory, not quanticstci).
     - `batched_f: Option<B>` with `B: Fn(&[MultiIndex]) -> Vec<T>` — same function, batched; pass `None` when batching is unavailable.
     - `initial_pivots` — full-domain, 0-based; empty allowed.

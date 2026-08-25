@@ -5,13 +5,19 @@
 //! TCIAlgorithms.jl at commit e501032278c9dd41b46c5851d8238169c8d178c5
 //! (MIT license; Copyright 2023 Ritter.Marc and contributors).
 
-use std::collections::{HashSet, VecDeque};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "adaptive-hataori-mpi")]
+use std::num::NonZeroUsize;
+#[cfg(feature = "adaptive-hataori-mpi")]
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use tensor4all_core::{DynIndex, IdxTensor, TensorElement};
-use tensor4all_core::{MatrixLuciScalar, MultiIndex, Scalar};
+use tensor4all_core::{DynIndex, IdxTensor, MatrixLuciScalar, MultiIndex, Scalar, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
+#[cfg(feature = "adaptive-hataori-mpi")]
+use tensor4all_simplett::Tensor3Ops;
 use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::StorageScalar;
 use tensor4all_tensorci::{
@@ -83,10 +89,367 @@ impl Default for AdaptiveInterpolateOptions {
     }
 }
 
-#[derive(Debug)]
-struct PendingPatch {
+#[cfg_attr(
+    feature = "adaptive-hataori-mpi",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[derive(Debug, Clone)]
+struct PatchCache<T> {
+    active_dims: Vec<usize>,
+    entries: HashMap<MultiIndex, T>,
+}
+
+impl<T> PatchCache<T> {
+    fn new(active_dims: Vec<usize>) -> Self {
+        Self {
+            active_dims,
+            entries: HashMap::new(),
+        }
+    }
+
+    fn split(self, split_pos: usize, child_count: usize) -> Result<Vec<Self>> {
+        if split_pos >= self.active_dims.len() || self.active_dims[split_pos] != child_count {
+            return Err(PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "cache split does not match the active patch dimensions".to_string(),
+            ));
+        }
+        let mut child_dims = self.active_dims;
+        child_dims.remove(split_pos);
+        let mut children: Vec<_> = (0..child_count)
+            .map(|_| Self::new(child_dims.clone()))
+            .collect();
+        for (mut key, value) in self.entries {
+            if key.len() != child_dims.len() + 1 {
+                return Err(PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                    "cached key rank does not match the parent patch".to_string(),
+                ));
+            }
+            let child = key.remove(split_pos);
+            let child_cache = children.get_mut(child).ok_or_else(|| {
+                PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                    "cached split coordinate is outside the child range".to_string(),
+                )
+            })?;
+            child_cache.entries.insert(key, value);
+        }
+        Ok(children)
+    }
+}
+
+/// Samples retained for one accepted adaptive patch.
+///
+/// Keys passed to [`Self::get`] contain only the patch's active coordinates,
+/// in the original site order. The projector records all fixed coordinates.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtt::{adaptiveinterpolate, AdaptiveInterpolateOptions, DynIndex, MultiIndex};
+/// let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+///     |index| (index[0] + 1) as f64,
+///     None,
+///     vec![DynIndex::new_dyn(2)],
+///     Vec::new(),
+///     AdaptiveInterpolateOptions::default(),
+/// )?;
+/// let cache = &result.patch_caches()[0];
+/// assert_eq!(cache.get(&[1]), Some(&2.0));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct AcceptedPatchCache<T> {
     projector: Projector,
+    active_positions: Vec<usize>,
+    cache: PatchCache<T>,
+}
+
+impl<T> AcceptedPatchCache<T> {
+    /// Return the projector identifying the accepted patch.
+    ///
+    /// The projector is empty when the root patch converges without splitting.
+    pub fn projector(&self) -> &Projector {
+        &self.projector
+    }
+
+    /// Return the full-domain positions represented by local cache keys.
+    ///
+    /// For an unsplit two-site patch this returns `[0, 1]`.
+    pub fn active_positions(&self) -> &[usize] {
+        &self.active_positions
+    }
+
+    /// Return a retained value by patch-local active coordinates.
+    ///
+    /// Returns `None` when TCI did not sample the requested point.
+    pub fn get(&self, local_index: &[usize]) -> Option<&T> {
+        self.cache.entries.get(local_index)
+    }
+
+    /// Return the number of retained sample entries.
+    ///
+    /// This is the cache's retained-entry statistic.
+    pub fn len(&self) -> usize {
+        self.cache.entries.len()
+    }
+
+    /// Return whether this patch retains no samples.
+    pub fn is_empty(&self) -> bool {
+        self.cache.entries.is_empty()
+    }
+
+    /// Drop all retained samples while preserving patch metadata.
+    pub fn clear(&mut self) {
+        self.cache.entries.clear();
+    }
+}
+
+/// Adaptive interpolation output and its accepted per-patch sample caches.
+///
+/// The cache collection is paired with tensor-network patches by full
+/// [`Projector`] equality, not by index ID.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtt::{adaptiveinterpolate, AdaptiveInterpolateOptions, DynIndex, MultiIndex};
+/// let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+///     |index| (index[0] + 1) as f64,
+///     None,
+///     vec![DynIndex::new_dyn(2)],
+///     Vec::new(),
+///     AdaptiveInterpolateOptions::default(),
+/// )?;
+/// assert_eq!(result.partitioned_tt().len(), 1);
+/// assert_eq!(result.patch_caches().len(), 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct AdaptiveInterpolationResult<T> {
+    partitioned_tt: PartitionedTT,
+    patch_caches: Vec<AcceptedPatchCache<T>>,
+}
+
+impl<T> AdaptiveInterpolationResult<T> {
+    /// Return the interpolated partitioned tensor train.
+    pub fn partitioned_tt(&self) -> &PartitionedTT {
+        &self.partitioned_tt
+    }
+
+    /// Return caches paired with accepted patches by projector.
+    pub fn patch_caches(&self) -> &[AcceptedPatchCache<T>] {
+        &self.patch_caches
+    }
+
+    /// Consume the result without copying the tensor train or cache entries.
+    pub fn into_parts(self) -> (PartitionedTT, Vec<AcceptedPatchCache<T>>) {
+        (self.partitioned_tt, self.patch_caches)
+    }
+}
+
+#[cfg_attr(
+    feature = "adaptive-hataori-mpi",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[derive(Debug)]
+struct PendingPatch<T> {
+    path: Vec<usize>,
     recycled_pivots: Vec<MultiIndex>,
+    cache: PatchCache<T>,
+}
+
+#[derive(Debug)]
+struct AcceptedPatch<T>
+where
+    T: TTScalar,
+{
+    path: Vec<usize>,
+    data: AcceptedData<T>,
+    cache: AcceptedPatchCache<T>,
+}
+
+#[derive(Debug)]
+enum AcceptedData<T>
+where
+    T: TTScalar,
+{
+    Scalar(T),
+    Active(SimpleTensorTrain<T>),
+}
+
+#[derive(Debug)]
+enum PatchOutcome<T: TTScalar> {
+    Accepted(AcceptedPatch<T>),
+    Split(Vec<PendingPatch<T>>),
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WireCore<T> {
+    dims: [usize; 3],
+    data: Vec<T>,
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[derive(serde::Serialize, serde::Deserialize)]
+enum WireAcceptedData<T> {
+    Scalar(T),
+    Active(Vec<WireCore<T>>),
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WireAcceptedPatch<T> {
+    path: Vec<usize>,
+    active_positions: Vec<usize>,
+    cache: PatchCache<T>,
+    data: WireAcceptedData<T>,
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[derive(serde::Serialize, serde::Deserialize)]
+enum WirePatchOutcome<T> {
+    Accepted(WireAcceptedPatch<T>),
+    Split(Vec<PendingPatch<T>>),
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[derive(serde::Serialize, serde::Deserialize)]
+enum WaveControl {
+    Continue,
+    Stop,
+    Fail(String),
+}
+
+struct PatchEvaluator<'a, T, F, B> {
+    f: &'a F,
+    batched_f: Option<&'a B>,
+    active_positions: &'a [usize],
+    projector: &'a Projector,
+    site_indices: &'a [DynIndex],
+    cache: RefCell<PatchCache<T>>,
+    pending_error: RefCell<Option<PartitionedTTError>>,
+}
+
+impl<'a, T, F, B> PatchEvaluator<'a, T, F, B>
+where
+    T: Scalar + Copy,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+{
+    fn new(
+        f: &'a F,
+        batched_f: Option<&'a B>,
+        active_positions: &'a [usize],
+        projector: &'a Projector,
+        site_indices: &'a [DynIndex],
+        cache: PatchCache<T>,
+    ) -> Result<Self> {
+        let expected_dims: Vec<_> = active_positions
+            .iter()
+            .map(|&position| site_indices[position].dim)
+            .collect();
+        if cache.active_dims != expected_dims {
+            return Err(PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "cache dimensions do not match the active patch".to_string(),
+            ));
+        }
+        Ok(Self {
+            f,
+            batched_f,
+            active_positions,
+            projector,
+            site_indices,
+            cache: RefCell::new(cache),
+            pending_error: RefCell::new(None),
+        })
+    }
+
+    fn eval(&self, local_index: &MultiIndex) -> T {
+        if let Some(value) = self.cache.borrow().entries.get(local_index).copied() {
+            return value;
+        }
+        let full_index = expand_pivot(
+            local_index,
+            self.active_positions,
+            self.projector,
+            self.site_indices,
+        );
+        let value = (self.f)(&full_index);
+        self.cache
+            .borrow_mut()
+            .entries
+            .insert(local_index.clone(), value);
+        value
+    }
+
+    fn eval_many(&self, local_indices: &[MultiIndex]) -> Vec<T> {
+        let mut output = vec![None; local_indices.len()];
+        let mut missing = Vec::new();
+        let mut missing_positions = HashMap::<MultiIndex, Vec<usize>>::new();
+        {
+            let cache = self.cache.borrow();
+            for (position, index) in local_indices.iter().enumerate() {
+                if let Some(value) = cache.entries.get(index).copied() {
+                    output[position] = Some(value);
+                } else {
+                    missing_positions
+                        .entry(index.clone())
+                        .or_insert_with(|| {
+                            missing.push(index.clone());
+                            Vec::new()
+                        })
+                        .push(position);
+                }
+            }
+        }
+        if !missing.is_empty() {
+            let full_indices: Vec<_> = missing
+                .iter()
+                .map(|index| {
+                    expand_pivot(
+                        index,
+                        self.active_positions,
+                        self.projector,
+                        self.site_indices,
+                    )
+                })
+                .collect();
+            let values = if let Some(batch) = self.batched_f {
+                batch(&full_indices)
+            } else {
+                full_indices.iter().map(self.f).collect()
+            };
+            if values.len() != missing.len() {
+                *self.pending_error.borrow_mut() = Some(
+                    PartitionedTTError::InvalidAdaptiveInterpolationInput(format!(
+                        "batch callback returned {} values for {} cache misses",
+                        values.len(),
+                        missing.len()
+                    )),
+                );
+                return vec![T::zero(); local_indices.len()];
+            }
+            let mut cache = self.cache.borrow_mut();
+            for (index, value) in missing.into_iter().zip(values) {
+                cache.entries.insert(index.clone(), value);
+                for &position in &missing_positions[&index] {
+                    output[position] = Some(value);
+                }
+            }
+        }
+        output
+            .into_iter()
+            .map(|value| value.unwrap_or_else(T::zero))
+            .collect()
+    }
+
+    fn take_error(&self) -> Option<PartitionedTTError> {
+        self.pending_error.borrow_mut().take()
+    }
+
+    fn into_cache(self) -> PatchCache<T> {
+        self.cache.into_inner()
+    }
 }
 
 /// Adaptively interpolate a discrete function as a partitioned tensor train.
@@ -107,7 +470,6 @@ struct PendingPatch {
 ///
 /// - `f`: scalar evaluator receiving one full, zero-based multi-index.
 /// - `batched_f`: optional batch evaluator receiving full multi-indices and
-///
 ///   returning values in the same order. Use `None` when batching is unavailable.
 /// - `site_indices`: one distinct [`DynIndex`] per TCI site, in evaluator order.
 /// - `initial_pivots`: full-domain, zero-based pivots. Empty input is allowed.
@@ -115,8 +477,8 @@ struct PendingPatch {
 ///
 /// # Returns
 ///
-/// A [`PartitionedTT`] whose mutually disjoint patches cover the full domain.
-/// Calling [`PartitionedTT::to_tensor_train`] combines the patches into one TT.
+/// An [`AdaptiveInterpolationResult`] containing mutually disjoint patches and
+/// one physically separate sample cache for each accepted patch.
 ///
 /// # Errors
 ///
@@ -144,7 +506,7 @@ struct PendingPatch {
 /// )
 /// .unwrap();
 ///
-/// let tt = result.to_tensor_train().unwrap();
+/// let tt = result.partitioned_tt().to_tensor_train().unwrap();
 /// let dense = contract(&[tt.tensor(0).unwrap(), tt.tensor(1).unwrap()]).unwrap();
 /// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 2.0, 4.0]);
 /// ```
@@ -154,177 +516,675 @@ pub fn adaptiveinterpolate<T, F, B>(
     site_indices: Vec<DynIndex>,
     initial_pivots: Vec<MultiIndex>,
     options: AdaptiveInterpolateOptions,
-) -> Result<PartitionedTT>
+) -> Result<AdaptiveInterpolationResult<T>>
 where
     T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
     let patch_order = validate_inputs(&site_indices, &initial_pivots, &options)?;
-    let mut rng = StdRng::seed_from_u64(options.tci_options.seed.unwrap_or(0));
-    let mut pending = VecDeque::from([PendingPatch {
-        projector: Projector::new(),
+    let root_dims = site_indices.iter().map(|index| index.dim).collect();
+    let mut wave = vec![PendingPatch {
+        path: Vec::new(),
         recycled_pivots: Vec::new(),
-    }]);
+        cache: PatchCache::new(root_dims),
+    }];
     let mut accepted = Vec::new();
 
-    while let Some(patch) = pending.pop_front() {
-        let active_positions = active_positions(&site_indices, &patch.projector);
-
-        if active_positions.is_empty() {
-            let value = f(&expand_pivot(
-                &Vec::new(),
-                &active_positions,
-                &patch.projector,
+    while !wave.is_empty() {
+        let mut next_wave = Vec::new();
+        for patch in wave {
+            match process_patch(
+                patch,
+                &f,
+                batched_f.as_ref(),
                 &site_indices,
-            ));
-            let tt = rank_one_full_tt(&site_indices, &patch.projector, value)?;
-            accepted.push(SubDomainTT::new(tt, patch.projector)?);
-            continue;
-        }
-
-        if active_positions.len() == 1 {
-            let dim = site_indices[active_positions[0]].dim;
-            let data = (0..dim)
-                .map(|value| {
-                    f(&expand_pivot(
-                        &vec![value],
-                        &active_positions,
-                        &patch.projector,
-                        &site_indices,
-                    ))
-                })
-                .collect();
-            let core = tensor3_from_data(data, 1, dim, 1)
-                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
-            let exact = SimpleTensorTrain::new(vec![core])
-                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
-            let (exact_tree, _) = tensor_train_to_treetn(&exact)
-                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
-            let tt = embed_active_tt::<T>(
-                exact_tree,
-                &site_indices,
-                &active_positions,
-                &patch.projector,
-            )?;
-            accepted.push(SubDomainTT::new(tt, patch.projector)?);
-            continue;
-        }
-
-        let candidate_pivots = patch_candidates(
-            &site_indices,
-            &active_positions,
-            &patch.projector,
-            &initial_pivots,
-            &patch.recycled_pivots,
-            options.n_initial_pivots,
-            &mut rng,
-        )?;
-        let candidate_values: Vec<T> = candidate_pivots
-            .iter()
-            .map(|pivot| {
-                f(&expand_pivot(
-                    pivot,
-                    &active_positions,
-                    &patch.projector,
-                    &site_indices,
-                ))
-            })
-            .collect();
-
-        if candidate_values
-            .iter()
-            .all(|value| Scalar::abs_val(*value) < ZERO_SAMPLE_THRESHOLD)
-        {
-            let tt = rank_one_full_tt(&site_indices, &patch.projector, T::zero())?;
-            accepted.push(SubDomainTT::new(tt, patch.projector)?);
-            continue;
-        }
-
-        let local_dims = active_positions
-            .iter()
-            .map(|&position| site_indices[position].dim)
-            .collect();
-        let local_f = |pivot: &MultiIndex| {
-            f(&expand_pivot(
-                pivot,
-                &active_positions,
-                &patch.projector,
-                &site_indices,
-            ))
-        };
-        let local_batch = batched_f.as_ref().map(|batch| {
-            |pivots: &[MultiIndex]| {
-                let full_pivots: Vec<_> = pivots
-                    .iter()
-                    .map(|pivot| {
-                        expand_pivot(pivot, &active_positions, &patch.projector, &site_indices)
-                    })
-                    .collect();
-                batch(&full_pivots)
+                &initial_pivots,
+                &patch_order,
+                &options,
+            )? {
+                PatchOutcome::Accepted(patch) => accepted.push(patch),
+                PatchOutcome::Split(children) => next_wave.extend(children),
             }
-        });
-        let TCI2OptimizationResult {
-            tci,
-            errors,
-            termination,
-            ..
-        } = crossinterpolate2(
-            local_f,
-            local_batch,
-            local_dims,
-            candidate_pivots,
-            options.tci_options.clone(),
-        )?;
-        let normalization = if options.tci_options.normalize_error && tci.max_sample_value() > 0.0 {
-            tci.max_sample_value()
-        } else {
-            1.0
-        };
-        let final_error = errors
-            .last()
-            .copied()
-            .unwrap_or_else(|| tci.max_bond_error() / normalization);
-
-        if patch_is_accepted(termination, final_error, options.tci_options.tolerance) {
-            let simple_tt = tci.to_tensor_train()?;
-            let (active_tree, _) = tensor_train_to_treetn(&simple_tt)
-                .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
-            let tt = embed_active_tt::<T>(
-                active_tree,
-                &site_indices,
-                &active_positions,
-                &patch.projector,
-            )?;
-            accepted.push(SubDomainTT::new(tt, patch.projector)?);
-            continue;
         }
-
-        let split_index = patch_order
-            .iter()
-            .find(|index| !patch.projector.is_projected_at(index))
-            .ok_or_else(|| {
-                PartitionedTTError::InvalidAdaptiveInterpolationInput(
-                    "a nonconverged patch has no remaining split index".to_string(),
-                )
-            })?
-            .clone();
-        let recycled_pivots = if options.recycle_pivots {
-            global_diagonal_pivots(&tci, &active_positions, &patch.projector, &site_indices)
-        } else {
-            Vec::new()
-        };
-        for value in 0..split_index.dim {
-            let mut child_projector = patch.projector.clone();
-            child_projector.insert(split_index.clone(), value)?;
-            pending.push_back(PendingPatch {
-                projector: child_projector,
-                recycled_pivots: recycled_pivots.clone(),
-            });
-        }
+        wave = next_wave;
     }
 
-    PartitionedTT::from_subdomains(accepted)
+    assemble_result(accepted, &site_indices, &patch_order)
+}
+
+/// Adaptively interpolate patches in parallel on an explicit Hataori Rayon domain.
+///
+/// Different patches use [`hataori::LocalMode::Outer`]. Rayon work started by a
+/// patch callback is nested in the same domain pool. The domain must be backed
+/// by a Rayon pool, and the call must originate outside a foreign Rayon pool.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use tensor4all_partitionedtt::{adaptiveinterpolate_in, AdaptiveInterpolateOptions, DynIndex, MultiIndex};
+/// let pool = Arc::new(rayon::ThreadPoolBuilder::new().num_threads(1).build()?);
+/// let domain = hataori::Domain::external(pool, vec![0], 1)?;
+/// let result = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+///     &domain,
+///     |index| (index[0] + 1) as f64,
+///     None,
+///     vec![DynIndex::new_dyn(2)],
+///     Vec::new(),
+///     AdaptiveInterpolateOptions::default(),
+/// )?;
+/// assert_eq!(result.patch_caches()[0].get(&[1]), Some(&2.0));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns the same interpolation errors as [`adaptiveinterpolate`], or
+/// [`PartitionedTTError::HataoriLocal`] when domain admission or scheduling
+/// fails. No partial partition or cache is returned.
+#[cfg(feature = "adaptive-hataori-rayon")]
+pub fn adaptiveinterpolate_in<T, F, B>(
+    domain: &hataori::Domain,
+    f: F,
+    batched_f: Option<B>,
+    site_indices: Vec<DynIndex>,
+    initial_pivots: Vec<MultiIndex>,
+    options: AdaptiveInterpolateOptions,
+) -> Result<AdaptiveInterpolationResult<T>>
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy + Send,
+    F: Fn(&MultiIndex) -> T + Send + Sync,
+    B: Fn(&[MultiIndex]) -> Vec<T> + Send + Sync,
+{
+    let patch_order = validate_inputs(&site_indices, &initial_pivots, &options)?;
+    let root_dims = site_indices.iter().map(|index| index.dim).collect();
+    let mut wave = vec![PendingPatch {
+        path: Vec::new(),
+        recycled_pivots: Vec::new(),
+        cache: PatchCache::new(root_dims),
+    }];
+    let mut accepted = Vec::new();
+
+    while !wave.is_empty() {
+        let paths: Vec<_> = wave.iter().map(|patch| patch.path.clone()).collect();
+        let outcomes = hataori::map_in(domain, hataori::LocalMode::Outer, wave, |patch| {
+            process_patch(
+                patch,
+                &f,
+                batched_f.as_ref(),
+                &site_indices,
+                &initial_pivots,
+                &patch_order,
+                &options,
+            )
+        })
+        .map_err(|source| {
+            let path = match &source {
+                hataori::MapInError::Callback(error) => paths.get(error.index()).cloned(),
+                _ => None,
+            };
+            PartitionedTTError::HataoriLocal { path, source }
+        })?;
+        let mut next_wave = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                PatchOutcome::Accepted(patch) => accepted.push(patch),
+                PatchOutcome::Split(children) => next_wave.extend(children),
+            }
+        }
+        wave = next_wave;
+    }
+
+    assemble_result(accepted, &site_indices, &patch_order)
+}
+
+/// Collectively interpolate adaptive patches across MPI ranks and local Rayon domains.
+///
+/// Every rank must call this function from the MPI main thread with equivalent
+/// callbacks and interpolation metadata. Each rank supplies a pool-backed,
+/// id-zero Hataori domain; MPI must provide `MPI_THREAD_FUNNELED` or stronger.
+/// Only `root` receives `Some(result)`.
+///
+/// # Examples
+///
+/// A runnable multi-rank example with numerical and cache assertions is provided
+/// at `examples/adaptive_mpi_smoke.rs` and is executed with
+/// `mpiexec -n 2 target/release/examples/adaptive_mpi_smoke`.
+///
+/// # Errors
+///
+/// Returns [`PartitionedTTError::HataoriMpiPlacement`] when collective
+/// validation or `WaveControl` broadcast fails,
+/// [`PartitionedTTError::HataoriMpiPmap`] when a patch callback, MPI scheduler,
+/// or Hataori wire operation fails, and
+/// [`PartitionedTTError::DistributedAdaptiveInterpolation`] when common input
+/// is invalid or root-side cache/core reconstruction and final partition
+/// validation fails. No rank receives a partial partition or cache.
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[allow(clippy::too_many_arguments)]
+pub fn adaptiveinterpolate_mpi<C, T, F, B>(
+    world: &C,
+    domain: &hataori::Domain,
+    root: i32,
+    f: F,
+    batched_f: Option<B>,
+    site_indices: Vec<DynIndex>,
+    initial_pivots: Vec<MultiIndex>,
+    options: AdaptiveInterpolateOptions,
+) -> Result<Option<AdaptiveInterpolationResult<T>>>
+where
+    C: mpi::traits::Communicator,
+    T: Scalar
+        + TTScalar
+        + MatrixLuciScalar
+        + TensorElement
+        + StorageScalar
+        + Default
+        + Copy
+        + Send
+        + Sync
+        + serde::Serialize
+        + serde::de::DeserializeOwned,
+    F: Fn(&MultiIndex) -> T + Send + Sync,
+    B: Fn(&[MultiIndex]) -> Vec<T> + Send + Sync,
+{
+    let rank = world.rank();
+    let local_validation = validate_inputs(&site_indices, &initial_pivots, &options);
+    let local_error = local_validation.as_ref().err().map(ToString::to_string);
+    let gathered = hataori::gather(world, root, local_error)
+        .map_err(|source| PartitionedTTError::HataoriMpiPlacement { source })?;
+    let validation_control = if rank == root {
+        let first_error = gathered
+            .as_ref()
+            .and_then(|errors| errors.iter().flatten().next())
+            .cloned();
+        Some(match first_error {
+            Some(message) => WaveControl::Fail(message),
+            None => WaveControl::Continue,
+        })
+    } else {
+        None
+    };
+    match hataori::broadcast(world, root, validation_control)
+        .map_err(|source| PartitionedTTError::HataoriMpiPlacement { source })?
+    {
+        WaveControl::Continue => {}
+        WaveControl::Fail(message) => {
+            return Err(PartitionedTTError::DistributedAdaptiveInterpolation(
+                message,
+            ));
+        }
+        WaveControl::Stop => {
+            return Err(PartitionedTTError::DistributedAdaptiveInterpolation(
+                "invalid stop control during MPI validation".to_string(),
+            ));
+        }
+    }
+    let patch_order = local_validation
+        .map_err(|error| PartitionedTTError::DistributedAdaptiveInterpolation(error.to_string()))?;
+
+    let root_dims = site_indices.iter().map(|index| index.dim).collect();
+    let mut wave = if rank == root {
+        vec![PendingPatch {
+            path: Vec::new(),
+            recycled_pivots: Vec::new(),
+            cache: PatchCache::new(root_dims),
+        }]
+    } else {
+        Vec::new()
+    };
+    let mut accepted = Vec::new();
+    let pmap_options = hataori::PmapOptions {
+        root,
+        batch_size: NonZeroUsize::MIN,
+        local_mode: hataori::LocalMode::Outer,
+        prefetch: false,
+    };
+
+    loop {
+        let root_items = (rank == root).then(|| std::mem::take(&mut wave));
+        let wire_outcomes = hataori::pmap(world, domain, pmap_options, root_items, |patch| {
+            process_patch(
+                patch,
+                &f,
+                batched_f.as_ref(),
+                &site_indices,
+                &initial_pivots,
+                &patch_order,
+                &options,
+            )
+            .map(patch_outcome_to_wire)
+        })
+        .map_err(|source| PartitionedTTError::HataoriMpiPmap { source })?;
+
+        let mut root_result = None;
+        let root_control = if rank == root {
+            let root_postprocess = catch_unwind(AssertUnwindSafe(|| -> Result<WaveControl> {
+                let mut next_wave = Vec::new();
+                for wire in wire_outcomes.ok_or_else(|| {
+                    PartitionedTTError::DistributedAdaptiveInterpolation(
+                        "MPI root did not receive patch outcomes".to_string(),
+                    )
+                })? {
+                    match patch_outcome_from_wire(wire, &site_indices, &patch_order)? {
+                        PatchOutcome::Accepted(patch) => accepted.push(patch),
+                        PatchOutcome::Split(children) => next_wave.extend(children),
+                    }
+                }
+                if next_wave.is_empty() {
+                    root_result = Some(assemble_result(
+                        std::mem::take(&mut accepted),
+                        &site_indices,
+                        &patch_order,
+                    )?);
+                    Ok(WaveControl::Stop)
+                } else {
+                    wave = next_wave;
+                    Ok(WaveControl::Continue)
+                }
+            }));
+            Some(match root_postprocess {
+                Ok(Ok(control)) => control,
+                Ok(Err(error)) => WaveControl::Fail(error.to_string()),
+                Err(_) => world.abort(75),
+            })
+        } else {
+            None
+        };
+
+        match hataori::broadcast(world, root, root_control)
+            .map_err(|source| PartitionedTTError::HataoriMpiPlacement { source })?
+        {
+            WaveControl::Continue => continue,
+            WaveControl::Stop if rank == root => {
+                return Ok(Some(root_result.unwrap_or_else(|| world.abort(76))));
+            }
+            WaveControl::Stop => return Ok(None),
+            WaveControl::Fail(message) => {
+                return Err(PartitionedTTError::DistributedAdaptiveInterpolation(
+                    message,
+                ));
+            }
+        }
+    }
+}
+
+fn assemble_result<T>(
+    mut accepted: Vec<AcceptedPatch<T>>,
+    site_indices: &[DynIndex],
+    patch_order: &[DynIndex],
+) -> Result<AdaptiveInterpolationResult<T>>
+where
+    T: Scalar + TTScalar + TensorElement + StorageScalar + Default + Copy,
+{
+    accepted.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut subdomains = Vec::with_capacity(accepted.len());
+    let mut patch_caches = Vec::with_capacity(accepted.len());
+    for patch in accepted {
+        let projector = projector_from_path(patch_order, &patch.path)?;
+        let tt = match patch.data {
+            AcceptedData::Scalar(value) => rank_one_full_tt(site_indices, &projector, value)?,
+            AcceptedData::Active(active_tt) => {
+                let (active_tree, _) = tensor_train_to_treetn(&active_tt).map_err(|error| {
+                    PartitionedTTError::tensor_train_operation(error.to_string())
+                })?;
+                embed_active_tt::<T>(
+                    active_tree,
+                    site_indices,
+                    patch.cache.active_positions(),
+                    &projector,
+                )?
+            }
+        };
+        subdomains.push(SubDomainTT::new(tt, projector)?);
+        patch_caches.push(patch.cache);
+    }
+    let partitioned_tt = PartitionedTT::from_subdomains(subdomains)?;
+    Ok(AdaptiveInterpolationResult {
+        partitioned_tt,
+        patch_caches,
+    })
+}
+
+fn process_patch<T, F, B>(
+    patch: PendingPatch<T>,
+    f: &F,
+    batched_f: Option<&B>,
+    site_indices: &[DynIndex],
+    initial_pivots: &[MultiIndex],
+    patch_order: &[DynIndex],
+    options: &AdaptiveInterpolateOptions,
+) -> Result<PatchOutcome<T>>
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+{
+    let projector = projector_from_path(patch_order, &patch.path)?;
+    let active_positions = active_positions(site_indices, &projector);
+    let evaluator = PatchEvaluator::new(
+        f,
+        batched_f,
+        &active_positions,
+        &projector,
+        site_indices,
+        patch.cache,
+    )?;
+
+    if active_positions.is_empty() {
+        let value = evaluator.eval(&Vec::new());
+        let cache = evaluator.into_cache();
+        return Ok(accepted_outcome(
+            patch.path,
+            projector,
+            active_positions,
+            AcceptedData::Scalar(value),
+            cache,
+        ));
+    }
+
+    if active_positions.len() == 1 {
+        let dim = site_indices[active_positions[0]].dim;
+        let data = (0..dim).map(|value| evaluator.eval(&vec![value])).collect();
+        let core = tensor3_from_data(data, 1, dim, 1)
+            .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
+        let exact = SimpleTensorTrain::new(vec![core])
+            .map_err(|error| PartitionedTTError::tensor_train_operation(error.to_string()))?;
+        let cache = evaluator.into_cache();
+        return Ok(accepted_outcome(
+            patch.path,
+            projector,
+            active_positions,
+            AcceptedData::Active(exact),
+            cache,
+        ));
+    }
+
+    let seed = patch_seed(options.tci_options.seed.unwrap_or(0), &patch.path);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let candidate_pivots = patch_candidates(
+        site_indices,
+        &active_positions,
+        &projector,
+        initial_pivots,
+        &patch.recycled_pivots,
+        options.n_initial_pivots,
+        &mut rng,
+    )?;
+    let candidate_values = evaluator.eval_many(&candidate_pivots);
+    if let Some(error) = evaluator.take_error() {
+        return Err(error);
+    }
+
+    if candidate_values
+        .iter()
+        .all(|value| Scalar::abs_val(*value) < ZERO_SAMPLE_THRESHOLD)
+    {
+        let cache = evaluator.into_cache();
+        return Ok(accepted_outcome(
+            patch.path,
+            projector,
+            active_positions,
+            AcceptedData::Scalar(T::zero()),
+            cache,
+        ));
+    }
+
+    let local_dims = active_positions
+        .iter()
+        .map(|&position| site_indices[position].dim)
+        .collect();
+    let local_f = |pivot: &MultiIndex| evaluator.eval(pivot);
+    let local_batch = batched_f.map(|_| |pivots: &[MultiIndex]| evaluator.eval_many(pivots));
+    let mut tci_options = options.tci_options.clone();
+    tci_options.seed = Some(splitmix64(seed));
+    let tci_result = crossinterpolate2(
+        local_f,
+        local_batch,
+        local_dims,
+        candidate_pivots,
+        tci_options,
+    );
+    if let Some(error) = evaluator.take_error() {
+        return Err(error);
+    }
+    let TCI2OptimizationResult {
+        tci,
+        errors,
+        termination,
+        ..
+    } = tci_result?;
+    let normalization = if options.tci_options.normalize_error && tci.max_sample_value() > 0.0 {
+        tci.max_sample_value()
+    } else {
+        1.0
+    };
+    let final_error = errors
+        .last()
+        .copied()
+        .unwrap_or_else(|| tci.max_bond_error() / normalization);
+
+    if patch_is_accepted(termination, final_error, options.tci_options.tolerance) {
+        let simple_tt = tci.to_tensor_train()?;
+        let cache = evaluator.into_cache();
+        return Ok(accepted_outcome(
+            patch.path,
+            projector,
+            active_positions,
+            AcceptedData::Active(simple_tt),
+            cache,
+        ));
+    }
+
+    let split_index = patch_order.get(patch.path.len()).ok_or_else(|| {
+        PartitionedTTError::InvalidAdaptiveInterpolationInput(
+            "a nonconverged patch has no remaining split index".to_string(),
+        )
+    })?;
+    let split_site_position = site_indices
+        .iter()
+        .position(|index| index == split_index)
+        .ok_or_else(|| {
+            PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "split index is absent from site_indices".to_string(),
+            )
+        })?;
+    let split_active_position = active_positions
+        .iter()
+        .position(|&position| position == split_site_position)
+        .ok_or_else(|| {
+            PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "split index is not active in its parent patch".to_string(),
+            )
+        })?;
+    let recycled_pivots = if options.recycle_pivots {
+        global_diagonal_pivots(&tci, &active_positions, &projector, site_indices)
+    } else {
+        Vec::new()
+    };
+    let child_caches = evaluator
+        .into_cache()
+        .split(split_active_position, split_index.dim)?;
+    let mut children = Vec::with_capacity(split_index.dim);
+    for (value, cache) in child_caches.into_iter().enumerate() {
+        let mut path = patch.path.clone();
+        path.push(value);
+        children.push(PendingPatch {
+            path,
+            recycled_pivots: recycled_pivots.clone(),
+            cache,
+        });
+    }
+    Ok(PatchOutcome::Split(children))
+}
+
+fn accepted_outcome<T: TTScalar>(
+    path: Vec<usize>,
+    projector: Projector,
+    active_positions: Vec<usize>,
+    data: AcceptedData<T>,
+    cache: PatchCache<T>,
+) -> PatchOutcome<T> {
+    PatchOutcome::Accepted(AcceptedPatch {
+        path,
+        data,
+        cache: AcceptedPatchCache {
+            projector,
+            active_positions,
+            cache,
+        },
+    })
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+fn patch_outcome_to_wire<T>(outcome: PatchOutcome<T>) -> WirePatchOutcome<T>
+where
+    T: TTScalar + Copy,
+{
+    match outcome {
+        PatchOutcome::Split(children) => WirePatchOutcome::Split(children),
+        PatchOutcome::Accepted(patch) => {
+            let data = match patch.data {
+                AcceptedData::Scalar(value) => WireAcceptedData::Scalar(value),
+                AcceptedData::Active(tt) => WireAcceptedData::Active(
+                    tt.into_site_tensors()
+                        .into_iter()
+                        .map(|core| WireCore {
+                            dims: [core.left_dim(), core.site_dim(), core.right_dim()],
+                            data: core.to_col_major_vec(),
+                        })
+                        .collect(),
+                ),
+            };
+            WirePatchOutcome::Accepted(WireAcceptedPatch {
+                path: patch.path,
+                active_positions: patch.cache.active_positions,
+                cache: patch.cache.cache,
+                data,
+            })
+        }
+    }
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+fn patch_outcome_from_wire<T>(
+    outcome: WirePatchOutcome<T>,
+    site_indices: &[DynIndex],
+    patch_order: &[DynIndex],
+) -> Result<PatchOutcome<T>>
+where
+    T: TTScalar + Copy,
+{
+    match outcome {
+        WirePatchOutcome::Split(children) => Ok(PatchOutcome::Split(children)),
+        WirePatchOutcome::Accepted(patch) => {
+            let projector = projector_from_path(patch_order, &patch.path)?;
+            let expected_active = active_positions(site_indices, &projector);
+            let expected_dims: Vec<_> = expected_active
+                .iter()
+                .map(|&position| site_indices[position].dim)
+                .collect();
+            if patch.active_positions != expected_active || patch.cache.active_dims != expected_dims
+            {
+                return Err(PartitionedTTError::DistributedAdaptiveInterpolation(
+                    "wire accepted cache metadata does not match its patch path".to_string(),
+                ));
+            }
+            let data = match patch.data {
+                WireAcceptedData::Scalar(value) => AcceptedData::Scalar(value),
+                WireAcceptedData::Active(wire_cores) => {
+                    if wire_cores.len() != expected_dims.len() {
+                        return Err(PartitionedTTError::DistributedAdaptiveInterpolation(
+                            format!(
+                                "wire TT has {} cores for {} active sites",
+                                wire_cores.len(),
+                                expected_dims.len()
+                            ),
+                        ));
+                    }
+                    let mut cores = Vec::with_capacity(wire_cores.len());
+                    for (site, core) in wire_cores.into_iter().enumerate() {
+                        if core.dims[1] != expected_dims[site] {
+                            return Err(PartitionedTTError::DistributedAdaptiveInterpolation(
+                                format!(
+                                    "wire TT core {site} has site dimension {} but patch requires {}",
+                                    core.dims[1], expected_dims[site]
+                                ),
+                            ));
+                        }
+                        let expected = core.dims.iter().try_fold(1usize, |count, &dim| {
+                            count.checked_mul(dim).ok_or_else(|| {
+                                PartitionedTTError::DistributedAdaptiveInterpolation(
+                                    "wire TT core shape product exceeds usize".to_string(),
+                                )
+                            })
+                        })?;
+                        if core.data.len() != expected {
+                            return Err(
+                                PartitionedTTError::DistributedAdaptiveInterpolation(format!(
+                                    "wire TT core has {} values for shape {:?} requiring {expected}",
+                                    core.data.len(),
+                                    core.dims
+                                )),
+                            );
+                        }
+                        cores.push(
+                            tensor3_from_data(core.data, core.dims[0], core.dims[1], core.dims[2])
+                                .map_err(|error| {
+                                    PartitionedTTError::tensor_train_operation(error.to_string())
+                                })?,
+                        );
+                    }
+                    AcceptedData::Active(SimpleTensorTrain::new(cores).map_err(|error| {
+                        PartitionedTTError::tensor_train_operation(error.to_string())
+                    })?)
+                }
+            };
+            Ok(PatchOutcome::Accepted(AcceptedPatch {
+                path: patch.path,
+                data,
+                cache: AcceptedPatchCache {
+                    projector,
+                    active_positions: patch.active_positions,
+                    cache: patch.cache,
+                },
+            }))
+        }
+    }
+}
+
+fn projector_from_path(patch_order: &[DynIndex], path: &[usize]) -> Result<Projector> {
+    if path.len() > patch_order.len() {
+        return Err(PartitionedTTError::InvalidAdaptiveInterpolationInput(
+            "patch path is deeper than patch_order".to_string(),
+        ));
+    }
+    let mut projector = Projector::new();
+    for (index, &value) in patch_order.iter().zip(path) {
+        if value >= index.dim {
+            return Err(PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "patch path coordinate is outside its site dimension".to_string(),
+            ));
+        }
+        projector.insert(index.clone(), value)?;
+    }
+    Ok(projector)
+}
+
+// Stable SplitMix64 derivation; changing these constants changes reproducible patch candidates.
+fn patch_seed(root_seed: u64, path: &[usize]) -> u64 {
+    path.iter().enumerate().fold(
+        splitmix64(root_seed ^ 0x6a09_e667_f3bc_c909),
+        |state, (depth, &value)| splitmix64(state ^ (depth as u64).rotate_left(32) ^ value as u64),
+    )
+}
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 fn validate_inputs(
