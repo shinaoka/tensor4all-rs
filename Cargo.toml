@@ -64,6 +64,7 @@ num-complex = "0.4"
 num-traits = "0.2"
 anyhow = "1.0"
 approx = "0.5"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 criterion = "0.5"
 bnum = "0.12"
@@ -75,6 +76,8 @@ thiserror = "2.0"
 rand = "0.9"
 rand_chacha = "0.9"
 rand_distr = "0.5"
+rayon = "1.10"
+mpi = { version = "=0.8.1", default-features = false }
 petgraph = "0.7"
 dyn-clone = "1.0"
 omeco = "0.2.1"
@@ -82,6 +85,7 @@ hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
+hataori = { git = "https://github.com/shinaoka/hataori-rs.git", rev = "59d0ccd6b403e285b7e716a8ae6d12d851da13b1", default-features = false }
 tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }
 tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }
 tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a21a4c602fc6700b9bc0c3f1b14ebd19b9d7ec45", default-features = false }

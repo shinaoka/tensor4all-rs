@@ -18,6 +18,7 @@
 | Document | Description |
 |----------|-------------|
 | [adaptive-tci-interpolation.md](./adaptive-tci-interpolation.md) | Adaptive TCI patching, convergence, pivot recycling, and structured embedding |
+| [adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md) | Optional Hataori/Rayon/MPI patch scheduling and one-pass cache projection |
 | [partitionedtt-projector-invariants.md](./partitionedtt-projector-invariants.md) | Issue #634 design for coherent projector identity, validation, and transactional PartitionedTT mutation |
 | [partitioned-treetn.md](./partitioned-treetn.md) | Issue #648 migration design for TreeTN-native eager partitioning and adaptive patching |
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
