@@ -6,14 +6,25 @@
 //! `chi^z` cost apart from avoidable repeated work at a branch hub. See
 //! `docs/superpowers/specs/2026-08-24-treeaci-branch-diagnostics-design.md`.
 //!
-//! One thread-local registry, reset at the start of a call and read back via
-//! `snapshot()` at the end. Not a cross-call or cross-thread store.
+//! One thread-local registry. Callers explicitly reset it at the start of a
+//! diagnostics window and read it back via `snapshot()` at the end. It is not
+//! a cross-call or cross-thread store.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Duration;
 
 /// Per-node branch-point timing and cache statistics.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::diagnostics::NodeDiagnostics;
+///
+/// let record = NodeDiagnostics::default();
+/// assert_eq!(record.guard_cache_hits, 0);
+/// assert!(record.bond_dims.is_empty());
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct NodeDiagnostics {
     /// The registry key for this node. TreeACI's frame records use
@@ -58,6 +69,18 @@ thread_local! {
 }
 
 /// Clear the thread-local diagnostics registry.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot};
+///
+/// record_guard("hub", 1, &[2], Duration::from_nanos(1), 1, 0);
+/// assert_eq!(snapshot().len(), 1);
+/// reset();
+/// assert!(snapshot().is_empty());
+/// ```
 pub fn reset() {
     REGISTRY.with(|registry| registry.borrow_mut().clear());
 }
@@ -67,6 +90,20 @@ pub fn reset() {
 /// The returned `Vec`'s order is not guaranteed to be stable across calls:
 /// it reflects `HashMap` iteration order. A caller that needs deterministic
 /// output should sort the result (for example by `node`).
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot};
+///
+/// reset();
+/// record_guard("hub", 2, &[3, 4], Duration::from_nanos(5), 2, 1);
+/// let records = snapshot();
+/// assert_eq!(records.len(), 1);
+/// assert_eq!(records[0].node, "hub");
+/// assert_eq!(records[0].guard_cache_hits, 2);
+/// ```
 pub fn snapshot() -> Vec<NodeDiagnostics> {
     REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
 }
@@ -92,6 +129,20 @@ fn with_entry(
 }
 
 /// Record a Guard message computation and its cache hit/miss counts.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot};
+///
+/// reset();
+/// record_guard("hub", 3, &[2, 2, 2], Duration::from_nanos(10), 4, 1);
+/// let record = &snapshot()[0];
+/// assert_eq!(record.coordination_number, 3);
+/// assert_eq!(record.guard_cache_hits, 4);
+/// assert_eq!(record.guard_cache_misses, 1);
+/// ```
 ///
 /// # Known limitation
 ///
@@ -121,6 +172,20 @@ pub fn record_guard(
 
 /// Record a TreeACI candidate-frame computation and its cache hit/miss
 /// counts. The `node` key is namespaced by the operand index (`input`).
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use tensor4all_treetn::diagnostics::{record_frame, reset, snapshot};
+///
+/// reset();
+/// record_frame("0:hub", 3, &[2, 2, 2], Duration::from_nanos(20), 5, 2);
+/// let record = &snapshot()[0];
+/// assert_eq!(record.node, "0:hub");
+/// assert_eq!(record.frame_cache_hits, 5);
+/// assert_eq!(record.frame_cache_misses, 2);
+/// ```
 pub fn record_frame(
     node: &str,
     coordination_number: usize,
@@ -139,12 +204,35 @@ pub fn record_frame(
 /// Reset the branch-vs-chain contraction-kernel counters (issue #671's
 /// scratch investigation into where the branch kernel's per-call BLAS setup
 /// cost goes; see `crate::treetn::cached_evaluator::contraction_diagnostics`).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::diagnostics::{contraction_summary, reset_contraction};
+///
+/// reset_contraction();
+/// assert!(contraction_summary().starts_with("branch:"));
+/// ```
 pub fn reset_contraction() {
     super::cached_evaluator::contraction_diagnostics::reset_all();
 }
 
 /// One human-readable line summarizing the branch-vs-chain contraction
 /// counters accumulated since the last [`reset_contraction`].
+/// The `blas_calls` field counts backend matrix-multiply dispatches; the
+/// branch `blas_groups` field counts physical-value groups processed by the
+/// branch kernel.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::diagnostics::{contraction_summary, reset_contraction};
+///
+/// reset_contraction();
+/// let summary = contraction_summary();
+/// assert!(summary.contains("branch: blas_calls=0"));
+/// assert!(summary.contains("chain: blas_calls=0"));
+/// ```
 pub fn contraction_summary() -> String {
     super::cached_evaluator::contraction_diagnostics::summary()
 }

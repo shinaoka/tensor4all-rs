@@ -8,8 +8,8 @@ entry modifies) and from the new `diagnostics`/`branch_diagnostics` feature
 ## What the new per-phase counters found
 
 `grouped_branch_message_contraction`/`grouped_chain_message_contraction`
-were instrumented with feature-gated counters splitting branch calls into
-`setup_ns` (building the `left` intermediate before the BLAS call),
+were instrumented with feature-gated counters splitting branch work into
+`setup_ns` (building the `left` intermediate before each BLAS dispatch),
 `matmul_ns`, and `accumulate_ns`, plus BLAS-vs-scalar call/point counts for
 both kernels (`contraction_diagnostics` in `cached_evaluator.rs`). A real R=10
 Comb `pi_rtau` product (T=0.01, `aci_global_guard=true`, same config as
@@ -17,17 +17,27 @@ issue #671's reproduction, replayed via gw-rs's `isolate_aci_stage` harness
 from an existing checkpoint) showed:
 
 ```
-branch: blas_calls=11392  blas_points=26049   (2.3 points/call average)
+branch: historical_kernel_calls=11392  blas_points=26049
         setup_ns=117.8s   matmul_ns=25.6s     accumulate_ns=1.25s
-chain:  blas_calls=2219   blas_points=408186  (184 points/call average)
+chain:  historical_kernel_calls=2219   blas_points=408186
         contract_ns=1.98s
 ```
+
+These archived measurements were collected before the counter-semantics
+correction below: the displayed `blas_calls` values counted one outer grouped
+kernel invocation, not one `mat_mul_owned` dispatch. The branch group count was
+available separately but was not printed in this excerpt. The current
+`blas_calls` counters count each actual matrix-multiply dispatch, so the old
+call-rate ratios are retained only as historical timing context and must not
+be compared directly with current dispatch counts.
 
 `setup_ns` -- the scalar triple-nested loop building the `left` intermediate
 matrix, independent of how many points share the group -- is 81% of the
 branch kernel's own time, and larger than the entire chain kernel's total
-time for the same call. Branch's average of 2.3 points per BLAS call (vs
-chain's 184) means this fixed setup cost is essentially never amortized.
+time for the same call. In the archived outer-kernel accounting, branch
+processed 2.3 points per recorded kernel invocation (vs chain's 184); this
+still shows that the fixed setup cost was poorly amortized in the measured
+workload, but it is not a per-dispatch statistic.
 
 ## Two follow-up questions, and why the answer wasn't "add a min-group gate"
 
@@ -145,10 +155,10 @@ above is a different, already-known rejection). None found in this branch's
 worklogs or git history for the memory-access-pattern angle specifically.
 
 Rather than guessing which of `child_axis_1`/`child_axis_2` to add a fast
-path for, added scratch counters (`BRANCH_FAST_AXIS_IS_{PARENT,CHILD1,CHILD2,PHYSICAL}`,
-not wired into `summary()`'s stable output) tallying which axis is actually
-stride-1 once per BLAS call, and re-ran the same checkpoint. Result, out of
-11392 branch BLAS calls: `parent=3986` (35%, already covered),
+path for, added counters (`BRANCH_FAST_AXIS_IS_{PARENT,CHILD1,CHILD2,PHYSICAL}`)
+to the summary. In the archived implementation these counters were updated
+once per outer grouped-kernel invocation; the archived
+run reported 11392 such invocations: `parent=3986` (35%, already covered),
 `child1=0` (never), `child2=5824` (51%, uncovered), `physical=1582` (14%, no
 axis available to help). `child_axis_2`, not `parent_axis`, is the single
 most common fast axis -- and `child_axis_1` needs no fast path at all.

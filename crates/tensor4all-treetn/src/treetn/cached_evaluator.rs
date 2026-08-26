@@ -54,13 +54,13 @@ pub(crate) mod contraction_diagnostics {
     pub static BRANCH_SCALAR_CALLS: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_SCALAR_POINTS: AtomicU64 = AtomicU64::new(0);
 
-    /// Scratch counters (not wired into [`summary`]) for whether the
+    /// Scratch counters included in [`summary`] for whether the
     /// contiguous-read fast path's `parent_axis == raw's fastest axis`
     /// condition is the common case among calls that reach the BLAS path, or
     /// whether `child_axis_1`/`child_axis_2` land there instead -- deciding
     /// whether generalizing the fast path to those two axes is worth the
-    /// added complexity. One increment per BLAS call (not per group; the
-    /// axis assignment is the same for every group in a call).
+    /// added complexity. One increment per BLAS dispatch; the axis assignment
+    /// is the same for every group in a kernel invocation.
     pub static BRANCH_FAST_AXIS_IS_PARENT: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_FAST_AXIS_IS_CHILD1: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_FAST_AXIS_IS_CHILD2: AtomicU64 = AtomicU64::new(0);
@@ -309,7 +309,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     fn new(
         tree: &TreeTN<IdxTensor, V>,
@@ -1012,7 +1012,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     /// # Examples
     ///
@@ -1587,10 +1587,7 @@ where
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
-        {
-            contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_CALLS, 1);
-            contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_POINTS, point_count);
-        }
+        contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_POINTS, point_count);
 
         let matrix_len = parent_dim
             .checked_mul(child_dim)
@@ -1639,6 +1636,8 @@ where
                 })?);
             }
 
+            #[cfg(feature = "diagnostics")]
+            contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_CALLS, 1);
             let product = mat_mul_owned(
                 Matrix::from_col_major_vec(parent_dim, child_dim, left),
                 Matrix::from_col_major_vec(child_dim, points.len(), right),
@@ -1760,23 +1759,22 @@ where
             groups.entry(physical_value).or_default().push(point);
         }
         #[cfg(feature = "diagnostics")]
+        let fast_axis_counter = if strides[parent_axis] == 1 {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_PARENT
+        } else if strides[child_axis_1] == 1 {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_CHILD1
+        } else if strides[child_axis_2] == 1 {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_CHILD2
+        } else {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_PHYSICAL
+        };
+        #[cfg(feature = "diagnostics")]
         {
-            contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_CALLS, 1);
             contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_POINTS, point_count);
             contraction_diagnostics::inc(
                 &contraction_diagnostics::BRANCH_BLAS_GROUPS,
                 groups.len(),
             );
-            let fast_axis_counter = if strides[parent_axis] == 1 {
-                &contraction_diagnostics::BRANCH_FAST_AXIS_IS_PARENT
-            } else if strides[child_axis_1] == 1 {
-                &contraction_diagnostics::BRANCH_FAST_AXIS_IS_CHILD1
-            } else if strides[child_axis_2] == 1 {
-                &contraction_diagnostics::BRANCH_FAST_AXIS_IS_CHILD2
-            } else {
-                &contraction_diagnostics::BRANCH_FAST_AXIS_IS_PHYSICAL
-            };
-            contraction_diagnostics::inc(fast_axis_counter, 1);
         }
 
         let mut output = vec![T::default(); point_count * parent_dim];
@@ -1881,6 +1879,11 @@ where
             }
             #[cfg(feature = "diagnostics")]
             let matmul_start = std::time::Instant::now();
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_CALLS, 1);
+                contraction_diagnostics::inc(fast_axis_counter, 1);
+            }
             let intermediate = mat_mul_owned(
                 Matrix::from_col_major_vec(parent_dim * child_dim_2, child_dim_1, left),
                 Matrix::from_col_major_vec(child_dim_1, points.len(), right),
@@ -4902,6 +4905,82 @@ mod tests {
             .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6));
     }
 
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn grouped_branch_contraction_counts_one_blas_dispatch_per_physical_group() {
+        use std::sync::atomic::Ordering;
+
+        let parent_dim = 8;
+        let child_dim_1 = 8;
+        let child_dim_2 = 8;
+        let point_count = 16;
+        let spec = BranchContractionSpec {
+            strides: [1, 2, 2 * parent_dim, 2 * parent_dim * child_dim_1],
+            physical_axis: 0,
+            parent_axis: 1,
+            child_axis_1: 2,
+            child_axis_2: 3,
+            parent_dim,
+            child_dim_1,
+            child_dim_2,
+        };
+        let raw: Vec<f64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
+            .map(|value| value as f64)
+            .collect();
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
+        let child1_columns = vec![1.0_f64; point_count * child_dim_1];
+        let child2_columns = vec![1.0_f64; point_count * child_dim_2];
+
+        contraction_diagnostics::reset_all();
+        TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+
+        assert_eq!(
+            contraction_diagnostics::BRANCH_BLAS_CALLS.load(Ordering::Relaxed),
+            2,
+            "each physical-value group dispatches one matrix multiplication"
+        );
+        assert_eq!(
+            contraction_diagnostics::BRANCH_BLAS_GROUPS.load(Ordering::Relaxed),
+            2,
+            "the dispatch count should agree with the group count"
+        );
+
+        let chain_parent_dim = 64;
+        let chain_child_dim = 64;
+        let chain_spec = ChainContractionSpec {
+            strides: [1, 2, 2 * chain_parent_dim],
+            physical_axis: 0,
+            parent_axis: 1,
+            child_axis: 2,
+            parent_dim: chain_parent_dim,
+            child_dim: chain_child_dim,
+        };
+        let chain_raw = vec![1.0_f64; 2 * chain_parent_dim * chain_child_dim];
+        let chain_child_columns = vec![1.0_f64; point_count * chain_child_dim];
+
+        contraction_diagnostics::reset_all();
+        TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
+            chain_spec,
+            &chain_raw,
+            &physical_values,
+            &chain_child_columns,
+        )
+        .unwrap();
+
+        assert_eq!(
+            contraction_diagnostics::CHAIN_BLAS_CALLS.load(Ordering::Relaxed),
+            2,
+            "each physical-value group dispatches one chain matrix multiplication"
+        );
+    }
+
     /// Same shape as `grouped_branch_contraction_large_real_groups_match_scalar_reference`,
     /// but with `parent_axis` mapped to `raw`'s stride-1 (fastest) position
     /// instead of `physical_axis` -- the contiguous-read fast path added
@@ -5078,6 +5157,90 @@ mod tests {
             .iter()
             .zip(expected)
             .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-6));
+    }
+
+    #[test]
+    fn grouped_branch_contiguous_read_fast_paths_match_complex_reference() {
+        let parent_dim = 8;
+        let child_dim_1 = 8;
+        let child_dim_2 = 8;
+        let physical_dim = 2;
+        let point_count = 16;
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
+        let child1_columns: Vec<Complex64> = (0..point_count * child_dim_1)
+            .map(|value| Complex64::new((value % 13) as f64 - 6.0, (value % 7) as f64 - 3.0))
+            .collect();
+        let child2_columns: Vec<Complex64> = (0..point_count * child_dim_2)
+            .map(|value| Complex64::new((value % 11) as f64 - 5.0, (value % 9) as f64 - 4.0))
+            .collect();
+
+        let check = |spec, raw: Vec<Complex64>| {
+            let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+                spec,
+                &raw,
+                &physical_values,
+                &child1_columns,
+                &child2_columns,
+            )
+            .unwrap();
+            let expected = scalar_branch_message_contraction(
+                spec,
+                &raw,
+                &physical_values,
+                &child1_columns,
+                &child2_columns,
+            )
+            .unwrap();
+
+            assert!(actual
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-6));
+        };
+
+        // The parent-axis contiguous read path.
+        check(
+            BranchContractionSpec {
+                strides: [
+                    1,
+                    parent_dim,
+                    parent_dim * physical_dim,
+                    parent_dim * physical_dim * child_dim_1,
+                ],
+                parent_axis: 0,
+                physical_axis: 1,
+                child_axis_1: 2,
+                child_axis_2: 3,
+                parent_dim,
+                child_dim_1,
+                child_dim_2,
+            },
+            (0..parent_dim * physical_dim * child_dim_1 * child_dim_2)
+                .map(|value| Complex64::new((value % 19) as f64 - 9.0, (value % 11) as f64 - 5.0))
+                .collect(),
+        );
+
+        // The child-2 contiguous read and scatter-write path.
+        check(
+            BranchContractionSpec {
+                strides: [
+                    1,
+                    child_dim_2,
+                    child_dim_2 * physical_dim,
+                    child_dim_2 * physical_dim * parent_dim,
+                ],
+                child_axis_2: 0,
+                physical_axis: 1,
+                parent_axis: 2,
+                child_axis_1: 3,
+                parent_dim,
+                child_dim_1,
+                child_dim_2,
+            },
+            (0..child_dim_2 * physical_dim * parent_dim * child_dim_1)
+                .map(|value| Complex64::new((value % 23) as f64 - 11.0, (value % 7) as f64 - 3.0))
+                .collect(),
+        );
     }
 
     fn scalar_grouped_chain_reference<
