@@ -5,10 +5,19 @@
 //! - Contracting TreeTN to tensor (`contract_to_tensor`)
 //! - Zip-up contraction (`contract_zipup`)
 //! - Naive contraction (`contract_naive`)
+//! - Successive randomized compression (`contract` with `ContractionMethod::Src`)
 //! - Validation (`validate_ortho_consistency`)
+//!
+//! The SRC implementation follows the algorithm and Appendix C estimator in
+//! C. Camaño, E. N. Epperly, and J. A. Tropp, "Successive randomized
+//! compression: A randomized algorithm for the compressed MPO-MPS product",
+//! [arXiv:2504.06475](https://arxiv.org/abs/2504.06475). It is an independent
+//! implementation; the RandomMPOMPS repository was consulted only for
+//! conventions and numerical validation, not translated into this crate.
 
 use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
+use rand::{Rng, SeedableRng};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -16,8 +25,8 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    validate_svd_truncation_options, Canonical, FactorizeAlg, FactorizeOptions, IndexLike,
-    SvdTruncationPolicy, TensorIndex, TensorLike,
+    validate_svd_truncation_options, AnyScalar, Canonical, FactorizeAlg, FactorizeOptions,
+    IndexLike, SvdTruncationPolicy, TensorIndex, TensorLike,
 };
 
 use super::TreeTN;
@@ -26,6 +35,344 @@ use super::TreeTN;
 enum ZipupTopologyMode {
     PruneScalarSubtrees,
     PreserveInputTopology,
+}
+
+fn src_probe_count(target_rank: usize, right_dim: usize, final_svd: bool) -> usize {
+    if !final_svd {
+        return target_rank.min(right_dim);
+    }
+    let oversampled = target_rank
+        .saturating_mul(3)
+        .div_ceil(2)
+        .max(target_rank.saturating_add(10));
+    oversampled.min(right_dim)
+}
+
+fn src_standard_normal<R: Rng>(rng: &mut R) -> f64 {
+    let u1 = rng.random::<f64>().max(f64::MIN_POSITIVE);
+    let u2 = rng.random::<f64>();
+    (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+}
+
+fn src_random_vector<T, R>(index: &T::Index, rng: &mut R) -> Result<T>
+where
+    T: TensorLike,
+    R: Rng,
+{
+    let mut vector: Option<T> = None;
+    for position in 0..index.dim() {
+        let basis = T::onehot(&[(index.clone(), position)])
+            .map_err(|error| anyhow::anyhow!("SRC probe one-hot construction failed: {error}"))?;
+        let scaled = basis
+            .scale(AnyScalar::new_real(src_standard_normal(rng)))
+            .map_err(|error| anyhow::anyhow!("SRC probe scaling failed: {error}"))?;
+        vector = Some(match vector {
+            Some(current) => current
+                .axpby(AnyScalar::new_real(1.0), &scaled, AnyScalar::new_real(1.0))
+                .map_err(|error| anyhow::anyhow!("SRC probe accumulation failed: {error}"))?,
+            None => scaled,
+        });
+    }
+    vector.ok_or_else(|| anyhow::anyhow!("SRC probe index has zero dimension"))
+}
+
+fn src_output_index_map<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+) -> Result<HashMap<V, Vec<T::Index>>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    <T::Index as IndexLike>::Id: Ord,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut nodes = tn_a.node_names();
+    nodes.sort();
+    let mut result = HashMap::with_capacity(nodes.len());
+    for node in nodes {
+        let mut site_indices = HashSet::new();
+        if let Some(indices) = tn_a.site_index_network().site_space(&node) {
+            site_indices.extend(indices.iter().cloned());
+        }
+        if let Some(indices) = tn_b.site_index_network().site_space(&node) {
+            site_indices.extend(indices.iter().cloned());
+        }
+
+        let node_a = tn_a
+            .node_index(&node)
+            .ok_or_else(|| anyhow::anyhow!("SRC output-index map is missing node in A"))?;
+        let tensor_a = tn_a
+            .tensor(node_a)
+            .ok_or_else(|| anyhow::anyhow!("SRC output-index map is missing tensor in A"))?;
+        let node_b = tn_b
+            .node_index(&node)
+            .ok_or_else(|| anyhow::anyhow!("SRC output-index map is missing node in B"))?;
+        let tensor_b = tn_b
+            .tensor(node_b)
+            .ok_or_else(|| anyhow::anyhow!("SRC output-index map is missing tensor in B"))?;
+        // Determine surviving site legs from the two operand boundaries
+        // without forming their local MPO-MPO product. This is both a cheaper
+        // classification pass and an important part of the factorized-probe
+        // contract: the production path must probe operand legs before any
+        // contraction that could create a physical-product axis.
+        let external_a = tensor_a.external_indices();
+        let external_b = tensor_b.external_indices();
+        let mut outputs = external_a
+            .iter()
+            .filter(|index| {
+                site_indices.contains(*index)
+                    && !external_b.iter().any(|other| index.is_contractable(other))
+            })
+            .chain(external_b.iter().filter(|index| {
+                site_indices.contains(*index)
+                    && !external_a.iter().any(|other| index.is_contractable(other))
+            }))
+            .cloned()
+            .collect::<Vec<_>>();
+        tensor4all_core::sort_indices_deterministic(&mut outputs);
+        result.insert(node, outputs);
+    }
+    Ok(result)
+}
+
+fn src_environment_local<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    node: &V,
+    excluded_neighbor: &V,
+    incoming: &HashMap<(V, V), T>,
+    probes: &HashMap<T::Index, T>,
+    output_indices: &HashMap<V, Vec<T::Index>>,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let node_a = tn_a
+        .node_index(node)
+        .ok_or_else(|| anyhow::anyhow!("SRC environment node is missing in A"))?;
+    let node_b = tn_b
+        .node_index(node)
+        .ok_or_else(|| anyhow::anyhow!("SRC environment node is missing in B"))?;
+    let tensor_a = tn_a
+        .tensor(node_a)
+        .ok_or_else(|| anyhow::anyhow!("SRC environment tensor is missing in A"))?;
+    let tensor_b = tn_b
+        .tensor(node_b)
+        .ok_or_else(|| anyhow::anyhow!("SRC environment tensor is missing in B"))?;
+
+    // Probe each surviving physical leg before contracting the two operands.
+    // For MPO-MPO products this preserves the factorized Khatri-Rao probe and
+    // avoids materializing a local product with both physical legs present.
+    let mut probed_a = tensor_a.clone();
+    let mut probed_b = tensor_b.clone();
+    for index in output_indices.get(node).into_iter().flatten() {
+        let probe = probes
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("SRC probe is missing for output index {:?}", index))?;
+        let conjugated_probe = probe.conj();
+        if probed_a
+            .external_indices()
+            .iter()
+            .any(|candidate| candidate == index)
+        {
+            probed_a = T::contract(&[&probed_a, &conjugated_probe]).map_err(|error| {
+                anyhow::anyhow!("SRC first-operand probe contraction failed: {error}")
+            })?;
+        }
+        if probed_b
+            .external_indices()
+            .iter()
+            .any(|candidate| candidate == index)
+        {
+            probed_b = T::contract(&[&probed_b, &conjugated_probe]).map_err(|error| {
+                anyhow::anyhow!("SRC second-operand probe contraction failed: {error}")
+            })?;
+        }
+    }
+
+    let mut factors = vec![probed_a, probed_b];
+    let mut neighbors = tn_a
+        .site_index_network()
+        .neighbors(node)
+        .collect::<Vec<_>>();
+    neighbors.sort();
+    for neighbor in neighbors {
+        if &neighbor == excluded_neighbor {
+            continue;
+        }
+        let message = incoming
+            .get(&(neighbor.clone(), node.clone()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "SRC environment message is missing for directed edge {:?}->{:?}",
+                    neighbor,
+                    node
+                )
+            })?;
+        factors.push(message.clone());
+    }
+
+    let factor_refs: Vec<&T> = factors.iter().collect();
+    let local = T::contract(&factor_refs)
+        .map_err(|error| anyhow::anyhow!("SRC environment contraction failed: {error}"))?;
+    Ok(local)
+}
+
+fn src_environment_messages<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    edges: &[(V, V)],
+    probes: &HashMap<T::Index, T>,
+    output_indices: &HashMap<V, Vec<T::Index>>,
+) -> Result<HashMap<(V, V), T>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if tn_a.node_index(center).is_none() || tn_b.node_index(center).is_none() {
+        anyhow::bail!("SRC environment center node is missing");
+    }
+    let mut messages = HashMap::with_capacity(edges.len().saturating_mul(2));
+
+    // Postorder pass: child components point towards the requested center.
+    for (source, destination) in edges {
+        let message = src_environment_local(
+            tn_a,
+            tn_b,
+            source,
+            destination,
+            &messages,
+            probes,
+            output_indices,
+        )?;
+        messages.insert((source.clone(), destination.clone()), message);
+    }
+
+    // Preorder pass: the parent-side component is assembled from the messages
+    // arriving from every neighbor except the child being queried.
+    for (source, destination) in edges.iter().rev() {
+        let message = src_environment_local(
+            tn_a,
+            tn_b,
+            destination,
+            source,
+            &messages,
+            probes,
+            output_indices,
+        )?;
+        messages.insert((destination.clone(), source.clone()), message);
+    }
+    Ok(messages)
+}
+
+fn src_append_environment_column<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    edges: &[(V, V)],
+    output_indices: &HashMap<V, Vec<T::Index>>,
+    rng: &mut R,
+) -> Result<HashMap<(V, V), T>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    R: Rng,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut nodes = tn_a.node_names();
+    nodes.sort();
+    let mut probes = HashMap::new();
+    for node in nodes {
+        for index in output_indices.get(&node).into_iter().flatten() {
+            probes.insert(index.clone(), src_random_vector(index, rng)?);
+        }
+    }
+    src_environment_messages(tn_a, tn_b, center, edges, &probes, output_indices)
+}
+
+// INVARIANT: This bounded helper owns the per-pass environment state and its
+// probe generator; splitting these inputs would obscure the one-tree traversal.
+#[allow(clippy::too_many_arguments)]
+fn src_extend_environment_columns<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    edges: &[(V, V)],
+    output_indices: &HashMap<V, Vec<T::Index>>,
+    target_width: usize,
+    columns: &mut Vec<HashMap<(V, V), T>>,
+    rng: &mut R,
+) -> Result<()>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    R: Rng,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    while columns.len() < target_width {
+        columns.push(src_append_environment_column(
+            tn_a,
+            tn_b,
+            center,
+            edges,
+            output_indices,
+            rng,
+        )?);
+    }
+    Ok(())
+}
+
+fn src_sketch_from_environment<T, V>(
+    tensor: &T,
+    source: &V,
+    destination: &V,
+    environment_columns: &[HashMap<(V, V), T>],
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if environment_columns.is_empty() {
+        anyhow::bail!("SRC sketch width must be at least 1");
+    }
+    let probe_index = T::Index::new_link(environment_columns.len())
+        .map_err(|error| anyhow::anyhow!("SRC probe index construction failed: {error}"))?;
+    let mut sketch: Option<T> = None;
+    for (column, environments) in environment_columns.iter().enumerate() {
+        let environment = environments
+            .get(&(destination.clone(), source.clone()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "SRC environment is missing for directed edge {:?}->{:?}",
+                    destination,
+                    source
+                )
+            })?;
+        let sampled_column = T::contract(&[tensor, environment]).map_err(|error| {
+            anyhow::anyhow!("SRC local/environment contraction failed: {error}")
+        })?;
+        let column_onehot = T::onehot(&[(probe_index.clone(), column)])
+            .map_err(|error| anyhow::anyhow!("SRC probe-column construction failed: {error}"))?;
+        let sampled_column = sampled_column
+            .outer_product(&column_onehot)
+            .map_err(|error| anyhow::anyhow!("SRC sketch column assembly failed: {error}"))?;
+        sketch = Some(match sketch {
+            Some(current) => current
+                .axpby(
+                    AnyScalar::new_real(1.0),
+                    &sampled_column,
+                    AnyScalar::new_real(1.0),
+                )
+                .map_err(|error| anyhow::anyhow!("SRC sketch accumulation failed: {error}"))?,
+            None => sampled_column,
+        });
+    }
+    sketch.ok_or_else(|| anyhow::anyhow!("SRC sketch width must be at least 1"))
 }
 
 fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
@@ -379,6 +726,259 @@ where
             max_bond_dim,
             ZipupTopologyMode::PreserveInputTopology,
         )
+    }
+
+    fn contract_src_fixed(
+        &self,
+        other: &Self,
+        center: &V,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: usize,
+        src_options: &SrcOptions,
+    ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        if !self.same_topology(other) {
+            anyhow::bail!("contract_src: networks have incompatible topologies");
+        }
+        if self.node_count() == 0 {
+            anyhow::bail!("contract_src: empty TreeTN");
+        }
+
+        let tn_a = self.sim_internal_inds();
+        let tn_b = other.sim_internal_inds();
+        let edges = tn_a
+            .edges_to_canonicalize_by_names(center)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: center node {:?} not found", center))?;
+        let output_indices = src_output_index_map(&tn_a, &tn_b)?;
+        let mut intermediate_tensors: HashMap<V, Vec<T>> = HashMap::new();
+        let mut result_tensors: HashMap<V, T> = HashMap::new();
+
+        let get_bond_index = |tn: &TreeTN<T, V>, source: &V, destination: &V| -> Result<T::Index> {
+            let edge = tn
+                .edge_between(source, destination)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: edge is missing"))?;
+            tn.bond_index(edge)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("contract_src: edge bond is missing"))
+        };
+
+        for (source_name, destination_name) in &edges {
+            let node_a = tn_a
+                .node_index(source_name)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: source node is missing in A"))?;
+            let node_b = tn_b
+                .node_index(source_name)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: source node is missing in B"))?;
+            let tensor_a = tn_a
+                .tensor(node_a)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: source tensor is missing in A"))?;
+            let tensor_b = tn_b
+                .tensor(node_b)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: source tensor is missing in B"))?;
+
+            let mut tensors = intermediate_tensors.remove(source_name).unwrap_or_default();
+            tensors.push(tensor_a.clone());
+            tensors.push(tensor_b.clone());
+            let tensor_refs: Vec<&T> = tensors.iter().collect();
+            let local = T::contract(&tensor_refs).map_err(|error| {
+                anyhow::anyhow!("contract_src: local contraction failed: {error}")
+            })?;
+
+            let bond_a = get_bond_index(&tn_a, source_name, destination_name)?;
+            let bond_b = get_bond_index(&tn_b, source_name, destination_name)?;
+            let left_inds = local
+                .external_indices()
+                .into_iter()
+                .filter(|index| index != &bond_a && index != &bond_b)
+                .collect::<Vec<_>>();
+            if left_inds.is_empty() {
+                // Keep scalar-only subtrees visible in the result. The
+                // dimension-one bridge becomes a regular child bond at the
+                // destination and is removed from the dense value only when
+                // that destination is finalized.
+                let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+                let source_tensor = T::ones(std::slice::from_ref(&dummy_left))
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "contract_src: scalar-subtree source bridge construction failed: {error}"
+                        )
+                    })?;
+                let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right)).map_err(
+                    |error| {
+                        anyhow::anyhow!(
+                            "contract_src: scalar-subtree destination bridge construction failed: {error}"
+                        )
+                    },
+                )?;
+                let projected = local.outer_product(&dummy_right_tensor).map_err(|error| {
+                    anyhow::anyhow!(
+                        "contract_src: scalar-subtree bridge attachment failed: {error}"
+                    )
+                })?;
+                result_tensors.insert(source_name.clone(), source_tensor);
+                intermediate_tensors
+                    .entry(destination_name.clone())
+                    .or_default()
+                    .push(projected);
+                continue;
+            }
+
+            let right_dim = bond_a.dim().checked_mul(bond_b.dim()).ok_or_else(|| {
+                anyhow::anyhow!("contract_src: parent bond product dimension overflow")
+            })?;
+            let adaptive_max_rank = src_options.max_rank.unwrap_or(max_bond_dim);
+            let mut requested_rank = if src_options.rtol.is_some() {
+                src_options.min_rank.min(adaptive_max_rank)
+            } else {
+                max_bond_dim
+            };
+            let mut environment_columns = Vec::new();
+            let mut environment_rng = rand::rngs::StdRng::seed_from_u64(src_options.seed);
+            let (q, projected) = loop {
+                let sketch_width = if src_options.rtol.is_some() {
+                    requested_rank.min(right_dim)
+                } else {
+                    src_probe_count(max_bond_dim, right_dim, src_options.final_svd)
+                };
+                if sketch_width == 0 {
+                    anyhow::bail!("contract_src: parent bond product has zero dimension");
+                }
+                src_extend_environment_columns(
+                    &tn_a,
+                    &tn_b,
+                    center,
+                    &edges,
+                    &output_indices,
+                    sketch_width,
+                    &mut environment_columns,
+                    &mut environment_rng,
+                )?;
+                let sketch = src_sketch_from_environment(
+                    &local,
+                    source_name,
+                    destination_name,
+                    &environment_columns[..sketch_width],
+                )?;
+                let factorized = sketch
+                    .factorize_full_rank(&left_inds, FactorizeAlg::QR, Canonical::Left)
+                    .map_err(|error| anyhow::anyhow!("contract_src: sketch QR failed: {error}"))?;
+
+                if let Some(rtol) = src_options.rtol {
+                    let produced_rank = factorized.rank;
+                    let saturated_space = produced_rank < sketch_width || sketch_width == right_dim;
+                    let should_stop = if saturated_space {
+                        true
+                    } else {
+                        match factorized.right.src_error_estimate() {
+                            Ok(estimate) => {
+                                estimate.error <= src_options.atol + rtol * estimate.norm
+                                    || requested_rank >= adaptive_max_rank
+                            }
+                            Err(error)
+                                if error.to_string().contains("finite, nonzero diagonal") =>
+                            {
+                                // A rank-deficient sketch has no valid inverse-adjoint
+                                // estimator. The current range is already saturated
+                                // numerically, so retain it and let the optional final
+                                // SVD remove any overcomplete directions.
+                                true
+                            }
+                            Err(error) => {
+                                return Err(anyhow::anyhow!(
+                                    "contract_src: adaptive estimator unavailable: {error}"
+                                ));
+                            }
+                        }
+                    };
+                    if !should_stop {
+                        requested_rank = requested_rank
+                            .saturating_add(src_options.rank_increment)
+                            .min(adaptive_max_rank);
+                        continue;
+                    }
+                }
+
+                let q = factorized.left;
+                let q_conj = q.conj();
+                let projected = T::contract(&[&q_conj, &local]).map_err(|error| {
+                    anyhow::anyhow!("contract_src: cap projection failed: {error}")
+                })?;
+                break (q, projected);
+            };
+            result_tensors.insert(source_name.clone(), q);
+            intermediate_tensors
+                .entry(destination_name.clone())
+                .or_default()
+                .push(projected);
+        }
+
+        let root_tensor_a = tn_a
+            .tensor(
+                tn_a.node_index(center)
+                    .ok_or_else(|| anyhow::anyhow!("contract_src: root node is missing in A"))?,
+            )
+            .ok_or_else(|| anyhow::anyhow!("contract_src: root tensor is missing in A"))?;
+        let root_tensor_b = tn_b
+            .tensor(
+                tn_b.node_index(center)
+                    .ok_or_else(|| anyhow::anyhow!("contract_src: root node is missing in B"))?,
+            )
+            .ok_or_else(|| anyhow::anyhow!("contract_src: root tensor is missing in B"))?;
+        let mut root_tensors = intermediate_tensors.remove(center).unwrap_or_default();
+        root_tensors.push(root_tensor_a.clone());
+        root_tensors.push(root_tensor_b.clone());
+        let root_refs: Vec<&T> = root_tensors.iter().collect();
+        let root = T::contract(&root_refs)
+            .map_err(|error| anyhow::anyhow!("contract_src: root contraction failed: {error}"))?;
+        result_tensors.insert(center.clone(), root);
+
+        let mut result = TreeTN::new();
+        for (node, tensor) in result_tensors {
+            result.add_tensor(node, tensor)?;
+        }
+        for (source_name, destination_name) in &edges {
+            let (Some(source), Some(destination)) = (
+                result.node_index(source_name),
+                result.node_index(destination_name),
+            ) else {
+                continue;
+            };
+            let source_tensor = result
+                .tensor(source)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: result source tensor is missing"))?;
+            let destination_tensor = result.tensor(destination).ok_or_else(|| {
+                anyhow::anyhow!("contract_src: result destination tensor is missing")
+            })?;
+            let common = tensor4all_core::index_ops::common_inds::<T::Index>(
+                &source_tensor.external_indices(),
+                &destination_tensor.external_indices(),
+            );
+            let Some(bond) = common.first() else {
+                anyhow::bail!(
+                    "contract_src: result tensors {:?} and {:?} have no connecting bond",
+                    source_name,
+                    destination_name
+                );
+            };
+            result.connect_internal(source, bond, destination, bond)?;
+            if let Some(edge) = result.edge_between(source_name, destination_name) {
+                result.set_edge_ortho_towards(edge, Some(destination_name.clone()))?;
+            }
+        }
+        result.set_canonical_region(std::iter::once(center.clone()))?;
+        if src_options.final_svd {
+            result.truncate_impl(
+                [center.clone()],
+                svd_policy,
+                Some(max_bond_dim),
+                "contract_src: final truncate",
+            )?;
+        }
+        Ok(result)
     }
 
     fn chain_order(&self, center: &V) -> Option<Vec<V>>
@@ -1319,6 +1919,16 @@ where
 use super::fit::FitContractionOptions;
 
 /// Contraction method for TreeTN operations.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::contraction::{ContractionMethod, ContractionOptions};
+///
+/// let options = ContractionOptions::new(ContractionMethod::Src)
+///     .with_max_bond_dim(8);
+/// assert_eq!(options.method, ContractionMethod::Src);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContractionMethod {
     /// Zip-up contraction (faster, one-pass).
@@ -1333,6 +1943,278 @@ pub enum ContractionMethod {
     /// is not the algorithm used by `apply_linear_operator(...,
     /// ApplyOptions::naive())`, which has a dedicated local exact apply path.
     Naive,
+    /// Successive randomized compression (sketch, QR, and projection).
+    Src,
+}
+
+/// Options specific to successive randomized compression (SRC).
+///
+/// `rtol = None` selects fixed-rank mode; fixed-rank SRC requires
+/// [`ContractionOptions::with_max_bond_dim`] to provide the requested output
+/// rank. `rtol = Some(_)` selects adaptive mode and requires a finite maximum
+/// rank, supplied either by [`Self::max_rank`] or by the contraction's
+/// `max_bond_dim`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::contraction::SrcOptions;
+///
+/// let options = SrcOptions::adaptive(1.0e-8, 32);
+/// assert_eq!(options.rtol, Some(1.0e-8));
+/// assert_eq!(options.max_rank, Some(32));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct SrcOptions {
+    /// Relative stopping tolerance in adaptive mode; `None` selects fixed rank.
+    /// Adaptive values must be finite and non-negative.
+    pub rtol: Option<f64>,
+    /// Absolute stopping tolerance in adaptive mode. The default is zero.
+    /// Fixed-rank mode requires this to remain zero because it has no stopping
+    /// test.
+    pub atol: f64,
+    /// Minimum adaptive sketch rank before the stopping test may succeed.
+    /// The default is 2.
+    pub min_rank: usize,
+    /// Number of columns added when adaptive SRC expands its sketch. The
+    /// default is 3.
+    pub rank_increment: usize,
+    /// Maximum adaptive sketch rank. Fixed-rank mode leaves this as `None`.
+    pub max_rank: Option<usize>,
+    /// Whether to run the existing TreeTN SVD truncation sweep after the SRC
+    /// projection. The default is `true`.
+    pub final_svd: bool,
+    /// Seed for deterministic Gaussian probe generation. The default is zero.
+    pub seed: u64,
+}
+
+impl Default for SrcOptions {
+    fn default() -> Self {
+        Self {
+            rtol: None,
+            atol: 0.0,
+            min_rank: 2,
+            rank_increment: 3,
+            max_rank: None,
+            final_svd: true,
+            seed: 0,
+        }
+    }
+}
+
+impl SrcOptions {
+    /// Create fixed-rank SRC options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_seed(7);
+    /// assert_eq!(options.rtol, None);
+    /// assert_eq!(options.seed, 7);
+    /// ```
+    pub fn fixed() -> Self {
+        Self::default()
+    }
+
+    /// Create adaptive SRC options.
+    ///
+    /// # Arguments
+    /// * `rtol` - Relative stopping tolerance.
+    /// * `max_rank` - Mandatory finite maximum sketch rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-8, 32);
+    /// assert_eq!(options.rtol, Some(1.0e-8));
+    /// assert_eq!(options.max_rank, Some(32));
+    /// ```
+    pub fn adaptive(rtol: f64, max_rank: usize) -> Self {
+        Self {
+            rtol: Some(rtol),
+            max_rank: Some(max_rank),
+            ..Self::default()
+        }
+    }
+
+    /// Set the adaptive relative tolerance, selecting adaptive mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_rtol(1.0e-7);
+    /// assert_eq!(options.rtol, Some(1.0e-7));
+    /// ```
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
+    }
+
+    /// Set the adaptive absolute tolerance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-7, 16).with_atol(1.0e-10);
+    /// assert_eq!(options.atol, 1.0e-10);
+    /// ```
+    pub fn with_atol(mut self, atol: f64) -> Self {
+        self.atol = atol;
+        self
+    }
+
+    /// Set the minimum adaptive sketch rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-7, 16).with_min_rank(4);
+    /// assert_eq!(options.min_rank, 4);
+    /// ```
+    pub fn with_min_rank(mut self, min_rank: usize) -> Self {
+        self.min_rank = min_rank;
+        self
+    }
+
+    /// Set the adaptive sketch expansion size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-7, 16).with_rank_increment(4);
+    /// assert_eq!(options.rank_increment, 4);
+    /// ```
+    pub fn with_rank_increment(mut self, rank_increment: usize) -> Self {
+        self.rank_increment = rank_increment;
+        self
+    }
+
+    /// Set the maximum adaptive sketch rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_rtol(1.0e-7).with_max_rank(16);
+    /// assert_eq!(options.max_rank, Some(16));
+    /// ```
+    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
+        self.max_rank = Some(max_rank);
+        self
+    }
+
+    /// Set whether final SVD truncation is applied after SRC projection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_final_svd(false);
+    /// assert!(!options.final_svd);
+    /// ```
+    pub fn with_final_svd(mut self, final_svd: bool) -> Self {
+        self.final_svd = final_svd;
+        self
+    }
+
+    /// Set the deterministic Gaussian probe seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_seed(123);
+    /// assert_eq!(options.seed, 123);
+    /// ```
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Validate SRC-specific options against the requested output rank.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when fixed rank has no output cap, adaptive mode has no
+    /// finite maximum rank, tolerances are invalid, or rank controls are zero
+    /// or inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// SrcOptions::adaptive(1.0e-8, 32)
+    ///     .validate(Some(32))
+    ///     .unwrap();
+    /// assert!(SrcOptions::fixed().validate(None).is_err());
+    /// ```
+    pub fn validate(&self, output_max_bond_dim: Option<usize>) -> Result<()> {
+        if !self.atol.is_finite() || self.atol < 0.0 {
+            anyhow::bail!("SRC absolute tolerance must be finite and non-negative");
+        }
+        if self.min_rank == 0 {
+            anyhow::bail!("SRC minimum rank must be at least 1");
+        }
+        if self.rank_increment == 0 {
+            anyhow::bail!("SRC rank increment must be at least 1");
+        }
+
+        match self.rtol {
+            None => {
+                if self.atol != 0.0 {
+                    anyhow::bail!("SRC absolute tolerance is only valid in adaptive mode");
+                }
+                if self.max_rank.is_some() {
+                    anyhow::bail!("SRC maximum rank is only valid in adaptive mode");
+                }
+                if output_max_bond_dim.is_none() {
+                    anyhow::bail!("fixed-rank SRC requires an explicit max_bond_dim output rank");
+                }
+            }
+            Some(rtol) => {
+                if !rtol.is_finite() || rtol < 0.0 {
+                    anyhow::bail!("SRC relative tolerance must be finite and non-negative");
+                }
+                let max_rank = self.max_rank.or(output_max_bond_dim).ok_or_else(|| {
+                    anyhow::anyhow!("adaptive SRC requires an explicit maximum rank")
+                })?;
+                if max_rank == 0 {
+                    anyhow::bail!("adaptive SRC maximum rank must be at least 1");
+                }
+                if self.min_rank > max_rank {
+                    anyhow::bail!(
+                        "adaptive SRC minimum rank {} exceeds maximum rank {}",
+                        self.min_rank,
+                        max_rank
+                    );
+                }
+                if !self.final_svd
+                    && output_max_bond_dim.is_some_and(|output_max| max_rank > output_max)
+                {
+                    anyhow::bail!(
+                        "adaptive SRC max_rank exceeds max_bond_dim when final_svd is disabled"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Options for the generic contract function.
@@ -1369,6 +2251,8 @@ pub struct ContractionOptions {
     /// materialization. Set this only for small reference/debug cases where
     /// full dense materialization is acceptable if structural alignment fails.
     pub mismatched_topology_dense_limit: Option<usize>,
+    /// SRC-specific rank, tolerance, probe, and finalization controls.
+    pub src_options: SrcOptions,
 }
 
 impl Default for ContractionOptions {
@@ -1383,6 +2267,7 @@ impl Default for ContractionOptions {
             factorize_alg: FactorizeAlg::default(),
             dense_reference_limit: None,
             mismatched_topology_dense_limit: None,
+            src_options: SrcOptions::default(),
         }
     }
 }
@@ -1404,6 +2289,37 @@ impl ContractionOptions {
     /// Create options for fit contraction.
     pub fn fit() -> Self {
         Self::new(ContractionMethod::Fit)
+    }
+
+    /// Create options for successive randomized compression.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::{ContractionMethod, ContractionOptions};
+    ///
+    /// let options = ContractionOptions::src().with_max_bond_dim(16);
+    /// assert_eq!(options.method, ContractionMethod::Src);
+    /// ```
+    pub fn src() -> Self {
+        Self::new(ContractionMethod::Src)
+    }
+
+    /// Replace the SRC-specific options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::{ContractionOptions, SrcOptions};
+    ///
+    /// let options = ContractionOptions::src()
+    ///     .with_max_bond_dim(16)
+    ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
+    /// assert_eq!(options.src_options.rtol, Some(1.0e-8));
+    /// ```
+    pub fn with_src_options(mut self, src_options: SrcOptions) -> Self {
+        self.src_options = src_options;
+        self
     }
 
     /// Set maximum bond dimension.
@@ -1589,6 +2505,12 @@ where
     // single-node / zero-sweep / dense short-cuts.
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("contract: invalid contraction options")?;
+    if options.method == ContractionMethod::Src {
+        options
+            .src_options
+            .validate(options.max_bond_dim)
+            .context("contract: invalid SRC options")?;
+    }
 
     match options.method {
         ContractionMethod::Zipup => {
@@ -1629,6 +2551,20 @@ where
                 options.svd_policy,
                 options.qr_rtol,
             )
+        }
+        ContractionMethod::Src => {
+            let output_rank = options
+                .max_bond_dim
+                .or(options.src_options.max_rank)
+                .ok_or_else(|| anyhow::anyhow!("contract: SRC requires a finite output rank"))?;
+            tn_a.contract_src_fixed(
+                tn_b,
+                center,
+                options.svd_policy,
+                output_rank,
+                &options.src_options,
+            )
+            .map_err(TreeTNOperationError::from)
         }
     }
 }

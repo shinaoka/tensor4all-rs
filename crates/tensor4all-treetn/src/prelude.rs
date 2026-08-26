@@ -20,7 +20,8 @@ pub use crate::{
     tdvp_with_treetn_operator, ApplyOptions, BoundaryEdge, CanonicalForm, CanonicalizationOptions,
     CompressionAlgorithm, ContractionAlgorithm, DmrgOptions, DmrgResult, LinkIndexNetwork,
     LinkSpace, NamedGraph, NodeNameNetwork, Operator, RestructureOptions, SiteIndexNetwork,
-    SplitOptions, SwapOptions, TdvpOptions, TdvpResult, TreeTN, TreeTopology, TruncationOptions,
+    SplitOptions, SrcOptions, SwapOptions, TdvpOptions, TdvpResult, TreeTN, TreeTopology,
+    TruncationOptions,
 };
 
 #[cfg(feature = "simplett-bridge")]

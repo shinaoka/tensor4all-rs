@@ -1,14 +1,17 @@
 # MPO-MPO Contraction: Cost Analysis
 
 This guide derives the floating-point cost (FLOPs) of contracting two MPOs on a
-tensor train and compares three strategies: the naive product followed by
-compression, the zip-up algorithm, and the variational fit algorithm. It follows
+tensor train and compares four strategies: the naive product followed by
+compression, the zip-up algorithm, the variational fit algorithm, and
+successive randomized compression (SRC). It follows
 the reference implementations in `tensor4all-treetn`:
 
 - zip-up: `crates/tensor4all-treetn/src/treetn/contraction.rs`
   (`contract_zipup_chain`)
 - fit: `crates/tensor4all-treetn/src/treetn/fit.rs` (two-site updates only, with
   the sweep plan built with `nsite=2` in `localupdate.rs`)
+- SRC: `crates/tensor4all-treetn/src/treetn/contraction.rs`
+  (`ContractionMethod::Src`)
 
 The treetn crate handles general tree topologies. Here we specialize to a chain
 (tensor train) so that the counting stays explicit.
@@ -324,10 +327,44 @@ zip-up pass**, both leading with \\(2Ld^4\chi^4\\). The one-site version is
 cheaper by a factor of \\(d\\), but the two-site version is chosen for its bond
 dimension adaptation and for how much more easily it escapes local minima.
 
-## 5. Summary and comparison
+## 5. Successive randomized compression (SRC)
+
+SRC compresses the exact local MPO-MPO product through a randomized range
+finder. At each directed tree edge, the implementation contracts the component
+on the far side of the edge into a set of Gaussian probe environments. The
+local product is sketched with those environments, QR-factorized, and projected
+onto the retained range before the result is passed to the next edge. A
+postorder pass constructs child-to-parent environments; a preorder pass adds
+the complementary parent-to-child environments, so a branch sees the complete
+tree context rather than only its local bond.
+
+`SrcOptions::fixed()` uses a deterministic seeded Gaussian sketch with a small
+oversampling margin. `SrcOptions::adaptive(rtol, max_rank)` grows the sketch in
+blocks and uses the triangular factor from QR to estimate the residual. The
+estimate is used to stop at the requested relative tolerance, while
+`max_rank` remains a hard safety cap. The final optional SVD is useful when the
+SRC range is deliberately overcomplete; set `final_svd(false)` when the fixed
+or adaptive range itself is the desired output.
+
+The public placement is alongside `naive`, `zip-up`, and `fit` in
+`ContractionMethod`. It is implemented in TreeTN first, which also covers a
+chain, so SimpleTT does not maintain a second independent SRC implementation.
+The itensorlike `TensorTrain` bridge and `ApplyOptions` expose the same method.
+
+SRC has a different cost profile from the deterministic methods. Its leading
+work is the cost of forming the directed environment sketches plus QR of the
+local sketched products; for a chain this reduces to the two-sided environments
+and successive local range finding described in the SRC reference. The exact
+cost depends on the retained rank, sketch oversampling, and tree degrees, so a
+single `L d^p chi^q` expression would hide the main trade-off. The Gaussian
+probes are reproducible through `SrcOptions::with_seed` and should be held
+fixed when comparing implementations.
+
+## 6. Summary and comparison
 
 | method | FLOPs (leading) | passes | peak memory | truncation quality |
 |---|---|---|---|---|
+| SRC (TreeTN) | environment sketches plus QR | 1 postorder plus 1 preorder | directed probe environments | randomized, tolerance-controlled |
 | naive plus SVD | \\(2Ld^2\chi^6\\) | 1 plus compression sweeps | \\(d^2\chi^4\\) per tensor | optimal (canonical gauge) |
 | zip-up | \\(2Ld^4\chi^4\\) | 1 | \\(d^2\chi^3\\) | quasi-optimal (environment not contracted) |
 | fit, one-site (theoretical reference) | \\(2(n_{\text{sw}}+1)Ld^3\chi^4\\) | \\(n_{\text{sw}}\\) | \\(\chi^3\\) (environments) | monotone improvement per sweep |

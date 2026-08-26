@@ -24,6 +24,7 @@ use tensor4all_tensorbackend::{
     storage_payload_native_read_input, storage_to_native_tensor, NativeTensorReadInput,
     TensorElement,
 };
+use tensor4all_tensorbackend::{src_error_estimate as backend_src_error_estimate, Matrix};
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
 use super::contract::PairwiseContractionOptions;
@@ -5501,6 +5502,42 @@ impl TensorFactorizationLike for IdxTensor {
         canonical: crate::Canonical,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize_full_rank(self, left_inds, alg, canonical)
+    }
+
+    fn src_error_estimate(
+        &self,
+    ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        let indices = self.indices();
+        if indices.len() != 2 {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC QR factor must have rank 2, got {}",
+                indices.len()
+            )));
+        }
+        let nrows = indices[0].dim();
+        let ncols = indices[1].dim();
+        let result = if self.is_f64() {
+            let matrix = Matrix::from_col_major_vec(
+                nrows,
+                ncols,
+                self.to_vec::<f64>()
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            );
+            backend_src_error_estimate(&matrix)
+        } else if self.is_c64() {
+            let matrix = Matrix::from_col_major_vec(
+                nrows,
+                ncols,
+                self.to_vec::<Complex64>()
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            );
+            backend_src_error_estimate(&matrix)
+        } else {
+            return Err(FactorizeError::UnsupportedStorage(
+                "SRC adaptive estimation currently supports f64 and Complex64 QR factors",
+            ));
+        };
+        result.map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))
     }
 }
 

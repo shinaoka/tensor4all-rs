@@ -270,6 +270,10 @@ typedef enum t4a_contract_method {
    * local-exact apply path instead of generic full-dense TreeTN contraction.
    */
   T4A_CONTRACT_METHOD_NAIVE = 2,
+  /**
+   * Successive randomized compression with Gaussian sketching.
+   */
+  T4A_CONTRACT_METHOD_SRC = 3,
 } t4a_contract_method;
 
 /**
@@ -998,6 +1002,8 @@ enum t4a_status_code t4a_treetn_add(const struct t4a_treetn *a,
  * default", which currently resolves to one variational sweep.
  * `t4a_contract_method::Naive` uses the dedicated local-exact apply path here,
  * not the generic full-dense TreeTN contraction used by `t4a_treetn_contract`.
+ * For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
+ * fixed-rank Gaussian-sketch path with default SRC controls.
  */
 enum t4a_status_code t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
                                                      const struct t4a_treetn *state,
@@ -1036,6 +1042,9 @@ enum t4a_status_code t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_t
  *
  * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
  * default", which currently resolves to one variational sweep.
+ * For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
+ * fixed-rank Gaussian-sketch path with default SRC controls. Adaptive SRC
+ * controls are currently available through the Rust API only.
  */
 enum t4a_status_code t4a_treetn_contract(const struct t4a_treetn *a,
                                          const struct t4a_treetn *b,
@@ -1219,6 +1228,9 @@ enum t4a_status_code t4a_treetn_orthogonalize(struct t4a_treetn *treetn,
  *
  * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
  * default", which currently resolves to one variational sweep.
+ * For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
+ * fixed-rank Gaussian-sketch path with default SRC controls. Adaptive SRC
+ * controls are currently available through the Rust API only.
  */
 enum t4a_status_code t4a_treetn_partial_contract(const struct t4a_treetn *a,
                                                  const struct t4a_treetn *b,

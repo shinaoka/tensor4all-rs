@@ -1,6 +1,7 @@
 //! Configuration options for tensor train operations.
 
 use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
+pub use tensor4all_treetn::contraction::SrcOptions;
 
 use crate::error::{Result, TensorTrainError};
 
@@ -100,6 +101,8 @@ pub enum ContractMethod {
     /// Useful only for small debugging and testing cases; memory scales as the
     /// product of external dimensions.
     Naive,
+    /// Successive randomized compression using factorized Gaussian sketches.
+    Src,
 }
 
 /// Options for tensor train contraction.
@@ -126,6 +129,7 @@ pub struct ContractOptions {
     svd_policy: Option<SvdTruncationPolicy>,
     nhalfsweeps: usize,
     dense_reference_limit: Option<usize>,
+    src_options: SrcOptions,
 }
 
 impl Default for ContractOptions {
@@ -136,6 +140,7 @@ impl Default for ContractOptions {
             svd_policy: None,
             nhalfsweeps: 2,
             dense_reference_limit: None,
+            src_options: SrcOptions::default(),
         }
     }
 }
@@ -179,6 +184,23 @@ impl ContractOptions {
     pub fn naive() -> Self {
         Self {
             method: ContractMethod::Naive,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for successive randomized compression (SRC).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{ContractMethod, ContractOptions};
+    ///
+    /// let options = ContractOptions::src().with_max_bond_dim(16);
+    /// assert_eq!(options.method(), ContractMethod::Src);
+    /// ```
+    pub fn src() -> Self {
+        Self {
+            method: ContractMethod::Src,
             ..Default::default()
         }
     }
@@ -235,6 +257,23 @@ impl ContractOptions {
         self
     }
 
+    /// Replace the SRC-specific options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{ContractOptions, SrcOptions};
+    ///
+    /// let options = ContractOptions::src()
+    ///     .with_max_bond_dim(16)
+    ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
+    /// assert_eq!(options.src_options().rtol, Some(1.0e-8));
+    /// ```
+    pub fn with_src_options(mut self, src_options: SrcOptions) -> Self {
+        self.src_options = src_options;
+        self
+    }
+
     /// Get the contraction method.
     #[inline]
     pub fn method(&self) -> ContractMethod {
@@ -277,6 +316,22 @@ impl ContractOptions {
     #[inline]
     pub fn dense_reference_limit(&self) -> Option<usize> {
         self.dense_reference_limit
+    }
+
+    /// Get the SRC-specific options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{ContractOptions, SrcOptions};
+    ///
+    /// let options = ContractOptions::src()
+    ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
+    /// assert_eq!(options.src_options().max_rank, Some(16));
+    /// ```
+    #[inline]
+    pub fn src_options(&self) -> &SrcOptions {
+        &self.src_options
     }
 }
 

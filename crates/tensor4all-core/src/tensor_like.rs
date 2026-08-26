@@ -880,6 +880,41 @@ pub trait TensorFactorizationLike: TensorIndex {
         alg: FactorizeAlg,
         canonical: Canonical,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
+    /// Evaluate the SRC adaptive stopping estimator for a small QR factor.
+    ///
+    /// The tensor must represent a square upper-triangular `R` matrix in
+    /// column-major order. Implementations that do not expose their small
+    /// matrix storage return an unsupported-storage error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FactorizeError`] when the tensor is not a supported QR factor,
+    /// when its storage cannot be read as a dense matrix, or when the backend
+    /// estimator rejects the matrix.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorFactorizationLike};
+    ///
+    /// let row = DynIndex::new_dyn(2);
+    /// let column = DynIndex::new_dyn(2);
+    /// let r = IdxTensor::from_dense(
+    ///     vec![row, column],
+    ///     vec![2.0_f64, 0.0, 1.0, 3.0],
+    /// ).unwrap();
+    /// let estimate = r.src_error_estimate().unwrap();
+    /// assert!(estimate.error.is_finite());
+    /// assert!(estimate.norm.is_finite());
+    /// ```
+    fn src_error_estimate(
+        &self,
+    ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "SRC adaptive estimation is not supported for this tensor type",
+        ))
+    }
 }
 
 /// Constructors and selection helpers for index-labelled tensors.

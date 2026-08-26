@@ -141,6 +141,36 @@ fn test_contract_zipup_two_sites() {
 }
 
 #[test]
+fn test_contract_src_two_sites() {
+    let s0 = idx(1024, 2);
+    let s1 = idx(1025, 2);
+    let l01_a = idx(1026, 2);
+    let l01_b = idx(1027, 2);
+
+    let tt1 = TensorTrain::new(vec![
+        make_tensor(vec![s0.clone(), l01_a.clone()]),
+        make_tensor(vec![l01_a, s1.clone()]),
+    ])
+    .unwrap();
+    let tt2 = TensorTrain::new(vec![
+        make_tensor(vec![s0.clone(), l01_b.clone()]),
+        make_tensor(vec![l01_b, s1]),
+    ])
+    .unwrap();
+
+    let options = ContractOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            tensor4all_treetn::contraction::SrcOptions::fixed()
+                .with_final_svd(false)
+                .with_seed(23),
+        );
+    let result = contract(&tt1, &tt2, &options).unwrap();
+
+    assert_matches_naive(&tt1, &tt2, &result);
+}
+
+#[test]
 fn test_contract_zipup_with_rtol() {
     let s0 = idx(1030, 2);
     let s1 = idx(1031, 2);

@@ -219,6 +219,30 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     where
         Self: Sized;
 
+    /// Create a fresh undirected link-like index with the requested dimension.
+    ///
+    /// Algorithms that assemble a batch or randomized sketch need an
+    /// auxiliary column index whose dimension is not known from an input leg.
+    /// Implementations should give the index a fresh identity and link
+    /// metadata where their index model has such metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `dim` causes a dimension overflow or cannot be
+    /// represented by the index type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike};
+    ///
+    /// let probe = DynIndex::new_link(5).unwrap();
+    /// assert_eq!(probe.dim(), 5);
+    /// ```
+    fn new_link(dim: usize) -> anyhow::Result<Self>
+    where
+        Self: Sized;
+
     /// Create a fresh link index representing the tensor-product space of input indices.
     ///
     /// Generic algorithms may use this to replace multiple local bond legs by one fused
@@ -380,6 +404,10 @@ mod tests {
 
         fn create_dummy_link_pair() -> (Self, Self) {
             (test_index(0, 1), test_index(0, 1))
+        }
+
+        fn new_link(dim: usize) -> anyhow::Result<Self> {
+            Ok(test_index(10000, dim))
         }
 
         /// # Errors

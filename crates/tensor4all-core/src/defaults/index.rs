@@ -523,6 +523,10 @@ impl IndexLike for DynIndex {
         (idx1, idx2)
     }
 
+    fn new_link(dim: usize) -> anyhow::Result<Self> {
+        Index::new_link(dim).map_err(anyhow::Error::new)
+    }
+
     fn product_link(indices: &[Self]) -> Result<Self> {
         anyhow::ensure!(
             !indices.is_empty(),

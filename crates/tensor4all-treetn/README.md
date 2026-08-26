@@ -1,6 +1,7 @@
 # tensor4all-treetn
 
-Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, and linear solving.
+Tree tensor networks with arbitrary graph topology. Supports canonicalization,
+truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 
 ## Key Types
 

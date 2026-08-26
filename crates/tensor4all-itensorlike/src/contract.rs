@@ -67,11 +67,14 @@ pub fn contract(
         ContractMethod::Zipup => ContractionMethod::Zipup,
         ContractMethod::Fit => ContractionMethod::Fit,
         ContractMethod::Naive => ContractionMethod::Naive,
+        ContractMethod::Src => ContractionMethod::Src,
     };
 
     // Convert nhalfsweeps to nfullsweeps (nhalfsweeps / 2)
     let nfullsweeps = options.nhalfsweeps() / 2;
-    let treetn_options = TreeTNContractionOptions::new(treetn_method).with_nfullsweeps(nfullsweeps);
+    let treetn_options = TreeTNContractionOptions::new(treetn_method)
+        .with_nfullsweeps(nfullsweeps)
+        .with_src_options(options.src_options().clone());
 
     let treetn_options = if let Some(max_bond_dim) = options.max_bond_dim() {
         treetn_options.with_max_bond_dim(max_bond_dim)

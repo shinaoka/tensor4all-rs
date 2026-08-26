@@ -68,6 +68,53 @@ fn test_contraction_options_fit() {
 }
 
 #[test]
+fn test_src_options_cover_fixed_and_adaptive_modes() {
+    let fixed = SrcOptions::fixed().with_seed(17).with_final_svd(false);
+    assert!(fixed.rtol.is_none());
+    assert_eq!(fixed.seed, 17);
+    assert!(!fixed.final_svd);
+    assert!(fixed.validate(Some(4)).is_ok());
+
+    let adaptive = SrcOptions::adaptive(1.0e-8, 12)
+        .with_atol(1.0e-10)
+        .with_min_rank(2)
+        .with_rank_increment(3);
+    assert_eq!(adaptive.rtol, Some(1.0e-8));
+    assert_eq!(adaptive.max_rank, Some(12));
+    assert!(adaptive.validate(Some(12)).is_ok());
+
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(adaptive.clone());
+    assert_eq!(options.method, ContractionMethod::Src);
+    assert_eq!(options.src_options, adaptive);
+}
+
+#[test]
+fn test_src_options_reject_invalid_adaptive_parameters() {
+    assert!(SrcOptions::adaptive(f64::NAN, 4).validate(Some(4)).is_err());
+    assert!(SrcOptions::adaptive(-1.0, 4).validate(Some(4)).is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 0).validate(Some(4)).is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 4)
+        .with_min_rank(5)
+        .validate(Some(4))
+        .is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 4)
+        .with_rank_increment(0)
+        .validate(Some(4))
+        .is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 5)
+        .with_final_svd(false)
+        .validate(Some(4))
+        .is_err());
+    assert!(SrcOptions::fixed().validate(None).is_err());
+    assert!(SrcOptions::fixed()
+        .with_atol(1.0e-8)
+        .validate(Some(4))
+        .is_err());
+}
+
+#[test]
 fn test_contraction_options_builders() {
     let policy = SvdTruncationPolicy::new(1e-8)
         .with_squared_values()
@@ -469,7 +516,153 @@ fn zipup_chain_matches_naive_without_truncation() {
 }
 
 #[test]
-fn zipup_complex_chain_matches_naive_without_truncation() {
+fn src_fixed_matches_exact_contraction_when_probe_cap_is_full() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false));
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(error < 1.0e-8, "full-probe SRC residual is {error}");
+    assert!(actual
+        .clone()
+        .external_indices()
+        .iter()
+        .all(|index| index.dim() == 2));
+}
+
+#[test]
+fn src_adaptive_contracts_and_honors_rank_cap() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(2)
+                .with_rank_increment(2)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+
+    assert_eq!(actual.node_count(), 3);
+    assert!(actual
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| actual.bond_index(edge).unwrap().dim() <= 4));
+    actual.validate_ortho_consistency().unwrap();
+}
+
+fn make_star_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
+    let shared = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let output_a = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let output_b = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let bonds_a = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let bonds_b = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let names = vec!["C".to_string(), "L".to_string(), "R".to_string()];
+    let build = |bonds: &[DynIndex; 2], outputs: &[DynIndex; 3], offset: f64| {
+        TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![
+                        shared[0].clone(),
+                        outputs[0].clone(),
+                        bonds[0].clone(),
+                        bonds[1].clone(),
+                    ],
+                    (0..16).map(|i| offset + f64::from(i) / 10.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[1].clone(), outputs[1].clone(), bonds[0].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 7.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[2].clone(), outputs[2].clone(), bonds[1].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 6.0).collect(),
+                )
+                .unwrap(),
+            ],
+            names.clone(),
+        )
+        .unwrap()
+    };
+    (
+        build(&bonds_a, &output_a, 1.0),
+        build(&bonds_b, &output_b, 2.0),
+    )
+}
+
+#[test]
+fn src_fixed_traverses_a_branched_tree_without_dense_fallback() {
+    let (tn_a, tn_b) = make_star_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(2)
+        .with_src_options(SrcOptions::fixed().with_seed(77).with_final_svd(false));
+    let result = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+
+    assert_eq!(result.node_count(), 3);
+    assert_eq!(result.edge_count(), 2);
+    assert!(result
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| result.bond_index(edge).unwrap().dim() <= 2));
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_preserves_scalar_only_subtrees_with_dimension_one_bridges() {
+    let shared_leaf = DynIndex::new_dyn(2);
+    let shared_root = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+    let leaf_a =
+        IdxTensor::from_dense(vec![shared_leaf.clone(), bond_a.clone()], vec![1.0; 4]).unwrap();
+    let root_a = IdxTensor::from_dense(vec![bond_a, shared_root.clone()], vec![1.0; 4]).unwrap();
+    let leaf_b = IdxTensor::from_dense(vec![shared_leaf, bond_b.clone()], vec![1.0; 4]).unwrap();
+    let root_b = IdxTensor::from_dense(vec![bond_b, shared_root], vec![1.0; 4]).unwrap();
+    let names = vec!["L".to_string(), "R".to_string()];
+    let tn_a = TreeTN::from_tensors(vec![leaf_a, root_a], names.clone()).unwrap();
+    let tn_b = TreeTN::from_tensors(vec![leaf_b, root_b], names).unwrap();
+
+    let result = contract(
+        &tn_a,
+        &tn_b,
+        &"R".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(2)
+            .with_src_options(SrcOptions::fixed().with_final_svd(false)),
+    )
+    .unwrap();
+
+    assert_eq!(result.node_count(), 2);
+    assert_eq!(result.edge_count(), 1);
+    assert!(result.external_indices().is_empty());
+    let edge = result.graph.graph().edge_indices().next().unwrap();
+    assert_eq!(result.bond_index(edge).unwrap().dim(), 1);
+}
+
+fn make_two_node_complex_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     let shared = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let output_a = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let output_b = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
@@ -513,6 +706,12 @@ fn zipup_complex_chain_matches_naive_without_truncation() {
     )
     .unwrap();
 
+    (tn_a, tn_b)
+}
+
+#[test]
+fn zipup_complex_chain_matches_naive_without_truncation() {
+    let (tn_a, tn_b) = make_two_node_complex_pair();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
     let actual = tn_a
         .contract_zipup(
@@ -525,6 +724,21 @@ fn zipup_complex_chain_matches_naive_without_truncation() {
         .to_dense()
         .unwrap();
     assert!(actual.distance(&expected).unwrap() < 1e-9);
+}
+
+#[test]
+fn src_complex_chain_matches_naive_when_probe_cap_is_full() {
+    let (tn_a, tn_b) = make_two_node_complex_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(321).with_final_svd(false));
+    let actual = contract(&tn_a, &tn_b, &"B".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    assert!(actual.distance(&expected).unwrap() < 1e-8);
 }
 
 #[test]

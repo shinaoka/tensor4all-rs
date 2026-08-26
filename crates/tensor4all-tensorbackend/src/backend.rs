@@ -4,7 +4,7 @@
 //! routing the actual work through the shared tenferro CPU backend.
 
 use anyhow::{anyhow, Result};
-use num_complex::{Complex32, Complex64};
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
 
@@ -349,6 +349,136 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
     ) -> Result<Matrix<Self>> {
         Self::triangular_solve_matrix_impl(&a, &b, left_side, lower, transpose_a, unit_diagonal)
     }
+}
+
+/// Small-matrix diagnostics produced by the successive randomized compression
+/// stopping estimator.
+///
+/// `error` is the Appendix C randomized residual estimate and `norm` is the
+/// corresponding Frobenius norm estimate. Both values use the sketch width as
+/// their normalization factor.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{src_error_estimate, Matrix};
+///
+/// let r = Matrix::from_col_major_vec(1, 1, vec![2.0_f64]);
+/// let estimate = src_error_estimate(&r).unwrap();
+/// assert!((estimate.error - 2.0).abs() < 1.0e-12);
+/// assert!((estimate.norm - 2.0).abs() < 1.0e-12);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SrcErrorEstimate {
+    /// Estimated residual magnitude from the inverse-adjoint QR factor.
+    pub error: f64,
+    /// Estimated norm of the sketched tensor from the QR factor.
+    pub norm: f64,
+}
+
+/// Compute the Appendix C SRC error and norm estimates from an upper-triangular
+/// QR factor `R`.
+///
+/// The helper explicitly builds `R†` before solving `R† G = I`, so complex
+/// inputs use the Hermitian adjoint rather than a plain transpose. The solve is
+/// delegated to the configured tensor4all backend and is restricted to the
+/// small sketch matrix; no general dense inverse routine is used.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] when `r` is empty, non-square, singular, or
+/// contains non-finite values, or when the backend triangular solve fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{src_error_estimate, Matrix};
+///
+/// let r = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 1.0, 3.0]);
+/// let estimate = src_error_estimate(&r).unwrap();
+/// assert!(estimate.error.is_finite());
+/// assert!(estimate.norm.is_finite());
+/// ```
+pub fn src_error_estimate<T>(
+    r: &Matrix<T>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar + ComplexFloat,
+{
+    let nrows = r.nrows();
+    let ncols = r.ncols();
+    if nrows != ncols {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a square R, got {nrows}x{ncols}"
+        )));
+    }
+    if nrows == 0 {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a non-empty R"
+        )));
+    }
+
+    let mut norm_sq = 0.0_f64;
+    for col in 0..ncols {
+        for row in 0..nrows {
+            norm_sq += r[[row, col]].matrix_abs_sq();
+        }
+        let diagonal_sq = r[[col, col]].matrix_abs_sq();
+        if !diagonal_sq.is_finite() || diagonal_sq == 0.0 {
+            return Err(BackendLinalgError::from(anyhow!(
+                "SRC estimator requires a finite, nonzero diagonal in R at ({col}, {col})"
+            )));
+        }
+    }
+    if !norm_sq.is_finite() {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires finite entries in R"
+        )));
+    }
+
+    let mut adjoint = Matrix::zeros(nrows, ncols);
+    for col in 0..ncols {
+        for row in 0..nrows {
+            adjoint[[row, col]] = r[[col, row]].conj();
+        }
+    }
+    let mut identity = Matrix::zeros(nrows, ncols);
+    for diagonal in 0..nrows {
+        identity[[diagonal, diagonal]] = T::one();
+    }
+
+    let inverse_adjoint = triangular_solve_matrix(&adjoint, &identity, true, true, false, false)
+        .map_err(|error| {
+            BackendLinalgError::from(anyhow!(
+                "SRC inverse-adjoint triangular solve failed: {error}"
+            ))
+        })?;
+
+    let mut inverse_row_error_sq = 0.0_f64;
+    for row in 0..nrows {
+        let row_norm_sq = (0..ncols)
+            .map(|col| inverse_adjoint[[row, col]].matrix_abs_sq())
+            .sum::<f64>();
+        if !row_norm_sq.is_finite() || row_norm_sq == 0.0 {
+            return Err(BackendLinalgError::from(anyhow!(
+                "SRC inverse-adjoint solve returned an invalid row norm at row {row}"
+            )));
+        }
+        inverse_row_error_sq += 1.0 / row_norm_sq;
+    }
+
+    let sketch_width = ncols as f64;
+    let error_sq = inverse_row_error_sq / sketch_width;
+    let norm_estimate_sq = norm_sq / sketch_width;
+    if !error_sq.is_finite() || !norm_estimate_sq.is_finite() {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator produced a non-finite estimate"
+        )));
+    }
+    Ok(SrcErrorEstimate {
+        error: error_sq.sqrt(),
+        norm: norm_estimate_sq.sqrt(),
+    })
 }
 
 fn solve_matrix_direct<T>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>>

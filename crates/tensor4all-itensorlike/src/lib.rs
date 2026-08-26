@@ -12,7 +12,7 @@ pub use contract::contract;
 pub use error::{Result, TensorTrainError};
 pub use linsolve::linsolve;
 pub use options::{
-    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, TruncateOptions,
+    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, SrcOptions, TruncateOptions,
 };
 pub use tensor4all_core::SvdOptions;
 pub use tensortrain::TensorTrain;
