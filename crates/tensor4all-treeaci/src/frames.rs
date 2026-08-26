@@ -1648,7 +1648,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
 
             let mut v1_data = Vec::with_capacity(incoming_dim_1 * ids_1.len());
             for &sample_1 in &ids_1 {
-                let values = self.memo[incoming_edge_1][sample_1].clone().ok_or(
+                let values = self.memo[incoming_edge_1][sample_1].as_ref().ok_or(
                     TreeAciError::InternalInvariant {
                         message:
                             "incoming sample frame was not memoized before batched contraction",
@@ -1659,13 +1659,13 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
                         message: "incoming frame length differs from its bond dimension",
                     });
                 }
-                v1_data.extend(values);
+                v1_data.extend_from_slice(values);
             }
             let v1 = Matrix::from_col_major_vec(incoming_dim_1, ids_1.len(), v1_data);
 
             let mut v2_data = Vec::with_capacity(incoming_dim_2 * ids_2.len());
             for &sample_2 in &ids_2 {
-                let values = self.memo[incoming_edge_2][sample_2].clone().ok_or(
+                let values = self.memo[incoming_edge_2][sample_2].as_ref().ok_or(
                     TreeAciError::InternalInvariant {
                         message:
                             "incoming sample frame was not memoized before batched contraction",
@@ -1676,7 +1676,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
                         message: "incoming frame length differs from its bond dimension",
                     });
                 }
-                v2_data.extend(values);
+                v2_data.extend_from_slice(values);
             }
             let v2 = Matrix::from_col_major_vec(incoming_dim_2, ids_2.len(), v2_data);
 
