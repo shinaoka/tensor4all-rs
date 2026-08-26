@@ -537,6 +537,33 @@ fn src_fixed_matches_exact_contraction_when_probe_cap_is_full() {
 }
 
 #[test]
+fn src_dispatch_preserves_public_contract() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false)),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "public SRC residual is {error}");
+    assert_eq!(actual.node_count(), tn_a.node_count());
+    assert_eq!(actual.edge_count(), tn_a.edge_count());
+    actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
 fn src_adaptive_contracts_and_honors_rank_cap() {
     let (tn_a, tn_b) = make_three_node_chain_pair();
     let options = ContractionOptions::src()
