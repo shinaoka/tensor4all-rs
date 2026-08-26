@@ -381,6 +381,38 @@ fn injection_never_exceeds_the_remaining_cut_capacity() {
 }
 
 #[test]
+fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
+    let (input, _, _) = delta_tree();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let output_before = state.output.to_dense().unwrap();
+    let candidates_before = state.candidates.clone();
+    let pivots_before = state.pivots.clone();
+    let records_before = state.sample_arena.record_count();
+    let generation_before = state.generation;
+    let ranks_before = state.edge_ranks.clone();
+
+    assert_eq!(inject_global_pivots(&mut state, &[], &[1]).unwrap(), 0);
+    assert_eq!(state.candidates, candidates_before);
+    assert_eq!(state.pivots, pivots_before);
+    assert_eq!(state.sample_arena.record_count(), records_before);
+    assert_eq!(state.generation, generation_before);
+    assert_eq!(state.edge_ranks, ranks_before);
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&output_before, 0.0, 0.0)
+        .unwrap());
+
+    assert!(matches!(
+        inject_global_pivots(&mut state, &[], &[]),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
+}
+
+#[test]
 fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
     let (input, left_site, right_site) = delta_tree();
     let options = TreeAciOptions::default();
@@ -416,6 +448,42 @@ fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
         )
         .unwrap();
     for (actual, expected) in actual.iter().zip(expected) {
+        assert!((actual - expected.real()).abs() < 1.0e-12);
+    }
+}
+
+#[test]
+fn shared_guard_hint_preserves_input_and_output_values() {
+    let (input, left_site, right_site) = delta_tree();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let mut output_evaluator = GuardOutputEvaluator::new(
+        &state.output,
+        &state.problem,
+        options.message_cache_max_bytes,
+    )
+    .unwrap();
+    let points = vec![vec![0, 0], vec![1, 0]];
+    let coordinates = input_evaluators.expand_points(&points).unwrap();
+    let hint = input_evaluators.evaluation_hint(&points);
+    let input_values = input_evaluators
+        .evaluate_expanded::<f64>(&points, &coordinates, hint.clone())
+        .unwrap();
+    let output_values: Vec<f64> = output_evaluator
+        .evaluate_expanded(&input_evaluators, &points, &coordinates, hint)
+        .unwrap();
+
+    assert_eq!(input_values, vec![1.0, 0.0]);
+    let expected = state
+        .output
+        .evaluate(
+            &[left_site, right_site],
+            ColMajorArrayRef::new(&coordinates, &[2, 2]).unwrap(),
+        )
+        .unwrap();
+    for (actual, expected) in output_values.iter().zip(expected) {
         assert!((actual - expected.real()).abs() < 1.0e-12);
     }
 }

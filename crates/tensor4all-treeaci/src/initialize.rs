@@ -17,8 +17,8 @@ pub(crate) fn initial_edge_ranks<V: TreeAciNode>(
     inputs: &[TreeTN<IdxTensor, V>],
     problem: &PreparedTreeProblem<V>,
     options: &TreeAciOptions<V>,
+    algebraic_bounds: &[usize],
 ) -> Result<Vec<usize>> {
-    let algebraic_bounds = algebraic_edge_bounds(problem)?;
     let mut ranks = Vec::with_capacity(problem.directed_edges.len() / 2);
     for forward in (0..problem.directed_edges.len()).step_by(2) {
         let edge = &problem.directed_edges[forward];

@@ -42,6 +42,8 @@
 //! for genuinely branched trees.
 
 mod batch;
+#[cfg(feature = "diagnostics")]
+pub mod branch_diagnostics;
 mod elementwise;
 mod error;
 mod frames;

@@ -24,11 +24,34 @@ pub(crate) enum PassDirection {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PassReport {
     pub(crate) direction: PassDirection,
+    #[cfg(test)]
     pub(crate) updated_edges: Vec<DirectedEdgeId>,
     pub(crate) max_rank: usize,
     pub(crate) max_error: f64,
-    pub(crate) rank_changed: bool,
     pub(crate) evaluated_points: u64,
+}
+
+#[derive(Debug, Default)]
+struct UpdateTrace {
+    any: bool,
+    #[cfg(test)]
+    ordered: Vec<DirectedEdgeId>,
+}
+
+impl UpdateTrace {
+    fn with_capacity(_capacity: usize) -> Self {
+        Self {
+            any: false,
+            #[cfg(test)]
+            ordered: Vec::with_capacity(_capacity),
+        }
+    }
+
+    fn record(&mut self, _edge: DirectedEdgeId) {
+        self.any = true;
+        #[cfg(test)]
+        self.ordered.push(_edge);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,40 +106,43 @@ where
         max_ranks.push(report.max_rank);
         max_errors.push(report.max_error);
         rank_limited.push(current_state_is_rank_limited(state, options));
-        let injection_capacities = global_injection_capacities(state, options);
         let found = if options.enable_global_guard
             && options.nsearch_global_pivots > 0
             && options.max_nglobal_pivots > 0
             && !rank_limited[pass]
-            && injection_capacities.iter().any(|capacity| *capacity > 0)
         {
-            if input_evaluators.is_none() {
-                let per_evaluator_budget = per_evaluator_message_cache_budget(
-                    options.message_cache_max_bytes,
-                    state.inputs.len(),
-                )?;
-                input_evaluators = Some(InputEvaluators::new_with_message_cache_max_bytes(
-                    state.inputs,
-                    &state.problem,
-                    per_evaluator_budget,
-                )?);
-            }
-            let input_evaluators =
-                input_evaluators
-                    .as_mut()
-                    .ok_or(TreeAciError::InternalInvariant {
-                        message: "enabled global Guard has no input evaluators",
+            let injection_capacities = global_injection_capacities(state, options);
+            if injection_capacities.iter().any(|capacity| *capacity > 0) {
+                if input_evaluators.is_none() {
+                    let per_evaluator_budget = per_evaluator_message_cache_budget(
+                        options.message_cache_max_bytes,
+                        state.inputs.len(),
+                    )?;
+                    input_evaluators = Some(InputEvaluators::new_with_message_cache_max_bytes(
+                        state.inputs,
+                        &state.problem,
+                        per_evaluator_budget,
+                    )?);
+                }
+                let input_evaluators =
+                    input_evaluators
+                        .as_mut()
+                        .ok_or(TreeAciError::InternalInvariant {
+                            message: "enabled global Guard has no input evaluators",
+                        })?;
+                let seed = options.rng_seed.wrapping_add((pass + 1) as u64);
+                let search = find_global_pivots(state, input_evaluators, options, seed, operator)?;
+                evaluated_points = evaluated_points
+                    .checked_add(search.evaluated_points)
+                    .ok_or(TreeAciError::SizeOverflow {
+                        context: "sweep evaluated point count",
                     })?;
-            let seed = options.rng_seed.wrapping_add((pass + 1) as u64);
-            let search = find_global_pivots(state, input_evaluators, options, seed, operator)?;
-            evaluated_points = evaluated_points
-                .checked_add(search.evaluated_points)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "sweep evaluated point count",
-                })?;
-            let found = search.pivots.len();
-            inject_global_pivots(state, &search.pivots, &injection_capacities)?;
-            found
+                let found = search.pivots.len();
+                inject_global_pivots(state, &search.pivots, &injection_capacities)?;
+                found
+            } else {
+                0
+            }
         } else {
             0
         };
@@ -177,8 +203,7 @@ where
         PassDirection::Forward => state.problem.schedule.forward.clone(),
         PassDirection::Reverse => state.problem.schedule.reverse.clone(),
     };
-    let ranks_before = state.edge_ranks.clone();
-    let mut updated_edges = Vec::with_capacity(state.problem.directed_edges.len() / 2);
+    let mut update_trace = UpdateTrace::with_capacity(state.problem.directed_edges.len() / 2);
     let mut evaluated_points = 0u64;
 
     for phase in &phases {
@@ -187,10 +212,10 @@ where
             options,
             phase,
             operator,
-            &mut updated_edges,
+            &mut update_trace,
             &mut evaluated_points,
         ) {
-            if !updated_edges.is_empty() {
+            if update_trace.any {
                 finalize_deferred_canonicalization(state)?;
             }
             return Err(error);
@@ -214,10 +239,10 @@ where
         .fold(0.0, f64::max);
     Ok(PassReport {
         direction,
-        updated_edges,
+        #[cfg(test)]
+        updated_edges: update_trace.ordered,
         max_rank,
         max_error,
-        rank_changed: state.edge_ranks != ranks_before,
         evaluated_points,
     })
 }
@@ -245,7 +270,7 @@ fn run_phase_serial<T, V, F>(
     options: &TreeAciOptions<V>,
     phase: &PathPhase,
     operator: &mut F,
-    updated_edges: &mut Vec<DirectedEdgeId>,
+    update_trace: &mut UpdateTrace,
     evaluated_points: &mut u64,
 ) -> Result<()>
 where
@@ -284,7 +309,7 @@ where
                 .ok_or(TreeAciError::SizeOverflow {
                     context: "pass evaluated point count",
                 })?;
-            updated_edges.push(directed);
+            update_trace.record(directed);
         }
     }
     Ok(())

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [features]
 default = ["tenferro-cpu-faer"]
+diagnostics = ["tensor4all-treetn/diagnostics"]
 tenferro-cpu-faer = [
     "tensor4all-treetn/tenferro-cpu-faer",
     "tensor4all-tensorbackend/backend-tenferro",

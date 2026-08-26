@@ -624,6 +624,61 @@ fn batched_path_matches_scalar_path_on_random_core() {
     }
 }
 
+fn assert_all_physical_single_incoming_matrix<T>()
+where
+    T: TreeAciScalar + From<f64> + PartialEq + std::fmt::Debug,
+{
+    // Core axes are [incoming, physical_1, outgoing, physical_0], while the
+    // local physical flattening order is [physical_0, physical_1]. This makes
+    // the test sensitive to both the physical-axis map and its strides.
+    let core_dims = vec![2usize, 3, 5, 4];
+    let mut core_strides = Vec::with_capacity(core_dims.len());
+    let mut stride = 1usize;
+    for &dimension in &core_dims {
+        core_strides.push(stride);
+        stride *= dimension;
+    }
+    let core = super::PreparedCore {
+        indices: Vec::new(),
+        dims: core_dims,
+        strides: core_strides,
+        values: (0..stride)
+            .map(|value| T::from(value as f64 + 0.25))
+            .collect(),
+    };
+    let physical = super::LocalPhysicalPlan {
+        indices: Vec::new(),
+        dims: vec![4, 3],
+        strides: vec![1, 4],
+        local_dim: 12,
+    };
+    let matrix =
+        super::single_incoming_all_physical_core_matrix(&core, 2, 0, &physical, &[3, 1], 5, 2);
+
+    for incoming in 0..2 {
+        for local_coordinate in 0..12 {
+            let physical_0 = local_coordinate % 4;
+            let physical_1 = (local_coordinate / 4) % 3;
+            for outgoing in 0..5 {
+                let offset = physical_0 * core.strides[3]
+                    + physical_1 * core.strides[1]
+                    + incoming * core.strides[0]
+                    + outgoing * core.strides[2];
+                assert_eq!(
+                    matrix[[outgoing + 5 * local_coordinate, incoming]],
+                    core.values[offset]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn all_physical_single_incoming_matrix_respects_nontrivial_axis_order() {
+    assert_all_physical_single_incoming_matrix::<f64>();
+    assert_all_physical_single_incoming_matrix::<Complex64>();
+}
+
 /// Builds a 4-node star `1 -- 0 -- 2`, `0 -- 3`, whose center (node `0`) has
 /// three neighbors. Directed edge `1 -> 0` has zero incoming edges (node `1`
 /// is a leaf) -- `InputFrameStore::candidate_frames_for_edge`'s scalar
@@ -945,6 +1000,117 @@ fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     // Sanity: candidates are not all identical, so this exercises real,
     // differing per-candidate contractions rather than a degenerate case.
     assert!(dispatched.iter().any(|frame| frame != &dispatched[0]));
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_number_three() {
+    use crate::branch_diagnostics;
+
+    let inputs = vec![star_tree_for_fallback_dispatch()];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    let incoming_edge_a = directed.incoming_to_from[0];
+    let incoming_edge_b = directed.incoming_to_from[1];
+    let ids_a = &candidate_sets.ids[incoming_edge_a];
+    let ids_b = &candidate_sets.ids[incoming_edge_b];
+
+    let mut candidates = Vec::new();
+    for local_coordinate in 0..2 {
+        for &id_a in ids_a {
+            for &id_b in ids_b {
+                candidates.push(ComponentSample {
+                    local_coordinate,
+                    incoming: vec![(incoming_edge_a, id_a), (incoming_edge_b, id_b)],
+                });
+            }
+        }
+    }
+
+    branch_diagnostics::reset();
+    let _dispatched = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+
+    let snapshot = branch_diagnostics::snapshot();
+    let hub_record = snapshot
+        .iter()
+        .find(|record| record.node == "0:0")
+        .expect("hub node (0) of input 0 recorded in branch diagnostics");
+    assert_eq!(hub_record.coordination_number, 3);
+    assert_eq!(hub_record.bond_dims.len(), 3);
+    assert!(hub_record.frame_cache_hits + hub_record.frame_cache_misses > 0);
+}
+
+/// The same hub node of two different input trees must produce two separate
+/// registry entries: the diagnostics key is namespaced by the operand index.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn frame_diagnostics_keys_are_namespaced_per_input_operand() {
+    use crate::branch_diagnostics;
+
+    // Two operands sharing the same physical indices, as a product's two
+    // inputs do; the clone gives input 1 the same node labels as input 0.
+    let tree = star_tree_for_fallback_dispatch();
+    let inputs = vec![tree.clone(), tree];
+    let options = TreeAciOptions::default();
+    let problem = prepare_problem(&inputs, &options).unwrap();
+
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("star tree must have a directed edge 0 -> 1");
+    let directed = &problem.directed_edges[edge];
+
+    let seeds = vec![vec![0, 0, 0, 0], vec![0, 0, 1, 1]];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    let incoming_edge_a = directed.incoming_to_from[0];
+    let incoming_edge_b = directed.incoming_to_from[1];
+    let id_a = candidate_sets.ids[incoming_edge_a][0];
+    let id_b = candidate_sets.ids[incoming_edge_b][0];
+    let candidate = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![(incoming_edge_a, id_a), (incoming_edge_b, id_b)],
+    };
+
+    branch_diagnostics::reset();
+    let from_input_0 = frames
+        .candidate_frame(&inputs, &problem, 0, edge, &candidate)
+        .unwrap();
+    let from_input_1 = frames
+        .candidate_frame(&inputs, &problem, 1, edge, &candidate)
+        .unwrap();
+    assert_eq!(from_input_0.len(), from_input_1.len());
+
+    let mut snapshot = branch_diagnostics::snapshot();
+    snapshot.sort_by(|a, b| a.node.cmp(&b.node));
+    let nodes: Vec<&str> = snapshot.iter().map(|record| record.node.as_str()).collect();
+    assert_eq!(
+        nodes,
+        vec!["0:0", "1:0"],
+        "the same hub node of two operands must not merge into one entry"
+    );
+    for record in &snapshot {
+        assert_eq!(record.coordination_number, 3);
+        assert_eq!(record.bond_dims.len(), record.coordination_number);
+        assert_eq!(record.frame_cache_hits + record.frame_cache_misses, 1);
+    }
 }
 
 #[test]
@@ -1394,6 +1560,28 @@ fn from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_cha
          {total_memo_slots} slots across {} directed edges",
         problem.directed_edges.len()
     );
+}
+
+#[test]
+fn priming_reuses_memoized_incoming_without_copying_again() {
+    let input = chain_tree_for_batched_compute();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0]]).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .expect("chain must have a single-incoming edge 1 -> 2");
+    let incoming = problem.directed_edges[edge].incoming_to_from[0];
+    let mut builder = build_frame_builder(&input, &problem, &arena);
+
+    super::debug_stats::reset();
+    builder.ensure_computed(incoming, 0).unwrap();
+    builder.ensure_computed(incoming, 0).unwrap();
+
+    assert_eq!(super::debug_stats::compute_calls(), 1);
+    assert_eq!(super::debug_stats::memo_hit_copies(), 0);
 }
 
 /// A chain's non-leaf directed edges have exactly one incoming edge and must

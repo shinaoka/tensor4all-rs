@@ -2,7 +2,7 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
 use super::TreeAciState;
-use crate::initialize::{build_random_output, initial_edge_ranks};
+use crate::initialize::{algebraic_edge_bounds, build_random_output, initial_edge_ranks};
 use crate::problem::prepare_problem;
 use crate::schedule::run_local_sweeps;
 use crate::{TreeAciError, TreeAciOptions};
@@ -309,7 +309,8 @@ fn unseeded_initialization_defers_numeric_canonicalization() {
         ..TreeAciOptions::default()
     };
     let problem = prepare_problem(&inputs, &options).unwrap();
-    let edge_ranks = initial_edge_ranks(&inputs, &problem, &options).unwrap();
+    let algebraic_bounds = algebraic_edge_bounds(&problem).unwrap();
+    let edge_ranks = initial_edge_ranks(&inputs, &problem, &options, &algebraic_bounds).unwrap();
     let raw =
         build_random_output::<f64, usize>(&inputs[0], &problem, &edge_ranks, &options).unwrap();
     let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
