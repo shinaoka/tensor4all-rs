@@ -77,7 +77,8 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         let stage_started = std::time::Instant::now();
         let problem = prepare_problem(inputs, options)?;
         let algebraic_edge_bounds = algebraic_edge_bounds(&problem)?;
-        let initial_edge_ranks = initial_edge_ranks(inputs, &problem, options)?;
+        let initial_edge_ranks =
+            initial_edge_ranks(inputs, &problem, options, &algebraic_edge_bounds)?;
         #[cfg(test)]
         profile_debug_stats::record(|stats| stats.preparation = stage_started.elapsed());
         #[cfg(test)]

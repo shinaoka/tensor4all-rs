@@ -55,6 +55,17 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     forward: DirectedEdgeId,
     proposal: LocalUpdateResult<T>,
 ) -> Result<EdgeCommitReport> {
+    let LocalUpdateResult {
+        row_samples,
+        col_samples,
+        left,
+        right,
+        pivot_errors,
+        sampled_scale,
+        row_count,
+        col_count,
+        ..
+    } = proposal;
     let directed =
         state
             .problem
@@ -64,18 +75,13 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
                 message: "edge proposal references an unknown directed edge",
             })?;
     let reverse = directed.reverse;
-    let new_rank = proposal.left.ncols();
-    let evaluated_points =
-        proposal
-            .row_count
-            .checked_mul(proposal.col_count)
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "edge evaluated point count",
-            })?;
-    if proposal.right.nrows() != new_rank
-        || proposal.row_samples.len() != new_rank
-        || proposal.col_samples.len() != new_rank
-    {
+    let new_rank = left.ncols();
+    let evaluated_points = row_count
+        .checked_mul(col_count)
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "edge evaluated point count",
+        })?;
+    if right.nrows() != new_rank || row_samples.len() != new_rank || col_samples.len() != new_rank {
         return Err(TreeAciError::InternalInvariant {
             message: "edge proposal factors and selected samples disagree on rank",
         });
@@ -90,13 +96,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     #[cfg(test)]
     let output_started = std::time::Instant::now();
     let mut proposed_output = state.output.clone();
-    replace_edge_cores(
-        &mut proposed_output,
-        &state.problem,
-        forward,
-        proposal.left,
-        proposal.right,
-    )?;
+    replace_edge_cores(&mut proposed_output, &state.problem, forward, left, right)?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.output_staging += output_started.elapsed();
@@ -105,20 +105,16 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     let staged = (|| {
         #[cfg(test)]
         let samples_started = std::time::Instant::now();
-        let left_ids = proposal
-            .row_samples
-            .iter()
-            .cloned()
+        let left_ids = row_samples
+            .into_iter()
             .map(|sample| {
                 state
                     .sample_arena
                     .intern_component(&state.problem, forward, sample)
             })
             .collect::<Result<Vec<_>>>()?;
-        let right_ids = proposal
-            .col_samples
-            .iter()
-            .cloned()
+        let right_ids = col_samples
+            .into_iter()
             .map(|sample| {
                 state
                     .sample_arena
@@ -174,7 +170,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     };
     state.pivots.set(edge_number, pivot_pairs);
 
-    let pivot_error = proposal.pivot_errors.last().copied().unwrap_or(0.0);
+    let pivot_error = pivot_errors.last().copied().unwrap_or(0.0);
     state.output = proposed_output;
     state.input_frames = proposed_frames;
     state.edge_ranks[edge_number] = state.pivots.rank(edge_number);
@@ -187,7 +183,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         forward,
         new_rank,
         pivot_error,
-        sampled_scale: proposal.sampled_scale,
+        sampled_scale,
         evaluated_points,
     })
 }

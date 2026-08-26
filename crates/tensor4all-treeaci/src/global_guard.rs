@@ -119,13 +119,19 @@ where
                 input_evaluators
                     .enforce_guard_batch_budget_with_retained::<T>(points.len(), retained_bytes)?;
                 let coordinates = input_evaluators.expand_points(points)?;
-                let input_values = input_evaluators.evaluate_expanded::<T>(points, &coordinates)?;
+                let hint = input_evaluators.evaluation_hint(points);
+                let input_values =
+                    input_evaluators.evaluate_expanded::<T>(points, &coordinates, hint.clone())?;
                 let batch =
                     TreeElementwiseBatch::new(&input_values, state.inputs.len(), points.len())?;
                 let mut target = vec![T::default(); points.len()];
                 operator(batch, &mut target)?;
-                let approximation =
-                    output_evaluator.evaluate_expanded(input_evaluators, points, &coordinates)?;
+                let approximation = output_evaluator.evaluate_expanded(
+                    input_evaluators,
+                    points,
+                    &coordinates,
+                    hint,
+                )?;
                 Ok(target
                     .into_iter()
                     .zip(approximation)
@@ -195,6 +201,9 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         return Err(TreeAciError::InternalInvariant {
             message: "global-pivot growth capacities differ from tree edge count",
         });
+    }
+    if points.is_empty() {
+        return Ok(0);
     }
     let checkpoint = state.sample_arena.checkpoint();
     let mut proposed_active = state.candidates.clone();
@@ -635,7 +644,8 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
     pub(crate) fn evaluate<T: TreeAciScalar>(&mut self, points: &[Vec<usize>]) -> Result<Vec<T>> {
         self.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = self.expand_points(points)?;
-        self.evaluate_expanded(points, &coordinates)
+        let hint = self.evaluation_hint(points);
+        self.evaluate_expanded(points, &coordinates, hint)
     }
 
     fn enforce_guard_batch_budget<T: TreeAciScalar>(&self, point_count: usize) -> Result<()> {
@@ -684,8 +694,8 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         &mut self,
         points: &[Vec<usize>],
         coordinates: &[usize],
+        hint: EvaluationHint<V>,
     ) -> Result<Vec<T>> {
-        let hint = self.evaluation_hint(points);
         let shape = [self.index_count, points.len()];
         let values = ColMajorArrayRef::new(coordinates, &shape).map_err(|error| {
             TreeAciError::Numerical {
@@ -804,7 +814,8 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
     ) -> Result<Vec<T>> {
         input_evaluators.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = input_evaluators.expand_points(points)?;
-        self.evaluate_expanded(input_evaluators, points, &coordinates)
+        let hint = input_evaluators.evaluation_hint(points);
+        self.evaluate_expanded(input_evaluators, points, &coordinates, hint)
     }
 
     fn evaluate_expanded<T: TreeAciScalar>(
@@ -812,6 +823,7 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         input_evaluators: &InputEvaluators<'_, V>,
         points: &[Vec<usize>],
         coordinates: &[usize],
+        hint: EvaluationHint<V>,
     ) -> Result<Vec<T>> {
         let shape = [input_evaluators.index_count, points.len()];
         let values = ColMajorArrayRef::new(coordinates, &shape).map_err(|error| {
@@ -820,7 +832,7 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
             }
         })?;
         self.evaluator
-            .evaluate_batched_with_hint(values, input_evaluators.evaluation_hint(points))?
+            .evaluate_batched_with_hint(values, hint)?
             .into_iter()
             .map(|value| {
                 T::from_evaluated_scalar(value).map_err(|message| TreeAciError::ScalarKind {

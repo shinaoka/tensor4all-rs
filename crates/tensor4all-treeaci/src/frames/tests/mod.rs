@@ -624,6 +624,61 @@ fn batched_path_matches_scalar_path_on_random_core() {
     }
 }
 
+fn assert_all_physical_single_incoming_matrix<T>()
+where
+    T: TreeAciScalar + From<f64> + PartialEq + std::fmt::Debug,
+{
+    // Core axes are [incoming, physical_1, outgoing, physical_0], while the
+    // local physical flattening order is [physical_0, physical_1]. This makes
+    // the test sensitive to both the physical-axis map and its strides.
+    let core_dims = vec![2usize, 3, 5, 4];
+    let mut core_strides = Vec::with_capacity(core_dims.len());
+    let mut stride = 1usize;
+    for &dimension in &core_dims {
+        core_strides.push(stride);
+        stride *= dimension;
+    }
+    let core = super::PreparedCore {
+        indices: Vec::new(),
+        dims: core_dims,
+        strides: core_strides,
+        values: (0..stride)
+            .map(|value| T::from(value as f64 + 0.25))
+            .collect(),
+    };
+    let physical = super::LocalPhysicalPlan {
+        indices: Vec::new(),
+        dims: vec![4, 3],
+        strides: vec![1, 4],
+        local_dim: 12,
+    };
+    let matrix =
+        super::single_incoming_all_physical_core_matrix(&core, 2, 0, &physical, &[3, 1], 5, 2);
+
+    for incoming in 0..2 {
+        for local_coordinate in 0..12 {
+            let physical_0 = local_coordinate % 4;
+            let physical_1 = (local_coordinate / 4) % 3;
+            for outgoing in 0..5 {
+                let offset = physical_0 * core.strides[3]
+                    + physical_1 * core.strides[1]
+                    + incoming * core.strides[0]
+                    + outgoing * core.strides[2];
+                assert_eq!(
+                    matrix[[outgoing + 5 * local_coordinate, incoming]],
+                    core.values[offset]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn all_physical_single_incoming_matrix_respects_nontrivial_axis_order() {
+    assert_all_physical_single_incoming_matrix::<f64>();
+    assert_all_physical_single_incoming_matrix::<Complex64>();
+}
+
 /// Builds a 4-node star `1 -- 0 -- 2`, `0 -- 3`, whose center (node `0`) has
 /// three neighbors. Directed edge `1 -> 0` has zero incoming edges (node `1`
 /// is a leaf) -- `InputFrameStore::candidate_frames_for_edge`'s scalar
@@ -1505,6 +1560,28 @@ fn from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_cha
          {total_memo_slots} slots across {} directed edges",
         problem.directed_edges.len()
     );
+}
+
+#[test]
+fn priming_reuses_memoized_incoming_without_copying_again() {
+    let input = chain_tree_for_batched_compute();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0]]).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .expect("chain must have a single-incoming edge 1 -> 2");
+    let incoming = problem.directed_edges[edge].incoming_to_from[0];
+    let mut builder = build_frame_builder(&input, &problem, &arena);
+
+    super::debug_stats::reset();
+    builder.ensure_computed(incoming, 0).unwrap();
+    builder.ensure_computed(incoming, 0).unwrap();
+
+    assert_eq!(super::debug_stats::compute_calls(), 1);
+    assert_eq!(super::debug_stats::memo_hit_copies(), 0);
 }
 
 /// A chain's non-leaf directed edges have exactly one incoming edge and must

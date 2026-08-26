@@ -27,7 +27,6 @@ pub(crate) struct PassReport {
     pub(crate) updated_edges: Vec<DirectedEdgeId>,
     pub(crate) max_rank: usize,
     pub(crate) max_error: f64,
-    pub(crate) rank_changed: bool,
     pub(crate) evaluated_points: u64,
 }
 
@@ -177,7 +176,6 @@ where
         PassDirection::Forward => state.problem.schedule.forward.clone(),
         PassDirection::Reverse => state.problem.schedule.reverse.clone(),
     };
-    let ranks_before = state.edge_ranks.clone();
     let mut updated_edges = Vec::with_capacity(state.problem.directed_edges.len() / 2);
     let mut evaluated_points = 0u64;
 
@@ -217,7 +215,6 @@ where
         updated_edges,
         max_rank,
         max_error,
-        rank_changed: state.edge_ranks != ranks_before,
         evaluated_points,
     })
 }
