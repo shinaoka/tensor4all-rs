@@ -22,6 +22,9 @@ mod context;
 #[cfg(feature = "tenferro-cuda")]
 /// Explicit visible-ordinal-0 CUDA execution and transfer boundaries.
 mod cuda;
+#[cfg(feature = "global-defaults")]
+/// Incremental QR state for successive randomized compression.
+mod incremental_qr;
 #[cfg(feature = "explicit-context")]
 /// Backend-free tensor snapshots for execution-domain transfer.
 mod logical_tensor;
@@ -56,6 +59,8 @@ pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 pub use context::{CpuExecutionContext, CpuExecutionContextError};
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::{CudaExecutionContext, CudaExecutionContextError, CUDA_ORDINAL};
+#[cfg(feature = "global-defaults")]
+pub use incremental_qr::{IncrementalQr, IncrementalQrScalar};
 #[cfg(feature = "explicit-context")]
 pub use logical_tensor::{LogicalTensor, LogicalTensorData, LogicalTensorError};
 #[cfg(feature = "global-defaults")]
