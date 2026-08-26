@@ -1,16 +1,16 @@
 use super::*;
-
-fn projector(pairs: impl IntoIterator<Item = (DynIndex, usize)>) -> Projector {
-    Projector::from_pairs(pairs).unwrap()
-}
 use num_complex::Complex64;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+#[cfg(feature = "adaptive-hataori-rayon")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "adaptive-hataori-rayon")]
+use std::sync::Arc;
 use tensor4all_core::contract;
 use tensor4all_tensorbackend::StorageKind;
 
-fn dense_f64(result: &PartitionedTT) -> Vec<f64> {
-    let tt = result.to_tensor_train().unwrap();
+fn dense_f64(result: &AdaptiveInterpolationResult<f64>) -> Vec<f64> {
+    let tt = result.partitioned_tt().to_tensor_train().unwrap();
     let tensors: Vec<_> = (0..tt.len()).map(|site| tt.tensor(site).unwrap()).collect();
     contract(&tensors).unwrap().to_vec::<f64>().unwrap()
 }
@@ -57,7 +57,7 @@ fn interpolates_low_rank_function_without_splitting() {
     )
     .unwrap();
 
-    assert_eq!(result.len(), 1);
+    assert_eq!(result.partitioned_tt().len(), 1);
     assert_eq!(
         dense_f64(&result),
         vec![6.0, 12.0, 9.0, 18.0, 8.0, 16.0, 12.0, 24.0]
@@ -87,7 +87,7 @@ fn evaluates_single_active_site_exactly() {
     )
     .unwrap();
 
-    assert_eq!(result.len(), 1);
+    assert_eq!(result.partitioned_tt().len(), 1);
     assert_eq!(dense_f64(&result), vec![1.0, 2.0, 5.0, 10.0]);
 }
 
@@ -119,20 +119,43 @@ fn rank_cap_forces_disjoint_exact_child_patches() {
     let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         function,
         None,
-        sites,
+        sites.clone(),
         vec![vec![0, 0, 0], vec![1, 1, 1]],
         options,
     )
     .unwrap();
 
-    assert!(result.len() >= 2);
+    assert!(result.partitioned_tt().len() >= 2);
     assert!(Projector::are_disjoint(
-        &result.projectors().cloned().collect::<Vec<_>>()
+        &result
+            .partitioned_tt()
+            .projectors()
+            .cloned()
+            .collect::<Vec<_>>()
     ));
     assert_eq!(
         dense_f64(&result),
         vec![2.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 2.0]
     );
+    assert_eq!(result.patch_caches().len(), result.partitioned_tt().len());
+    for cache in result.patch_caches() {
+        assert!(result.partitioned_tt().contains(cache.projector()));
+        for local_index in cache.cache.entries.keys() {
+            let full = expand_pivot(
+                local_index,
+                cache.active_positions(),
+                cache.projector(),
+                &sites,
+            );
+            assert!(is_compatible_pivot(&full, &sites, cache.projector()));
+        }
+    }
+    let mut returned = result.patch_caches().to_vec();
+    assert!(returned.iter().map(AcceptedPatchCache::len).sum::<usize>() > 0);
+    let projector = returned[0].projector().clone();
+    returned[0].clear();
+    assert!(returned[0].is_empty());
+    assert_eq!(returned[0].projector(), &projector);
 }
 
 #[test]
@@ -176,7 +199,7 @@ fn supports_complex_values() {
         AdaptiveInterpolateOptions::default(),
     )
     .unwrap();
-    let tt = result.to_tensor_train().unwrap();
+    let tt = result.partitioned_tt().to_tensor_train().unwrap();
     let tensors: Vec<_> = (0..tt.len()).map(|site| tt.tensor(site).unwrap()).collect();
     let dense = contract(&tensors).unwrap().to_vec::<Complex64>().unwrap();
 
@@ -203,7 +226,7 @@ fn sampled_zero_patch_is_represented_as_zero() {
     )
     .unwrap();
 
-    assert_eq!(result.len(), 1);
+    assert_eq!(result.partitioned_tt().len(), 1);
     assert_eq!(dense_f64(&result), vec![0.0; 4]);
 }
 
@@ -235,7 +258,7 @@ fn extracts_full_diagonal_pivots_for_recycling() {
 #[test]
 fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
     let sites = binary_sites(3);
-    let projector = projector([(sites[0].clone(), 1)]);
+    let projector = Projector::from_pairs([(sites[0].clone(), 1)]).unwrap();
     let active = active_positions(&sites, &projector);
     let recycled = vec![vec![0, 0, 0], vec![0, 1, 1]];
     let mut rng = StdRng::seed_from_u64(7);
@@ -262,7 +285,7 @@ fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
 fn projected_middle_sites_use_compact_structured_storage() {
     let sites = binary_sites(3);
     let active = vec![0, 2];
-    let projector = projector([(sites[1].clone(), 1)]);
+    let projector = Projector::from_pairs([(sites[1].clone(), 1)]).unwrap();
     let active_tt = tensor4all_simplett::SimpleTensorTrain::new(vec![
         tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(vec![5.0, 6.0, 7.0, 8.0], 2, 2, 1).unwrap(),
@@ -285,6 +308,191 @@ fn projected_middle_sites_use_compact_structured_storage() {
         .collect();
     let dense = contract(&tensors).unwrap().to_vec::<f64>().unwrap();
     assert_eq!(dense, vec![0.0, 0.0, 23.0, 34.0, 0.0, 0.0, 31.0, 46.0]);
+}
+
+#[test]
+fn cache_split_moves_entries_to_one_child_for_every_split_position() {
+    let dims = vec![2, 3, 2];
+    let mut parent = PatchCache::new(dims.clone());
+    for i in 0..dims[0] {
+        for j in 0..dims[1] {
+            for k in 0..dims[2] {
+                parent.entries.insert(vec![i, j, k], 100 * i + 10 * j + k);
+            }
+        }
+    }
+
+    for (split_pos, &child_count) in dims.iter().enumerate() {
+        let children = parent.clone().split(split_pos, child_count).unwrap();
+        assert_eq!(children.len(), child_count);
+        assert_eq!(
+            children
+                .iter()
+                .map(|cache| cache.entries.len())
+                .sum::<usize>(),
+            parent.entries.len()
+        );
+        for (child, cache) in children.iter().enumerate() {
+            for (local, &value) in &cache.entries {
+                let mut full = local.clone();
+                full.insert(split_pos, child);
+                assert_eq!(parent.entries.get(&full), Some(&value));
+            }
+        }
+    }
+}
+
+#[test]
+fn cache_split_keeps_sibling_maps_independent() {
+    let mut parent = PatchCache::new(vec![2, 2]);
+    parent.entries.insert(vec![0, 0], 1);
+    parent.entries.insert(vec![1, 1], 2);
+    let mut children = parent.split(0, 2).unwrap();
+
+    children[0].entries.clear();
+
+    assert!(children[0].entries.is_empty());
+    assert_eq!(children[1].entries.get(&vec![1]), Some(&2));
+}
+
+#[test]
+fn child_cache_hits_inherited_samples_but_not_sibling_samples() {
+    let sites = binary_sites(2);
+    let mut parent = PatchCache::new(vec![2, 2]);
+    parent.entries.insert(vec![0, 1], 7.0_f64);
+    parent.entries.insert(vec![1, 0], 8.0_f64);
+    let mut children = parent.split(0, 2).unwrap();
+    let calls = Cell::new(0);
+    let function = |full: &MultiIndex| {
+        calls.set(calls.get() + 1);
+        (10 * full[0] + full[1]) as f64
+    };
+    let projector = Projector::from_pairs([(sites[0].clone(), 0)]).unwrap();
+    let evaluator = PatchEvaluator::<_, _, fn(&[MultiIndex]) -> Vec<f64>>::new(
+        &function,
+        None,
+        &[1],
+        &projector,
+        &sites,
+        children.remove(0),
+    )
+    .unwrap();
+
+    assert_eq!(evaluator.eval(&vec![1]), 7.0);
+    assert_eq!(
+        calls.get(),
+        0,
+        "the matching parent sample must be inherited"
+    );
+    assert_eq!(evaluator.eval(&vec![0]), 0.0);
+    assert_eq!(calls.get(), 1, "a sibling-only sample must be re-evaluated");
+}
+
+#[test]
+fn batch_cache_deduplicates_misses_and_restores_order() {
+    let sites = binary_sites(2);
+    let calls = Rc::new(RefCell::new(Vec::<Vec<MultiIndex>>::new()));
+    let recorded = Rc::clone(&calls);
+    let scalar = |index: &MultiIndex| (10 * index[0] + index[1]) as f64;
+    let batch = move |indices: &[MultiIndex]| {
+        recorded.borrow_mut().push(indices.to_vec());
+        indices
+            .iter()
+            .map(|index| (10 * index[0] + index[1]) as f64)
+            .collect()
+    };
+    let projector = Projector::new();
+    let evaluator = PatchEvaluator::new(
+        &scalar,
+        Some(&batch),
+        &[0, 1],
+        &projector,
+        &sites,
+        PatchCache::new(vec![2, 2]),
+    )
+    .unwrap();
+    let input = vec![vec![0, 1], vec![0, 1], vec![1, 0]];
+
+    assert_eq!(evaluator.eval_many(&input), vec![1.0, 1.0, 10.0]);
+    assert_eq!(calls.borrow().as_slice(), &[vec![vec![0, 1], vec![1, 0]]]);
+    assert_eq!(evaluator.eval_many(&input), vec![1.0, 1.0, 10.0]);
+    assert_eq!(calls.borrow().len(), 1);
+    assert_eq!(evaluator.into_cache().entries.len(), 2);
+}
+
+#[test]
+fn batch_cache_length_mismatch_is_reported_without_inserting() {
+    let sites = binary_sites(2);
+    let scalar = |_: &MultiIndex| 1.0_f64;
+    let batch = |_: &[MultiIndex]| vec![1.0_f64];
+    let projector = Projector::new();
+    let evaluator = PatchEvaluator::new(
+        &scalar,
+        Some(&batch),
+        &[0, 1],
+        &projector,
+        &sites,
+        PatchCache::new(vec![2, 2]),
+    )
+    .unwrap();
+
+    assert_eq!(
+        evaluator.eval_many(&[vec![0, 0], vec![1, 1]]),
+        vec![0.0, 0.0]
+    );
+    assert!(matches!(
+        evaluator.take_error(),
+        Some(PartitionedTTError::InvalidAdaptiveInterpolationInput(message))
+            if message.contains("cache misses")
+    ));
+    assert!(evaluator.into_cache().entries.is_empty());
+}
+
+#[cfg(feature = "adaptive-hataori-mpi")]
+#[test]
+fn malformed_wire_cores_are_rejected_before_reconstruction() {
+    let valid = || WireCore {
+        dims: [1, 2, 1],
+        data: vec![1.0_f64, 2.0],
+    };
+    let cases = vec![
+        vec![valid()],
+        vec![
+            WireCore {
+                dims: [usize::MAX, 2, 1],
+                data: Vec::new(),
+            },
+            valid(),
+        ],
+        vec![
+            WireCore {
+                dims: [1, 2, 1],
+                data: vec![1.0],
+            },
+            valid(),
+        ],
+        vec![
+            WireCore {
+                dims: [1, 3, 1],
+                data: vec![1.0, 2.0, 3.0],
+            },
+            valid(),
+        ],
+    ];
+    for cores in cases {
+        let outcome = WirePatchOutcome::Accepted(WireAcceptedPatch {
+            path: Vec::new(),
+            active_positions: vec![0, 1],
+            cache: PatchCache::new(vec![2, 2]),
+            data: WireAcceptedData::Active(cores),
+        });
+        let sites = binary_sites(2);
+        let error = patch_outcome_from_wire(outcome, &sites, &sites).unwrap_err();
+        assert!(matches!(
+            error,
+            PartitionedTTError::DistributedAdaptiveInterpolation(_)
+        ));
+    }
 }
 
 #[test]
@@ -431,13 +639,102 @@ fn rejects_invalid_patch_order_and_pivots() {
     }
 }
 
+#[cfg(feature = "adaptive-hataori-rayon")]
+#[test]
+fn hataori_outer_matches_sequential_and_allows_nested_rayon() {
+    let sites = binary_sites(1);
+    let function = |index: &MultiIndex| (index[0] + 1) as f64;
+    let options = AdaptiveInterpolateOptions {
+        tci_options: TCI2Options {
+            seed: Some(11),
+            ..TCI2Options::default()
+        },
+        ..AdaptiveInterpolateOptions::default()
+    };
+    let sequential = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        function,
+        None,
+        sites.clone(),
+        Vec::new(),
+        options.clone(),
+    )
+    .unwrap();
+
+    // One explicit worker keeps this nested-pool contract test independent of
+    // workspace-wide nextest process parallelism and host thread limits.
+    let workers = 1;
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap(),
+    );
+    let domain =
+        hataori::Domain::external(Arc::clone(&pool), (0..workers).collect(), workers).unwrap();
+    let nested = Arc::new(AtomicBool::new(false));
+    let nested_for_callback = Arc::clone(&nested);
+    let parallel_function = move |index: &MultiIndex| {
+        let (left, right) = rayon::join(
+            || rayon::current_thread_index().is_some(),
+            || rayon::current_thread_index().is_some(),
+        );
+        nested_for_callback.fetch_or(left && right, Ordering::Relaxed);
+        function(index)
+    };
+    let parallel = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        &domain,
+        parallel_function,
+        None,
+        sites,
+        Vec::new(),
+        options,
+    )
+    .unwrap();
+
+    assert!(nested.load(Ordering::Relaxed));
+    assert_eq!(parallel.patch_caches()[0].get(&[0]), Some(&1.0));
+    assert_eq!(parallel.patch_caches()[0].get(&[1]), Some(&2.0));
+    assert_eq!(
+        parallel.patch_caches()[0].len(),
+        sequential.patch_caches()[0].len()
+    );
+    let sequential_projectors: HashSet<_> = sequential
+        .patch_caches()
+        .iter()
+        .map(|cache| cache.projector().clone())
+        .collect();
+    let parallel_projectors: HashSet<_> = parallel
+        .patch_caches()
+        .iter()
+        .map(|cache| cache.projector().clone())
+        .collect();
+    assert_eq!(parallel_projectors, sequential_projectors);
+}
+
+#[cfg(feature = "adaptive-hataori-rayon")]
+#[test]
+fn hataori_entry_rejects_a_sequential_domain() {
+    let error = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        &hataori::Domain::sequential(),
+        |_| 1.0,
+        None,
+        binary_sites(2),
+        Vec::new(),
+        AdaptiveInterpolateOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        PartitionedTTError::HataoriLocal {
+            source: hataori::MapInError::MissingPool,
+            ..
+        }
+    ));
+}
+
 #[test]
 fn numerically_zero_child_patch_is_accepted_not_crash_issue598() {
-    // Regression test for issue #598: a 2D fused-quantics Gaussian mixture
-    // whose child patches decay below floating-point resolution used to make
-    // TCI2 empty its pivot sets and fail with "Dimension mismatch: tensor at
-    // site 5 has incompatible dimensions". The zero (sub)domain must be
-    // accepted as a rank-one patch instead.
     const WEIGHTS: [f64; 3] = [1.3, 0.9, 0.9];
     const ALPHAS: [f64; 3] = [2.8, 5.4, 0.7];
     const CENTERS: [(f64, f64); 3] = [(0.4, 0.1), (3.8, -0.8), (-5.5, -2.1)];
@@ -483,8 +780,8 @@ fn numerically_zero_child_patch_is_accepted_not_crash_issue598() {
     )
     .expect("adaptiveinterpolate must accept every patch, including near-zero ones");
 
-    // The patches must cover the full domain with a valid global tensor train.
     let tt = result
+        .partitioned_tt()
         .to_tensor_train()
         .expect("valid combined tensor train");
     let _ = tt.bond_dims();

@@ -270,7 +270,8 @@ assert!(*result.errors.last().unwrap() < 1e-10);
 
 `adaptiveinterpolate` runs TCI2 per patch and subdivides patches that miss the
 tolerance. Pivots are full-domain and **0-indexed** (tensorci territory, not
-quanticstci). The result is a `PartitionedTT`; `to_tensor_train()` recombines it.
+quanticstci). The result contains a `PartitionedTT` and one sample cache per
+accepted patch; `partitioned_tt().to_tensor_train()` recombines the patches.
 
 ```rust
 use tensor4all_core::contract;
@@ -288,9 +289,10 @@ let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
     vec![vec![1, 1]],                      // initial pivots where |f| is large
     AdaptiveInterpolateOptions::default(), // tci_options tol 1e-8, n_initial_pivots 5
 )?;
-assert_eq!(result.len(), 1);               // one patch covered the whole domain
+assert_eq!(result.partitioned_tt().len(), 1); // one patch covered the whole domain
+assert_eq!(result.patch_caches().len(), 1);
 
-let tt = result.to_tensor_train()?;
+let tt = result.partitioned_tt().to_tensor_train()?;
 let dense = contract(&[tt.tensor(0)?, tt.tensor(1)?])?;
 assert_eq!(dense.to_vec::<f64>()?, vec![1.0, 2.0, 2.0, 4.0]); // column-major
 # Ok::<(), Box<dyn std::error::Error>>(())

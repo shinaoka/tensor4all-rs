@@ -27,7 +27,14 @@ mod subdomain_tt;
 #[cfg(test)]
 mod test_utils;
 
-pub use adaptive_interpolation::{adaptiveinterpolate, AdaptiveInterpolateOptions};
+#[cfg(feature = "adaptive-hataori-rayon")]
+pub use adaptive_interpolation::adaptiveinterpolate_in;
+#[cfg(feature = "adaptive-hataori-mpi")]
+pub use adaptive_interpolation::adaptiveinterpolate_mpi;
+pub use adaptive_interpolation::{
+    adaptiveinterpolate, AcceptedPatchCache, AdaptiveInterpolateOptions,
+    AdaptiveInterpolationResult,
+};
 pub use contract::{contract, proj_contract};
 pub use error::{PartitionedTTError, Result};
 pub use partitioned_tt::PartitionedTT;
