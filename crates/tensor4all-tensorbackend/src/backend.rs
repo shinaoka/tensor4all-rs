@@ -379,6 +379,13 @@ pub struct SrcErrorEstimate {
 /// Compute the Appendix C SRC error and norm estimates from an upper-triangular
 /// QR factor `R`.
 ///
+/// Provenance: the formulas are Eq. (err-est) and Eq. (norm-est) in Appendix C
+/// of Camaño--Epperly--Tropp, [arXiv:2504.06475](https://arxiv.org/abs/2504.06475),
+/// cross-checked against `chriscamano/RandomMPOMPS/code/tensornetwork/incrementalqr.cpp::get_error_estimate`
+/// (lines 106--119). The use of actual `R` plus an `R†` solve is an equivalent
+/// representation derived in the audit; it is not a literal port of the
+/// author's inverse-`R` storage.
+///
 /// The helper explicitly builds `R†` before solving `R† G = I`, so complex
 /// inputs use the Hermitian adjoint rather than a plain transpose. The solve is
 /// delegated to the configured tensor4all backend and is restricted to the
@@ -402,6 +409,22 @@ pub struct SrcErrorEstimate {
 pub fn src_error_estimate<T>(
     r: &Matrix<T>,
 ) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar + ComplexFloat,
+{
+    let inverse_adjoint = src_inverse_adjoint(r)?;
+    src_error_estimate_from_inverse_adjoint(r, &inverse_adjoint)
+}
+
+/// Compute the inverse adjoint `R^{-†}` used by the Appendix C estimator.
+///
+/// This is crate-visible so incremental QR can initialize the stored
+/// estimator state once and then update it with the block formula from
+/// Appendix C.3 instead of solving the same triangular system after every
+/// appended sketch block.
+pub(crate) fn src_inverse_adjoint<T>(
+    r: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: MatrixTriangularSolveScalar + ComplexFloat,
 {
@@ -453,22 +476,58 @@ where
                 "SRC inverse-adjoint triangular solve failed: {error}"
             ))
         })?;
+    Ok(inverse_adjoint)
+}
 
-    let mut inverse_row_error_sq = 0.0_f64;
-    for row in 0..nrows {
-        let row_norm_sq = (0..ncols)
-            .map(|col| inverse_adjoint[[row, col]].matrix_abs_sq())
+/// Evaluate the Appendix C estimator from a previously computed `R^{-†}`.
+///
+/// The inverse-adjoint argument is intentionally separate from
+/// [`src_error_estimate`] so incremental QR can reuse its updated triangular
+/// solve state. This helper performs only norm accumulation and validation.
+pub(crate) fn src_error_estimate_from_inverse_adjoint<T>(
+    r: &Matrix<T>,
+    inverse_adjoint: &Matrix<T>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar + ComplexFloat,
+{
+    let nrows = r.nrows();
+    let ncols = r.ncols();
+    if nrows != ncols || inverse_adjoint.nrows() != nrows || inverse_adjoint.ncols() != ncols {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires matching square R and inverse-adjoint factors"
+        )));
+    }
+    if nrows == 0 {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a non-empty R"
+        )));
+    }
+
+    let mut norm_sq = 0.0_f64;
+    for value in r.as_col_major_slice() {
+        norm_sq += value.matrix_abs_sq();
+    }
+    if !norm_sq.is_finite() {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires finite entries in R"
+        )));
+    }
+    let mut inverse_column_error_sq = 0.0_f64;
+    for col in 0..ncols {
+        let column_norm_sq = (0..nrows)
+            .map(|row| inverse_adjoint[[row, col]].matrix_abs_sq())
             .sum::<f64>();
-        if !row_norm_sq.is_finite() || row_norm_sq == 0.0 {
+        if !column_norm_sq.is_finite() || column_norm_sq == 0.0 {
             return Err(BackendLinalgError::from(anyhow!(
-                "SRC inverse-adjoint solve returned an invalid row norm at row {row}"
+                "SRC inverse-adjoint solve returned an invalid column norm at column {col}"
             )));
         }
-        inverse_row_error_sq += 1.0 / row_norm_sq;
+        inverse_column_error_sq += 1.0 / column_norm_sq;
     }
 
     let sketch_width = ncols as f64;
-    let error_sq = inverse_row_error_sq / sketch_width;
+    let error_sq = inverse_column_error_sq / sketch_width;
     let norm_estimate_sq = norm_sq / sketch_width;
     if !error_sq.is_finite() || !norm_estimate_sq.is_finite() {
         return Err(BackendLinalgError::from(anyhow!(

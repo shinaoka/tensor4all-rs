@@ -537,6 +537,32 @@ fn src_fixed_matches_exact_contraction_when_probe_cap_is_full() {
 }
 
 #[test]
+fn src_fixed_handles_scalar_sites_in_a_chain() {
+    for output_sites in [[false, true, true], [true, false, true]] {
+        let (tn_a, tn_b) = make_chain_pair_with_outputs(&output_sites);
+        let expected = tn_a.contract_naive(&tn_b).unwrap();
+        let actual = contract(
+            &tn_a,
+            &tn_b,
+            &"S2".to_string(),
+            ContractionOptions::src()
+                .with_max_bond_dim(4)
+                .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false)),
+        )
+        .unwrap();
+        let error = actual
+            .to_dense()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        assert!(error < 1.0e-8, "scalar-site SRC residual is {error}");
+        actual.validate_ortho_consistency().unwrap();
+    }
+}
+
+#[test]
 fn src_dispatch_preserves_public_contract() {
     let (tn_a, tn_b) = make_three_node_chain_pair();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
@@ -584,6 +610,27 @@ fn src_adaptive_contracts_and_honors_rank_cap() {
         .edge_indices()
         .all(|edge| actual.bond_index(edge).unwrap().dim() <= 4));
     actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_adaptive_uses_the_minimum_rank_when_the_estimate_is_already_small() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e6, 4)
+                .with_min_rank(1)
+                .with_rank_increment(1)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+
+    assert!(actual
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| actual.bond_index(edge).unwrap().dim() == 1));
 }
 
 fn make_star_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
@@ -655,6 +702,188 @@ fn src_fixed_traverses_a_branched_tree_without_dense_fallback() {
         .edge_indices()
         .all(|edge| result.bond_index(edge).unwrap().dim() <= 2));
     result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
+    let (tn_a, tn_b) = make_branched_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_seed(77).with_final_svd(false)),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "branched SRC residual is {error}");
+    actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_adaptive_contracts_a_branched_tree_with_a_rank_cap() {
+    let (tn_a, tn_b) = make_branched_pair();
+    let result = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(
+                SrcOptions::adaptive(1.0e-8, 4)
+                    .with_min_rank(1)
+                    .with_rank_increment(1)
+                    .with_seed(77)
+                    .with_final_svd(false),
+            ),
+    )
+    .unwrap();
+
+    assert_eq!(result.node_count(), 4);
+    assert_eq!(result.edge_count(), 3);
+    assert!(result
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| result.bond_index(edge).unwrap().dim() <= 4));
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_preserves_a_scalar_leaf_on_a_branched_tree() {
+    let shared = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let output_c = DynIndex::new_dyn(2);
+    let output_m = DynIndex::new_dyn(2);
+    let output_r = DynIndex::new_dyn(2);
+    let bonds_a = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds_b = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let names = vec![
+        "C".to_string(),
+        "L".to_string(),
+        "M".to_string(),
+        "R".to_string(),
+    ];
+    let build = |bonds: &[DynIndex], offset: f64| {
+        TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![
+                        shared[0].clone(),
+                        output_c.clone(),
+                        bonds[0].clone(),
+                        bonds[1].clone(),
+                        bonds[2].clone(),
+                    ],
+                    (0..32).map(|i| offset + f64::from(i) / 10.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[1].clone(), bonds[0].clone()],
+                    (0..4).map(|i| offset + f64::from(i) / 7.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[2].clone(), output_m.clone(), bonds[1].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 6.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[3].clone(), output_r.clone(), bonds[2].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 5.0).collect(),
+                )
+                .unwrap(),
+            ],
+            names.clone(),
+        )
+        .unwrap()
+    };
+    let tn_a = build(&bonds_a, 1.0);
+    let tn_b = build(&bonds_b, 2.0);
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_seed(91).with_final_svd(false)),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "branched scalar-leaf residual is {error}");
+    let scalar_edge = actual
+        .edge_between(&"C".to_string(), &"L".to_string())
+        .unwrap();
+    assert_eq!(actual.bond_index(scalar_edge).unwrap().dim(), 1);
+    actual.validate_ortho_consistency().unwrap();
+}
+
+fn make_branched_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
+    let shared = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let output_a = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let output_b = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds_a = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds_b = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let names = vec![
+        "C".to_string(),
+        "L".to_string(),
+        "M".to_string(),
+        "R".to_string(),
+    ];
+    let build = |bonds: &[DynIndex], outputs: &[DynIndex], offset: f64| {
+        TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![
+                        shared[0].clone(),
+                        outputs[0].clone(),
+                        bonds[0].clone(),
+                        bonds[1].clone(),
+                        bonds[2].clone(),
+                    ],
+                    (0..32).map(|i| offset + f64::from(i) / 10.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[1].clone(), outputs[1].clone(), bonds[0].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 7.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[2].clone(), outputs[2].clone(), bonds[1].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 6.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[3].clone(), outputs[3].clone(), bonds[2].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 5.0).collect(),
+                )
+                .unwrap(),
+            ],
+            names.clone(),
+        )
+        .unwrap()
+    };
+    (
+        build(&bonds_a, &output_a, 1.0),
+        build(&bonds_b, &output_b, 2.0),
+    )
 }
 
 #[test]

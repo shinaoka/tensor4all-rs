@@ -8,12 +8,20 @@
 //! - Successive randomized compression (`contract` with `ContractionMethod::Src`)
 //! - Validation (`validate_ortho_consistency`)
 //!
-//! The SRC implementation follows the algorithm and Appendix C estimator in
-//! C. Camaño, E. N. Epperly, and J. A. Tropp, "Successive randomized
-//! compression: A randomized algorithm for the compressed MPO-MPS product",
-//! [arXiv:2504.06475](https://arxiv.org/abs/2504.06475). It is an independent
-//! implementation; the RandomMPOMPS repository was consulted only for
-//! conventions and numerical validation, not translated into this crate.
+//! The SRC implementation follows Algorithm 1, Sections 2.3--2.5, and
+//! Appendices C--D of C. Camaño, E. N. Epperly, and J. A. Tropp,
+//! "Successive randomized compression: A randomized algorithm for the
+//! compressed MPO-MPS product", [arXiv:2504.06475](https://arxiv.org/abs/2504.06475).
+//! The author implementation used for a line-by-line cross-check is
+//! `chriscamano/RandomMPOMPS`, `code/tensornetwork/contraction.py`, functions
+//! `random_contraction` and `random_contraction_inc`, plus
+//! `code/tensornetwork/incrementalqr.py::IncrementalQR` and
+//! `incrementalqr.cpp::{setup,add_cols,get_error_estimate}`. Those files are
+//! consulted references; no source text is copied into this crate. The
+//! factorized MPO--MPO probe contract follows the maintainer clarification in
+//! tensor4all-rs issue #563 (comment 5396107820). The rooted-tree recurrence is
+//! a separately derived extension and is labelled `[AI-Supplied]` in the audit
+//! worklog.
 
 use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
@@ -38,7 +46,6 @@ enum ZipupTopologyMode {
 
 mod src_chain;
 mod src_probe;
-mod src_qr;
 mod src_tree;
 
 fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
@@ -1394,8 +1401,10 @@ pub struct SrcOptions {
     pub rank_increment: usize,
     /// Maximum adaptive sketch rank. Fixed-rank mode leaves this as `None`.
     pub max_rank: Option<usize>,
-    /// Whether to run the existing TreeTN SVD truncation sweep after the SRC
-    /// projection. The default is `true`.
+    /// Whether to run the optional TreeTN SVD truncation sweep after the SRC
+    /// projection. The default is `false`, matching the paper's core SRC
+    /// algorithm; enable it explicitly when an oversampled final round is
+    /// desired.
     pub final_svd: bool,
     /// Seed for deterministic Gaussian probe generation. The default is zero.
     pub seed: u64,
@@ -1409,13 +1418,23 @@ impl Default for SrcOptions {
             min_rank: 2,
             rank_increment: 3,
             max_rank: None,
-            final_svd: true,
+            final_svd: false,
             seed: 0,
         }
     }
 }
 
 impl SrcOptions {
+    fn sketch_options(&self, final_truncation_has_tolerance: bool) -> Self {
+        let mut options = self.clone();
+        if self.final_svd && final_truncation_has_tolerance {
+            if let Some(rtol) = self.rtol {
+                options.rtol = Some(0.1 * rtol);
+            }
+        }
+        options
+    }
+
     /// Create fixed-rank SRC options.
     ///
     /// # Examples

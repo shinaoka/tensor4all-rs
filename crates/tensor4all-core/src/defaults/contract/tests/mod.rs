@@ -1,5 +1,6 @@
 use super::*;
 use crate::defaults::{Index, TagSet};
+use crate::TensorContractionLike;
 use num_complex::Complex64;
 use std::ffi::OsString;
 use std::time::Duration;
@@ -276,6 +277,10 @@ fn test_contract_with_options_retains_shared_batch_index() {
     }
 
     assert_eq!(result.to_vec::<f64>().unwrap(), expected);
+
+    let trait_result = IdxTensor::contract_retaining_indices(&[&a, &b], &[batch]).unwrap();
+    assert_eq!(trait_result.indices(), result.indices());
+    assert_eq!(trait_result.to_vec::<f64>().unwrap(), expected);
 }
 
 #[test]

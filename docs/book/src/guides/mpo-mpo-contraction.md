@@ -338,13 +338,14 @@ postorder pass constructs child-to-parent environments; a preorder pass adds
 the complementary parent-to-child environments, so a branch sees the complete
 tree context rather than only its local bond.
 
-`SrcOptions::fixed()` uses a deterministic seeded Gaussian sketch with a small
-oversampling margin. `SrcOptions::adaptive(rtol, max_rank)` grows the sketch in
+`SrcOptions::fixed()` uses a deterministic seeded Gaussian sketch at the
+requested rank. `SrcOptions::adaptive(rtol, max_rank)` grows the sketch in
 blocks and uses the triangular factor from QR to estimate the residual. The
 estimate is used to stop at the requested relative tolerance, while
-`max_rank` remains a hard safety cap. The final optional SVD is useful when the
-SRC range is deliberately overcomplete; set `final_svd(false)` when the fixed
-or adaptive range itself is the desired output.
+`max_rank` remains a hard safety cap. The optional final SVD is useful when the
+SRC range is deliberately overcomplete; enable it with `final_svd(true)`. When
+an SVD tolerance policy is supplied, the sketch uses one tenth of that final
+tolerance, as in the paper's oversampled experiment.
 
 The public placement is alongside `naive`, `zip-up`, and `fit` in
 `ContractionMethod`. It is implemented in TreeTN first, which also covers a

@@ -8,9 +8,9 @@ fn src_error_estimate_matches_real_upper_triangular_oracle() {
     let r = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 1.0, 3.0]);
 
     let estimate = src_error_estimate(&r).expect("well-conditioned R should be accepted");
-    let row0_norm_sq: f64 = 0.25;
-    let row1_norm_sq: f64 = 1.0 / 36.0 + 1.0 / 9.0;
-    let expected_error = (0.5 * (1.0 / row0_norm_sq + 1.0 / row1_norm_sq)).sqrt();
+    let column0_norm_sq: f64 = 0.25 + 1.0 / 36.0;
+    let column1_norm_sq: f64 = 1.0 / 9.0;
+    let expected_error = (0.5 * (1.0 / column0_norm_sq + 1.0 / column1_norm_sq)).sqrt();
     let expected_norm = (14.0_f64 / 2.0).sqrt();
 
     assert!((estimate.error - expected_error).abs() < 1.0e-12);
@@ -31,9 +31,9 @@ fn src_error_estimate_uses_conjugate_adjoint_for_complex_r() {
     let g00 = Complex64::new(0.5, 0.0);
     let g11 = Complex64::new(1.0, 0.0) / r11.conj();
     let g10 = -(r01.conj() * g00 * g11);
-    let row0_norm_sq = g00.norm_sqr();
-    let row1_norm_sq = g10.norm_sqr() + g11.norm_sqr();
-    let expected_error = (0.5 * (1.0 / row0_norm_sq + 1.0 / row1_norm_sq)).sqrt();
+    let column0_norm_sq = g00.norm_sqr() + g10.norm_sqr();
+    let column1_norm_sq = g11.norm_sqr();
+    let expected_error = (0.5 * (1.0 / column0_norm_sq + 1.0 / column1_norm_sq)).sqrt();
     let expected_norm = (r01.norm_sqr() + 4.0 + r11.norm_sqr()).sqrt() / 2.0_f64.sqrt();
 
     assert!((estimate.error - expected_error).abs() < 1.0e-12);
@@ -55,7 +55,7 @@ fn src_error_estimate_rejects_singular_and_non_square_r() {
 fn src_error_estimate_supports_single_precision_scalars() {
     let r32 = Matrix::from_col_major_vec(2, 2, vec![2.0_f32, 0.0, 1.0, 3.0]);
     let estimate32 = src_error_estimate(&r32).expect("f32 R should be accepted");
-    assert!((estimate32.error - 5.6_f64.sqrt()).abs() < 1.0e-5);
+    assert!((estimate32.error - 6.3_f64.sqrt()).abs() < 1.0e-5);
 
     let rc32 = Matrix::from_col_major_vec(
         2,

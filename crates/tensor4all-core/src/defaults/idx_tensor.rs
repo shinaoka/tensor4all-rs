@@ -25,9 +25,10 @@ use tensor4all_tensorbackend::{
     TensorElement,
 };
 use tensor4all_tensorbackend::{src_error_estimate as backend_src_error_estimate, Matrix};
+use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
-use super::contract::PairwiseContractionOptions;
+use super::contract::{ContractionOptions, PairwiseContractionOptions};
 use super::structured_contraction::{
     normalize_payload_read_for_roots, storage_from_payload_native, storage_payload_native,
     OperandLayout, StructuredContractionPlan, StructuredContractionSpec,
@@ -3644,6 +3645,145 @@ impl IdxTensor {
         })
     }
 
+    // Provenance: this retained-axis dense path is a tensor4all-specific
+    // implementation of the batch needed by SRC. Its output ordering follows
+    // `defaults::contract::build_contraction_plan`; it is not present in
+    // RandomMPOMPS and is labelled `[AI-Supplied]` in the SRC audit.
+    pub(crate) fn try_contract_pairwise_retaining(
+        &self,
+        other: &Self,
+        retained_indices: &[DynIndex],
+    ) -> Result<Self> {
+        if retained_indices.is_empty()
+            || self.should_use_structured_payload_contract(other)
+            || self.try_materialized_inner()?.dtype() != other.try_materialized_inner()?.dtype()
+        {
+            let options = ContractionOptions::new().with_retain_indices(retained_indices);
+            return super::contract::contract_with_options(&[self, other], options)
+                .map_err(anyhow::Error::from);
+        }
+
+        let common = common_ind_positions(&self.indices, &other.indices);
+        if common.is_empty() {
+            let options = ContractionOptions::new().with_retain_indices(retained_indices);
+            return super::contract::contract_with_options(&[self, other], options)
+                .map_err(anyhow::Error::from);
+        }
+
+        let mut retained_pairs = Vec::with_capacity(retained_indices.len());
+        for retained in retained_indices {
+            let Some(pos_a) = self.indices.iter().position(|index| index == retained) else {
+                let options = ContractionOptions::new().with_retain_indices(retained_indices);
+                return super::contract::contract_with_options(&[self, other], options)
+                    .map_err(anyhow::Error::from);
+            };
+            let Some(pos_b) = other.indices.iter().position(|index| index == retained) else {
+                let options = ContractionOptions::new().with_retain_indices(retained_indices);
+                return super::contract::contract_with_options(&[self, other], options)
+                    .map_err(anyhow::Error::from);
+            };
+            if !self.indices[pos_a].is_contractable(&other.indices[pos_b]) {
+                let options = ContractionOptions::new().with_retain_indices(retained_indices);
+                return super::contract::contract_with_options(&[self, other], options)
+                    .map_err(anyhow::Error::from);
+            }
+            retained_pairs.push((pos_a, pos_b));
+        }
+
+        let mut contracting_a = Vec::new();
+        let mut contracting_b = Vec::new();
+        for &(pos_a, pos_b) in &common {
+            if !retained_pairs.contains(&(pos_a, pos_b)) {
+                contracting_a.push(pos_a);
+                contracting_b.push(pos_b);
+            }
+        }
+
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: contracting_a.clone(),
+            rhs_contracting_dims: contracting_b.clone(),
+            lhs_batch_dims: retained_pairs.iter().map(|&(pos_a, _)| pos_a).collect(),
+            rhs_batch_dims: retained_pairs.iter().map(|&(_, pos_b)| pos_b).collect(),
+        };
+        let result = self
+            .try_materialized_inner()?
+            .dot_general_with_conj(other.try_materialized_inner()?, config, false, false)
+            .map_err(|error| anyhow::anyhow!("retained pairwise contraction failed: {error}"))?;
+
+        // dot_general emits [lhs_free, rhs_free, batch]. Restore the index
+        // order used by contract_with_options, where retained axes occur at
+        // their first operand position. The permutation is a single dense
+        // copy after the batched GEMM and is much cheaper than one einsum per
+        // probe column.
+        let contracting_a_set: HashSet<usize> = contracting_a.into_iter().collect();
+        let contracting_b_set: HashSet<usize> = contracting_b.into_iter().collect();
+        let retained_a_set: HashSet<usize> = retained_pairs.iter().map(|&(a, _)| a).collect();
+        let retained_b_set: HashSet<usize> = retained_pairs.iter().map(|&(_, b)| b).collect();
+        let mut current_indices = self
+            .indices
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| !retained_a_set.contains(axis) && !contracting_a_set.contains(axis))
+            .map(|(_, index)| index.clone())
+            .chain(
+                other
+                    .indices
+                    .iter()
+                    .enumerate()
+                    .filter(|(axis, _)| {
+                        !retained_b_set.contains(axis) && !contracting_b_set.contains(axis)
+                    })
+                    .map(|(_, index)| index.clone()),
+            )
+            .collect::<Vec<_>>();
+        current_indices.extend(
+            retained_pairs
+                .iter()
+                .map(|&(pos_a, _)| self.indices[pos_a].clone()),
+        );
+
+        let mut desired_indices = self
+            .indices
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| !contracting_a_set.contains(axis))
+            .map(|(_, index)| index.clone())
+            .chain(
+                other
+                    .indices
+                    .iter()
+                    .enumerate()
+                    .filter(|(axis, _)| {
+                        !contracting_b_set.contains(axis) && !retained_b_set.contains(axis)
+                    })
+                    .map(|(_, index)| index.clone()),
+            )
+            .collect::<Vec<_>>();
+        if desired_indices.is_empty() {
+            desired_indices = current_indices.clone();
+        }
+        let result = if current_indices == desired_indices {
+            result
+        } else {
+            let permutation = desired_indices
+                .iter()
+                .map(|desired| {
+                    current_indices
+                        .iter()
+                        .position(|current| current == desired)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "retained pairwise result is missing index {:?}",
+                                desired
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            result.transpose(&permutation)?
+        };
+        Self::from_inner(desired_indices, result)
+    }
+
     pub(crate) fn try_tensordot_pairwise_explicit(
         &self,
         other: &Self,
@@ -5438,7 +5578,7 @@ impl TensorIndex for IdxTensor {
 // ============================================================================
 
 use crate::tensor_like::{
-    FactorizeError, FactorizeOptions, FactorizeResult, TensorConstructionLike,
+    FactorizeError, FactorizeOptions, FactorizeResult, IncrementalQrState, TensorConstructionLike,
     TensorContractionLike, TensorFactorizationLike, TensorVectorSpace,
 };
 
@@ -5504,6 +5644,15 @@ impl TensorFactorizationLike for IdxTensor {
         crate::factorize::factorize_full_rank(self, left_inds, alg, canonical)
     }
 
+    fn factorize_probe_columns_incremental(
+        previous: Option<&FactorizeResult<Self>>,
+        all_columns: &[&Self],
+        appended_columns: &[&Self],
+        left_inds: &[DynIndex],
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        factorize_probe_columns_incremental(previous, all_columns, appended_columns, left_inds)
+    }
+
     fn src_error_estimate(
         &self,
     ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
@@ -5539,6 +5688,254 @@ impl TensorFactorizationLike for IdxTensor {
         };
         result.map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))
     }
+}
+
+// Provenance: the public seam mirrors the append contract in
+// `chriscamano/RandomMPOMPS/code/tensornetwork/incrementalqr.py::IncrementalQR.append`
+// and `incrementalqr.cpp::add_cols`; the tensor/index bridge and private state
+// are tensor4all-specific and are labelled `[AI-Supplied]` in the audit.
+fn factorize_probe_columns_incremental(
+    previous: Option<&FactorizeResult<IdxTensor>>,
+    all_columns: &[&IdxTensor],
+    appended_columns: &[&IdxTensor],
+    left_inds: &[DynIndex],
+) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let first = all_columns.first().ok_or_else(|| {
+        FactorizeError::ComputationError(anyhow::anyhow!(
+            "incremental SRC factorization requires at least one column"
+        ))
+    })?;
+    if first.is_f64() {
+        incremental_probe_factorize_typed::<f64>(previous, all_columns, appended_columns, left_inds)
+    } else if first.is_c64() {
+        incremental_probe_factorize_typed::<Complex64>(
+            previous,
+            all_columns,
+            appended_columns,
+            left_inds,
+        )
+    } else {
+        Err(FactorizeError::UnsupportedStorage(
+            "incremental SRC factorization currently supports f64 and Complex64 tensors",
+        ))
+    }
+}
+
+trait IncrementalQrStateScalar: IncrementalQrScalar + TensorElement {
+    fn resume(previous: &FactorizeResult<IdxTensor>) -> Option<IncrementalQr<Self>>;
+
+    fn store(state: IncrementalQr<Self>) -> IncrementalQrState;
+}
+
+impl IncrementalQrStateScalar for f64 {
+    fn resume(previous: &FactorizeResult<IdxTensor>) -> Option<IncrementalQr<Self>> {
+        match previous.incremental_qr_state()? {
+            IncrementalQrState::F64(state) => Some(state.clone()),
+            IncrementalQrState::C64(_) => None,
+        }
+    }
+
+    fn store(state: IncrementalQr<Self>) -> IncrementalQrState {
+        IncrementalQrState::F64(state)
+    }
+}
+
+impl IncrementalQrStateScalar for Complex64 {
+    fn resume(previous: &FactorizeResult<IdxTensor>) -> Option<IncrementalQr<Self>> {
+        match previous.incremental_qr_state()? {
+            IncrementalQrState::F64(_) => None,
+            IncrementalQrState::C64(state) => Some(state.clone()),
+        }
+    }
+
+    fn store(state: IncrementalQr<Self>) -> IncrementalQrState {
+        IncrementalQrState::C64(state)
+    }
+}
+
+fn incremental_probe_factorize_typed<S>(
+    previous: Option<&FactorizeResult<IdxTensor>>,
+    all_columns: &[&IdxTensor],
+    appended_columns: &[&IdxTensor],
+    left_inds: &[DynIndex],
+) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError>
+where
+    S: IncrementalQrStateScalar,
+{
+    let (mut state, previous_left, previous_cap, previous_rank) = if let Some(previous) = previous {
+        if appended_columns.is_empty() {
+            return Ok(previous.clone());
+        }
+        let previous_rank = previous.rank;
+        let resumed = S::resume(previous);
+        let reused_previous_q = resumed.is_some();
+        let state = if let Some(state) = resumed {
+            state
+        } else {
+            let q = previous.left.clone();
+            let cap = previous.bond_index.clone();
+            let mut q_indices = left_inds.to_vec();
+            q_indices.push(cap.clone());
+            let q = q
+                .permute_indices(&q_indices)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let q_dims = q_indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
+            let q_rows = q_dims[..q_dims.len() - 1]
+                .iter()
+                .try_fold(1usize, |size, &dim| size.checked_mul(dim))
+                .ok_or_else(|| {
+                    FactorizeError::ComputationError(anyhow::anyhow!(
+                        "incremental SRC Q row dimension overflows usize"
+                    ))
+                })?;
+            let q_matrix = Matrix::from_col_major_vec(
+                q_rows,
+                cap.dim(),
+                q.to_vec::<S>()
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            );
+
+            let batch = previous.right.indices().last().cloned().ok_or_else(|| {
+                FactorizeError::ComputationError(anyhow::anyhow!(
+                    "incremental SRC R factor has no batch index"
+                ))
+            })?;
+            let r = previous
+                .right
+                .permute_indices(&[cap.clone(), batch.clone()])
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let r_matrix = Matrix::from_col_major_vec(
+                cap.dim(),
+                batch.dim(),
+                r.to_vec::<S>()
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            );
+            IncrementalQr::from_factors(q_matrix, r_matrix)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+        };
+        (
+            state,
+            if reused_previous_q {
+                Some(previous.left.clone())
+            } else {
+                None
+            },
+            if reused_previous_q {
+                Some(previous.bond_index.clone())
+            } else {
+                None
+            },
+            previous_rank,
+        )
+    } else {
+        let initial_matrix = probe_columns_matrix::<S>(all_columns, left_inds)?;
+        (
+            IncrementalQr::new(initial_matrix)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            None,
+            None,
+            0,
+        )
+    };
+    if !appended_columns.is_empty() && previous.is_some() {
+        let appended_matrix = probe_columns_matrix::<S>(appended_columns, left_inds)?;
+        state
+            .append(&appended_matrix)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    }
+
+    let rank = state.rank();
+    if previous_left.is_some() && rank < previous_rank {
+        return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "incremental SRC QR rank decreased from {previous_rank} to {rank}"
+        )));
+    }
+    let r = state.r();
+    let cap = if rank == previous_rank {
+        match previous_cap.as_ref() {
+            Some(cap) => cap.clone(),
+            None => DynIndex::new_bond(rank)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+        }
+    } else {
+        DynIndex::new_bond(rank)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+    };
+    let left = if let Some(previous_left) = previous_left {
+        if rank == previous_rank {
+            previous_left
+        } else {
+            let appended_rank = rank - previous_rank;
+            let appended_cap = DynIndex::new_bond(appended_rank)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let appended_q = state
+                .q_columns(previous_rank, appended_rank)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let mut appended_indices = left_inds.to_vec();
+            appended_indices.push(appended_cap.clone());
+            let appended_left =
+                IdxTensor::from_dense(appended_indices, appended_q.as_col_major_slice().to_vec())
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            IdxTensor::concatenate_along_new_index(
+                &[&previous_left, &appended_left],
+                &[
+                    previous_cap.ok_or_else(|| {
+                        FactorizeError::ComputationError(anyhow::anyhow!(
+                            "incremental SRC previous QR state has no bond index"
+                        ))
+                    })?,
+                    appended_cap,
+                ],
+                cap.clone(),
+            )
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+        }
+    } else {
+        let q = state.q();
+        let mut q_indices = left_inds.to_vec();
+        q_indices.push(cap.clone());
+        IdxTensor::from_dense(q_indices, q.as_col_major_slice().to_vec())
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+    };
+    let batch = DynIndex::new_link(r.ncols())
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let right = IdxTensor::from_dense(vec![cap.clone(), batch], r.as_col_major_slice().to_vec())
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    Ok(FactorizeResult::new(left, right, cap, None, rank)
+        .with_incremental_qr_state(S::store(state)))
+}
+
+fn probe_columns_matrix<S>(
+    columns: &[&IdxTensor],
+    left_inds: &[DynIndex],
+) -> std::result::Result<Matrix<S>, FactorizeError>
+where
+    S: TensorElement,
+{
+    let batch = DynIndex::new_link(columns.len())
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let stacked = IdxTensor::stack_along_new_index(columns, batch.clone(), -1)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let mut ordered_indices = left_inds.to_vec();
+    ordered_indices.push(batch);
+    let ordered = stacked
+        .permute_indices(&ordered_indices)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let nrows = left_inds
+        .iter()
+        .try_fold(1usize, |size, index| size.checked_mul(index.dim()))
+        .ok_or_else(|| {
+            FactorizeError::ComputationError(anyhow::anyhow!(
+                "incremental SRC sketch row dimension overflows usize"
+            ))
+        })?;
+    Ok(Matrix::from_col_major_vec(
+        nrows,
+        columns.len(),
+        ordered
+            .to_vec::<S>()
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+    ))
 }
 
 impl TensorContractionLike for IdxTensor {
@@ -5579,6 +5976,19 @@ impl TensorContractionLike for IdxTensor {
 
     fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error> {
         super::contract::contract(tensors)
+    }
+
+    fn contract_retaining_indices(
+        tensors: &[&Self],
+        retained_indices: &[DynIndex],
+    ) -> std::result::Result<Self, Self::Error> {
+        if tensors.len() == 2 {
+            return tensors[0]
+                .try_contract_pairwise_retaining(tensors[1], retained_indices)
+                .map_err(IdxTensorError::from);
+        }
+        let options = ContractionOptions::new().with_retain_indices(retained_indices);
+        super::contract::contract_with_options(tensors, options)
     }
 
     fn contract_pair(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
@@ -5626,6 +6036,88 @@ impl TensorConstructionLike for IdxTensor {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size = checked_total_size(&dims)?;
         IdxTensor::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
+    }
+
+    fn from_dense_any(
+        indices: Vec<DynIndex>,
+        data: Vec<AnyScalar>,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::from_dense_any(indices, data)
+    }
+
+    fn stack_along_new_index(
+        tensors: &[&Self],
+        new_index: DynIndex,
+        axis: isize,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::stack_along_new_index(tensors, new_index, axis)
+    }
+
+    fn concatenate_along_new_index(
+        tensors: &[&Self],
+        source_indices: &[DynIndex],
+        new_index: DynIndex,
+    ) -> std::result::Result<Self, Self::Error> {
+        let first = tensors
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("concatenate requires at least one tensor"))?;
+        if tensors.len() != source_indices.len() {
+            return Err(anyhow::anyhow!(
+                "concatenate tensor count {} does not match source-index count {}",
+                tensors.len(),
+                source_indices.len()
+            )
+            .into());
+        }
+        let first_axis = first
+            .indices
+            .iter()
+            .position(|index| index == &source_indices[0])
+            .ok_or_else(|| anyhow::anyhow!("concatenate source index is not present"))?;
+        let mut total_dim = 0usize;
+        let first_indices = first.indices();
+        let mut inners = Vec::with_capacity(tensors.len());
+        for (tensor, source) in tensors.iter().zip(source_indices) {
+            let axis = tensor
+                .indices
+                .iter()
+                .position(|index| index == source)
+                .ok_or_else(|| anyhow::anyhow!("concatenate source index is not present"))?;
+            if axis != first_axis {
+                return Err(
+                    anyhow::anyhow!("concatenate source axes must have the same position").into(),
+                );
+            }
+            if tensor
+                .indices()
+                .iter()
+                .zip(first_indices)
+                .enumerate()
+                .any(|(position, (actual, expected))| position != first_axis && actual != expected)
+            {
+                return Err(anyhow::anyhow!(
+                    "concatenate tensors must match away from the source axis"
+                )
+                .into());
+            }
+            total_dim = total_dim
+                .checked_add(source.dim())
+                .ok_or_else(|| anyhow::anyhow!("concatenate dimension overflow"))?;
+            tensor.ensure_shape_packing_preserves_ad("concatenate_along_new_index")?;
+            inners.push(tensor.try_materialized_inner()?);
+        }
+        if new_index.dim() != total_dim {
+            return Err(anyhow::anyhow!(
+                "concatenate output dimension {} does not match source dimension sum {}",
+                new_index.dim(),
+                total_dim
+            )
+            .into());
+        }
+        let concatenated = EagerTensor::concatenate(&inners, first_axis)?;
+        let mut indices = first_indices.to_vec();
+        indices[first_axis] = new_index;
+        Self::from_inner(indices, concatenated).map_err(IdxTensorError::from)
     }
 
     fn onehot(index_vals: &[(DynIndex, usize)]) -> std::result::Result<Self, Self::Error> {

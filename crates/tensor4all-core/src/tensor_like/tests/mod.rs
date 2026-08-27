@@ -112,3 +112,195 @@ fn tensor_like_default_neg_and_delta_helpers_work() {
     let err = IdxTensor::delta(&[i], &[]).unwrap_err();
     assert!(err.to_string().contains("Number of input indices"));
 }
+
+#[test]
+fn tensor_construction_supports_column_major_dense_payloads() {
+    fn construct<T: TensorConstructionLike + TensorVectorSpace>(
+        indices: Vec<T::Index>,
+        data: Vec<AnyScalar>,
+    ) -> std::result::Result<T, T::Error> {
+        T::from_dense_any(indices, data)
+    }
+
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let tensor = construct::<IdxTensor>(
+        vec![i, j],
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+            .into_iter()
+            .map(AnyScalar::new_real)
+            .collect(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        tensor.to_vec::<f64>().unwrap(),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn tensor_construction_supports_stacking_a_batch_axis() {
+    fn stack<T: TensorConstructionLike + TensorVectorSpace>(
+        tensors: &[&T],
+        new_index: T::Index,
+    ) -> std::result::Result<T, T::Error> {
+        T::stack_along_new_index(tensors, new_index, -1)
+    }
+
+    let i = DynIndex::new_dyn(2);
+    let batch = DynIndex::new_dyn(2);
+    let first = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let second = IdxTensor::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
+    let stacked = stack(&[&first, &second], batch).unwrap();
+
+    assert_eq!(stacked.external_indices().len(), 2);
+    assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn tensor_construction_concatenates_existing_batch_blocks() {
+    fn concatenate<T: TensorConstructionLike + TensorVectorSpace>(
+        tensors: &[&T],
+        source_indices: &[T::Index],
+        new_index: T::Index,
+    ) -> std::result::Result<T, T::Error> {
+        T::concatenate_along_new_index(tensors, source_indices, new_index)
+    }
+
+    let row = DynIndex::new_dyn(2);
+    let first_batch = DynIndex::new_link(1).unwrap();
+    let second_batch = DynIndex::new_link(2).unwrap();
+    let combined = DynIndex::new_link(3).unwrap();
+    let first =
+        IdxTensor::from_dense(vec![row.clone(), first_batch.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let second = IdxTensor::from_dense(
+        vec![row.clone(), second_batch.clone()],
+        vec![3.0, 4.0, 5.0, 6.0],
+    )
+    .unwrap();
+    let result = concatenate(
+        &[&first, &second],
+        &[first_batch, second_batch],
+        combined.clone(),
+    )
+    .unwrap();
+
+    assert_eq!(result.external_indices(), vec![row, combined]);
+    assert_eq!(
+        result.to_vec::<f64>().unwrap(),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn tensor_factorization_supports_incremental_probe_prefixes() {
+    let row = DynIndex::new_dyn(5);
+    let first = IdxTensor::from_dense(vec![row.clone()], vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    let second = IdxTensor::from_dense(vec![row.clone()], vec![-2.0, 1.0, 0.0, 3.0, -1.0]).unwrap();
+    let third = IdxTensor::from_dense(vec![row.clone()], vec![0.5, -1.0, 2.0, 1.0, 4.0]).unwrap();
+    let fourth =
+        IdxTensor::from_dense(vec![row.clone()], vec![3.0, -2.0, 1.5, 0.25, -3.0]).unwrap();
+
+    let first_factorization =
+        <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+            None,
+            &[&first, &second],
+            &[&first, &second],
+            std::slice::from_ref(&row),
+        )
+        .unwrap();
+    let second_factorization =
+        <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+            Some(&first_factorization),
+            &[&first, &second, &third],
+            &[&third],
+            std::slice::from_ref(&row),
+        )
+        .unwrap();
+    let third_factorization =
+        <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+            Some(&second_factorization),
+            &[&first, &second, &third, &fourth],
+            &[&fourth],
+            std::slice::from_ref(&row),
+        )
+        .unwrap();
+
+    assert_eq!(first_factorization.rank, 2);
+    assert_eq!(second_factorization.rank, 3);
+    assert_eq!(third_factorization.rank, 4);
+    let reconstructed = third_factorization
+        .left
+        .contract_pair(&third_factorization.right)
+        .unwrap();
+    let expected = vec![
+        1.0, 2.0, 3.0, 4.0, 5.0, -2.0, 1.0, 0.0, 3.0, -1.0, 0.5, -1.0, 2.0, 1.0, 4.0, 3.0, -2.0,
+        1.5, 0.25, -3.0,
+    ];
+    let actual = reconstructed.to_vec::<f64>().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    assert!(
+        actual
+            .iter()
+            .zip(expected.iter())
+            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-12),
+        "reconstructed columns differ: actual={actual:?}, expected={expected:?}"
+    );
+}
+
+#[test]
+fn tensor_factorization_preserves_multi_axis_probe_row_order() {
+    let first_row = DynIndex::new_dyn(2);
+    let second_row = DynIndex::new_dyn(3);
+    let rows = vec![first_row.clone(), second_row.clone()];
+    let first = IdxTensor::from_dense(rows.clone(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let second = IdxTensor::from_dense(rows.clone(), vec![-1.0, 0.5, 2.0, -2.0, 3.0, 4.0]).unwrap();
+    let third =
+        IdxTensor::from_dense(rows.clone(), vec![0.25, -3.0, 1.5, 2.5, -0.75, 5.0]).unwrap();
+    let fourth =
+        IdxTensor::from_dense(rows.clone(), vec![4.0, -1.0, 0.5, 3.5, 2.25, -2.5]).unwrap();
+
+    let first_factorization =
+        <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+            None,
+            &[&first, &second],
+            &[&first, &second],
+            &rows,
+        )
+        .unwrap();
+    let second_factorization =
+        <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+            Some(&first_factorization),
+            &[&first, &second, &third],
+            &[&third],
+            &rows,
+        )
+        .unwrap();
+    let final_factorization =
+        <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+            Some(&second_factorization),
+            &[&first, &second, &third, &fourth],
+            &[&fourth],
+            &rows,
+        )
+        .unwrap();
+
+    let reconstructed = final_factorization
+        .left
+        .contract_pair(&final_factorization.right)
+        .unwrap();
+    let expected = vec![
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, 0.5, 2.0, -2.0, 3.0, 4.0, 0.25, -3.0, 1.5, 2.5, -0.75,
+        5.0, 4.0, -1.0, 0.5, 3.5, 2.25, -2.5,
+    ];
+    let actual = reconstructed.to_vec::<f64>().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    assert!(
+        actual
+            .iter()
+            .zip(expected.iter())
+            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-12),
+        "reconstructed multi-axis sketch differs: actual={actual:?}, expected={expected:?}"
+    );
+}

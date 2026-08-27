@@ -305,13 +305,13 @@ fn factorize_gram(
     output_right_indices.extend(right_indices);
     let right = reshape_factor(right_matrix, output_right_indices)?;
 
-    Ok(FactorizeResult {
+    Ok(FactorizeResult::new(
         left,
         right,
         bond_index,
-        singular_values: Some(singular_values),
+        Some(singular_values),
         rank,
-    })
+    ))
 }
 
 fn scale_bond(
@@ -531,13 +531,13 @@ fn factorize_svd_with_options(
             let right = right_contracted
                 .replaceind(&sim_bond_index, &bond_index)
                 .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
-            Ok(FactorizeResult {
-                left: u,
+            Ok(FactorizeResult::new(
+                u,
                 right,
                 bond_index,
-                singular_values: Some(singular_values),
+                Some(singular_values),
                 rank,
-            })
+            ))
         }
         Canonical::Right => {
             // L = U * S, R = V^H
@@ -546,13 +546,13 @@ fn factorize_svd_with_options(
             let left = left_contracted
                 .replaceind(&sim_bond_index, &bond_index)
                 .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
-            Ok(FactorizeResult {
+            Ok(FactorizeResult::new(
                 left,
-                right: vh,
+                vh,
                 bond_index,
-                singular_values: Some(singular_values),
+                Some(singular_values),
                 rank,
-            })
+            ))
         }
     }
 }
@@ -611,13 +611,7 @@ fn factorize_qr_with_options(
         .last()
         .ok_or_else(|| anyhow::anyhow!("QR factorization returned Q with no dimensions"))?;
 
-    Ok(FactorizeResult {
-        left: q,
-        right: r,
-        bond_index,
-        singular_values: None,
-        rank,
-    })
+    Ok(FactorizeResult::new(q, r, bond_index, None, rank))
 }
 
 /// LU factorization implementation.
@@ -722,13 +716,7 @@ where
     let right = IdxTensor::from_dense(r_indices, u_vec)
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
-    Ok(FactorizeResult {
-        left,
-        right,
-        bond_index,
-        singular_values: None,
-        rank,
-    })
+    Ok(FactorizeResult::new(left, right, bond_index, None, rank))
 }
 
 /// CI (Cross Interpolation) factorization implementation.
@@ -827,13 +815,7 @@ where
     let (left, right, bond_index) =
         matrix_luci_factors_to_idx_tensors(factors, &left_indices, &right_indices)?;
 
-    Ok(FactorizeResult {
-        left,
-        right,
-        bond_index,
-        singular_values: None,
-        rank,
-    })
+    Ok(FactorizeResult::new(left, right, bond_index, None, rank))
 }
 
 fn matrix_luci_factors_to_idx_tensors<T>(

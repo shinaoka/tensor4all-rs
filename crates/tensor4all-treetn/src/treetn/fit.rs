@@ -720,13 +720,7 @@ where
                 .map_err(|e| anyhow::anyhow!("failed to attach dummy left bond: {e}"))?;
             (left, dummy_right_tensor)
         };
-        FactorizeResult {
-            left,
-            right,
-            bond_index: dummy_left,
-            singular_values: None,
-            rank: 1,
-        }
+        FactorizeResult::new(left, right, dummy_left, None, 1)
     } else {
         local_optimum
             .factorize(&left_inds, &options)

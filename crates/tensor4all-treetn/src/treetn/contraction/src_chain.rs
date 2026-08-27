@@ -1,1 +1,736 @@
 //! Paper-faithful chain specialization of successive randomized compression.
+//!
+//! Provenance: `contract` implements the right-to-left schedule in Algorithm 1
+//! and Sections 2.3--2.5 of Camaño--Epperly--Tropp,
+//! [arXiv:2504.06475](https://arxiv.org/abs/2504.06475). Its local contraction
+//! ordering and adaptive loop were cross-checked against
+//! `chriscamano/RandomMPOMPS/code/tensornetwork/contraction.py`,
+//! `random_contraction` (lines 133--353) and `random_contraction_inc`
+//! (lines 405--593). Prefix batching and the Q-column reuse optimization are
+//! derived implementation choices, not claims that the author code contains
+//! the same Rust abstractions; they are labelled `[AI-Supplied]` in the audit.
+
+use anyhow::Result;
+use std::hash::Hash;
+
+use tensor4all_core::{
+    Canonical as FactorizeCanonical, FactorizeAlg, IndexLike, SvdTruncationPolicy, TensorLike,
+};
+
+use super::src_probe::{
+    connect_result_edge, contract_prefix_with_probed_site_pair_batch_range,
+    contract_prefix_with_site_pair, contract_site_pair, factorize_probe_columns, initial_width,
+    local_output_indices, local_site_pairs, mark_result_canonical, maximum_site_width,
+    probed_site_pair_batch_range, product_dim, ProbeBank,
+};
+use super::{SrcOptions, TreeTN};
+use crate::algorithm::CanonicalForm;
+
+/// Execute the paper's successive randomized compression schedule on a chain.
+pub(super) fn contract<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    svd_policy: Option<SvdTruncationPolicy>,
+    max_bond_dim: usize,
+    src_options: &SrcOptions,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let chain = tn_a
+        .chain_order(center)
+        .ok_or_else(|| anyhow::anyhow!("contract_src: expected a chain containing center"))?;
+    if !tn_a.same_topology(tn_b) {
+        anyhow::bail!("contract_src: networks have incompatible topologies");
+    }
+    if chain.is_empty() {
+        anyhow::bail!("contract_src: empty chain");
+    }
+
+    let tn_a = tn_a.sim_internal_inds();
+    let tn_b = tn_b.sim_internal_inds();
+    let local = local_site_pairs(&tn_a, &tn_b, &chain)?;
+    if chain.len() == 1 {
+        let mut result = TreeTN::new();
+        let tensor = contract_site_pair(local[0].0, local[0].1, &[])?;
+        result.add_tensor(chain[0].clone(), tensor)?;
+        result.canonicalize_impl(
+            [center.clone()],
+            CanonicalForm::Unitary,
+            "contract_src: single-site canonicalization",
+        )?;
+        return Ok(result);
+    }
+
+    let outputs = local
+        .iter()
+        .enumerate()
+        .map(|(site, _)| local_output_indices(&tn_a, &tn_b, &chain[site]))
+        .collect::<Result<Vec<_>>>()?;
+    let cut_dimensions = chain_cut_dimensions(&tn_a, &tn_b, &chain)?;
+    let probe_indices = outputs[..outputs.len() - 1]
+        .iter()
+        .flat_map(|site| site.iter().cloned())
+        .collect::<Vec<_>>();
+    let last_output_dim = product_dim(&outputs[outputs.len() - 1])?;
+    let last_maximum_width = maximum_site_width(
+        max_bond_dim,
+        last_output_dim,
+        *cut_dimensions
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: chain has no internal cut"))?,
+        src_options,
+    );
+    if last_maximum_width == 0 {
+        anyhow::bail!("contract_src: last-site output space has zero dimension");
+    }
+    let mut probes = ProbeBank::new(probe_indices, 1, src_options.seed)?;
+    if src_options.rtol.is_none() {
+        return contract_fixed(FixedContractionRequest {
+            center,
+            svd_policy,
+            max_bond_dim,
+            chain: &chain,
+            local: &local,
+            outputs: &outputs,
+            cut_dimensions: &cut_dimensions,
+            probes: &mut probes,
+            final_svd: src_options.final_svd,
+        });
+    }
+    let sketch_options = src_options.sketch_options(svd_policy.is_some());
+    let mut prefixes =
+        PrefixCache::new(&local, &outputs, &mut probes, sketch_options.rank_increment);
+
+    let last = chain.len() - 1;
+    let mut factors: Vec<Option<T>> = (0..chain.len()).map(|_| None).collect();
+    let mut caps: Vec<Option<T::Index>> = (0..chain.len()).map(|_| None).collect();
+
+    let last_initial_width = if sketch_options.rtol.is_some() {
+        initial_width(last_maximum_width, &sketch_options)
+    } else {
+        last_maximum_width
+    };
+    let (last_factor, last_cap, mut cap_environment) = if outputs[last].is_empty() {
+        let cap = T::Index::new_link(1)?;
+        let factor = T::ones(std::slice::from_ref(&cap)).map_err(|error| {
+            anyhow::anyhow!("contract_src: scalar last-site cap construction failed: {error}")
+        })?;
+        let local_product = contract_site_pair(local[last].0, local[last].1, &[])?;
+        let environment = local_product.outer_product(&factor).map_err(|error| {
+            anyhow::anyhow!(
+                "contract_src: scalar last-site environment construction failed: {error}"
+            )
+        })?;
+        (factor, cap, environment)
+    } else {
+        factorize_site_adaptive(
+            FactorizeSiteRequest {
+                outputs: &outputs[last],
+                right_cap: None,
+                operands: local[last],
+                right_environment: None,
+                initial_width: last_initial_width,
+                maximum_width: last_maximum_width,
+                src_options: &sketch_options,
+                label: "last-site",
+            },
+            |column| {
+                let prefix = prefixes.column(last - 1, column)?;
+                contract_prefix_with_site_pair(&prefix, local[last].0, local[last].1).map_err(
+                    |error| anyhow::anyhow!("contract_src: last-site sketch failed: {error}"),
+                )
+            },
+        )?
+    };
+    caps[last] = Some(last_cap);
+    factors[last] = Some(last_factor);
+
+    for site in (1..last).rev() {
+        let right_environment = cap_environment;
+        let right_cap = caps[site + 1]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: missing right cap at site {site}"))?;
+        let row_dim = product_dim(&outputs[site])?
+            .checked_mul(right_cap.dim())
+            .ok_or_else(|| {
+                anyhow::anyhow!("contract_src: site {site} sketch row dimension overflow")
+            })?;
+        let cut_dimension = cut_dimensions[site - 1].max(cut_dimensions[site]);
+        let site_max_width =
+            maximum_site_width(max_bond_dim, row_dim, cut_dimension, &sketch_options);
+        if site_max_width == 0 {
+            anyhow::bail!("contract_src: site {site} sketch row space is empty");
+        }
+        let site_initial_width = if sketch_options.rtol.is_some() {
+            initial_width(site_max_width, &sketch_options)
+        } else {
+            site_max_width
+        };
+        let label = format!("site {site}");
+        let (factor, cap, next_environment) = factorize_site_adaptive(
+            FactorizeSiteRequest {
+                outputs: &outputs[site],
+                right_cap: Some(right_cap),
+                operands: local[site],
+                right_environment: Some(&right_environment),
+                initial_width: site_initial_width,
+                maximum_width: site_max_width,
+                src_options: &sketch_options,
+                label: &label,
+            },
+            |column| {
+                let prefix = prefixes.column(site - 1, column)?;
+                let after_a = T::contract(&[&prefix, local[site].0]).map_err(|error| {
+                    anyhow::anyhow!(
+                        "contract_src: site {site} prefix-A contraction failed: {error}"
+                    )
+                })?;
+                let after_b = T::contract(&[&after_a, local[site].1]).map_err(|error| {
+                    anyhow::anyhow!(
+                        "contract_src: site {site} prefix-B contraction failed: {error}"
+                    )
+                })?;
+                T::contract(&[&after_b, &right_environment]).map_err(|error| {
+                    anyhow::anyhow!("contract_src: site {site} sketch failed: {error}")
+                })
+            },
+        )?;
+        caps[site] = Some(cap);
+        factors[site] = Some(factor);
+        cap_environment = next_environment;
+    }
+
+    let first = contract_site_pair(local[0].0, local[0].1, &[&cap_environment])
+        .map_err(|error| anyhow::anyhow!("contract_src: first-site contraction failed: {error}"))?;
+    factors[0] = Some(first);
+
+    let mut result = TreeTN::new();
+    for (site, node) in chain.iter().enumerate() {
+        let tensor = factors[site]
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: missing result tensor at site {site}"))?;
+        result.add_tensor(node.clone(), tensor)?;
+    }
+    for site in 1..chain.len() {
+        connect_result_edge(&mut result, &chain[site - 1], &chain[site])?;
+    }
+
+    if src_options.final_svd {
+        result.truncate_impl(
+            [center.clone()],
+            svd_policy,
+            Some(max_bond_dim),
+            "contract_src: final truncate",
+        )?;
+    } else {
+        let rooted_edges = chain
+            .windows(2)
+            .map(|sites| (sites[0].clone(), sites[1].clone()))
+            .collect::<Vec<_>>();
+        mark_result_canonical(&mut result, center, &rooted_edges)?;
+    }
+    Ok(result)
+}
+
+struct FixedContractionRequest<'a, T, V>
+where
+    T: TensorLike,
+{
+    center: &'a V,
+    svd_policy: Option<SvdTruncationPolicy>,
+    max_bond_dim: usize,
+    chain: &'a [V],
+    local: &'a [(&'a T, &'a T)],
+    outputs: &'a [Vec<T::Index>],
+    cut_dimensions: &'a [usize],
+    probes: &'a mut ProbeBank<T::Index>,
+    final_svd: bool,
+}
+
+fn contract_fixed<T, V>(request: FixedContractionRequest<'_, T, V>) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let FixedContractionRequest {
+        center,
+        svd_policy,
+        max_bond_dim,
+        chain,
+        local,
+        outputs,
+        cut_dimensions,
+        probes,
+        final_svd,
+    } = request;
+    let last = chain.len() - 1;
+    let fixed_options = SrcOptions::fixed().with_final_svd(final_svd);
+    let last_maximum_width = maximum_site_width(
+        max_bond_dim,
+        product_dim(&outputs[last])?,
+        *cut_dimensions
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: chain has no internal cut"))?,
+        &fixed_options,
+    );
+    if last_maximum_width == 0 {
+        anyhow::bail!("contract_src: last-site output space has zero dimension");
+    }
+    let mut prefixes = BatchedPrefixCache::new(local, outputs, probes);
+    let mut factors: Vec<Option<T>> = (0..chain.len()).map(|_| None).collect();
+    let mut caps: Vec<Option<T::Index>> = (0..chain.len()).map(|_| None).collect();
+
+    let (last_factor, last_cap, mut cap_environment) = if outputs[last].is_empty() {
+        let cap = T::Index::new_link(1)?;
+        let factor = T::ones(std::slice::from_ref(&cap)).map_err(|error| {
+            anyhow::anyhow!("contract_src: scalar last-site cap construction failed: {error}")
+        })?;
+        let local_product = contract_site_pair(local[last].0, local[last].1, &[])?;
+        let environment = local_product.outer_product(&factor).map_err(|error| {
+            anyhow::anyhow!(
+                "contract_src: scalar last-site environment construction failed: {error}"
+            )
+        })?;
+        (factor, cap, environment)
+    } else {
+        let (prefix, batch) = prefixes.batch(last - 1, last_maximum_width)?;
+        let sketch = contract_prefix_with_probed_site_pair_batch_range(
+            &prefix,
+            local[last].0,
+            local[last].1,
+            &[],
+            &*prefixes.probes,
+            0,
+            last_maximum_width,
+            &batch,
+        )
+        .map_err(|error| anyhow::anyhow!("contract_src: last-site sketch failed: {error}"))?;
+        let (factor, cap) = factorize_fixed_batch(&sketch, &outputs[last], "last-site")?;
+        let factor_conj = factor.conj();
+        let environment = contract_site_pair(local[last].0, local[last].1, &[&factor_conj])
+            .map_err(|error| {
+                anyhow::anyhow!("contract_src: last-site environment failed: {error}")
+            })?;
+        (factor, cap, environment)
+    };
+    caps[last] = Some(last_cap);
+    factors[last] = Some(last_factor);
+
+    for site in (1..last).rev() {
+        let right_environment = cap_environment;
+        let right_cap = caps[site + 1]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: missing right cap at site {site}"))?;
+        let row_dim = product_dim(&outputs[site])?
+            .checked_mul(right_cap.dim())
+            .ok_or_else(|| {
+                anyhow::anyhow!("contract_src: site {site} sketch row dimension overflow")
+            })?;
+        let cut_dimension = cut_dimensions[site - 1].max(cut_dimensions[site]);
+        let site_max_width =
+            maximum_site_width(max_bond_dim, row_dim, cut_dimension, &fixed_options);
+        if site_max_width == 0 {
+            anyhow::bail!("contract_src: site {site} sketch row space is empty");
+        }
+        let mut left_indices = outputs[site].clone();
+        left_indices.push(right_cap.clone());
+        let (prefix, batch) = prefixes.batch(site - 1, site_max_width)?;
+        let prefix_local = contract_prefix_with_probed_site_pair_batch_range(
+            &prefix,
+            local[site].0,
+            local[site].1,
+            &[],
+            &*prefixes.probes,
+            0,
+            site_max_width,
+            &batch,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("contract_src: site {site} prefix contraction failed: {error}")
+        })?;
+        let sketch = prefix_local
+            .contract_pair(&right_environment)
+            .map_err(|error| anyhow::anyhow!("contract_src: site {site} sketch failed: {error}"))?;
+        let (factor, cap) = factorize_fixed_batch(&sketch, &left_indices, &format!("site {site}"))?;
+        let factor_conj = factor.conj();
+        let next_environment = contract_site_pair(
+            local[site].0,
+            local[site].1,
+            &[&factor_conj, &right_environment],
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("contract_src: site {site} environment failed: {error}")
+        })?;
+        caps[site] = Some(cap);
+        factors[site] = Some(factor);
+        cap_environment = next_environment;
+    }
+
+    let first = contract_site_pair(local[0].0, local[0].1, &[&cap_environment])
+        .map_err(|error| anyhow::anyhow!("contract_src: first-site contraction failed: {error}"))?;
+    factors[0] = Some(first);
+
+    let mut result = TreeTN::new();
+    for (site, node) in chain.iter().enumerate() {
+        let tensor = factors[site]
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: missing result tensor at site {site}"))?;
+        result.add_tensor(node.clone(), tensor)?;
+    }
+    for site in 1..chain.len() {
+        connect_result_edge(&mut result, &chain[site - 1], &chain[site])?;
+    }
+    if final_svd {
+        result.truncate_impl(
+            [center.clone()],
+            svd_policy,
+            Some(max_bond_dim),
+            "contract_src: final truncate",
+        )?;
+    } else {
+        let rooted_edges = chain
+            .windows(2)
+            .map(|sites| (sites[0].clone(), sites[1].clone()))
+            .collect::<Vec<_>>();
+        mark_result_canonical(&mut result, center, &rooted_edges)?;
+    }
+    Ok(result)
+}
+
+fn chain_cut_dimensions<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    chain: &[V],
+) -> Result<Vec<usize>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    chain
+        .windows(2)
+        .map(|sites| {
+            let left = &sites[0];
+            let right = &sites[1];
+            let edge_a = tn_a
+                .edge_between(left, right)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: A chain edge is missing"))?;
+            let edge_b = tn_b
+                .edge_between(left, right)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: B chain edge is missing"))?;
+            let dim_a = tn_a
+                .bond_index(edge_a)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: A chain bond is missing"))?
+                .dim();
+            let dim_b = tn_b
+                .bond_index(edge_b)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: B chain bond is missing"))?
+                .dim();
+            dim_a
+                .checked_mul(dim_b)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: chain cut dimension overflow"))
+        })
+        .collect()
+}
+
+fn factorize_fixed_batch<T>(
+    sketch: &T,
+    left_indices: &[T::Index],
+    label: &str,
+) -> Result<(T, T::Index)>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    let factorized = sketch
+        .factorize_full_rank(left_indices, FactorizeAlg::QR, FactorizeCanonical::Left)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "contract_src: {label} QR failed: {error}; sketch indices={:?}, left indices={:?}",
+                sketch.external_indices(),
+                left_indices
+            )
+        })?;
+    Ok((factorized.left, factorized.bond_index))
+}
+
+struct PrefixCache<'a, T>
+where
+    T: TensorLike,
+{
+    local: &'a [(&'a T, &'a T)],
+    outputs: &'a [Vec<T::Index>],
+    probes: &'a mut ProbeBank<T::Index>,
+    prefixes: Vec<Vec<T>>,
+    batch_size: usize,
+}
+
+struct BatchedPrefixCache<'a, T>
+where
+    T: TensorLike,
+{
+    local: &'a [(&'a T, &'a T)],
+    outputs: &'a [Vec<T::Index>],
+    probes: &'a mut ProbeBank<T::Index>,
+    cached: Option<(usize, T::Index, Vec<T>)>,
+    segments: Vec<PrefixBatchSegment<T>>,
+    generated_width: usize,
+}
+
+struct PrefixBatchSegment<T>
+where
+    T: TensorLike,
+{
+    batch: T::Index,
+    prefixes: Vec<T>,
+}
+
+impl<'a, T> BatchedPrefixCache<'a, T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    fn new(
+        local: &'a [(&'a T, &'a T)],
+        outputs: &'a [Vec<T::Index>],
+        probes: &'a mut ProbeBank<T::Index>,
+    ) -> Self {
+        Self {
+            local,
+            outputs,
+            probes,
+            cached: None,
+            segments: Vec::new(),
+            generated_width: 0,
+        }
+    }
+
+    fn batch(&mut self, site: usize, width: usize) -> Result<(T, T::Index)> {
+        if let Some((cached_width, batch, prefixes)) = &self.cached {
+            if *cached_width == width {
+                return Ok((
+                    prefixes
+                        .get(site)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch is missing"))?,
+                    batch.clone(),
+                ));
+            }
+        }
+
+        if width < self.generated_width {
+            // The chain schedule normally grows the requested width while
+            // sweeping right-to-left. Rebuild on a decrease so that the
+            // segment partition remains an exact prefix rather than silently
+            // returning columns beyond the requested width.
+            self.cached = None;
+            self.segments.clear();
+            self.generated_width = 0;
+        }
+        if width > self.generated_width {
+            self.probes.extend_to(width)?;
+            let start = self.generated_width;
+            let segment_width = width - start;
+            let batch = T::Index::new_link(segment_width)?;
+            let mut prefixes = Vec::with_capacity(self.local.len() - 1);
+            let mut prefix = probed_site_pair_batch_range(
+                self.local[0].0,
+                self.local[0].1,
+                &self.outputs[0],
+                self.probes,
+                start,
+                segment_width,
+                &batch,
+            )?;
+            prefixes.push(prefix.clone());
+            for prefix_site in 1..self.local.len() - 1 {
+                prefix = contract_prefix_with_probed_site_pair_batch_range(
+                    &prefix,
+                    self.local[prefix_site].0,
+                    self.local[prefix_site].1,
+                    &self.outputs[prefix_site],
+                    self.probes,
+                    start,
+                    segment_width,
+                    &batch,
+                )?;
+                prefixes.push(prefix.clone());
+            }
+            self.segments.push(PrefixBatchSegment { batch, prefixes });
+            self.generated_width = width;
+        }
+
+        let batch = T::Index::new_link(width)?;
+        let mut prefixes = Vec::with_capacity(self.local.len() - 1);
+        for prefix_site in 0..self.local.len() - 1 {
+            let segment_prefixes =
+                self.segments
+                    .iter()
+                    .map(|segment| {
+                        segment.prefixes.get(prefix_site).ok_or_else(|| {
+                            anyhow::anyhow!("contract_src: prefix segment is missing")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+            let source_indices = self
+                .segments
+                .iter()
+                .map(|segment| segment.batch.clone())
+                .collect::<Vec<_>>();
+            let combined =
+                T::concatenate_along_new_index(&segment_prefixes, &source_indices, batch.clone())?;
+            prefixes.push(combined);
+        }
+        let result = prefixes
+            .get(site)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch is missing"))?;
+        self.cached = Some((width, batch.clone(), prefixes));
+        Ok((result, batch))
+    }
+}
+
+impl<'a, T> PrefixCache<'a, T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    fn new(
+        local: &'a [(&'a T, &'a T)],
+        outputs: &'a [Vec<T::Index>],
+        probes: &'a mut ProbeBank<T::Index>,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            local,
+            outputs,
+            probes,
+            prefixes: (0..local.len() - 1).map(|_| Vec::new()).collect(),
+            batch_size: batch_size.max(1),
+        }
+    }
+
+    fn ensure_width(&mut self, width: usize) -> Result<()> {
+        let current_width = self.prefixes.first().map_or(0, Vec::len);
+        self.probes.extend_to(width)?;
+        let mut start = current_width;
+        while start < width {
+            let segment_width = self.batch_size.min(width - start);
+            let batch = T::Index::new_link(segment_width)?;
+            let mut prefix = probed_site_pair_batch_range(
+                self.local[0].0,
+                self.local[0].1,
+                &self.outputs[0],
+                self.probes,
+                start,
+                segment_width,
+                &batch,
+            )?;
+            let mut segment_prefixes = vec![prefix.clone()];
+            for site in 1..self.local.len() - 1 {
+                prefix = contract_prefix_with_probed_site_pair_batch_range(
+                    &prefix,
+                    self.local[site].0,
+                    self.local[site].1,
+                    &self.outputs[site],
+                    self.probes,
+                    start,
+                    segment_width,
+                    &batch,
+                )?;
+                segment_prefixes.push(prefix.clone());
+            }
+            for (site, segment) in segment_prefixes.iter().enumerate() {
+                for position in 0..segment_width {
+                    self.prefixes[site].push(
+                        segment
+                            .select_indices(std::slice::from_ref(&batch), &[position])
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "contract_src: prefix batch split at site {site} failed: {error}"
+                                )
+                            })?,
+                    );
+                }
+            }
+            start += segment_width;
+        }
+        Ok(())
+    }
+
+    fn column(&mut self, site: usize, column: usize) -> Result<T> {
+        let next_batch = column
+            .checked_div(self.batch_size)
+            .and_then(|block| block.checked_add(1))
+            .and_then(|block| block.checked_mul(self.batch_size))
+            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch width overflow"))?;
+        self.ensure_width(next_batch.max(column + 1))?;
+        self.prefixes
+            .get(site)
+            .and_then(|prefixes| prefixes.get(column))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix column is missing"))
+    }
+}
+
+struct FactorizeSiteRequest<'a, T>
+where
+    T: TensorLike,
+{
+    outputs: &'a [T::Index],
+    right_cap: Option<&'a T::Index>,
+    operands: (&'a T, &'a T),
+    right_environment: Option<&'a T>,
+    initial_width: usize,
+    maximum_width: usize,
+    src_options: &'a SrcOptions,
+    label: &'a str,
+}
+
+fn factorize_site_adaptive<T, F>(
+    request: FactorizeSiteRequest<'_, T>,
+    make_column: F,
+) -> Result<(T, T::Index, T)>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    F: FnMut(usize) -> Result<T>,
+{
+    let FactorizeSiteRequest {
+        outputs,
+        right_cap,
+        operands,
+        right_environment,
+        initial_width,
+        maximum_width,
+        src_options,
+        label,
+    } = request;
+    let mut left = outputs.to_vec();
+    if let Some(right_cap) = right_cap {
+        left.push(right_cap.clone());
+    }
+    let (factor, cap) = factorize_probe_columns(
+        &left,
+        initial_width,
+        maximum_width,
+        src_options,
+        label,
+        make_column,
+    )?;
+    let factor_conj = factor.conj();
+    let environment = if let Some(right_environment) = right_environment {
+        contract_site_pair(operands.0, operands.1, &[&factor_conj, right_environment])
+    } else {
+        contract_site_pair(operands.0, operands.1, &[&factor_conj])
+    }
+    .map_err(|error| anyhow::anyhow!("contract_src: {label} environment failed: {error}"))?;
+    Ok((factor, cap, environment))
+}

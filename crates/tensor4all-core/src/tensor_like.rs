@@ -18,6 +18,7 @@ use crate::tensor_index::TensorIndex;
 use crate::truncation::{
     validate_svd_truncation_options, SvdTruncationOptionsError, SvdTruncationPolicy,
 };
+use num_complex::Complex64;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -477,6 +478,67 @@ pub struct FactorizeResult<T: TensorIndex> {
     pub singular_values: Option<Vec<f64>>,
     /// Rank of the factorization.
     pub rank: usize,
+    incremental_qr_state: Option<IncrementalQrState>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum IncrementalQrState {
+    F64(tensor4all_tensorbackend::IncrementalQr<f64>),
+    C64(tensor4all_tensorbackend::IncrementalQr<Complex64>),
+}
+
+impl<T: TensorIndex> FactorizeResult<T> {
+    /// Construct a factorization result without an algorithm-private update
+    /// state.
+    ///
+    /// # Arguments
+    /// * `left` - Left factor tensor.
+    /// * `right` - Right factor tensor.
+    /// * `bond_index` - Index connecting the two factors.
+    /// * `singular_values` - Singular values when the result came from SVD.
+    /// * `rank` - Number of columns in the factorization.
+    ///
+    /// # Returns
+    /// A factorization result suitable for public factorization APIs. Native
+    /// incremental QR callers attach their private update state afterward.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, FactorizeResult, IdxTensor};
+    ///
+    /// let left_index = DynIndex::new_dyn(1);
+    /// let bond = DynIndex::new_bond(1).unwrap();
+    /// let left = IdxTensor::from_dense(vec![left_index.clone(), bond.clone()], vec![1.0]).unwrap();
+    /// let right = IdxTensor::from_dense(vec![bond.clone()], vec![2.0]).unwrap();
+    /// let result = FactorizeResult::new(left, right, bond, None, 1);
+    /// assert_eq!(result.rank, 1);
+    /// ```
+    pub fn new(
+        left: T,
+        right: T,
+        bond_index: T::Index,
+        singular_values: Option<Vec<f64>>,
+        rank: usize,
+    ) -> Self {
+        Self {
+            left,
+            right,
+            bond_index,
+            singular_values,
+            rank,
+            incremental_qr_state: None,
+        }
+    }
+
+    pub(crate) fn with_incremental_qr_state(mut self, state: IncrementalQrState) -> Self {
+        self.incremental_qr_state = Some(state);
+        self
+    }
+
+    pub(crate) fn incremental_qr_state(&self) -> Option<&IncrementalQrState> {
+        self.incremental_qr_state.as_ref()
+    }
 }
 
 // ============================================================================
@@ -777,6 +839,65 @@ pub trait TensorContractionLike: TensorIndex {
     /// failure.
     fn contract(tensors: &[&Self]) -> std::result::Result<Self, Self::Error>;
 
+    /// Contract tensors while preserving selected shared indices as batch axes.
+    ///
+    /// This seam was introduced for the batched SRC sketch. The paper basis is
+    /// Algorithm 1's independent probe columns; the retained-index execution
+    /// and fallback contract are tensor4all-specific `[AI-Supplied]` plumbing.
+    ///
+    /// A retained index is matched elementwise across operands instead of being
+    /// summed. This is useful for evaluating several independent contractions
+    /// in one backend call, such as a batch of SRC probe columns. Implementations
+    /// that do not support retained batch axes may return an operation error.
+    ///
+    /// # Arguments
+    /// * `tensors` - Connected tensor operands to contract.
+    /// * `retained_indices` - Shared indices to preserve as output batch axes.
+    ///
+    /// # Returns
+    /// The contracted tensor with each retained index present once in its output
+    /// index list. An empty `retained_indices` list has the same meaning as
+    /// [`Self::contract`].
+    ///
+    /// # Errors
+    /// Returns `Self::Error` when the operands are disconnected, incompatible,
+    /// or the tensor type does not support retained indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike};
+    ///
+    /// let batch = DynIndex::new_dyn(2);
+    /// let contracted = DynIndex::new_dyn(2);
+    /// let left = IdxTensor::from_dense(
+    ///     vec![batch.clone(), contracted.clone()],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0],
+    /// )
+    /// .unwrap();
+    /// let right = IdxTensor::from_dense(
+    ///     vec![batch.clone(), contracted],
+    ///     vec![2.0_f64, 3.0, 4.0, 5.0],
+    /// )
+    /// .unwrap();
+    /// let result = IdxTensor::contract_retaining_indices(&[&left, &right], &[batch]).unwrap();
+    /// assert_eq!(result.dims(), vec![2]);
+    /// assert_eq!(result.to_vec::<f64>().unwrap(), vec![14.0, 26.0]);
+    /// ```
+    fn contract_retaining_indices(
+        tensors: &[&Self],
+        retained_indices: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        if retained_indices.is_empty() {
+            return Self::contract(tensors);
+        }
+        Err(anyhow::anyhow!(
+            "{} does not support retained contraction indices",
+            std::any::type_name::<Self>()
+        )
+        .into())
+    }
+
     /// Contract this tensor with one other tensor using default pairwise semantics.
     ///
     /// # Errors
@@ -881,6 +1002,75 @@ pub trait TensorFactorizationLike: TensorIndex {
         canonical: Canonical,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
+    /// Factorize a probe prefix, optionally extending an existing QR prefix.
+    ///
+    /// The append semantics are based on Appendix C of
+    /// Camaño--Epperly--Tropp and the author's `IncrementalQR.append`; the
+    /// generic trait/default implementation is repository plumbing and is
+    /// labelled `[AI-Supplied]` in the audit.
+    ///
+    /// `all_columns` contains the complete prefix requested by the caller;
+    /// `appended_columns` contains only the newly added columns when
+    /// `previous` is present. Native dense implementations may use the
+    /// previous factors and append only the new block. The default is a
+    /// correctness fallback that factorizes the complete prefix from scratch.
+    ///
+    /// # Arguments
+    /// * `previous` - Factors for the preceding prefix, or `None` for the first
+    ///   prefix.
+    /// * `all_columns` - All probe-column tensors in the new prefix.
+    /// * `appended_columns` - Only the columns appended since `previous`.
+    /// * `left_inds` - Tensor indices that form the matrix rows.
+    ///
+    /// # Returns
+    /// A full-rank left-canonical QR factorization of the requested prefix.
+    ///
+    /// # Errors
+    /// Returns [`FactorizeError`] when the prefix cannot be stacked or QR
+    /// factorized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorFactorizationLike};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let row = DynIndex::new_dyn(2);
+    /// let first = IdxTensor::from_dense(
+    ///     vec![row.clone()],
+    ///     vec![1.0, 0.0],
+    /// )?;
+    /// let second = IdxTensor::from_dense(
+    ///     vec![row.clone()],
+    ///     vec![0.0, 1.0],
+    /// )?;
+    /// let result = <IdxTensor as TensorFactorizationLike>::factorize_probe_columns_incremental(
+    ///     None,
+    ///     &[&first, &second],
+    ///     &[&first, &second],
+    ///     &[row],
+    /// )?;
+    /// assert_eq!(result.rank, 2);
+    /// assert_eq!(result.left.indices().len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn factorize_probe_columns_incremental(
+        _previous: Option<&FactorizeResult<Self>>,
+        all_columns: &[&Self],
+        _appended_columns: &[&Self],
+        left_inds: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>
+    where
+        Self: TensorVectorSpace + TensorConstructionLike,
+    {
+        let batch = <Self as TensorIndex>::Index::new_link(all_columns.len())
+            .map_err(FactorizeError::ComputationError)?;
+        let sketch = Self::stack_along_new_index(all_columns, batch, -1)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        sketch.factorize_full_rank(left_inds, FactorizeAlg::QR, Canonical::Left)
+    }
+
     /// Evaluate the SRC adaptive stopping estimator for a small QR factor.
     ///
     /// The tensor must represent a square upper-triangular `R` matrix in
@@ -980,6 +1170,291 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// Returns `Self::Error` when an index dimension product overflows (an
     /// overflow failure) or the underlying construction reports a failure.
     fn ones(indices: &[<Self as TensorIndex>::Index]) -> std::result::Result<Self, Self::Error>;
+
+    /// Construct a tensor from a column-major dense payload.
+    ///
+    /// Implementations with a native dense storage path should override this
+    /// method. The default preserves compatibility for tensor types that only
+    /// expose one-hot construction, at the cost of constructing a sparse sum
+    /// of one-hot tensors.
+    ///
+    /// # Arguments
+    /// * `indices` - External indices in the intended column-major axis order.
+    /// * `data` - Dense values in column-major order; its length must equal the
+    ///   product of the index dimensions.
+    ///
+    /// # Errors
+    /// Returns `Self::Error` when the payload length is inconsistent, an index
+    /// dimension product overflows, or the underlying tensor operations fail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorConstructionLike};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = <IdxTensor as TensorConstructionLike>::from_dense_any(
+    ///     vec![index],
+    ///     vec![AnyScalar::new_real(2.0), AnyScalar::new_real(3.0)],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![2.0, 3.0]);
+    /// ```
+    fn from_dense_any(
+        indices: Vec<<Self as TensorIndex>::Index>,
+        data: Vec<AnyScalar>,
+    ) -> std::result::Result<Self, Self::Error>
+    where
+        Self: TensorVectorSpace,
+    {
+        let expected_len = indices.iter().try_fold(1usize, |size, index| {
+            size.checked_mul(index.dim())
+                .ok_or_else(|| anyhow::anyhow!("dense tensor shape product overflows usize"))
+        })?;
+        if data.len() != expected_len {
+            return Err(anyhow::anyhow!(
+                "dense tensor payload has length {}, expected {}",
+                data.len(),
+                expected_len
+            )
+            .into());
+        }
+
+        let mut result = Self::ones(&indices)?.scale(AnyScalar::new_real(0.0))?;
+        let one = AnyScalar::new_real(1.0);
+        for (linear, value) in data.into_iter().enumerate() {
+            if value.is_zero() {
+                continue;
+            }
+            let mut remainder = linear;
+            let mut index_vals = Vec::with_capacity(indices.len());
+            for index in &indices {
+                let dim = index.dim();
+                let position = remainder % dim;
+                remainder /= dim;
+                index_vals.push((index.clone(), position));
+            }
+            let basis = Self::onehot(&index_vals)?;
+            let term = basis.scale(value)?;
+            result = result.axpby(one.clone(), &term, one.clone())?;
+        }
+        Ok(result)
+    }
+
+    /// Stack tensors along a newly created batch index.
+    ///
+    /// Implementations with a native batch stack should override this method.
+    /// The default constructs the batch by outer products with one-hot batch
+    /// vectors, which is correct but intended only as a compatibility path.
+    ///
+    /// # Arguments
+    /// * `tensors` - Non-empty tensors with identical external index order.
+    /// * `new_index` - Fresh index whose dimension equals `tensors.len()`.
+    /// * `axis` - Insertion axis; negative axes count from the end, so `-1`
+    ///   appends the batch axis.
+    ///
+    /// # Errors
+    /// Returns `Self::Error` when tensors are empty, their index orders differ,
+    /// the batch dimension is wrong, the axis is invalid, or construction
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorConstructionLike};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let batch = DynIndex::new_dyn(2);
+    /// let first = IdxTensor::from_dense(vec![index.clone()], vec![1.0, 2.0]).unwrap();
+    /// let second = IdxTensor::from_dense(vec![index.clone()], vec![3.0, 4.0]).unwrap();
+    /// let stacked = <IdxTensor as TensorConstructionLike>::stack_along_new_index(
+    ///     &[&first, &second],
+    ///     batch.clone(),
+    ///     -1,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(stacked.indices(), &[index, batch]);
+    /// assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    fn stack_along_new_index(
+        tensors: &[&Self],
+        new_index: <Self as TensorIndex>::Index,
+        axis: isize,
+    ) -> std::result::Result<Self, Self::Error>
+    where
+        Self: TensorVectorSpace,
+    {
+        let first = tensors
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("stack_along_new_index requires at least one tensor"))?;
+        if new_index.dim() != tensors.len() {
+            return Err(anyhow::anyhow!(
+                "stack_along_new_index batch dimension {} does not match tensor count {}",
+                new_index.dim(),
+                tensors.len()
+            )
+            .into());
+        }
+        let base_indices = first.external_indices();
+        for tensor in tensors.iter().skip(1) {
+            if tensor.external_indices() != base_indices {
+                return Err(anyhow::anyhow!(
+                    "stack_along_new_index tensors must have identical index order"
+                )
+                .into());
+            }
+        }
+
+        let result_rank = base_indices.len() + 1;
+        let insertion_axis = if axis < 0 {
+            result_rank as isize + axis
+        } else {
+            axis
+        };
+        if !(0..=base_indices.len() as isize).contains(&insertion_axis) {
+            return Err(anyhow::anyhow!(
+                "stack_along_new_index axis {} is invalid for rank {}",
+                axis,
+                base_indices.len()
+            )
+            .into());
+        }
+
+        let batch_one = AnyScalar::new_real(1.0);
+        let mut result: Option<Self> = None;
+        for (position, tensor) in tensors.iter().enumerate() {
+            let batch = Self::onehot(&[(new_index.clone(), position)])?;
+            let term = tensor.outer_product(&batch)?;
+            result = Some(match result {
+                Some(current) => current.axpby(batch_one.clone(), &term, batch_one.clone())?,
+                None => term,
+            });
+        }
+        let mut desired = base_indices;
+        desired.insert(insertion_axis as usize, new_index);
+        let result = result
+            .ok_or_else(|| anyhow::anyhow!("stack_along_new_index requires at least one tensor"))?;
+        if result.external_indices() == desired {
+            Ok(result)
+        } else {
+            result.permuteinds(&desired)
+        }
+    }
+
+    /// Concatenate tensors whose selected axes are replaced by one new index.
+    ///
+    /// The tensors must have the same index order away from the selected axis.
+    /// Each tensor may use a distinct source index at that axis; the source
+    /// axes are copied in tensor order into `new_index`. This is the batched
+    /// counterpart to appending column blocks without recomputing the old
+    /// columns.
+    ///
+    /// # Arguments
+    /// * `tensors` - Non-empty tensors with matching non-concatenated axes.
+    /// * `source_indices` - One axis to concatenate for each tensor.
+    /// * `new_index` - Fresh output axis whose dimension is the sum of source
+    ///   dimensions.
+    ///
+    /// # Errors
+    /// Returns `Self::Error` when the input list is empty, its lengths differ,
+    /// source axes are absent or at different positions, non-concatenated axes
+    /// differ, or the new index dimension is inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorConstructionLike};
+    ///
+    /// let row = DynIndex::new_dyn(2);
+    /// let first_batch = DynIndex::new_link(1).unwrap();
+    /// let second_batch = DynIndex::new_link(2).unwrap();
+    /// let combined = DynIndex::new_link(3).unwrap();
+    /// let first = IdxTensor::from_dense(
+    ///     vec![row.clone(), first_batch.clone()],
+    ///     vec![1.0_f64, 2.0],
+    /// ).unwrap();
+    /// let second = IdxTensor::from_dense(
+    ///     vec![row.clone(), second_batch.clone()],
+    ///     vec![3.0, 4.0, 5.0, 6.0],
+    /// ).unwrap();
+    /// let result = <IdxTensor as TensorConstructionLike>::concatenate_along_new_index(
+    ///     &[&first, &second],
+    ///     &[first_batch, second_batch],
+    ///     combined.clone(),
+    /// ).unwrap();
+    /// assert_eq!(result.indices(), &[row, combined]);
+    /// assert_eq!(result.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// ```
+    fn concatenate_along_new_index(
+        tensors: &[&Self],
+        source_indices: &[<Self as TensorIndex>::Index],
+        new_index: <Self as TensorIndex>::Index,
+    ) -> std::result::Result<Self, Self::Error>
+    where
+        Self: TensorVectorSpace,
+    {
+        let first = tensors
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("concatenate requires at least one tensor"))?;
+        if tensors.len() != source_indices.len() {
+            return Err(anyhow::anyhow!(
+                "concatenate tensor count {} does not match source-index count {}",
+                tensors.len(),
+                source_indices.len()
+            )
+            .into());
+        }
+        let first_axis = first
+            .external_indices()
+            .iter()
+            .position(|index| index == &source_indices[0])
+            .ok_or_else(|| anyhow::anyhow!("concatenate source index is not present"))?;
+        let mut total_dim = 0usize;
+        for (tensor, source) in tensors.iter().zip(source_indices) {
+            let axis = tensor
+                .external_indices()
+                .iter()
+                .position(|index| index == source)
+                .ok_or_else(|| anyhow::anyhow!("concatenate source index is not present"))?;
+            if axis != first_axis {
+                return Err(
+                    anyhow::anyhow!("concatenate source axes must have the same position").into(),
+                );
+            }
+            let indices = tensor.external_indices();
+            let first_indices = first.external_indices();
+            if indices.len() != first_indices.len()
+                || indices.iter().zip(first_indices).enumerate().any(
+                    |(position, (actual, expected))| position != first_axis && *actual != expected,
+                )
+            {
+                return Err(anyhow::anyhow!(
+                    "concatenate tensors must match away from the source axis"
+                )
+                .into());
+            }
+            total_dim = total_dim
+                .checked_add(source.dim())
+                .ok_or_else(|| anyhow::anyhow!("concatenate dimension overflow"))?;
+        }
+        if new_index.dim() != total_dim {
+            return Err(anyhow::anyhow!(
+                "concatenate output dimension {} does not match source dimension sum {}",
+                new_index.dim(),
+                total_dim
+            )
+            .into());
+        }
+
+        let mut slices = Vec::with_capacity(total_dim);
+        for (tensor, source) in tensors.iter().zip(source_indices) {
+            for position in 0..source.dim() {
+                slices.push(tensor.select_indices(std::slice::from_ref(source), &[position])?);
+            }
+        }
+        let slice_refs = slices.iter().collect::<Vec<_>>();
+        Self::stack_along_new_index(&slice_refs, new_index, first_axis as isize)
+    }
 
     /// Select fixed coordinates for a subset of this tensor's external indices.
     ///

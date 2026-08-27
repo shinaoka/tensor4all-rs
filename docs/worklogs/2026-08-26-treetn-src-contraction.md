@@ -22,6 +22,10 @@ second SRC engine.
 - `ContractionMethod::Src` and `SrcOptions` are public TreeTN APIs. `rtol =
   None` selects fixed rank; `Some(rtol)` selects adaptive growth with explicit
   maximum rank, minimum rank, increment, seed, and optional final SVD.
+- The core SRC path does not run the optional final SVD by default. Callers
+  must opt into the paper's oversampled final round with
+  `with_final_svd(true)`; when a final tolerance policy is present, the sketch
+  tolerance uses the paper's `0.1 * requested_tol` experiment convention.
 - SRC roots at the requested canonical center, computes child-to-parent and
   parent-to-child directed environment messages, then performs leaf-to-root
   QR/projection caps. The result preserves the input topology and canonical
@@ -31,10 +35,25 @@ second SRC engine.
   constructing a fused random physical vector or an unprobed local physical
   product in the production SRC path.
 - The Appendix C estimator is owned by `tensor4all-tensorbackend`; it builds
-  the Hermitian adjoint explicitly for complex values and calls the existing
-  triangular solve. `IdxTensor` exposes this through the existing
-  factorization abstraction. Singular adaptive sketches terminate safely and
-  can be cleaned up by the optional final SVD.
+  the Hermitian adjoint explicitly for complex values. Incremental QR stores
+  and updates `R^{-†}` with the Appendix C.3 block formula; the triangular
+  solve is used only to initialize a state or handle a fallback. `IdxTensor`
+  exposes this through the existing factorization abstraction. Singular
+  adaptive sketches terminate safely and can be cleaned up by the optional
+  final SVD.
+- The MPO-MPO probe path now makes the paper's contraction order explicit: it
+  partitions each local probe by operand, contracts X into A and Y into B,
+  and only then contracts the shared physical/virtual legs. Batched probes
+  retain one common sample axis through both operand contractions.
+- The incremental QR backend now stores packed Householder reflectors and
+  updates only the appended residual block. The packed state is carried
+  through `FactorizeResult` as an internal core detail, so adaptive prefix
+  growth resumes the existing reflectors instead of reconstructing them from
+  Q/R factors.
+- Adaptive prefix results reuse the already materialized Q columns and form
+  only newly accepted Q columns after an append. The public Q/R fallback now
+  resumes with `R_q R` (the R factor from QR of the supplied Q), preserving the
+  represented product for externally constructed factorization results.
 - Scalar-only branches retain the input TreeTN topology through explicit
   dimension-one bridge links, matching the topology-preservation contract.
 - Operator application, partial contraction, itensorlike, and the C API method
@@ -80,9 +99,13 @@ arm time) were:
 | 128 | 1.60x | 0.025x | 0.0042x | 1.28x |
 
 These are single-machine paired measurements, not a formal performance gate.
-The current generic SRC probe construction is therefore correct on this
-benchmark but substantially slower than zip-up and fit; optimization should
-follow only after the algorithm/API review is accepted.
+Those measurements predate the packed-state, factorized-probe, and incremental-Q
+fixes. They are retained as historical diagnostics only and must not be used as
+the current SRC speed result; the benchmark has to be rerun after this code is
+committed.
+
+The post-fix benchmark smoke attempt in this worktree reached dependency
+compilation but did not enter measurement, so it produced no new timing data.
 
 ## Verification
 
@@ -105,9 +128,10 @@ Rust doctests, mdBook guide tests, and all other workspace checks pass.
 
 ## Remaining risks
 
-- The first implementation recomputes backend QR after adaptive block growth;
-  cached environment columns avoid recomputing the expensive directed messages,
-  but incremental QR is a future optimization.
+- Results externally constructed through the public factorization constructor
+  have no packed state; if such a result is supplied as an adaptive predecessor,
+  the implementation falls back to one Q/R-to-Householder conversion. Native
+  SRC adaptive results carry the packed state and do not use this fallback.
 - Probe construction is generic and currently uses tensor one-hot/axpby
   assembly; a backend-native random-vector constructor may be worthwhile after
   a formal performance experiment.
