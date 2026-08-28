@@ -1379,7 +1379,7 @@ impl TensorTrain {
         }
 
         if self.is_empty() {
-            return Ok(AnyScalar::new_real(0.0));
+            return Ok(AnyScalar::new_real(1.0));
         }
 
         // Sequential bra-ket contraction along the chain: O(N·D²·d).
@@ -1590,7 +1590,7 @@ impl TensorTrain {
 
     fn norm_squared_fast_path(&self) -> Result<Option<f64>> {
         if self.is_empty() {
-            return Ok(Some(0.0));
+            return Ok(Some(1.0));
         }
         if !self.has_simple_linear_links()? {
             return Ok(None);

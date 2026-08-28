@@ -1,17 +1,16 @@
 //! Tests for TensorTrain inner product operations
 
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::IdxTensor;
+use tensor4all_core::{IdxTensor, TensorConstructionLike};
 use tensor4all_itensorlike::TensorTrain;
 
-/// Test inner product of empty tensor trains
+/// Test metrics of the empty tensor train representing scalar one.
 #[test]
 fn test_inner_empty_tensor_trains() {
-    let tt1 = TensorTrain::new(vec![]).unwrap();
-    let tt2 = TensorTrain::new(vec![]).unwrap();
+    let one = <TensorTrain as TensorConstructionLike>::scalar_one().unwrap();
 
-    let result = tt1.inner(&tt2).unwrap();
-    assert_eq!(result.real(), 0.0);
+    assert_eq!(one.inner(&one).unwrap().real(), 1.0);
+    assert_eq!(one.norm_squared().unwrap(), 1.0);
 }
 
 /// Test inner product of single-site tensor trains
