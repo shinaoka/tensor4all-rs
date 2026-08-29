@@ -176,100 +176,6 @@ where
         .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
 }
 
-/// Build the tensor product of all probe vectors for one site and column.
-pub(super) fn site_probe<T>(
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
-    column: usize,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    if outputs.is_empty() {
-        anyhow::bail!("contract_src: empty site probe");
-    }
-    let dimension = product_dim(outputs)?;
-    let mut data = Vec::with_capacity(dimension);
-    for linear in 0..dimension {
-        let mut remainder = linear;
-        let mut value = 1.0;
-        for index in outputs {
-            let position = remainder % index.dim();
-            remainder /= index.dim();
-            value *= probes.column(index, column)?[position];
-        }
-        data.push(AnyScalar::new_real(value));
-    }
-    T::from_dense_any(outputs.to_vec(), data)
-        .map_err(|error| anyhow::anyhow!("contract_src: probe vector construction failed: {error}"))
-}
-
-/// Build all tensor-product probe vectors for one site as one trailing batch
-/// index. The batch index is retained by the subsequent local contraction.
-pub(super) fn site_probe_batch<T>(
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
-    width: usize,
-    batch: T::Index,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    site_probe_batch_range(outputs, probes, 0, width, batch)
-}
-
-/// Build a contiguous block of tensor-product probe vectors as one batch.
-pub(super) fn site_probe_batch_range<T>(
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
-    first_column: usize,
-    width: usize,
-    batch: T::Index,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    if width == 0 || batch.dim() != width {
-        anyhow::bail!(
-            "contract_src: probe batch dimension {} does not match width {}",
-            batch.dim(),
-            width
-        );
-    }
-    if outputs.is_empty() {
-        return T::ones(std::slice::from_ref(&batch)).map_err(|error| {
-            anyhow::anyhow!("contract_src: scalar probe batch construction failed: {error}")
-        });
-    }
-    let dimension = product_dim(outputs)?;
-    let capacity = dimension
-        .checked_mul(width)
-        .ok_or_else(|| anyhow::anyhow!("contract_src: probe batch size overflow"))?;
-    let mut data = Vec::with_capacity(capacity);
-    for column in 0..width {
-        let probe_column = first_column
-            .checked_add(column)
-            .ok_or_else(|| anyhow::anyhow!("contract_src: probe column range overflow"))?;
-        for linear in 0..dimension {
-            let mut remainder = linear;
-            let mut value = 1.0;
-            for index in outputs {
-                let position = remainder % index.dim();
-                remainder /= index.dim();
-                value *= probes.column(index, probe_column)?[position];
-            }
-            data.push(AnyScalar::new_real(value));
-        }
-    }
-    let mut indices = outputs.to_vec();
-    indices.push(batch);
-    T::from_dense_any(indices, data)
-        .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
-}
-
 /// Return the checked product of a list of index dimensions.
 pub(super) fn product_dim<I: IndexLike>(indices: &[I]) -> Result<usize> {
     indices.iter().try_fold(1usize, |size, index| {
@@ -813,7 +719,7 @@ mod tests {
         contract_prefix_with_probed_site_pair, contract_prefix_with_probed_site_pair_batch_range,
         contract_prefix_with_site_pair, contract_retaining, contract_site_pair,
         factorize_probe_columns, maximum_site_width, probed_site_pair,
-        probed_site_pair_batch_range, site_probe, site_probe_batch, ProbeBank,
+        probed_site_pair_batch_range, ProbeBank,
     };
     use crate::treetn::contraction::SrcOptions;
     use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
@@ -858,23 +764,6 @@ mod tests {
 
         let zero_dimensional = DynIndex::new_dyn(0);
         assert!(ProbeBank::new(vec![zero_dimensional], 1, 0).is_err());
-    }
-
-    #[test]
-    fn site_probe_uses_column_major_tensor_product_order() {
-        let first = DynIndex::new_dyn(2);
-        let second = DynIndex::new_dyn(3);
-        let bank = ProbeBank::new(vec![first.clone(), second.clone()], 1, 17).unwrap();
-        let first_column = bank.column(&first, 0).unwrap().to_vec();
-        let second_column = bank.column(&second, 0).unwrap().to_vec();
-        let probe = site_probe::<IdxTensor>(&[first.clone(), second.clone()], &bank, 0).unwrap();
-        let expected = (0..first.dim() * second.dim())
-            .map(|linear| {
-                first_column[linear % first.dim()]
-                    * second_column[(linear / first.dim()) % second.dim()]
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(probe.to_vec::<f64>().unwrap(), expected);
     }
 
     #[test]
@@ -1084,12 +973,9 @@ mod tests {
     }
 
     #[test]
-    fn scalar_site_probe_batch_broadcasts_over_the_batch_axis() {
+    fn scalar_probed_site_pair_batch_range_broadcasts_over_the_batch_axis() {
         let batch = DynIndex::new_dyn(3);
         let bank = ProbeBank::new(vec![], 3, 17).unwrap();
-        let probe = site_probe_batch::<IdxTensor>(&[], &bank, 3, batch.clone()).unwrap();
-        assert_eq!(probe.indices(), std::slice::from_ref(&batch));
-        assert_eq!(probe.to_vec::<f64>().unwrap(), vec![1.0; 3]);
 
         let left = DynIndex::new_dyn(2);
         let shared = DynIndex::new_dyn(1);
