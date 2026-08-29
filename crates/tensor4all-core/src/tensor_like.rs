@@ -860,8 +860,10 @@ pub trait TensorContractionLike: TensorIndex {
     /// [`Self::contract`].
     ///
     /// # Errors
-    /// Returns `Self::Error` when the operands are disconnected, incompatible,
-    /// or the tensor type does not support retained indices.
+    ///
+    /// Returns `Self::Error` when the operands are disconnected, an operand
+    /// index is missing or incompatible, or the retained-index operation is
+    /// unsupported by the tensor type.
     ///
     /// # Examples
     ///
@@ -1184,8 +1186,10 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///   product of the index dimensions.
     ///
     /// # Errors
-    /// Returns `Self::Error` when the payload length is inconsistent, an index
-    /// dimension product overflows, or the underlying tensor operations fail.
+    ///
+    /// Returns `Self::Error` when the input payload length does not match the
+    /// product of the index dimensions, that index-dimension product would
+    /// overflow `usize`, or an underlying tensor construction operation fails.
     ///
     /// # Examples
     ///
@@ -1356,9 +1360,12 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///   dimensions.
     ///
     /// # Errors
-    /// Returns `Self::Error` when the input list is empty, its lengths differ,
-    /// source axes are absent or at different positions, non-concatenated axes
-    /// differ, or the new index dimension is inconsistent.
+    ///
+    /// Returns `Self::Error` when the input list is empty; the tensor and
+    /// source-index counts do not match; a source index is missing; source axes
+    /// occupy incompatible positions; non-concatenated indices are
+    /// incompatible; the source-dimension sum overflows; or the new index
+    /// dimension does not match that sum.
     ///
     /// # Examples
     ///
