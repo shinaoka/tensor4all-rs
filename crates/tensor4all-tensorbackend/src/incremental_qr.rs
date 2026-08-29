@@ -19,9 +19,10 @@ use crate::matrix::{mat_mul, Matrix, MatrixScalar};
 
 /// Scalar operations required by [`IncrementalQr`].
 ///
-/// The implementation is provided for the four scalar types supported by the
-/// backend. The conjugation hook keeps the update correct for complex matrices
-/// while using the same column-major algorithm for real matrices.
+/// The implementation is provided for the two scalar types supported by the
+/// backend, `f64` and `Complex64`. The conjugation hook keeps the update
+/// correct for complex matrices while using the same column-major algorithm
+/// for real matrices.
 ///
 /// # Examples
 ///
