@@ -32,38 +32,38 @@
 
 | File | Code unit | Lines | Verdict | Citation / gap |
 |---|---|---|---|---|
-| `src_chain.rs` | Module doc comment (provenance claim) | 1-11 | `SOURCED-PAPER(Algorithm 1)` + flagged citation error | Algorithm and Python line-range citations check out (see Detailed findings), but the claimed paper location "Sections 2.3--2.5" is wrong — see flagged finding below. |
-| `src_chain.rs` | Imports | 13-27 | n/a (trivial plumbing) | Pulls `FactorizeAlg`, `SvdTruncationPolicy`, `TensorLike`, `IndexLike`, `Canonical` from `tensor4all_core` (not hand-rolled), and probe/prefix helpers from sibling `src_probe.rs` (audited under WS-tree-probe). |
+| `src_chain.rs` | Module doc comment (provenance claim) | 1-11 | `SOURCED-PAPER(Algorithm 1)` + flagged citation error | Algorithm and Python line-range citations check out (see Detailed findings), but the claimed paper location "Sections 2.3--2.5" is wrong — see flagged finding below. The doc's third claim (lines 9-11, "Prefix batching and the Q-column reuse optimization are derived implementation choices... labelled `[AI-Supplied]` in the audit") is also checked and holds: `docs/worklogs/2026-08-27-treetn-src-provenance-and-derivation-audit.md:282` (`PrefixCache`/`BatchedPrefixCache` segment growth: "a Rust performance optimization not present in the author source: `[AI-Supplied]`") and `:313` (`incremental_qr.rs`'s `q_columns`: "Reusing old Q columns... is `[AI-Supplied]` optimization") both carry the exact `[AI-Supplied]` label the comment cites. Flag for Task 7: the code comment's provenance authority for this claim is itself a Tier-2 worklog, not a Tier-1 source (paper/Python/Hiroshi comment) — worth surfacing in the synthesis pass. |
+| `src_chain.rs` | Imports | 13-27 | `DERIVED-VERIFIED` | Trivial, no source needed. Pulls `FactorizeAlg`, `SvdTruncationPolicy`, `TensorLike`, `IndexLike`, `Canonical` from `tensor4all_core` (not hand-rolled), and probe/prefix helpers from sibling `src_probe.rs` (audited under WS-tree-probe). |
 | `src_chain.rs` | `fn contract` — signature, chain retrieval, topology/emptiness checks | 30-52 | `DERIVED-VERIFIED` | Engineering precondition-checking with no direct paper analog (the paper's MPO/MPS *are* linear chains by construction; extracting a chain from a general `TreeTN` and checking `same_topology` is Rust-side infrastructure). Trivially correct: refuses to proceed without a valid, non-empty, topology-matched chain. |
 | `src_chain.rs` | `fn contract` — index desimilarization + local site pairs + `chain.len()==1` special case | 54-67 | `DERIVED-VERIFIED` | See "n=1 special case" derivation below. Python's `random_contraction` explicitly does *not* implement this case (`raise NotImplementedError`) — the Rust code adds a capability, not a citation gap. |
 | `src_chain.rs` | `fn contract` — `outputs`, `cut_dimensions`, `probe_indices`, `last_output_dim`, `last_maximum_width`, `ProbeBank::new` | 69-91 | `SOURCED-PYTHON(contraction.py:138-150)` | Matches Python's per-site `prod_bond_dims`/`current_maxdim`/`current_sketchdim` computation; see `chain_cut_dimensions` row below for the exact correspondence. The probe/width-bound *logic itself* (`maximum_site_width`) is defined in `src_probe.rs`, out of this workstream's file list — noted, not re-verified here. |
-| `src_chain.rs` | `fn contract` — dispatch to `contract_fixed` when `src_options.rtol.is_none()` | 92-104 | `SOURCED-PAPER(§3, fixed-χ̄ vs adaptive-χ̄ dichotomy)` | Matches the paper's two operating modes: §3.1-3.3 assume a supplied output bond dimension χ̄; §3.6/Appendix (`sec:approx`) adds tolerance-driven adaptive determination. Python encodes the same dichotomy with one function guarded by `if outputdim is not None`; Rust splits it into two functions (`contract` vs `contract_fixed`) — see duplication note below. |
-| `src_chain.rs` | `fn contract` — `sketch_options`, `PrefixCache::new` | 105-107 | see struct rows below | Cross-reference only; verdict lives on the `PrefixCache` struct definition (SCOPE-DEVIATION, see below). |
+| `src_chain.rs` | `fn contract` — dispatch to `contract_fixed` when `src_options.rtol.is_none()` | 92-104 | `SOURCED-PAPER(§3, fixed-χ̄ vs adaptive-χ̄ dichotomy)` | Matches the paper's two operating modes: §3.1-3.3 assume a supplied output bond dimension χ̄; Appendix (`sec:approx`, report.tex:1146, and `sec:adaptivity`, report.tex:1265) adds tolerance-driven adaptive determination. Python encodes the same dichotomy with one function guarded by `if outputdim is not None`; Rust splits it into two functions (`contract` vs `contract_fixed`) — see duplication note below. |
+| `src_chain.rs` | `fn contract` — `sketch_options`, `PrefixCache::new` | 105-107 | `SCOPE-DEVIATION` | Cross-reference: this call site instantiates the `PrefixCache` struct; the verdict is the same one carried by the `PrefixCache` struct definition row below (`SCOPE-DEVIATION` — see "PrefixCache trait ask" finding below). |
 | `src_chain.rs` | `fn contract` — adaptive last-site determination (`outputs[last].is_empty()` scalar branch + `factorize_site_adaptive` call) | 109-151 | `SOURCED-PAPER(§3.1, Algorithm 1 "Determine the last site")` + `SOURCED-PYTHON(contraction.py:205-212, 463-471)` + `DERIVED-VERIFIED` (scalar sub-branch) | See "Last-site sketch" and "Scalar-output boundary case" derivations below. |
 | `src_chain.rs` | `fn contract` — main site loop `for site in (1..last).rev()` | 153-206 | `SOURCED-PAPER(§3.2/§3.3, Algorithm 1 "Determine sites η^(n-1),...,η^(2)")` + `SOURCED-PYTHON(contraction.py:213-238, random_contraction_inc:460-490)` | See "Interior-site sketch" derivation below. No SVD call anywhere in this loop (grep-verified, see SVD audit below). |
 | `src_chain.rs` | `fn contract` — first-site determination | 208-210 | `SOURCED-PAPER(§3.3, Algorithm 1 "Determine the first site η^(1)", pseudocode line 669)` + `SOURCED-PYTHON(contraction.py:344-348)` | `contract_site_pair(local[0].0, local[0].1, &[&cap_environment])` matches η^(1)(a,b) = Σ H^(1)(a,c,d) ψ^(1)(d,e) S^(2)(e,d,b) — three tensors contracted (H, ψ, S^(2)), same as the pseudocode and the Python final block. |
 | `src_chain.rs` | `fn contract` — result assembly (`TreeTN::new`, per-site `add_tensor`, `connect_result_edge`) | 212-221 | `DERIVED-VERIFIED` | Mechanical: the paper/Python return a flat MPS list; Rust must rebuild a graph (`TreeTN`) from the same per-site tensors and wire up the same chain edges. No new math — the edges connected are exactly the chain's original adjacency (`chain.windows(2)`, `chain[i-1]`-`chain[i]`), which reproduces the same 1-D topology. |
 | `src_chain.rs` | `fn contract` — final SVD / canonical marking | 223-237 | `SOURCED-PAPER(§3.4, pseudocode line 670 "Optional: Run an MPS truncation algorithm")` + `SOURCED-COMMENT(#563, 2026-07-29T07:13:51Z)` | The one legitimate SVD call site in `contract`. See SVD audit below — gated by `src_options.final_svd`, applied only to the fully-assembled `result` (post per-site QR loop), matching Hiroshi's "acts on the already-compressed MPS" claim exactly. When `final_svd` is false, `mark_result_canonical` is used instead (no SVD at all). |
-| `src_chain.rs` | `struct FixedContractionRequest` | 240-253 | n/a (trivial plumbing) | Parameter-bundle struct, no logic. |
+| `src_chain.rs` | `struct FixedContractionRequest` | 240-253 | `DERIVED-VERIFIED` | Trivial, no source needed. Parameter-bundle struct, no logic. |
 | `src_chain.rs` | `fn contract_fixed` — signature/setup, `fixed_options`, `last_maximum_width`, `BatchedPrefixCache::new` | 255-289 | `SOURCED-PYTHON(contraction.py: outputdim-is-not-None branch, lines 110-117, 391-393)` | Mirrors the fixed-rank branch of the Python reference (`if outputdim is None: ... else: maxdim=mindim=sketchdim=outputdim`). |
 | `src_chain.rs` | `fn contract_fixed` — last-site fixed determination (scalar branch + `BatchedPrefixCache::batch` + `factorize_fixed_batch`) | 290-324 | `SOURCED-PAPER(§3.1, Algorithm 1)` + `SOURCED-PYTHON(contraction.py:205-212)` + `DERIVED-VERIFIED` (scalar sub-branch, same derivation as the adaptive path) | Same math as the adaptive last-site branch, but the sketch is built as a single batch (`prefixes.batch(...)`, width fixed to `last_maximum_width` up front) rather than incrementally — see "Batched vs incremental sketch equivalence" derivation below. |
 | `src_chain.rs` | `fn contract_fixed` — main site loop `for site in (1..last).rev()` | 326-374 | `SOURCED-PAPER(§3.2/§3.3, Algorithm 1)` + `SOURCED-PYTHON(contraction.py:213-238)` | Same tensors contracted as the adaptive path's interior-site loop (prefix batch, `local[site].0`/`.1`, `right_environment`), via `contract_prefix_with_probed_site_pair_batch_range` + `contract_pair` instead of the incremental `PrefixCache::column` + `T::contract` chain. Mathematically the same operation (see batching-equivalence derivation). |
-| `src_chain.rs` | `fn contract_fixed` — first-site + result assembly + final SVD/canonical | 376-405 | Same verdicts as the corresponding `contract` rows | Byte-for-byte structurally identical logic to lines 208-237 of `contract` (first-site contraction, `TreeTN` assembly, `final_svd`-gated truncation). This is the second (and only other) SVD call site in the file — see SVD audit below. |
+| `src_chain.rs` | `fn contract_fixed` — first-site + result assembly + final SVD/canonical | 376-405 | `SOURCED-PAPER(§3.3, Algorithm 1 "Determine the first site η^(1)")` + `SOURCED-PYTHON(contraction.py:344-348)` + `DERIVED-VERIFIED` (result assembly) + `SOURCED-PAPER(§3.4, pseudocode line 670)` + `SOURCED-COMMENT(#563, 2026-07-29T07:13:51Z)` | Byte-for-byte structurally identical logic to lines 208-237 of `contract` (first-site contraction, `TreeTN` assembly, `final_svd`-gated truncation) — carries the same verdicts as those three rows above (first-site determination, result assembly, final SVD/canonical marking). This is the second (and only other) SVD call site in the file — see SVD audit below. |
 | `src_chain.rs` | `fn chain_cut_dimensions` | 407-441 | `SOURCED-PYTHON(contraction.py:138-146)` | Computes, per internal chain edge, `dim_a(edge) * dim_b(edge)` (MPO bond dim × MPS bond dim). Combined with the call-site `.max()` of the two adjacent edges (line 163, 336), this is algebraically identical to Python's per-site `prod_bond_dims = max(H[j].shape[0]*psi[j].shape[0], H[j].shape[2]*psi[j].shape[2])` — see derivation below. The boundary case (`cut_dimensions.last()`, one edge only) matches Python's `j == n-1` branch (single bond, no `max`). |
 | `src_chain.rs` | `fn factorize_fixed_batch` | 443-462 | `SOURCED-PAPER(§3, QR-only claim)` + confirms no `HANDROLLED-DUPLICATE` | Calls `sketch.factorize_full_rank(left_indices, FactorizeAlg::QR, FactorizeCanonical::Left)` — an explicit, named QR decomposition delegated to `tensor4all-core`'s typed factorization API, not a hand-rolled linear-algebra routine. This is the fixed-rank path's analog of the paper's step (ii)/(iii) QR-and-project; matches Python's `np.linalg.qr` call sites (contraction.py:244, 247) in kind (QR, not SVD). |
 | `src_chain.rs` | `struct PrefixCache` | 464-473 | `SCOPE-DEVIATION` | See "PrefixCache trait ask" finding below — field `prefixes: Vec<Vec<T>>` is a concrete, hard-coded Vec of Vecs, not a trait, contradicting Hiroshi's still-current 2026-08-27T12:56:57Z ask. |
 | `src_chain.rs` | `struct BatchedPrefixCache`, `struct PrefixBatchSegment` | 475-493 | `SCOPE-DEVIATION` | Same finding as `PrefixCache`: `BatchedPrefixCache` is likewise a concrete struct (fields `cached`, `segments: Vec<PrefixBatchSegment<T>>`), not behind any trait. |
-| `src_chain.rs` | `impl BatchedPrefixCache::new` | 500-513 | n/a (trivial) | Field initialization only. |
+| `src_chain.rs` | `impl BatchedPrefixCache::new` | 500-513 | `DERIVED-VERIFIED` | Trivial, no source needed. Field initialization only. |
 | `src_chain.rs` | `impl BatchedPrefixCache::batch` | 515-597 | `SOURCED-PYTHON(concept: contraction.py's incrementally-grown `envs` list, lines 164-199)` + `DERIVED-VERIFIED` (segment/concatenate batching mechanism) | See "Batched vs incremental sketch equivalence" derivation below. |
-| `src_chain.rs` | `impl PrefixCache::new` | 605-618 | n/a (trivial) | Field initialization only. |
+| `src_chain.rs` | `impl PrefixCache::new` | 605-618 | `DERIVED-VERIFIED` | Trivial, no source needed. Field initialization only. |
 | `src_chain.rs` | `impl PrefixCache::ensure_width` | 620-666 | `SOURCED-PYTHON(concept: contraction.py's `sketchincrement`-driven `envs` growth, random_contraction_inc lines 431-456)` + `DERIVED-VERIFIED` (batch-then-split mechanism) | Grows the cache in `batch_size` chunks, then splits each chunk into individual per-column tensors via `select_indices`. See derivation below. |
 | `src_chain.rs` | `impl PrefixCache::column` | 668-680 | `SOURCED-PYTHON(contraction.py: `envs[idx][j-1]` column access pattern)` | Direct analog of indexing into the Python `envs` list; triggers `ensure_width` on demand instead of requiring the caller to pre-grow the cache. |
-| `src_chain.rs` | `struct FactorizeSiteRequest` | 683-695 | n/a (trivial plumbing) | Parameter-bundle struct, no logic. |
+| `src_chain.rs` | `struct FactorizeSiteRequest` | 683-695 | `DERIVED-VERIFIED` | Trivial, no source needed. Parameter-bundle struct, no logic. |
 | `src_chain.rs` | `fn factorize_site_adaptive` | 697-736 | `SOURCED-PAPER(§3, Algorithm 1 steps (ii)-(iii): orthonormalize + project)` + `SOURCED-PYTHON(contraction.py:280-313, random_contraction_inc:540-571)` | See "Per-site orthonormalize+project" derivation below. Delegates the actual QR/orthonormalization to `factorize_probe_columns` in `src_probe.rs` (out of this file, audited under WS-tree-probe) — this function's own logic is the conjugate-and-project (environment/cap update) step. No SVD call in this function (grep-verified). |
 
 ## SVD audit (mandatory per Task 1 brief)
 
-`grep -n -i "svd"` over the full file returns exactly these 12 lines, all
+`grep -n -i "svd"` over the full file returns exactly these 14 lines, all
 accounted for:
 
 - Line 17: `use tensor4all_core::{..., SvdTruncationPolicy, ...}` — type import only.
@@ -73,7 +73,10 @@ accounted for:
 - Line 105: `let sketch_options = src_options.sketch_options(svd_policy.is_some());` — configuration derivation, not a decomposition call.
 - Line 223: `if src_options.final_svd {` — **SVD call site #1** (guard).
 - Line 226: `svd_policy,` — argument to `result.truncate_impl(...)` inside the guarded branch.
-- Line 245, 252, 264, 271: parameter/struct-field declarations in `FixedContractionRequest`/`contract_fixed`'s destructure, threading the same policy through.
+- Line 245: `svd_policy: Option<SvdTruncationPolicy>,` — field declaration in `FixedContractionRequest`.
+- Line 252: `final_svd: bool,` — field declaration in `FixedContractionRequest`.
+- Line 264: `svd_policy,` — destructured field, `contract_fixed`'s request unpacking.
+- Line 271: `final_svd,` — destructured field, `contract_fixed`'s request unpacking.
 - Line 274: `let fixed_options = SrcOptions::fixed().with_final_svd(final_svd);` — configuration.
 - Line 390: `if final_svd {` — **SVD call site #2** (guard).
 - Line 393: `svd_policy,` — argument to the second `result.truncate_impl(...)`.
@@ -137,6 +140,24 @@ rather than a sign the surrounding code is unverified — but it is exactly
 the kind of unverifiable-on-its-face claim the audit exists to catch, and it
 should be corrected to "§3.1-§3.5" (or simply "§3, Algorithm 1").
 
+### `fn contract` — signature, chain retrieval, topology/emptiness checks (lines 30-52) — DERIVED-VERIFIED
+
+`chain = tn_a.chain_order(center)` retrieves the linear ordering of sites
+through `center`, failing if `center` isn't part of a chain; `tn_a.same_topology(tn_b)`
+checks that the two operand networks (`H` and `ψ`) share the same graph
+structure; `chain.is_empty()` rejects a degenerate zero-site chain. None of
+this has a direct paper or Python analog: the paper's MPO and MPS *are*
+linear chains by construction (there is no general-tree case to guard
+against), so `random_contraction`/`random_contraction_inc` never perform an
+equivalent check. This is Rust-side infrastructure needed because `contract`
+is reached from a general `TreeTN` API that must first establish it's
+actually looking at a chain before the chain-only algorithm below can run.
+The derivation is trivial: each check is a precondition that, if it fails,
+correctly aborts before any numerically meaningful work is done (no
+chain/topology mismatch/empty-chain state can produce a valid contraction),
+and none of the checks discards or approximates anything — they are pure
+early-return guards. No paper/Python equivalent is needed or expected.
+
 ### n=1 special case (lines 57-67) — DERIVED-VERIFIED
 
 For a length-1 chain, `H|psi>` reduces to contracting the single MPO tensor
@@ -188,8 +209,17 @@ then `contract_prefix_with_site_pair(&prefix, local[last].0, local[last].1)`
 tensors in the pseudocode's `Y^{(n)}` formula. This matches Python's
 `j == n-1` sketch-formation branch (contraction.py:205-212 /
 random_contraction_inc:463-471): `temp = envs[idx][j-1] @ psi[j]; temp =
-H[j] @ temp` — same three-tensor contraction (env/`C`, ψ, H), same order of
-operations (prefix into ψ first, then H). The fixed-rank path (lines 303-314)
+H[j] @ temp` — same three-tensor contraction (env/`C`, ψ, H), but **a
+different contraction order**: `contract_prefix_with_site_pair` (defined in
+`src_probe.rs:358-366`) contracts `prefix` with `tensor_a` first and
+`tensor_b` second, and here `tensor_a = local[last].0` is `H^{(n)}` while
+`tensor_b = local[last].1` is `ψ^{(n)}` — i.e. Rust contracts prefix-then-H
+first, then folds in ψ, whereas Python contracts `envs[idx][j-1] @ psi[j]`
+(prefix-then-ψ) first, then folds in `H[j]`. Same tensor set, opposite order
+of the last two contraction steps; mathematically value-equivalent (tensor
+contraction is associative/commutative in the operands being combined here),
+but the order-equivalence is not literal — cost/performance implications of
+the differing order are not assessed by this workstream. The fixed-rank path (lines 303-314)
 performs the identical contraction batched over all columns at once via
 `contract_prefix_with_probed_site_pair_batch_range` rather than per-column —
 see the batching-equivalence derivation below for why this is the same
@@ -202,17 +232,42 @@ C^{(j-1)}(a,d,e) H^{(j)}(d,b,f,g) ψ^{(j)}(e,g,h) S^{(j+1)}(h,f,c)` — a
 four-tensor contraction of the prefix `C^{(j-1)}`, the MPO site `H^{(j)}`,
 the MPS site `ψ^{(j)}`, and the right-environment cap `S^{(j+1)}`. The
 adaptive `make_column` closure (lines 186-201) computes exactly these four
-contractions in the same order: `prefix = prefixes.column(site-1, column)`
+contractions: `prefix = prefixes.column(site-1, column)`
 (→ `C^{(j-1)}`), `after_a = T::contract(&[&prefix, local[site].0])` (→ with
-`H^{(j)}`), `after_b = T::contract(&[&after_a, local[site].1])` (→ with
-`ψ^{(j)}`), `T::contract(&[&after_b, &right_environment])` (→ with
-`S^{(j+1)}`, i.e. `cap_environment` from the previous iteration). This
-matches Python's `else` (interior-site) sketch-formation branch
-(random_contraction_inc:472-488), which builds the identical four-tensor
-product (`env`/`C`, `psi`, `H`, `cap`) in the same dependency order. The
-fixed-rank path (lines 344-360) performs the same four-tensor contraction
+`H^{(j)}`, A-side first), `after_b = T::contract(&[&after_a, local[site].1])`
+(→ with `ψ^{(j)}`), `T::contract(&[&after_b, &right_environment])` (→ with
+`S^{(j+1)}`, i.e. `cap_environment` from the previous iteration). Python's
+`else` (interior-site) sketch-formation branch (random_contraction_inc:472-488,
+contraction.py:218-235) builds the identical four-tensor product (`env`/`C`,
+`psi`, `H`, `cap`) but in a different dependency order: `temp =
+envs[idx][j-1] @ reshaped_psis2[j-1]` folds in ψ before H (environment/
+MPS-side first), then `reshaped_H2[j-1] @ temp_reshaped` folds in H, then
+the result is contracted against `cap`. As with the last-site case (above),
+this is the same tensor set contracted in a different order — A-side (`H`)
+first in Rust vs. environment/MPS-side (`ψ`) first in Python — which is
+mathematically value-equivalent but not a literal order match; the
+cost/performance implications of the differing order are not assessed by
+this workstream. The fixed-rank path (lines 344-360) performs the same four-tensor contraction
 batched via `contract_prefix_with_probed_site_pair_batch_range` +
 `contract_pair`.
+
+### `fn contract` — result assembly (lines 212-221) — DERIVED-VERIFIED
+
+After the site loop and first-site contraction produce one factored tensor
+per chain site, this block rebuilds a `TreeTN`: `TreeTN::new()` creates an
+empty graph, each site's tensor is added via `add_tensor`, and
+`connect_result_edge` wires up an edge between each adjacent pair
+(`chain.windows(2)`, i.e. `chain[i-1]`-`chain[i]`) — exactly the chain's
+original adjacency. The paper and Python reference return a flat ordered
+list of per-site tensors (an MPS); Rust's `TreeTN` representation requires
+an explicit graph object, so this step is mechanical bookkeeping to
+reconstruct the same 1-D topology as a first-class graph rather than an
+implicit list ordering. No new math is introduced: the same per-site
+tensors computed by the (already-verified) site loop/first-site/last-site
+code are placed into the graph unchanged, and the edges added reproduce
+exactly the original chain's linear adjacency, so the resulting `TreeTN`
+represents the identical MPS the Python code would return as a list. No
+paper/Python equivalent is needed since neither uses a graph data structure.
 
 ### `factorize_site_adaptive` — per-site orthonormalize+project (lines 697-736) — SOURCED-PAPER + SOURCED-PYTHON
 
@@ -274,8 +329,8 @@ addressable columns for `factorize_probe_columns`'s incremental QR).
 
 Correctness argument: each sketch column `k` is defined by contracting the
 network against one fixed random probe vector/matrix `Ω^{(1)}_{:,k}, ...,
-Ω^{(j)}_{:,k}` (Khatri-Rao structure, §2.2/2.3 — sorry, §2.2 background +
-§3's per-site application). This contraction is linear and acts
+Ω^{(j)}_{:,k}` (Khatri-Rao structure, §2.2 background + §3's per-site
+application). This contraction is linear and acts
 independently per column `k` — the tensor-network contraction that produces
 column `k`'s prefix value does not depend on any other column. Stacking `w`
 independent per-column computations into one batched tensor contraction
