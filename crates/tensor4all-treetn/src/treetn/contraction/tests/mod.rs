@@ -1317,6 +1317,61 @@ fn zipup_branched_tree_uses_existing_fallback() {
     assert_eq!(result.edge_count(), 3);
 }
 
+/// Reproduces gw-rs's `NBlock`/`Comb` quantics layouts: a chain topology
+/// whose node-ID assignment does not follow the graph's path order, so the
+/// lexicographically smallest node name ("A") is an interior node rather
+/// than an endpoint. `preferred_contraction_center` must pick an actual
+/// endpoint ("M", the smaller of the two: "M" and "Z") instead, so that
+/// callers like `apply_linear_operator` land on SRC's fast chain path
+/// (`chain.last() == center` in `src_tree.rs`) instead of silently falling
+/// through to the more expensive general tree path on every call.
+#[test]
+fn preferred_contraction_center_picks_an_endpoint_even_when_its_name_does_not_sort_smallest() {
+    let names = vec!["Z".to_string(), "A".to_string(), "M".to_string()];
+    let bonds = (1..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let outputs = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let tensors = (0..3)
+        .map(|i| {
+            let mut indices = Vec::new();
+            if i > 0 {
+                indices.push(bonds[i - 1].clone());
+            }
+            indices.push(outputs[i].clone());
+            if i + 1 < 3 {
+                indices.push(bonds[i].clone());
+            }
+            let size = indices.iter().map(IndexLike::dim).product();
+            IdxTensor::from_dense(indices, (0..size).map(|j| (j + 1) as f64).collect()).unwrap()
+        })
+        .collect();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(tensors, names).unwrap();
+
+    // Sanity check the fixture actually reproduces the bug precondition:
+    // "A" is the smallest name, but it is the chain's interior node, so
+    // `chain_order`'s fast-path callers (which require `chain.last() ==
+    // Some(center)`, e.g. `src_tree.rs`'s SRC dispatch) do NOT accept it as
+    // a valid chain root, even though `chain_order` itself still returns
+    // `Some` (it always succeeds on a path-graph topology, walking from one
+    // endpoint to the other regardless of which node was requested).
+    assert_ne!(
+        tn.chain_order(&"A".to_string())
+            .and_then(|chain| chain.last().cloned()),
+        Some("A".to_string())
+    );
+    assert_eq!(
+        tn.chain_order(&"M".to_string())
+            .and_then(|chain| chain.last().cloned()),
+        Some("M".to_string())
+    );
+
+    assert_eq!(
+        tn.preferred_contraction_center(),
+        Some("M".to_string()),
+        "must pick the actual (lexicographically smaller) endpoint, not the \
+         globally smallest node name"
+    );
+}
+
 #[test]
 fn zipup_single_node_with_surviving_output_matches_naive() {
     let shared = DynIndex::new_dyn(2);

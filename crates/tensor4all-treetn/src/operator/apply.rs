@@ -380,11 +380,12 @@ where
     let transformed_state = transform_state_to_input(&full_operator, state)?;
 
     // 3. Contract state with operator MPO
-    // Choose a center node (use first node in sorted order for determinism)
-    let mut node_names: Vec<_> = state.node_names();
-    node_names.sort();
-    let center = node_names
-        .first()
+    // Choose a center node: an actual chain endpoint when the topology is
+    // chain-shaped (so SRC's fast chain path stays eligible), falling back
+    // to the smallest node name otherwise. See
+    // `TreeTN::preferred_contraction_center`'s doc comment.
+    let center = &state
+        .preferred_contraction_center()
         .ok_or_else(|| anyhow::anyhow!("Empty state"))?;
 
     let contraction_options = ContractionOptions {

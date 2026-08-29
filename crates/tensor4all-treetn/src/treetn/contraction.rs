@@ -453,6 +453,57 @@ where
         (path.len() == node_count).then_some(path)
     }
 
+    /// Choose a deterministic default contraction center, preferring an
+    /// actual topological endpoint (leaf) of the network's graph when the
+    /// topology is chain-shaped (a path graph).
+    ///
+    /// `chain_order`'s fast-path callers -- `contract_zipup_with`'s chain
+    /// specialization, and SRC's `chain.last() == center` dispatch check in
+    /// `src_tree.rs` -- only take their efficient path when the requested
+    /// center is one of the two endpoints of a path-graph topology. Picking
+    /// "the node name that sorts smallest" (the historical default in
+    /// `apply_linear_operator`) lands on an endpoint only by coincidence:
+    /// for topologies whose node-ID assignment doesn't follow the graph's
+    /// path order -- e.g. quantics `NBlock`/`Comb` layouts, which assign IDs
+    /// by a fixed per-axis interleaving unrelated to the constructed tree's
+    /// actual edges -- the smallest ID is typically an interior node. That
+    /// silently forces every SRC contraction onto the more expensive general
+    /// tree path even though a cheap endpoint choice was available and would
+    /// have produced an equally valid canonical center (zip-up's chain
+    /// specialization does not suffer the same fast/slow split, so this
+    /// choice is a pure win for SRC and neutral elsewhere).
+    ///
+    /// For a non-chain topology (a genuine branching tree), there is no
+    /// endpoint pair for a chain-only fast path to key on, so this falls
+    /// back to the same smallest-node-name choice used before. Returns
+    /// `None` only when the network has no nodes.
+    pub(crate) fn preferred_contraction_center(&self) -> Option<V>
+    where
+        V: Ord,
+    {
+        let mut node_names: Vec<V> = self.node_names();
+        node_names.sort();
+        if node_names.is_empty() {
+            return None;
+        }
+
+        let graph = self.graph.graph();
+        let node_count = graph.node_count();
+        if node_count > 1 && graph.edge_count() == node_count - 1 {
+            let mut endpoints: Vec<V> = graph
+                .node_indices()
+                .filter(|node| graph.neighbors_undirected(*node).count() == 1)
+                .filter_map(|node| self.graph.node_name(node).cloned())
+                .collect();
+            if endpoints.len() == 2 {
+                endpoints.sort();
+                return Some(endpoints[0].clone());
+            }
+        }
+
+        node_names.into_iter().next()
+    }
+
     // Inspired by ITensorMPS.jl v0.3.45, commit 794c97d, src/mpo.jl;
     // independently implemented via Rust APIs.
     fn contract_zipup_chain(
