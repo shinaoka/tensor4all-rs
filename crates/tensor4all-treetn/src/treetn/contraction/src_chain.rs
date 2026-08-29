@@ -209,17 +209,41 @@ where
                 );
                 if pending_columns.is_empty() {
                     let width = lookahead_width.min(site_max_width - next_column);
-                    let block = (0..width)
-                        .map(|offset| prefixes.column(site - 1, next_column + offset))
-                        .collect::<Result<Vec<_>>>()?;
-                    let block_refs = block.iter().collect::<Vec<_>>();
-                    let batch_index = T::Index::new_link(width)?;
-                    let stacked = T::stack_along_new_index(&block_refs, batch_index.clone(), -1)
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "contract_src: site {site} probe batch stacking failed: {error}"
-                            )
-                        })?;
+                    // `fresh_segment` returns the batch-indexed tensor
+                    // `PrefixCache` already builds internally before
+                    // splitting it into individual columns, whenever this
+                    // request is exactly its next growth step (the common
+                    // case here, since `lookahead_width == batch_size`) --
+                    // avoiding the fetch-individual-columns-then-
+                    // `stack_along_new_index` round trip below, which
+                    // `EagerTensor::stack` (tenferro-ad) pays for by
+                    // reshaping every individual input tensor before
+                    // concatenating. Falls back to the fetch+stack path
+                    // (still correct, just not the fast path) whenever the
+                    // request isn't a fresh aligned segment -- e.g. this
+                    // site's first block, requested after a different site
+                    // already grew the shared cache further.
+                    let (stacked, batch_index) = match prefixes.fresh_segment(next_column, width)? {
+                        Some((mut segment_prefixes, batch_index)) => {
+                            (segment_prefixes.swap_remove(site - 1), batch_index)
+                        }
+                        None => {
+                            let block = (0..width)
+                                .map(|offset| prefixes.column(site - 1, next_column + offset))
+                                .collect::<Result<Vec<_>>>()?;
+                            let block_refs = block.iter().collect::<Vec<_>>();
+                            let batch_index = T::Index::new_link(width)?;
+                            let stacked =
+                                T::stack_along_new_index(&block_refs, batch_index.clone(), -1)
+                                    .map_err(|error| {
+                                        anyhow::anyhow!(
+                                            "contract_src: site {site} probe batch stacking \
+                                                 failed: {error}"
+                                        )
+                                    })?;
+                            (stacked, batch_index)
+                        }
+                    };
                     let after_a = contract_retaining(&[&stacked, local[site].0], &batch_index)
                         .map_err(|error| {
                             anyhow::anyhow!(
@@ -671,52 +695,94 @@ where
         }
     }
 
+    /// Compute one new segment covering `[start, start + segment_width)` for
+    /// every site, splitting it into `self.prefixes`'s individual per-column
+    /// storage (for [`Self::column`]) and returning the pre-split
+    /// batch-indexed tensors too, so callers that want a whole fresh segment
+    /// as one tensor ([`Self::fresh_segment`]) don't have to re-fetch and
+    /// re-stack the columns this just split apart.
+    fn grow_one_segment(
+        &mut self,
+        start: usize,
+        segment_width: usize,
+    ) -> Result<(Vec<T>, T::Index)> {
+        let batch = T::Index::new_link(segment_width)?;
+        let mut prefix = probed_site_pair_batch_range(
+            self.local[0].0,
+            self.local[0].1,
+            &self.outputs[0],
+            self.probes,
+            start,
+            segment_width,
+            &batch,
+        )?;
+        let mut segment_prefixes = vec![prefix.clone()];
+        for site in 1..self.local.len() - 1 {
+            prefix = contract_prefix_with_probed_site_pair_batch_range(
+                &prefix,
+                self.local[site].0,
+                self.local[site].1,
+                &self.outputs[site],
+                self.probes,
+                start,
+                segment_width,
+                &batch,
+            )?;
+            segment_prefixes.push(prefix.clone());
+        }
+        for (site, segment) in segment_prefixes.iter().enumerate() {
+            for position in 0..segment_width {
+                self.prefixes[site].push(
+                    segment
+                        .select_indices(std::slice::from_ref(&batch), &[position])
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "contract_src: prefix batch split at site {site} failed: {error}"
+                            )
+                        })?,
+                );
+            }
+        }
+        Ok((segment_prefixes, batch))
+    }
+
     fn ensure_width(&mut self, width: usize) -> Result<()> {
         let current_width = self.prefixes.first().map_or(0, Vec::len);
         self.probes.extend_to(width)?;
         let mut start = current_width;
         while start < width {
             let segment_width = self.batch_size.min(width - start);
-            let batch = T::Index::new_link(segment_width)?;
-            let mut prefix = probed_site_pair_batch_range(
-                self.local[0].0,
-                self.local[0].1,
-                &self.outputs[0],
-                self.probes,
-                start,
-                segment_width,
-                &batch,
-            )?;
-            let mut segment_prefixes = vec![prefix.clone()];
-            for site in 1..self.local.len() - 1 {
-                prefix = contract_prefix_with_probed_site_pair_batch_range(
-                    &prefix,
-                    self.local[site].0,
-                    self.local[site].1,
-                    &self.outputs[site],
-                    self.probes,
-                    start,
-                    segment_width,
-                    &batch,
-                )?;
-                segment_prefixes.push(prefix.clone());
-            }
-            for (site, segment) in segment_prefixes.iter().enumerate() {
-                for position in 0..segment_width {
-                    self.prefixes[site].push(
-                        segment
-                            .select_indices(std::slice::from_ref(&batch), &[position])
-                            .map_err(|error| {
-                                anyhow::anyhow!(
-                                    "contract_src: prefix batch split at site {site} failed: {error}"
-                                )
-                            })?,
-                    );
-                }
-            }
+            self.grow_one_segment(start, segment_width)?;
             start += segment_width;
         }
         Ok(())
+    }
+
+    /// Return `[first_column, first_column + width)` as one batch-indexed
+    /// tensor per site, directly from a freshly grown segment, when this
+    /// request is exactly the cache's next growth step (`first_column`
+    /// picks up where the cache left off, and `width` fits in one
+    /// `batch_size`-sized chunk -- the shape lookahead-batched callers
+    /// naturally produce when `width == batch_size`). Falls back to `Ok(None)`
+    /// (after still ensuring the range via [`Self::ensure_width`], so
+    /// [`Self::column`] stays correct either way) for any other request --
+    /// already-cached range, a gap spanning multiple segments, or a request
+    /// wider than one chunk -- since a single fresh segment can't represent
+    /// those without re-splitting and re-combining, which is exactly the
+    /// round trip this method exists to avoid paying when it isn't needed.
+    fn fresh_segment(
+        &mut self,
+        first_column: usize,
+        width: usize,
+    ) -> Result<Option<(Vec<T>, T::Index)>> {
+        let current_width = self.prefixes.first().map_or(0, Vec::len);
+        if first_column != current_width || width == 0 || width > self.batch_size {
+            self.ensure_width(first_column + width)?;
+            return Ok(None);
+        }
+        self.probes.extend_to(first_column + width)?;
+        let (segment_prefixes, batch) = self.grow_one_segment(first_column, width)?;
+        Ok(Some((segment_prefixes, batch)))
     }
 
     fn column(&mut self, site: usize, column: usize) -> Result<T> {

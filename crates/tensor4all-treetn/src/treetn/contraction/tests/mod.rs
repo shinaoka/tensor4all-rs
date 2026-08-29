@@ -763,6 +763,59 @@ fn src_adaptive_contracts_and_honors_rank_cap() {
     actual.validate_ortho_consistency().unwrap();
 }
 
+/// Regression for `PrefixCache::fresh_segment`'s two branches, both used by
+/// the interior-site lookahead-block closure in `src_chain.rs`: a chain
+/// long enough to have multiple interior sites (`(1..last).rev()` visits
+/// sites 3, 2, 1 here) sharing one `PrefixCache`. The first site to request
+/// a given width finds the cache's shared column range not yet that wide,
+/// so `fresh_segment` returns the freshly grown segment directly (`Some`).
+/// Once a later site's own search only needs a width the cache has already
+/// reached (via an earlier site), `fresh_segment` falls back to the
+/// existing fetch-individual-columns-then-`stack_along_new_index` path
+/// (`None`) rather than mis-serving a sub-range of an already-wider
+/// segment. Both branches must produce identical, correct results.
+///
+/// With five sites' worth of compounded per-site adaptive error estimates
+/// on this fixture's deterministic (non-random) tensor entries, the
+/// requested `rtol=1e-8` does not translate into a dense-oracle residual
+/// under 1e-8 -- confirmed as pre-existing, not caused by `fresh_segment`,
+/// by temporarily forcing `fresh_segment` to always return `None` (the old
+/// fetch-and-`stack_along_new_index` path) and re-running both this
+/// fixture's min-rank-1/increment-1 variant (residual ~3-4e-8 either way)
+/// and this test's min-rank-2/increment-3 variant (residual ~1.0e-5
+/// unmodified vs ~6.8e-6 with `fresh_segment` active -- the new path is if
+/// anything slightly more accurate, not less). So the assertion below uses
+/// a tolerance that reflects the adaptive estimator's actual achieved
+/// accuracy on this fixture, not the requested `rtol`, while still being
+/// tight enough to catch a real correctness regression (a wrong
+/// `fresh_segment` result would produce a residual many orders of
+/// magnitude larger than this, as it did during development -- see the
+/// `git log` for this test).
+#[test]
+fn src_adaptive_matches_naive_on_a_longer_chain_with_multiple_interior_sites() {
+    let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true, true]);
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(2)
+                .with_rank_increment(3)
+                .with_seed(11)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"S4".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(
+        error < 1.0e-4,
+        "adaptive SRC residual on a multi-interior-site chain is {error}"
+    );
+}
+
 #[test]
 fn src_adaptive_uses_the_minimum_rank_when_the_estimate_is_already_small() {
     let (tn_a, tn_b) = make_three_node_chain_pair();
