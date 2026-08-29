@@ -297,6 +297,44 @@ fn incremental_qr_rejects_invalid_shapes() {
 }
 
 #[test]
+fn incremental_qr_new_rejects_empty_matrix() {
+    let empty_rows: Matrix<f64> = Matrix::from_col_major_vec(0, 1, vec![]);
+    assert!(IncrementalQr::new(empty_rows).is_err());
+
+    let empty_cols: Matrix<f64> = Matrix::from_col_major_vec(3, 0, vec![]);
+    assert!(IncrementalQr::new(empty_cols).is_err());
+}
+
+#[test]
+fn incremental_qr_new_rejects_wide_matrix() {
+    let wide = Matrix::from_col_major_vec(2, 3, vec![1.0; 6]);
+    assert!(IncrementalQr::new(wide).is_err());
+}
+
+#[test]
+fn incremental_qr_from_factors_rejects_empty_q() {
+    let empty_q: Matrix<f64> = Matrix::from_col_major_vec(0, 0, vec![]);
+    let r = Matrix::from_col_major_vec(1, 1, vec![1.0]);
+    assert!(IncrementalQr::from_factors(empty_q, r).is_err());
+}
+
+#[test]
+fn incremental_qr_from_factors_rejects_non_thin_q() {
+    // Q must be tall-or-square: nrows >= ncols. 2x3 violates that.
+    let wide_q = Matrix::from_col_major_vec(2, 3, vec![1.0; 6]);
+    let r = Matrix::from_col_major_vec(3, 3, vec![1.0; 9]);
+    assert!(IncrementalQr::from_factors(wide_q, r).is_err());
+}
+
+#[test]
+fn incremental_qr_from_factors_rejects_incompatible_r() {
+    let q = Matrix::from_col_major_vec(3, 2, vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    // R must have r.nrows() == q.ncols() == 2, and r.ncols() >= 2.
+    let bad_r = Matrix::from_col_major_vec(1, 2, vec![1.0, 1.0]);
+    assert!(IncrementalQr::from_factors(q, bad_r).is_err());
+}
+
+#[test]
 fn incremental_qr_uses_the_hermitian_projection_for_complex_columns() {
     let first = Matrix::from_col_major_vec(
         4,

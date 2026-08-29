@@ -9,7 +9,7 @@
 //! scalar reflector kernels.
 
 use anyhow::anyhow;
-use num_complex::{Complex32, Complex64, ComplexFloat};
+use num_complex::{Complex64, ComplexFloat};
 
 use crate::backend::{
     qr_backend, src_error_estimate, src_error_estimate_from_inverse_adjoint, src_inverse_adjoint,
@@ -39,16 +39,6 @@ pub trait IncrementalQrScalar:
     fn from_real(value: f64) -> Self;
 }
 
-impl IncrementalQrScalar for f32 {
-    fn conjugate(self) -> Self {
-        self
-    }
-
-    fn from_real(value: f64) -> Self {
-        value as f32
-    }
-}
-
 impl IncrementalQrScalar for f64 {
     fn conjugate(self) -> Self {
         self
@@ -56,16 +46,6 @@ impl IncrementalQrScalar for f64 {
 
     fn from_real(value: f64) -> Self {
         value
-    }
-}
-
-impl IncrementalQrScalar for Complex32 {
-    fn conjugate(self) -> Self {
-        self.conj()
-    }
-
-    fn from_real(value: f64) -> Self {
-        Self::new(value as f32, 0.0)
     }
 }
 
