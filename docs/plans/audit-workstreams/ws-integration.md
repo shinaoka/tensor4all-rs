@@ -146,7 +146,7 @@ calls `src_tree::contract(...)`, never `src_chain::contract` directly.
 `src_tree::contract` (line ~44 of `src_tree.rs`) only delegates to
 `src_chain::contract` when `tn_a.chain_order(center)` succeeds **and**
 `chain.last() == Some(center)`. Traced `chain_order`'s endpoint-selection
-logic (`contraction.rs:404-445`, real source lines — corrected from an
+logic (`contraction.rs:404-454`, real source lines — corrected from an
 earlier diff-offset citation):
 
 ```rust
@@ -159,27 +159,30 @@ let (start, end) = if center == &endpoints[0].1 {
 
 `endpoints` is sorted alphabetically before this branch runs, so
 `endpoints[0]` is always the alphabetically-first degree-1 endpoint. This
-`if`/`else` does **not** discriminate on which endpoint `center` is for the
-purpose of deciding *whether* to delegate — `chain_order` only returns
-`Some(path)` at all when the graph is already a chain with exactly two
-degree-1 endpoints (the earlier `graph.edge_count() != node_count - 1` and
-`endpoints.len() != 2` guards return `None` otherwise) and `center` names
-one of them, so `end` is always `center`'s node index by construction. What
-the branch actually does is choose the path's *orientation*: it flips
-`start`/`end` specifically to compensate for the case where `center` is the
-alphabetically-first endpoint (`center == &endpoints[0].1`), so the walk
-still starts at the far endpoint and ends at `center` regardless of which of
-the two endpoints happens to sort first alphabetically. In other words, this
-code guarantees "the path ends at `center`" is true whenever `chain_order`
-returns `Some(_)` at all — alphabetical order only decides which endpoint
-is `start` vs. `end` internally, never whether delegation happens.
+`if`/`else` does **not** decide *whether* `chain_order` returns
+`Some`/`None` at all — that decision is made earlier and is purely
+topological (the `node_count`, `graph.edge_count() != node_count - 1`, and
+`endpoints.len() != 2` guards), independent of `center`. `chain_order`
+returns `Some(path)` for **any** valid chain topology, whether `center` is
+one of the two degree-1 endpoints or an interior node. What the `if`/`else`
+picks is only the path's *orientation* between the two already-known
+endpoints: if `center` equals the alphabetically-first endpoint
+(`center == &endpoints[0].1`), it flips `start`/`end` so the walk ends at
+`endpoints[0]` (i.e. at `center`); otherwise — which covers both the case
+where `center` is the alphabetically-*second* endpoint **and** the case
+where `center` is an interior node whose name matches neither endpoint —
+the walk runs `endpoints[0] -> endpoints[1]` and ends at `endpoints[1]`. So
+when `center` is interior, `chain_order` still returns `Some(path)`, but
+that path ends at `endpoints[1]`, not at `center` — the function has no way
+to know or care that `center` wasn't one of the two endpoints it found.
 
 The real discriminator for whether `src_tree::contract` delegates to
-`src_chain::contract` is therefore whether `center` is an **endpoint of a
-chain** at all (`chain_order` returns `Some`) vs. an **interior node of a
-general tree** (`chain_order` returns `None`, forcing the tree recurrence)
-— exactly the distinction `src_tree.rs:41-43`'s own comment draws between
-the chain case and the interior-node case. For the shared fixture
+`src_chain::contract` is therefore not `chain_order`'s return value alone
+but `src_tree.rs`'s separate follow-up check, `chain.last() == Some(center)`
+(`src_tree.rs:49`, with the rationale spelled out in the comment at
+`src_tree.rs:46-48`): it rejects exactly the interior-center case just
+described, where `chain_order` succeeded but the path it returned doesn't
+actually terminate at `center`. For the shared fixture
 `make_three_node_chain_pair()` (nodes `"A"`-`"B"`-`"C"`, center `"C"`), the
 graph is a 3-node chain, `center` `"C"` is one of its two degree-1
 endpoints, so `chain_order` returns `Some([...])` ending at `"C"` and the
@@ -377,7 +380,7 @@ file list. It belongs in this table.
 
 **Not independently re-derived here** — WS-tests already diagnosed this
 exact pair of hunks (`docs/plans/audit-workstreams/ws-tests.md`, "§0"
-section around lines 60-92, and table rows 20-21 around lines 123-124) and
+section around lines 46-111, and table rows 20-21 around lines 136-137) and
 that diagnosis is adopted by reference rather than duplicated: `git
 merge-base origin/main HEAD` (`72de8fb`) is an older common ancestor, not
 `origin/main`'s own tip (`fd61f08`); `origin/main` independently picked up
@@ -387,13 +390,27 @@ tensor train is the mathematical scalar `1`, matching `scalar_one()`'s
 `tensortrain.rs:2224-2226`) after this SRC branch had already forked from
 an older commit that still had `0.0`. `git diff origin/main` surfaces these
 two hunks only because the diff base moved out from under this branch, not
-because `feature/treetn-src` itself touched or regressed this logic. WS-tests'
-own process flag applies equally here: merging `feature/treetn-src` as-is
-would silently reintroduce the `0.0` bug `#693` already fixed on `main`,
-independent of anything else in this audit. No taxonomy verdict token cleanly
-fits an artifact that predates the branch's own diff base moving, hence
-`N/A` rather than e.g. `SUSPECT-UNVERIFIED`/`MISSING-VS-SOURCE` — this
-mirrors WS-tests' own choice of token for the same underlying fact.
+because `feature/treetn-src` itself touched or regressed this logic.
+WS-tests' own process flag applies equally here, but **not** as a
+merge-regression risk: WS-tests explicitly verified that `git diff --stat
+72de8fb..HEAD -- crates/tensor4all-itensorlike/src/tensortrain.rs
+crates/tensor4all-itensorlike/tests/tensortrain_inner.rs
+crates/tensor4all-quanticstci/src/quantics_tci/tests/mod.rs` is **empty** —
+`feature/treetn-src` has made zero changes to any of the three files
+`#693`/`fd61f08` touched, relative to the merge base. There is nothing on
+this branch for a merge or rebase to overwrite in those files, so merging
+`feature/treetn-src` as-is simply carries `#693`'s fix along unmodified and
+does **not** reintroduce the `0.0` bug. The accurate framing, matching
+WS-tests' own conclusion, is about staleness, not regression risk: the
+branch's own SRC-related test checks (and its `.inner()`/`scalar_one()`
+behavior generally) were run against a stale, pre-`#693` base, so results
+derived from running this branch's own test suite as-is should not be
+treated as final until it syncs with `origin/main` — but the sync itself
+(rebase or merge) carries no risk of reintroducing the `#693` bug. No
+taxonomy verdict token cleanly fits an artifact that predates the branch's
+own diff base moving, hence `N/A` rather than e.g.
+`SUSPECT-UNVERIFIED`/`MISSING-VS-SOURCE` — this mirrors WS-tests' own
+choice of token for the same underlying fact.
 
 ## Detailed derivations and flagged findings
 
