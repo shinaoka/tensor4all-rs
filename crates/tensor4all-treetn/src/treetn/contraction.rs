@@ -8,12 +8,12 @@
 //! - Successive randomized compression (`contract` with `ContractionMethod::Src`)
 //! - Validation (`validate_ortho_consistency`)
 //!
-//! The SRC implementation follows Algorithm 1, Sections 2.3--2.5, and
+//! The SRC implementation follows Algorithm 1, Sections 3.1-3.5, and
 //! Appendices C--D of C. Camaño, E. N. Epperly, and J. A. Tropp,
 //! "Successive randomized compression: A randomized algorithm for the
 //! compressed MPO-MPS product", [arXiv:2504.06475](https://arxiv.org/abs/2504.06475).
-//! The author implementation used for a line-by-line cross-check is
-//! `chriscamano/RandomMPOMPS`, `code/tensornetwork/contraction.py`, functions
+//! The author implementation used to validate numerical behavior and parameter
+//! conventions (not translated) is `chriscamano/RandomMPOMPS`, `code/tensornetwork/contraction.py`, functions
 //! `random_contraction` and `random_contraction_inc`, plus
 //! `code/tensornetwork/incrementalqr.py::IncrementalQR` and
 //! `incrementalqr.cpp::{setup,add_cols,get_error_estimate}`. Those files are

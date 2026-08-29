@@ -1,7 +1,7 @@
 //! Paper-faithful chain specialization of successive randomized compression.
 //!
 //! Provenance: `contract` implements the right-to-left schedule in Algorithm 1
-//! and Sections 2.3--2.5 of Camaño--Epperly--Tropp,
+//! and Sections 3.1-3.5 of Camaño--Epperly--Tropp,
 //! [arXiv:2504.06475](https://arxiv.org/abs/2504.06475). Its local contraction
 //! ordering and adaptive loop were cross-checked against
 //! `chriscamano/RandomMPOMPS/code/tensornetwork/contraction.py`,

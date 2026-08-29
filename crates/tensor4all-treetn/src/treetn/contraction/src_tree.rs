@@ -1,7 +1,7 @@
 //! Paper-faithful tree extension of successive randomized compression.
 //!
 //! Provenance: the per-edge sketch/QR/projection pattern is derived from
-//! Algorithm 1 and Sections 2.3--2.5 of Camaño--Epperly--Tropp,
+//! Algorithm 1 and Sections 3.1-3.5 of Camaño--Epperly--Tropp,
 //! [arXiv:2504.06475](https://arxiv.org/abs/2504.06475). The author repository
 //! `chriscamano/RandomMPOMPS` contains no tree implementation; its chain
 //! reference is `code/tensornetwork/contraction.py::random_contraction_inc`
