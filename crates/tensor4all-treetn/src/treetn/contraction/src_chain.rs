@@ -338,7 +338,7 @@ where
     if last_maximum_width == 0 {
         anyhow::bail!("contract_src: last-site output space has zero dimension");
     }
-    let mut prefixes = BatchedPrefixCache::new(local, outputs, probes);
+    let mut prefixes = PrefixCache::new(local, outputs, probes, max_bond_dim);
     let mut factors: Vec<Option<T>> = (0..chain.len()).map(|_| None).collect();
     let mut caps: Vec<Option<T::Index>> = (0..chain.len()).map(|_| None).collect();
 
@@ -525,131 +525,7 @@ where
     probes: &'a mut ProbeBank<T::Index>,
     prefixes: Vec<Vec<T>>,
     batch_size: usize,
-}
-
-struct BatchedPrefixCache<'a, T>
-where
-    T: TensorLike,
-{
-    local: &'a [(&'a T, &'a T)],
-    outputs: &'a [Vec<T::Index>],
-    probes: &'a mut ProbeBank<T::Index>,
     cached: Option<(usize, T::Index, Vec<T>)>,
-    segments: Vec<PrefixBatchSegment<T>>,
-    generated_width: usize,
-}
-
-struct PrefixBatchSegment<T>
-where
-    T: TensorLike,
-{
-    batch: T::Index,
-    prefixes: Vec<T>,
-}
-
-impl<'a, T> BatchedPrefixCache<'a, T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    fn new(
-        local: &'a [(&'a T, &'a T)],
-        outputs: &'a [Vec<T::Index>],
-        probes: &'a mut ProbeBank<T::Index>,
-    ) -> Self {
-        Self {
-            local,
-            outputs,
-            probes,
-            cached: None,
-            segments: Vec::new(),
-            generated_width: 0,
-        }
-    }
-
-    fn batch(&mut self, site: usize, width: usize) -> Result<(T, T::Index)> {
-        if let Some((cached_width, batch, prefixes)) = &self.cached {
-            if *cached_width == width {
-                return Ok((
-                    prefixes
-                        .get(site)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch is missing"))?,
-                    batch.clone(),
-                ));
-            }
-        }
-
-        if width < self.generated_width {
-            // The chain schedule normally grows the requested width while
-            // sweeping right-to-left. Rebuild on a decrease so that the
-            // segment partition remains an exact prefix rather than silently
-            // returning columns beyond the requested width.
-            self.cached = None;
-            self.segments.clear();
-            self.generated_width = 0;
-        }
-        if width > self.generated_width {
-            self.probes.extend_to(width)?;
-            let start = self.generated_width;
-            let segment_width = width - start;
-            let batch = T::Index::new_link(segment_width)?;
-            let mut prefixes = Vec::with_capacity(self.local.len() - 1);
-            let mut prefix = probed_site_pair_batch_range(
-                self.local[0].0,
-                self.local[0].1,
-                &self.outputs[0],
-                self.probes,
-                start,
-                segment_width,
-                &batch,
-            )?;
-            prefixes.push(prefix.clone());
-            for prefix_site in 1..self.local.len() - 1 {
-                prefix = contract_prefix_with_probed_site_pair_batch_range(
-                    &prefix,
-                    self.local[prefix_site].0,
-                    self.local[prefix_site].1,
-                    &self.outputs[prefix_site],
-                    self.probes,
-                    start,
-                    segment_width,
-                    &batch,
-                )?;
-                prefixes.push(prefix.clone());
-            }
-            self.segments.push(PrefixBatchSegment { batch, prefixes });
-            self.generated_width = width;
-        }
-
-        let batch = T::Index::new_link(width)?;
-        let mut prefixes = Vec::with_capacity(self.local.len() - 1);
-        for prefix_site in 0..self.local.len() - 1 {
-            let segment_prefixes =
-                self.segments
-                    .iter()
-                    .map(|segment| {
-                        segment.prefixes.get(prefix_site).ok_or_else(|| {
-                            anyhow::anyhow!("contract_src: prefix segment is missing")
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-            let source_indices = self
-                .segments
-                .iter()
-                .map(|segment| segment.batch.clone())
-                .collect::<Vec<_>>();
-            let combined =
-                T::concatenate_along_new_index(&segment_prefixes, &source_indices, batch.clone())?;
-            prefixes.push(combined);
-        }
-        let result = prefixes
-            .get(site)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch is missing"))?;
-        self.cached = Some((width, batch.clone(), prefixes));
-        Ok((result, batch))
-    }
 }
 
 impl<'a, T> PrefixCache<'a, T>
@@ -669,7 +545,54 @@ where
             probes,
             prefixes: (0..local.len() - 1).map(|_| Vec::new()).collect(),
             batch_size: batch_size.max(1),
+            cached: None,
         }
+    }
+
+    /// Return a single `width`-wide batch-indexed tensor for `site`,
+    /// suitable for `contract_prefix_with_probed_site_pair_batch_range`.
+    ///
+    /// Used by the fixed-rank path (`contract_fixed`), which always wants
+    /// the whole target width for a site in one shot, unlike the adaptive
+    /// path's [`Self::column`], which grows one column at a time. Stacks the
+    /// already-flat per-column tensors `ensure_width` maintains
+    /// (`stack_along_new_index`) instead of `concatenate_along_new_index`ing
+    /// separately-batched segments back together the way the removed
+    /// `BatchedPrefixCache` type did -- mirroring how the reference Python
+    /// implementation's `envs` cache is a plain per-column list (O(1)
+    /// lookup, `np.stack` only over the columns a site actually needs) with
+    /// no equivalent re-concatenation step. Caches the single most recent
+    /// `(width, batch_index, per-site tensors)` triple, since `contract_fixed`
+    /// typically requests the same width from many consecutive sites once
+    /// the local rank saturates the cap.
+    fn batch(&mut self, site: usize, width: usize) -> Result<(T, T::Index)> {
+        if let Some((cached_width, batch, prefixes)) = &self.cached {
+            if *cached_width == width {
+                return Ok((
+                    prefixes
+                        .get(site)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch is missing"))?,
+                    batch.clone(),
+                ));
+            }
+        }
+        self.ensure_width(width)?;
+        let batch = T::Index::new_link(width)?;
+        let mut prefixes = Vec::with_capacity(self.local.len() - 1);
+        for prefix_site in 0..self.local.len() - 1 {
+            let columns = self.prefixes[prefix_site][..width]
+                .iter()
+                .collect::<Vec<_>>();
+            let stacked = T::stack_along_new_index(&columns, batch.clone(), -1)?;
+            prefixes.push(stacked);
+        }
+        let result = prefixes
+            .get(site)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch is missing"))?;
+        self.cached = Some((width, batch.clone(), prefixes));
+        Ok((result, batch))
     }
 
     fn ensure_width(&mut self, width: usize) -> Result<()> {
