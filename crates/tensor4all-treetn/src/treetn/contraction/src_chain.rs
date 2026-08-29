@@ -244,6 +244,20 @@ where
                             (stacked, batch_index)
                         }
                     };
+                    // NOTE: `local[site].0`/`.1`/`right_environment` never
+                    // carry `batch_index`, so a plain contraction here would
+                    // give an identical result to `contract_retaining` (same
+                    // reasoning as `contract_prefix_with_probed_site_pair_batch_range`
+                    // in src_probe.rs, which now uses plain contraction).
+                    // Measured, though: doing that here regressed
+                    // `src-adaptive` ~10% at bond 64 (1.31s -> 1.48s,
+                    // reproducible across repeated runs, not noise), for
+                    // reasons an explicit trailing-batch-axis permute before
+                    // the `select_indices` split below did not fix. Left as
+                    // `contract_retaining` pending a real explanation;
+                    // `PrefixCache`'s own prefix construction (`ensure_width`)
+                    // already goes through the fixed function in
+                    // src_probe.rs, so adaptive still gets that benefit.
                     let after_a = contract_retaining(&[&stacked, local[site].0], &batch_index)
                         .map_err(|error| {
                             anyhow::anyhow!(

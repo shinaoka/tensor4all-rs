@@ -338,9 +338,24 @@ where
         .map(|index| single_probe_batch(index, probes, first_column, width, batch))
         .collect::<Result<Vec<_>>>()?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    let mut result = contract_retaining(&[prefix, tensor_a], batch)?;
+    // `tensor_a`/`tensor_b` are the raw, unprobed local operands -- `batch`
+    // is never one of their indices (only `prefix`/`result` and the probes
+    // in `a_probes`/`b_probes` carry it, attached separately below by
+    // `contract_operand_with_probes`). So contracting `prefix`/`result`
+    // against them cannot need `batch` to be "diagonal" (present on both
+    // sides): a plain contraction already keeps `batch` as a free/surviving
+    // index by ordinary contraction rules, identical to `contract_retaining`
+    // here (verified: same result, any axis order) but without forcing
+    // tenferro's batch-dims/grouped-GEMM dispatch, which for the CPU faer
+    // backend is an unconditional per-batch-entry sequential GEMM loop with
+    // no true batched-BLAS fast path (unlike the retained-index case in
+    // `contract_operand_with_probes`, where `batch` genuinely is shared
+    // between two probed operands and retaining is required).
+    let mut result = T::contract(&[prefix, tensor_a])
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
     result = contract_operand_with_probes(&result, &a_probes, Some(batch))?;
-    result = contract_retaining(&[&result, tensor_b], batch)?;
+    result = T::contract(&[&result, tensor_b])
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
     contract_operand_with_probes(&result, &b_probes, Some(batch))
 }
 
