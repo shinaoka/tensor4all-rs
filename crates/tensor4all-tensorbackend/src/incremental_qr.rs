@@ -1,24 +1,21 @@
-//! Incremental QR factorization for column-major dense matrices.
+//! Backend-native incremental QR factorization for column-major dense matrices.
 //!
-//! Provenance: the append layout and block-triangular update are cross-checked
-//! against `chriscamano/RandomMPOMPS/code/tensornetwork/incrementalqr.py`,
-//! `IncrementalQR::_setup`/`append` (lines 90--151), and
-//! `incrementalqr.cpp::setup`/`add_cols` (lines 21--88), following Appendix C
-//! of Camaño--Epperly--Tropp, [arXiv:2504.06475](https://arxiv.org/abs/2504.06475).
-//! The safe-Rust Householder arithmetic, actual-R storage, rank-deficiency
-//! policy, and `q_columns` optimization are derived or engineering choices;
-//! the audit labels choices without an external basis `[AI-Supplied]`.
+//! The block update is independently derived from Appendix C.3 of
+//! Camaño--Epperly--Tropp,
+//! [arXiv:2504.06475](https://arxiv.org/abs/2504.06475). For an existing
+//! factorization `Y = Q R` and appended columns `Y'`, it computes two
+//! block Gram--Schmidt projection passes followed by a backend QR of the
+//! residual. The second pass limits loss of orthogonality without introducing
+//! scalar reflector kernels.
 
 use anyhow::anyhow;
 use num_complex::{Complex32, Complex64, ComplexFloat};
 
 use crate::backend::{
-    src_error_estimate, src_error_estimate_from_inverse_adjoint, src_inverse_adjoint,
+    qr_backend, src_error_estimate, src_error_estimate_from_inverse_adjoint, src_inverse_adjoint,
     BackendLinalgError, BackendLinalgScalar, MatrixTriangularSolveScalar,
 };
 use crate::matrix::{mat_mul, Matrix, MatrixScalar};
-
-type HouseholderFactorization<T> = (Matrix<T>, Vec<T>, Matrix<T>);
 
 /// Scalar operations required by [`IncrementalQr`].
 ///
@@ -84,11 +81,10 @@ impl IncrementalQrScalar for Complex64 {
 
 /// Thin QR state that can append columns without refactorizing the old block.
 ///
-/// The state stores Householder reflectors for the thin `Q` factor and an
-/// upper-trapezoidal `R` factor. Appending a block applies the stored
-/// reflectors to the new columns, factors only the residual rows, and updates
-/// the block-triangular `R`. This is the same state layout used by the
-/// reference implementation's incremental QR path, expressed in safe Rust.
+/// The state stores an explicit thin `Q` factor and an upper-trapezoidal
+/// `R` factor. Appending a full-rank block uses two backend matrix-product
+/// projection passes, factorizes only the residual block through the configured
+/// QR backend, and updates the block-triangular `R`.
 ///
 /// The matrix layout is column-major throughout. The current state must have
 /// at least as many rows as columns, and appends are accepted only while the
@@ -112,8 +108,7 @@ impl IncrementalQrScalar for Complex64 {
 /// ```
 #[derive(Debug, Clone)]
 pub struct IncrementalQr<T> {
-    reflectors: Matrix<T>,
-    tau: Vec<T>,
+    q: Matrix<T>,
     r: Matrix<T>,
     /// `R^{-†}` for the current square full-rank QR block. `None` denotes a
     /// rank-deficient or rectangular state for which the Appendix C estimate
@@ -128,7 +123,7 @@ where
     /// Resume an incremental QR update from compatible thin factors.
     ///
     /// # Arguments
-    /// * `q` - Existing column-major `m × p` thin orthonormal factor.
+    /// * `q` - Existing column-major `m × p` thin factor.
     /// * `r` - Existing column-major `p × n` upper-trapezoidal factor, where
     ///   `n >= p`.
     ///
@@ -137,7 +132,7 @@ where
     ///
     /// # Errors
     /// Returns a backend error when the factors are empty, have incompatible
-    /// dimensions, or are not thin.
+    /// dimensions, are not thin, or backend QR/multiplication fails.
     ///
     /// # Examples
     ///
@@ -177,13 +172,13 @@ where
             )
             .into());
         }
-        let (reflectors, tau, r_factor) = householder_factor(&q)?;
-        let r = mat_mul(&r_factor, &r)
+
+        let (q, q_r) = factorize_backend(&q)?;
+        let r = mat_mul(&q_r, &r)
             .map_err(|error| anyhow!("incremental QR factor conversion failed: {error}"))?;
         let inverse_adjoint = try_inverse_adjoint(&r);
         Ok(Self {
-            reflectors,
-            tau,
+            q,
             r,
             inverse_adjoint,
         })
@@ -199,8 +194,9 @@ where
     /// floating-point error.
     ///
     /// # Errors
-    /// Returns a backend error when the matrix is empty, wide, malformed, or
-    /// the backend QR factorization fails.
+    /// Returns a backend error when the input dimensions are invalid because
+    /// the matrix is empty or wide, or when backend QR conversion or
+    /// factorization fails.
     ///
     /// # Examples
     ///
@@ -229,11 +225,10 @@ where
             .into());
         }
 
-        let (reflectors, tau, r) = householder_factor(&input)?;
+        let (q, r) = factorize_backend(&input)?;
         let inverse_adjoint = try_inverse_adjoint(&r);
         Ok(Self {
-            reflectors,
-            tau,
+            q,
             r,
             inverse_adjoint,
         })
@@ -250,8 +245,10 @@ where
     /// matrix followed by `new_columns`.
     ///
     /// # Errors
-    /// Returns a backend error when row counts differ, the append is empty, the
-    /// resulting matrix would be wide, or a residual QR update fails.
+    /// Returns a backend error when the input dimensions are invalid because
+    /// row counts differ, the append is empty, or the resulting matrix would
+    /// be wide; when a rank or column count overflows; or when backend matrix
+    /// multiplication, conversion, or QR factorization fails.
     ///
     /// # Examples
     ///
@@ -276,106 +273,91 @@ where
         &mut self,
         new_columns: &Matrix<T>,
     ) -> std::result::Result<(), BackendLinalgError> {
-        if new_columns.nrows() != self.reflectors.nrows() {
+        if new_columns.nrows() != self.q.nrows() {
             return Err(anyhow!(
                 "incremental QR append row count {} does not match {}",
                 new_columns.nrows(),
-                self.reflectors.nrows()
+                self.q.nrows()
             )
             .into());
         }
         if new_columns.ncols() == 0 {
             return Err(anyhow!("incremental QR append requires at least one column").into());
         }
-        let old_rank = self.reflectors.ncols();
-        let maximum_new_rank = old_rank
+        let maximum_new_rank = self
+            .q
+            .ncols()
             .checked_add(new_columns.ncols())
             .ok_or_else(|| anyhow!("incremental QR rank overflow"))?;
-        if maximum_new_rank > self.reflectors.nrows() {
+        if maximum_new_rank > self.q.nrows() {
             return Err(anyhow!(
                 "incremental QR append would produce a wide factorization: {} rows, {} columns",
-                self.reflectors.nrows(),
+                self.q.nrows(),
                 maximum_new_rank
             )
             .into());
         }
 
-        let mut transformed = new_columns.clone();
-        apply_q_adjoint(&self.reflectors, &self.tau, &mut transformed);
-        let new_columns_norm = new_columns
-            .as_col_major_slice()
-            .iter()
-            .map(|value| value.matrix_abs_sq())
-            .sum::<f64>()
-            .sqrt();
+        let new_columns_norm = frobenius_norm(new_columns)?;
         let residual_tolerance = 32.0
             * f64::EPSILON
-            * (self.reflectors.nrows().max(new_columns.ncols()) as f64)
+            * (self.q.nrows().max(new_columns.ncols()) as f64)
             * new_columns_norm.max(1.0);
-        let mut reflectors = Matrix::zeros(self.reflectors.nrows(), maximum_new_rank);
-        for col in 0..old_rank {
-            for row in 0..self.reflectors.nrows() {
-                reflectors[[row, col]] = self.reflectors[[row, col]];
-            }
+
+        let (projection, residual) = project_twice(&self.q, new_columns)?;
+        let (appended_q, appended_r) = factorize_backend(&residual)?;
+        if diagonal_is_full_rank(&appended_r, residual_tolerance) {
+            return self.commit_full_rank_block(projection, appended_q, appended_r);
         }
-        let mut tau = self.tau.clone();
-        let mut rank = old_rank;
-        for col in 0..new_columns.ncols() {
-            let residual_norm = (rank..transformed.nrows())
-                .map(|row| transformed[[row, col]].matrix_abs_sq())
-                .sum::<f64>()
-                .sqrt();
-            if !residual_norm.is_finite() {
-                return Err(
-                    anyhow!("incremental QR append produced a non-finite residual norm").into(),
-                );
-            }
+
+        for column in 0..new_columns.ncols() {
+            let column = matrix_column(new_columns, column)?;
+            let (projection, residual) = project_twice(&self.q, &column)?;
+            let residual_norm = frobenius_norm(&residual)?;
             if residual_norm <= residual_tolerance {
+                self.commit_dependent_column(projection)?;
                 continue;
             }
-
-            let (reflector_tau, vector) = householder_vector(&transformed, rank, col)?;
-            apply_reflector(
-                &mut transformed,
-                rank,
-                col,
-                new_columns.ncols(),
-                &vector,
-                reflector_tau,
-            );
-            for (offset, value) in vector.iter().enumerate() {
-                reflectors[[rank + offset, rank]] = *value;
-            }
-            tau.push(reflector_tau);
-            rank += 1;
+            let (appended_q, appended_r) = factorize_backend(&residual)?;
+            self.commit_full_rank_block(projection, appended_q, appended_r)?;
         }
+        Ok(())
+    }
 
+    fn commit_full_rank_block(
+        &mut self,
+        projection: Matrix<T>,
+        appended_q: Matrix<T>,
+        appended_r: Matrix<T>,
+    ) -> std::result::Result<(), BackendLinalgError> {
+        let old_rank = self.q.ncols();
         let old_column_count = self.r.ncols();
-        let new_column_count = old_column_count
-            .checked_add(new_columns.ncols())
-            .ok_or_else(|| anyhow!("incremental QR column count overflow"))?;
-        let mut r = Matrix::zeros(rank, new_column_count);
-        for col in 0..old_column_count {
-            for row in 0..old_rank {
-                r[[row, col]] = self.r[[row, col]];
-            }
-        }
-        for col in 0..new_columns.ncols() {
-            for row in 0..rank {
-                r[[row, old_column_count + col]] = transformed[[row, col]];
-            }
+        let appended_rank = appended_q.ncols();
+        if projection.nrows() != old_rank
+            || projection.ncols() != appended_rank
+            || appended_r.nrows() != appended_rank
+            || appended_r.ncols() != appended_rank
+        {
+            return Err(anyhow!(
+                "incremental QR backend update returned incompatible blocks: projection {}x{}, Q' {}x{}, R'' {}x{}",
+                projection.nrows(),
+                projection.ncols(),
+                appended_q.nrows(),
+                appended_q.ncols(),
+                appended_r.nrows(),
+                appended_r.ncols()
+            )
+            .into());
         }
 
-        let inverse_adjoint = if rank == new_column_count {
+        let q = concatenate_columns(&self.q, &appended_q)?;
+        let r = assemble_r(&self.r, &projection, &appended_r)?;
+        let new_rank = q.ncols();
+        let new_column_count = r.ncols();
+        let inverse_adjoint = if new_rank == new_column_count {
             if old_rank == old_column_count {
-                if let Some(previous_inverse_adjoint) = self.inverse_adjoint.as_ref() {
-                    Some(update_inverse_adjoint(
-                        previous_inverse_adjoint,
-                        &transformed,
-                        old_rank,
-                        old_column_count,
-                        new_columns.ncols(),
-                    )?)
+                if let Some(previous) = self.inverse_adjoint.as_ref() {
+                    Some(update_inverse_adjoint(previous, &projection, &appended_r)?)
                 } else {
                     try_inverse_adjoint(&r)
                 }
@@ -386,16 +368,42 @@ where
             None
         };
 
-        let mut reflector_data = Vec::with_capacity(self.reflectors.nrows() * rank);
-        for col in 0..rank {
-            for row in 0..self.reflectors.nrows() {
-                reflector_data.push(reflectors[[row, col]]);
-            }
-        }
-        self.reflectors = Matrix::from_col_major_vec(self.reflectors.nrows(), rank, reflector_data);
-        self.tau = tau;
+        self.q = q;
         self.r = r;
         self.inverse_adjoint = inverse_adjoint;
+        Ok(())
+    }
+
+    fn commit_dependent_column(
+        &mut self,
+        projection: Matrix<T>,
+    ) -> std::result::Result<(), BackendLinalgError> {
+        if projection.nrows() != self.q.ncols() || projection.ncols() != 1 {
+            return Err(anyhow!(
+                "incremental QR dependent-column projection has shape {}x{}, expected {}x1",
+                projection.nrows(),
+                projection.ncols(),
+                self.q.ncols()
+            )
+            .into());
+        }
+        let new_column_count = self
+            .r
+            .ncols()
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("incremental QR column count overflow"))?;
+        let mut r = Matrix::try_zeros(self.r.nrows(), new_column_count)
+            .map_err(|error| anyhow!("incremental QR R allocation failed: {error}"))?;
+        for column in 0..self.r.ncols() {
+            for row in 0..self.r.nrows() {
+                r[[row, column]] = self.r[[row, column]];
+            }
+        }
+        for row in 0..self.r.nrows() {
+            r[[row, self.r.ncols()]] = projection[[row, 0]];
+        }
+        self.r = r;
+        self.inverse_adjoint = None;
         Ok(())
     }
 
@@ -415,7 +423,7 @@ where
     /// assert_eq!(qr.q().ncols(), 1);
     /// ```
     pub fn q(&self) -> Matrix<T> {
-        form_q(&self.reflectors, &self.tau)
+        self.q.clone()
     }
 
     /// Return the current thin factor width.
@@ -436,14 +444,10 @@ where
     /// assert_eq!(qr.rank(), 1);
     /// ```
     pub fn rank(&self) -> usize {
-        self.reflectors.ncols()
+        self.q.ncols()
     }
 
     /// Return a contiguous range of columns from the current thin `Q` factor.
-    ///
-    /// This is useful when a caller already materialized an earlier prefix and
-    /// only needs the newly appended orthonormal columns. The returned matrix
-    /// has the same row count as `Q` and `count` columns.
     ///
     /// # Arguments
     /// * `start` - Zero-based column in the current `Q` factor.
@@ -453,8 +457,9 @@ where
     /// The requested column-major `m × count` block of `Q`.
     ///
     /// # Errors
-    /// Returns a backend error if `start + count` exceeds the current thin
-    /// factor width.
+    /// Returns a backend error when the requested range overflows or is out of
+    /// bounds for the current thin-factor width, or when the output shape is
+    /// invalid because its element count overflows.
     ///
     /// # Examples
     ///
@@ -480,22 +485,19 @@ where
         let end = start
             .checked_add(count)
             .ok_or_else(|| anyhow!("incremental QR Q-column range overflows usize"))?;
-        if end > self.reflectors.ncols() {
+        if end > self.q.ncols() {
             return Err(anyhow!(
                 "incremental QR Q-column range {start}..{end} exceeds width {}",
-                self.reflectors.ncols()
+                self.q.ncols()
             )
             .into());
         }
-        let mut q = Matrix::zeros(self.reflectors.nrows(), count);
+        let mut q = Matrix::try_zeros(self.q.nrows(), count)
+            .map_err(|error| anyhow!("incremental QR Q-column allocation failed: {error}"))?;
         for column in 0..count {
-            q[[start + column, column]] = T::one();
-        }
-        for reflector in (0..self.tau.len()).rev() {
-            let vector = (reflector..self.reflectors.nrows())
-                .map(|row| self.reflectors[[row, reflector]])
-                .collect::<Vec<_>>();
-            apply_reflector(&mut q, reflector, 0, count, &vector, self.tau[reflector]);
+            for row in 0..self.q.nrows() {
+                q[[row, column]] = self.q[[row, start + column]];
+            }
         }
         Ok(q)
     }
@@ -555,6 +557,249 @@ where
     }
 }
 
+fn factorize_backend<T>(
+    input: &Matrix<T>,
+) -> std::result::Result<(Matrix<T>, Matrix<T>), BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    let (q, r) = qr_backend(&input.to_typed_tensor())?;
+    let q = Matrix::try_from_typed_tensor(q)
+        .map_err(|error| anyhow!("incremental QR backend Q conversion failed: {error}"))?;
+    let r = Matrix::try_from_typed_tensor(r)
+        .map_err(|error| anyhow!("incremental QR backend R conversion failed: {error}"))?;
+    Ok((q, r))
+}
+
+fn project_twice<T>(
+    q: &Matrix<T>,
+    columns: &Matrix<T>,
+) -> std::result::Result<(Matrix<T>, Matrix<T>), BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    let q_adjoint = matrix_adjoint(q)?;
+    let first_projection = mat_mul(&q_adjoint, columns)
+        .map_err(|error| anyhow!("incremental QR first projection failed: {error}"))?;
+    let first_reconstruction = mat_mul(q, &first_projection)
+        .map_err(|error| anyhow!("incremental QR first reconstruction failed: {error}"))?;
+    let first_residual = matrix_subtract(columns, &first_reconstruction)?;
+
+    let correction = mat_mul(&q_adjoint, &first_residual)
+        .map_err(|error| anyhow!("incremental QR reorthogonalization failed: {error}"))?;
+    let correction_reconstruction = mat_mul(q, &correction).map_err(|error| {
+        anyhow!("incremental QR reorthogonalization reconstruction failed: {error}")
+    })?;
+    let residual = matrix_subtract(&first_residual, &correction_reconstruction)?;
+    let projection = matrix_add(&first_projection, &correction)?;
+    Ok((projection, residual))
+}
+
+fn matrix_adjoint<T>(matrix: &Matrix<T>) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    let mut adjoint = Matrix::try_zeros(matrix.ncols(), matrix.nrows())
+        .map_err(|error| anyhow!("incremental QR adjoint allocation failed: {error}"))?;
+    for column in 0..matrix.ncols() {
+        for row in 0..matrix.nrows() {
+            adjoint[[column, row]] = matrix[[row, column]].conjugate();
+        }
+    }
+    Ok(adjoint)
+}
+
+fn matrix_add<T>(
+    left: &Matrix<T>,
+    right: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    ensure_same_shape("addition", left, right)?;
+    let values = left
+        .as_col_major_slice()
+        .iter()
+        .zip(right.as_col_major_slice())
+        .map(|(left, right)| *left + *right)
+        .collect();
+    Matrix::try_from_col_major_vec(left.nrows(), left.ncols(), values)
+        .map_err(|error| anyhow!("incremental QR addition result is invalid: {error}").into())
+}
+
+fn matrix_subtract<T>(
+    left: &Matrix<T>,
+    right: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    ensure_same_shape("subtraction", left, right)?;
+    let values = left
+        .as_col_major_slice()
+        .iter()
+        .zip(right.as_col_major_slice())
+        .map(|(left, right)| *left - *right)
+        .collect();
+    Matrix::try_from_col_major_vec(left.nrows(), left.ncols(), values)
+        .map_err(|error| anyhow!("incremental QR subtraction result is invalid: {error}").into())
+}
+
+fn ensure_same_shape<T>(
+    operation: &str,
+    left: &Matrix<T>,
+    right: &Matrix<T>,
+) -> std::result::Result<(), BackendLinalgError> {
+    if left.nrows() != right.nrows() || left.ncols() != right.ncols() {
+        return Err(anyhow!(
+            "incremental QR {operation} shape mismatch: {}x{} and {}x{}",
+            left.nrows(),
+            left.ncols(),
+            right.nrows(),
+            right.ncols()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn matrix_column<T>(
+    matrix: &Matrix<T>,
+    column: usize,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    if column >= matrix.ncols() {
+        return Err(anyhow!(
+            "incremental QR column {column} exceeds width {}",
+            matrix.ncols()
+        )
+        .into());
+    }
+    let start = column
+        .checked_mul(matrix.nrows())
+        .ok_or_else(|| anyhow!("incremental QR column offset overflow"))?;
+    let end = start
+        .checked_add(matrix.nrows())
+        .ok_or_else(|| anyhow!("incremental QR column range overflow"))?;
+    Matrix::try_from_col_major_vec(
+        matrix.nrows(),
+        1,
+        matrix.as_col_major_slice()[start..end].to_vec(),
+    )
+    .map_err(|error| anyhow!("incremental QR column extraction failed: {error}").into())
+}
+
+fn frobenius_norm<T>(matrix: &Matrix<T>) -> std::result::Result<f64, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    let norm = matrix
+        .as_col_major_slice()
+        .iter()
+        .map(|value| value.matrix_abs_sq())
+        .sum::<f64>()
+        .sqrt();
+    if !norm.is_finite() {
+        return Err(anyhow!("incremental QR produced a non-finite residual norm").into());
+    }
+    Ok(norm)
+}
+
+fn diagonal_is_full_rank<T>(r: &Matrix<T>, tolerance: f64) -> bool
+where
+    T: IncrementalQrScalar,
+{
+    r.nrows() == r.ncols()
+        && (0..r.ncols()).all(|diagonal| {
+            let magnitude = r[[diagonal, diagonal]].matrix_abs_sq().sqrt();
+            magnitude.is_finite() && magnitude > tolerance
+        })
+}
+
+fn concatenate_columns<T>(
+    left: &Matrix<T>,
+    right: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    if left.nrows() != right.nrows() {
+        return Err(anyhow!(
+            "incremental QR Q block row mismatch: {} and {}",
+            left.nrows(),
+            right.nrows()
+        )
+        .into());
+    }
+    let ncols = left
+        .ncols()
+        .checked_add(right.ncols())
+        .ok_or_else(|| anyhow!("incremental QR Q width overflow"))?;
+    let mut values = Vec::with_capacity(
+        left.as_col_major_slice()
+            .len()
+            .checked_add(right.as_col_major_slice().len())
+            .ok_or_else(|| anyhow!("incremental QR Q element count overflow"))?,
+    );
+    values.extend_from_slice(left.as_col_major_slice());
+    values.extend_from_slice(right.as_col_major_slice());
+    Matrix::try_from_col_major_vec(left.nrows(), ncols, values)
+        .map_err(|error| anyhow!("incremental QR Q assembly failed: {error}").into())
+}
+
+fn assemble_r<T>(
+    old: &Matrix<T>,
+    projection: &Matrix<T>,
+    residual_r: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: IncrementalQrScalar,
+{
+    if projection.nrows() != old.nrows()
+        || residual_r.nrows() != residual_r.ncols()
+        || projection.ncols() != residual_r.ncols()
+    {
+        return Err(anyhow!(
+            "incremental QR R blocks are incompatible: R {}x{}, projection {}x{}, residual R {}x{}",
+            old.nrows(),
+            old.ncols(),
+            projection.nrows(),
+            projection.ncols(),
+            residual_r.nrows(),
+            residual_r.ncols()
+        )
+        .into());
+    }
+    let new_rows = old
+        .nrows()
+        .checked_add(residual_r.nrows())
+        .ok_or_else(|| anyhow!("incremental QR R row count overflow"))?;
+    let new_columns = old
+        .ncols()
+        .checked_add(residual_r.ncols())
+        .ok_or_else(|| anyhow!("incremental QR R column count overflow"))?;
+    let mut result = Matrix::try_zeros(new_rows, new_columns)
+        .map_err(|error| anyhow!("incremental QR R allocation failed: {error}"))?;
+
+    for column in 0..old.ncols() {
+        for row in 0..old.nrows() {
+            result[[row, column]] = old[[row, column]];
+        }
+    }
+    for column in 0..projection.ncols() {
+        let target_column = old.ncols() + column;
+        for row in 0..projection.nrows() {
+            result[[row, target_column]] = projection[[row, column]];
+        }
+        for row in 0..residual_r.nrows() {
+            result[[old.nrows() + row, target_column]] = residual_r[[row, column]];
+        }
+    }
+    Ok(result)
+}
+
 fn try_inverse_adjoint<T>(r: &Matrix<T>) -> Option<Matrix<T>>
 where
     T: IncrementalQrScalar,
@@ -564,47 +809,51 @@ where
 
 fn update_inverse_adjoint<T>(
     previous: &Matrix<T>,
-    transformed: &Matrix<T>,
-    old_rank: usize,
-    old_column_count: usize,
-    appended_column_count: usize,
+    projection: &Matrix<T>,
+    residual_r: &Matrix<T>,
 ) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
     T: IncrementalQrScalar,
 {
-    debug_assert_eq!(old_rank, old_column_count);
-    debug_assert_eq!(previous.nrows(), old_rank);
-    debug_assert_eq!(previous.ncols(), old_rank);
-
-    let mut b_adjoint = Matrix::zeros(appended_column_count, old_rank);
-    for column in 0..appended_column_count {
-        for row in 0..old_rank {
-            b_adjoint[[column, row]] = transformed[[row, column]].conjugate();
-        }
+    let old_rank = previous.nrows();
+    let appended_rank = residual_r.nrows();
+    if previous.ncols() != old_rank
+        || projection.nrows() != old_rank
+        || projection.ncols() != appended_rank
+        || residual_r.ncols() != appended_rank
+    {
+        return Err(anyhow!(
+            "incremental QR inverse-adjoint blocks are incompatible: G {}x{}, projection {}x{}, R'' {}x{}",
+            previous.nrows(),
+            previous.ncols(),
+            projection.nrows(),
+            projection.ncols(),
+            residual_r.nrows(),
+            residual_r.ncols()
+        )
+        .into());
     }
 
-    let mut c = Matrix::zeros(appended_column_count, appended_column_count);
-    for column in 0..appended_column_count {
-        for row in 0..appended_column_count {
-            c[[row, column]] = transformed[[old_rank + row, column]];
-        }
-    }
-    let c_inverse_adjoint = src_inverse_adjoint(&c)?;
-    let coupling = mat_mul(&b_adjoint, previous)
+    let projection_adjoint = matrix_adjoint(projection)?;
+    let residual_inverse_adjoint = src_inverse_adjoint(residual_r)?;
+    let coupling = mat_mul(&projection_adjoint, previous)
         .map_err(|error| anyhow!("incremental QR inverse-adjoint coupling failed: {error}"))?;
-    let lower = mat_mul(&c_inverse_adjoint, &coupling)
+    let lower = mat_mul(&residual_inverse_adjoint, &coupling)
         .map_err(|error| anyhow!("incremental QR inverse-adjoint update failed: {error}"))?;
 
-    let new_rank = old_rank + appended_column_count;
-    let mut updated = Matrix::zeros(new_rank, new_rank);
+    let new_rank = old_rank
+        .checked_add(appended_rank)
+        .ok_or_else(|| anyhow!("incremental QR inverse-adjoint rank overflow"))?;
+    let mut updated = Matrix::try_zeros(new_rank, new_rank)
+        .map_err(|error| anyhow!("incremental QR inverse-adjoint allocation failed: {error}"))?;
     for column in 0..old_rank {
         for row in 0..old_rank {
             updated[[row, column]] = previous[[row, column]];
         }
     }
-    for column in 0..appended_column_count {
-        for row in 0..appended_column_count {
-            updated[[old_rank + row, old_rank + column]] = c_inverse_adjoint[[row, column]];
+    for column in 0..appended_rank {
+        for row in 0..appended_rank {
+            updated[[old_rank + row, old_rank + column]] = residual_inverse_adjoint[[row, column]];
         }
         for row in 0..old_rank {
             updated[[old_rank + column, row]] = -lower[[column, row]];
@@ -613,393 +862,5 @@ where
     Ok(updated)
 }
 
-fn householder_factor<T>(
-    input: &Matrix<T>,
-) -> std::result::Result<HouseholderFactorization<T>, BackendLinalgError>
-where
-    T: IncrementalQrScalar,
-{
-    if input.nrows() < input.ncols() {
-        return Err(anyhow!(
-            "incremental QR requires a tall-or-square matrix, got {}x{}",
-            input.nrows(),
-            input.ncols()
-        )
-        .into());
-    }
-    let mut data = input.clone();
-    let mut tau = Vec::with_capacity(input.ncols());
-    let mut diagonal = vec![T::zero(); input.ncols()];
-    for column in 0..input.ncols() {
-        let (reflector_tau, vector) = householder_vector(&data, column, column)?;
-        apply_reflector(
-            &mut data,
-            column,
-            column,
-            input.ncols(),
-            &vector,
-            reflector_tau,
-        );
-        diagonal[column] = data[[column, column]];
-        data[[column, column]] = T::one();
-        for row in column + 1..input.nrows() {
-            data[[row, column]] = vector[row - column];
-        }
-        tau.push(reflector_tau);
-    }
-
-    let mut r = Matrix::zeros(input.ncols(), input.ncols());
-    for column in 0..input.ncols() {
-        for row in 0..=column {
-            r[[row, column]] = if row == column {
-                diagonal[column]
-            } else {
-                data[[row, column]]
-            };
-        }
-    }
-    Ok((data, tau, r))
-}
-
-fn householder_vector<T>(
-    data: &Matrix<T>,
-    start: usize,
-    column: usize,
-) -> std::result::Result<(T, Vec<T>), BackendLinalgError>
-where
-    T: IncrementalQrScalar,
-{
-    if start >= data.nrows() || column >= data.ncols() {
-        return Err(anyhow!(
-            "incremental QR reflector ({start}, {column}) is outside {}x{} matrix",
-            data.nrows(),
-            data.ncols()
-        )
-        .into());
-    }
-    let tail_norm_sq = (start + 1..data.nrows())
-        .map(|row| data[[row, column]].matrix_abs_sq())
-        .sum::<f64>();
-    let alpha = data[[start, column]];
-    let alpha_norm_sq = alpha.matrix_abs_sq();
-    let norm_sq = alpha_norm_sq + tail_norm_sq;
-    if !norm_sq.is_finite() {
-        return Err(anyhow!("incremental QR reflector norm is not finite").into());
-    }
-    let norm = norm_sq.sqrt();
-    let mut vector = vec![T::zero(); data.nrows() - start];
-    vector[0] = T::one();
-    if norm == 0.0 {
-        return Ok((T::zero(), vector));
-    }
-
-    let phase = if alpha_norm_sq == 0.0 {
-        T::one()
-    } else {
-        alpha / T::from_real(alpha_norm_sq.sqrt())
-    };
-    let beta = -(phase * T::from_real(norm));
-    let denominator = alpha - beta;
-    if denominator.matrix_abs_sq() == 0.0 || !denominator.matrix_abs_sq().is_finite() {
-        return Err(anyhow!("incremental QR reflector denominator is invalid").into());
-    }
-    for row in start + 1..data.nrows() {
-        vector[row - start] = data[[row, column]] / denominator;
-    }
-    let tau = (beta - alpha) / beta;
-    Ok((tau, vector))
-}
-
-fn apply_reflector<T>(
-    data: &mut Matrix<T>,
-    start: usize,
-    first_column: usize,
-    column_count: usize,
-    vector: &[T],
-    tau: T,
-) where
-    T: IncrementalQrScalar,
-{
-    if tau == T::zero() {
-        return;
-    }
-    for column in first_column..column_count {
-        let dot = (0..vector.len()).fold(T::zero(), |sum, offset| {
-            sum + vector[offset].conjugate() * data[[start + offset, column]]
-        });
-        let scale = tau * dot;
-        for (offset, value) in vector.iter().enumerate() {
-            let row = start + offset;
-            data[[row, column]] = data[[row, column]] - *value * scale;
-        }
-    }
-}
-
-fn apply_q_adjoint<T>(reflectors: &Matrix<T>, tau: &[T], data: &mut Matrix<T>)
-where
-    T: IncrementalQrScalar,
-{
-    for reflector in 0..tau.len() {
-        let vector = (reflector..reflectors.nrows())
-            .map(|row| reflectors[[row, reflector]])
-            .collect::<Vec<_>>();
-        apply_reflector(data, reflector, 0, data.ncols(), &vector, tau[reflector]);
-    }
-}
-
-fn form_q<T>(reflectors: &Matrix<T>, tau: &[T]) -> Matrix<T>
-where
-    T: IncrementalQrScalar,
-{
-    let mut q = Matrix::zeros(reflectors.nrows(), reflectors.ncols());
-    for column in 0..reflectors.ncols() {
-        q[[column, column]] = T::one();
-    }
-    for reflector in (0..tau.len()).rev() {
-        let vector = (reflector..reflectors.nrows())
-            .map(|row| reflectors[[row, reflector]])
-            .collect::<Vec<_>>();
-        let column_count = q.ncols();
-        apply_reflector(&mut q, reflector, 0, column_count, &vector, tau[reflector]);
-    }
-    q
-}
-
 #[cfg(test)]
-mod tests {
-    use super::IncrementalQr;
-    use crate::{mat_mul, Matrix};
-    use num_complex::Complex64;
-
-    fn reconstruction_error(qr: &IncrementalQr<f64>, original: &Matrix<f64>) -> f64 {
-        let reconstructed = mat_mul(&qr.q(), &qr.r()).unwrap();
-        reconstructed
-            .as_col_major_slice()
-            .iter()
-            .zip(original.as_col_major_slice())
-            .map(|(actual, expected)| (actual - expected).abs())
-            .fold(0.0, f64::max)
-    }
-
-    #[test]
-    fn incremental_qr_reconstructs_after_appending_columns() {
-        let first = Matrix::from_col_major_vec(
-            5,
-            2,
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, -2.0, 1.0, 0.5, 3.0, 4.0],
-        );
-        let appended = Matrix::from_col_major_vec(5, 1, vec![0.5, -1.0, 2.0, 1.5, 3.5]);
-        let appended_again = Matrix::from_col_major_vec(5, 1, vec![2.5, 1.0, -0.5, 4.5, -3.0]);
-        let mut original_data = first.as_col_major_slice().to_vec();
-        original_data.extend_from_slice(appended.as_col_major_slice());
-        original_data.extend_from_slice(appended_again.as_col_major_slice());
-        let original = Matrix::from_col_major_vec(5, 4, original_data);
-
-        let mut qr = IncrementalQr::new(first.clone()).unwrap();
-        let initial_original =
-            Matrix::from_col_major_vec(5, 2, first.as_col_major_slice().to_vec());
-        assert!(reconstruction_error(&qr, &initial_original) < 1.0e-12);
-        assert_eq!(qr.q().ncols(), 2);
-        assert_eq!(qr.r().nrows(), 2);
-        qr.append(&appended).unwrap();
-        let after_one = Matrix::from_col_major_vec(5, 3, {
-            let mut values = first.as_col_major_slice().to_vec();
-            values.extend_from_slice(appended.as_col_major_slice());
-            values
-        });
-        assert!(reconstruction_error(&qr, &after_one) < 1.0e-12);
-        qr.append(&appended_again).unwrap();
-
-        assert_eq!(qr.q().nrows(), 5);
-        assert_eq!(qr.q().ncols(), 4);
-        assert_eq!(qr.r().nrows(), 4);
-        assert_eq!(qr.r().ncols(), 4);
-        let error = reconstruction_error(&qr, &original);
-        assert!(error < 1.0e-12, "reconstruction error={error}");
-
-        let q = qr.q();
-        for left in 0..q.ncols() {
-            for right in 0..q.ncols() {
-                let inner = (0..q.nrows())
-                    .map(|row| q[[row, left]] * q[[row, right]])
-                    .sum::<f64>();
-                let expected = if left == right { 1.0 } else { 0.0 };
-                assert!(
-                    (inner - expected).abs() < 1.0e-12,
-                    "Q is not orthonormal at ({left}, {right}): {inner}"
-                );
-            }
-        }
-
-        let full = IncrementalQr::new(original).unwrap();
-        let incremental_estimate = qr.error_estimate().unwrap();
-        let full_estimate = full.error_estimate().unwrap();
-        assert!(
-            (incremental_estimate.error - full_estimate.error).abs() < 1.0e-10,
-            "incremental and full QR error estimates differ: {} vs {}",
-            incremental_estimate.error,
-            full_estimate.error
-        );
-        assert!(
-            (incremental_estimate.norm - full_estimate.norm).abs() < 1.0e-10,
-            "incremental and full QR norm estimates differ: {} vs {}",
-            incremental_estimate.norm,
-            full_estimate.norm
-        );
-    }
-
-    #[test]
-    fn incremental_qr_updates_the_inverse_adjoint_after_appending_columns() {
-        let first = Matrix::from_col_major_vec(
-            5,
-            2,
-            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, -2.0, 1.0, 0.5, 3.0, 4.0],
-        );
-        let appended = Matrix::from_col_major_vec(5, 1, vec![0.5, -1.0, 2.0, 1.5, 3.5]);
-        let mut qr = IncrementalQr::new(first).unwrap();
-        qr.append(&appended).unwrap();
-
-        let r = qr.r();
-        let g = qr
-            .inverse_adjoint
-            .as_ref()
-            .expect("full-rank incremental QR must retain R^{-T}");
-        let mut r_transpose = Matrix::zeros(r.ncols(), r.nrows());
-        for col in 0..r.ncols() {
-            for row in 0..r.nrows() {
-                r_transpose[[row, col]] = r[[col, row]];
-            }
-        }
-        let product = mat_mul(&r_transpose, g).unwrap();
-        for row in 0..product.nrows() {
-            for col in 0..product.ncols() {
-                let expected = if row == col { 1.0 } else { 0.0 };
-                assert!(
-                    (product[[row, col]] - expected).abs() < 1.0e-10,
-                    "R^T G is not identity at ({row}, {col}): {}",
-                    product[[row, col]]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn incremental_qr_preserves_rank_for_dependent_appended_columns() {
-        let first = Matrix::from_col_major_vec(
-            5,
-            2,
-            vec![1.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-        );
-        let appended = Matrix::from_col_major_vec(
-            5,
-            2,
-            vec![1.0_f64, 2.0, 0.0, 0.0, 0.0, -3.0, 1.0, 0.0, 0.0, 0.0],
-        );
-        let mut original_data = first.as_col_major_slice().to_vec();
-        original_data.extend_from_slice(appended.as_col_major_slice());
-        let original = Matrix::from_col_major_vec(5, 4, original_data);
-
-        let mut qr = IncrementalQr::new(first).unwrap();
-        qr.append(&appended).unwrap();
-
-        assert_eq!(qr.q().ncols(), 2);
-        assert_eq!(qr.r().nrows(), 2);
-        assert_eq!(qr.r().ncols(), 4);
-        let reconstructed = mat_mul(&qr.q(), &qr.r()).unwrap();
-        assert!(reconstructed
-            .as_col_major_slice()
-            .iter()
-            .zip(original.as_col_major_slice())
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-12));
-    }
-
-    #[test]
-    fn incremental_qr_from_factors_reconstructs_the_supplied_product() {
-        let q = Matrix::from_col_major_vec(4, 2, vec![1.0_f64, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-        let r = Matrix::from_col_major_vec(2, 3, vec![2.0_f64, 0.0, 1.0, 3.0, -1.0, 0.5]);
-        let expected = mat_mul(&q, &r).unwrap();
-        let state = IncrementalQr::from_factors(q, r).unwrap();
-        let actual = mat_mul(&state.q(), &state.r()).unwrap();
-        assert!(actual
-            .as_col_major_slice()
-            .iter()
-            .zip(expected.as_col_major_slice())
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-12));
-    }
-
-    #[test]
-    fn incremental_qr_rejects_invalid_shapes() {
-        let initial = Matrix::from_col_major_vec(3, 1, vec![1.0, 2.0, 3.0]);
-        let mut qr = IncrementalQr::new(initial).unwrap();
-        let wrong_rows = Matrix::from_col_major_vec(2, 1, vec![1.0, 2.0]);
-        assert!(qr.append(&wrong_rows).is_err());
-
-        let too_many = Matrix::from_col_major_vec(3, 3, vec![1.0; 9]);
-        assert!(qr.append(&too_many).is_err());
-    }
-
-    #[test]
-    fn incremental_qr_uses_the_hermitian_projection_for_complex_columns() {
-        let first = Matrix::from_col_major_vec(
-            4,
-            1,
-            vec![
-                Complex64::new(1.0, 1.0),
-                Complex64::new(2.0, -1.0),
-                Complex64::new(-1.0, 0.5),
-                Complex64::new(0.25, 2.0),
-            ],
-        );
-        let appended = Matrix::from_col_major_vec(
-            4,
-            1,
-            vec![
-                Complex64::new(0.5, -2.0),
-                Complex64::new(-1.0, 1.5),
-                Complex64::new(2.0, 0.25),
-                Complex64::new(3.0, -0.5),
-            ],
-        );
-        let mut original_data = first.as_col_major_slice().to_vec();
-        original_data.extend_from_slice(appended.as_col_major_slice());
-        let original = Matrix::from_col_major_vec(4, 2, original_data);
-
-        let mut qr = IncrementalQr::new(first).unwrap();
-        qr.append(&appended).unwrap();
-        let reconstructed = mat_mul(&qr.q(), &qr.r()).unwrap();
-        let error = reconstructed
-            .as_col_major_slice()
-            .iter()
-            .zip(original.as_col_major_slice())
-            .map(|(actual, expected)| (*actual - *expected).norm())
-            .fold(0.0, f64::max);
-        assert!(error < 1.0e-12, "complex reconstruction error is {error}");
-
-        let r = qr.r();
-        let g = qr
-            .inverse_adjoint
-            .as_ref()
-            .expect("full-rank complex QR must retain R^{-dagger}");
-        let mut r_adjoint = Matrix::zeros(r.ncols(), r.nrows());
-        for col in 0..r.ncols() {
-            for row in 0..r.nrows() {
-                r_adjoint[[row, col]] = r[[col, row]].conj();
-            }
-        }
-        let product = mat_mul(&r_adjoint, g).unwrap();
-        for row in 0..product.nrows() {
-            for col in 0..product.ncols() {
-                let expected = if row == col {
-                    Complex64::new(1.0, 0.0)
-                } else {
-                    Complex64::new(0.0, 0.0)
-                };
-                assert!(
-                    (product[[row, col]] - expected).norm() < 1.0e-10,
-                    "R^dagger G is not identity at ({row}, {col}): {}",
-                    product[[row, col]]
-                );
-            }
-        }
-    }
-}
+mod tests;
