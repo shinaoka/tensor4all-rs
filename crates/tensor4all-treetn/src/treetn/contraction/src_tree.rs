@@ -561,7 +561,6 @@ where
             }
             let message = messages
                 .get(&(neighbor.clone(), parent.clone()))
-                .or_else(|| messages.get(&(parent.clone(), neighbor.clone())))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "contract_src: side message is missing for {:?} around {:?}",
@@ -623,7 +622,6 @@ where
             }
             let message = messages
                 .get(&(neighbor.clone(), parent.clone()))
-                .or_else(|| messages.get(&(parent.clone(), neighbor.clone())))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "contract_src: side batched message is missing for {:?} around {:?}",
