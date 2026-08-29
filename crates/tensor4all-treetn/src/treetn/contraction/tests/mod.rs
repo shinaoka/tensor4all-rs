@@ -759,6 +759,44 @@ fn src_adaptive_contracts_a_branched_tree_with_a_rank_cap() {
 }
 
 #[test]
+fn src_adaptive_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
+    // Same fixture and interior center ("C", the degree-3 hub) as
+    // `src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full`,
+    // but with `SrcOptions::adaptive` so this exercises the `rtol.is_some()`
+    // dispatch branch (`directed_messages`, the non-batched/column path) with
+    // a numeric dense-oracle comparison, rather than only the fixed-rank
+    // dispatch branch (`directed_messages_batched`) that the sibling test
+    // above covers.
+    let (tn_a, tn_b) = make_branched_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(
+                SrcOptions::adaptive(1.0e-8, 4)
+                    .with_min_rank(1)
+                    .with_rank_increment(1)
+                    .with_seed(77)
+                    .with_final_svd(false),
+            ),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "branched adaptive SRC residual is {error}");
+    actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
 fn src_preserves_a_scalar_leaf_on_a_branched_tree() {
     let shared = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
     let output_c = DynIndex::new_dyn(2);
