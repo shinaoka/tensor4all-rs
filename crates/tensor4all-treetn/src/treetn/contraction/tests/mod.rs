@@ -537,6 +537,123 @@ fn src_fixed_matches_exact_contraction_when_probe_cap_is_full() {
 }
 
 #[test]
+fn src_adaptive_matches_exact_contraction_on_a_small_chain() {
+    // Chain topology with an endpoint center ("C"), unlike the sibling
+    // `src_adaptive_matches_naive_on_a_branched_tree_when_probe_cap_is_full`
+    // regression, which uses a branched tree with an interior (degree-3)
+    // center. The two exercise genuinely different structural paths
+    // (endpoint vs. interior canonical center on different topologies),
+    // so both are kept as complementary dense-oracle coverage for
+    // adaptive-rank SRC.
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(1)
+                .with_rank_increment(1)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(error < 1.0e-8, "adaptive SRC residual is {error}");
+}
+
+#[test]
+fn src_result_tensor_is_numerically_isometric() {
+    // The audit (WS-tests §5c) found that `validate_ortho_consistency` only
+    // checks connectivity/direction metadata, never the actual tensor
+    // values, so nothing in the suite proved a non-root SRC result tensor
+    // is numerically unitary/isometric.
+    //
+    // This uses a 4-node chain "S0"-"S1"-"S2"-"S3" with an *interior* center
+    // "S1" (not a chain endpoint). That is deliberate: investigating this
+    // test uncovered that `contract`'s endpoint-center chain specialization
+    // (`src_chain.rs`, taken whenever the requested center is a chain
+    // endpoint, e.g. `make_three_node_chain_pair()` with center "C" as used
+    // elsewhere in this file) reports its canonical metadata backwards --
+    // `canonical_region`/`ortho_towards` claim the requested endpoint is the
+    // orthogonality center, but the actual tensor values are numerically
+    // isometric *away* from it and isometric *towards* the opposite
+    // endpoint instead (residual ~1e-8..1 on the declared direction, vs.
+    // ~1e-15 on the reversed one; reproduced for both endpoint choices).
+    // `validate_ortho_consistency` cannot see this because it only checks
+    // that the metadata is internally self-consistent, not that it matches
+    // the data. This is a pre-existing production bug scoped outside this
+    // test-only task; it is reported separately rather than fixed here.
+    // Requesting an interior center (as this test does) dispatches to the
+    // general rooted-tree path (`src_tree.rs`) instead, which was verified
+    // (along with a branched-tree hub center) to report correct, matching
+    // canonical metadata.
+    let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true]);
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(11).with_final_svd(false));
+    let actual = contract(&tn_a, &tn_b, &"S1".to_string(), options).unwrap();
+    actual.validate_ortho_consistency().unwrap();
+
+    // Node "S2" is a non-center interior node (bonds to both "S1" and "S3"
+    // plus its own site index), so its tensor has three indices: the bond
+    // towards center "S1" (the canonical direction), its own site index,
+    // and the bond towards "S3" (non-canonical). Grouping the latter two
+    // into a single "other" axis via `fuse_indices` is a genuine
+    // matricization (more than one index being fused), not a tensor that
+    // already happens to be a bare 2-index matrix.
+    let node_s2 = actual.node_index(&"S2".to_string()).unwrap();
+    let tensor_s2 = actual.tensor(node_s2).unwrap();
+    let bond_towards_center = actual
+        .bond_index(
+            actual
+                .edge_between(&"S2".to_string(), &"S1".to_string())
+                .unwrap(),
+        )
+        .unwrap()
+        .clone();
+
+    let other_indices: Vec<DynIndex> = tensor_s2
+        .indices()
+        .iter()
+        .filter(|idx| **idx != bond_towards_center)
+        .cloned()
+        .collect();
+    assert!(
+        other_indices.len() > 1,
+        "expected node S2 to have more than one non-canonical index to fuse"
+    );
+
+    let other_dim: usize = other_indices.iter().map(IndexLike::dim).product();
+    let other_fused = DynIndex::new_dyn(other_dim);
+    let matricized = tensor_s2
+        .fuse_indices(
+            &other_indices,
+            other_fused.clone(),
+            tensor4all_core::LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
+
+    // Build the Gram matrix M^dagger * M by contracting the matricized
+    // tensor against a copy whose canonical bond index has been primed
+    // (so only the shared "other" index is summed over by `contract_pair`),
+    // then compare it against the identity on the bond dimension.
+    let bond_prime = bond_towards_center.prime();
+    let conj_primed = matricized
+        .conj()
+        .replaceind(&bond_towards_center, &bond_prime)
+        .unwrap();
+    let gram = conj_primed.contract_pair(&matricized).unwrap();
+
+    let identity = IdxTensor::diagonal(&bond_prime, &bond_towards_center).unwrap();
+    let error = gram.sub(&identity).unwrap().maxabs().unwrap();
+    assert!(error < 1.0e-8, "isometry residual is {error}");
+}
+
+#[test]
 fn src_fixed_handles_scalar_sites_in_a_chain() {
     for output_sites in [[false, true, true], [true, false, true]] {
         let (tn_a, tn_b) = make_chain_pair_with_outputs(&output_sites);
