@@ -565,6 +565,40 @@ fn src_adaptive_matches_exact_contraction_on_a_small_chain() {
     assert!(error < 1.0e-8, "adaptive SRC residual is {error}");
 }
 
+/// Regression for the interior-site adaptive closure's lookahead probe
+/// batching in `src_chain.rs`: it fetches, stacks
+/// (`stack_along_new_index`), and contracts (`contract_retaining`) up to
+/// `rank_increment`-many probe columns at once instead of one at a time,
+/// then splits the result back into individual columns
+/// (`select_indices`). `rank_increment` here is 2 (unlike the sibling
+/// `src_adaptive_matches_exact_contraction_on_a_small_chain`, which uses 1
+/// and so never exercises a batch wider than a single column), so this
+/// forces at least one genuinely multi-column stack/split cycle.
+#[test]
+fn src_adaptive_matches_exact_contraction_with_a_multi_column_lookahead_batch() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(1)
+                .with_rank_increment(2)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(
+        error < 1.0e-8,
+        "adaptive SRC residual with multi-column lookahead batching is {error}"
+    );
+}
+
 #[test]
 fn src_result_tensor_is_numerically_isometric() {
     // The audit (WS-tests §5c) found that `validate_ortho_consistency` only

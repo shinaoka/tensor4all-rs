@@ -19,9 +19,10 @@ use tensor4all_core::{
 
 use super::src_probe::{
     connect_result_edge, contract_prefix_with_probed_site_pair_batch_range,
-    contract_prefix_with_site_pair, contract_site_pair, factorize_probe_columns, initial_width,
-    local_output_indices, local_site_pairs, mark_result_canonical, maximum_site_width,
-    probed_site_pair_batch_range, product_dim, ProbeBank,
+    contract_prefix_with_site_pair, contract_retaining, contract_site_pair,
+    factorize_probe_columns, initial_width, local_output_indices, local_site_pairs,
+    mark_result_canonical, maximum_site_width, probed_site_pair_batch_range, product_dim,
+    ProbeBank,
 };
 use super::{SrcOptions, TreeTN};
 use crate::algorithm::CanonicalForm;
@@ -172,6 +173,24 @@ where
             site_max_width
         };
         let label = format!("site {site}");
+        // `tensor_a`/`tensor_b`/`right_environment` are the same for every
+        // probe column at this site -- only `prefix` (fetched from
+        // `prefixes`, one column at a time) varies. Rather than repeat the
+        // 3-tensor contraction chain once per single column (as many times
+        // as `site_max_width` requires), fetch and stack a whole
+        // `rank_increment`-sized lookahead block of prefixes into one
+        // `batch`-indexed tensor via `stack_along_new_index`, contract that
+        // block through `tensor_a`/`tensor_b`/`right_environment` ONCE with
+        // `contract_retaining` (mirroring `contract_fixed`'s own batched
+        // interior-site step just above, which already avoids this
+        // per-column repetition), then split the block back into individual
+        // columns via `select_indices` for `factorize_probe_columns`'s
+        // per-column QR interface. `factorize_probe_columns` always requests
+        // columns in strictly increasing order starting at 0, so a small
+        // lookahead queue is sufficient -- no need to support random access.
+        let lookahead_width = sketch_options.rank_increment.max(1);
+        let mut pending_columns: std::collections::VecDeque<T> = std::collections::VecDeque::new();
+        let mut next_column = 0usize;
         let (factor, cap, next_environment) = factorize_site_adaptive(
             FactorizeSiteRequest {
                 outputs: &outputs[site],
@@ -184,19 +203,55 @@ where
                 label: &label,
             },
             |column| {
-                let prefix = prefixes.column(site - 1, column)?;
-                let after_a = T::contract(&[&prefix, local[site].0]).map_err(|error| {
-                    anyhow::anyhow!(
-                        "contract_src: site {site} prefix-A contraction failed: {error}"
-                    )
-                })?;
-                let after_b = T::contract(&[&after_a, local[site].1]).map_err(|error| {
-                    anyhow::anyhow!(
-                        "contract_src: site {site} prefix-B contraction failed: {error}"
-                    )
-                })?;
-                T::contract(&[&after_b, &right_environment]).map_err(|error| {
-                    anyhow::anyhow!("contract_src: site {site} sketch failed: {error}")
+                debug_assert_eq!(
+                    column, next_column,
+                    "contract_src: site {site} probe columns must be requested in order"
+                );
+                if pending_columns.is_empty() {
+                    let width = lookahead_width.min(site_max_width - next_column);
+                    let block = (0..width)
+                        .map(|offset| prefixes.column(site - 1, next_column + offset))
+                        .collect::<Result<Vec<_>>>()?;
+                    let block_refs = block.iter().collect::<Vec<_>>();
+                    let batch_index = T::Index::new_link(width)?;
+                    let stacked = T::stack_along_new_index(&block_refs, batch_index.clone(), -1)
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "contract_src: site {site} probe batch stacking failed: {error}"
+                            )
+                        })?;
+                    let after_a = contract_retaining(&[&stacked, local[site].0], &batch_index)
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "contract_src: site {site} prefix-A contraction failed: {error}"
+                            )
+                        })?;
+                    let after_b = contract_retaining(&[&after_a, local[site].1], &batch_index)
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "contract_src: site {site} prefix-B contraction failed: {error}"
+                            )
+                        })?;
+                    let after_env =
+                        contract_retaining(&[&after_b, &right_environment], &batch_index).map_err(
+                            |error| {
+                                anyhow::anyhow!("contract_src: site {site} sketch failed: {error}")
+                            },
+                        )?;
+                    for position in 0..width {
+                        let single = after_env
+                            .select_indices(std::slice::from_ref(&batch_index), &[position])
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "contract_src: site {site} probe batch split failed: {error}"
+                                )
+                            })?;
+                        pending_columns.push_back(single);
+                    }
+                }
+                next_column += 1;
+                pending_columns.pop_front().ok_or_else(|| {
+                    anyhow::anyhow!("contract_src: site {site} probe batch underflow")
                 })
             },
         )?;
