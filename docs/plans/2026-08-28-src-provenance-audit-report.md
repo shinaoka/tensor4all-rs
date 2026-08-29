@@ -34,6 +34,15 @@ trivial-plumbing rows of either convention. `ws-backend`'s `F7` row is marked
 `WITHDRAWN` by that workstream itself and is excluded from the ranking, as its
 own document instructs.
 
+**Verification depth also varies across workstreams and is not uniform
+evidentiary weight.** WS-tree-probe ran the crate's test suite directly
+(`cargo test --lib contraction`, 114 passed); WS-core's numerical claims rest
+on `cargo check` only, with no `cargo test` run; WS-chain, WS-integration, and
+WS-tests performed no executable verification of their own, relying instead on
+direct source reading, paper/plan cross-checks, and grep sweeps. Each
+workstream discloses this locally, but a reader of this summary alone should
+not assume every finding below carries the same kind of evidence behind it.
+
 ## Executive summary
 
 ### 0. Confirmed-wrong math: none
@@ -70,7 +79,10 @@ derivation that was re-derived from Tier-1 sources held:
   it pre-exists unchanged on `origin/main`, and the entire diff is a mechanical
   struct-literal → `FactorizeResult::new(...)` call-site migration forced by a
   new private field. WS-backend found zero SVD calls, zero eigendecompositions,
-  and zero general dense inverses in its three files.
+  and zero general dense inverses in its three files. **What this audit found
+  instead is a different problem than the one it was opened to look for**: not
+  a hand-rolled SVD, but a hand-rolled QR on the adaptive path (F1, §1) plus
+  two unmeasured cost concerns on the tree path (F-4 and F-5, §2).
 
 ### 1. `HANDROLLED-DUPLICATE` — and the open question that decides whether it explains the slowness
 
@@ -281,6 +293,25 @@ Test-coverage gaps, from WS-tests §7:
   named `..._column_major_dense_payloads` whose full-buffer round-trip cannot
   discriminate column-major from row-major (§5g), and the Complex32 half of the
   single-precision estimator test, which asserts only `.is_finite()`.
+- **One verified tolerance-gap instance (WS-tests §5d/§7).**
+  `src_complex_chain_matches_naive_when_probe_cap_is_full` in
+  `contraction/tests/mod.rs` asserts `< 1e-8`, one order of magnitude looser
+  than its immediately adjacent, same-fixture (`make_two_node_complex_pair()`),
+  same-oracle (`contract_naive`) precedent
+  `zipup_complex_chain_matches_naive_without_truncation` (`< 1e-9`), unexplained
+  in any comment. An earlier draft generalized this to "every new SRC test"
+  being systematically one-to-two orders of magnitude looser across three
+  files; that broader claim does **not** survive re-checking — the other two
+  files' new SRC tests match their file's actual dominant precedent exactly,
+  and the second order of magnitude came entirely from a citation the
+  re-check refuted. This instance is the sole verified survivor of that fix
+  round, not part of the debunked pattern. WS-tests notes an a-priori
+  plausible (but unconfirmed) explanation — SRC's randomized-sketch
+  construction vs. zip-up's deterministic SVD path could legitimately warrant
+  a looser default tolerance — and explicitly hands off to the synthesis pass
+  / WS-chain's and WS-backend's numerical audits for an actual residual
+  measurement to determine whether the gap is justified or a real precision
+  gap; no such measurement was taken in this pass.
 
 ### 5. `SCOPE-DEVIATION`
 
@@ -522,7 +553,7 @@ workstreams explicitly recommend the branch sync with `origin/main` before any
 further work ships from it, and the plan's own "Verification commands" section
 anticipates exactly this precondition. This report adopts that recommendation.
 
-### 11. On the citation-precision residue
+### 11. Deferred minor findings
 
 Each of the six workstreams went through a review loop that caught and either
 fixed or explicitly deferred a number of minor issues: off-by-a-few line
@@ -543,7 +574,10 @@ change any verdict above.
    width-keyed batched cache. These are live candidates for the slowness
    symptom independent of the answer to step 1, and F-4's fix direction is
    already demonstrated by the chain path's own
-   `contract_prefix_with_probed_site_pair_batch_range`.
+   `contract_prefix_with_probed_site_pair_batch_range`. **Measure first:**
+   both are established by index-counting arguments from a single workstream
+   (WS-tree-probe), not profiled measurements, so confirm the actual cost
+   before spending effort fixing them.
 4. **Decide `incremental_qr.rs`'s fate** in light of step 1's answer. Note that
    Appendix C.3's own block Gram–Schmidt formulation needs only `qr` and
    `mat_mul`, both of which the backend already provides, and would keep the
