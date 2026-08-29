@@ -15,22 +15,34 @@ code, and states the one question the audit could not answer.
 
 ## How to read the verdicts (taxonomy normalization)
 
-The spec defines eleven verdict tokens. Five of the six workstreams
-(`ws-chain`, `ws-core`, `ws-tree-probe`, `ws-integration`, `ws-tests`) record
-trivial, no-derivation-owed units — imports, accessors, parameter-bundle
-structs, re-export lines — as `DERIVED-VERIFIED` with a "(trivial plumbing)"
-qualifier. `ws-backend` instead introduced a sentinel, `NO-FINDING`, for the
-identical situation, and documented that choice inside its own file. Both
-conventions were reviewed and are internally consistent, but they are **not the
-same taxonomy**, so raw token counts are not comparable across files.
+The spec defines eleven verdict tokens, but the six workstreams do not all
+mark trivial, no-derivation-owed units — imports, accessors, parameter-bundle
+structs, re-export lines — the same way. `ws-chain`, `ws-core`,
+`ws-integration`, and `ws-tests` record them as `DERIVED-VERIFIED` with a
+"(trivial plumbing)" qualifier. `ws-tree-probe` uses that same
+`DERIVED-VERIFIED` convention for only 5 of its trivial rows; for the
+remaining 13 it uses its own sentinel, `n/a (trivial)` /
+`n/a (trivial plumbing)`, documented locally inside that file (its own lines
+14-15). `ws-backend` uses a third sentinel, `NO-FINDING`, for the identical
+situation, likewise documented locally inside its own file. All three
+conventions were reviewed and are internally consistent, but they are **not
+the same taxonomy**, so raw token counts are not comparable across files.
+Separately, a fourth convention — an `N/A — <reason>` cell (e.g.
+`N/A — rebase-lag artifact` in `ws-tests` and `ws-integration`) — is not a
+trivial-plumbing variant at all: it marks rows describing code that isn't
+SRC-authored (rebase-lag artifacts), a different situation from trivial
+plumbing with no derivation owed.
 
-**Normalization used in this report:** `ws-backend`'s `NO-FINDING` rows are
-treated as equivalent to the other workstreams' trivial-plumbing
-`DERIVED-VERIFIED` rows. Both mean "inspected, nothing owed, no finding."
-Neither is counted as a substantive finding in the ranking below. Where this
-report speaks of "`DERIVED-VERIFIED` findings needing review," it means only
-those rows carrying an actual derivation and an open question — never the
-trivial-plumbing rows of either convention. `ws-backend`'s `F7` row is marked
+**Normalization used in this report:** `ws-backend`'s `NO-FINDING` rows and
+`ws-tree-probe`'s `n/a (trivial)` / `n/a (trivial plumbing)` rows are treated
+as equivalent to the other workstreams' trivial-plumbing `DERIVED-VERIFIED`
+rows. All three mean "inspected, nothing owed, no finding," and none is
+counted as a substantive finding in the ranking below. The `N/A — <reason>`
+rebase-lag rows are excluded from the ranking too, but for a different
+reason — they describe non-SRC code, not SRC plumbing. Where this report
+speaks of "`DERIVED-VERIFIED` findings needing review," it means only those
+rows carrying an actual derivation and an open question — never the
+trivial-plumbing rows of any convention. `ws-backend`'s `F7` row is marked
 `WITHDRAWN` by that workstream itself and is excluded from the ranking, as its
 own document instructs.
 
