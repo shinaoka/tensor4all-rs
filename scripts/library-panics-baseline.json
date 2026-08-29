@@ -1,5 +1,5 @@
 [
-  "crates/tensor4all-core/src/defaults/idx_tensor.rs:6054:debug_assert_eq",
+  "crates/tensor4all-core/src/defaults/idx_tensor.rs:6583:debug_assert_eq",
   "crates/tensor4all-core/src/matrixlu.rs:741:debug_assert_eq",
   "crates/tensor4all-core/src/matrixluci/source.rs:103:assert",
   "crates/tensor4all-core/src/matrixluci/source.rs:108:assert_eq",
