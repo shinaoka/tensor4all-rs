@@ -1,5 +1,28 @@
 # WS-integration — dispatch, public API, and cross-cutting glue
 
+**Files audited:**
+- `crates/tensor4all-treetn/src/treetn/contraction.rs` (diff only: SRC
+  dispatch/options additions, 2108 lines total)
+- `crates/tensor4all-treetn/src/operator/apply.rs` (full file, SRC-related
+  hunks)
+- `crates/tensor4all-treetn/src/treetn/fit.rs` (diff only)
+- `crates/tensor4all-treetn/src/treetn/swap.rs` (diff only)
+- `crates/tensor4all-treetn/src/algorithm.rs` (diff only)
+- `crates/tensor4all-itensorlike/src/options.rs` (full file, 527 lines)
+- `crates/tensor4all-itensorlike/src/contract.rs` (full file, 162 lines)
+- `crates/tensor4all-capi/src/treetn.rs` (diff only)
+- `crates/tensor4all-capi/src/types.rs` (diff only)
+- `crates/tensor4all-capi/include/tensor4all_capi.h` (diff only)
+- `crates/tensor4all-treetn/src/lib.rs`, `crates/tensor4all-treetn/src/prelude.rs`,
+  `crates/tensor4all-treetn/README.md` (plumbing, diff only)
+- `crates/tensor4all-itensorlike/src/lib.rs`,
+  `crates/tensor4all-itensorlike/src/prelude.rs` (plumbing, diff only —
+  `tensor4all-itensorlike/README.md` has no diff against `origin/main` and is
+  not touched by this branch; see M4 note below)
+- `crates/tensor4all-itensorlike/src/tensortrain.rs` (added per Fix round 1;
+  in the diff, unclaimed by any other workstream — see the dedicated section
+  below)
+
 **Scope:** `crates/tensor4all-treetn/src/treetn/contraction.rs` (diff only:
 SRC dispatch/options additions),
 `crates/tensor4all-treetn/src/operator/apply.rs`,
@@ -10,8 +33,10 @@ SRC dispatch/options additions),
 `crates/tensor4all-itensorlike/src/contract.rs`,
 `crates/tensor4all-capi/src/treetn.rs`, `crates/tensor4all-capi/src/types.rs`,
 plus the plumbing files listed in the spec's WS-integration section
-(`lib.rs`/`prelude.rs`/`README.md` in `tensor4all-treetn` and
-`tensor4all-itensorlike`, `crates/tensor4all-capi/include/tensor4all_capi.h`).
+(`lib.rs`/`prelude.rs` in `tensor4all-treetn` and `tensor4all-itensorlike`,
+`tensor4all-treetn/README.md` — the only one of the two crates' `README.md`
+files this branch actually touches (see M4 note below) —,
+`crates/tensor4all-capi/include/tensor4all_capi.h`).
 `src_chain.rs`/`src_tree.rs`/`src_probe.rs` bodies are WS-chain /
 WS-tree-probe territory; they are referenced here only where the
 `PrefixCache`/chain-reduction-gate checks required a look past the `mod`
@@ -87,10 +112,12 @@ independent re-implementation of the four paper identities, exists.
 
 What exists instead (`contraction/tests/mod.rs:518-1000`, all calling the
 public `contract()` dispatcher, so genuinely exercised through the same
-path `contraction.rs` wires up): seven `src_fixed_*`/`src_adaptive_*`/
-`src_complex_*` tests that build a chain (or branched-tree, or complex-`f64`)
-input pair, run `ContractionOptions::src()` at `final_svd: false` with the
-probe cap large enough to be lossless, and assert the **dense output**
+path `contraction.rs` wires up): six `src_fixed_*`/`src_adaptive_*`/
+`src_complex_*` tests (`tests/mod.rs:531, 560, 586, 728, 829, 997` — the
+dense-output-vs-`tn_a.contract_naive(&tn_b)` residual-assertion lines) that
+build a chain (or branched-tree, or complex-`f64`) input pair, run
+`ContractionOptions::src()` at `final_svd: false` with the probe cap large
+enough to be lossless, and assert the **dense output**
 matches `tn_a.contract_naive(&tn_b)` to `< 1e-8`, plus
 `validate_ortho_consistency()`/canonical-center/topology assertions. This
 is an end-to-end numerical oracle test (SRC output vs. an independent,
@@ -119,16 +146,48 @@ calls `src_tree::contract(...)`, never `src_chain::contract` directly.
 `src_tree::contract` (line ~44 of `src_tree.rs`) only delegates to
 `src_chain::contract` when `tn_a.chain_order(center)` succeeds **and**
 `chain.last() == Some(center)`. Traced `chain_order`'s endpoint-selection
-logic (`contraction.rs:401-430`): it sorts the two degree-1 endpoints
-alphabetically and orients the path so it ends at `center` only if `center`
-is the endpoint that is *not* alphabetically first (or is an interior/only
-node handled by the immediate-return `None` for non-chain graphs). For the
-shared fixture `make_three_node_chain_pair()` (nodes `"A"`-`"B"`-`"C"`,
-center `"C"`), endpoints are `{"A","C"}`, `"C"` is not the alphabetically
-first endpoint, so the delegation condition holds and these tests do
-genuinely exercise `src_chain.rs`'s paper-faithful chain path, not the
-general tree fallback. (Confirmed by direct trace, not assumed from the
-test names.)
+logic (`contraction.rs:404-445`, real source lines — corrected from an
+earlier diff-offset citation):
+
+```rust
+let (start, end) = if center == &endpoints[0].1 {
+    (endpoints[1].0, endpoints[0].0)
+} else {
+    (endpoints[0].0, endpoints[1].0)
+};
+```
+
+`endpoints` is sorted alphabetically before this branch runs, so
+`endpoints[0]` is always the alphabetically-first degree-1 endpoint. This
+`if`/`else` does **not** discriminate on which endpoint `center` is for the
+purpose of deciding *whether* to delegate — `chain_order` only returns
+`Some(path)` at all when the graph is already a chain with exactly two
+degree-1 endpoints (the earlier `graph.edge_count() != node_count - 1` and
+`endpoints.len() != 2` guards return `None` otherwise) and `center` names
+one of them, so `end` is always `center`'s node index by construction. What
+the branch actually does is choose the path's *orientation*: it flips
+`start`/`end` specifically to compensate for the case where `center` is the
+alphabetically-first endpoint (`center == &endpoints[0].1`), so the walk
+still starts at the far endpoint and ends at `center` regardless of which of
+the two endpoints happens to sort first alphabetically. In other words, this
+code guarantees "the path ends at `center`" is true whenever `chain_order`
+returns `Some(_)` at all — alphabetical order only decides which endpoint
+is `start` vs. `end` internally, never whether delegation happens.
+
+The real discriminator for whether `src_tree::contract` delegates to
+`src_chain::contract` is therefore whether `center` is an **endpoint of a
+chain** at all (`chain_order` returns `Some`) vs. an **interior node of a
+general tree** (`chain_order` returns `None`, forcing the tree recurrence)
+— exactly the distinction `src_tree.rs:41-43`'s own comment draws between
+the chain case and the interior-node case. For the shared fixture
+`make_three_node_chain_pair()` (nodes `"A"`-`"B"`-`"C"`, center `"C"`), the
+graph is a 3-node chain, `center` `"C"` is one of its two degree-1
+endpoints, so `chain_order` returns `Some([...])` ending at `"C"` and the
+delegation condition holds — these tests do genuinely exercise
+`src_chain.rs`'s paper-faithful chain path, not the general tree fallback.
+(Confirmed by direct trace of the real branch logic, not the earlier
+mis-stated "not alphabetically first" framing — the fixture's conclusion
+was already correct, only the reasoning needed fixing.)
 
 **Verdict:** the plan's literal "chain reduction gate" (identity-level,
 against a hand-written reference of the paper's equations) **does not
@@ -209,92 +268,132 @@ as unrequested elaboration, just not as #691-specific scope creep.
 
 ### `contraction.rs` (SRC-related hunks only; +369 total)
 
-| Unit | Lines (new file) | Verdict | Notes |
+**Line numbers below are real source-file line numbers, verified by directly
+reading the current `contraction.rs` (2108 lines total) — not git-diff hunk
+offsets. An earlier version of this table used diff-line offsets that were
+off by roughly +1300 for every SRC-specific unit; every row was
+re-verified against the file as it stands.**
+
+| Unit | Lines (real, verified) | Verdict | Notes |
 | --- | --- | --- | --- |
-| Module doc-comment SRC provenance block | 9-25 | `SUSPECT-UNVERIFIED` (citation) | Cites "Algorithm 1, Sections 2.3--2.5, and Appendices C--D." **The paper's Section 2 ("Background") has only two subsections (2.1 randomized QB approximation, 2.2 Khatri-Rao product) — there is no 2.3, 2.4, or 2.5.** Verified against `report.tex`'s actual `\section`/`\subsection` list. Algorithm 1 (the pseudocode box, `\begin{algorithm}` at report.tex:640) and the step-by-step exposition (Step 1/Step 2/Finishing up/Optional oversampling) are in **Section 3** (`\S`3.1-3.4), not Section 2. Appendix C ("Implementing SRC with a tolerance") is genuinely the adaptive-mode source and checks out; Appendix D ("Full operation counts") is a pure cost/complexity table with nothing the dispatch code in this file implements — its inclusion reads as citation padding. See Detailed findings below: this exact wrong "Sections 2.3--2.5" string is copy-pasted verbatim into `src_chain.rs` and `src_tree.rs` too. |
-| Module doc: reference-Python function/file citation (`random_contraction`, `random_contraction_inc`, `incrementalqr.py::IncrementalQR`, `incrementalqr.cpp::{setup,add_cols,get_error_estimate}`) | 16-21 | `SOURCED-PYTHON` (citation-only check) | Spot-checked: `IncrementalQR` class and `setup`/`add_cols`/`get_error_estimate` genuinely exist in the reference repo's `incrementalqr.py`/`incrementalqr.cpp` at matching names. `random_contraction`/`random_contraction_inc` genuinely exist as top-level `def`s in `contraction.py`. This citation is accurate (full line-range verification of `src_chain.rs`'s own body is WS-chain's job). |
-| Module doc: issue #563 comment 5396107820 citation | 22-23 | `SOURCED-COMMENT(#563, 2026-08-24T13:45:35Z)` verified | Fetched the comment live via `gh api repos/tensor4all/tensor4all-rs/issues/comments/5396107820`; body and timestamp match Appendix A's transcription exactly. Accurate citation, not fabricated. |
-| Module doc: "labelled `[AI-Supplied]` in the audit worklog" | 24-25 | `SOURCED-COMMENT`-adjacent, verified | `docs/worklogs/2026-08-27-treetn-src-provenance-and-derivation-audit.md` exists and does label the rooted-tree recurrence `[AI-Supplied]` (lines 137, 292-293, 434 of that worklog). Note: that worklog is itself a Tier-2 artifact (an earlier AI-generated provenance pass) per the spec's epistemics section — its own `[Derived]` math claims are not independently re-verified here, only the fact that this doc-comment's *pointer* to it is accurate. |
-| `mod src_chain; mod src_probe; mod src_tree;` | 33-35 | `SOURCED-COMMENT`-adjacent / `Repo` plumbing | Mechanical module wiring; content of those modules is WS-chain/WS-tree-probe's scope. |
-| `ContractionMethod::Src` variant + doc-example | 44-63 | `Repo` plumbing, verified | Doc-test (`with_max_bond_dim(8)`) exercises real, existing methods; not fabricated API. |
-| `SrcOptions` struct + field docs | 65-106 | `SOURCED-PAPER` / `SOURCED-COMMENT` (field semantics), `Repo` (struct shape) | `rtol=None ⇒ fixed / Some ⇒ adaptive` matches the opening post's "fixed output rank and adaptive rank selection" ask; `final_svd` default matches Hiroshi's 2026-07-29 QR-only-hot-path / optional-final-SVD description. |
-| `impl Default for SrcOptions` | 108-120 | `Repo` plumbing | `min_rank: 2, rank_increment: 3, final_svd: false, seed: 0` — reasonable, undocumented-in-paper policy defaults; consistent with `final_svd: false` matching "core loop is QR-only" framing. |
-| `sketch_options` (private, oversampling tolerance tightening) | 122-131 | `SOURCED-PAPER(report.tex:1286)` verified | Independently grepped `report.tex`: line 1286 reads *"To implement with oversampling, we set the relative tolerance to be 0.1 times the requested tolerance and run a final truncation with the requested tolerance."* The code's `options.rtol = Some(0.1 * rtol)`, gated on `self.final_svd && final_truncation_has_tolerance`, matches this exactly — gating on `final_svd` is the only way this makes sense (no final truncation ⇒ no round to "run with the requested tolerance" ⇒ applying 0.1× would leave the result under-converged with no fix-up step). Confirmed against the paper directly, not the plan's transcription. |
-| `SrcOptions::fixed()` | 133-146 | `Repo` plumbing, doc-tested | — |
-| `SrcOptions::adaptive(rtol, max_rank)` | 148-169 | `SOURCED-COMMENT`(opening post: "adaptive rank selection") | — |
-| `with_rtol`/`with_atol`/`with_min_rank`/`with_rank_increment`/`with_max_rank`/`with_final_svd`/`with_seed` builders | 171-274 | `Repo` plumbing, each doc-tested | Straightforward field setters; no logic to independently verify beyond the doc-tests, which all pass their own assertions inline. |
-| `SrcOptions::validate()` | 276-344 | `DERIVED-VERIFIED` | No direct paper/Python/Hiroshi source names this exact validation policy (it is API-level input-hygiene, not algorithm math), so this is necessarily derived. Re-derived: fixed mode needs a finite target rank (`output_max_bond_dim`) since there's no stopping test to determine one; adaptive mode needs `rtol` finite/non-negative and a finite `max_rank` (from `self.max_rank` or the ambient `max_bond_dim`) since the adaptive loop in `src_chain.rs` must have a hard stop; `min_rank ≤ max_rank` is required or the loop could never satisfy its own precondition; `max_rank > output_max_bond_dim` is only safe when `final_svd` will cut it back down. Each check maps to a real downstream invariant. Holds up. |
-| `ContractionOptions.src_options` field + `Default` update | 348-364 | `Repo` plumbing | — |
-| `ContractionOptions::src()` / `.with_src_options(...)` | 369-398 | `Repo` plumbing, doc-tested | — |
-| `contract()`: `SrcOptions::validate` call before dispatch | 403-412 | `Repo` plumbing | Correctly runs *after* the existing `validate_svd_truncation_options` call, before any method-specific branch — consistent with how the other methods' preconditions are already checked. |
-| `contract()`: `ContractionMethod::Src` dispatch arm | 416-435 | `Repo` plumbing / routing | `output_rank = max_bond_dim.or(src_options.max_rank)` then calls `src_tree::contract(...)`. Traced (see check 2 above) that this always enters `src_tree::contract`, which conditionally re-delegates to `src_chain::contract` for genuine chain+endpoint-center cases. No dispatch bug found. |
+| Module doc-comment SRC provenance block | 11-24 | `SUSPECT-UNVERIFIED` (citation) | Cites "Algorithm 1, Sections 2.3--2.5, and Appendices C--D." **The paper's Section 2 ("Background") has only two subsections (2.1 randomized QB approximation, 2.2 Khatri-Rao product) — there is no 2.3, 2.4, or 2.5.** Verified against `report.tex`'s actual `\section`/`\subsection` list. Algorithm 1 (the pseudocode box, `\begin{algorithm}` at report.tex:640) and the step-by-step exposition (Step 1/Step 2/Finishing up/Optional oversampling) are in **Section 3** (`\S`3.1-3.4), not Section 2. Appendix C ("Implementing SRC with a tolerance") is genuinely the adaptive-mode source and checks out; Appendix D ("Full operation counts") is a pure cost/complexity table with nothing the dispatch code in this file implements — its inclusion reads as citation padding. See Detailed findings below: this exact wrong "Sections 2.3--2.5" string is copy-pasted verbatim into `src_chain.rs` and `src_tree.rs` too. |
+| Module doc: reference-Python function/file citation (`random_contraction`, `random_contraction_inc`, `incrementalqr.py::IncrementalQR`, `incrementalqr.cpp::{setup,add_cols,get_error_estimate}`) | 15-19 | `SOURCED-PYTHON` (citation-only check) | Spot-checked: `IncrementalQR` class and `setup`/`add_cols`/`get_error_estimate` genuinely exist in the reference repo's `incrementalqr.py`/`incrementalqr.cpp` at matching names. `random_contraction`/`random_contraction_inc` genuinely exist as top-level `def`s in `contraction.py`. This citation is accurate (full line-range verification of `src_chain.rs`'s own body is WS-chain's job). **See also the I5/LICENSE-RISK note below on line 15's own self-description as a "line-by-line cross-check."** |
+| Module doc: issue #563 comment 5396107820 citation | 21-22 | `SOURCED-COMMENT(#563, 2026-08-24T13:45:35Z)` verified | Fetched the comment live via `gh api repos/tensor4all/tensor4all-rs/issues/comments/5396107820`; body and timestamp match Appendix A's transcription exactly. Accurate citation, not fabricated. |
+| Module doc: "labelled `[AI-Supplied]` in the audit worklog" | 22-24 | `SOURCED-COMMENT`-adjacent, verified | `docs/worklogs/2026-08-27-treetn-src-provenance-and-derivation-audit.md` exists and does label the rooted-tree recurrence `[AI-Supplied]` (lines 137, 292-293, 434 of that worklog). Note: that worklog is itself a Tier-2 artifact (an earlier AI-generated provenance pass) per the spec's epistemics section — its own `[Derived]` math claims are not independently re-verified here, only the fact that this doc-comment's *pointer* to it is accurate. |
+| `mod src_chain; mod src_probe; mod src_tree;` | 47-49 | `DERIVED-VERIFIED` (trivial plumbing) | Mechanical module wiring; content of those modules is WS-chain/WS-tree-probe's scope. |
+| `ContractionMethod::Src` variant + doc-example | 1341-1368 | `DERIVED-VERIFIED` (trivial plumbing), verified | Doc-test (`with_max_bond_dim(8)`) exercises real, existing methods; not fabricated API. |
+| `SrcOptions` struct + field docs | 1370-1411 | `SOURCED-PAPER` / `SOURCED-COMMENT` (field semantics), `DERIVED-VERIFIED` (trivial plumbing; struct shape) | `rtol=None ⇒ fixed / Some ⇒ adaptive` matches the opening post's "fixed output rank and adaptive rank selection" ask; `final_svd` default matches Hiroshi's 2026-07-29 QR-only-hot-path / optional-final-SVD description. |
+| `impl Default for SrcOptions` | 1413-1425 | `DERIVED-VERIFIED` (trivial plumbing) | `min_rank: 2, rank_increment: 3, final_svd: false, seed: 0` — reasonable, undocumented-in-paper policy defaults; consistent with `final_svd: false` matching "core loop is QR-only" framing. |
+| `sketch_options` (private, oversampling tolerance tightening) | 1428-1436 | `SOURCED-PAPER(report.tex:1286)` verified | Independently grepped `report.tex`: line 1286 reads *"To implement with oversampling, we set the relative tolerance to be 0.1 times the requested tolerance and run a final truncation with the requested tolerance."* The code's `options.rtol = Some(0.1 * rtol)`, gated on `self.final_svd && final_truncation_has_tolerance`, matches this exactly — gating on `final_svd` is the only way this makes sense (no final truncation ⇒ no round to "run with the requested tolerance" ⇒ applying 0.1× would leave the result under-converged with no fix-up step). Confirmed against the paper directly, not the plan's transcription. |
+| `SrcOptions::fixed()` | 1438-1451 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
+| `SrcOptions::adaptive(rtol, max_rank)` | 1453-1474 | `SOURCED-COMMENT`(opening post: "adaptive rank selection") | — |
+| `with_rtol`/`with_atol`/`with_min_rank`/`with_rank_increment`/`with_max_rank`/`with_final_svd`/`with_seed` builders | 1476-1579 | `DERIVED-VERIFIED` (trivial plumbing), each doc-tested | Straightforward field setters; no logic to independently verify beyond the doc-tests, which all pass their own assertions inline. |
+| `SrcOptions::validate()` | 1581-1649 | `DERIVED-VERIFIED` | No direct paper/Python/Hiroshi source names this exact validation policy (it is API-level input-hygiene, not algorithm math), so this is necessarily derived. Re-derived: fixed mode needs a finite target rank (`output_max_bond_dim`) since there's no stopping test to determine one; adaptive mode needs `rtol` finite/non-negative and a finite `max_rank` (from `self.max_rank` or the ambient `max_bond_dim`) since the adaptive loop in `src_chain.rs` must have a hard stop; `min_rank ≤ max_rank` is required or the loop could never satisfy its own precondition; `max_rank > output_max_bond_dim` is only safe when `final_svd` will cut it back down. Each check maps to a real downstream invariant. Holds up. See the dedicated derivation subsection below (Detailed derivations and flagged findings). |
+| `ContractionOptions.src_options` field + `Default` update | 1686-1687, 1702 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `ContractionOptions::src()` / `.with_src_options(...)` | 1726-1755 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
+| `contract()`: `SrcOptions::validate` call before dispatch | 1940-1945 | `DERIVED-VERIFIED` (trivial plumbing) | Correctly runs *after* the existing `validate_svd_truncation_options` call (1938-1939), before any method-specific branch — consistent with how the other methods' preconditions are already checked. |
+| `contract()`: `ContractionMethod::Src` dispatch arm | 1987-2001 | `DERIVED-VERIFIED` (trivial plumbing / routing) | `output_rank = max_bond_dim.or(src_options.max_rank)` then calls `src_tree::contract(...)`. Traced (see check 2 above) that this always enters `src_tree::contract`, which conditionally re-delegates to `src_chain::contract` for genuine chain+endpoint-center cases. No dispatch bug found. |
 
 ### `apply.rs` (+44/-2)
 
 | Unit | Lines | Verdict | Notes |
 | --- | --- | --- | --- |
-| Module doc "ZipUp, Fit, SRC, or local exact naive apply" | ~9-11 | `Repo` plumbing | Accurate: `Src` is now a real dispatchable method here (see below), not a doc-only mention. |
-| `use ...SrcOptions` import; `ApplyOptions` doc default note | ~85-95, ~107-127 | `Repo` plumbing | — |
-| `ApplyOptions.src_options` field + `Default` update | 150-166 | `Repo` plumbing | — |
-| `ApplyOptions::src()` | 196-211 | `Repo` plumbing, doc-tested | — |
-| `ApplyOptions::with_src_options(...)` | 237-254 | `Repo` plumbing, doc-tested | — |
-| `contraction_options` struct literal: `src_options: options.src_options` | ~394-397 (context read, exact hunk line 400 of diff) | `Repo` plumbing, verified | Traced: this is the internal `ContractionOptions` built inside `apply_linear_operator` and passed to the shared `contract()` in `contraction.rs`. Confirms `ApplyOptions::src()` genuinely reaches the SRC dispatch arm — this is real plumbing, not a dead/unused field. Matches the opening post's "Possibly extend to TreeTN apply later" scope item. |
+| Module doc "ZipUp, Fit, SRC, or local exact naive apply" | ~9-11 | `DERIVED-VERIFIED` (trivial plumbing) | Accurate: `Src` is now a real dispatchable method here (see below), not a doc-only mention. |
+| `use ...SrcOptions` import; `ApplyOptions` doc default note | ~85-95, ~107-127 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `ApplyOptions.src_options` field + `Default` update | 150-166 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `ApplyOptions::src()` | 196-211 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
+| `ApplyOptions::with_src_options(...)` | 237-254 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
+| `contraction_options` struct literal: `src_options: options.src_options` | ~394-397 (context read, exact hunk line 400 of diff) | `DERIVED-VERIFIED` (trivial plumbing), verified | Traced: this is the internal `ContractionOptions` built inside `apply_linear_operator` and passed to the shared `contract()` in `contraction.rs`. Confirms `ApplyOptions::src()` genuinely reaches the SRC dispatch arm — this is real plumbing, not a dead/unused field. Matches the opening post's "Possibly extend to TreeTN apply later" scope item. |
 
 ### `fit.rs` (+1/-7) and `swap.rs` (+2/-14)
 
-| Unit | Verdict | Notes |
-| --- | --- | --- |
-| `fit.rs`: `FactorizeResult { left, right, bond_index: dummy_left, singular_values: None, rank: 1 }` → `FactorizeResult::new(left, right, dummy_left, None, 1)` | `Repo` plumbing, mechanical | `swap.rs`: two identical replacements | Verified `FactorizeResult::new` genuinely exists (`tensor4all-core/src/tensor_like.rs:487` area) with a matching 5-argument signature `(left, right, bond_index, singular_values, rank)`. The struct gained a new **private** field `incremental_qr_state: Option<IncrementalQrState>` (WS-core's `IncrementalQr` addition), which is why the old positional struct-literal syntax stopped compiling outside its defining module — `::new(...)` sets that field to `None`. This is forced, cross-crate compile-fallout plumbing, not new logic and not a hallucinated API — confirmed the constructor is real and does what the call sites need. |
+| File | Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- | --- |
+| `fit.rs` | `FactorizeResult { left, right, bond_index: dummy_left, singular_values: None, rank: 1 }` → `FactorizeResult::new(left, right, dummy_left, None, 1)` | 723 | `DERIVED-VERIFIED` (trivial plumbing), mechanical | Verified `FactorizeResult::new` genuinely exists at `tensor4all-core/src/tensor_like.rs:517` (corrected from an earlier ~487 citation) with a matching 5-argument signature `(left, right, bond_index, singular_values, rank)`. The struct gained a new **private** field `incremental_qr_state: Option<IncrementalQrState>` (WS-core's `IncrementalQr` addition), which is why the old positional struct-literal syntax stopped compiling outside its defining module — `::new(...)` sets that field to `None`. This is forced, cross-crate compile-fallout plumbing, not new logic and not a hallucinated API — confirmed the constructor is real and does what the call sites need. |
+| `swap.rs` | Same replacement, two identical call sites | 59, 81 | `DERIVED-VERIFIED` (trivial plumbing), mechanical | Same `FactorizeResult::new` constructor, same forced compile-fallout reasoning as the `fit.rs` row above. |
 
 ### `algorithm.rs` (+7)
 
-| Unit | Verdict | Notes |
-| --- | --- | --- |
-| Doc comment `T4A_CONTRACT_SRC = 3` | `Repo` plumbing | Matches the enum addition below and the capi header. |
-| `ContractionAlgorithm::Src = 3` variant + doc | `Repo` plumbing | — |
-| `from_i32` match arm `3 => Some(Self::Src)` | `Repo` plumbing | — |
-| `as_str` match arm `Self::Src => "src"` | `Repo` plumbing | — |
+| Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| Doc comment `T4A_CONTRACT_SRC = 3` | 36 | `DERIVED-VERIFIED` (trivial plumbing) | Matches the enum addition below and the capi header. |
+| `ContractionAlgorithm::Src = 3` variant + doc | 66-67 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `from_i32` match arm `3 => Some(Self::Src)` | 79 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `name` match arm `Self::Src => "src"` | 95 | `DERIVED-VERIFIED` (trivial plumbing) | Corrected method name: the match is inside `pub fn name(&self) -> &'static str`, not an `as_str` method — no `as_str` exists anywhere in this file. |
 
 ### `tensor4all-itensorlike/src/options.rs` (+55)
 
-| Unit | Verdict | Notes |
-| --- | --- | --- |
-| `pub use tensor4all_treetn::contraction::SrcOptions;` | `Repo` plumbing | Re-export, no new logic. |
-| `ContractMethod::Src` variant | `Repo` plumbing | — |
-| `ContractOptions.src_options` field + `Default` update | `Repo` plumbing | — |
-| `ContractOptions::src()` | `Repo` plumbing, doc-tested | — |
-| `ContractOptions::with_src_options(...)` | `Repo` plumbing, doc-tested | — |
-| `ContractOptions::src_options()` getter | `Repo` plumbing, doc-tested | — |
+| Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| `pub use tensor4all_treetn::contraction::SrcOptions;` | 4 | `DERIVED-VERIFIED` (trivial plumbing) | Re-export, no new logic. |
+| `ContractMethod::Src` variant | 104-105 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `ContractOptions.src_options` field + `Default` update | 132, 143 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `ContractOptions::src()` | 191-206 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
+| `ContractOptions::with_src_options(...)` | 260-275 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
+| `ContractOptions::src_options()` getter | 321-335 | `DERIVED-VERIFIED` (trivial plumbing), doc-tested | — |
 
 ### `tensor4all-itensorlike/src/contract.rs` (+4/-1)
 
-| Unit | Verdict | Notes |
-| --- | --- | --- |
-| `ContractMethod::Src => ContractionMethod::Src` match arm | `Repo` plumbing | — |
-| `.with_src_options(options.src_options().clone())` chained onto `treetn_options` | `Repo` plumbing, verified | Confirms `tensor4all-itensorlike`'s `ContractOptions::src()` genuinely threads through to `tensor4all-treetn`'s `ContractionOptions` — not a dead/unused field on this side either. |
+| Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| `ContractMethod::Src => ContractionMethod::Src` match arm | 70 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `.with_src_options(options.src_options().clone())` chained onto `treetn_options` | 77 | `DERIVED-VERIFIED` (trivial plumbing), verified | Confirms `tensor4all-itensorlike`'s `ContractOptions::src()` genuinely threads through to `tensor4all-treetn`'s `ContractionOptions` — not a dead/unused field on this side either. |
 
 ### `tensor4all-capi/src/types.rs` (+3)
 
-| Unit | Verdict | Notes |
-| --- | --- | --- |
-| `t4a_contract_method::Src = 3` | `Repo` plumbing | — |
-| `From<ContractionMethod>`/`From<t4a_contract_method>` match arms | `Repo` plumbing | Bidirectional conversion is complete and consistent with `algorithm.rs`'s `ContractionAlgorithm::Src = 3`. |
+| Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| `t4a_contract_method::Src = 3` | 611 | `DERIVED-VERIFIED` (trivial plumbing) | — |
+| `From<ContractionMethod>`/`From<t4a_contract_method>` match arms | 620, 631 | `DERIVED-VERIFIED` (trivial plumbing) | Bidirectional conversion is complete and consistent with `algorithm.rs`'s `ContractionAlgorithm::Src = 3`. |
 
 ### `tensor4all-capi/src/treetn.rs` (+9) and `include/tensor4all_capi.h` (+12)
 
-| Unit | Verdict | Notes |
-| --- | --- | --- |
-| Doc-comment additions on `t4a_treetn_contract`/`t4a_treetn_partial_contract`/`t4a_treetn_apply_operator_chain` ("`maxdim` must be nonzero...fixed-rank...Adaptive SRC controls are currently available through the Rust API only") | `Repo` plumbing, verified accurate | `t4a_treetn_apply_operator_chain`'s internal `ApplyOptions`-equivalent struct literal sets `src_options: Default::default()` (fixed-rank, seed 0) with no C-ABI parameter to override it — the doc's "Rust API only" claim for adaptive controls is factually correct, not aspirational. |
+| Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| Doc-comment additions on `t4a_treetn_contract` (`treetn.rs:1606-1608`, `tensor4all_capi.h:1045-1046`), `t4a_treetn_partial_contract` (`treetn.rs:1717-1719`, `tensor4all_capi.h:1231-1232`), `t4a_treetn_apply_operator_chain` (`treetn.rs:1848-1849`, `tensor4all_capi.h:1005-1006`) — "`maxdim` must be nonzero...fixed-rank...Adaptive SRC controls are currently available through the Rust API only" | see cell | `DERIVED-VERIFIED` (trivial plumbing), verified accurate | `t4a_treetn_apply_operator_chain`'s internal `ApplyOptions`-equivalent struct literal sets `src_options: Default::default()` (fixed-rank, seed 0) with no C-ABI parameter to override it — the doc's "Rust API only" claim for adaptive controls is factually correct, not aspirational. |
 
 ### Plumbing files (mechanical re-export/registration only, one row each)
 
-| File | Verdict | Notes |
-| --- | --- | --- |
-| `tensor4all-treetn/src/lib.rs` | `Repo` plumbing | Doc-comment mention + `pub use treetn::contraction::SrcOptions;` re-export. No logic. |
-| `tensor4all-treetn/src/prelude.rs` | `Repo` plumbing | Adds `SrcOptions` to the prelude re-export list. No logic. |
-| `tensor4all-treetn/README.md` | `Repo` plumbing | One sentence: "naive/zip-up/fit/SRC contraction." Descriptive only. |
-| `tensor4all-itensorlike/src/lib.rs` | `Repo` plumbing | Adds `SrcOptions` to the crate's `pub use options::{...}` list. No logic. |
-| `tensor4all-itensorlike/src/prelude.rs` | `Repo` plumbing | Adds `SrcOptions` to the prelude re-export list. No logic. |
+| File | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| `tensor4all-treetn/src/lib.rs` | 63 | `DERIVED-VERIFIED` (trivial plumbing) | `pub use treetn::contraction::SrcOptions;` re-export. No logic. |
+| `tensor4all-treetn/src/prelude.rs` | 23 | `DERIVED-VERIFIED` (trivial plumbing) | Adds `SrcOptions` to the prelude re-export list. No logic. |
+| `tensor4all-treetn/README.md` | 3-4 | `DERIVED-VERIFIED` (trivial plumbing) | One sentence: "naive/zip-up/fit/SRC contraction." Descriptive only. |
+| `tensor4all-itensorlike/src/lib.rs` | 15 | `DERIVED-VERIFIED` (trivial plumbing) | Adds `SrcOptions` to the crate's `pub use options::{...}` list. No logic. |
+| `tensor4all-itensorlike/src/prelude.rs` | 24 | `DERIVED-VERIFIED` (trivial plumbing) | Adds `SrcOptions` to the prelude re-export list. No logic. |
+| `tensor4all-itensorlike/README.md` | n/a | N/A — not touched | `git diff origin/main -- crates/tensor4all-itensorlike/README.md` is empty. This file is **not** part of the SRC diff, unlike `tensor4all-treetn/README.md` above (see M4 fix note: an earlier prose pass in this document incorrectly implied both crates' `README.md` were touched). Row kept for completeness since the spec's plumbing-file list names it. |
+
+### `tensor4all-itensorlike/src/tensortrain.rs` (added per Fix round 1 — previously uncovered)
+
+This file is in the `feature/treetn-src` diff against `origin/main`, is a
+non-test source file in a crate this workstream already owns
+(`tensor4all-itensorlike`), and was not claimed by any other workstream's
+file list. It belongs in this table.
+
+| Unit | Lines | Verdict | Notes |
+| --- | --- | --- | --- |
+| `TensorTrain::inner()` — empty-tensor-train return value | 1370-1382 (empty case: 1380-1382) | `N/A — rebase-lag artifact, not attributable to feature/treetn-src` | Changes the empty-TT `inner()` result from `1.0` to `0.0` (`return Ok(AnyScalar::new_real(0.0));` at line 1381). |
+| `TensorTrain::norm_squared_fast_path()` — empty-tensor-train return value | 1591-1593 | `N/A — rebase-lag artifact, not attributable to feature/treetn-src` | Changes the empty-TT fast-path result from `Some(1.0)` to `Some(0.0)` (`return Ok(Some(0.0));` at line 1592). |
+
+**Not independently re-derived here** — WS-tests already diagnosed this
+exact pair of hunks (`docs/plans/audit-workstreams/ws-tests.md`, "§0"
+section around lines 60-92, and table rows 20-21 around lines 123-124) and
+that diagnosis is adopted by reference rather than duplicated: `git
+merge-base origin/main HEAD` (`72de8fb`) is an older common ancestor, not
+`origin/main`'s own tip (`fd61f08`); `origin/main` independently picked up
+PR `#693` (`fd61f08`), which *restores* the correct convention (empty
+tensor train is the mathematical scalar `1`, matching `scalar_one()`'s
+`// Empty tensor train represents scalar 1` comment at
+`tensortrain.rs:2224-2226`) after this SRC branch had already forked from
+an older commit that still had `0.0`. `git diff origin/main` surfaces these
+two hunks only because the diff base moved out from under this branch, not
+because `feature/treetn-src` itself touched or regressed this logic. WS-tests'
+own process flag applies equally here: merging `feature/treetn-src` as-is
+would silently reintroduce the `0.0` bug `#693` already fixed on `main`,
+independent of anything else in this audit. No taxonomy verdict token cleanly
+fits an artifact that predates the branch's own diff base moving, hence
+`N/A` rather than e.g. `SUSPECT-UNVERIFIED`/`MISSING-VS-SOURCE` — this
+mirrors WS-tests' own choice of token for the same underlying fact.
 
 ## Detailed derivations and flagged findings
 
@@ -372,6 +471,91 @@ claim to debunk. The gap is that the Tier-2 plan's specific precondition
 was silently not built as specified, and no comment anywhere says so. This
 is a coverage gap for a reader relying on the plan, not a fabricated claim
 in the code.
+
+### Finding 5 — `LICENSE-RISK` self-description in the module doc-comment (I5, this workstream's own file)
+
+`contraction.rs:15` reads: "The author implementation used for a
+line-by-line cross-check is `chriscamano/RandomMPOMPS`,
+`code/tensornetwork/contraction.py`, ..." (full sentence: lines 15-19, see
+the module-doc-comment row of the provenance table above). Per the spec's
+Tier-1 epistemics section, the reference Python repository has no detected
+license, and **code that reads as a line-by-line translation against it is
+a `LICENSE-RISK` finding in its own right, separate from whether the
+citation is accurate.** The citation itself checks out (the named functions
+and files genuinely exist at those names — see the provenance table row),
+but the doc-comment's own chosen phrase, "line-by-line cross-check," is the
+kind of self-description the spec specifically calls out as a trigger: it
+describes the author's *methodology* against the unlicensed reference in
+terms ("line-by-line") that, if literally true of the resulting code
+(rather than just the validation process), would itself be the
+`LICENSE-RISK` condition.
+
+This workstream's own files (`contraction.rs`'s dispatch/options code
+audited above) do not implement the SRC algorithm's numerical body — that
+logic lives in `src_chain.rs`/`src_tree.rs`, which are WS-chain's scope.
+WS-chain's provenance report (`docs/plans/audit-workstreams/ws-chain.md`,
+"License-risk assessment — no finding" section) already performs the
+detailed body-level comparison against `contraction.py`'s reshape/matmul
+style and concludes the Rust implementation is structurally independent
+(named `Index`/`IndexLike` objects and generic `TensorLike::contract`
+helpers vs. Python's raw NumPy reshape-and-matmul sequences), finding no
+`LICENSE-RISK`. This workstream defers to that body-level check rather than
+duplicating it — flagging here only because the *doc-comment's own choice
+of words* ("line-by-line cross-check") is a WS-integration file
+(`contraction.rs`'s module doc), and a reader who trusted the phrase at
+face value without checking WS-chain's independent-reimplementation finding
+could reasonably conclude a `LICENSE-RISK` exists where WS-chain's
+line-by-line comparison shows it does not. No open `LICENSE-RISK` finding
+for WS-integration's own files (they contain no reference-Python-derived
+numerical logic to compare); this is a citation-wording note pointing to
+WS-chain's finding, not a second independent verdict.
+
+### `SrcOptions::validate()` — DERIVED-VERIFIED
+
+(I3: this subsection was missing for a table row already graded
+`DERIVED-VERIFIED`; the derivation itself is unchanged from the provenance
+table's Notes cell, only promoted to its own subsection here per the
+sibling-workstream convention.)
+
+`SrcOptions::validate(&self, output_max_bond_dim: Option<usize>)`
+(`contraction.rs:1599-1649`) is API-level input hygiene for the public
+`SrcOptions` builder — no paper equation or Python function corresponds to
+it (the reference Python takes its rank/tolerance parameters as plain
+function arguments with no equivalent up-front validation pass), so it is
+necessarily `DERIVED-VERIFIED` rather than `SOURCED-*`.
+
+**What it validates, and why each check is correct:**
+- `atol` finite and non-negative (1600-1602): a negative or non-finite
+  absolute tolerance can never be satisfied by any real residual norm, so
+  rejecting it up front avoids a downstream adaptive loop that could never
+  terminate on its stopping test.
+- `min_rank >= 1` and `rank_increment >= 1` (1603-1608): both values are
+  loop-step sizes in the adaptive sketch-growth loop in `src_chain.rs`; a
+  zero value would either start the sketch with no columns or make the
+  `while` loop that grows it non-progressing (infinite loop).
+- Fixed mode (`rtol.is_none()`, 1611-1621): `atol`/`max_rank` are rejected
+  as set (they only mean something relative to a stopping *test*, which
+  fixed mode has none of, by construction), and `output_max_bond_dim` is
+  required — fixed-rank SRC has no stopping test at all, so the target rank
+  can only come from the caller-supplied cap.
+- Adaptive mode (`Some(rtol)`, 1622-1646): `rtol` must be finite and
+  non-negative for the same reason as `atol` above; a finite `max_rank` is
+  required (from `self.max_rank` or the ambient `output_max_bond_dim`)
+  because the adaptive column-growth loop in `src_chain.rs` needs a hard
+  upper bound to guarantee termination even if the tolerance is never met;
+  `min_rank <= max_rank` is required because the loop's own starting
+  precondition (start at `min_rank`, grow toward `max_rank`) is otherwise
+  unsatisfiable; `max_rank > output_max_bond_dim` is only permitted when
+  `final_svd` is enabled, because only the optional final-SVD truncation
+  sweep can bring an over-wide adaptive sketch back down to the caller's
+  requested output rank — without it, exceeding the output cap would leave
+  a result wider than what the caller asked for.
+
+Every branch traces to a real downstream invariant in `src_chain.rs`'s
+adaptive/fixed loops rather than guarding a state the type system already
+rules out (see "No unnecessary defensive code found," below, for the
+broader reachability check). The derivation holds up under re-derivation:
+`DERIVED-VERIFIED`.
 
 ## No invented APIs found in WS-integration's files
 
