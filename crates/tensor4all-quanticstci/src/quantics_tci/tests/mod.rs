@@ -49,7 +49,7 @@ fn test_discrete_simple_function() {
         .with_nrandominitpivot(3)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
-    let result = quanticscrossinterpolate_discrete(&sizes, f, None, opts);
+    let result = quanticscrossinterpolate_discrete(&sizes, f, Some(vec![vec![1, 0]]), opts);
     assert!(result.is_ok(), "Error: {:?}", result.err());
 
     let (qtci, _ranks, _errors) = result.unwrap();
@@ -77,7 +77,7 @@ fn test_discrete_tci_structure() {
         .with_nrandominitpivot(3)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
-    let result = quanticscrossinterpolate_discrete(&sizes, f, None, opts);
+    let result = quanticscrossinterpolate_discrete(&sizes, f, Some(vec![vec![1, 0]]), opts);
     assert!(result.is_ok(), "Error: {:?}", result.err());
 
     let (qtci, _ranks, _errors) = result.unwrap();
@@ -212,7 +212,8 @@ fn test_discrete_inherent_grid_accessor() {
         .with_nrandominitpivot(3)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
-    let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(&sizes, f, None, opts).unwrap();
+    let (qtci, _ranks, _errors) =
+        quanticscrossinterpolate_discrete(&sizes, f, Some(vec![vec![1, 0]]), opts).unwrap();
 
     // inherent_grid should be Some, discretized_grid should be None
     assert!(qtci.inherent_grid().is_some());
