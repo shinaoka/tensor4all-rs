@@ -244,6 +244,35 @@ concretely here in the specific case of a wide, shallow star with abundant
 distinct branches but low required rank per branch -- the opposite regime
 from the primary (narrow, deep, high-required-rank) measurement above.
 
+**A more specific alternative hypothesis**: the "fixed per-request overhead"
+explanation above is plausible but not the only candidate, and there is a
+more specific, falsifiable mechanism worth recording alongside it. Both
+`PrefixCache::request` (`crates/tensor4all-treetn/src/treetn/contraction/src_chain.rs`)
+and `EnvironmentCache::request` (`crates/tensor4all-treetn/src/treetn/contraction/src_tree.rs`)
+grow segments using `next_width = self.batch_size.min(start + width -
+next_start)` -- i.e. the growth grid is *demand-capped*, not truly fixed.
+Whenever one caller's own `maximum_width` caps a growth step short of a
+full `batch_size`, it permanently installs a "ragged" segment boundary in
+the *shared* cache. Any later request that straddles that boundary takes
+the misaligned-fallback path -- which does `width` separate
+`select_indices` calls plus a `stack_along_new_index`, i.e. exactly the
+per-column split-then-restack round trip this whole plan was built to
+eliminate, now paid on a code path that used to be free. A wide star
+topology is exactly the shape with the most *distinct* `maximum_width`
+values in one `contract()` call (one per leaf edge), so it is the case
+most likely to produce many ragged boundaries and therefore the most
+fallback-path traffic -- a more specific explanation than generic "fixed
+overhead," though not mutually exclusive with it.
+
+These two hypotheses are distinguishable empirically: a hit counter on the
+misaligned-fallback branch of both `request` methods, run under the star
+benchmark that showed the regression, would settle it. If the fallback is
+"hot" (triggered many times), the ragged-boundary/demand-capped-grid
+mechanism is confirmed; if it is cold, the generic fixed-overhead
+explanation stands instead. This counter is not added to production code
+here and the experiment is not run as part of this task -- it is recorded
+as the next diagnostic step for whoever picks up the follow-up.
+
 ## Decision
 
 This plan's change is kept as-is; no further code change is made in this
@@ -258,9 +287,13 @@ to fix per the design spec's "Problem" section. The chain-path win, while
 smaller, is consistent and matches the mechanism intended.
 
 The star-topology regression is reported honestly rather than omitted or
-downplayed: it is real, reproducible, and traceable to a specific
-mechanism (fixed per-request overhead in the new segment-based cache not
-being amortized when very few growth steps are needed). It does not
+downplayed: it is real and reproducible, and the "Analysis" section above
+records two candidate mechanisms for it -- generic fixed per-request
+overhead in the new segment-based cache not being amortized when very few
+growth steps are needed, and the more specific ragged-boundary/
+demand-capped-grid mechanism, with a proposed hit-counter experiment to
+distinguish them -- rather than a single mechanism confirmed by
+measurement. It does not
 invalidate the plan's overall benefit -- both measured star configurations
 are small, low-effective-rank corner cases, not the primary target
 scenario the design spec's evidence was built on (which used chain/

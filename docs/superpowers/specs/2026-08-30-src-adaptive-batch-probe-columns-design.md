@@ -209,6 +209,19 @@ cache" reuse subtlety in the first place -- one `directed_messages_batched`
 call inherently produces every edge's segment together -- so this class of
 misalignment cannot arise there; its segment cache is simpler.
 
+> **Correction (recorded after implementation, 2026-08-30):** This claim
+> turned out to be false. Task 5's review found that `EnvironmentCache`,
+> when shared across multiple tree edges with different required widths,
+> DOES need a fixed growth grid and a genuine misaligned-request fallback,
+> mirroring the chain path -- the same class of misalignment this section
+> claims cannot arise on the tree side. The finished implementation has
+> both a fixed grid and the fallback, plus a dedicated regression test,
+> `request_shared_across_edges_with_misaligned_widths_matches_a_direct_reference`
+> in `crates/tensor4all-treetn/src/treetn/contraction/src_tree.rs`, proving
+> misalignment does arise there too. This paragraph is left as originally
+> written for the historical record; see the Task 5 fix round for what was
+> actually built instead.
+
 ### 4. Call-site changes
 
 - **`src_chain.rs` interior sites**: the closure drops its final
@@ -226,6 +239,15 @@ misalignment cannot arise there; its segment cache is simpler.
   `probed_site_pair_batch_range` + `directed_messages_batched` (already used
   by today's fixed-rank `batch()`) instead of the adaptive path's current
   one-column-at-a-time `probed_site_pair` + `directed_messages`.
+
+  > **Correction (recorded after implementation, 2026-08-30):** This is not
+  > what was actually done, correctly. The plan's own Global Constraints
+  > explicitly kept `batch`/`batched_environments` (the fixed-rank tree
+  > path) untouched and out of scope, and Task 6 only replaced
+  > `ensure_width`/`column` (the adaptive path) with `request`, leaving
+  > `batch` as its own separate method. This paragraph's wording is stale
+  > relative to what the plan and implementation correctly decided to do
+  > instead; it is left as originally written for the historical record.
 
 ### 5. Error handling
 

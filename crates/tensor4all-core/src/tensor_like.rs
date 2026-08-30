@@ -1093,6 +1093,22 @@ pub trait TensorFactorizationLike: TensorIndex {
     /// implementation cannot provide. `IdxTensor` overrides this with a true
     /// incremental implementation.
     ///
+    /// Unlike [`Self::factorize_probe_columns_incremental`], whose default
+    /// can always fall back to re-stacking `all_columns` and factorizing
+    /// from scratch, this method's default has no such fallback once growth
+    /// is needed: `tensor4all-treetn`'s adaptive SRC path
+    /// (`factorize_probe_batches` in
+    /// `crates/tensor4all-treetn/src/treetn/contraction/src_probe.rs`) calls
+    /// this method with `previous.is_some()` on every growth step after the
+    /// first, and always passes only the newly appended batch slice, never
+    /// the cumulative range from the start. A backend that does not override
+    /// this method therefore cannot use adaptive SRC at all once a second
+    /// growth step is needed, even though the column-based path would have
+    /// kept working (just less efficiently). This is a deliberate trade-off
+    /// of the batch interface, not an oversight: a correct from-scratch
+    /// re-derivation is not possible from an appended-only slice, so no
+    /// generic default can close this gap.
+    ///
     /// # Errors
     /// Returns [`FactorizeError`] when the batch cannot be factorized, or
     /// (default implementation only) when asked to extend a previous
