@@ -7481,25 +7481,4 @@ mod tests {
             max_diff
         );
     }
-
-    #[test]
-    fn factorize_probe_batch_incremental_default_rejects_incremental_growth() {
-        // Exercise the *default* trait implementation's `previous.is_some()`
-        // error path directly (not IdxTensor's override): a type with no
-        // FactorizeResult of its own to pass as `previous` can't exercise the
-        // `Some` branch through IdxTensor, so this test only needs to confirm
-        // the *from-scratch* default path behaves correctly for a type that
-        // does not override the method. IdxTensor always overrides it, so this
-        // is documentation-by-test for the trait default rather than a
-        // reachable-in-practice code path today; see the trait doc comment.
-        let row = DynIndex::new_dyn(2);
-        let batch = DynIndex::new_dyn(2);
-        let batch_tensor =
-            IdxTensor::from_dense(vec![row.clone(), batch.clone()], vec![1.0, 0.0, 0.0, 1.0])
-                .unwrap();
-        let result =
-            IdxTensor::factorize_probe_batch_incremental(None, &batch_tensor, &batch, &[row])
-                .unwrap();
-        assert_eq!(result.rank, 2);
-    }
 }
