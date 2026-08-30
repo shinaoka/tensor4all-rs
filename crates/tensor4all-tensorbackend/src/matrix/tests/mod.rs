@@ -577,3 +577,30 @@ fn mat_mul_reports_dimension_mismatch() {
 
     assert!(err.to_string().contains("matrix dimensions"));
 }
+
+#[test]
+fn append_columns_reuses_existing_data_and_grows_ncols() {
+    let mut left = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let right = Matrix::from_col_major_vec(2, 1, vec![5.0_f64, 6.0]);
+    left.append_columns(&right).unwrap();
+    assert_eq!(left.nrows(), 2);
+    assert_eq!(left.ncols(), 3);
+    assert_eq!(left.as_col_major_slice(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+}
+
+#[test]
+fn append_columns_matches_building_a_fresh_concatenated_matrix() {
+    let left = Matrix::from_col_major_vec(3, 2, vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let right = Matrix::from_col_major_vec(3, 1, vec![7.0_f64, 8.0, 9.0]);
+
+    let mut grown = left.clone();
+    grown.append_columns(&right).unwrap();
+
+    let mut expected_data = left.as_col_major_slice().to_vec();
+    expected_data.extend_from_slice(right.as_col_major_slice());
+    let expected = Matrix::try_from_col_major_vec(3, 3, expected_data).unwrap();
+
+    assert_eq!(grown.nrows(), expected.nrows());
+    assert_eq!(grown.ncols(), expected.ncols());
+    assert_eq!(grown.as_col_major_slice(), expected.as_col_major_slice());
+}
