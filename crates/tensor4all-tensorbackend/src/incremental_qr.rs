@@ -331,9 +331,10 @@ where
             .into());
         }
 
-        let q = concatenate_columns(&self.q, &appended_q)?;
         let r = assemble_r(&self.r, &projection, &appended_r)?;
-        let new_rank = q.ncols();
+        let new_rank = old_rank
+            .checked_add(appended_rank)
+            .ok_or_else(|| anyhow!("incremental QR rank overflow"))?;
         let new_column_count = r.ncols();
         let inverse_adjoint = if new_rank == new_column_count {
             if old_rank == old_column_count {
@@ -349,7 +350,9 @@ where
             None
         };
 
-        self.q = q;
+        self.q
+            .append_columns(&appended_q)
+            .map_err(|error| anyhow!("incremental QR Q append failed: {error}"))?;
         self.r = r;
         self.inverse_adjoint = inverse_adjoint;
         Ok(())
