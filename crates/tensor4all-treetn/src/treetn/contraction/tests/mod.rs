@@ -567,15 +567,18 @@ fn src_adaptive_matches_exact_contraction_on_a_small_chain() {
     assert!(error < 1.0e-8, "adaptive SRC residual is {error}");
 }
 
-/// Regression for the interior-site adaptive closure's lookahead probe
-/// batching in `src_chain.rs`: it fetches, stacks
-/// (`stack_along_new_index`), and contracts (`contract_retaining`) up to
-/// `rank_increment`-many probe columns at once instead of one at a time,
-/// then splits the result back into individual columns
-/// (`select_indices`). `rank_increment` here is 2 (unlike the sibling
-/// `src_adaptive_matches_exact_contraction_on_a_small_chain`, which uses 1
-/// and so never exercises a batch wider than a single column), so this
-/// forces at least one genuinely multi-column stack/split cycle.
+/// Regression for the interior-site adaptive closure's probe batching in
+/// `src_chain.rs`: at each growth step the closure fetches one
+/// already-batched (batch-indexed) prefix tensor via `PrefixCache::request`
+/// and contracts it through the two local site tensors and the right
+/// environment with `contract_retaining`, all in one shot -- there is no
+/// `stack_along_new_index`/`select_indices` round trip at the call site
+/// itself, since `request` already returns a single batch-indexed tensor
+/// covering the whole requested range. `rank_increment` here is 2 (unlike
+/// the sibling `src_adaptive_matches_exact_contraction_on_a_small_chain`,
+/// which uses 1 and so never requests a batch wider than a single column),
+/// so this forces at least one `request` call for a genuinely multi-column
+/// (`width > 1`) batch.
 #[test]
 fn src_adaptive_matches_exact_contraction_with_a_multi_column_lookahead_batch() {
     let (tn_a, tn_b) = make_three_node_chain_pair();
@@ -866,34 +869,40 @@ fn src_adaptive_contracts_and_honors_rank_cap() {
     actual.validate_ortho_consistency().unwrap();
 }
 
-/// Regression for `PrefixCache::fresh_segment`'s two branches, both used by
-/// the interior-site lookahead-block closure in `src_chain.rs`: a chain
-/// long enough to have multiple interior sites (`(1..last).rev()` visits
-/// sites 3, 2, 1 here) sharing one `PrefixCache`. The first site to request
-/// a given width finds the cache's shared column range not yet that wide,
-/// so `fresh_segment` returns the freshly grown segment directly (`Some`).
-/// Once a later site's own search only needs a width the cache has already
-/// reached (via an earlier site), `fresh_segment` falls back to the
-/// existing fetch-individual-columns-then-`stack_along_new_index` path
-/// (`None`) rather than mis-serving a sub-range of an already-wider
-/// segment. Both branches must produce identical, correct results.
+/// Regression for `PrefixCache::request`'s two branches, both exercised by
+/// the interior-site adaptive closure in `src_chain.rs`: a chain long
+/// enough to have multiple interior sites (`(1..last).rev()` visits sites
+/// 3, 2, 1 here) sharing one `PrefixCache`. The first site to request a
+/// given range causes `request` to grow a fresh segment covering exactly
+/// that range and return it directly (the aligned "exact segment match"
+/// fast path -- no splitting or restacking). A later site whose own
+/// request only partially overlaps segment boundaries already grown by an
+/// earlier site's requests instead falls into `request`'s misaligned
+/// fallback, which splits the covering segment(s) via `select_indices` and
+/// re-stacks the requested range via `stack_along_new_index`. Both
+/// branches must produce identical, correct results, since they compute
+/// the same underlying probe-batch data by construction.
 ///
 /// With five sites' worth of compounded per-site adaptive error estimates
 /// on this fixture's deterministic (non-random) tensor entries, the
 /// requested `rtol=1e-8` does not translate into a dense-oracle residual
-/// under 1e-8 -- confirmed as pre-existing, not caused by `fresh_segment`,
-/// by temporarily forcing `fresh_segment` to always return `None` (the old
-/// fetch-and-`stack_along_new_index` path) and re-running both this
-/// fixture's min-rank-1/increment-1 variant (residual ~3-4e-8 either way)
-/// and this test's min-rank-2/increment-3 variant (residual ~1.0e-5
-/// unmodified vs ~6.8e-6 with `fresh_segment` active -- the new path is if
-/// anything slightly more accurate, not less). So the assertion below uses
-/// a tolerance that reflects the adaptive estimator's actual achieved
-/// accuracy on this fixture, not the requested `rtol`, while still being
-/// tight enough to catch a real correctness regression (a wrong
-/// `fresh_segment` result would produce a residual many orders of
-/// magnitude larger than this, as it did during development -- see the
-/// `git log` for this test).
+/// under 1e-8 -- this was confirmed pre-existing (not caused by the
+/// aligned-vs-misaligned request handling) back when that handling was
+/// still implemented as `PrefixCache::fresh_segment`'s `Some`/`None`
+/// branches, by temporarily forcing `fresh_segment` to always return
+/// `None` (the old fetch-and-`stack_along_new_index` path) and re-running
+/// both this fixture's min-rank-1/increment-1 variant (residual ~3-4e-8
+/// either way) and this test's min-rank-2/increment-3 variant (residual
+/// ~1.0e-5 unmodified vs ~6.8e-6 with `fresh_segment` active); see `git
+/// log` for this test for that investigation. `fresh_segment` has since
+/// been replaced by `PrefixCache::request`'s exact-match/misaligned-
+/// fallback distinction described above, but the same conclusion applies:
+/// the assertion below uses a tolerance that reflects the adaptive
+/// estimator's actual achieved accuracy on this fixture, not the requested
+/// `rtol`, while still being tight enough to catch a real correctness
+/// regression (a wrong aligned-vs-misaligned result would produce a
+/// residual many orders of magnitude larger than this, as a wrong
+/// `fresh_segment` result did during that earlier investigation).
 #[test]
 fn src_adaptive_matches_naive_on_a_longer_chain_with_multiple_interior_sites() {
     let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true, true]);
