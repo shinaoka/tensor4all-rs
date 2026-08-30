@@ -614,73 +614,10 @@ pub(super) fn initial_width(maximum_width: usize, src_options: &SrcOptions) -> u
     src_options.min_rank.min(maximum_width).max(1)
 }
 
-/// Factorize probe columns, expanding an adaptive sketch only as required.
-pub(super) fn factorize_probe_columns<T, F>(
-    left_indices: &[T::Index],
-    initial_width: usize,
-    maximum_width: usize,
-    src_options: &SrcOptions,
-    label: &str,
-    mut make_column: F,
-) -> Result<(T, T::Index)>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-    F: FnMut(usize) -> Result<T>,
-{
-    if maximum_width == 0 {
-        anyhow::bail!("contract_src: {label} has no usable probe columns");
-    }
-    let mut width = initial_width.min(maximum_width).max(1);
-    let mut columns = Vec::with_capacity(maximum_width);
-    let mut previous_width = 0;
-    let mut previous = None;
-    loop {
-        while columns.len() < width {
-            let column = make_column(columns.len())?;
-            columns.push(column);
-        }
-        let all_columns = columns[..width].iter().collect::<Vec<_>>();
-        let appended_columns = columns[previous_width..width].iter().collect::<Vec<_>>();
-        let factorized = T::factorize_probe_columns_incremental(
-            previous.as_ref(),
-            &all_columns,
-            &appended_columns,
-            left_indices,
-        )
-        .map_err(|error| anyhow::anyhow!("contract_src: {label} QR failed: {error}"))?;
-        let saturated = factorized.rank < width || width == maximum_width;
-        let stop = if src_options.rtol.is_none() || saturated {
-            true
-        } else {
-            match factorized.right.src_error_estimate() {
-                Ok(estimate) => {
-                    estimate.error
-                        <= src_options.atol + src_options.rtol.unwrap_or(0.0) * estimate.norm
-                }
-                Err(error) => {
-                    return Err(anyhow::anyhow!(
-                        "contract_src: {label} adaptive estimator unavailable: {error}"
-                    ));
-                }
-            }
-        };
-        if !stop {
-            previous_width = width;
-            previous = Some(factorized);
-            width = width
-                .saturating_add(src_options.rank_increment)
-                .min(maximum_width);
-            continue;
-        }
-        return Ok((factorized.left, factorized.bond_index));
-    }
-}
-
-/// Batch-native counterpart of [`factorize_probe_columns`]: `make_batch`
-/// receives `(start, width)` and returns one batch-indexed tensor covering
-/// exactly `[start, start + width)`, instead of being asked for individual
-/// columns one at a time. See
+/// Batch-native adaptive sketch growth loop: `make_batch` receives
+/// `(start, width)` and returns one batch-indexed tensor covering exactly
+/// `[start, start + width)`, instead of being asked for individual columns
+/// one at a time. See
 /// `docs/superpowers/specs/2026-08-30-src-adaptive-batch-probe-columns-design.md`.
 pub(super) fn factorize_probe_batches<T, F>(
     left_indices: &[T::Index],
@@ -809,8 +746,8 @@ mod tests {
     use super::{
         contract_prefix_with_probed_site_pair, contract_prefix_with_probed_site_pair_batch_range,
         contract_prefix_with_site_pair, contract_retaining, contract_site_pair,
-        factorize_probe_columns, local_output_indices, maximum_site_width, probed_site_pair,
-        probed_site_pair_batch_range, ProbeBank, TreeTN,
+        local_output_indices, maximum_site_width, probed_site_pair, probed_site_pair_batch_range,
+        ProbeBank, TreeTN,
     };
     use crate::treetn::contraction::SrcOptions;
     use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
@@ -1112,37 +1049,6 @@ mod tests {
             pair.to_vec::<f64>().unwrap(),
             vec![8.0, 12.0, 8.0, 12.0, 8.0, 12.0]
         );
-    }
-
-    #[test]
-    fn adaptive_factorization_requests_only_the_columns_it_needs() {
-        let row = DynIndex::new_dyn(4);
-        let columns = [
-            IdxTensor::from_dense(vec![row.clone()], vec![1.0, 0.0, 0.0, 0.0]).unwrap(),
-            IdxTensor::from_dense(vec![row.clone()], vec![0.0, 1.0, 0.0, 0.0]).unwrap(),
-            IdxTensor::from_dense(vec![row.clone()], vec![0.0, 0.0, 1.0, 0.0]).unwrap(),
-            IdxTensor::from_dense(vec![row.clone()], vec![0.0, 0.0, 0.0, 1.0]).unwrap(),
-        ];
-        let options = SrcOptions::adaptive(1.0e6, 4)
-            .with_min_rank(1)
-            .with_rank_increment(1)
-            .with_final_svd(false);
-        let mut requested = 0;
-        let (factor, cap) = factorize_probe_columns(
-            std::slice::from_ref(&row),
-            1,
-            columns.len(),
-            &options,
-            "test",
-            |column| {
-                requested += 1;
-                Ok(columns[column].clone())
-            },
-        )
-        .unwrap();
-        assert_eq!(requested, 1);
-        assert_eq!(factor.indices().last().unwrap().dim(), cap.dim());
-        assert_eq!(cap.dim(), 1);
     }
 
     #[test]
