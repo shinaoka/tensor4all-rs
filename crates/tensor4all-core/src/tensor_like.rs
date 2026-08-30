@@ -1079,6 +1079,42 @@ pub trait TensorFactorizationLike: TensorIndex {
         sketch.factorize_full_rank(left_inds, FactorizeAlg::QR, Canonical::Left)
     }
 
+    /// Batch-native variant of [`Self::factorize_probe_columns_incremental`]:
+    /// `batch_tensor` carries a batch axis (`batch_index`) instead of being
+    /// split into separate column tensors, letting an implementation avoid
+    /// splitting an already-computed batch into columns and re-stacking them
+    /// only to feed this call.
+    ///
+    /// The default implementation only supports the from-scratch case
+    /// (`previous.is_none()`); it returns
+    /// [`FactorizeError::UnsupportedStorage`] when asked to extend a
+    /// previous factorization, exactly like this trait's
+    /// [`Self::src_error_estimate`] default does for a capability a generic
+    /// implementation cannot provide. `IdxTensor` overrides this with a true
+    /// incremental implementation.
+    ///
+    /// # Errors
+    /// Returns [`FactorizeError`] when the batch cannot be factorized, or
+    /// (default implementation only) when asked to extend a previous
+    /// factorization.
+    fn factorize_probe_batch_incremental(
+        previous: Option<&FactorizeResult<Self>>,
+        batch_tensor: &Self,
+        batch_index: &<Self as TensorIndex>::Index,
+        left_inds: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>
+    where
+        Self: TensorVectorSpace + TensorConstructionLike,
+    {
+        if previous.is_some() {
+            return Err(FactorizeError::UnsupportedStorage(
+                "incremental probe-batch growth is not supported for this tensor type",
+            ));
+        }
+        let _ = batch_index;
+        batch_tensor.factorize_full_rank(left_inds, FactorizeAlg::QR, Canonical::Left)
+    }
+
     /// Evaluate the SRC adaptive stopping estimator for a small QR factor.
     ///
     /// The tensor must represent a square upper-triangular `R` matrix in
