@@ -18,11 +18,10 @@ use tensor4all_core::{
 };
 
 use super::src_probe::{
-    connect_result_edge, contract_prefix_with_probed_site_pair_batch_range,
-    contract_prefix_with_site_pair, contract_retaining, contract_site_pair,
-    factorize_probe_columns, initial_width, local_output_indices, local_site_pairs,
-    mark_result_canonical, maximum_site_width, probed_site_pair_batch_range, product_dim,
-    ProbeBank,
+    connect_result_edge, contract_prefix_with_probed_site_pair_batch_range, contract_retaining,
+    contract_site_pair, factorize_probe_batches, initial_width, local_output_indices,
+    local_site_pairs, mark_result_canonical, maximum_site_width, probed_site_pair_batch_range,
+    product_dim, ProbeBank,
 };
 use super::{SrcOptions, TreeTN};
 use crate::algorithm::CanonicalForm;
@@ -140,11 +139,20 @@ where
                 src_options: &sketch_options,
                 label: "last-site",
             },
-            |column| {
-                let prefix = prefixes.column(last - 1, column)?;
-                contract_prefix_with_site_pair(&prefix, local[last].0, local[last].1).map_err(
-                    |error| anyhow::anyhow!("contract_src: last-site sketch failed: {error}"),
-                )
+            |start, width| {
+                let (prefix, batch_index) = prefixes.request(last - 1, start, width)?;
+                let after_a = contract_retaining(&[&prefix, local[last].0], &batch_index).map_err(
+                    |error| {
+                        anyhow::anyhow!(
+                            "contract_src: last-site prefix-A contraction failed: {error}"
+                        )
+                    },
+                )?;
+                contract_retaining(&[&after_a, local[last].1], &batch_index)
+                    .map(|tensor| (tensor, batch_index))
+                    .map_err(|error| {
+                        anyhow::anyhow!("contract_src: last-site sketch failed: {error}")
+                    })
             },
         )?
     };
@@ -173,24 +181,6 @@ where
             site_max_width
         };
         let label = format!("site {site}");
-        // `tensor_a`/`tensor_b`/`right_environment` are the same for every
-        // probe column at this site -- only `prefix` (fetched from
-        // `prefixes`, one column at a time) varies. Rather than repeat the
-        // 3-tensor contraction chain once per single column (as many times
-        // as `site_max_width` requires), fetch and stack a whole
-        // `rank_increment`-sized lookahead block of prefixes into one
-        // `batch`-indexed tensor via `stack_along_new_index`, contract that
-        // block through `tensor_a`/`tensor_b`/`right_environment` ONCE with
-        // `contract_retaining` (mirroring `contract_fixed`'s own batched
-        // interior-site step just above, which already avoids this
-        // per-column repetition), then split the block back into individual
-        // columns via `select_indices` for `factorize_probe_columns`'s
-        // per-column QR interface. `factorize_probe_columns` always requests
-        // columns in strictly increasing order starting at 0, so a small
-        // lookahead queue is sufficient -- no need to support random access.
-        let lookahead_width = sketch_options.rank_increment.max(1);
-        let mut pending_columns: std::collections::VecDeque<T> = std::collections::VecDeque::new();
-        let mut next_column = 0usize;
         let (factor, cap, next_environment) = factorize_site_adaptive(
             FactorizeSiteRequest {
                 outputs: &outputs[site],
@@ -202,95 +192,25 @@ where
                 src_options: &sketch_options,
                 label: &label,
             },
-            |column| {
-                debug_assert_eq!(
-                    column, next_column,
-                    "contract_src: site {site} probe columns must be requested in order"
-                );
-                if pending_columns.is_empty() {
-                    let width = lookahead_width.min(site_max_width - next_column);
-                    // `fresh_segment` returns the batch-indexed tensor
-                    // `PrefixCache` already builds internally before
-                    // splitting it into individual columns, whenever this
-                    // request is exactly its next growth step (the common
-                    // case here, since `lookahead_width == batch_size`) --
-                    // avoiding the fetch-individual-columns-then-
-                    // `stack_along_new_index` round trip below, which
-                    // `EagerTensor::stack` (tenferro-ad) pays for by
-                    // reshaping every individual input tensor before
-                    // concatenating. Falls back to the fetch+stack path
-                    // (still correct, just not the fast path) whenever the
-                    // request isn't a fresh aligned segment -- e.g. this
-                    // site's first block, requested after a different site
-                    // already grew the shared cache further.
-                    let (stacked, batch_index) = match prefixes.fresh_segment(next_column, width)? {
-                        Some((mut segment_prefixes, batch_index)) => {
-                            (segment_prefixes.swap_remove(site - 1), batch_index)
-                        }
-                        None => {
-                            let block = (0..width)
-                                .map(|offset| prefixes.column(site - 1, next_column + offset))
-                                .collect::<Result<Vec<_>>>()?;
-                            let block_refs = block.iter().collect::<Vec<_>>();
-                            let batch_index = T::Index::new_link(width)?;
-                            let stacked =
-                                T::stack_along_new_index(&block_refs, batch_index.clone(), -1)
-                                    .map_err(|error| {
-                                        anyhow::anyhow!(
-                                            "contract_src: site {site} probe batch stacking \
-                                                 failed: {error}"
-                                        )
-                                    })?;
-                            (stacked, batch_index)
-                        }
-                    };
-                    // NOTE: `local[site].0`/`.1`/`right_environment` never
-                    // carry `batch_index`, so a plain contraction here would
-                    // give an identical result to `contract_retaining` (same
-                    // reasoning as `contract_prefix_with_probed_site_pair_batch_range`
-                    // in src_probe.rs, which now uses plain contraction).
-                    // Measured, though: doing that here regressed
-                    // `src-adaptive` ~10% at bond 64 (1.31s -> 1.48s,
-                    // reproducible across repeated runs, not noise), for
-                    // reasons an explicit trailing-batch-axis permute before
-                    // the `select_indices` split below did not fix. Left as
-                    // `contract_retaining` pending a real explanation;
-                    // `PrefixCache`'s own prefix construction (`ensure_width`)
-                    // already goes through the fixed function in
-                    // src_probe.rs, so adaptive still gets that benefit.
-                    let after_a = contract_retaining(&[&stacked, local[site].0], &batch_index)
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "contract_src: site {site} prefix-A contraction failed: {error}"
-                            )
-                        })?;
-                    let after_b = contract_retaining(&[&after_a, local[site].1], &batch_index)
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "contract_src: site {site} prefix-B contraction failed: {error}"
-                            )
-                        })?;
-                    let after_env =
-                        contract_retaining(&[&after_b, &right_environment], &batch_index).map_err(
-                            |error| {
-                                anyhow::anyhow!("contract_src: site {site} sketch failed: {error}")
-                            },
-                        )?;
-                    for position in 0..width {
-                        let single = after_env
-                            .select_indices(std::slice::from_ref(&batch_index), &[position])
-                            .map_err(|error| {
-                                anyhow::anyhow!(
-                                    "contract_src: site {site} probe batch split failed: {error}"
-                                )
-                            })?;
-                        pending_columns.push_back(single);
-                    }
-                }
-                next_column += 1;
-                pending_columns.pop_front().ok_or_else(|| {
-                    anyhow::anyhow!("contract_src: site {site} probe batch underflow")
-                })
+            |start, width| {
+                let (stacked, batch_index) = prefixes.request(site - 1, start, width)?;
+                let after_a = contract_retaining(&[&stacked, local[site].0], &batch_index)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "contract_src: site {site} prefix-A contraction failed: {error}"
+                        )
+                    })?;
+                let after_b = contract_retaining(&[&after_a, local[site].1], &batch_index)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "contract_src: site {site} prefix-B contraction failed: {error}"
+                        )
+                    })?;
+                contract_retaining(&[&after_b, &right_environment], &batch_index)
+                    .map(|tensor| (tensor, batch_index))
+                    .map_err(|error| {
+                        anyhow::anyhow!("contract_src: site {site} sketch failed: {error}")
+                    })
             },
         )?;
         caps[site] = Some(cap);
@@ -561,7 +481,6 @@ where
     local: &'a [(&'a T, &'a T)],
     outputs: &'a [Vec<T::Index>],
     probes: &'a mut ProbeBank<T::Index>,
-    prefixes: Vec<Vec<T>>,
     batch_size: usize,
     // Per-site list of (batch tensor, batch index, width) segments, storing
     // whatever chunk each `grow_segment` call actually produced -- segments
@@ -710,120 +629,15 @@ where
             local,
             outputs,
             probes,
-            prefixes: (0..local.len() - 1).map(|_| Vec::new()).collect(),
             batch_size: batch_size.max(1),
             segments: (0..local.len() - 1).map(|_| Vec::new()).collect(),
             segment_total_width: 0,
         }
     }
 
-    /// Compute one new segment covering `[start, start + segment_width)` for
-    /// every site, splitting it into `self.prefixes`'s individual per-column
-    /// storage (for [`Self::column`]) and returning the pre-split
-    /// batch-indexed tensors too, so callers that want a whole fresh segment
-    /// as one tensor ([`Self::fresh_segment`]) don't have to re-fetch and
-    /// re-stack the columns this just split apart.
-    fn grow_one_segment(
-        &mut self,
-        start: usize,
-        segment_width: usize,
-    ) -> Result<(Vec<T>, T::Index)> {
-        let batch = T::Index::new_link(segment_width)?;
-        let mut prefix = probed_site_pair_batch_range(
-            self.local[0].0,
-            self.local[0].1,
-            &self.outputs[0],
-            self.probes,
-            start,
-            segment_width,
-            &batch,
-        )?;
-        let mut segment_prefixes = vec![prefix.clone()];
-        for site in 1..self.local.len() - 1 {
-            prefix = contract_prefix_with_probed_site_pair_batch_range(
-                &prefix,
-                self.local[site].0,
-                self.local[site].1,
-                &self.outputs[site],
-                self.probes,
-                start,
-                segment_width,
-                &batch,
-            )?;
-            segment_prefixes.push(prefix.clone());
-        }
-        for (site, segment) in segment_prefixes.iter().enumerate() {
-            for position in 0..segment_width {
-                self.prefixes[site].push(
-                    segment
-                        .select_indices(std::slice::from_ref(&batch), &[position])
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "contract_src: prefix batch split at site {site} failed: {error}"
-                            )
-                        })?,
-                );
-            }
-        }
-        Ok((segment_prefixes, batch))
-    }
-
-    fn ensure_width(&mut self, width: usize) -> Result<()> {
-        let current_width = self.prefixes.first().map_or(0, Vec::len);
-        self.probes.extend_to(width)?;
-        let mut start = current_width;
-        while start < width {
-            let segment_width = self.batch_size.min(width - start);
-            self.grow_one_segment(start, segment_width)?;
-            start += segment_width;
-        }
-        Ok(())
-    }
-
-    /// Return `[first_column, first_column + width)` as one batch-indexed
-    /// tensor per site, directly from a freshly grown segment, when this
-    /// request is exactly the cache's next growth step (`first_column`
-    /// picks up where the cache left off, and `width` fits in one
-    /// `batch_size`-sized chunk -- the shape lookahead-batched callers
-    /// naturally produce when `width == batch_size`). Falls back to `Ok(None)`
-    /// (after still ensuring the range via [`Self::ensure_width`], so
-    /// [`Self::column`] stays correct either way) for any other request --
-    /// already-cached range, a gap spanning multiple segments, or a request
-    /// wider than one chunk -- since a single fresh segment can't represent
-    /// those without re-splitting and re-combining, which is exactly the
-    /// round trip this method exists to avoid paying when it isn't needed.
-    fn fresh_segment(
-        &mut self,
-        first_column: usize,
-        width: usize,
-    ) -> Result<Option<(Vec<T>, T::Index)>> {
-        let current_width = self.prefixes.first().map_or(0, Vec::len);
-        if first_column != current_width || width == 0 || width > self.batch_size {
-            self.ensure_width(first_column + width)?;
-            return Ok(None);
-        }
-        self.probes.extend_to(first_column + width)?;
-        let (segment_prefixes, batch) = self.grow_one_segment(first_column, width)?;
-        Ok(Some((segment_prefixes, batch)))
-    }
-
-    fn column(&mut self, site: usize, column: usize) -> Result<T> {
-        let next_batch = column
-            .checked_div(self.batch_size)
-            .and_then(|block| block.checked_add(1))
-            .and_then(|block| block.checked_mul(self.batch_size))
-            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix batch width overflow"))?;
-        self.ensure_width(next_batch.max(column + 1))?;
-        self.prefixes
-            .get(site)
-            .and_then(|prefixes| prefixes.get(column))
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("contract_src: prefix column is missing"))
-    }
-
     /// Compute one new segment covering `[start, start + width)` for every
-    /// site, without splitting it into individual per-column tensors (unlike
-    /// `grow_one_segment`, which this method does not call).
+    /// site, appending it (with its batch index and width) to each site's
+    /// entry in `self.segments`.
     fn grow_segment(&mut self, start: usize, width: usize) -> Result<()> {
         let batch = T::Index::new_link(width)?;
         let mut prefix = probed_site_pair_batch_range(
@@ -882,16 +696,42 @@ where
             cursor += segment_width;
         }
 
-        // Misaligned fallback: read the covering individual columns via the
-        // existing (unchanged) `column` method and re-stack them. Reachable
-        // only when a request spans a segment boundary that isn't exactly
-        // `start`/`width` -- see this method's doc comment.
-        let block = (0..width)
-            .map(|offset| self.column(site, start + offset))
-            .collect::<Result<Vec<_>>>()?;
-        let block_refs = block.iter().collect::<Vec<_>>();
+        // Misaligned fallback: split the covering segment(s) into
+        // individual columns via `select_indices` and re-stack the
+        // requested range. Reachable only when `[start, start+width)`
+        // doesn't align with a single stored segment's boundaries -- see
+        // this method's doc comment.
+        let mut collected = Vec::with_capacity(width);
+        let mut cursor = 0usize;
+        for (tensor, batch_index, segment_width) in &self.segments[site] {
+            let segment_start = cursor;
+            let segment_end = cursor + segment_width;
+            cursor = segment_end;
+            let overlap_start = segment_start.max(start);
+            let overlap_end = segment_end.min(start + width);
+            if overlap_start >= overlap_end {
+                continue;
+            }
+            for position in (overlap_start - segment_start)..(overlap_end - segment_start) {
+                collected.push(tensor.select_indices(std::slice::from_ref(batch_index), &[position]).map_err(
+                    |error| {
+                        anyhow::anyhow!(
+                            "contract_src: site {site} misaligned segment split at position {position} failed: {error}"
+                        )
+                    },
+                )?);
+            }
+        }
+        anyhow::ensure!(
+            collected.len() == width,
+            "contract_src: site {site} misaligned segment request [{start}, {}) only found {} of {} columns",
+            start + width,
+            collected.len(),
+            width
+        );
+        let collected_refs = collected.iter().collect::<Vec<_>>();
         let batch_index = T::Index::new_link(width)?;
-        let stacked = T::stack_along_new_index(&block_refs, batch_index.clone(), -1).map_err(|error| {
+        let stacked = T::stack_along_new_index(&collected_refs, batch_index.clone(), -1).map_err(|error| {
             anyhow::anyhow!(
                 "contract_src: site {site} misaligned segment request [{start}, {}) failed: {error}",
                 start + width
@@ -917,12 +757,12 @@ where
 
 fn factorize_site_adaptive<T, F>(
     request: FactorizeSiteRequest<'_, T>,
-    make_column: F,
+    make_batch: F,
 ) -> Result<(T, T::Index, T)>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
-    F: FnMut(usize) -> Result<T>,
+    F: FnMut(usize, usize) -> Result<(T, T::Index)>,
 {
     let FactorizeSiteRequest {
         outputs,
@@ -938,13 +778,13 @@ where
     if let Some(right_cap) = right_cap {
         left.push(right_cap.clone());
     }
-    let (factor, cap) = factorize_probe_columns(
+    let (factor, cap) = factorize_probe_batches(
         &left,
         initial_width,
         maximum_width,
         src_options,
         label,
-        make_column,
+        make_batch,
     )?;
     let factor_conj = factor.conj();
     let environment = if let Some(right_environment) = right_environment {
@@ -1043,6 +883,65 @@ mod tests {
             cache.segments[0].len(),
             2,
             "re-reading an existing aligned segment must not grow a new one"
+        );
+    }
+
+    #[test]
+    fn request_misaligned_range_spanning_a_segment_boundary_matches_a_direct_reference() {
+        let (a0, b0, a1, b1) = two_site_local(3);
+        let local = vec![(&a0, &b0), (&a1, &b1)];
+        let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
+        let index_list = outputs
+            .iter()
+            .flat_map(|o| o.iter().cloned())
+            .collect::<Vec<_>>();
+        let mut probes = ProbeBank::new(index_list.clone(), 1, 42).unwrap();
+        // batch_size 2: the first request exactly fills one aligned segment
+        // [0,2); the second request [1,3) straddles that segment's right
+        // boundary and the freshly grown [2,3) segment, so neither stored
+        // segment alone covers [1,3) -- this must hit the misaligned
+        // fallback (unlike the ragged-reuse test above, whose second
+        // request re-reads an existing segment exactly and so never
+        // exercises this branch).
+        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 2);
+        let (_first, _) = cache.request(0, 0, 2).unwrap();
+        assert_eq!(
+            cache.segments[0].len(),
+            1,
+            "first request should be a single aligned segment"
+        );
+
+        let (misaligned, misaligned_batch) = cache.request(0, 1, 2).unwrap();
+        assert_eq!(misaligned_batch.dim(), 2);
+        assert_eq!(
+            cache.segments[0].len(),
+            2,
+            "the misaligned request should grow a second segment covering [2,3) \
+             but still needs to fall back to splitting/restacking, since [1,3) \
+             does not align with either stored segment's boundaries"
+        );
+
+        // Ground truth: an independent probe bank/prefix computation for the
+        // same [1, 3) range, built without going through `PrefixCache` at
+        // all.
+        let mut reference_probes = ProbeBank::new(index_list, 1, 42).unwrap();
+        reference_probes.extend_to(3).unwrap();
+        let reference_batch = DynIndex::new_link(2).unwrap();
+        let reference = crate::treetn::contraction::src_probe::probed_site_pair_batch_range(
+            &a0,
+            &b0,
+            &outputs[0],
+            &reference_probes,
+            1,
+            2,
+            &reference_batch,
+        )
+        .unwrap();
+
+        assert_eq!(
+            misaligned.to_vec::<f64>().unwrap(),
+            reference.to_vec::<f64>().unwrap(),
+            "misaligned fallback result must match a directly computed reference"
         );
     }
 }

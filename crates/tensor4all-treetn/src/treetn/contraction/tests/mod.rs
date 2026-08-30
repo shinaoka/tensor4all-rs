@@ -1,5 +1,7 @@
 use super::*;
 use num_complex::Complex64;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
 };
@@ -597,6 +599,107 @@ fn src_adaptive_matches_exact_contraction_with_a_multi_column_lookahead_batch() 
         error < 1.0e-8,
         "adaptive SRC residual with multi-column lookahead batching is {error}"
     );
+}
+
+fn random_dense_tensor(indices: Vec<DynIndex>, rng: &mut StdRng) -> IdxTensor {
+    let elements = indices.iter().map(IndexLike::dim).product();
+    let data = (0..elements)
+        .map(|_| rng.random_range(-1.0_f64..1.0_f64))
+        .collect();
+    IdxTensor::from_dense(indices, data).unwrap()
+}
+
+/// A 5-site MPO/MPS pair with a shared physical index per site (the MPO's
+/// own kept output index and the MPS's contracted input index both carry
+/// `physical_dim`), and independent chain bonds of `bond_dim` for each of
+/// the two networks -- the same index-construction shape as
+/// `make_three_node_chain_pair` above, generalized to 5 sites with
+/// `StdRng`-seeded random values (mirroring `benchmark_src.rs`'s
+/// `make_mpo_mps`) so callers can pick a `physical_dim`/`bond_dim`/`seed`
+/// combination that forces a ragged `PrefixCache` segment.
+fn make_five_site_chain_pair(
+    physical_dim: usize,
+    bond_dim: usize,
+    seed: u64,
+) -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
+    let n_sites = 5;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let shared = (0..n_sites)
+        .map(|_| DynIndex::new_dyn(physical_dim))
+        .collect::<Vec<_>>();
+    let output_a = (0..n_sites)
+        .map(|_| DynIndex::new_dyn(physical_dim))
+        .collect::<Vec<_>>();
+    let bonds_a = (0..n_sites - 1)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+    let bonds_b = (0..n_sites - 1)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+
+    let mut tensors_a = Vec::with_capacity(n_sites);
+    let mut tensors_b = Vec::with_capacity(n_sites);
+    for site in 0..n_sites {
+        let mut indices_a = Vec::with_capacity(4);
+        if site > 0 {
+            indices_a.push(bonds_a[site - 1].clone());
+        }
+        indices_a.push(shared[site].clone());
+        indices_a.push(output_a[site].clone());
+        if site + 1 < n_sites {
+            indices_a.push(bonds_a[site].clone());
+        }
+        tensors_a.push(random_dense_tensor(indices_a, &mut rng));
+
+        let mut indices_b = Vec::with_capacity(3);
+        if site > 0 {
+            indices_b.push(bonds_b[site - 1].clone());
+        }
+        indices_b.push(shared[site].clone());
+        if site + 1 < n_sites {
+            indices_b.push(bonds_b[site].clone());
+        }
+        tensors_b.push(random_dense_tensor(indices_b, &mut rng));
+    }
+
+    let names = (0..n_sites)
+        .map(|site| format!("S{site}"))
+        .collect::<Vec<_>>();
+    (
+        TreeTN::from_tensors(tensors_a, names.clone()).unwrap(),
+        TreeTN::from_tensors(tensors_b, names).unwrap(),
+    )
+}
+
+#[test]
+fn src_adaptive_chain_reuses_a_ragged_segment_across_sites_and_matches_dense_reference() {
+    // A 5-site chain with a physical dimension small enough that an early
+    // site's maximum_width caps below a full rank_increment step (forcing
+    // a ragged segment), while a later site needs to grow past it.
+    let (mpo, mps) = make_five_site_chain_pair(
+        /* physical_dim */ 2, /* bond_dim */ 3, /* seed */ 21,
+    );
+    let center = mpo.node_names().into_iter().min().unwrap();
+    let exact = mpo.contract_naive(&mps).unwrap();
+
+    let result = contract(
+        &mpo,
+        &mps,
+        &center,
+        ContractionOptions::src()
+            .with_max_bond_dim(9)
+            .with_src_options(
+                SrcOptions::adaptive(1.0e-8, 9)
+                    .with_min_rank(1)
+                    .with_rank_increment(2)
+                    .with_seed(7),
+            ),
+    )
+    .unwrap();
+
+    let dense = result.to_dense().unwrap();
+    let rel_error = dense.sub(&exact).unwrap().maxabs().unwrap() / exact.maxabs().unwrap();
+    assert!(rel_error < 1e-6, "relative error {rel_error} too large");
 }
 
 #[test]
