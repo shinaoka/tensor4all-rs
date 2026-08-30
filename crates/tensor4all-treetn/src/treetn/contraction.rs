@@ -1476,6 +1476,11 @@ impl Default for SrcOptions {
 }
 
 impl SrcOptions {
+    /// Tightens the sketch's own adaptive `rtol` to a tenth of itself when a
+    /// final SVD round with a tolerance-bearing policy will run afterward.
+    /// This scales `self.rtol`, not the final truncation policy's threshold —
+    /// the two tolerances are independent and are not reconciled here, so
+    /// callers who set both should keep them consistent by hand.
     fn sketch_options(&self, final_truncation_has_tolerance: bool) -> Self {
         let mut options = self.clone();
         if self.final_svd && final_truncation_has_tolerance {

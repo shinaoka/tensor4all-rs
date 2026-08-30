@@ -264,7 +264,9 @@ fn main() {
         .next()
         .is_some_and(|value| value.parse().expect("final_svd"));
     let physical_dim = 2;
-    let max_rank = bond_dim * bond_dim;
+    let max_rank = args.next().map_or(bond_dim * bond_dim, |value| {
+        value.parse().expect("target_rank")
+    });
 
     println!(
         "config=n_sites:{n_sites} physical_dim:{physical_dim} input_bond:{bond_dim} max_rank:{max_rank} reps:{reps} mode:{mode} rank_increment:{rank_increment} final_svd:{final_svd}"

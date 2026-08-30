@@ -344,8 +344,12 @@ blocks and uses the triangular factor from QR to estimate the residual. The
 estimate is used to stop at the requested relative tolerance, while
 `max_rank` remains a hard safety cap. The optional final SVD is useful when the
 SRC range is deliberately overcomplete; enable it with `final_svd(true)`. When
-an SVD tolerance policy is supplied, the sketch uses one tenth of that final
-tolerance, as in the paper's oversampled experiment.
+`final_svd` is enabled together with an adaptive `rtol` and a final truncation
+policy that carries its own tolerance, the sketch stopping test tightens to
+one tenth of `SrcOptions::rtol` — the adaptive SRC tolerance the caller
+supplied, *not* the final SVD truncation policy's own threshold. The two
+tolerances are independent and are not currently reconciled if a caller sets
+them to different values, so keep them consistent by hand when tuning both.
 
 The public placement is alongside `naive`, `zip-up`, and `fit` in
 `ContractionMethod`. It is implemented in TreeTN first, which also covers a

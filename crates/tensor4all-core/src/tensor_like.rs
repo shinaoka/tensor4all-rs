@@ -466,7 +466,13 @@ impl FactorizeOptions {
 /// assert!(result.singular_values.is_some());
 /// assert_eq!(result.singular_values.as_ref().unwrap().len(), result.rank);
 /// ```
+///
+/// This struct is `#[non_exhaustive]`: it carries a private
+/// algorithm-internal field (`incremental_qr_state`) that downstream crates
+/// cannot see or set, so external construction always goes through
+/// [`FactorizeResult::new`] rather than struct-literal syntax.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FactorizeResult<T: TensorIndex> {
     /// Left factor tensor.
     pub left: T,
