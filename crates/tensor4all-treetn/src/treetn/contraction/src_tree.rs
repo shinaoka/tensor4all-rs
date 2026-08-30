@@ -102,11 +102,21 @@ where
         })
         .collect::<Result<HashMap<_, _>>>()?;
 
-    let mut probe_indices = outputs
-        .values()
-        .flat_map(|site| site.iter().cloned())
+    // Iterate `nodes` (already sorted, so process-stable) rather than
+    // `outputs.values()`: `HashMap` iteration order is randomized per
+    // process, and the flattened order here is consumed sequentially by
+    // `ProbeBank`'s seeded RNG (see `local_output_indices`'s doc comment in
+    // `src_probe.rs` for the matching per-node instability this mirrors at
+    // the whole-tree level).
+    let probe_indices = nodes
+        .iter()
+        .flat_map(|node| {
+            outputs
+                .get(node)
+                .into_iter()
+                .flat_map(|site| site.iter().cloned())
+        })
         .collect::<Vec<_>>();
-    tensor4all_core::sort_indices_deterministic(&mut probe_indices);
     if outputs
         .values()
         .map(|site| product_dim(site))
@@ -460,17 +470,34 @@ where
     T::Index: IndexLike + Clone + Hash + Eq,
     <T::Index as IndexLike>::Id: Ord,
 {
-    let mut counts = HashMap::new();
+    // Order follows each factor's own `external_indices()`, in the order
+    // `factors` is given -- not `HashMap`/`sort_indices_deterministic`
+    // iteration order. `contract()` re-mints every bond index's random id on
+    // every call (`sim_internal_inds()`), so when a physical output index
+    // and a same-dimension bond share a tie under `sort_indices_deterministic`,
+    // the row order fed to the QR factorization below used to change from
+    // one `contract()` call to the next -- even within one process, on the
+    // exact same input tensors -- producing small (row-permutation-induced)
+    // floating-point rounding differences. See
+    // docs/worklogs/2026-08-30-src-probe-order-nondeterminism.md.
+    let mut counts: HashMap<T::Index, usize> = HashMap::new();
     for factor in factors {
         for index in factor.external_indices() {
             *counts.entry(index).or_insert(0usize) += 1;
         }
     }
-    let mut result = counts
-        .into_iter()
-        .filter_map(|(index, count)| (count == 1 && !excluded.contains(&index)).then_some(index))
-        .collect::<Vec<_>>();
-    tensor4all_core::sort_indices_deterministic(&mut result);
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for factor in factors {
+        for index in factor.external_indices() {
+            if counts.get(&index) == Some(&1)
+                && !excluded.contains(&index)
+                && seen.insert(index.clone())
+            {
+                result.push(index);
+            }
+        }
+    }
     result
 }
 
@@ -636,4 +663,39 @@ where
     }
 
     Ok(messages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uncontracted_indices;
+    use std::collections::HashSet;
+    use tensor4all_core::{DynIndex, IdxTensor};
+
+    /// `uncontracted_indices` used to order same-dimension survivors by
+    /// `Index::id()` (via `HashMap` + `sort_indices_deterministic`), and
+    /// `id()` is drawn from a per-process, unseeded RNG that `contract()`
+    /// re-invokes on every call (`sim_internal_inds()` mints fresh bond ids
+    /// each time). Rebuilding `out_a`/`out_b` fresh each iteration mimics
+    /// that: under the old implementation this had roughly a 50% chance per
+    /// iteration of returning `[out_b, out_a]` instead, so 200 iterations
+    /// would fail with probability `1 - 2^-200`. Under the fix, order always
+    /// follows `factors`' own order, regardless of the ids involved.
+    #[test]
+    fn uncontracted_indices_orders_same_dimension_survivors_by_factor_order_not_random_id() {
+        for _ in 0..200 {
+            let shared = DynIndex::new_dyn(2);
+            let out_a = DynIndex::new_dyn(3);
+            let out_b = DynIndex::new_dyn(3);
+
+            let factor_1 =
+                IdxTensor::from_dense(vec![shared.clone(), out_a.clone()], vec![0.0; 2 * 3])
+                    .unwrap();
+            let factor_2 =
+                IdxTensor::from_dense(vec![shared.clone(), out_b.clone()], vec![0.0; 2 * 3])
+                    .unwrap();
+
+            let result = uncontracted_indices(&[&factor_1, &factor_2], &HashSet::new());
+            assert_eq!(result, vec![out_a.clone(), out_b.clone()]);
+        }
+    }
 }

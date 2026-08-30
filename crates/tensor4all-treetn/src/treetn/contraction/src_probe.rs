@@ -544,22 +544,37 @@ where
         bonds.insert(bond);
     }
     let (tensor_a, tensor_b) = site_operands(tn_a, tn_b, node)?;
-    let a_external = tensor_a
-        .external_indices()
-        .into_iter()
-        .filter(|index| !bonds.contains(index))
-        .collect::<HashSet<_>>();
-    let b_external = tensor_b
-        .external_indices()
-        .into_iter()
-        .filter(|index| !bonds.contains(index))
-        .collect::<HashSet<_>>();
-    let mut outputs = a_external
-        .difference(&b_external)
-        .chain(b_external.difference(&a_external))
+    // Order comes from each tensor's own `external_indices()` (fixed at
+    // construction), not from `HashSet`/`sort_indices_deterministic`
+    // iteration order: same-dimension legs are common, and
+    // `sort_indices_deterministic` tie-breaks those by `Index::id()`, which
+    // is drawn from a per-process, unseeded RNG (`generate_id()` in
+    // tensor4all-core). That made this function's output order -- and thus
+    // which physical leg `ProbeBank` assigns which Gaussian sketch column to
+    // -- non-deterministic across process runs despite a fixed SRC seed. See
+    // docs/worklogs/2026-08-30-src-probe-order-nondeterminism.md. `HashSet`s
+    // below are only used for O(1) `contains` probes.
+    let a_indices = tensor_a.external_indices();
+    let b_indices = tensor_b.external_indices();
+    let a_external: HashSet<_> = a_indices
+        .iter()
+        .filter(|index| !bonds.contains(*index))
         .cloned()
+        .collect();
+    let b_external: HashSet<_> = b_indices
+        .iter()
+        .filter(|index| !bonds.contains(*index))
+        .cloned()
+        .collect();
+    let outputs = a_indices
+        .into_iter()
+        .filter(|index| a_external.contains(index) && !b_external.contains(index))
+        .chain(
+            b_indices
+                .into_iter()
+                .filter(|index| b_external.contains(index) && !a_external.contains(index)),
+        )
         .collect::<Vec<_>>();
-    tensor4all_core::sort_indices_deterministic(&mut outputs);
     Ok(outputs)
 }
 
@@ -733,11 +748,44 @@ mod tests {
     use super::{
         contract_prefix_with_probed_site_pair, contract_prefix_with_probed_site_pair_batch_range,
         contract_prefix_with_site_pair, contract_retaining, contract_site_pair,
-        factorize_probe_columns, maximum_site_width, probed_site_pair,
-        probed_site_pair_batch_range, ProbeBank,
+        factorize_probe_columns, local_output_indices, maximum_site_width, probed_site_pair,
+        probed_site_pair_batch_range, ProbeBank, TreeTN,
     };
     use crate::treetn::contraction::SrcOptions;
     use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+
+    /// `local_output_indices` used to order same-dimension output legs by
+    /// `Index::id()` (via `HashSet` + `sort_indices_deterministic`), and
+    /// `id()` is drawn from a per-process, unseeded RNG -- so on a real
+    /// process restart, freshly created `out_x`/`out_y` below would have a
+    /// coin-flip chance of swapping places. This test can't literally
+    /// restart the process, but it rebuilds `out_x`/`out_y` (and therefore
+    /// their random ids) fresh on every iteration: under the old
+    /// implementation that gave roughly a 50% chance per iteration of
+    /// observing `[out_y, out_x]`, so 200 iterations would fail with
+    /// probability `1 - 2^-200`. Under the fix, order always follows
+    /// `tensor_a`'s own construction order, regardless of the ids involved.
+    #[test]
+    fn local_output_indices_orders_same_dimension_legs_by_construction_not_by_random_id() {
+        for _ in 0..200 {
+            let in_idx = DynIndex::new_dyn(2);
+            let out_x = DynIndex::new_dyn(3);
+            let out_y = DynIndex::new_dyn(3);
+
+            let tensor_a = IdxTensor::from_dense(
+                vec![in_idx.clone(), out_x.clone(), out_y.clone()],
+                vec![0.0; 2 * 3 * 3],
+            )
+            .unwrap();
+            let tensor_b = IdxTensor::from_dense(vec![in_idx.clone()], vec![0.0; 2]).unwrap();
+
+            let tn_a = TreeTN::from_tensors(vec![tensor_a], vec!["X".to_string()]).unwrap();
+            let tn_b = TreeTN::from_tensors(vec![tensor_b], vec!["X".to_string()]).unwrap();
+
+            let outputs = local_output_indices(&tn_a, &tn_b, &"X".to_string()).unwrap();
+            assert_eq!(outputs, vec![out_x, out_y]);
+        }
+    }
 
     #[test]
     fn probe_bank_extension_preserves_the_existing_prefix() {
