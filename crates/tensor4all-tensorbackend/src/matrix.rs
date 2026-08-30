@@ -523,6 +523,10 @@ impl<T> Matrix<T> {
     /// # Errors
     /// Returns [`MatrixShapeError::ShapeOverflow`] when the combined column
     /// count would overflow `usize`.
+    ///
+    /// # Panics
+    /// Panics in debug builds if `right`'s row count differs from `self`'s.
+    /// Callers must guarantee matching row counts.
     pub(crate) fn append_columns(
         &mut self,
         right: &Matrix<T>,
@@ -537,13 +541,17 @@ impl<T> Matrix<T> {
             self.nrows(),
             right.nrows()
         );
-        let new_ncols =
-            self.ncols()
-                .checked_add(right.ncols())
-                .ok_or(MatrixShapeError::ShapeOverflow {
-                    nrows: self.nrows(),
-                    ncols: self.ncols().saturating_add(right.ncols()),
-                })?;
+        let new_ncols = self.ncols().checked_add(right.ncols()).ok_or(
+            // The true combined column count is exactly what overflows here, so
+            // it cannot be reported without fabricating a value (a saturating
+            // add would always read back as `usize::MAX`, which carries no
+            // information about the actual operands). Report the current,
+            // real shape of `self` instead.
+            MatrixShapeError::ShapeOverflow {
+                nrows: self.nrows(),
+                ncols: self.ncols(),
+            },
+        )?;
         self.data.extend_from_slice(right.as_col_major_slice());
         self.ncols = new_ncols;
         Ok(())

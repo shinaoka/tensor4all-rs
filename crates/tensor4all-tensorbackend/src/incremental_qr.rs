@@ -316,6 +316,7 @@ where
         let appended_rank = appended_q.ncols();
         if projection.nrows() != old_rank
             || projection.ncols() != appended_rank
+            || appended_q.nrows() != self.q.nrows()
             || appended_r.nrows() != appended_rank
             || appended_r.ncols() != appended_rank
         {
