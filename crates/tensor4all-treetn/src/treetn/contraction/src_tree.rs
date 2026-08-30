@@ -27,6 +27,14 @@ type BatchedEnvironment<T, V> = (
     <T as tensor4all_core::TensorIndex>::Index,
     DirectedEnvironment<T, V>,
 );
+/// One growth call's stored result: `(start, width, batch index, per-edge
+/// environment)`, covering probe columns `[start, start + width)`.
+type EnvironmentSegment<T, V> = (
+    usize,
+    usize,
+    <T as tensor4all_core::TensorIndex>::Index,
+    DirectedEnvironment<T, V>,
+);
 
 /// Execute successive randomized compression on a chain or a rooted tree.
 pub(super) fn contract<T, V>(
@@ -293,6 +301,8 @@ where
     probes: &'a mut ProbeBank<T::Index>,
     environments: Vec<HashMap<(V, V), T>>,
     batched_environments: HashMap<usize, BatchedEnvironment<T, V>>,
+    segments: Vec<EnvironmentSegment<T, V>>,
+    segment_total_width: usize,
 }
 
 impl<'a, T, V> EnvironmentCache<'a, T, V>
@@ -318,6 +328,8 @@ where
             probes,
             environments: Vec::new(),
             batched_environments: HashMap::new(),
+            segments: Vec::new(),
+            segment_total_width: 0,
         }
     }
 
@@ -435,6 +447,87 @@ where
                     child
                 )
             })
+    }
+
+    /// Compute one new segment covering `[start, start + width)`'s
+    /// per-edge environment tensors, without ever materializing a
+    /// per-column (`width == 1`) representation.
+    fn grow_segment(&mut self, start: usize, width: usize) -> Result<()> {
+        self.probes.extend_to(start + width)?;
+        let batch = T::Index::new_link(width)?;
+        let probed =
+            self.nodes
+                .iter()
+                .map(|node| {
+                    let (tensor_a, tensor_b) =
+                        self.local.get(node).copied().ok_or_else(|| {
+                            anyhow::anyhow!("contract_src: local tensor is missing")
+                        })?;
+                    let site_outputs = self
+                        .outputs
+                        .get(node)
+                        .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
+                    Ok((
+                        node.clone(),
+                        probed_site_pair_batch_range(
+                            tensor_a,
+                            tensor_b,
+                            site_outputs,
+                            self.probes,
+                            start,
+                            width,
+                            &batch,
+                        )?,
+                    ))
+                })
+                .collect::<Result<HashMap<_, _>>>()?;
+        // `directed_messages_batched` contracts every message via
+        // `contract_retaining(&factors, batch)`, which explicitly keeps
+        // `batch` in the result -- every tensor in `directed` carries this
+        // exact `batch` index, so it is safe to store and hand back later
+        // without re-deriving it from any one tensor's own index list.
+        let directed = directed_messages_batched(self.tn, self.edges, &probed, &batch)?;
+        self.segments.push((start, width, batch, directed));
+        self.segment_total_width += width;
+        Ok(())
+    }
+
+    /// Return the environment tensor for `(parent, child)` covering
+    /// `[start, start + width)`, growing new segments first if needed. See
+    /// `PrefixCache::request` (`src_chain.rs`) for the equivalent
+    /// chain-path method and the same aligned-vs-misaligned reasoning.
+    fn request(
+        &mut self,
+        parent: &V,
+        child: &V,
+        start: usize,
+        width: usize,
+    ) -> Result<(T, T::Index)> {
+        while self.segment_total_width < start + width {
+            let next_start = self.segment_total_width;
+            self.grow_segment(next_start, width.min(start + width - next_start))?;
+        }
+        for (segment_start, segment_width, batch_index, environments) in &self.segments {
+            if *segment_start == start && *segment_width == width {
+                let environment = environments
+                    .get(&(parent.clone(), child.clone()))
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "contract_src: cached segment environment is missing for {:?}->{:?}",
+                            parent,
+                            child
+                        )
+                    })?;
+                return Ok((environment, batch_index.clone()));
+            }
+        }
+        anyhow::bail!(
+            "contract_src: no segment covers [{start}, {}) for {:?}->{:?} after growth",
+            start + width,
+            parent,
+            child
+        )
     }
 }
 
@@ -667,9 +760,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::uncontracted_indices;
+    use super::super::src_probe::{local_output_indices, local_site_pairs, ProbeBank};
+    use super::{uncontracted_indices, EnvironmentCache};
+    use crate::treetn::TreeTN;
     use std::collections::HashSet;
-    use tensor4all_core::{DynIndex, IdxTensor};
+    use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
     /// `uncontracted_indices` used to order same-dimension survivors by
     /// `Index::id()` (via `HashMap` + `sort_indices_deterministic`), and
@@ -697,5 +792,89 @@ mod tests {
             let result = uncontracted_indices(&[&factor_1, &factor_2], &HashSet::new());
             assert_eq!(result, vec![out_a.clone(), out_b.clone()]);
         }
+    }
+
+    fn three_node_path(offset: f64) -> TreeTN<IdxTensor, String> {
+        let dim = 3usize;
+        let ab = DynIndex::new_dyn(dim);
+        let bc = DynIndex::new_dyn(dim);
+        let a_out = DynIndex::new_dyn(dim);
+        let b_out = DynIndex::new_dyn(dim);
+        let c_out = DynIndex::new_dyn(dim);
+        let a = IdxTensor::from_dense(
+            vec![a_out, ab.clone()],
+            (0..dim * dim)
+                .map(|i| offset + f64::from(i as i32) / 10.0)
+                .collect(),
+        )
+        .unwrap();
+        let b = IdxTensor::from_dense(
+            vec![ab, b_out, bc.clone()],
+            (0..dim * dim * dim)
+                .map(|i| offset + f64::from(i as i32) / 11.0)
+                .collect(),
+        )
+        .unwrap();
+        let c = IdxTensor::from_dense(
+            vec![bc, c_out],
+            (0..dim * dim)
+                .map(|i| offset + f64::from(i as i32) / 12.0)
+                .collect(),
+        )
+        .unwrap();
+        TreeTN::from_tensors(vec![a, b, c], vec!["A".into(), "B".into(), "C".into()]).unwrap()
+    }
+
+    #[test]
+    fn request_grows_a_fresh_segment_and_re_reads_an_aligned_one() {
+        let tn_a = three_node_path(1.0);
+        let tn_b = three_node_path(2.0);
+        let mut nodes = tn_a.node_names();
+        nodes.sort();
+        let edges = tn_a
+            .edges_to_canonicalize_by_names(&"B".to_string())
+            .unwrap();
+
+        let local_values = local_site_pairs(&tn_a, &tn_b, &nodes).unwrap();
+        let local = nodes
+            .iter()
+            .cloned()
+            .zip(local_values)
+            .collect::<std::collections::HashMap<_, _>>();
+        let outputs = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.clone(),
+                    local_output_indices(&tn_a, &tn_b, node).unwrap(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut probe_indices = nodes
+            .iter()
+            .flat_map(|node| outputs[node].iter().cloned())
+            .collect::<Vec<_>>();
+        let mut probes = ProbeBank::new(std::mem::take(&mut probe_indices), 1, 99).unwrap();
+        let mut cache = EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes);
+
+        let (first, first_batch) = cache
+            .request(&"B".to_string(), &"A".to_string(), 0, 3)
+            .unwrap();
+        assert_eq!(first_batch.dim(), 3);
+
+        let (again, again_batch) = cache
+            .request(&"B".to_string(), &"A".to_string(), 0, 3)
+            .unwrap();
+        assert_eq!(again_batch.dim(), first_batch.dim());
+        let difference = again.sub(&first).unwrap().maxabs().unwrap();
+        assert!(
+            difference < 1e-12,
+            "re-read segment tensor should exactly match the grown one, got difference {difference}"
+        );
+        assert_eq!(
+            cache.segments.len(),
+            1,
+            "re-reading an aligned segment must not grow a new one"
+        );
     }
 }
