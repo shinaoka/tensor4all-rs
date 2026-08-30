@@ -135,8 +135,15 @@ where
         anyhow::bail!("contract_src: tree output space has zero dimension");
     }
     let mut probes = ProbeBank::new(probe_indices, 1, src_options.seed)?;
-    let mut environment_cache =
-        EnvironmentCache::new(&tn_a_sim, &edges, &nodes, &local, &outputs, &mut probes);
+    let mut environment_cache = EnvironmentCache::new(
+        &tn_a_sim,
+        &edges,
+        &nodes,
+        &local,
+        &outputs,
+        &mut probes,
+        sketch_options.rank_increment,
+    );
 
     let mut result_tensors = HashMap::with_capacity(nodes.len());
     let mut projected_children: HashMap<V, Vec<T>> = HashMap::new();
@@ -301,6 +308,7 @@ where
     probes: &'a mut ProbeBank<T::Index>,
     environments: Vec<HashMap<(V, V), T>>,
     batched_environments: HashMap<usize, BatchedEnvironment<T, V>>,
+    batch_size: usize,
     segments: Vec<EnvironmentSegment<T, V>>,
     segment_total_width: usize,
 }
@@ -318,6 +326,7 @@ where
         local: &'a HashMap<V, (&'a T, &'a T)>,
         outputs: &'a HashMap<V, Vec<T::Index>>,
         probes: &'a mut ProbeBank<T::Index>,
+        batch_size: usize,
     ) -> Self {
         Self {
             tn,
@@ -328,6 +337,7 @@ where
             probes,
             environments: Vec::new(),
             batched_environments: HashMap::new(),
+            batch_size: batch_size.max(1),
             segments: Vec::new(),
             segment_total_width: 0,
         }
@@ -493,9 +503,23 @@ where
     }
 
     /// Return the environment tensor for `(parent, child)` covering
-    /// `[start, start + width)`, growing new segments first if needed. See
-    /// `PrefixCache::request` (`src_chain.rs`) for the equivalent
-    /// chain-path method and the same aligned-vs-misaligned reasoning.
+    /// `[start, start + width)`, growing new segments first if needed.
+    ///
+    /// `EnvironmentCache` is shared across every edge in the tree -- unlike
+    /// `PrefixCache` (one instance per site), one `EnvironmentCache` serves
+    /// every edge's own `site_max_width`. Segments therefore grow on a fixed
+    /// `batch_size`-wide grid regardless of which edge's request triggers
+    /// growth first, so a later edge's request can still land on an earlier
+    /// edge's segment boundaries. The common case (the request aligns
+    /// exactly with one already-grown or newly-grown segment's boundaries)
+    /// returns that segment's environment directly, no
+    /// `select_indices`/`stack_along_new_index` at all. A request that only
+    /// partially overlaps a segment boundary (possible when an edge's own
+    /// `site_max_width` caps a segment at a width narrower than
+    /// `batch_size`) falls back to splitting and re-stacking the covering
+    /// segments' environments -- mirrors `PrefixCache::request`
+    /// (`src_chain.rs`) exactly, adapted for one `(parent, child)` map per
+    /// segment instead of one tensor per segment.
     fn request(
         &mut self,
         parent: &V,
@@ -503,10 +527,13 @@ where
         start: usize,
         width: usize,
     ) -> Result<(T, T::Index)> {
+        self.probes.extend_to(start + width)?;
         while self.segment_total_width < start + width {
             let next_start = self.segment_total_width;
-            self.grow_segment(next_start, width.min(start + width - next_start))?;
+            let next_width = self.batch_size.min(start + width - next_start);
+            self.grow_segment(next_start, next_width)?;
         }
+
         for (segment_start, segment_width, batch_index, environments) in &self.segments {
             if *segment_start == start && *segment_width == width {
                 let environment = environments
@@ -522,12 +549,66 @@ where
                 return Ok((environment, batch_index.clone()));
             }
         }
-        anyhow::bail!(
-            "contract_src: no segment covers [{start}, {}) for {:?}->{:?} after growth",
-            start + width,
+
+        // Misaligned fallback: split each overlapping segment's
+        // `(parent, child)` environment tensor into individual probe-columns
+        // via `select_indices`, then re-stack the requested range with
+        // `stack_along_new_index`. Reachable only when `[start, start+width)`
+        // doesn't align with a single stored segment's boundaries -- see
+        // this method's doc comment.
+        let mut collected = Vec::with_capacity(width);
+        for (segment_start, segment_width, batch_index, environments) in &self.segments {
+            let segment_start = *segment_start;
+            let segment_end = segment_start + *segment_width;
+            let overlap_start = segment_start.max(start);
+            let overlap_end = segment_end.min(start + width);
+            if overlap_start >= overlap_end {
+                continue;
+            }
+            let environment = environments
+                .get(&(parent.clone(), child.clone()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "contract_src: cached segment environment is missing for {:?}->{:?}",
+                        parent,
+                        child
+                    )
+                })?;
+            for position in (overlap_start - segment_start)..(overlap_end - segment_start) {
+                collected.push(
+                    environment
+                        .select_indices(std::slice::from_ref(batch_index), &[position])
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "contract_src: {:?}->{:?} misaligned segment split at position {position} failed: {error}",
+                                parent,
+                                child
+                            )
+                        })?,
+                );
+            }
+        }
+        anyhow::ensure!(
+            collected.len() == width,
+            "contract_src: {:?}->{:?} misaligned segment request [{start}, {}) only found {} of {} columns",
             parent,
-            child
-        )
+            child,
+            start + width,
+            collected.len(),
+            width
+        );
+        let collected_refs = collected.iter().collect::<Vec<_>>();
+        let batch_index = T::Index::new_link(width)?;
+        let stacked = T::stack_along_new_index(&collected_refs, batch_index.clone(), -1)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "contract_src: {:?}->{:?} misaligned segment request [{start}, {}) failed: {error}",
+                    parent,
+                    child,
+                    start + width
+                )
+            })?;
+        Ok((stacked, batch_index))
     }
 }
 
@@ -760,8 +841,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::src_probe::{local_output_indices, local_site_pairs, ProbeBank};
-    use super::{uncontracted_indices, EnvironmentCache};
+    use super::super::src_probe::{
+        local_output_indices, local_site_pairs, probed_site_pair_batch_range, ProbeBank,
+    };
+    use super::{directed_messages_batched, uncontracted_indices, EnvironmentCache};
     use crate::treetn::TreeTN;
     use std::collections::HashSet;
     use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
@@ -855,7 +938,11 @@ mod tests {
             .flat_map(|node| outputs[node].iter().cloned())
             .collect::<Vec<_>>();
         let mut probes = ProbeBank::new(std::mem::take(&mut probe_indices), 1, 99).unwrap();
-        let mut cache = EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes);
+        // batch_size 3 matches the request width exactly, so this exercises
+        // the aligned single-segment path only -- see the misaligned/
+        // multi-edge test below for the fixed-grid growth and fallback.
+        let mut cache =
+            EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 3);
 
         let (first, first_batch) = cache
             .request(&"B".to_string(), &"A".to_string(), 0, 3)
@@ -875,6 +962,111 @@ mod tests {
             cache.segments.len(),
             1,
             "re-reading an aligned segment must not grow a new one"
+        );
+    }
+
+    #[test]
+    fn request_shared_across_edges_with_misaligned_widths_matches_a_direct_reference() {
+        // `EnvironmentCache` is shared across every edge in the tree, and
+        // different edges generally need different widths (different ranks).
+        // This reproduces exactly that: edge (B, A) grows the cache to width
+        // 5 on a batch_size-2 grid (segments [0,2), [2,2), [4,1)), then edge
+        // (B, C) requests [0,3) -- a width that lands on none of those
+        // segment boundaries -- forcing the misaligned split/re-stack
+        // fallback. The result must still match a reference computed
+        // directly, without going through `EnvironmentCache` at all.
+        let tn_a = three_node_path(1.0);
+        let tn_b = three_node_path(2.0);
+        let mut nodes = tn_a.node_names();
+        nodes.sort();
+        let edges = tn_a
+            .edges_to_canonicalize_by_names(&"B".to_string())
+            .unwrap();
+
+        let local_values = local_site_pairs(&tn_a, &tn_b, &nodes).unwrap();
+        let local = nodes
+            .iter()
+            .cloned()
+            .zip(local_values)
+            .collect::<std::collections::HashMap<_, _>>();
+        let outputs = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.clone(),
+                    local_output_indices(&tn_a, &tn_b, node).unwrap(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let index_list = nodes
+            .iter()
+            .flat_map(|node| outputs[node].iter().cloned())
+            .collect::<Vec<_>>();
+
+        let mut probes = ProbeBank::new(index_list.clone(), 1, 7).unwrap();
+        let mut cache =
+            EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 2);
+
+        let (_wide, wide_batch) = cache
+            .request(&"B".to_string(), &"A".to_string(), 0, 5)
+            .unwrap();
+        assert_eq!(wide_batch.dim(), 5);
+        assert_eq!(
+            cache.segments.len(),
+            3,
+            "batch_size 2 growing to width 5 should produce segments [0,2), [2,2), [4,1)"
+        );
+
+        let (narrow, narrow_batch) = cache
+            .request(&"B".to_string(), &"C".to_string(), 0, 3)
+            .unwrap();
+        assert_eq!(narrow_batch.dim(), 3);
+        assert_eq!(
+            cache.segments.len(),
+            3,
+            "edge C's narrower request is already covered by edge A's growth and needs no new segment"
+        );
+
+        // Ground truth: an independent probe bank/environment computation for
+        // [0, 3) on edge (B, C), built without going through
+        // `EnvironmentCache` at all.
+        let mut reference_probes = ProbeBank::new(index_list, 1, 7).unwrap();
+        reference_probes.extend_to(3).unwrap();
+        let reference_batch = DynIndex::new_link(3).unwrap();
+        let reference_probed = nodes
+            .iter()
+            .map(|node| {
+                let (tensor_a, tensor_b) = local[node];
+                let site_outputs = &outputs[node];
+                let probed = probed_site_pair_batch_range(
+                    tensor_a,
+                    tensor_b,
+                    site_outputs,
+                    &reference_probes,
+                    0,
+                    3,
+                    &reference_batch,
+                )
+                .unwrap();
+                (node.clone(), probed)
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let reference_directed =
+            directed_messages_batched(&tn_a, &edges, &reference_probed, &reference_batch).unwrap();
+        let reference = reference_directed
+            .get(&("B".to_string(), "C".to_string()))
+            .unwrap();
+
+        // `narrow`'s batch index (freshly minted by the misaligned fallback)
+        // and `reference`'s batch index (freshly minted independently) are
+        // different `T::Index` identities despite the same dimension, so
+        // `sub` (which requires literally the same indices) cannot compare
+        // them directly -- compare the flattened data instead, as
+        // `PrefixCache`'s equivalent chain-path misaligned test does.
+        assert_eq!(
+            narrow.to_vec::<f64>().unwrap(),
+            reference.to_vec::<f64>().unwrap(),
+            "misaligned fallback result must match a directly computed reference"
         );
     }
 }
