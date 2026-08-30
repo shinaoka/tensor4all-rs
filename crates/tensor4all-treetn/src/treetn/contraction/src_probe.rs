@@ -677,6 +677,67 @@ where
     }
 }
 
+/// Batch-native counterpart of [`factorize_probe_columns`]: `make_batch`
+/// receives `(start, width)` and returns one batch-indexed tensor covering
+/// exactly `[start, start + width)`, instead of being asked for individual
+/// columns one at a time. See
+/// `docs/superpowers/specs/2026-08-30-src-adaptive-batch-probe-columns-design.md`.
+pub(super) fn factorize_probe_batches<T, F>(
+    left_indices: &[T::Index],
+    initial_width: usize,
+    maximum_width: usize,
+    src_options: &SrcOptions,
+    label: &str,
+    mut make_batch: F,
+) -> Result<(T, T::Index)>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    F: FnMut(usize, usize) -> Result<(T, T::Index)>,
+{
+    if maximum_width == 0 {
+        anyhow::bail!("contract_src: {label} has no usable probe columns");
+    }
+    let mut width = initial_width.min(maximum_width).max(1);
+    let mut previous_width = 0;
+    let mut previous = None;
+    loop {
+        let (batch_tensor, batch_index) = make_batch(previous_width, width - previous_width)?;
+        let factorized = T::factorize_probe_batch_incremental(
+            previous.as_ref(),
+            &batch_tensor,
+            &batch_index,
+            left_indices,
+        )
+        .map_err(|error| anyhow::anyhow!("contract_src: {label} QR failed: {error}"))?;
+        let saturated = factorized.rank < width || width == maximum_width;
+        let stop = if src_options.rtol.is_none() || saturated {
+            true
+        } else {
+            match factorized.right.src_error_estimate() {
+                Ok(estimate) => {
+                    estimate.error
+                        <= src_options.atol + src_options.rtol.unwrap_or(0.0) * estimate.norm
+                }
+                Err(error) => {
+                    return Err(anyhow::anyhow!(
+                        "contract_src: {label} adaptive estimator unavailable: {error}"
+                    ));
+                }
+            }
+        };
+        if !stop {
+            previous_width = width;
+            previous = Some(factorized);
+            width = width
+                .saturating_add(src_options.rank_increment)
+                .min(maximum_width);
+            continue;
+        }
+        return Ok((factorized.left, factorized.bond_index));
+    }
+}
+
 /// Connect two result tensors through their single shared SRC cap index.
 pub(super) fn connect_result_edge<T, V>(
     result: &mut TreeTN<T, V>,
@@ -1116,5 +1177,59 @@ mod tests {
 
         assert!(!adaptive.final_svd);
         assert_eq!(adaptive.sketch_options(false).rtol, Some(1.0e-6));
+    }
+
+    #[test]
+    fn factorize_probe_batches_grows_by_rank_increment_and_stops_on_error_estimate() {
+        use super::factorize_probe_batches;
+
+        let row = DynIndex::new_dyn(4);
+        // A 4x4 identity-ish sketch (well-conditioned, rank 4) split into two
+        // width-2 batches, so a rank_increment of 2 should need exactly two
+        // `make_batch` calls to reach the full rank-4 estimate below tolerance.
+        let batch0 = DynIndex::new_dyn(2);
+        let batch1 = DynIndex::new_dyn(2);
+        let full = IdxTensor::from_dense(
+            vec![row.clone(), DynIndex::new_dyn(4)],
+            vec![
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let column_index = full.indices()[1].clone();
+        let col = |position: usize| {
+            full.select_indices(std::slice::from_ref(&column_index), &[position])
+                .unwrap()
+        };
+        let first_two =
+            IdxTensor::stack_along_new_index(&[&col(0), &col(1)], batch0.clone(), -1).unwrap();
+        let last_two =
+            IdxTensor::stack_along_new_index(&[&col(2), &col(3)], batch1.clone(), -1).unwrap();
+
+        let mut calls = Vec::new();
+        let src_options = SrcOptions::adaptive(1.0e-10, 4)
+            .with_min_rank(1)
+            .with_rank_increment(2);
+        let (result, result_batch) = factorize_probe_batches::<IdxTensor, _>(
+            &[row],
+            2,
+            4,
+            &src_options,
+            "test",
+            |start, width| {
+                calls.push((start, width));
+                if start == 0 {
+                    Ok((first_two.clone(), batch0.clone()))
+                } else {
+                    Ok((last_two.clone(), batch1.clone()))
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(calls, vec![(0, 2), (2, 2)]);
+        assert_eq!(result_batch.dim(), 4);
+        let values = result.to_vec::<f64>().unwrap();
+        assert_eq!(values.len(), 16);
     }
 }
