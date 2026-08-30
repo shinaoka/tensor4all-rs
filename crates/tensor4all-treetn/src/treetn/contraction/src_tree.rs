@@ -16,9 +16,9 @@ use std::hash::Hash;
 use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorLike};
 
 use super::src_probe::{
-    connect_result_edge, contract_retaining, factorize_probe_columns, initial_width,
+    connect_result_edge, contract_retaining, factorize_probe_batches, initial_width,
     local_output_indices, local_site_pairs, mark_result_canonical, maximum_site_width,
-    probed_site_pair, probed_site_pair_batch_range, product_dim, ProbeBank,
+    probed_site_pair_batch_range, product_dim, ProbeBank,
 };
 use super::{SrcOptions, TreeTN};
 
@@ -219,23 +219,26 @@ where
                     })?;
                 (factorized.left, factorized.bond_index)
             } else {
-                factorize_probe_columns(
+                factorize_probe_batches(
                     &left_indices,
                     site_initial_width,
                     site_max_width,
                     &sketch_options,
                     &label,
-                    |column| {
-                        let environment = environment_cache.column(parent, child, column)?;
+                    |start, width| {
+                        let (environment, batch_index) =
+                            environment_cache.request(parent, child, start, width)?;
                         let mut factors = source_factors.clone();
                         factors.push(&environment);
-                        T::contract(&factors).map_err(|error| {
-                            anyhow::anyhow!(
-                                "contract_src: tree sketch for {:?}->{:?} failed: {error}",
-                                child,
-                                parent
-                            )
-                        })
+                        contract_retaining(&factors, &batch_index)
+                            .map(|tensor| (tensor, batch_index))
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "contract_src: tree sketch for {:?}->{:?} failed: {error}",
+                                    child,
+                                    parent
+                                )
+                            })
                     },
                 )?
             };
@@ -306,7 +309,6 @@ where
     local: &'a HashMap<V, (&'a T, &'a T)>,
     outputs: &'a HashMap<V, Vec<T::Index>>,
     probes: &'a mut ProbeBank<T::Index>,
-    environments: Vec<HashMap<(V, V), T>>,
     batched_environments: HashMap<usize, BatchedEnvironment<T, V>>,
     batch_size: usize,
     segments: Vec<EnvironmentSegment<T, V>>,
@@ -335,52 +337,11 @@ where
             local,
             outputs,
             probes,
-            environments: Vec::new(),
             batched_environments: HashMap::new(),
             batch_size: batch_size.max(1),
             segments: Vec::new(),
             segment_total_width: 0,
         }
-    }
-
-    fn ensure_width(&mut self, width: usize) -> Result<()> {
-        self.probes.extend_to(width)?;
-        for column in self.environments.len()..width {
-            let probed = self
-                .nodes
-                .iter()
-                .map(|node| {
-                    let (tensor_a, tensor_b) =
-                        self.local.get(node).copied().ok_or_else(|| {
-                            anyhow::anyhow!("contract_src: local tensor is missing")
-                        })?;
-                    let site_outputs = self
-                        .outputs
-                        .get(node)
-                        .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
-                    Ok((
-                        node.clone(),
-                        probed_site_pair(tensor_a, tensor_b, site_outputs, self.probes, column)?,
-                    ))
-                })
-                .collect::<Result<HashMap<_, _>>>()?;
-            let mut directed = directed_messages(self.tn, self.edges, &probed)?;
-            let mut selected = HashMap::with_capacity(self.edges.len());
-            for (child, parent) in self.edges {
-                let message = directed
-                    .remove(&(parent.clone(), child.clone()))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "contract_src: complement environment is missing for {:?}->{:?}",
-                            parent,
-                            child
-                        )
-                    })?;
-                selected.insert((parent.clone(), child.clone()), message);
-            }
-            self.environments.push(selected);
-        }
-        Ok(())
     }
 
     fn batch(&mut self, parent: &V, child: &V, width: usize) -> Result<(T, T::Index)> {
@@ -442,21 +403,6 @@ where
         self.batched_environments
             .insert(width, (batch.clone(), directed));
         Ok((environment, batch))
-    }
-
-    fn column(&mut self, parent: &V, child: &V, column: usize) -> Result<T> {
-        self.ensure_width(column + 1)?;
-        self.environments
-            .get(column)
-            .and_then(|messages| messages.get(&(parent.clone(), child.clone())))
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "contract_src: complement environment is missing for {:?}->{:?}",
-                    parent,
-                    child
-                )
-            })
     }
 
     /// Compute one new segment covering `[start, start + width)`'s
@@ -712,69 +658,6 @@ where
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("contract_src: B parent bond is missing"))?;
     Ok((bond_a, bond_b))
-}
-
-fn directed_messages<T, V>(
-    tn: &TreeTN<T, V>,
-    edges: &[(V, V)],
-    probed: &HashMap<V, T>,
-) -> Result<HashMap<(V, V), T>>
-where
-    T: TensorLike,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    let mut messages = HashMap::with_capacity(edges.len() * 2);
-
-    // Upward pass: each child message contains that whole child subtree,
-    // with the physical outputs already contracted against this probe column.
-    for (child, parent) in edges {
-        let mut factors = vec![probed
-            .get(child)
-            .ok_or_else(|| anyhow::anyhow!("contract_src: probed child tensor is missing"))?];
-        for neighbor in tn.site_index_network().neighbors(child) {
-            if &neighbor == parent {
-                continue;
-            }
-            let message = messages
-                .get(&(neighbor.clone(), child.clone()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "contract_src: upward message is missing for {:?}->{:?}",
-                        neighbor,
-                        child
-                    )
-                })?;
-            factors.push(message);
-        }
-        let message = contract_factors(&factors, "contract_src: upward message")?;
-        messages.insert((child.clone(), parent.clone()), message);
-    }
-
-    // Downward pass: the reverse postorder guarantees that the parent-side
-    // message is available before the next child is visited.
-    for (child, parent) in edges.iter().rev() {
-        let mut factors = vec![probed
-            .get(parent)
-            .ok_or_else(|| anyhow::anyhow!("contract_src: probed parent tensor is missing"))?];
-        for neighbor in tn.site_index_network().neighbors(parent) {
-            if &neighbor == child {
-                continue;
-            }
-            let message = messages
-                .get(&(neighbor.clone(), parent.clone()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "contract_src: side message is missing for {:?} around {:?}",
-                        neighbor,
-                        parent
-                    )
-                })?;
-            factors.push(message);
-        }
-        let message = contract_factors(&factors, "contract_src: downward message")?;
-        messages.insert((parent.clone(), child.clone()), message);
-    }
-    Ok(messages)
 }
 
 fn directed_messages_batched<T, V>(

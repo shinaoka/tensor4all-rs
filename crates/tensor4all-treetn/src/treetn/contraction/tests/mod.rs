@@ -1021,6 +1021,36 @@ fn src_fixed_traverses_a_branched_tree_without_dense_fallback() {
 }
 
 #[test]
+fn src_adaptive_traverses_a_branched_tree_and_matches_dense_reference() {
+    // Same fixture and interior center ("C", not a chain endpoint) as
+    // `src_fixed_traverses_a_branched_tree_without_dense_fallback` above, so
+    // this also routes through `src_tree.rs`'s general path -- but with
+    // `SrcOptions::adaptive`, exercising this task's rewired adaptive branch
+    // (`factorize_probe_batches` + `EnvironmentCache::request`) end-to-end
+    // against a dense-oracle reference.
+    let (tn_a, tn_b) = make_star_pair();
+    let exact = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(1)
+                .with_rank_increment(2)
+                .with_seed(88),
+        );
+    let result = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+    let error = result
+        .to_dense()
+        .unwrap()
+        .sub(&exact)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1e-6, "branched adaptive SRC residual is {error}");
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
 fn src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
     let (tn_a, tn_b) = make_branched_pair();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
@@ -1079,10 +1109,11 @@ fn src_adaptive_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
     // Same fixture and interior center ("C", the degree-3 hub) as
     // `src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full`,
     // but with `SrcOptions::adaptive` so this exercises the `rtol.is_some()`
-    // dispatch branch (`directed_messages`, the non-batched/column path) with
-    // a numeric dense-oracle comparison, rather than only the fixed-rank
-    // dispatch branch (`directed_messages_batched`) that the sibling test
-    // above covers.
+    // dispatch branch (`EnvironmentCache::request`/`grow_segment`, the
+    // batch-native probe path) with a numeric dense-oracle comparison,
+    // rather than only the fixed-rank dispatch branch
+    // (`directed_messages_batched` via `EnvironmentCache::batch`) that the
+    // sibling test above covers.
     let (tn_a, tn_b) = make_branched_pair();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
     let actual = contract(
