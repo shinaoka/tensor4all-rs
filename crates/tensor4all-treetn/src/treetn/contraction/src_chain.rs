@@ -563,6 +563,12 @@ where
     probes: &'a mut ProbeBank<T::Index>,
     prefixes: Vec<Vec<T>>,
     batch_size: usize,
+    // Per-site list of (batch tensor, batch index, width) segments, storing
+    // whatever chunk each `grow_segment` call actually produced -- segments
+    // need not all be the same width (see the design spec's Section 3 on
+    // ragged final segments).
+    segments: Vec<Vec<(T, T::Index, usize)>>,
+    segment_total_width: usize,
 }
 
 /// Batched (whole-width-at-once) prefix cache for the fixed-rank path.
@@ -706,6 +712,8 @@ where
             probes,
             prefixes: (0..local.len() - 1).map(|_| Vec::new()).collect(),
             batch_size: batch_size.max(1),
+            segments: (0..local.len() - 1).map(|_| Vec::new()).collect(),
+            segment_total_width: 0,
         }
     }
 
@@ -812,6 +820,85 @@ where
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("contract_src: prefix column is missing"))
     }
+
+    /// Compute one new segment covering `[start, start + width)` for every
+    /// site, without splitting it into individual per-column tensors (unlike
+    /// `grow_one_segment`, which this method does not call).
+    fn grow_segment(&mut self, start: usize, width: usize) -> Result<()> {
+        let batch = T::Index::new_link(width)?;
+        let mut prefix = probed_site_pair_batch_range(
+            self.local[0].0,
+            self.local[0].1,
+            &self.outputs[0],
+            self.probes,
+            start,
+            width,
+            &batch,
+        )?;
+        self.segments[0].push((prefix.clone(), batch.clone(), width));
+        for site in 1..self.local.len() - 1 {
+            prefix = contract_prefix_with_probed_site_pair_batch_range(
+                &prefix,
+                self.local[site].0,
+                self.local[site].1,
+                &self.outputs[site],
+                self.probes,
+                start,
+                width,
+                &batch,
+            )?;
+            self.segments[site].push((prefix.clone(), batch.clone(), width));
+        }
+        self.segment_total_width += width;
+        Ok(())
+    }
+
+    /// Return `[start, start + width)` as one batch-indexed tensor for
+    /// `site`, growing new segments first if the requested range extends
+    /// past what is cached.
+    ///
+    /// The common case (the request aligns exactly with one already-grown or
+    /// newly-grown segment's boundaries) returns that segment directly, with
+    /// no `select_indices`/`stack_along_new_index` at all. A request that
+    /// only partially overlaps a segment boundary (possible when an earlier
+    /// caller's own `maximum_width` capped a segment at a width narrower
+    /// than `batch_size` -- see the design spec's Section 3) falls back to
+    /// splitting and re-stacking the covering segments; this is expected to
+    /// be rare, not routine.
+    fn request(&mut self, site: usize, start: usize, width: usize) -> Result<(T, T::Index)> {
+        self.probes.extend_to(start + width)?;
+        while self.segment_total_width < start + width {
+            let next_start = self.segment_total_width;
+            let next_width = self.batch_size.min(start + width - next_start);
+            self.grow_segment(next_start, next_width)?;
+        }
+
+        let site_segments = &self.segments[site];
+        let mut cursor = 0usize;
+        for (tensor, batch_index, segment_width) in site_segments {
+            if cursor == start && *segment_width == width {
+                return Ok((tensor.clone(), batch_index.clone()));
+            }
+            cursor += segment_width;
+        }
+
+        // Misaligned fallback: read the covering individual columns via the
+        // existing (unchanged) `column` method and re-stack them. Reachable
+        // only when a request spans a segment boundary that isn't exactly
+        // `start`/`width` -- see this method's doc comment.
+        let block = (0..width)
+            .map(|offset| self.column(site, start + offset))
+            .collect::<Result<Vec<_>>>()?;
+        let block_refs = block.iter().collect::<Vec<_>>();
+        let batch_index = T::Index::new_link(width)?;
+        let stacked = T::stack_along_new_index(&block_refs, batch_index.clone(), -1).map_err(|error| {
+            anyhow::anyhow!(
+                "contract_src: site {site} misaligned segment request [{start}, {}) failed: {error}",
+                start + width
+            )
+        })?;
+        Ok((stacked, batch_index))
+    }
 }
 
 struct FactorizeSiteRequest<'a, T>
@@ -867,4 +954,95 @@ where
     }
     .map_err(|error| anyhow::anyhow!("contract_src: {label} environment failed: {error}"))?;
     Ok((factor, cap, environment))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PrefixCache;
+    use crate::treetn::contraction::src_probe::ProbeBank;
+    use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+
+    fn two_site_local(dim: usize) -> (IdxTensor, IdxTensor, IdxTensor, IdxTensor) {
+        let s0_out = DynIndex::new_dyn(dim);
+        let s0_in = DynIndex::new_dyn(dim);
+        let s1_out = DynIndex::new_dyn(dim);
+        let elements = dim * dim;
+        let a0 = IdxTensor::from_dense(vec![s0_out, s0_in.clone()], vec![0.1; elements]).unwrap();
+        let b0 = IdxTensor::from_dense(vec![s0_in], vec![0.2; dim]).unwrap();
+        let a1 = IdxTensor::from_dense(vec![s1_out.clone()], vec![0.3; dim]).unwrap();
+        let b1 = IdxTensor::from_dense(vec![s1_out], vec![0.4; dim]).unwrap();
+        (a0, b0, a1, b1)
+    }
+
+    #[test]
+    fn request_grows_a_fresh_segment_and_reuses_a_previously_cached_one() {
+        let (a0, b0, a1, b1) = two_site_local(3);
+        let local = vec![(&a0, &b0), (&a1, &b1)];
+        let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
+        let mut probes = ProbeBank::new(
+            outputs.iter().flat_map(|o| o.iter().cloned()).collect(),
+            1,
+            42,
+        )
+        .unwrap();
+        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3);
+
+        let (first, first_batch) = cache.request(0, 0, 3).unwrap();
+        assert_eq!(first_batch.dim(), 3);
+        // Site 0's own output index (`s0_out`) is one of `outputs[0]`, so it
+        // is contracted away against the probe columns rather than kept --
+        // like `s0_in` (the a0/b0 shared bond), it does not survive into the
+        // prefix. Only the batch axis remains external.
+        assert_eq!(first.dims().len(), 1); // [batch]
+
+        // Requesting the same already-cached range again must not recompute
+        // it -- assert the returned tensor is bit-identical (a fresh
+        // recomputation of the same probes would also be numerically
+        // identical here since ProbeBank is deterministic, so this alone
+        // isn't proof of reuse; the ragged-boundary test below adds a
+        // segment-count assertion that actually proves it).
+        let (again, again_batch) = cache.request(0, 0, 3).unwrap();
+        assert_eq!(again_batch.dim(), first_batch.dim());
+        assert_eq!(
+            again.to_vec::<f64>().unwrap(),
+            first.to_vec::<f64>().unwrap()
+        );
+    }
+
+    #[test]
+    fn request_reuses_an_earlier_ragged_segment_without_recomputing_it() {
+        let (a0, b0, a1, b1) = two_site_local(3);
+        let local = vec![(&a0, &b0), (&a1, &b1)];
+        let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
+        let mut probes = ProbeBank::new(
+            outputs.iter().flat_map(|o| o.iter().cloned()).collect(),
+            1,
+            42,
+        )
+        .unwrap();
+        // batch_size 3, first caller only needs width 4 -- forces a ragged
+        // final segment of width 1 (segments end up [0,3) then [3,4)).
+        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3);
+        let (_first, _) = cache.request(0, 0, 4).unwrap();
+        assert_eq!(
+            cache.segments[0].len(),
+            2,
+            "expected a [0,3) segment plus a ragged [3,4) segment"
+        );
+        assert_eq!(
+            cache.segments[0][1].2, 1,
+            "second segment should be the ragged width-1 remainder"
+        );
+
+        // A second caller re-reading exactly the ragged [3,4) segment must
+        // hit it directly (aligned request), not fall back to misaligned
+        // handling.
+        let (_second, second_batch) = cache.request(0, 3, 1).unwrap();
+        assert_eq!(second_batch.dim(), 1);
+        assert_eq!(
+            cache.segments[0].len(),
+            2,
+            "re-reading an existing aligned segment must not grow a new one"
+        );
+    }
 }
