@@ -3691,8 +3691,8 @@ impl IdxTensor {
         }
 
         let retained_pairs_set: HashSet<(usize, usize)> = retained_pairs.iter().copied().collect();
-        let mut contracting_a = Vec::new();
-        let mut contracting_b = Vec::new();
+        let mut contracting_a = Vec::with_capacity(common.len());
+        let mut contracting_b = Vec::with_capacity(common.len());
         for &(pos_a, pos_b) in &common {
             if !retained_pairs_set.contains(&(pos_a, pos_b)) {
                 contracting_a.push(pos_a);

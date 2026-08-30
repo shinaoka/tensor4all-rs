@@ -441,22 +441,19 @@ where
         )));
     }
 
-    let mut norm_sq = 0.0_f64;
+    // Only the diagonal is checked here; the full-R Frobenius-norm
+    // finiteness check lives solely in `src_error_estimate_from_inverse_adjoint`,
+    // which every `src_error_estimate` call already runs immediately after
+    // this function returns. Duplicating that O(rank^2) accumulation here
+    // would recompute the identical sum for nothing on SRC's adaptive
+    // stopping-test hot path.
     for col in 0..ncols {
-        for row in 0..nrows {
-            norm_sq += r[[row, col]].matrix_abs_sq();
-        }
         let diagonal_sq = r[[col, col]].matrix_abs_sq();
         if !diagonal_sq.is_finite() || diagonal_sq == 0.0 {
             return Err(BackendLinalgError::from(anyhow!(
                 "SRC estimator requires a finite, nonzero diagonal in R at ({col}, {col})"
             )));
         }
-    }
-    if !norm_sq.is_finite() {
-        return Err(BackendLinalgError::from(anyhow!(
-            "SRC estimator requires finite entries in R"
-        )));
     }
 
     let mut adjoint = Matrix::zeros(nrows, ncols);
