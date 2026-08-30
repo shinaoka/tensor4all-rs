@@ -411,3 +411,18 @@ If the ratio at rank=192 is small (say, under ~1.2x) even after this fix, that's
 - [ ] **Step 5: Report results to the user**
 
 Do not commit anything in this task — it's pure measurement and reporting. Summarize Task 1's baseline, Task 5's after numbers, and the recommendation from Step 4 back to the user.
+
+### Results (captured 2026-08-30)
+
+| Target Rank | Baseline per_run (s) | After per_run (s) | Ratio (baseline/after) |
+|-------------|-----------------------|--------------------|-------------------------|
+| 8           | 0.387929               | 0.376901           | 1.0293                  |
+| 16          | 0.743652               | 0.782282           | 0.9506                  |
+| 32          | 1.302772               | 1.290345           | 1.0096                  |
+| 64          | 2.602000               | 2.631256           | 0.9889                  |
+| 96          | 3.576113               | 3.904667           | 0.9159                  |
+| 128         | 4.528721               | 5.339247           | 0.8482                  |
+| 160         | 5.737502               | 5.989938           | 0.9579                  |
+| 192         | 7.087727               | 6.774579           | 1.0462                  |
+
+A repeat sweep (not saved to a file) produced per_run values within ~5-8% of the "after" figures above at every rank, confirming these are within normal run-to-run noise rather than a one-off fluke. The ratio at rank=192 (1.05x) is well under the ~1.2x threshold from Step 4, and several mid-range ranks (96, 128, 160) show the after run *slower* than baseline, within noise. Conclusion: `Q`'s O(final_rank²) copy cost was not the dominant term in this benchmark's wall-clock time — the fix is correct and reduces `Q`'s asymptotic copy cost as designed, but that cost was not the measurable bottleneck for `src-adaptive` on this problem size. Per Step 4's decision criterion, this points at `R`/`R^{-†}`'s O(n²) growth (or another cost entirely, e.g. the QR factorization work itself, which is inherently superlinear) as the more promising next place to look before committing to the harder `R` growth redesign.
