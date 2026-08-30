@@ -702,37 +702,6 @@ where
         })
 }
 
-fn concatenate_columns<T>(
-    left: &Matrix<T>,
-    right: &Matrix<T>,
-) -> std::result::Result<Matrix<T>, BackendLinalgError>
-where
-    T: IncrementalQrScalar,
-{
-    if left.nrows() != right.nrows() {
-        return Err(anyhow!(
-            "incremental QR Q block row mismatch: {} and {}",
-            left.nrows(),
-            right.nrows()
-        )
-        .into());
-    }
-    let ncols = left
-        .ncols()
-        .checked_add(right.ncols())
-        .ok_or_else(|| anyhow!("incremental QR Q width overflow"))?;
-    let mut values = Vec::with_capacity(
-        left.as_col_major_slice()
-            .len()
-            .checked_add(right.as_col_major_slice().len())
-            .ok_or_else(|| anyhow!("incremental QR Q element count overflow"))?,
-    );
-    values.extend_from_slice(left.as_col_major_slice());
-    values.extend_from_slice(right.as_col_major_slice());
-    Matrix::try_from_col_major_vec(left.nrows(), ncols, values)
-        .map_err(|error| anyhow!("incremental QR Q assembly failed: {error}").into())
-}
-
 fn assemble_r<T>(
     old: &Matrix<T>,
     projection: &Matrix<T>,
