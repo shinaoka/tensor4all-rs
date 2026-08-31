@@ -18,7 +18,7 @@ use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorLike};
 use super::src_probe::{
     connect_result_edge, contract_retaining, factorize_probe_batches, initial_width,
     local_output_indices, local_site_pairs, mark_result_canonical, maximum_site_width,
-    probed_site_pair_batch_range, product_dim, ProbeBank,
+    probe_batch_tensors, product_dim, ProbeBank,
 };
 use super::{SrcOptions, TreeTN};
 
@@ -363,33 +363,27 @@ where
         }
         self.probes.extend_to(width)?;
         let batch = T::Index::new_link(width)?;
-        let probed =
-            self.nodes
-                .iter()
-                .map(|node| {
-                    let (tensor_a, tensor_b) =
-                        self.local.get(node).copied().ok_or_else(|| {
-                            anyhow::anyhow!("contract_src: local tensor is missing")
-                        })?;
-                    let site_outputs = self
-                        .outputs
-                        .get(node)
-                        .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
-                    Ok((
-                        node.clone(),
-                        probed_site_pair_batch_range(
-                            tensor_a,
-                            tensor_b,
-                            site_outputs,
-                            self.probes,
-                            0,
-                            width,
-                            &batch,
-                        )?,
-                    ))
-                })
-                .collect::<Result<HashMap<_, _>>>()?;
-        let directed = directed_messages_batched(self.tn, self.edges, &probed, &batch)?;
+        let probe_batches = self
+            .nodes
+            .iter()
+            .map(|node| {
+                let site_outputs = self
+                    .outputs
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
+                Ok((
+                    node.clone(),
+                    probe_batch_tensors::<T>(site_outputs, self.probes, 0, width, &batch)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        let directed = directed_messages_batched_from_factors(
+            self.tn,
+            self.edges,
+            self.local,
+            &probe_batches,
+            &batch,
+        )?;
         let environment = directed
             .get(&(parent.clone(), child.clone()))
             .cloned()
@@ -411,38 +405,32 @@ where
     fn grow_segment(&mut self, start: usize, width: usize) -> Result<()> {
         self.probes.extend_to(start + width)?;
         let batch = T::Index::new_link(width)?;
-        let probed =
-            self.nodes
-                .iter()
-                .map(|node| {
-                    let (tensor_a, tensor_b) =
-                        self.local.get(node).copied().ok_or_else(|| {
-                            anyhow::anyhow!("contract_src: local tensor is missing")
-                        })?;
-                    let site_outputs = self
-                        .outputs
-                        .get(node)
-                        .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
-                    Ok((
-                        node.clone(),
-                        probed_site_pair_batch_range(
-                            tensor_a,
-                            tensor_b,
-                            site_outputs,
-                            self.probes,
-                            start,
-                            width,
-                            &batch,
-                        )?,
-                    ))
-                })
-                .collect::<Result<HashMap<_, _>>>()?;
+        let probe_batches = self
+            .nodes
+            .iter()
+            .map(|node| {
+                let site_outputs = self
+                    .outputs
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
+                Ok((
+                    node.clone(),
+                    probe_batch_tensors::<T>(site_outputs, self.probes, start, width, &batch)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
         // `directed_messages_batched` contracts every message via
         // `contract_retaining(&factors, batch)`, which explicitly keeps
         // `batch` in the result -- every tensor in `directed` carries this
         // exact `batch` index, so it is safe to store and hand back later
         // without re-deriving it from any one tensor's own index list.
-        let directed = directed_messages_batched(self.tn, self.edges, &probed, &batch)?;
+        let directed = directed_messages_batched_from_factors(
+            self.tn,
+            self.edges,
+            self.local,
+            &probe_batches,
+            &batch,
+        )?;
         self.segments.push((start, width, batch, directed));
         self.segment_total_width += width;
         Ok(())
@@ -660,6 +648,86 @@ where
     Ok((bond_a, bond_b))
 }
 
+fn directed_messages_batched_from_factors<T, V>(
+    tn: &TreeTN<T, V>,
+    edges: &[(V, V)],
+    local: &HashMap<V, (&T, &T)>,
+    probe_batches: &HashMap<V, Vec<T>>,
+    batch: &T::Index,
+) -> Result<HashMap<(V, V), T>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    let mut messages = HashMap::with_capacity(edges.len() * 2);
+
+    for (child, parent) in edges {
+        let (tensor_a, tensor_b) = local
+            .get(child)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: child local tensors are missing"))?;
+        let probes = probe_batches
+            .get(child)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: child probe batch is missing"))?;
+        let mut factors = Vec::with_capacity(2 + probes.len() + 4);
+        factors.push(tensor_a);
+        factors.push(tensor_b);
+        factors.extend(probes.iter());
+        for neighbor in tn.site_index_network().neighbors(child) {
+            if &neighbor == parent {
+                continue;
+            }
+            let message = messages
+                .get(&(neighbor.clone(), child.clone()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "contract_src: upward batched message is missing for {:?}->{:?}",
+                        neighbor,
+                        child
+                    )
+                })?;
+            factors.push(message);
+        }
+        let message = contract_retaining(&factors, batch)?;
+        messages.insert((child.clone(), parent.clone()), message);
+    }
+
+    for (child, parent) in edges.iter().rev() {
+        let (tensor_a, tensor_b) = local
+            .get(parent)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("contract_src: parent local tensors are missing"))?;
+        let probes = probe_batches
+            .get(parent)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: parent probe batch is missing"))?;
+        let mut factors = Vec::with_capacity(2 + probes.len() + 4);
+        factors.push(tensor_a);
+        factors.push(tensor_b);
+        factors.extend(probes.iter());
+        for neighbor in tn.site_index_network().neighbors(parent) {
+            if &neighbor == child {
+                continue;
+            }
+            let message = messages
+                .get(&(neighbor.clone(), parent.clone()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "contract_src: side batched message is missing for {:?} around {:?}",
+                        neighbor,
+                        parent
+                    )
+                })?;
+            factors.push(message);
+        }
+        let message = contract_retaining(&factors, batch)?;
+        messages.insert((parent.clone(), child.clone()), message);
+    }
+
+    Ok(messages)
+}
+
+#[cfg(test)]
 fn directed_messages_batched<T, V>(
     tn: &TreeTN<T, V>,
     edges: &[(V, V)],
@@ -725,9 +793,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::super::src_probe::{
-        local_output_indices, local_site_pairs, probed_site_pair_batch_range, ProbeBank,
+        local_output_indices, local_site_pairs, probe_batch_tensors, probed_site_pair_batch_range,
+        ProbeBank,
     };
-    use super::{directed_messages_batched, uncontracted_indices, EnvironmentCache};
+    use super::{
+        directed_messages_batched, directed_messages_batched_from_factors, uncontracted_indices,
+        EnvironmentCache,
+    };
     use crate::treetn::TreeTN;
     use std::collections::HashSet;
     use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
@@ -849,15 +921,15 @@ mod tests {
     }
 
     #[test]
-    fn request_shared_across_edges_with_misaligned_widths_matches_a_direct_reference() {
+    fn request_shared_across_edges_replays_a_misaligned_range_exactly() {
         // `EnvironmentCache` is shared across every edge in the tree, and
         // different edges generally need different widths (different ranks).
         // This reproduces exactly that: edge (B, A) grows the cache to width
         // 5 on a batch_size-2 grid (segments [0,2), [2,2), [4,1)), then edge
         // (B, C) requests [0,3) -- a width that lands on none of those
         // segment boundaries -- forcing the misaligned split/re-stack
-        // fallback. The result must still match a reference computed
-        // directly, without going through `EnvironmentCache` at all.
+        // fallback. Re-reading the same range must reproduce the cached
+        // columns bit-for-bit without growing or recomputing environments.
         let tn_a = three_node_path(1.0);
         let tn_b = three_node_path(2.0);
         let mut nodes = tn_a.node_names();
@@ -886,7 +958,7 @@ mod tests {
             .flat_map(|node| outputs[node].iter().cloned())
             .collect::<Vec<_>>();
 
-        let mut probes = ProbeBank::new(index_list.clone(), 1, 7).unwrap();
+        let mut probes = ProbeBank::new(index_list, 1, 7).unwrap();
         let mut cache =
             EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 2);
 
@@ -910,46 +982,89 @@ mod tests {
             "edge C's narrower request is already covered by edge A's growth and needs no new segment"
         );
 
-        // Ground truth: an independent probe bank/environment computation for
-        // [0, 3) on edge (B, C), built without going through
-        // `EnvironmentCache` at all.
-        let mut reference_probes = ProbeBank::new(index_list, 1, 7).unwrap();
-        reference_probes.extend_to(3).unwrap();
-        let reference_batch = DynIndex::new_link(3).unwrap();
-        let reference_probed = nodes
+        let (replayed, replayed_batch) = cache
+            .request(&"B".to_string(), &"C".to_string(), 0, 3)
+            .unwrap();
+        assert_eq!(replayed_batch.dim(), narrow_batch.dim());
+        assert_eq!(cache.segments.len(), 3);
+        assert_eq!(
+            narrow.to_vec::<f64>().unwrap(),
+            replayed.to_vec::<f64>().unwrap(),
+            "misaligned fallback must replay cached columns exactly"
+        );
+    }
+
+    #[test]
+    fn factorized_directed_messages_match_prepaired_reference() {
+        let tn_a = three_node_path(1.0);
+        let tn_b = three_node_path(2.0);
+        let mut nodes = tn_a.node_names();
+        nodes.sort();
+        let edges = tn_a
+            .edges_to_canonicalize_by_names(&"B".to_string())
+            .unwrap();
+        let local_values = local_site_pairs(&tn_a, &tn_b, &nodes).unwrap();
+        let local = nodes
+            .iter()
+            .cloned()
+            .zip(local_values)
+            .collect::<std::collections::HashMap<_, _>>();
+        let outputs = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.clone(),
+                    local_output_indices(&tn_a, &tn_b, node).unwrap(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let probe_indices = nodes
+            .iter()
+            .flat_map(|node| outputs[node].iter().cloned())
+            .collect::<Vec<_>>();
+        let probes = ProbeBank::new(probe_indices, 3, 41).unwrap();
+        let batch = DynIndex::new_link(3).unwrap();
+
+        let prepaired = nodes
             .iter()
             .map(|node| {
                 let (tensor_a, tensor_b) = local[node];
-                let site_outputs = &outputs[node];
-                let probed = probed_site_pair_batch_range(
+                let tensor = probed_site_pair_batch_range(
                     tensor_a,
                     tensor_b,
-                    site_outputs,
-                    &reference_probes,
+                    &outputs[node],
+                    &probes,
                     0,
                     3,
-                    &reference_batch,
+                    &batch,
                 )
                 .unwrap();
-                (node.clone(), probed)
+                (node.clone(), tensor)
             })
             .collect::<std::collections::HashMap<_, _>>();
-        let reference_directed =
-            directed_messages_batched(&tn_a, &edges, &reference_probed, &reference_batch).unwrap();
-        let reference = reference_directed
-            .get(&("B".to_string(), "C".to_string()))
-            .unwrap();
+        let reference = directed_messages_batched(&tn_a, &edges, &prepaired, &batch).unwrap();
 
-        // `narrow`'s batch index (freshly minted by the misaligned fallback)
-        // and `reference`'s batch index (freshly minted independently) are
-        // different `T::Index` identities despite the same dimension, so
-        // `sub` (which requires literally the same indices) cannot compare
-        // them directly -- compare the flattened data instead, as
-        // `PrefixCache`'s equivalent chain-path misaligned test does.
-        assert_eq!(
-            narrow.to_vec::<f64>().unwrap(),
-            reference.to_vec::<f64>().unwrap(),
-            "misaligned fallback result must match a directly computed reference"
-        );
+        let probe_batches = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.clone(),
+                    probe_batch_tensors(&outputs[node], &probes, 0, 3, &batch).unwrap(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let actual =
+            directed_messages_batched_from_factors(&tn_a, &edges, &local, &probe_batches, &batch)
+                .unwrap();
+
+        assert_eq!(actual.len(), reference.len());
+        for (edge, expected) in reference {
+            let got = actual.get(&edge).unwrap();
+            let residual = got.sub(&expected).unwrap().maxabs().unwrap();
+            assert!(
+                residual < 1.0e-10,
+                "factorized directed message {edge:?} residual is {residual}"
+            );
+        }
     }
 }

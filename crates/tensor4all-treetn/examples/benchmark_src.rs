@@ -267,9 +267,17 @@ fn main() {
     let max_rank = args.next().map_or(bond_dim * bond_dim, |value| {
         value.parse().expect("target_rank")
     });
+    let algorithm = std::env::var("T4A_BENCH_ALGORITHM").unwrap_or_else(|_| "all".to_string());
+    assert!(
+        matches!(
+            algorithm.as_str(),
+            "all" | "zipup" | "src-fixed" | "src-adaptive"
+        ),
+        "T4A_BENCH_ALGORITHM must be all, zipup, src-fixed, or src-adaptive"
+    );
 
     println!(
-        "config=n_sites:{n_sites} physical_dim:{physical_dim} input_bond:{bond_dim} max_rank:{max_rank} reps:{reps} mode:{mode} rank_increment:{rank_increment} final_svd:{final_svd}"
+        "config=n_sites:{n_sites} physical_dim:{physical_dim} input_bond:{bond_dim} max_rank:{max_rank} reps:{reps} mode:{mode} algorithm:{algorithm} rank_increment:{rank_increment} final_svd:{final_svd}"
     );
 
     let skip_exact = std::env::var("T4A_BENCH_SKIP_EXACT").is_ok();
@@ -288,44 +296,50 @@ fn main() {
             Some(dense)
         };
         let exact_ref = exact.as_ref();
-        run_case(
-            &format!("{label}/zipup"),
-            &left,
-            &right,
-            ContractionOptions::zipup().with_max_bond_dim(max_rank),
-            reps,
-            exact_ref,
-        );
-        run_case(
-            &format!("{label}/src-fixed"),
-            &left,
-            &right,
-            ContractionOptions::src()
-                .with_max_bond_dim(max_rank)
-                .with_src_options(
-                    SrcOptions::fixed()
-                        .with_seed(1234)
-                        .with_final_svd(final_svd),
-                ),
-            reps,
-            exact_ref,
-        );
-        run_case(
-            &format!("{label}/src-adaptive"),
-            &left,
-            &right,
-            ContractionOptions::src()
-                .with_max_bond_dim(max_rank)
-                .with_src_options(
-                    SrcOptions::adaptive(1.0e-4, max_rank)
-                        .with_min_rank(2)
-                        .with_rank_increment(rank_increment)
-                        .with_seed(1234)
-                        .with_final_svd(final_svd),
-                ),
-            reps,
-            exact_ref,
-        );
+        if algorithm == "all" || algorithm == "zipup" {
+            run_case(
+                &format!("{label}/zipup"),
+                &left,
+                &right,
+                ContractionOptions::zipup().with_max_bond_dim(max_rank),
+                reps,
+                exact_ref,
+            );
+        }
+        if algorithm == "all" || algorithm == "src-fixed" {
+            run_case(
+                &format!("{label}/src-fixed"),
+                &left,
+                &right,
+                ContractionOptions::src()
+                    .with_max_bond_dim(max_rank)
+                    .with_src_options(
+                        SrcOptions::fixed()
+                            .with_seed(1234)
+                            .with_final_svd(final_svd),
+                    ),
+                reps,
+                exact_ref,
+            );
+        }
+        if algorithm == "all" || algorithm == "src-adaptive" {
+            run_case(
+                &format!("{label}/src-adaptive"),
+                &left,
+                &right,
+                ContractionOptions::src()
+                    .with_max_bond_dim(max_rank)
+                    .with_src_options(
+                        SrcOptions::adaptive(1.0e-4, max_rank)
+                            .with_min_rank(2)
+                            .with_rank_increment(rank_increment)
+                            .with_seed(1234)
+                            .with_final_svd(final_svd),
+                    ),
+                reps,
+                exact_ref,
+            );
+        }
     };
 
     if mode == "mpo-mps" || mode == "both" {

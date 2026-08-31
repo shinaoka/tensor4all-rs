@@ -176,6 +176,36 @@ where
         .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
 }
 
+/// Build the factorized probe tensors for one batch of SRC columns.
+///
+/// Each returned tensor carries one physical output index and the shared
+/// `batch` index. Keeping these tensors separate lets a tree-message
+/// contraction eliminate incoming branch bonds before joining the two local
+/// operands, instead of materializing their full virtual-bond product.
+pub(super) fn probe_batch_tensors<T>(
+    outputs: &[T::Index],
+    probes: &ProbeBank<T::Index>,
+    first_column: usize,
+    width: usize,
+    batch: &T::Index,
+) -> Result<Vec<T>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    if width == 0 || batch.dim() != width {
+        anyhow::bail!(
+            "contract_src: probe batch dimension {} does not match width {}",
+            batch.dim(),
+            width
+        );
+    }
+    outputs
+        .iter()
+        .map(|index| single_probe_batch::<T>(index, probes, first_column, width, batch))
+        .collect()
+}
+
 /// Return the checked product of a list of index dimensions.
 pub(super) fn product_dim<I: IndexLike>(indices: &[I]) -> Result<usize> {
     indices.iter().try_fold(1usize, |size, index| {
@@ -207,7 +237,7 @@ where
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, None)?;
     let probed_b = contract_operand_with_probes(tensor_b, &b_probes, None)?;
-    T::contract(&[&probed_a, &probed_b]).map_err(|error| {
+    probed_a.contract_pair(&probed_b).map_err(|error| {
         anyhow::anyhow!("contract_src: factorized probe contraction failed: {error}")
     })
 }
@@ -234,7 +264,7 @@ where
         );
     }
     if outputs.is_empty() {
-        let local = T::contract(&[tensor_a, tensor_b]).map_err(|error| {
+        let local = tensor_a.contract_pair(tensor_b).map_err(|error| {
             anyhow::anyhow!("contract_src: scalar local pair contraction failed: {error}")
         })?;
         let batch_values = T::ones(std::slice::from_ref(batch)).map_err(|error| {
@@ -244,10 +274,7 @@ where
             anyhow::anyhow!("contract_src: scalar probe batch broadcast failed: {error}")
         });
     }
-    let probe_tensors = outputs
-        .iter()
-        .map(|index| single_probe_batch::<T>(index, probes, first_column, width, batch))
-        .collect::<Result<Vec<_>>>()?;
+    let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, Some(batch))?;
     let probed_b = contract_operand_with_probes(tensor_b, &b_probes, Some(batch))?;
@@ -265,9 +292,11 @@ pub(super) fn contract_prefix_with_site_pair<T>(prefix: &T, tensor_a: &T, tensor
 where
     T: TensorLike,
 {
-    let after_a = T::contract(&[prefix, tensor_a])
+    let after_a = prefix
+        .contract_pair(tensor_a)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
-    T::contract(&[&after_a, tensor_b])
+    after_a
+        .contract_pair(tensor_b)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))
 }
 
@@ -293,10 +322,12 @@ where
         .map(|index| single_probe::<T>(index, probes, column))
         .collect::<Result<Vec<_>>>()?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    let mut result = T::contract(&[prefix, tensor_a])
+    let mut result = prefix
+        .contract_pair(tensor_a)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
     result = contract_operand_with_probes(&result, &a_probes, None)?;
-    result = T::contract(&[&result, tensor_b])
+    result = result
+        .contract_pair(tensor_b)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
     contract_operand_with_probes(&result, &b_probes, None)
 }
@@ -333,10 +364,7 @@ where
     // `env @ psi[j]` followed by `H[j] @ ...` path.  Building the complete
     // local MPO-MPO product first would expose both virtual bonds at once and
     // costs O(chi^4) storage for a single probe block.
-    let probe_tensors = outputs
-        .iter()
-        .map(|index| single_probe_batch(index, probes, first_column, width, batch))
-        .collect::<Result<Vec<_>>>()?;
+    let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     // `tensor_a`/`tensor_b` are the raw, unprobed local operands -- `batch`
     // is never one of their indices (only `prefix`/`result` and the probes
@@ -351,10 +379,12 @@ where
     // no true batched-BLAS fast path (unlike the retained-index case in
     // `contract_operand_with_probes`, where `batch` genuinely is shared
     // between two probed operands and retaining is required).
-    let mut result = T::contract(&[prefix, tensor_a])
+    let mut result = prefix
+        .contract_pair(tensor_a)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
     result = contract_operand_with_probes(&result, &a_probes, Some(batch))?;
-    result = T::contract(&[&result, tensor_b])
+    result = result
+        .contract_pair(tensor_b)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
     contract_operand_with_probes(&result, &b_probes, Some(batch))
 }

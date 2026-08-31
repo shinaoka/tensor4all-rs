@@ -483,9 +483,9 @@ where
     probes: &'a mut ProbeBank<T::Index>,
     batch_size: usize,
     // Per-site list of (batch tensor, batch index, width) segments, storing
-    // whatever chunk each `grow_segment` call actually produced -- segments
-    // need not all be the same width (see the design spec's Section 3 on
-    // ragged final segments).
+    // whatever chunk each `grow_segment` call actually produced. The first
+    // segment may be narrower than `batch_size`; subsequent segments stay on
+    // the full rank-increment grid.
     segments: Vec<Vec<(T, T::Index, usize)>>,
     segment_total_width: usize,
 }
@@ -674,16 +674,26 @@ where
     /// The common case (the request aligns exactly with one already-grown or
     /// newly-grown segment's boundaries) returns that segment directly, with
     /// no `select_indices`/`stack_along_new_index` at all. A request that
-    /// only partially overlaps a segment boundary (possible when an earlier
-    /// caller's own `maximum_width` capped a segment at a width narrower
-    /// than `batch_size` -- see the design spec's Section 3) falls back to
-    /// splitting and re-stacking the covering segments; this is expected to
-    /// be rare, not routine.
+    /// only partially overlaps a segment boundary falls back to splitting and
+    /// re-stacking the covering segments; this is expected to be rare, not
+    /// routine. Only the initial segment may be narrower than `batch_size`;
+    /// later growth deliberately computes a full segment so rank increments
+    /// remain aligned across sites.
     fn request(&mut self, site: usize, start: usize, width: usize) -> Result<(T, T::Index)> {
-        self.probes.extend_to(start + width)?;
-        while self.segment_total_width < start + width {
+        let requested_end = start
+            .checked_add(width)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: requested probe range overflows"))?;
+        while self.segment_total_width < requested_end {
             let next_start = self.segment_total_width;
-            let next_width = self.batch_size.min(start + width - next_start);
+            let next_width = if next_start == 0 {
+                self.batch_size.min(requested_end)
+            } else {
+                self.batch_size
+            };
+            let next_end = next_start
+                .checked_add(next_width)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: cached probe range overflows"))?;
+            self.probes.extend_to(next_end)?;
             self.grow_segment(next_start, next_width)?;
         }
 
@@ -708,7 +718,7 @@ where
             let segment_end = cursor + segment_width;
             cursor = segment_end;
             let overlap_start = segment_start.max(start);
-            let overlap_end = segment_end.min(start + width);
+            let overlap_end = segment_end.min(requested_end);
             if overlap_start >= overlap_end {
                 continue;
             }
@@ -725,7 +735,7 @@ where
         anyhow::ensure!(
             collected.len() == width,
             "contract_src: site {site} misaligned segment request [{start}, {}) only found {} of {} columns",
-            start + width,
+            requested_end,
             collected.len(),
             width
         );
@@ -850,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn request_reuses_an_earlier_ragged_segment_without_recomputing_it() {
+    fn request_overgenerates_a_full_post_initial_segment_for_reuse() {
         let (a0, b0, a1, b1) = two_site_local(3);
         let local = vec![(&a0, &b0), (&a1, &b1)];
         let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
@@ -860,25 +870,19 @@ mod tests {
             42,
         )
         .unwrap();
-        // batch_size 3, first caller only needs width 4 -- forces a ragged
-        // final segment of width 1 (segments end up [0,3) then [3,4)).
+        // batch_size 3, first caller only needs width 4. The cache computes
+        // a full second increment so a later width-3 request can reuse it.
         let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3);
         let (_first, _) = cache.request(0, 0, 4).unwrap();
+        assert_eq!(cache.segments[0].len(), 2, "expected two width-3 segments");
         assert_eq!(
-            cache.segments[0].len(),
-            2,
-            "expected a [0,3) segment plus a ragged [3,4) segment"
-        );
-        assert_eq!(
-            cache.segments[0][1].2, 1,
-            "second segment should be the ragged width-1 remainder"
+            cache.segments[0][1].2, 3,
+            "post-initial growth should use the full rank increment"
         );
 
-        // A second caller re-reading exactly the ragged [3,4) segment must
-        // hit it directly (aligned request), not fall back to misaligned
-        // handling.
-        let (_second, second_batch) = cache.request(0, 3, 1).unwrap();
-        assert_eq!(second_batch.dim(), 1);
+        // A later caller can reuse that full segment directly.
+        let (_second, second_batch) = cache.request(0, 3, 3).unwrap();
+        assert_eq!(second_batch.dim(), 3);
         assert_eq!(
             cache.segments[0].len(),
             2,

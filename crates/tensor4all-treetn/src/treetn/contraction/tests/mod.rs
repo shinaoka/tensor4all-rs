@@ -675,10 +675,10 @@ fn make_five_site_chain_pair(
 }
 
 #[test]
-fn src_adaptive_chain_reuses_a_ragged_segment_across_sites_and_matches_dense_reference() {
+fn src_adaptive_chain_reuses_an_aligned_segment_across_sites_and_matches_dense_reference() {
     // A 5-site chain with a physical dimension small enough that an early
-    // site's maximum_width caps below a full rank_increment step (forcing
-    // a ragged segment), while a later site needs to grow past it.
+    // site's maximum_width ends inside a rank-increment step, while a later
+    // site needs the complete cached segment.
     let (mpo, mps) = make_five_site_chain_pair(
         /* physical_dim */ 2, /* bond_dim */ 3, /* seed */ 21,
     );
