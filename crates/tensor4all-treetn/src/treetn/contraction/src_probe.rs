@@ -379,12 +379,12 @@ where
     // no true batched-BLAS fast path (unlike the retained-index case in
     // `contract_operand_with_probes`, where `batch` genuinely is shared
     // between two probed operands and retaining is required).
-    let mut result = prefix
-        .contract_pair(tensor_a)
+    let mut result = tensor_a
+        .contract_pair(prefix)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
     result = contract_operand_with_probes(&result, &a_probes, Some(batch))?;
-    result = result
-        .contract_pair(tensor_b)
+    result = tensor_b
+        .contract_pair(&result)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
     contract_operand_with_probes(&result, &b_probes, Some(batch))
 }
@@ -1013,14 +1013,11 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(actual.indices(), reference.indices());
-        let actual_values = actual.to_vec::<f64>().unwrap();
-        let reference_values = reference.to_vec::<f64>().unwrap();
-        assert_eq!(actual_values.len(), reference_values.len());
-        assert!(actual_values
-            .iter()
-            .zip(reference_values)
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-10));
+        let error = actual.distance(&reference).unwrap();
+        assert!(
+            error < 1.0e-10,
+            "batched prefix contraction error is {error}"
+        );
 
         let prefix_without_batch = prefix.select_indices(&[batch], &[0]).unwrap();
         let reference = contract_site_pair(&tensor_a, &tensor_b, &[&prefix_without_batch]).unwrap();

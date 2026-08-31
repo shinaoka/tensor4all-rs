@@ -129,14 +129,14 @@ fn qr_backend_reconstructs_real_matrix() {
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
         .expect("valid QR test input");
 
-    let (q, r) = qr_backend(&input).unwrap();
+    let input_values = row_major_values(&input);
+    let (q, r) = qr_backend(input).unwrap();
     assert_eq!(q.shape(), &[2, 2]);
     assert_eq!(r.shape(), &[2, 2]);
 
     let q_values = row_major_values(&q);
     let r_values = row_major_values(&r);
     let reconstructed = matmul_row_major(&q_values, 2, 2, &r_values, 2);
-    let input_values = row_major_values(&input);
 
     for (actual, expected) in reconstructed.iter().zip(input_values.iter()) {
         assert!(

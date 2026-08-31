@@ -909,25 +909,24 @@ where
     })
 }
 
-/// Compute a thin/economy QR decomposition on a typed tensor.
+/// Compute a thin/economy QR decomposition, consuming the input tensor so its
+/// column-major storage can be transferred to the backend without copying.
 /// # Errors
 ///
 /// Returns an error when the QR fails (a backend or non-convergence
 /// /// failure).
 ///
 pub fn qr_backend<T>(
-    a: &TypedTensor<T>,
+    a: TypedTensor<T>,
 ) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(
-        a.shape().to_vec(),
-        a.host_data()
-            .map_err(|e| anyhow!("QR input host access failed: {e}"))?
-            .to_vec(),
-    )
-    .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
+    let (shape, data) = a
+        .into_vec_col_major()
+        .map_err(|e| anyhow!("QR input host access failed: {e}"))?;
+    let tensor = T::into_tensor(shape, data)
+        .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
     let (q, r) = with_default_session(|session| tensor.qr(session))
         .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((

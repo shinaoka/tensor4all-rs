@@ -51,7 +51,7 @@ fn incremental_qr_matches_backend_qr_projector_and_estimate() {
     incremental.append(&second).unwrap();
     incremental.append(&third).unwrap();
 
-    let (direct_q, direct_r) = qr_backend(&full.to_typed_tensor()).unwrap();
+    let (direct_q, direct_r) = qr_backend(full.clone().into_typed_tensor()).unwrap();
     let direct_q = Matrix::try_from_typed_tensor(direct_q).unwrap();
     let direct_r = Matrix::try_from_typed_tensor(direct_r).unwrap();
     let direct_reconstruction = mat_mul(&direct_q, &direct_r).unwrap();

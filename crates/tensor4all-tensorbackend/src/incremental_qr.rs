@@ -154,7 +154,7 @@ where
             .into());
         }
 
-        let (q, q_r) = factorize_backend(&q)?;
+        let (q, q_r) = factorize_backend(q)?;
         let r = mat_mul(&q_r, &r)
             .map_err(|error| anyhow!("incremental QR factor conversion failed: {error}"))?;
         let inverse_adjoint = try_inverse_adjoint(&r);
@@ -206,7 +206,7 @@ where
             .into());
         }
 
-        let (q, r) = factorize_backend(&input)?;
+        let (q, r) = factorize_backend(input)?;
         let inverse_adjoint = try_inverse_adjoint(&r);
         Ok(Self {
             q,
@@ -286,7 +286,7 @@ where
             * new_columns_norm.max(1.0);
 
         let (projection, residual) = project_twice(&self.q, new_columns)?;
-        let (appended_q, appended_r) = factorize_backend(&residual)?;
+        let (appended_q, appended_r) = factorize_backend(residual)?;
         if diagonal_is_full_rank(&appended_r, residual_tolerance) {
             return self.commit_full_rank_block(projection, appended_q, appended_r);
         }
@@ -299,7 +299,7 @@ where
                 self.commit_dependent_column(projection)?;
                 continue;
             }
-            let (appended_q, appended_r) = factorize_backend(&residual)?;
+            let (appended_q, appended_r) = factorize_backend(residual)?;
             self.commit_full_rank_block(projection, appended_q, appended_r)?;
         }
         Ok(())
@@ -543,12 +543,12 @@ where
 }
 
 fn factorize_backend<T>(
-    input: &Matrix<T>,
+    input: Matrix<T>,
 ) -> std::result::Result<(Matrix<T>, Matrix<T>), BackendLinalgError>
 where
     T: IncrementalQrScalar,
 {
-    let (q, r) = qr_backend(&input.to_typed_tensor())?;
+    let (q, r) = qr_backend(input.into_typed_tensor())?;
     let q = Matrix::try_from_typed_tensor(q)
         .map_err(|error| anyhow!("incremental QR backend Q conversion failed: {error}"))?;
     let r = Matrix::try_from_typed_tensor(r)
