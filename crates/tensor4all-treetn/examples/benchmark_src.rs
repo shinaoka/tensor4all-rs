@@ -2,7 +2,9 @@
 //!
 //! Run with `RAYON_NUM_THREADS=1` for reproducible CPU measurements. Set
 //! `T4A_PROFILE_CONTRACT=1` to print the aggregated dense contraction
-//! signatures after each case.
+//! signatures after each case. For MPO--MPS scaling studies, the positional
+//! bond-dimension argument controls the MPO bond dimension and
+//! `T4A_BENCH_MPS_BOND_DIM` optionally sets a different MPS bond dimension.
 
 use std::time::Instant;
 
@@ -25,7 +27,8 @@ fn random_tensor(indices: Vec<DynIndex>, rng: &mut StdRng) -> IdxTensor {
 fn make_mpo_mps(
     n_sites: usize,
     physical_dim: usize,
-    bond_dim: usize,
+    mpo_bond_dim: usize,
+    mps_bond_dim: usize,
     seed: u64,
 ) -> (Network, Network) {
     assert!(n_sites >= 2);
@@ -37,10 +40,10 @@ fn make_mpo_mps(
         .map(|_| DynIndex::new_dyn(physical_dim))
         .collect::<Vec<_>>();
     let operator_bonds = (0..n_sites - 1)
-        .map(|_| DynIndex::new_dyn(bond_dim))
+        .map(|_| DynIndex::new_dyn(mpo_bond_dim))
         .collect::<Vec<_>>();
     let state_bonds = (0..n_sites - 1)
-        .map(|_| DynIndex::new_dyn(bond_dim))
+        .map(|_| DynIndex::new_dyn(mps_bond_dim))
         .collect::<Vec<_>>();
 
     let mut operator_tensors = Vec::with_capacity(n_sites);
@@ -252,7 +255,7 @@ fn main() {
     let n_sites = args
         .next()
         .map_or(10, |value| value.parse().expect("n_sites"));
-    let bond_dim = args
+    let bond_dim: usize = args
         .next()
         .map_or(4, |value| value.parse().expect("bond_dim"));
     let reps = args.next().map_or(1, |value| value.parse().expect("reps"));
@@ -264,7 +267,20 @@ fn main() {
         .next()
         .is_some_and(|value| value.parse().expect("final_svd"));
     let physical_dim = 2;
-    let max_rank = args.next().map_or(bond_dim * bond_dim, |value| {
+    let mps_bond_dim: usize = std::env::var("T4A_BENCH_MPS_BOND_DIM")
+        .map_or(bond_dim, |value| value.parse().expect("MPS bond dimension"));
+    let mpo_mps_product_bond = bond_dim
+        .checked_mul(mps_bond_dim)
+        .expect("MPO-MPS product bond dimension");
+    let equal_bond_product = bond_dim
+        .checked_mul(bond_dim)
+        .expect("product bond dimension");
+    let default_max_rank = match mode.as_str() {
+        "mpo-mps" => mpo_mps_product_bond,
+        "both" => mpo_mps_product_bond.max(equal_bond_product),
+        _ => equal_bond_product,
+    };
+    let max_rank = args.next().map_or(default_max_rank, |value| {
         value.parse().expect("target_rank")
     });
     let algorithm = std::env::var("T4A_BENCH_ALGORITHM").unwrap_or_else(|_| "all".to_string());
@@ -277,7 +293,7 @@ fn main() {
     );
 
     println!(
-        "config=n_sites:{n_sites} physical_dim:{physical_dim} input_bond:{bond_dim} max_rank:{max_rank} reps:{reps} mode:{mode} algorithm:{algorithm} rank_increment:{rank_increment} final_svd:{final_svd}"
+        "config=n_sites:{n_sites} physical_dim:{physical_dim} mpo_bond:{bond_dim} mps_bond:{mps_bond_dim} max_rank:{max_rank} reps:{reps} mode:{mode} algorithm:{algorithm} rank_increment:{rank_increment} final_svd:{final_svd}"
     );
 
     let skip_exact = std::env::var("T4A_BENCH_SKIP_EXACT").is_ok();
@@ -343,7 +359,7 @@ fn main() {
     };
 
     if mode == "mpo-mps" || mode == "both" {
-        let (operator, state) = make_mpo_mps(n_sites, physical_dim, bond_dim, 7);
+        let (operator, state) = make_mpo_mps(n_sites, physical_dim, bond_dim, mps_bond_dim, 7);
         run("mpo-mps", operator, state);
     }
     if mode == "mpo-mpo" || mode == "both" {

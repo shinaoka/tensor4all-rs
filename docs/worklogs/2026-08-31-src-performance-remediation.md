@@ -230,43 +230,102 @@ exact dense MPO--MPS result used for the error columns.
 ### High-bond complexity regression against issue #563
 
 Issue #563 gives the simplified arithmetic cost
-`O(n D chi chibar^2)` for both zip-up and SRC, where `chi` is the input bond
-dimension and `chibar` is the retained/output bond dimension. With `n` and
-`D` fixed and a constant `chibar`, this predicts an approximately linear
-log-log slope in `chi`. The following ordinary-least-squares fits use
-`log2(ms/run)` versus `log2(input bond)` for bonds 16, 32, 64, and 128; the
-last column is the measured time ratio from bond 32 to bond 128.
+`O(n D chi chibar^2)` for both zip-up and SRC, where `D` is the MPO bond
+dimension, `chi` is the MPS bond dimension, and `chibar` is the output bond
+dimension. The earlier version of this worklog incorrectly treated `D` as the
+fixed physical dimension. The paper states that the simplified expression
+assumes `d = O(1)` and `D <= chi <= chibar`; the benchmark violates that
+assumption once its common input bond exceeds the adaptive output bond 32.
 
-| Implementation/method | slope p | R^2 | time(128) / time(32) |
+The paper's full SRC count is
+`O(n d D chi chibar (chi + chibar + d D))`. The benchmark varied both input
+bonds together (`D = chi = b`) with `d = 2` and high-bond adaptive output
+`chibar = 32`. Substitution gives a leading cubic dependence on `b`, not a
+linear one. The paper's full zip-up count,
+`O(n (d D chi chibar^2 + d^2 D^2 chi chibar))`, has the same leading cubic
+dependence in this regime. For bond 64 to 128 the full SRC expression predicts
+a 7.43x increase (local log2 slope 2.89). The corresponding profiled Rust
+pairwise-contraction kernel time increased from 22.650 ms to 171.412 ms: 7.57x,
+or slope 2.92. That kernel therefore follows the full paper count almost
+exactly; it does not contain an additional asymptotic bond factor.
+
+To remove the unrelated `max_rank = bond^2` fixed-rank stress configuration,
+Rust and Python were also rerun with `chibar/max_rank = 32` at bonds 32, 64,
+and 128:
+
+| Implementation/method | bond 32 ms | bond 64 ms | bond 128 ms | local 64-to-128 slope |
+|---|---:|---:|---:|---:|
+| Rust zip-up | 19.601 | 28.881 | 56.723 | 0.97 |
+| Rust SRC fixed | 24.871 | 105.534 | 638.834 | 2.60 |
+| Rust SRC adaptive | 36.614 | 86.736 | 440.018 | 2.34 |
+| Python zip-up | 13.418 | 78.543 | 489.767 | 2.64 |
+| Python SRC fixed | 17.504 | 107.301 | 633.977 | 2.56 |
+| Python SRC adaptive (incremental) | 11.358 | 56.101 | 348.851 | 2.64 |
+
+Both SRC implementations trend toward the full formula's cubic high-bond
+regime, and their fixed-rank bond-128 times are nearly identical (639 ms Rust,
+634 ms Python). Rust adaptive is about 26% slower than Python at that point,
+which is a constant-factor gap rather than evidence of a wrong asymptotic
+complexity. Rust zip-up is substantially faster than the full-count trend in
+this measured range; an upper operation-count bound does not require every
+implementation/backend to attain that exponent.
+
+The benchmark now reports the MPO and MPS bond dimensions separately and
+accepts `T4A_BENCH_MPS_BOND_DIM`, preventing future regressions from silently
+varying `D` and `chi` together while interpreting one as fixed.
+
+The corrected benchmark was then used to vary one input bond at a time with
+adaptive `chibar/max_rank = 32` (five repetitions):
+
+| Sweep | MPO bond D | MPS bond chi | Rust adaptive ms/run |
 |---|---:|---:|---:|
-| Rust zip-up | 0.628 | 0.961 | 2.96x |
-| Rust SRC fixed | 2.677 | 0.998 | 38.05x |
-| Rust SRC adaptive | 1.330 | 0.890 | 12.82x |
-| Python zip-up | 1.953 | 0.960 | 16.21x |
-| Python SRC fixed | 1.876 | 0.994 | 14.23x |
-| Python SRC adaptive (incremental) | 1.914 | 0.972 | 21.30x |
+| vary D | 32 | 32 | 40.217 |
+| vary D | 64 | 32 | 60.555 |
+| vary D | 128 | 32 | 126.072 |
+| vary chi | 32 | 32 | 39.782 |
+| vary chi | 32 | 64 | 58.348 |
+| vary chi | 32 | 128 | 99.289 |
 
-The adaptive and Rust zip-up cases retain a roughly constant output bond in
-the high-bond runs (Rust adaptive/zip-up: 32; Python adaptive: 32; Python
-zip-up: 256). Under the issue's model these cases should therefore have
-`p` near 1. Rust zip-up is compatible with that prediction (`p=0.63`), but
-Rust adaptive drifts upward at the largest bonds (the local 32-to-128 slope is
-`1.84`). Python zip-up and adaptive are clearly superlinear in this range
-(`p=1.95` and `1.91`; local slopes `2.01` and `2.21`). Equivalently, after
-dividing by `chi chibar^2`, the bond-32-to-128 normalized time grows about
-3.2x for Rust adaptive and 5.3x for Python adaptive, whereas the ideal model
-would keep it approximately flat.
+Changing either input bond alone is much milder than changing both together.
+This confirms that the apparent extra scaling came from the old benchmark's
+coupled `D = chi = input_bond` axis, not from a Rust-only repeated-work loop.
 
-Fixed SRC is not a clean test of the constant-`chibar` prediction: the
-configured maximum rank is `bond^2`, while the observed output bond saturates
-at 512 from bond 32 onward. Its measured slopes (`2.68` Rust, `1.88` Python)
-are therefore a rank-selection/implementation stress result, not evidence for
-the nominal `p=1` or the fully saturated `p=5` (`chibar=chi^2`) regime.
+### Why the fixed Python environment order regresses in Rust
 
-These are wall-time regressions, so QR, allocation, planner, BLAS, and runtime
-overheads are included. They are evidence that the current Rust adaptive path
-does not yet realize the issue's ideal high-bond scaling, while Rust zip-up is
-the closest of the measured implementations.
+The first Rust A/B port of the Python cap update forced the reference order
+`Q^* x right_environment -> MPO -> MPS` at every adaptive step. That version
+was about 10--11% slower at bonds 64 and 128, so it was reverted. A native
+einsum path trace explains the reversal: the reference order is optimal only
+for some relations between the old right-cap rank and the newly selected
+rank, while the Rust N-ary planner changes the tree with the actual dimensions.
+
+For a representative bond-64 growth step, the factor has dimensions
+`[physical=2, old_cap=16, new_rank=32]`, the right environment has
+`[MPO_left=64, MPS_left=64, old_cap=16]`, and the MPO/MPS bonds are 64. The
+time-optimized Rust tree is:
+
+1. `MPS x environment`: flop-index product 8,388,608, intermediate 131,072
+   elements;
+2. `MPO x partial`: 16,777,216, intermediate 131,072 elements;
+3. `Q^* x partial`: 4,194,304, intermediate 131,072 elements.
+
+The total is 29,360,128 with a 131,072-element peak. Forcing the Python order
+on the same tensors gives 4,194,304 + 33,554,432 + 16,777,216 = 54,525,952
+and a 262,144-element peak: 1.86x the arithmetic proxy and 2x the temporary.
+When the ranks reverse (`old_cap=32`, `new_rank=16`), the Rust planner itself
+selects the Python order; the issue is therefore forcing that order across all
+adaptive rank configurations, not the order in isolation.
+
+A second A/B used an explicit rank-aware pairwise implementation that follows
+those two planner choices. With five repetitions it measured 93.679 ms versus
+94.434 ms for the N-ary planner at bond 64 (within run noise), and 481.046 ms
+versus 466.733 ms at bond 128 (3.1% slower). Under pairwise profiling at bond
+128, the explicit form issued 200 instead of 176 pairwise calls and produced
+211,025,920 instead of 167,772,160 output bytes across those calls. Splitting
+one N-ary compiled graph into three independently dispatched pairwise graphs
+therefore loses another constant factor even after matching its arithmetic
+tree. The explicit candidates were reverted; retaining the adaptive N-ary
+planner is the measured implementation choice.
 
 Because the scalar type, RNG, warm-up policy, and backend differ, these rows
 are diagnostic rather than a claim of a normalized language benchmark. The
