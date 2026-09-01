@@ -14,23 +14,34 @@ This is a static, line-range-complete audit of the production code in
 `*/tests/` trees are validation evidence, not production algorithm code, and
 are listed separately below.
 
-Only these two algorithm authorities were allowed:
+Only these algorithm and performance authorities were allowed:
 
 1. Ritter, *Fast elementwise operations on tensor trains with alternating
    cross interpolation*, arXiv:2604.00037v2 (23 Apr 2026), including Algorithms
    1--5 and equations (4)--(11).
 2. The chain implementation in `crates/tensor4all-aci/src/` at the audited
    revision (called “simplett ACI” below).
+3. Hiroshi Shinaoka's review comments on the merged original TreeACI
+   [PR #646](https://github.com/tensor4all/tensor4all-rs/pull/646), specifically
+   the [performance-blocking review](https://github.com/tensor4all/tensor4all-rs/pull/646#issuecomment-5313040237),
+   the [representative-rank comparison protocol](https://github.com/tensor4all/tensor4all-rs/pull/646#issuecomment-5316892012),
+   and the [packed directed-message cache design](https://github.com/tensor4all/tensor4all-rs/pull/646#issuecomment-5316916280).
+4. Hiroshi Shinaoka's topology-cost caveat in large
+   [issue #671](https://github.com/tensor4all/tensor4all-rs/issues/671), especially
+   the [coordination-number/bond-dimension relation](https://github.com/tensor4all/tensor4all-rs/issues/671#issuecomment-5391376991).
 
-No cited TCI paper, previous TreeACI worklog, issue, pull request, or TreeTN
-implementation was used as algorithm authority. TreeTN source was inspected
-only to determine the runtime semantics of calls made by TreeACI. Tests and
-benchmarks are evidence only.
+No other cited TCI paper, previous TreeACI worklog, issue, pull request, or
+TreeTN implementation was used as algorithm authority. TreeTN source was
+inspected only to determine the runtime semantics and costs of calls made by
+TreeACI. Tests and benchmarks are evidence only.
 
 The provenance labels used below are:
 
 - **Paper**: a direct implementation of a cited equation or pseudocode step.
 - **simplett ACI**: a direct analogue of the cited chain implementation.
+- **Hiroshi review**: an authorized performance expectation, measurement
+  protocol, or cache design from PR #646 or issue #671; it is not silently
+  promoted to an algorithm derivation.
 - **Tree generalization — re-derived**: absent from the paper's equations and
   pseudocode; derived from the cut-message equations in this document.
 - **[AI Supplied]**: no authority in either allowed source. This includes
@@ -247,8 +258,115 @@ range inherit the range's label unless a narrower row says otherwise.
 | `order_experiment.rs`, `skeleton.rs`, `validate.rs` | Edge-order experiments and independent nesting/interpolation/gauge checks | **[AI Supplied]** validation evidence; excluded from production ledger because `lib.rs:67-72` compiles them only for tests |
 | `problem.rs:425-614`, `options.rs:127-137`, `scalar.rs:101-194` | Inline unit-test modules | Evidence only; excluded from production ranges |
 | `src/*/tests/mod.rs`, `tests/*.rs` | Correctness, error-path, resource, and timing checks | Evidence only; never used as provenance |
+| `tensor4all-treetn/benches/cached_evaluator.rs` additions | Same-input cold/warm evaluator parity and `d * product(chi_e)` scaling fixtures | Measurement protocol and representative `chi` values: **Hiroshi review**; star/chain fixtures, tolerances, Criterion configuration, and benchmark plumbing: **[AI Supplied]** |
 
 ## Performance findings
+
+### P0: warm chain evaluation does not reuse the center contraction
+
+The representative comparison requested in Hiroshi's PR #646 review was added
+to `crates/tensor4all-treetn/benches/cached_evaluator.rs`. It uses the same
+16-site `f64` chain and 8-by-8 coordinate batch for both evaluators, fixes both
+at the midpoint, validates every result before timing, constructs cold
+evaluators outside the timed region, and measures both cold and repeated warm
+calls at `chi = 64, 128, 256`.
+
+The APIs have an important, unavoidable comparison detail: `TTCache` splits on
+a bond, whereas `TreeTNCachedEvaluator` centers on a node. The latter is the
+closest representable midpoint, not an identical contraction object. That
+difference is itself causal on warm calls.
+
+| chi | TTCache cold | TreeTN cold | Tree/TT cold | TTCache warm | TreeTN warm | Tree/TT warm |
+|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 2.189 ms | 4.429 ms | 2.02x | 10.58 us | 3.318 ms | 314x |
+| 128 | 9.058 ms | 9.860 ms | 1.09x | 13.49 us | 4.516 ms | 335x |
+| 256 | 37.79 ms | 25.04 ms | 0.66x | 19.17 us | 8.265 ms | 431x |
+
+Cold results rule out a general high-bond defect in TreeTN's chain arithmetic:
+the gap closes and reverses as `chi` grows. Warm results reproduce the severe
+chain regression and identify it as a reuse-granularity problem:
+
+- `cached_evaluator.rs:1151-1208` eagerly walks every non-center node in
+  postorder on every call. An all-hit parent message does not short-circuit its
+  descendants as `TTCache::evaluate_left/right` recursion does.
+- The all-hit path at `cached_evaluator.rs:2772-2817` allocates a new packed
+  result and copies every cached column for every visited directed message.
+- `cached_evaluator.rs:1230-1310` rebuilds local keys and compact subtree
+  assignment batches from scratch on every call.
+- Most importantly, the cache excludes the center node.
+  `cached_evaluator.rs:3387-3552,3718-3834` contracts the center tensor again
+  on every call. For an internal chain center this is
+  `O(n_points * d * chi^2)`. A warm `TTCache` has already cached environments
+  that include every site tensor and only takes an `O(n_points * chi)` inner
+  product at its split.
+
+A two-point floating-zone scan, which is closer to a Guard coordinate walk,
+confirms that the 64-point batch is not creating the effect. On an 8-site
+chain, TreeTN/TTCache was 147.3 us/0.870 us (169x) at `chi=128` and
+258.4 us/1.127 us (229x) at `chi=256`.
+
+The existing “cache was hit” tests prove correctness and nonzero reuse, but do
+not assert that a hit skips descendant reconstruction or center arithmetic.
+The correct fix seam is therefore an edge-centered or lazily recursive cached
+evaluation plan, not a faster hash function. Such a plan is **[AI Supplied]**
+unless separately re-derived and reviewed; neither the paper nor simplett ACI
+specifies its tree form.
+
+### P0: distinguish topology-required branch cost from branch overhead
+
+Hiroshi's issue #671 comment gives the correct normalization. For physical
+dimension `d`, coordination number `z`, and incident bond dimensions
+`chi_1,...,chi_z`, the local tensor has
+
+```text
+d * product_e chi_e
+```
+
+elements; only for uniform bonds is this `d * chi^z`. The new
+`treetn_warm_center_coordination_vs_bond` benchmark places this actual product
+in every benchmark ID and compares the same two-point warm center scan on a
+degree-2 chain node and degree-3 star hub.
+
+| chi | z=2 local elements | z=2 time | z=3 local elements | z=3 time | z3/z2 time |
+|---:|---:|---:|---:|---:|---:|
+| 32 | 2,048 | 105.2 us | 65,536 | 188.4 us | 1.79x |
+| 64 | 8,192 | 112.0 us | 524,288 | 823.2 us | 7.35x |
+
+The z=3 local work proxy is 32x and 64x larger respectively, yet elapsed time
+is only 1.79x and 7.35x larger. Equivalently, time per local tensor element is
+lower at the branch hub in these fixtures. This does **not** prove all branch
+paths efficient, but it does show that the raw center kernel's absolute branch
+cost is presently within the topology-required envelope; a wall-time ratio
+without `d * product(chi_e)` would misdiagnose it.
+
+The unresolved branch-specific implementation costs are elsewhere:
+
+- TreeACI candidate frames still fall from a batched kernel to per-candidate
+  scalar recursion at three or more incoming components (next section).
+- A non-center degree-3 node uses the grouped branch-message path, which
+  rebuilds the physical-slice `left` packing on each cache miss even though the
+  local core is immutable. Existing diagnostics can split setup/matmul/
+  accumulation, but this audit has not yet produced a representative
+  end-to-end branch-message trace. Treat it as a measured-next hypothesis, not
+  a confirmed dominant cause.
+
+### P1: the packed message cache still violates part of the review protocol
+
+The persistent cache implements the broad shape of Hiroshi's PR #646 design,
+but two details remain avoidable:
+
+- `get_or_compute_node_message` maps each requested missing key back to its
+  column with `missing_keys.iter().position(...)` and then `to_vec()`. For `m`
+  misses this is `O(m^2)` key comparison plus one allocation/copy per message,
+  before the columns are appended to the packed buffer.
+- `PackedMessageCache::retained_bytes` counts only
+  `columns.len() * size_of::<T>()`. Hiroshi explicitly required real cache
+  memory to include key/HashMap/capacity overhead, not payload alone.
+
+This is not the primary cost in the measured 16-site, `chi=128` floating-zone
+walk: test-only phase timing reported contraction 82.8%, insert 7.7%, lookup
+5.5%, reconstruction 4.0%. It should be fixed after the reuse-granularity
+defect, not mistaken for the 300x warm-call cause.
 
 ### P0: arbitrary-degree branch contraction has a scalar efficiency cliff
 
@@ -390,6 +508,25 @@ Commands were run in release mode in the isolated worktree.
    The benchmark filter still executed untimed correctness setup for `chi=32`,
    `64`, and `128`; those results are not timing samples.
 
+5. The Hiroshi-review evaluator parity benchmark was added and run in release
+   mode. The full cold/warm `chi=64,128,256` results are in the first P0 section
+   above. Its pre-timing numerical parity checks passed at all three ranks.
+
+6. The two-point floating-zone comparison was run at 8 sites for `chi=128` and
+   `256`; its results are in the same P0 section. The coordination-number
+   benchmark was run at `chi=32` and `64`; its results and exact local tensor
+   products are in the branch-cost section.
+
+7. The existing message-cache phase breakdown was rerun in release mode:
+
+   ```text
+   key_and_lookup 1.5 ms (5.5%)
+   contract       21.9 ms (82.8%)
+   insert          2.0 ms (7.7%)
+   reconstruct     1.0 ms (4.0%)
+   total          26.4 ms
+   ```
+
 No profiler trace for the user's exact slow workload was available in this
 audit. Findings labelled P0/P1 above are based on exact control-flow and
 allocation counts plus the isolated branch microbenchmark. A subsequent fix
@@ -398,17 +535,21 @@ branched fixtures with fixed degree/rank before changing production code.
 
 ## Recommended fix order (not implemented in this audit)
 
-1. Add benchmark fixtures that independently scale chain length, branch degree,
+1. Redesign cached chain evaluation so a warm directed-message hit does not
+   eagerly reconstruct descendant messages, and so the varying center's local
+   contraction can be reused at an edge-like cut. Preserve the exact parity
+   benchmark as the regression measurement.
+2. Add the remaining benchmark fixtures that independently scale chain length,
    input bond dimension, and active candidate rank; include callback counts and
-   accuracy/rank parity.
-2. Replace per-edge whole-store `extend` with cut-local incremental frame
+   accuracy/rank parity. The degree/bond local-work fixture now exists.
+3. Replace per-edge whole-store `extend` with cut-local incremental frame
    insertion and eliminate the per-edge whole-TreeTN metadata transaction,
    while retaining failure atomicity at a smaller seam.
-3. Introduce borrowed/packed candidate-frame batches so local update avoids
+4. Introduce borrowed/packed candidate-frame batches so local update avoids
    `Vec<Vec<T>>`, cache-hit cloning, repacking, and scatter where layouts match.
-4. Generalize the batched message contraction to arbitrary incoming degree, or
+5. Generalize the batched message contraction to arbitrary incoming degree, or
    explicitly reject/route high degree until such a kernel exists.
-5. Separately derive a lazy/block LUCI source for (T4) if full branch cross
+6. Separately derive a lazy/block LUCI source for (T4) if full branch cross
    materialization, rather than contraction mechanics, is the dominant limit.
 
 Every item above changes **[AI Supplied]** machinery or requires a new explicit

@@ -1,13 +1,15 @@
 //! Benchmark cached TreeTN batch evaluation against TTCache and uncached TreeTN evaluation.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::ColMajorArrayRef;
+use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_simplett::{
     tensor3_zeros, MultiIndex, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
 };
-use tensor4all_treetn::{tensor_train_to_treetn, CachedEvaluatorOptions, TreeTNCachedEvaluator};
+use tensor4all_treetn::{
+    tensor_train_to_treetn, CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator,
+};
 
 fn generate_tci_like_indices(
     n_left: usize,
@@ -74,6 +76,43 @@ fn multi_indices_to_col_major(indices: &[MultiIndex], n_sites: usize) -> Vec<usi
         }
     }
     values
+}
+
+fn create_uniform_three_leaf_star(
+    local_dim: usize,
+    bond_dim: usize,
+) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    let physical = (0..4)
+        .map(|_| DynIndex::new_dyn(local_dim))
+        .collect::<Vec<_>>();
+    let bonds = (0..3)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+    let hub_len = local_dim * bond_dim * bond_dim * bond_dim;
+    let hub = IdxTensor::from_dense(
+        vec![
+            physical[0].clone(),
+            bonds[0].clone(),
+            bonds[1].clone(),
+            bonds[2].clone(),
+        ],
+        vec![1.0_f64; hub_len],
+    )
+    .unwrap();
+    let mut tensors = vec![hub];
+    for leaf in 0..3 {
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![bonds[leaf].clone(), physical[leaf + 1].clone()],
+                vec![1.0_f64; bond_dim * local_dim],
+            )
+            .unwrap(),
+        );
+    }
+    (
+        TreeTN::from_tensors(tensors, vec![0, 1, 2, 3]).unwrap(),
+        physical,
+    )
 }
 
 fn bench_chain_size_scaling(c: &mut Criterion) {
@@ -287,10 +326,19 @@ fn bench_warm_call_vs_bond(c: &mut Criterion) {
             }
         }
         let shape = [n_sites, 2];
+        let indices = (0..2)
+            .map(|point| {
+                (0..n_sites)
+                    .map(|site| values[site + n_sites * point])
+                    .collect::<MultiIndex>()
+            })
+            .collect::<Vec<_>>();
 
-        for bond_dim in [2usize, 4, 8, 16, 32, 64, 128] {
+        for bond_dim in [2usize, 4, 8, 16, 32, 64, 128, 256] {
             let tt = create_tt_with_bond_dim(n_sites, LOCAL_DIM, bond_dim);
             let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
+            let mut tt_cache = TTCache::new(&tt);
+            tt_cache.evaluate_many(&indices, Some(varying)).unwrap();
             let mut evaluator = TreeTNCachedEvaluator::new(
                 &tree,
                 &site_indices,
@@ -300,6 +348,22 @@ fn bench_warm_call_vs_bond(c: &mut Criterion) {
                 },
             )
             .unwrap();
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+            evaluator.evaluate_batched(points).unwrap();
+
+            // Hiroshi's #646 review asks for the same coordinate batches and
+            // fixed center/split when comparing persistent-cache behavior.
+            group.bench_with_input(
+                BenchmarkId::new(format!("ttcache_n{n_sites}"), bond_dim),
+                &indices,
+                |b, indices| {
+                    b.iter(|| {
+                        tt_cache
+                            .evaluate_many(black_box(indices), Some(varying))
+                            .unwrap()
+                    })
+                },
+            );
 
             group.bench_with_input(
                 BenchmarkId::new(format!("n{n_sites}"), bond_dim),
@@ -316,11 +380,223 @@ fn bench_warm_call_vs_bond(c: &mut Criterion) {
     group.finish();
 }
 
+/// Direct chain-evaluator parity protocol requested by Hiroshi Shinaoka in
+/// <https://github.com/tensor4all/tensor4all-rs/pull/646#issuecomment-5316892012>.
+///
+/// Both evaluators see the same tensors, coordinate batch, scalar type, and a
+/// fixed midpoint. The APIs cannot express identical contraction objects:
+/// `TTCache` splits on a bond while `TreeTNCachedEvaluator` centers on a node.
+/// That semantic difference is retained and reported because it controls how
+/// much of a warm contraction each cache can reuse. `iter_batched_ref`
+/// constructs a fresh evaluator outside each timed region, so the sample
+/// measures one cold-cache evaluation without charging either implementation
+/// for construction. The representative bond dimensions are the review's
+/// requested 64, 128, and 256, rather than the small-rank cases that can hide
+/// scaling defects.
+fn bench_hiroshi_chain_evaluator_parity(c: &mut Criterion) {
+    const N_SITES: usize = 16;
+    const LOCAL_DIM: usize = 2;
+    const N_LEFT: usize = 8;
+    const N_RIGHT: usize = 8;
+    const SPLIT: usize = N_SITES / 2;
+
+    let indices = generate_tci_like_indices(N_LEFT, N_RIGHT, N_SITES, LOCAL_DIM, SPLIT, 646);
+    let values = multi_indices_to_col_major(&indices, N_SITES);
+    let shape = [N_SITES, indices.len()];
+    let mut group = c.benchmark_group("hiroshi_chain_evaluator_parity");
+    group.sample_size(10);
+
+    for bond_dim in [64usize, 128, 256] {
+        let tt = create_tt_with_bond_dim(N_SITES, LOCAL_DIM, bond_dim);
+        let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
+
+        // Validate numerical parity once, outside the timed measurements.
+        let mut tt_check = TTCache::new(&tt);
+        let expected = tt_check.evaluate_many(&indices, Some(SPLIT)).unwrap();
+        let mut tree_check = TreeTNCachedEvaluator::new(
+            &tree,
+            &site_indices,
+            CachedEvaluatorOptions::<usize> {
+                center: Some(SPLIT),
+                ..CachedEvaluatorOptions::default()
+            },
+        )
+        .unwrap();
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let actual = tree_check.evaluate_batched(points).unwrap();
+        assert_eq!(actual.len(), expected.len());
+        assert!(actual.iter().zip(&expected).all(|(actual, expected)| {
+            let actual = actual.real();
+            actual.is_finite()
+                && expected.is_finite()
+                && (actual - expected).abs() <= 1.0e-12 * actual.abs().max(expected.abs()).max(1.0)
+        }));
+
+        group.bench_with_input(
+            BenchmarkId::new("ttcache_cold", bond_dim),
+            &indices,
+            |b, indices| {
+                b.iter_batched_ref(
+                    || TTCache::new(&tt),
+                    |cache| {
+                        cache
+                            .evaluate_many(black_box(indices), Some(SPLIT))
+                            .unwrap()
+                    },
+                    BatchSize::LargeInput,
+                )
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("treetn_cold", bond_dim),
+            &values,
+            |b, values| {
+                b.iter_batched_ref(
+                    || {
+                        TreeTNCachedEvaluator::new(
+                            &tree,
+                            &site_indices,
+                            CachedEvaluatorOptions::<usize> {
+                                center: Some(SPLIT),
+                                ..CachedEvaluatorOptions::default()
+                            },
+                        )
+                        .unwrap()
+                    },
+                    |evaluator| {
+                        let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
+                        evaluator.evaluate_batched(points).unwrap()
+                    },
+                    BatchSize::LargeInput,
+                )
+            },
+        );
+
+        // The same batch after both persistent evaluators have cached every
+        // reusable environment/message, corresponding to the review's
+        // follow-up request to separate repeated-cache behavior from cold
+        // contraction work.
+        let mut tt_warm = TTCache::new(&tt);
+        tt_warm.evaluate_many(&indices, Some(SPLIT)).unwrap();
+        group.bench_with_input(
+            BenchmarkId::new("ttcache_warm", bond_dim),
+            &indices,
+            |b, indices| {
+                b.iter(|| {
+                    tt_warm
+                        .evaluate_many(black_box(indices), Some(SPLIT))
+                        .unwrap()
+                })
+            },
+        );
+
+        let mut tree_warm = TreeTNCachedEvaluator::new(
+            &tree,
+            &site_indices,
+            CachedEvaluatorOptions::<usize> {
+                center: Some(SPLIT),
+                ..CachedEvaluatorOptions::default()
+            },
+        )
+        .unwrap();
+        tree_warm.evaluate_batched(points).unwrap();
+        group.bench_with_input(
+            BenchmarkId::new("treetn_warm", bond_dim),
+            &values,
+            |b, values| {
+                b.iter(|| {
+                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
+                    tree_warm.evaluate_batched(points).unwrap()
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Bond-dimension scaling at a center node of coordination two versus three.
+///
+/// Hiroshi's issue #671 comment derives the topology-required local tensor
+/// size as `d * product(incident bond dimensions)`, or `d * chi^z` for uniform
+/// bonds: <https://github.com/tensor4all/tensor4all-rs/issues/671#issuecomment-5391376991>.
+/// The benchmark IDs include that exact work proxy, making it possible to
+/// distinguish its unavoidable extra factor of `chi` from regressions in
+/// cache lookup, packing, or repeated environment construction.
+fn bench_warm_center_coordination_vs_bond(c: &mut Criterion) {
+    const LOCAL_DIM: usize = 2;
+    let mut group = c.benchmark_group("treetn_warm_center_coordination_vs_bond");
+    group.sample_size(10);
+
+    for bond_dim in [4usize, 8, 16, 32, 64] {
+        let chain_tt = create_tt_with_bond_dim(3, LOCAL_DIM, bond_dim);
+        let (chain, chain_indices) = tensor_train_to_treetn(&chain_tt).unwrap();
+        let chain_values = [0usize, 0, 0, 1, 0, 0];
+        let chain_shape = [3usize, 2usize];
+        let mut chain_evaluator = TreeTNCachedEvaluator::new(
+            &chain,
+            &chain_indices,
+            CachedEvaluatorOptions::<usize> {
+                center: Some(1),
+                ..CachedEvaluatorOptions::default()
+            },
+        )
+        .unwrap();
+        chain_evaluator
+            .evaluate_batched(ColMajorArrayRef::new(&chain_values, &chain_shape).unwrap())
+            .unwrap();
+        let chain_local_elements = LOCAL_DIM * bond_dim * bond_dim;
+        group.bench_function(
+            BenchmarkId::new(
+                format!("z2_local_elements_{chain_local_elements}"),
+                bond_dim,
+            ),
+            |b| {
+                b.iter(|| {
+                    let points =
+                        ColMajorArrayRef::new(black_box(&chain_values), &chain_shape).unwrap();
+                    chain_evaluator.evaluate_batched(points).unwrap()
+                })
+            },
+        );
+
+        let (star, star_indices) = create_uniform_three_leaf_star(LOCAL_DIM, bond_dim);
+        let star_values = [0usize, 0, 0, 0, 1, 0, 0, 0];
+        let star_shape = [4usize, 2usize];
+        let mut star_evaluator = TreeTNCachedEvaluator::new(
+            &star,
+            &star_indices,
+            CachedEvaluatorOptions::<usize> {
+                center: Some(0),
+                ..CachedEvaluatorOptions::default()
+            },
+        )
+        .unwrap();
+        star_evaluator
+            .evaluate_batched(ColMajorArrayRef::new(&star_values, &star_shape).unwrap())
+            .unwrap();
+        let star_local_elements = LOCAL_DIM * bond_dim * bond_dim * bond_dim;
+        group.bench_function(
+            BenchmarkId::new(format!("z3_local_elements_{star_local_elements}"), bond_dim),
+            |b| {
+                b.iter(|| {
+                    let points =
+                        ColMajorArrayRef::new(black_box(&star_values), &star_shape).unwrap();
+                    star_evaluator.evaluate_batched(points).unwrap()
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_chain_size_scaling,
     bench_batch_size_scaling,
     bench_bond_dim_scaling,
-    bench_warm_call_vs_bond
+    bench_warm_call_vs_bond,
+    bench_hiroshi_chain_evaluator_parity,
+    bench_warm_center_coordination_vs_bond
 );
 criterion_main!(benches);
