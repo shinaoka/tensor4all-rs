@@ -358,35 +358,22 @@ where
             width
         );
     }
-    // The incoming prefix already carries `batch`.  Contract it into the
-    // first MPO operand before joining the two local operands.  This is the
-    // matrix-multiplication ordering used by the reference implementation's
-    // `env @ psi[j]` followed by `H[j] @ ...` path.  Building the complete
-    // local MPO-MPO product first would expose both virtual bonds at once and
-    // costs O(chi^4) storage for a single probe block.
     let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    // `tensor_a`/`tensor_b` are the raw, unprobed local operands -- `batch`
-    // is never one of their indices (only `prefix`/`result` and the probes
-    // in `a_probes`/`b_probes` carry it, attached separately below by
-    // `contract_operand_with_probes`). So contracting `prefix`/`result`
-    // against them cannot need `batch` to be "diagonal" (present on both
-    // sides): a plain contraction already keeps `batch` as a free/surviving
-    // index by ordinary contraction rules, identical to `contract_retaining`
-    // here (verified: same result, any axis order) but without forcing
-    // tenferro's batch-dims/grouped-GEMM dispatch, which for the CPU faer
-    // backend is an unconditional per-batch-entry sequential GEMM loop with
-    // no true batched-BLAS fast path (unlike the retained-index case in
-    // `contract_operand_with_probes`, where `batch` genuinely is shared
-    // between two probed operands and retaining is required).
-    let mut result = tensor_a
-        .contract_pair(prefix)
+
+    let mut a_factors = Vec::with_capacity(a_probes.len() + 2);
+    a_factors.push(tensor_a);
+    a_factors.push(prefix);
+    a_factors.extend(a_probes.iter().copied());
+    let result = contract_retaining(&a_factors, batch)
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
-    result = contract_operand_with_probes(&result, &a_probes, Some(batch))?;
-    result = tensor_b
-        .contract_pair(&result)
-        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
-    contract_operand_with_probes(&result, &b_probes, Some(batch))
+
+    let mut b_factors = Vec::with_capacity(b_probes.len() + 2);
+    b_factors.push(tensor_b);
+    b_factors.push(&result);
+    b_factors.extend(b_probes.iter().copied());
+    contract_retaining(&b_factors, batch)
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))
 }
 
 /// Partition local probes by the MPO operand carrying their external index.
@@ -956,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_probe_contraction_matches_local_product_but_uses_environment_first_order() {
+    fn prefix_probe_contraction_matches_local_product_with_optimized_order() {
         let left_a = DynIndex::new_dyn(2);
         let left_b = DynIndex::new_dyn(3);
         let right_a = DynIndex::new_dyn(2);

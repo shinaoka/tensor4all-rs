@@ -635,12 +635,11 @@ where
         }
     }
 
-    /// Compute one new segment covering `[start, start + width)` for every
-    /// site, appending it (with its batch index and width) to each site's
-    /// entry in `self.segments`.
+    /// Compute one new segment covering `[start, start + width)` at site 0.
+    /// [`Self::extend_segments_to`] propagates it farther only when requested.
     fn grow_segment(&mut self, start: usize, width: usize) -> Result<()> {
         let batch = T::Index::new_link(width)?;
-        let mut prefix = probed_site_pair_batch_range(
+        let prefix = probed_site_pair_batch_range(
             self.local[0].0,
             self.local[0].1,
             &self.outputs[0],
@@ -649,21 +648,39 @@ where
             width,
             &batch,
         )?;
-        self.segments[0].push((prefix.clone(), batch.clone(), width));
-        for site in 1..self.local.len() - 1 {
-            prefix = contract_prefix_with_probed_site_pair_batch_range(
-                &prefix,
-                self.local[site].0,
-                self.local[site].1,
-                &self.outputs[site],
-                self.probes,
-                start,
-                width,
-                &batch,
-            )?;
-            self.segments[site].push((prefix.clone(), batch.clone(), width));
-        }
+        self.segments[0].push((prefix, batch, width));
         self.segment_total_width += width;
+        Ok(())
+    }
+
+    /// Extend cached segments just far enough to serve `site` through `end`.
+    fn extend_segments_to(&mut self, site: usize, end: usize) -> Result<()> {
+        let mut covered = 0;
+        for segment in 0..self.segments[0].len() {
+            if covered >= end {
+                break;
+            }
+            let width = self.segments[0][segment].2;
+            while self.segments[site].len() <= segment {
+                let next_site = (1..=site)
+                    .find(|&candidate| self.segments[candidate].len() <= segment)
+                    .ok_or_else(|| anyhow::anyhow!("contract_src: missing prefix segment"))?;
+                let (prefix, batch, _) = self.segments[next_site - 1][segment].clone();
+                let extended = contract_prefix_with_probed_site_pair_batch_range(
+                    &prefix,
+                    self.local[next_site].0,
+                    self.local[next_site].1,
+                    &self.outputs[next_site],
+                    self.probes,
+                    covered,
+                    width,
+                    &batch,
+                )?;
+                debug_assert_eq!(self.segments[next_site].len(), segment);
+                self.segments[next_site].push((extended, batch, width));
+            }
+            covered += width;
+        }
         Ok(())
     }
 
@@ -696,6 +713,7 @@ where
             self.probes.extend_to(next_end)?;
             self.grow_segment(next_start, next_width)?;
         }
+        self.extend_segments_to(site, requested_end)?;
 
         let site_segments = &self.segments[site];
         let mut cursor = 0usize;
@@ -887,6 +905,74 @@ mod tests {
             cache.segments[0].len(),
             2,
             "re-reading an existing aligned segment must not grow a new one"
+        );
+    }
+
+    #[test]
+    fn request_extends_only_needed_segments_to_requested_site() {
+        let outputs = (0..3).map(|_| DynIndex::new_dyn(3)).collect::<Vec<_>>();
+        let inner = (0..3).map(|_| DynIndex::new_dyn(3)).collect::<Vec<_>>();
+        let tensors = (0..3)
+            .map(|site| {
+                (
+                    IdxTensor::from_dense(
+                        vec![outputs[site].clone(), inner[site].clone()],
+                        vec![0.1; 9],
+                    )
+                    .unwrap(),
+                    IdxTensor::from_dense(vec![inner[site].clone()], vec![0.2; 3]).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let local = tensors.iter().map(|(a, b)| (a, b)).collect::<Vec<_>>();
+        let site_outputs = outputs
+            .iter()
+            .cloned()
+            .map(|output| vec![output])
+            .collect::<Vec<_>>();
+        let mut probes = ProbeBank::new(outputs.clone(), 1, 42).unwrap();
+        let mut cache = PrefixCache::new(&local, &site_outputs, &mut probes, 2);
+
+        cache.request(0, 0, 2).unwrap();
+        cache.request(0, 2, 2).unwrap();
+        assert_eq!(cache.segments[0].len(), 2);
+        assert!(
+            cache.segments[1].is_empty(),
+            "site 1 must stay lazy while only site 0 is requested"
+        );
+
+        let (lazy, _) = cache.request(1, 0, 2).unwrap();
+        assert_eq!(
+            cache.segments[1].len(),
+            1,
+            "requesting the first range must not extend a later segment"
+        );
+
+        let mut direct_probes = ProbeBank::new(outputs, 1, 42).unwrap();
+        let mut direct = PrefixCache::new(&local, &site_outputs, &mut direct_probes, 2);
+        let (expected, _) = direct.request(1, 0, 2).unwrap();
+        assert_eq!(
+            lazy.to_vec::<f64>().unwrap(),
+            expected.to_vec::<f64>().unwrap()
+        );
+
+        let (later, _) = cache.request(1, 4, 2).unwrap();
+        assert_eq!(
+            cache.segments[1].len(),
+            3,
+            "growing while ragged must fill the missing segment before appending"
+        );
+        let (middle, _) = cache.request(1, 2, 2).unwrap();
+
+        let (expected_middle, _) = direct.request(1, 2, 2).unwrap();
+        let (expected_later, _) = direct.request(1, 4, 2).unwrap();
+        assert_eq!(
+            middle.to_vec::<f64>().unwrap(),
+            expected_middle.to_vec::<f64>().unwrap()
+        );
+        assert_eq!(
+            later.to_vec::<f64>().unwrap(),
+            expected_later.to_vec::<f64>().unwrap()
         );
     }
 

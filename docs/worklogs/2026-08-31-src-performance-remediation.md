@@ -335,12 +335,37 @@ machine precision; Python zip-up's bond-16 error (`6.347e-5`) is consistent
 with its requested `1e-4` cutoff; and Rust's final pairwise/tree changes do not
 alter the expected dense result.
 
+### Lazy adaptive prefixes and optimized probe order
+
+A matched operation-count trace found that the adaptive chain cache propagated
+every new probe segment through all eight interior prefix sites. At bond 128
+this produced 256 site-columns, while the reference sweep needed 158 because
+high-rank columns first requested near the center never need propagation back
+towards the right boundary. `PrefixCache` now creates each segment at site zero
+and extends it through later sites only when requested. A non-monotonic cache
+test covers a ragged site requesting a later segment before revisiting the
+missing middle segment.
+
+The prefix helper now gives the incoming prefix, local operand, and physical
+probes to the retained-index N-ary optimizer together. This lets the existing
+cost model eliminate the dimension-two probe before an expensive bond
+contraction when that order is cheaper, without hard-coding an MPO--MPS matrix
+layout or creating the full local product.
+
+A clean old-pin A/B used ten paired one-thread processes with five repetitions
+per process. The bond-128 median improved from 462.204 ms to 390.939 ms
+(-15.4%). A five-pair rerun after the ragged-cache review fix measured 459.950
+to 373.704 ms (-18.8%). The exact dense check reported relative error
+`2.091e-31`. With the separately tested latest-tenferro adapter, the same
+algorithmic change reduced the median from 466.794 to 376.059 ms (-19.4%) and
+the prefix trace fell to 160 site-columns, close to the reference count.
+
 ## Verification
 
-- `cargo test --release -p tensor4all-treetn src_ -- --nocapture`:
-  41 passed.
-- `cargo test --release -p tensor4all-treetn`:
-  497 library tests passed, all integration tests and 140 doctests passed;
+- `cargo test --release -p tensor4all-treetn 'treetn::contraction::' --lib`:
+  74 passed, including four prefix-cache tests.
+- `cargo test --release -p tensor4all-treetn --lib`:
+  498 library tests passed; prior integration tests and 140 doctests passed;
   one pre-existing diagnostic test remained ignored.
 - `cargo clippy -p tensor4all-treetn --all-targets -- -D warnings
   -D clippy::missing_errors_doc -D clippy::missing_panics_doc`: passed.
