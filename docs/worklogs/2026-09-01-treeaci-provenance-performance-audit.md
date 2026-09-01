@@ -339,6 +339,22 @@ paths efficient, but it does show that the raw center kernel's absolute branch
 cost is presently within the topology-required envelope; a wall-time ratio
 without `d * product(chi_e)` would misdiagnose it.
 
+The existing ignored 16-site chain-versus-comb diagnostic was also run at
+`d=2`, `chi=128`, with one degree-3 hub as a non-center branch-message node:
+
+```text
+chain: 48.421641 ms
+comb:  499.832829 ms
+comb / chain wall time: 10.32x
+```
+
+Summing `d * product(chi_e)` over every node gives 459,264 local elements for
+the chain and 4,588,288 for the comb, a 9.9905x work ratio. The wall-time ratio
+divided by this topology-required ratio is 1.033. In this matched-bond fixture,
+therefore, nearly the entire apparent branch slowdown is explained by the
+larger dense tensors, including the non-center branch-message path. It is not
+evidence of a large residual Guard branch-kernel regression.
+
 The unresolved branch-specific implementation costs are elsewhere:
 
 - TreeACI candidate frames still fall from a batched kernel to per-candidate
@@ -526,6 +542,11 @@ Commands were run in release mode in the isolated worktree.
    reconstruct     1.0 ms (4.0%)
    total          26.4 ms
    ```
+
+8. The ignored same-bond chain-versus-comb diagnostic was run with the
+   `diagnostics` feature at 16 sites and `chi=128`. It passed and reported
+   48.421641 ms versus 499.832829 ms (10.32x); the actual summed local-element
+   ratio is 9.9905x, as detailed in the branch-cost section.
 
 No profiler trace for the user's exact slow workload was available in this
 audit. Findings labelled P0/P1 above are based on exact control-flow and
