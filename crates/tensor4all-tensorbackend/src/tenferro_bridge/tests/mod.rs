@@ -320,10 +320,25 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
     assert_eq!(out.shape(), &[2, 2, 3, 2]);
     assert_eq!(values, expected);
     assert_eq!(values[0], 55.0);
+
+    let read_a = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&a));
+    let read_b = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&b));
+    let read_c = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&c));
+    let session_out = einsum_native_tensor_reads(
+        &[(&read_a, &[0, 1]), (&read_b, &[0, 2]), (&read_c, &[0, 3])],
+        &[0, 1, 2, 3],
+    )
+    .expect("session-native retained-label einsum should succeed");
+    assert_eq!(session_out.shape(), out.shape());
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&session_out).unwrap(),
+        values
+    );
 }
 
 #[test]
 fn einsum_native_tensor_reads_accepts_non_contiguous_borrowed_view() {
+    reset_concrete_einsum_plan_cache();
     let backing = [1.0_f64, 2.0, 3.0, 4.0];
     let lhs_view = TensorView::F64(
         tenferro::TypedTensorView::from_slice(vec![2, 2], vec![2, 1], 0, &backing)
@@ -337,17 +352,32 @@ fn einsum_native_tensor_reads_accepts_non_contiguous_borrowed_view() {
         .expect("valid identity rhs");
     let rhs = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&rhs_tensor));
 
-    let output = einsum_native_tensor_reads(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
-        .expect("borrowed non-contiguous einsum should succeed");
-
+    let contiguous_lhs_tensor =
+        NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+            .expect("valid contiguous lhs");
+    let contiguous_lhs =
+        NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&contiguous_lhs_tensor));
+    let output =
+        einsum_native_tensor_reads(&[(&contiguous_lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
+            .expect("borrowed contiguous einsum should succeed");
     assert_eq!(
         native_tensor_primal_to_dense_col_major::<f64>(&output).unwrap(),
         vec![1.0, 3.0, 2.0, 4.0]
     );
+    assert_eq!(concrete_einsum_plan_cache_len(), 1);
+
+    let repeated = einsum_native_tensor_reads(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
+        .expect("repeated borrowed einsum should reuse its session plan");
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&repeated).unwrap(),
+        vec![1.0, 3.0, 2.0, 4.0]
+    );
+    assert_eq!(concrete_einsum_plan_cache_len(), 1);
 }
 
 #[test]
 fn einsum_native_tensor_reads_promotes_non_contiguous_borrowed_view() {
+    reset_concrete_einsum_plan_cache();
     let backing = [1.0_f64, 2.0, 3.0, 4.0];
     let lhs_view = TensorView::F64(
         tenferro::TypedTensorView::from_slice(vec![2, 2], vec![2, 1], 0, &backing)
@@ -378,6 +408,47 @@ fn einsum_native_tensor_reads_promotes_non_contiguous_borrowed_view() {
             Complex64::new(4.0, 0.0),
         ]
     );
+    assert_eq!(concrete_einsum_plan_cache_len(), 0);
+}
+
+#[test]
+fn same_integer_dtype_retains_graph_promotion() {
+    reset_concrete_einsum_plan_cache();
+    let lhs_tensor =
+        NativeTensor::from_vec_col_major(vec![1, 2], vec![2_i64, 3]).expect("valid integer lhs");
+    let rhs_tensor =
+        NativeTensor::from_vec_col_major(vec![2, 1], vec![5_i64, 7]).expect("valid integer rhs");
+    let lhs = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&lhs_tensor));
+    let rhs = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&rhs_tensor));
+
+    let output = einsum_native_tensor_reads(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
+        .expect("integer graph fallback should promote and contract");
+
+    assert_eq!(output.dtype(), DType::F64);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&output).unwrap(),
+        vec![31.0]
+    );
+    assert_eq!(concrete_einsum_plan_cache_len(), 0);
+}
+
+#[test]
+fn concrete_einsum_plan_cache_clears_at_its_bound() {
+    reset_concrete_einsum_plan_cache();
+    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .expect("valid bounded-cache tensor");
+    let input = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&tensor));
+
+    for label in 0..=CONCRETE_EINSUM_PLAN_CACHE_CAPACITY {
+        let output = einsum_native_tensor_reads(&[(&input, &[label])], &[label])
+            .expect("single-input session plan should execute");
+        assert_eq!(
+            native_tensor_primal_to_dense_col_major::<f64>(&output).unwrap(),
+            vec![1.0, 2.0]
+        );
+    }
+
+    assert_eq!(concrete_einsum_plan_cache_len(), 1);
 }
 
 #[test]

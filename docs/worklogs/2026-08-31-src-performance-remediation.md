@@ -398,8 +398,42 @@ Rust/faer path scales better and overtakes Python/OpenBLAS. A skinny
 `N = 1, K <= 4` lowering is a separate micro-kernel follow-up, not another SRC
 algorithm correction.
 
+### Session-native prepared-plan execution
+
+Fine-grained profiling then showed that the small GEMM kernel was not the
+remaining fixed cost. At bond 32, 254 separately submitted native einsum graphs
+spent 43.526 ms in `Runtime::execute_scoped_read_only`; tensor4all contraction
+planning used 1.629 ms. On a representative `64 x 32` by `32 x 32` product, the
+cached graph path took 71.077 us, while a cached `ConcreteEinsumPlan` took
+17.829 us with a fresh session and 8.760 us in a reused session. The same raw
+tenferro matmul took 6.051 us in a reused session, comparable to Python's
+6.628 us OpenBLAS call.
+
+Same-dtype borrowed einsums now cache a tenferro `ConcreteEinsumPlan` by dtype,
+shape, labels, and output order, then execute it through the canonical CPU
+session API. Mixed-dtype inputs retain the compiled-graph conversion path. The
+thread-local cache is bounded at 256 entries and clears on saturation; tests
+cover cross-layout plan reuse, retained-label output order, mixed/integer dtype
+fallback, and the bound.
+
+A five-pair graph-versus-session A/B measured 33.2%, 18.3%, 14.2%, 10.7%, and
+8.1% reductions at bonds 32, 64, 80, 96, and 128. A fresh ten-pair comparison
+against Python measured:
+
+| Input bond | Rust (ms) | Python (ms) | Rust / Python |
+| ---: | ---: | ---: | ---: |
+| 32 | 37.075 | 19.461 | 1.905 |
+| 64 | 81.392 | 79.812 | 1.020 |
+| 128 | 340.894 | 464.430 | 0.734 |
+
+The low-bond crossover moved from about 80 to about 64. Dense-oracle relative
+errors remained `6.255e-26`, `1.120e-28`, and `2.099e-31` at bonds 32, 64, and
+128.
+
 ## Verification
 
+- `cargo test --release -p tensor4all-tensorbackend --lib`:
+  219 passed.
 - `cargo test --release -p tensor4all-treetn 'treetn::contraction::' --lib`:
   74 passed, including four prefix-cache tests.
 - `cargo test --release -p tensor4all-treetn --lib`:
