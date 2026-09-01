@@ -360,6 +360,44 @@ to 373.704 ms (-18.8%). The exact dense check reported relative error
 algorithmic change reduced the median from 466.794 to 376.059 ms (-19.4%) and
 the prefix trace fell to 160 site-columns, close to the reference count.
 
+### Fresh one-thread crossover rerun
+
+A subsequent comparison matched the warm-up policy as well as the algorithm
+parameters: every fresh process ran one untimed contraction followed by five
+timed repetitions. Ten paired processes were pinned to one CPU for bonds 32,
+64, and 128; five paired processes narrowed the crossover. Python used NumPy
+2.0.0 with scipy-openblas 0.3.27 and its pure-Python incremental-QR fallback.
+The tensor values and dense backends still differ, so these are matched
+configuration and shape measurements, not identical-input kernel timings.
+
+| Input bond | Rust (ms) | Python (ms) | Rust / Python |
+| ---: | ---: | ---: | ---: |
+| 32 | 57.911 | 19.678 | 2.943 |
+| 64 | 98.665 | 75.970 | 1.299 |
+| 72 | 108.387 | 97.258 | 1.114 |
+| 80 | 128.834 | 126.600 | 1.018 |
+| 96 | 181.041 | 196.715 | 0.920 |
+| 128 | 343.313 | 448.202 | 0.766 |
+
+The crossover is near bond 80; at bond 128 Rust is 23.4% faster. The earlier
+Python bond-128 diagnostic of 348.851 ms was not reproducible in this rerun: an
+additional unpinned run was also about 450 ms. The current paired result
+therefore supersedes that absolute-time comparison. Rust dense-oracle relative
+errors were `6.255e-26`, `1.052e-28`, and `2.099e-31` at bonds 32, 64, and 128.
+Python selected `[5, 5, 11, 17, 32, 16, 8, 4, 2]` at every input bond.
+
+The remaining low-bond difference is fixed contraction cost rather than excess
+adaptive work. Rust now creates 160 prefix site-columns versus Python's 158.
+At bond 32, Rust stage timing assigned 46.184 ms to sketch/prefix contractions
+and 9.440 ms to incremental QR plus environment projection; setup and result
+assembly were below 0.1 ms. Instrumented Python spent 13.185 ms in 683 matrix
+multiplications and about 3 ms in incremental-QR routines. Generic retained and
+N-ary lowering, dispatch, and intermediate tensor materialization therefore
+dominate Rust while the matrices are small. Once arithmetic dominates, the
+Rust/faer path scales better and overtakes Python/OpenBLAS. A skinny
+`N = 1, K <= 4` lowering is a separate micro-kernel follow-up, not another SRC
+algorithm correction.
+
 ## Verification
 
 - `cargo test --release -p tensor4all-treetn 'treetn::contraction::' --lib`:
