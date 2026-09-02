@@ -346,4 +346,3 @@ git status --short
 ~~~
 
 - [ ] Step 7: Report exact evidence and wait for explicit approval before pushing or opening a PR.
-

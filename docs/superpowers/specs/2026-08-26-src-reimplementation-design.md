@@ -190,4 +190,3 @@ and when correctness remains within the existing benchmark gate.
 - A new public backend API beyond the minimum dense and incremental seams
   needed by TreeTN.
 - Keeping the previous prototype's internal helpers or behavior.
-
