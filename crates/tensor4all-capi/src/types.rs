@@ -607,6 +607,8 @@ pub enum t4a_contract_method {
     /// for this method. `t4a_treetn_apply_operator_chain` uses a dedicated
     /// local-exact apply path instead of generic full-dense TreeTN contraction.
     Naive = 2,
+    /// Successive randomized compression with Gaussian sketching.
+    Src = 3,
 }
 
 impl From<ContractionMethod> for t4a_contract_method {
@@ -615,6 +617,7 @@ impl From<ContractionMethod> for t4a_contract_method {
             ContractionMethod::Zipup => Self::Zipup,
             ContractionMethod::Fit => Self::Fit,
             ContractionMethod::Naive => Self::Naive,
+            ContractionMethod::Src => Self::Src,
         }
     }
 }
@@ -625,6 +628,7 @@ impl From<t4a_contract_method> for ContractionMethod {
             t4a_contract_method::Zipup => Self::Zipup,
             t4a_contract_method::Fit => Self::Fit,
             t4a_contract_method::Naive => Self::Naive,
+            t4a_contract_method::Src => Self::Src,
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::defaults::{Index, TagSet};
+use crate::TensorContractionLike;
 use num_complex::Complex64;
 use std::ffi::OsString;
 use std::time::Duration;
@@ -276,6 +277,10 @@ fn test_contract_with_options_retains_shared_batch_index() {
     }
 
     assert_eq!(result.to_vec::<f64>().unwrap(), expected);
+
+    let trait_result = IdxTensor::contract_retaining_indices(&[&a, &b], &[batch]).unwrap();
+    assert_eq!(trait_result.indices(), result.indices());
+    assert_eq!(trait_result.to_vec::<f64>().unwrap(), expected);
 }
 
 #[test]
@@ -593,6 +598,85 @@ fn test_contract_owned_with_options_falls_back_to_borrowed_for_grad_tensors() {
     let grad = x.grad().unwrap().unwrap();
     assert_eq!(grad.dims(), vec![2, 2, 3]);
     assert_eq!(grad.to_vec::<f64>().unwrap(), vec![2.0; 12]);
+}
+
+fn assert_untracked_result_is_valid_ad_constant(constant: IdxTensor, expected: Vec<f64>) {
+    assert!(!constant.tracks_grad());
+    assert_eq!(constant.to_vec::<f64>().unwrap(), expected);
+
+    let tracked = IdxTensor::from_dense(constant.indices().to_vec(), vec![1.0_f64; expected.len()])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let loss = contract(&[&constant, &tracked]).unwrap();
+    loss.backward().unwrap();
+
+    let grad = tracked.grad().unwrap().unwrap();
+    assert_eq!(grad.to_vec::<f64>().unwrap(), expected);
+}
+
+fn assert_untracked_contraction_result_is_valid_ad_constant(owned: bool) {
+    let i = Index::new(DynId(94), 2);
+    let k = Index::new(DynId(95), 2);
+    let j = Index::new(DynId(96), 2);
+    let a = make_test_tensor_from_data(
+        &[2, 2],
+        vec![i.clone(), k.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    );
+    let b = make_test_tensor_from_data(&[2, 2], vec![k, j.clone()], vec![5.0, 6.0, 7.0, 8.0]);
+    let constant = if owned {
+        contract_owned(vec![a, b]).unwrap()
+    } else {
+        contract(&[&a, &b]).unwrap()
+    };
+    assert_untracked_result_is_valid_ad_constant(constant, vec![23.0, 34.0, 31.0, 46.0]);
+}
+
+#[test]
+fn test_borrowed_untracked_result_remains_a_valid_ad_constant() {
+    assert_untracked_contraction_result_is_valid_ad_constant(false);
+}
+
+#[test]
+fn test_owned_untracked_result_remains_a_valid_ad_constant() {
+    assert_untracked_contraction_result_is_valid_ad_constant(true);
+}
+
+#[test]
+fn test_mixed_dtype_pairwise_result_remains_a_valid_ad_constant() {
+    let i = Index::new(DynId(97), 2);
+    let k = Index::new(DynId(98), 2);
+    let j = Index::new(DynId(99), 2);
+    let a = IdxTensor::from_dense(vec![i, k.clone()], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![k, j], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
+
+    let result = contract_pair(&a, &b).unwrap();
+    assert_untracked_result_is_valid_ad_constant(result, vec![23.0, 34.0, 31.0, 46.0]);
+}
+
+#[test]
+fn test_mixed_dtype_tensordot_result_remains_a_valid_ad_constant() {
+    let i = Index::new(DynId(100), 2);
+    let left = Index::new(DynId(101), 2);
+    let right = Index::new(DynId(102), 2);
+    let j = Index::new(DynId(103), 2);
+    let a = IdxTensor::from_dense(vec![i, left.clone()], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![right.clone(), j], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
+
+    let result = tensordot(&a, &b, &[(left, right)]).unwrap();
+    assert_untracked_result_is_valid_ad_constant(result, vec![23.0, 34.0, 31.0, 46.0]);
+}
+
+#[test]
+fn test_mixed_dtype_outer_product_result_remains_a_valid_ad_constant() {
+    let i = Index::new(DynId(104), 2);
+    let j = Index::new(DynId(105), 2);
+    let a = IdxTensor::from_dense(vec![i], vec![1.0_f32, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap();
+
+    let result = outer_product(&a, &b).unwrap();
+    assert_untracked_result_is_valid_ad_constant(result, vec![3.0, 6.0, 4.0, 8.0]);
 }
 
 #[test]

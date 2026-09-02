@@ -2,6 +2,7 @@ use super::*;
 use num_complex::Complex64;
 use tensor4all_core::AnyScalar;
 use tensor4all_core::SvdTruncationPolicy;
+use tensor4all_treetn::contraction::SrcOptions;
 
 #[test]
 fn test_validate_svd_truncation_options_accepts_default_settings() {
@@ -70,6 +71,17 @@ fn test_contract_options_methods() {
     assert_eq!(ContractOptions::zipup().method(), ContractMethod::Zipup);
     assert_eq!(ContractOptions::fit().method(), ContractMethod::Fit);
     assert_eq!(ContractOptions::naive().method(), ContractMethod::Naive);
+    assert_eq!(ContractOptions::src().method(), ContractMethod::Src);
+}
+
+#[test]
+fn test_contract_options_src_controls() {
+    let src = SrcOptions::adaptive(1.0e-8, 12).with_seed(9);
+    let opts = ContractOptions::src()
+        .with_max_bond_dim(8)
+        .with_src_options(src.clone());
+
+    assert_eq!(opts.src_options(), &src);
 }
 
 #[test]

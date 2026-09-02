@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Result};
@@ -15,7 +16,7 @@ use tenferro::{
     TensorView, TraceContext,
 };
 use tenferro_einsum::{
-    ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
+    ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
     TraceContextEinsumExt,
 };
 use tenferro_linalg::TensorLinalgExt;
@@ -133,11 +134,15 @@ struct NativeEinsumProfileEntry {
     total_time: Duration,
 }
 
+const CONCRETE_EINSUM_PLAN_CACHE_CAPACITY: usize = 256;
+
 thread_local! {
     static NATIVE_EINSUM_PROFILE_STATE: RefCell<HashMap<NativeEinsumSignature, NativeEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
     static NATIVE_EINSUM_TRACE_STATE: RefCell<HashSet<NativeEinsumSignature>> =
         RefCell::new(HashSet::new());
+    static CONCRETE_EINSUM_PLAN_CACHE: RefCell<HashMap<NativeEinsumSignature, Arc<ConcreteEinsumPlan>>> =
+        RefCell::new(HashMap::new());
 }
 
 #[cfg(test)]
@@ -234,6 +239,68 @@ fn native_einsum_signature(
             .collect(),
         output_ids: output_ids.to_vec(),
     }
+}
+
+fn concrete_einsum_dtype_supported(dtype: DType) -> bool {
+    matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
+}
+
+fn concrete_einsum_signature(
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+) -> NativeEinsumSignature {
+    // ConcreteEinsumPlan owns only dtype, shape, labels, and its contraction
+    // tree. Per-call TensorRead strides are validated and consumed at execute.
+    NativeEinsumSignature {
+        path: NativeEinsumPath::Borrowed,
+        operands: inputs
+            .iter()
+            .zip(subscripts.inputs.iter())
+            .map(|(tensor, ids)| NativeOperandSignature {
+                shape: tensor.shape().to_vec(),
+                ids: ids.clone(),
+                dtype: tensor.dtype(),
+            })
+            .collect(),
+        output_ids: subscripts.output.clone(),
+    }
+}
+
+fn cached_concrete_einsum_plan(
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+    einsum_subscripts: &EinsumSubscripts,
+) -> Result<Arc<ConcreteEinsumPlan>> {
+    let signature = concrete_einsum_signature(inputs, subscripts);
+    if let Some(plan) =
+        CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().get(&signature).cloned())
+    {
+        return Ok(plan);
+    }
+
+    let plan = Arc::new(
+        ConcreteEinsumPlan::prepare_read_subscripts(inputs, einsum_subscripts)
+            .map_err(|error| anyhow!("native einsum session plan preparation failed: {error}"))?,
+    );
+    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        // ponytail: bounded clear-on-full cache; use an LRU only if shape churn is measured.
+        if cache.len() >= CONCRETE_EINSUM_PLAN_CACHE_CAPACITY {
+            cache.clear();
+        }
+        cache.insert(signature, Arc::clone(&plan));
+    });
+    Ok(plan)
+}
+
+#[cfg(test)]
+fn reset_concrete_einsum_plan_cache() {
+    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[cfg(test)]
+fn concrete_einsum_plan_cache_len() -> usize {
+    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().len())
 }
 
 fn record_native_einsum_profile(
@@ -779,11 +846,20 @@ fn cached_einsum_native_reads(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<NativeTensor> {
+    let einsum_subscripts = EinsumSubscripts::from(subscripts);
+    if inputs.first().is_some_and(|first| {
+        concrete_einsum_dtype_supported(first.dtype())
+            && inputs.iter().all(|input| input.dtype() == first.dtype())
+    }) {
+        let plan = cached_concrete_einsum_plan(inputs, subscripts, &einsum_subscripts)?;
+        return with_default_session(|session| plan.execute_read(inputs, session))
+            .map_err(|error| anyhow!("native einsum session execution failed: {error}"));
+    }
+
     let views = inputs
         .iter()
         .map(|input| input.clone().tensor_view())
         .collect::<Vec<_>>();
-    let einsum_subscripts = EinsumSubscripts::from(subscripts);
     run_cached_native_einsum(&einsum_subscripts, |compiler, runtime| {
         let program = compile_native_einsum_program(
             compiler,

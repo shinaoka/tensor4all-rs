@@ -510,6 +510,53 @@ impl<T> Matrix<T> {
         self.data
     }
 
+    /// Appends `right`'s columns to the end of this matrix in place, in
+    /// column-major order.
+    ///
+    /// Reuses existing spare `Vec` capacity via amortized-doubling growth
+    /// (`Vec::extend_from_slice`) instead of always reallocating and copying
+    /// every existing element the way building a fresh concatenated `Matrix`
+    /// via [`Matrix::try_from_col_major_vec`] would. Column-major layout
+    /// makes appending columns an append-to-the-end operation on the flat
+    /// buffer, so no existing element moves.
+    ///
+    /// # Errors
+    /// Returns [`MatrixShapeError::ShapeOverflow`] when the combined column
+    /// count would overflow `usize`.
+    ///
+    /// # Panics
+    /// Panics in debug builds if `right`'s row count differs from `self`'s.
+    /// Callers must guarantee matching row counts.
+    pub(crate) fn append_columns(
+        &mut self,
+        right: &Matrix<T>,
+    ) -> std::result::Result<(), MatrixShapeError>
+    where
+        T: Clone,
+    {
+        debug_assert_eq!(
+            self.nrows(),
+            right.nrows(),
+            "append_columns requires matching row counts: {} vs {}",
+            self.nrows(),
+            right.nrows()
+        );
+        let new_ncols = self.ncols().checked_add(right.ncols()).ok_or(
+            // The true combined column count is exactly what overflows here, so
+            // it cannot be reported without fabricating a value (a saturating
+            // add would always read back as `usize::MAX`, which carries no
+            // information about the actual operands). Report the current,
+            // real shape of `self` instead.
+            MatrixShapeError::ShapeOverflow {
+                nrows: self.nrows(),
+                ncols: self.ncols(),
+            },
+        )?;
+        self.data.extend_from_slice(right.as_col_major_slice());
+        self.ncols = new_ncols;
+        Ok(())
+    }
+
     /// Borrow this matrix as an owned tenferro [`TypedTensor`].
     ///
     /// This clones the matrix buffer and preserves column-major layout. Use

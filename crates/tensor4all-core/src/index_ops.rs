@@ -892,6 +892,10 @@ mod tests {
             )
         }
 
+        fn new_link(dim: usize) -> anyhow::Result<Self> {
+            Ok(Self::new(10000, dim, ConjState::Undirected))
+        }
+
         fn product_link(indices: &[Self]) -> anyhow::Result<Self> {
             anyhow::ensure!(
                 !indices.is_empty(),

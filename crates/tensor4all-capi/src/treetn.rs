@@ -1603,6 +1603,9 @@ pub extern "C" fn t4a_treetn_add(
 ///
 /// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
 /// default", which currently resolves to one variational sweep.
+/// For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
+/// fixed-rank Gaussian-sketch path with default SRC controls. Adaptive SRC
+/// controls are currently available through the Rust API only.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_contract(
     a: *const t4a_treetn,
@@ -1711,6 +1714,9 @@ pub extern "C" fn t4a_treetn_contract(
 ///
 /// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
 /// default", which currently resolves to one variational sweep.
+/// For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
+/// fixed-rank Gaussian-sketch path with default SRC controls. Adaptive SRC
+/// controls are currently available through the Rust API only.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn t4a_treetn_partial_contract(
@@ -1839,6 +1845,8 @@ pub extern "C" fn t4a_treetn_partial_contract(
 /// default", which currently resolves to one variational sweep.
 /// `t4a_contract_method::Naive` uses the dedicated local-exact apply path here,
 /// not the generic full-dense TreeTN contraction used by `t4a_treetn_contract`.
+/// For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
+/// fixed-rank Gaussian-sketch path with default SRC controls.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_apply_operator_chain(
     operator: *const t4a_treetn,
@@ -1915,6 +1923,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
                 qr_rtol: None,
                 nfullsweeps: fit_nfullsweeps,
                 convergence_tol: resolve_convergence_tol(convergence_tol),
+                src_options: Default::default(),
             },
         )
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;

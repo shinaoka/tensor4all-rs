@@ -11,7 +11,7 @@ Related project: [tenferro-rs](https://github.com/tensor4all/tenferro-rs) provid
 - **ITensors.jl-like dynamic tensors**: Flexible `Index` system with dynamic-rank `Tensor`
 - **Tensor Cross Interpolation**: TCI2 primary algorithm plus legacy TCI1 compatibility for efficient high-dimensional function approximation
 - **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
-- **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
+- **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and naive, zip-up, fit, and SRC contraction
 - **Experimental CUDA contraction**: Explicit upload, dense TreeTN full contraction, and download on one GPU
 - **Partitioned TreeTNs**: Eagerly masked subdomains and volume-budgeted adaptive patching
 - **C API**: Minimal Julia-facing FFI surface for indices, structured tensors, TreeTN, and quantics materialization

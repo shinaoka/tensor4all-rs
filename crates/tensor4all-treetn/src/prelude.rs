@@ -16,11 +16,12 @@
 //! ```
 
 pub use crate::{
-    apply_linear_operator, dmrg, dmrg_with_treetn_operator, random_treetn, tdvp,
-    tdvp_with_treetn_operator, ApplyOptions, BoundaryEdge, CanonicalForm, CanonicalizationOptions,
-    CompressionAlgorithm, ContractionAlgorithm, DmrgOptions, DmrgResult, LinkIndexNetwork,
-    LinkSpace, NamedGraph, NodeNameNetwork, Operator, RestructureOptions, SiteIndexNetwork,
-    SplitOptions, SwapOptions, TdvpOptions, TdvpResult, TreeTN, TreeTopology, TruncationOptions,
+    apply_linear_operator, contract_src_with_rng, dmrg, dmrg_with_treetn_operator, random_treetn,
+    tdvp, tdvp_with_treetn_operator, ApplyOptions, BoundaryEdge, CanonicalForm,
+    CanonicalizationOptions, CompressionAlgorithm, ContractionAlgorithm, DmrgOptions, DmrgResult,
+    LinkIndexNetwork, LinkSpace, NamedGraph, NodeNameNetwork, Operator, RestructureOptions,
+    SiteIndexNetwork, SplitOptions, SrcOptions, SwapOptions, TdvpOptions, TdvpResult, TreeTN,
+    TreeTopology, TruncationOptions,
 };
 
 #[cfg(feature = "simplett-bridge")]

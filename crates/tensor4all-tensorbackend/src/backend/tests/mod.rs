@@ -3,6 +3,75 @@ use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use tenferro::TensorScalar;
 
+#[test]
+fn src_error_estimate_matches_real_upper_triangular_oracle() {
+    let r = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 1.0, 3.0]);
+
+    let estimate = src_error_estimate(&r).expect("well-conditioned R should be accepted");
+    let column0_norm_sq: f64 = 0.25 + 1.0 / 36.0;
+    let column1_norm_sq: f64 = 1.0 / 9.0;
+    let expected_error = (0.5 * (1.0 / column0_norm_sq + 1.0 / column1_norm_sq)).sqrt();
+    let expected_norm = (14.0_f64 / 2.0).sqrt();
+
+    assert!((estimate.error - expected_error).abs() < 1.0e-12);
+    assert!((estimate.norm - expected_norm).abs() < 1.0e-12);
+}
+
+#[test]
+fn src_error_estimate_uses_conjugate_adjoint_for_complex_r() {
+    let r01 = Complex64::new(1.0, 2.0);
+    let r11 = Complex64::new(3.0, -1.0);
+    let r = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![Complex64::new(2.0, 0.0), Complex64::zero(), r01, r11],
+    );
+
+    let estimate = src_error_estimate(&r).expect("well-conditioned R should be accepted");
+    let g00 = Complex64::new(0.5, 0.0);
+    let g11 = Complex64::new(1.0, 0.0) / r11.conj();
+    let g10 = -(r01.conj() * g00 * g11);
+    let column0_norm_sq = g00.norm_sqr() + g10.norm_sqr();
+    let column1_norm_sq = g11.norm_sqr();
+    let expected_error = (0.5 * (1.0 / column0_norm_sq + 1.0 / column1_norm_sq)).sqrt();
+    let expected_norm = (r01.norm_sqr() + 4.0 + r11.norm_sqr()).sqrt() / 2.0_f64.sqrt();
+
+    assert!((estimate.error - expected_error).abs() < 1.0e-12);
+    assert!((estimate.norm - expected_norm).abs() < 1.0e-12);
+}
+
+#[test]
+fn src_error_estimate_rejects_singular_and_non_square_r() {
+    let singular = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 1.0, 0.0]);
+    let singular_error = src_error_estimate(&singular).unwrap_err();
+    assert!(singular_error.to_string().contains("SRC"));
+
+    let non_square = Matrix::from_col_major_vec(2, 3, vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let shape_error = src_error_estimate(&non_square).unwrap_err();
+    assert!(shape_error.to_string().contains("square"));
+}
+
+#[test]
+fn src_error_estimate_supports_single_precision_scalars() {
+    let r32 = Matrix::from_col_major_vec(2, 2, vec![2.0_f32, 0.0, 1.0, 3.0]);
+    let estimate32 = src_error_estimate(&r32).expect("f32 R should be accepted");
+    assert!((estimate32.error - 6.3_f64.sqrt()).abs() < 1.0e-5);
+
+    let rc32 = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![
+            Complex32::new(2.0, 0.0),
+            Complex32::zero(),
+            Complex32::new(1.0, 2.0),
+            Complex32::new(3.0, -1.0),
+        ],
+    );
+    let estimatec32 = src_error_estimate(&rc32).expect("Complex32 R should be accepted");
+    assert!(estimatec32.error.is_finite());
+    assert!(estimatec32.norm.is_finite());
+}
+
 fn row_major_values<T>(tensor: &TypedTensor<T>) -> Vec<T>
 where
     T: TensorScalar + Copy,
@@ -60,14 +129,14 @@ fn qr_backend_reconstructs_real_matrix() {
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
         .expect("valid QR test input");
 
-    let (q, r) = qr_backend(&input).unwrap();
+    let input_values = row_major_values(&input);
+    let (q, r) = qr_backend(input).unwrap();
     assert_eq!(q.shape(), &[2, 2]);
     assert_eq!(r.shape(), &[2, 2]);
 
     let q_values = row_major_values(&q);
     let r_values = row_major_values(&r);
     let reconstructed = matmul_row_major(&q_values, 2, 2, &r_values, 2);
-    let input_values = row_major_values(&input);
 
     for (actual, expected) in reconstructed.iter().zip(input_values.iter()) {
         assert!(

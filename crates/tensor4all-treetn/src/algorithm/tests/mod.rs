@@ -6,6 +6,7 @@ fn test_contraction_algorithm_roundtrip() {
         ContractionAlgorithm::Naive,
         ContractionAlgorithm::ZipUp,
         ContractionAlgorithm::Fit,
+        ContractionAlgorithm::Src,
     ] {
         let i = alg.to_i32();
         let recovered = ContractionAlgorithm::from_i32(i).unwrap();
@@ -58,6 +59,7 @@ fn test_contraction_algorithm_name() {
     assert_eq!(ContractionAlgorithm::Naive.name(), "naive");
     assert_eq!(ContractionAlgorithm::ZipUp.name(), "zipup");
     assert_eq!(ContractionAlgorithm::Fit.name(), "fit");
+    assert_eq!(ContractionAlgorithm::Src.name(), "src");
 }
 
 #[test]

@@ -1,5 +1,5 @@
 [
-  "crates/tensor4all-core/src/defaults/idx_tensor.rs:6054:debug_assert_eq",
+  "crates/tensor4all-core/src/defaults/idx_tensor.rs:6739:debug_assert_eq",
   "crates/tensor4all-core/src/matrixlu.rs:741:debug_assert_eq",
   "crates/tensor4all-core/src/matrixluci/source.rs:103:assert",
   "crates/tensor4all-core/src/matrixluci/source.rs:108:assert_eq",
@@ -7,15 +7,15 @@
   "crates/tensor4all-core/src/matrixluci/source.rs:140:assert_eq",
   "crates/tensor4all-core/src/matrixluci/source.rs:67:assert",
   "crates/tensor4all-core/src/matrixluci/source.rs:72:assert_eq",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1107:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1142:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1146:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1303:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1304:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1305:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1306:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1000:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1045:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1154:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1189:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1193:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1350:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1351:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1352:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1353:assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:453:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:458:assert_eq",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:953:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:998:assert"
+  "crates/tensor4all-tensorbackend/src/matrix.rs:458:assert_eq"
 ]

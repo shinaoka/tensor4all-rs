@@ -15,7 +15,7 @@
 //!
 //! - **Canonicalization**: Transform networks into canonical forms (unitary, LU, CI).
 //! - **Truncation**: Compress networks using SVD-based truncation.
-//! - **Contraction**: Contract two networks using zip-up or fit algorithms.
+//! - **Contraction**: Contract two networks using zip-up, fit, or SRC algorithms.
 //! - **Linear operators**: Apply and compose linear operators on tree tensor networks.
 //! - **Linear solvers**: Solve linear systems involving tree tensor network operators.
 
@@ -60,6 +60,7 @@ pub use gse::{
     GseResult, GseTdvpOptions, GseTdvpResult,
 };
 pub use treetn::contraction;
+pub use treetn::contraction::{contract_src_with_rng, SrcOptions};
 
 // dyn_treetn exports removed - use TreeTN<IdxTensor, V> directly
 pub use link_index_network::LinkIndexNetwork;

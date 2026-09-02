@@ -73,7 +73,9 @@ This is a dense full-network contraction, so output memory scales with the produ
 - visible CUDA ordinal 0;
 - full contraction to one dense tensor.
 
-CUDA SVD, QR, truncation, TreeTN-to-TreeTN contraction, zip-up/fitting, TCI/ACI, automatic device selection, and multi-GPU execution are not yet supported.
+CUDA SVD, QR, truncation, TreeTN-to-TreeTN contraction, zip-up/fitting/SRC,
+TCI/ACI, automatic device selection, and multi-GPU execution are not yet
+supported.
 
 For timing, use the separate `cuda_tree_contraction` example, which reports context setup, upload, warm-up, steady-state GPU contraction plus synchronization, download, and CPU contraction independently:
 

@@ -59,7 +59,7 @@ where
         // `Q_t^T (Q_t^T)^H = conj(Q_t^H Q_t) = I`.
         let transposed = einsum_tensors("lx->xl", &[&matrix])
             .map_err(|err| mpo_helper_error("Failed to transpose MPO site matrix", err))?;
-        let (q, r) = qr_backend(&transposed)
+        let (q, r) = qr_backend(transposed)
             .map_err(|err| mpo_helper_error("QR failed during MPO canonicalization", err))?;
 
         let rank = q.shape()[1];

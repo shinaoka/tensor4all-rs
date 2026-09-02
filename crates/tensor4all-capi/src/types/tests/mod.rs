@@ -20,6 +20,7 @@ fn test_contract_method_roundtrip() {
         ContractionMethod::Zipup,
         ContractionMethod::Fit,
         ContractionMethod::Naive,
+        ContractionMethod::Src,
     ] {
         let ffi = t4a_contract_method::from(method);
         let roundtrip = ContractionMethod::from(ffi);

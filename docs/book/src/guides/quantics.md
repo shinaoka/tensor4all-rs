@@ -139,17 +139,18 @@ Original TreeTN          Operator            Result TreeTN
 ### Apply Method Selection
 
 `ApplyOptions` controls how the operator-state contraction is performed.
-Three methods are available, each with different tradeoffs:
+Four methods are available, each with different tradeoffs:
 
 | Method | Algorithm | When to use |
 |--------|-----------|-------------|
 | `ApplyOptions::naive()` | Local exact operator-state apply with product links | Small exact/debug cases; bond dimensions may grow as products |
 | `ApplyOptions::zipup()` | Single-sweep contraction with SVD truncation | Default choice; fast, good accuracy |
-| `ApplyOptions::fit()` | Iterative variational optimization | Best compression; use when bond dim must be small |
+| `ApplyOptions::fit()` | Iterative variational optimization | Best deterministic compression; use when bond dim must be small |
+| `ApplyOptions::src()` | Successive randomized compression with directed tree environments | Fast randomized compression; use a fixed seed for reproducible runs |
 
 ```rust
 use tensor4all_core::SvdTruncationPolicy;
-use tensor4all_treetn::ApplyOptions;
+use tensor4all_treetn::{ApplyOptions, SrcOptions};
 
 // Naive: local exact apply with no truncation or full dense materialization.
 // Use for small exact/debug cases; output bond dimensions can grow as
@@ -168,7 +169,18 @@ let opts = ApplyOptions::fit()
     .with_max_bond_dim(32)
     .with_nfullsweeps(3);
 assert_eq!(opts.nfullsweeps, 3);
+
+// SRC: randomized range finding with a deterministic probe stream.
+let opts = ApplyOptions::src()
+    .with_max_bond_dim(32)
+    .with_src_options(SrcOptions::fixed().with_seed(7));
+assert_eq!(opts.max_bond_dim, Some(32));
+assert_eq!(opts.src_options.seed, 7);
 ```
+
+SRC is implemented on the TreeTN contraction path and therefore also handles
+non-chain operator/state topologies. Use `ApplyOptions::with_src_options` to
+select adaptive tolerance control, rank increments, or the optional final SVD.
 
 ### Steiner Tree Partial Apply
 

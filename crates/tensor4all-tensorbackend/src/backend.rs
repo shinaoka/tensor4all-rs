@@ -4,7 +4,7 @@
 //! routing the actual work through the shared tenferro CPU backend.
 
 use anyhow::{anyhow, Result};
-use num_complex::{Complex32, Complex64};
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
 
@@ -349,6 +349,192 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
     ) -> Result<Matrix<Self>> {
         Self::triangular_solve_matrix_impl(&a, &b, left_side, lower, transpose_a, unit_diagonal)
     }
+}
+
+/// Small-matrix diagnostics produced by the successive randomized compression
+/// stopping estimator.
+///
+/// `error` is the Appendix C randomized residual estimate and `norm` is the
+/// corresponding Frobenius norm estimate. Both values use the sketch width as
+/// their normalization factor.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{src_error_estimate, Matrix};
+///
+/// let r = Matrix::from_col_major_vec(1, 1, vec![2.0_f64]);
+/// let estimate = src_error_estimate(&r).unwrap();
+/// assert!((estimate.error - 2.0).abs() < 1.0e-12);
+/// assert!((estimate.norm - 2.0).abs() < 1.0e-12);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SrcErrorEstimate {
+    /// Estimated residual magnitude from the inverse-adjoint QR factor.
+    pub error: f64,
+    /// Estimated norm of the sketched tensor from the QR factor.
+    pub norm: f64,
+}
+
+/// Compute the Appendix C SRC error and norm estimates from an upper-triangular
+/// QR factor `R`.
+///
+/// Provenance: the formulas are Eq. (err-est) and Eq. (norm-est) in Appendix C
+/// of Camaño--Epperly--Tropp, [arXiv:2504.06475](https://arxiv.org/abs/2504.06475),
+/// cross-checked against `chriscamano/RandomMPOMPS/code/tensornetwork/incrementalqr.cpp::get_error_estimate`
+/// (lines 106--119). The use of actual `R` plus an `R†` solve is an equivalent
+/// representation derived in the audit; it is not a literal port of the
+/// author's inverse-`R` storage.
+///
+/// The helper explicitly builds `R†` before solving `R† G = I`, so complex
+/// inputs use the Hermitian adjoint rather than a plain transpose. The solve is
+/// delegated to the configured tensor4all backend and is restricted to the
+/// small sketch matrix; no general dense inverse routine is used.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] when `r` is empty, non-square, singular, or
+/// contains non-finite values, or when the backend triangular solve fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{src_error_estimate, Matrix};
+///
+/// let r = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 1.0, 3.0]);
+/// let estimate = src_error_estimate(&r).unwrap();
+/// assert!(estimate.error.is_finite());
+/// assert!(estimate.norm.is_finite());
+/// ```
+pub fn src_error_estimate<T>(
+    r: &Matrix<T>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar + ComplexFloat,
+{
+    let inverse_adjoint = src_inverse_adjoint(r)?;
+    src_error_estimate_from_inverse_adjoint(r, &inverse_adjoint)
+}
+
+/// Compute the inverse adjoint `R^{-†}` used by the Appendix C estimator.
+///
+/// This is crate-visible so incremental QR can initialize the stored
+/// estimator state once and then update it with the block formula from
+/// Appendix C.3 instead of solving the same triangular system after every
+/// appended sketch block.
+pub(crate) fn src_inverse_adjoint<T>(
+    r: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar + ComplexFloat,
+{
+    let nrows = r.nrows();
+    let ncols = r.ncols();
+    if nrows != ncols {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a square R, got {nrows}x{ncols}"
+        )));
+    }
+    if nrows == 0 {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a non-empty R"
+        )));
+    }
+
+    // Only the diagonal is checked here; the full-R Frobenius-norm
+    // finiteness check lives solely in `src_error_estimate_from_inverse_adjoint`,
+    // which every `src_error_estimate` call already runs immediately after
+    // this function returns. Duplicating that O(rank^2) accumulation here
+    // would recompute the identical sum for nothing on SRC's adaptive
+    // stopping-test hot path.
+    for col in 0..ncols {
+        let diagonal_sq = r[[col, col]].matrix_abs_sq();
+        if !diagonal_sq.is_finite() || diagonal_sq == 0.0 {
+            return Err(BackendLinalgError::from(anyhow!(
+                "SRC estimator requires a finite, nonzero diagonal in R at ({col}, {col})"
+            )));
+        }
+    }
+
+    let mut adjoint = Matrix::zeros(nrows, ncols);
+    for col in 0..ncols {
+        for row in 0..nrows {
+            adjoint[[row, col]] = r[[col, row]].conj();
+        }
+    }
+    let mut identity = Matrix::zeros(nrows, ncols);
+    for diagonal in 0..nrows {
+        identity[[diagonal, diagonal]] = T::one();
+    }
+
+    let inverse_adjoint = triangular_solve_matrix(&adjoint, &identity, true, true, false, false)
+        .map_err(|error| {
+            BackendLinalgError::from(anyhow!(
+                "SRC inverse-adjoint triangular solve failed: {error}"
+            ))
+        })?;
+    Ok(inverse_adjoint)
+}
+
+/// Evaluate the Appendix C estimator from a previously computed `R^{-†}`.
+///
+/// The inverse-adjoint argument is intentionally separate from
+/// [`src_error_estimate`] so incremental QR can reuse its updated triangular
+/// solve state. This helper performs only norm accumulation and validation.
+pub(crate) fn src_error_estimate_from_inverse_adjoint<T>(
+    r: &Matrix<T>,
+    inverse_adjoint: &Matrix<T>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar + ComplexFloat,
+{
+    let nrows = r.nrows();
+    let ncols = r.ncols();
+    if nrows != ncols || inverse_adjoint.nrows() != nrows || inverse_adjoint.ncols() != ncols {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires matching square R and inverse-adjoint factors"
+        )));
+    }
+    if nrows == 0 {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a non-empty R"
+        )));
+    }
+
+    let mut norm_sq = 0.0_f64;
+    for value in r.as_col_major_slice() {
+        norm_sq += value.matrix_abs_sq();
+    }
+    if !norm_sq.is_finite() {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires finite entries in R"
+        )));
+    }
+    let mut inverse_column_error_sq = 0.0_f64;
+    for col in 0..ncols {
+        let column_norm_sq = (0..nrows)
+            .map(|row| inverse_adjoint[[row, col]].matrix_abs_sq())
+            .sum::<f64>();
+        if !column_norm_sq.is_finite() || column_norm_sq == 0.0 {
+            return Err(BackendLinalgError::from(anyhow!(
+                "SRC inverse-adjoint solve returned an invalid column norm at column {col}"
+            )));
+        }
+        inverse_column_error_sq += 1.0 / column_norm_sq;
+    }
+
+    let sketch_width = ncols as f64;
+    let error_sq = inverse_column_error_sq / sketch_width;
+    let norm_estimate_sq = norm_sq / sketch_width;
+    if !error_sq.is_finite() || !norm_estimate_sq.is_finite() {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator produced a non-finite estimate"
+        )));
+    }
+    Ok(SrcErrorEstimate {
+        error: error_sq.sqrt(),
+        norm: norm_estimate_sq.sqrt(),
+    })
 }
 
 fn solve_matrix_direct<T>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>>
@@ -723,25 +909,24 @@ where
     })
 }
 
-/// Compute a thin/economy QR decomposition on a typed tensor.
+/// Compute a thin/economy QR decomposition, consuming the input tensor so its
+/// column-major storage can be transferred to the backend without copying.
 /// # Errors
 ///
 /// Returns an error when the QR fails (a backend or non-convergence
 /// /// failure).
 ///
 pub fn qr_backend<T>(
-    a: &TypedTensor<T>,
+    a: TypedTensor<T>,
 ) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(
-        a.shape().to_vec(),
-        a.host_data()
-            .map_err(|e| anyhow!("QR input host access failed: {e}"))?
-            .to_vec(),
-    )
-    .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
+    let (shape, data) = a
+        .into_vec_col_major()
+        .map_err(|e| anyhow!("QR input host access failed: {e}"))?;
+    let tensor = T::into_tensor(shape, data)
+        .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
     let (q, r) = with_default_session(|session| tensor.qr(session))
         .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((

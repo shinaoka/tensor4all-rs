@@ -56,13 +56,7 @@ where
         let right = tensor
             .outer_product(&right_bond)
             .context("factorize_or_trivial: right outer_product")?;
-        return Ok(FactorizeResult {
-            left,
-            right,
-            bond_index: bond,
-            singular_values: None,
-            rank: 1,
-        });
+        return Ok(FactorizeResult::new(left, right, bond, None, 1));
     }
 
     if left_inds.len() == all_inds.len() {
@@ -84,13 +78,7 @@ where
                 .scale(tensor4all_core::AnyScalar::new_real(left_norm))
                 .context("factorize_or_trivial: scale right")?;
         }
-        return Ok(FactorizeResult {
-            left,
-            right,
-            bond_index: bond,
-            singular_values: None,
-            rank: 1,
-        });
+        return Ok(FactorizeResult::new(left, right, bond, None, 1));
     }
 
     // Normal case: delegate to TensorFactorizationLike::factorize

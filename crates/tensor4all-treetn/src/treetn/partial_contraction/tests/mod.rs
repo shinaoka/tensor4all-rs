@@ -1,5 +1,5 @@
 use super::*;
-use crate::treetn::contraction::{ContractionMethod, ContractionOptions};
+use crate::treetn::contraction::{ContractionMethod, ContractionOptions, SrcOptions};
 use crate::{
     factorize_tensor_to_treetn, RestructureOptions, SelectedIndexContractionError,
     SiteIndexNetwork, TreeTopology,
@@ -479,6 +479,47 @@ fn test_partial_contract_contract_only() {
 
     // s_a/s_b contracted away; extra_a and extra_b remain
     assert_eq!(result.external_indices().len(), 2);
+}
+
+#[test]
+fn partial_contract_src_uses_the_same_directed_tree_path() {
+    let PartialContractionInputs {
+        tn_a,
+        tn_b,
+        s_contract_a,
+        s_contract_b,
+        ..
+    } = make_partial_contraction_inputs();
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(s_contract_a, s_contract_b)],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+
+    let src = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"B".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_final_svd(false).with_seed(31)),
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+    let reference = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"B".to_string(),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(4096),
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+
+    assert!(src.distance(&reference).unwrap() < 1.0e-10);
 }
 
 #[test]

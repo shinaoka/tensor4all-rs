@@ -1,5 +1,7 @@
 use super::*;
 use num_complex::Complex64;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
     DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
 };
@@ -65,6 +67,53 @@ fn test_contraction_options_zipup() {
 fn test_contraction_options_fit() {
     let opts = ContractionOptions::fit();
     assert_eq!(opts.method, ContractionMethod::Fit);
+}
+
+#[test]
+fn test_src_options_cover_fixed_and_adaptive_modes() {
+    let fixed = SrcOptions::fixed().with_seed(17).with_final_svd(false);
+    assert!(fixed.rtol.is_none());
+    assert_eq!(fixed.seed, 17);
+    assert!(!fixed.final_svd);
+    assert!(fixed.validate(Some(4)).is_ok());
+
+    let adaptive = SrcOptions::adaptive(1.0e-8, 12)
+        .with_atol(1.0e-10)
+        .with_min_rank(2)
+        .with_rank_increment(3);
+    assert_eq!(adaptive.rtol, Some(1.0e-8));
+    assert_eq!(adaptive.max_rank, Some(12));
+    assert!(adaptive.validate(Some(12)).is_ok());
+
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(adaptive.clone());
+    assert_eq!(options.method, ContractionMethod::Src);
+    assert_eq!(options.src_options, adaptive);
+}
+
+#[test]
+fn test_src_options_reject_invalid_adaptive_parameters() {
+    assert!(SrcOptions::adaptive(f64::NAN, 4).validate(Some(4)).is_err());
+    assert!(SrcOptions::adaptive(-1.0, 4).validate(Some(4)).is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 0).validate(Some(4)).is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 4)
+        .with_min_rank(5)
+        .validate(Some(4))
+        .is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 4)
+        .with_rank_increment(0)
+        .validate(Some(4))
+        .is_err());
+    assert!(SrcOptions::adaptive(1.0e-8, 5)
+        .with_final_svd(false)
+        .validate(Some(4))
+        .is_err());
+    assert!(SrcOptions::fixed().validate(None).is_err());
+    assert!(SrcOptions::fixed()
+        .with_atol(1.0e-8)
+        .validate(Some(4))
+        .is_err());
 }
 
 #[test]
@@ -469,7 +518,818 @@ fn zipup_chain_matches_naive_without_truncation() {
 }
 
 #[test]
-fn zipup_complex_chain_matches_naive_without_truncation() {
+fn src_fixed_matches_exact_contraction_when_probe_cap_is_full() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false));
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(error < 1.0e-8, "full-probe SRC residual is {error}");
+    assert!(actual
+        .clone()
+        .external_indices()
+        .iter()
+        .all(|index| index.dim() == 2));
+}
+
+#[test]
+fn src_adaptive_matches_exact_contraction_on_a_small_chain() {
+    // Chain topology with an endpoint center ("C"), unlike the sibling
+    // `src_adaptive_matches_naive_on_a_branched_tree_when_probe_cap_is_full`
+    // regression, which uses a branched tree with an interior (degree-3)
+    // center. The two exercise genuinely different structural paths
+    // (endpoint vs. interior canonical center on different topologies),
+    // so both are kept as complementary dense-oracle coverage for
+    // adaptive-rank SRC.
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(1)
+                .with_rank_increment(1)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(error < 1.0e-8, "adaptive SRC residual is {error}");
+}
+
+/// Regression for the interior-site adaptive closure's probe batching in
+/// `src_chain.rs`: at each growth step the closure fetches one
+/// already-batched (batch-indexed) prefix tensor via `PrefixCache::request`
+/// and contracts it through the two local site tensors and the right
+/// environment with `contract_retaining`, all in one shot -- there is no
+/// `stack_along_new_index`/`select_indices` round trip at the call site
+/// itself, since `request` already returns a single batch-indexed tensor
+/// covering the whole requested range. `rank_increment` here is 2 (unlike
+/// the sibling `src_adaptive_matches_exact_contraction_on_a_small_chain`,
+/// which uses 1 and so never requests a batch wider than a single column),
+/// so this forces at least one `request` call for a genuinely multi-column
+/// (`width > 1`) batch.
+#[test]
+fn src_adaptive_matches_exact_contraction_with_a_multi_column_lookahead_batch() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(1)
+                .with_rank_increment(2)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    assert!(
+        error < 1.0e-8,
+        "adaptive SRC residual with multi-column lookahead batching is {error}"
+    );
+}
+
+fn random_dense_tensor(indices: Vec<DynIndex>, rng: &mut ChaCha8Rng) -> IdxTensor {
+    let elements = indices.iter().map(IndexLike::dim).product();
+    let data = (0..elements)
+        .map(|_| rng.random_range(-1.0_f64..1.0_f64))
+        .collect();
+    IdxTensor::from_dense(indices, data).unwrap()
+}
+
+/// A 5-site MPO/MPS pair with a shared physical index per site (the MPO's
+/// own kept output index and the MPS's contracted input index both carry
+/// `physical_dim`), and independent chain bonds of `bond_dim` for each of
+/// the two networks -- the same index-construction shape as
+/// `make_three_node_chain_pair` above, generalized to 5 sites with
+/// `ChaCha8Rng`-seeded random values (mirroring `benchmark_src.rs`'s
+/// `make_mpo_mps`) so callers can pick a `physical_dim`/`bond_dim`/`seed`
+/// combination that forces a ragged `PrefixCache` segment.
+fn make_five_site_chain_pair(
+    physical_dim: usize,
+    bond_dim: usize,
+    seed: u64,
+) -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
+    let n_sites = 5;
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let shared = (0..n_sites)
+        .map(|_| DynIndex::new_dyn(physical_dim))
+        .collect::<Vec<_>>();
+    let output_a = (0..n_sites)
+        .map(|_| DynIndex::new_dyn(physical_dim))
+        .collect::<Vec<_>>();
+    let bonds_a = (0..n_sites - 1)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+    let bonds_b = (0..n_sites - 1)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+
+    let mut tensors_a = Vec::with_capacity(n_sites);
+    let mut tensors_b = Vec::with_capacity(n_sites);
+    for site in 0..n_sites {
+        let mut indices_a = Vec::with_capacity(4);
+        if site > 0 {
+            indices_a.push(bonds_a[site - 1].clone());
+        }
+        indices_a.push(shared[site].clone());
+        indices_a.push(output_a[site].clone());
+        if site + 1 < n_sites {
+            indices_a.push(bonds_a[site].clone());
+        }
+        tensors_a.push(random_dense_tensor(indices_a, &mut rng));
+
+        let mut indices_b = Vec::with_capacity(3);
+        if site > 0 {
+            indices_b.push(bonds_b[site - 1].clone());
+        }
+        indices_b.push(shared[site].clone());
+        if site + 1 < n_sites {
+            indices_b.push(bonds_b[site].clone());
+        }
+        tensors_b.push(random_dense_tensor(indices_b, &mut rng));
+    }
+
+    let names = (0..n_sites)
+        .map(|site| format!("S{site}"))
+        .collect::<Vec<_>>();
+    (
+        TreeTN::from_tensors(tensors_a, names.clone()).unwrap(),
+        TreeTN::from_tensors(tensors_b, names).unwrap(),
+    )
+}
+
+#[test]
+fn src_adaptive_chain_reuses_an_aligned_segment_across_sites_and_matches_dense_reference() {
+    // A 5-site chain with a physical dimension small enough that an early
+    // site's maximum_width ends inside a rank-increment step, while a later
+    // site needs the complete cached segment.
+    let (mpo, mps) = make_five_site_chain_pair(
+        /* physical_dim */ 2, /* bond_dim */ 3, /* seed */ 21,
+    );
+    let center = mpo.node_names().into_iter().min().unwrap();
+    let exact = mpo.contract_naive(&mps).unwrap();
+
+    let result = contract(
+        &mpo,
+        &mps,
+        &center,
+        ContractionOptions::src()
+            .with_max_bond_dim(9)
+            .with_src_options(
+                SrcOptions::adaptive(1.0e-8, 9)
+                    .with_min_rank(1)
+                    .with_rank_increment(2)
+                    .with_seed(7),
+            ),
+    )
+    .unwrap();
+
+    let dense = result.to_dense().unwrap();
+    let rel_error = dense.sub(&exact).unwrap().maxabs().unwrap() / exact.maxabs().unwrap();
+    assert!(rel_error < 1e-6, "relative error {rel_error} too large");
+}
+
+#[test]
+fn src_result_tensor_is_numerically_isometric() {
+    // The audit (WS-tests §5c) found that `validate_ortho_consistency` only
+    // checks connectivity/direction metadata, never the actual tensor
+    // values, so nothing in the suite proved a non-root SRC result tensor
+    // is numerically unitary/isometric.
+    //
+    // This uses a 4-node chain "S0"-"S1"-"S2"-"S3" with an *interior* center
+    // "S1" (not a chain endpoint). That is deliberate: investigating this
+    // test uncovered that `contract`'s endpoint-center chain specialization
+    // (`src_chain.rs`, taken whenever the requested center is a chain
+    // endpoint, e.g. `make_three_node_chain_pair()` with center "C" as used
+    // elsewhere in this file) reports its canonical metadata backwards --
+    // `canonical_region`/`ortho_towards` claim the requested endpoint is the
+    // orthogonality center, but the actual tensor values are numerically
+    // isometric *away* from it and isometric *towards* the opposite
+    // endpoint instead (residual ~1e-8..1 on the declared direction, vs.
+    // ~1e-15 on the reversed one; reproduced for both endpoint choices).
+    // `validate_ortho_consistency` cannot see this because it only checks
+    // that the metadata is internally self-consistent, not that it matches
+    // the data. This is a pre-existing production bug scoped outside this
+    // test-only task; it is reported separately rather than fixed here.
+    // Requesting an interior center (as this test does) dispatches to the
+    // general rooted-tree path (`src_tree.rs`) instead, which was verified
+    // (along with a branched-tree hub center) to report correct, matching
+    // canonical metadata.
+    let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true]);
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(11).with_final_svd(false));
+    let actual = contract(&tn_a, &tn_b, &"S1".to_string(), options).unwrap();
+    actual.validate_ortho_consistency().unwrap();
+
+    // Node "S2" is a non-center interior node (bonds to both "S1" and "S3"
+    // plus its own site index), so its tensor has three indices: the bond
+    // towards center "S1" (the canonical direction), its own site index,
+    // and the bond towards "S3" (non-canonical). Grouping the latter two
+    // into a single "other" axis via `fuse_indices` is a genuine
+    // matricization (more than one index being fused), not a tensor that
+    // already happens to be a bare 2-index matrix.
+    let node_s2 = actual.node_index(&"S2".to_string()).unwrap();
+    let tensor_s2 = actual.tensor(node_s2).unwrap();
+    let bond_towards_center = actual
+        .bond_index(
+            actual
+                .edge_between(&"S2".to_string(), &"S1".to_string())
+                .unwrap(),
+        )
+        .unwrap()
+        .clone();
+
+    let other_indices: Vec<DynIndex> = tensor_s2
+        .indices()
+        .iter()
+        .filter(|idx| **idx != bond_towards_center)
+        .cloned()
+        .collect();
+    assert!(
+        other_indices.len() > 1,
+        "expected node S2 to have more than one non-canonical index to fuse"
+    );
+
+    let other_dim: usize = other_indices.iter().map(IndexLike::dim).product();
+    let other_fused = DynIndex::new_dyn(other_dim);
+    let matricized = tensor_s2
+        .fuse_indices(
+            &other_indices,
+            other_fused.clone(),
+            tensor4all_core::LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
+
+    // Build the Gram matrix M^dagger * M by contracting the matricized
+    // tensor against a copy whose canonical bond index has been primed
+    // (so only the shared "other" index is summed over by `contract_pair`),
+    // then compare it against the identity on the bond dimension.
+    let bond_prime = bond_towards_center.prime();
+    let conj_primed = matricized
+        .conj()
+        .replaceind(&bond_towards_center, &bond_prime)
+        .unwrap();
+    let gram = conj_primed.contract_pair(&matricized).unwrap();
+
+    let identity = IdxTensor::diagonal(&bond_prime, &bond_towards_center).unwrap();
+    let error = gram.sub(&identity).unwrap().maxabs().unwrap();
+    assert!(error < 1.0e-8, "isometry residual is {error}");
+}
+
+#[test]
+fn src_fixed_handles_scalar_sites_in_a_chain() {
+    for output_sites in [[false, true, true], [true, false, true]] {
+        let (tn_a, tn_b) = make_chain_pair_with_outputs(&output_sites);
+        let expected = tn_a.contract_naive(&tn_b).unwrap();
+        let actual = contract(
+            &tn_a,
+            &tn_b,
+            &"S2".to_string(),
+            ContractionOptions::src()
+                .with_max_bond_dim(4)
+                .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false)),
+        )
+        .unwrap();
+        let error = actual
+            .to_dense()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        assert!(error < 1.0e-8, "scalar-site SRC residual is {error}");
+        actual.validate_ortho_consistency().unwrap();
+    }
+}
+
+#[test]
+fn src_dispatch_preserves_public_contract() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false)),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "public SRC residual is {error}");
+    assert_eq!(actual.node_count(), tn_a.node_count());
+    assert_eq!(actual.edge_count(), tn_a.edge_count());
+    actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_with_rng_matches_the_seeded_high_level_api() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false));
+    let seeded = contract(&tn_a, &tn_b, &"C".to_string(), options.clone())
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let mut rng = ChaCha8Rng::seed_from_u64(123);
+    let supplied = contract_src_with_rng(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        options.with_src_options(SrcOptions::fixed().with_seed(999).with_final_svd(false)),
+        &mut rng,
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+
+    let error = supplied.sub(&seeded).unwrap().maxabs().unwrap();
+    assert!(
+        error < 1.0e-12,
+        "seeded and caller-owned RNG paths differ by {error}"
+    );
+
+    let error = contract_src_with_rng(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::zipup(),
+        &mut rng,
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("requires ContractionMethod::Src"));
+}
+
+#[test]
+fn src_adaptive_contracts_and_honors_rank_cap() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(2)
+                .with_rank_increment(2)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+
+    assert_eq!(actual.node_count(), 3);
+    assert!(actual
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| actual.bond_index(edge).unwrap().dim() <= 4));
+    actual.validate_ortho_consistency().unwrap();
+}
+
+/// Regression for `PrefixCache::request`'s two branches, both exercised by
+/// the interior-site adaptive closure in `src_chain.rs`: a chain long
+/// enough to have multiple interior sites (`(1..last).rev()` visits sites
+/// 3, 2, 1 here) sharing one `PrefixCache`. The first site to request a
+/// given range causes `request` to grow a fresh segment covering exactly
+/// that range and return it directly (the aligned "exact segment match"
+/// fast path -- no splitting or restacking). A later site whose own
+/// request only partially overlaps segment boundaries already grown by an
+/// earlier site's requests instead falls into `request`'s misaligned
+/// fallback, which splits the covering segment(s) via `select_indices` and
+/// re-stacks the requested range via `stack_along_new_index`. Both
+/// branches must produce identical, correct results, since they compute
+/// the same underlying probe-batch data by construction.
+///
+/// The dense-oracle assertion uses relative max error because the fixture's
+/// values compound across five sites.
+#[test]
+fn src_adaptive_matches_naive_on_a_longer_chain_with_multiple_interior_sites() {
+    let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true, true]);
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(2)
+                .with_rank_increment(3)
+                .with_seed(11)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"S4".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let absolute_error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    let expected_scale = expected.maxabs().unwrap();
+    let relative_error = absolute_error / expected_scale;
+    assert!(
+        relative_error < 1.0e-10,
+        "adaptive SRC relative max error is {relative_error} (absolute={absolute_error}, reference scale={expected_scale})"
+    );
+}
+
+#[test]
+fn src_adaptive_uses_the_minimum_rank_when_the_estimate_is_already_small() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e6, 4)
+                .with_min_rank(1)
+                .with_rank_increment(1)
+                .with_seed(123)
+                .with_final_svd(false),
+        );
+    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+
+    assert!(actual
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| actual.bond_index(edge).unwrap().dim() == 1));
+}
+
+fn make_star_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
+    let shared = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let output_a = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let output_b = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let bonds_a = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let bonds_b = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let names = vec!["C".to_string(), "L".to_string(), "R".to_string()];
+    let build = |bonds: &[DynIndex; 2], outputs: &[DynIndex; 3], offset: f64| {
+        TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![
+                        shared[0].clone(),
+                        outputs[0].clone(),
+                        bonds[0].clone(),
+                        bonds[1].clone(),
+                    ],
+                    (0..16).map(|i| offset + f64::from(i) / 10.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[1].clone(), outputs[1].clone(), bonds[0].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 7.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[2].clone(), outputs[2].clone(), bonds[1].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 6.0).collect(),
+                )
+                .unwrap(),
+            ],
+            names.clone(),
+        )
+        .unwrap()
+    };
+    (
+        build(&bonds_a, &output_a, 1.0),
+        build(&bonds_b, &output_b, 2.0),
+    )
+}
+
+#[test]
+fn src_fixed_traverses_a_branched_tree_without_dense_fallback() {
+    let (tn_a, tn_b) = make_star_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(2)
+        .with_src_options(SrcOptions::fixed().with_seed(77).with_final_svd(false));
+    let result = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+
+    assert_eq!(result.node_count(), 3);
+    assert_eq!(result.edge_count(), 2);
+    assert!(result
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| result.bond_index(edge).unwrap().dim() <= 2));
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_adaptive_traverses_a_branched_tree_and_matches_dense_reference() {
+    // Same fixture and interior center ("C", not a chain endpoint) as
+    // `src_fixed_traverses_a_branched_tree_without_dense_fallback` above, so
+    // this also routes through `src_tree.rs`'s general path -- but with
+    // `SrcOptions::adaptive`, exercising this task's rewired adaptive branch
+    // (`factorize_probe_batches` + `EnvironmentCache::request`) end-to-end
+    // against a dense-oracle reference.
+    let (tn_a, tn_b) = make_star_pair();
+    let exact = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(
+            SrcOptions::adaptive(1.0e-8, 4)
+                .with_min_rank(1)
+                .with_rank_increment(2)
+                .with_seed(88),
+        );
+    let result = contract(&tn_a, &tn_b, &"C".to_string(), options).unwrap();
+    let error = result
+        .to_dense()
+        .unwrap()
+        .sub(&exact)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1e-6, "branched adaptive SRC residual is {error}");
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
+    let (tn_a, tn_b) = make_branched_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_seed(77).with_final_svd(false)),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "branched SRC residual is {error}");
+    actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_adaptive_contracts_a_branched_tree_with_a_rank_cap() {
+    let (tn_a, tn_b) = make_branched_pair();
+    let result = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(
+                SrcOptions::adaptive(1.0e-8, 4)
+                    .with_min_rank(1)
+                    .with_rank_increment(1)
+                    .with_seed(77)
+                    .with_final_svd(false),
+            ),
+    )
+    .unwrap();
+
+    assert_eq!(result.node_count(), 4);
+    assert_eq!(result.edge_count(), 3);
+    assert!(result
+        .graph
+        .graph()
+        .edge_indices()
+        .all(|edge| result.bond_index(edge).unwrap().dim() <= 4));
+    result.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_adaptive_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
+    // Same fixture and interior center ("C", the degree-3 hub) as
+    // `src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full`,
+    // but with `SrcOptions::adaptive` so this exercises the `rtol.is_some()`
+    // dispatch branch (`EnvironmentCache::request`/`grow_segment`, the
+    // batch-native probe path) with a numeric dense-oracle comparison,
+    // rather than only the fixed-rank dispatch branch
+    // (`directed_messages_batched` via `EnvironmentCache::batch`) that the
+    // sibling test above covers.
+    let (tn_a, tn_b) = make_branched_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(
+                SrcOptions::adaptive(1.0e-8, 4)
+                    .with_min_rank(1)
+                    .with_rank_increment(1)
+                    .with_seed(77)
+                    .with_final_svd(false),
+            ),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "branched adaptive SRC residual is {error}");
+    actual.validate_ortho_consistency().unwrap();
+}
+
+#[test]
+fn src_preserves_a_scalar_leaf_on_a_branched_tree() {
+    let shared = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let output_c = DynIndex::new_dyn(2);
+    let output_m = DynIndex::new_dyn(2);
+    let output_r = DynIndex::new_dyn(2);
+    let bonds_a = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds_b = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let names = vec![
+        "C".to_string(),
+        "L".to_string(),
+        "M".to_string(),
+        "R".to_string(),
+    ];
+    let build = |bonds: &[DynIndex], offset: f64| {
+        TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![
+                        shared[0].clone(),
+                        output_c.clone(),
+                        bonds[0].clone(),
+                        bonds[1].clone(),
+                        bonds[2].clone(),
+                    ],
+                    (0..32).map(|i| offset + f64::from(i) / 10.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[1].clone(), bonds[0].clone()],
+                    (0..4).map(|i| offset + f64::from(i) / 7.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[2].clone(), output_m.clone(), bonds[1].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 6.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[3].clone(), output_r.clone(), bonds[2].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 5.0).collect(),
+                )
+                .unwrap(),
+            ],
+            names.clone(),
+        )
+        .unwrap()
+    };
+    let tn_a = build(&bonds_a, 1.0);
+    let tn_b = build(&bonds_b, 2.0);
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let actual = contract(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_seed(91).with_final_svd(false)),
+    )
+    .unwrap();
+
+    let error = actual
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-8, "branched scalar-leaf residual is {error}");
+    let scalar_edge = actual
+        .edge_between(&"C".to_string(), &"L".to_string())
+        .unwrap();
+    assert_eq!(actual.bond_index(scalar_edge).unwrap().dim(), 1);
+    actual.validate_ortho_consistency().unwrap();
+}
+
+fn make_branched_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
+    let shared = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let output_a = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let output_b = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds_a = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds_b = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let names = vec![
+        "C".to_string(),
+        "L".to_string(),
+        "M".to_string(),
+        "R".to_string(),
+    ];
+    let build = |bonds: &[DynIndex], outputs: &[DynIndex], offset: f64| {
+        TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![
+                        shared[0].clone(),
+                        outputs[0].clone(),
+                        bonds[0].clone(),
+                        bonds[1].clone(),
+                        bonds[2].clone(),
+                    ],
+                    (0..32).map(|i| offset + f64::from(i) / 10.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[1].clone(), outputs[1].clone(), bonds[0].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 7.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[2].clone(), outputs[2].clone(), bonds[1].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 6.0).collect(),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![shared[3].clone(), outputs[3].clone(), bonds[2].clone()],
+                    (0..8).map(|i| offset + f64::from(i) / 5.0).collect(),
+                )
+                .unwrap(),
+            ],
+            names.clone(),
+        )
+        .unwrap()
+    };
+    (
+        build(&bonds_a, &output_a, 1.0),
+        build(&bonds_b, &output_b, 2.0),
+    )
+}
+
+#[test]
+fn src_preserves_scalar_only_subtrees_with_dimension_one_bridges() {
+    let shared_leaf = DynIndex::new_dyn(2);
+    let shared_root = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+    let leaf_a =
+        IdxTensor::from_dense(vec![shared_leaf.clone(), bond_a.clone()], vec![1.0; 4]).unwrap();
+    let root_a = IdxTensor::from_dense(vec![bond_a, shared_root.clone()], vec![1.0; 4]).unwrap();
+    let leaf_b = IdxTensor::from_dense(vec![shared_leaf, bond_b.clone()], vec![1.0; 4]).unwrap();
+    let root_b = IdxTensor::from_dense(vec![bond_b, shared_root], vec![1.0; 4]).unwrap();
+    let names = vec!["L".to_string(), "R".to_string()];
+    let tn_a = TreeTN::from_tensors(vec![leaf_a, root_a], names.clone()).unwrap();
+    let tn_b = TreeTN::from_tensors(vec![leaf_b, root_b], names).unwrap();
+
+    let result = contract(
+        &tn_a,
+        &tn_b,
+        &"R".to_string(),
+        ContractionOptions::src()
+            .with_max_bond_dim(2)
+            .with_src_options(SrcOptions::fixed().with_final_svd(false)),
+    )
+    .unwrap();
+
+    assert_eq!(result.node_count(), 2);
+    assert_eq!(result.edge_count(), 1);
+    assert!(result.external_indices().is_empty());
+    let edge = result.graph.graph().edge_indices().next().unwrap();
+    assert_eq!(result.bond_index(edge).unwrap().dim(), 1);
+}
+
+fn make_two_node_complex_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     let shared = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let output_a = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let output_b = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
@@ -513,6 +1373,12 @@ fn zipup_complex_chain_matches_naive_without_truncation() {
     )
     .unwrap();
 
+    (tn_a, tn_b)
+}
+
+#[test]
+fn zipup_complex_chain_matches_naive_without_truncation() {
+    let (tn_a, tn_b) = make_two_node_complex_pair();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
     let actual = tn_a
         .contract_zipup(
@@ -525,6 +1391,21 @@ fn zipup_complex_chain_matches_naive_without_truncation() {
         .to_dense()
         .unwrap();
     assert!(actual.distance(&expected).unwrap() < 1e-9);
+}
+
+#[test]
+fn src_complex_chain_matches_naive_when_probe_cap_is_full() {
+    let (tn_a, tn_b) = make_two_node_complex_pair();
+    let expected = tn_a.contract_naive(&tn_b).unwrap();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(321).with_final_svd(false));
+    let actual = contract(&tn_a, &tn_b, &"B".to_string(), options)
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    assert!(actual.distance(&expected).unwrap() < 1e-8);
 }
 
 #[test]
@@ -690,6 +1571,61 @@ fn zipup_branched_tree_uses_existing_fallback() {
         .unwrap();
     assert_eq!(result.node_count(), 4);
     assert_eq!(result.edge_count(), 3);
+}
+
+/// Reproduces gw-rs's `NBlock`/`Comb` quantics layouts: a chain topology
+/// whose node-ID assignment does not follow the graph's path order, so the
+/// lexicographically smallest node name ("A") is an interior node rather
+/// than an endpoint. `preferred_contraction_center` must pick an actual
+/// endpoint ("M", the smaller of the two: "M" and "Z") instead, so that
+/// callers like `apply_linear_operator` land on SRC's fast chain path
+/// (`chain.last() == center` in `src_tree.rs`) instead of silently falling
+/// through to the more expensive general tree path on every call.
+#[test]
+fn preferred_contraction_center_picks_an_endpoint_even_when_its_name_does_not_sort_smallest() {
+    let names = vec!["Z".to_string(), "A".to_string(), "M".to_string()];
+    let bonds = (1..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let outputs = (0..3).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let tensors = (0..3)
+        .map(|i| {
+            let mut indices = Vec::new();
+            if i > 0 {
+                indices.push(bonds[i - 1].clone());
+            }
+            indices.push(outputs[i].clone());
+            if i + 1 < 3 {
+                indices.push(bonds[i].clone());
+            }
+            let size = indices.iter().map(IndexLike::dim).product();
+            IdxTensor::from_dense(indices, (0..size).map(|j| (j + 1) as f64).collect()).unwrap()
+        })
+        .collect();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(tensors, names).unwrap();
+
+    // Sanity check the fixture actually reproduces the bug precondition:
+    // "A" is the smallest name, but it is the chain's interior node, so
+    // `chain_order`'s fast-path callers (which require `chain.last() ==
+    // Some(center)`, e.g. `src_tree.rs`'s SRC dispatch) do NOT accept it as
+    // a valid chain root, even though `chain_order` itself still returns
+    // `Some` (it always succeeds on a path-graph topology, walking from one
+    // endpoint to the other regardless of which node was requested).
+    assert_ne!(
+        tn.chain_order(&"A".to_string())
+            .and_then(|chain| chain.last().cloned()),
+        Some("A".to_string())
+    );
+    assert_eq!(
+        tn.chain_order(&"M".to_string())
+            .and_then(|chain| chain.last().cloned()),
+        Some("M".to_string())
+    );
+
+    assert_eq!(
+        tn.preferred_contraction_center(),
+        Some("M".to_string()),
+        "must pick the actual (lexicographically smaller) endpoint, not the \
+         globally smallest node name"
+    );
 }
 
 #[test]

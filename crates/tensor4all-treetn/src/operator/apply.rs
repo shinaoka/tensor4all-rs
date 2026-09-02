@@ -9,7 +9,7 @@
 //! 1. **Partial Site Handling**: If the operator only covers some nodes of the state,
 //!    use `compose_exclusive_linear_operators` to fill gaps with identity operators.
 //! 2. **Index Transformation**: Replace state's site indices with operator's input indices.
-//! 3. **Application**: Apply the operator using ZipUp, Fit, or local exact naive
+//! 3. **Application**: Apply the operator using ZipUp, Fit, SRC, or local exact naive
 //!    apply depending on options.
 //! 4. **Output Transformation**: Replace operator's output indices with true output indices.
 //!
@@ -85,7 +85,7 @@ use crate::error::{
 use crate::operator::compose::{
     compose_exclusive_linear_operators, compose_exclusive_linear_operators_unchecked,
 };
-use crate::treetn::contraction::{contract, ContractionMethod, ContractionOptions};
+use crate::treetn::contraction::{contract, ContractionMethod, ContractionOptions, SrcOptions};
 use crate::treetn::TreeTN;
 
 /// Options for [`apply_linear_operator`].
@@ -107,6 +107,7 @@ use crate::treetn::TreeTN;
 /// - `qr_rtol`: `None` (uses the QR global default tolerance)
 /// - `nfullsweeps`: `1` (only used by Fit method)
 /// - `convergence_tol`: `None` (only used by Fit method)
+/// - `src_options`: [`SrcOptions::default`] (only used by SRC method)
 ///
 /// # Examples
 ///
@@ -149,6 +150,8 @@ pub struct ApplyOptions {
     pub nfullsweeps: usize,
     /// Convergence tolerance for Fit method.
     pub convergence_tol: Option<f64>,
+    /// SRC-specific rank, tolerance, probe, and finalization controls.
+    pub src_options: SrcOptions,
 }
 
 impl Default for ApplyOptions {
@@ -160,6 +163,7 @@ impl Default for ApplyOptions {
             qr_rtol: None,
             nfullsweeps: 1,
             convergence_tol: None,
+            src_options: SrcOptions::default(),
         }
     }
 }
@@ -192,6 +196,24 @@ impl ApplyOptions {
         }
     }
 
+    /// Create options for successive randomized compression (SRC).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::{ApplyOptions, SrcOptions};
+    /// use tensor4all_treetn::contraction::ContractionMethod;
+    ///
+    /// let options = ApplyOptions::src().with_max_bond_dim(16);
+    /// assert_eq!(options.method, ContractionMethod::Src);
+    /// ```
+    pub fn src() -> Self {
+        Self {
+            method: ContractionMethod::Src,
+            ..Default::default()
+        }
+    }
+
     /// Set maximum bond dimension.
     pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
         self.max_bond_dim = Some(max_bond_dim);
@@ -213,6 +235,23 @@ impl ApplyOptions {
     /// Set number of full sweeps for Fit method.
     pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self {
         self.nfullsweeps = nfullsweeps;
+        self
+    }
+
+    /// Replace the SRC-specific options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::{ApplyOptions, SrcOptions};
+    ///
+    /// let options = ApplyOptions::src()
+    ///     .with_max_bond_dim(16)
+    ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
+    /// assert_eq!(options.src_options.rtol, Some(1.0e-8));
+    /// ```
+    pub fn with_src_options(mut self, src_options: SrcOptions) -> Self {
+        self.src_options = src_options;
         self
     }
 }
@@ -341,11 +380,12 @@ where
     let transformed_state = transform_state_to_input(&full_operator, state)?;
 
     // 3. Contract state with operator MPO
-    // Choose a center node (use first node in sorted order for determinism)
-    let mut node_names: Vec<_> = state.node_names();
-    node_names.sort();
-    let center = node_names
-        .first()
+    // Choose a center node: an actual chain endpoint when the topology is
+    // chain-shaped (so SRC's fast chain path stays eligible), falling back
+    // to the smallest node name otherwise. See
+    // `TreeTN::preferred_contraction_center`'s doc comment.
+    let center = &state
+        .preferred_contraction_center()
         .ok_or_else(|| anyhow::anyhow!("Empty state"))?;
 
     let contraction_options = ContractionOptions {
@@ -355,6 +395,7 @@ where
         qr_rtol: options.qr_rtol,
         nfullsweeps: options.nfullsweeps,
         convergence_tol: options.convergence_tol,
+        src_options: options.src_options,
         ..Default::default()
     };
 

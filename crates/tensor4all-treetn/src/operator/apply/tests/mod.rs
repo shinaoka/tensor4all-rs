@@ -1,5 +1,6 @@
 use super::*;
 use crate::random::{random_treetn, LinkSpace};
+use crate::treetn::contraction::SrcOptions;
 use crate::{
     LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError, NumberedTagSelectionError,
     SiteIndexNetwork,
@@ -629,6 +630,48 @@ fn test_apply_options_builder() {
 
     let naive = ApplyOptions::naive();
     assert_eq!(naive.method, ContractionMethod::Naive);
+}
+
+#[test]
+fn apply_linear_operator_src_preserves_a_two_site_identity() {
+    let site0 = make_index(2);
+    let site1 = make_index(2);
+    let state_bond = make_index(2);
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(
+                vec![site0.clone(), state_bond.clone()],
+                vec![1.0, 2.0, 3.0, 4.0],
+            )
+            .unwrap(),
+            IdxTensor::from_dense(vec![state_bond, site1.clone()], vec![5.0, 6.0, 7.0, 8.0])
+                .unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+    let operator = build_bonded_identity_operator(&[
+        ("site0".to_string(), site0),
+        ("site1".to_string(), site1),
+    ]);
+
+    let result = apply_linear_operator(
+        &operator,
+        &state,
+        ApplyOptions::src()
+            .with_max_bond_dim(4)
+            .with_src_options(SrcOptions::fixed().with_final_svd(false).with_seed(17)),
+    )
+    .unwrap();
+
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .distance(&state.to_dense().unwrap())
+            .unwrap()
+            < 1.0e-10
+    );
 }
 
 #[test]

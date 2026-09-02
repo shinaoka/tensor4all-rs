@@ -33,6 +33,7 @@
 /// - `T4A_CONTRACT_NAIVE` = 0
 /// - `T4A_CONTRACT_ZIPUP` = 1
 /// - `T4A_CONTRACT_FIT` = 2
+/// - `T4A_CONTRACT_SRC` = 3
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(i32)]
 pub enum ContractionAlgorithm {
@@ -61,6 +62,9 @@ pub enum ContractionAlgorithm {
     /// Best for cases where target bond dimension is much smaller than
     /// the exact result.
     Fit = 2,
+
+    /// Successive randomized compression using sketching and QR projection.
+    Src = 3,
 }
 
 impl ContractionAlgorithm {
@@ -72,6 +76,7 @@ impl ContractionAlgorithm {
             0 => Some(Self::Naive),
             1 => Some(Self::ZipUp),
             2 => Some(Self::Fit),
+            3 => Some(Self::Src),
             _ => None,
         }
     }
@@ -87,6 +92,7 @@ impl ContractionAlgorithm {
             Self::Naive => "naive",
             Self::ZipUp => "zipup",
             Self::Fit => "fit",
+            Self::Src => "src",
         }
     }
 }

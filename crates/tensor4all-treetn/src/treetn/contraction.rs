@@ -5,10 +5,28 @@
 //! - Contracting TreeTN to tensor (`contract_to_tensor`)
 //! - Zip-up contraction (`contract_zipup`)
 //! - Naive contraction (`contract_naive`)
+//! - Successive randomized compression (`contract` with `ContractionMethod::Src`)
 //! - Validation (`validate_ortho_consistency`)
+//!
+//! The SRC implementation follows Algorithm 1, Sections 3.1-3.5, and
+//! Appendices C--D of C. Camaño, E. N. Epperly, and J. A. Tropp,
+//! "Successive randomized compression: A randomized algorithm for the
+//! compressed MPO-MPS product", [arXiv:2504.06475](https://arxiv.org/abs/2504.06475).
+//! The author implementation used to validate numerical behavior and parameter
+//! conventions (not translated) is `chriscamano/RandomMPOMPS`, `code/tensornetwork/contraction.py`, functions
+//! `random_contraction` and `random_contraction_inc`, plus
+//! `code/tensornetwork/incrementalqr.py::IncrementalQR` and
+//! `incrementalqr.cpp::{setup,add_cols,get_error_estimate}`. Those files are
+//! consulted references; no source text is copied into this crate. The
+//! factorized MPO--MPO probe contract follows the maintainer clarification in
+//! tensor4all-rs issue #563 (comment 5396107820). The rooted-tree recurrence is
+//! a separately derived extension and is labelled `[AI-Supplied]` in the audit
+//! worklog.
 
 use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -27,6 +45,10 @@ enum ZipupTopologyMode {
     PruneScalarSubtrees,
     PreserveInputTopology,
 }
+
+mod src_chain;
+mod src_probe;
+mod src_tree;
 
 fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
     tensor4all_core::index_ops::unique_inds(indices, excluded)
@@ -431,6 +453,57 @@ where
             }
         }
         (path.len() == node_count).then_some(path)
+    }
+
+    /// Choose a deterministic default contraction center, preferring an
+    /// actual topological endpoint (leaf) of the network's graph when the
+    /// topology is chain-shaped (a path graph).
+    ///
+    /// `chain_order`'s fast-path callers -- `contract_zipup_with`'s chain
+    /// specialization, and SRC's `chain.last() == center` dispatch check in
+    /// `src_tree.rs` -- only take their efficient path when the requested
+    /// center is one of the two endpoints of a path-graph topology. Picking
+    /// "the node name that sorts smallest" (the historical default in
+    /// `apply_linear_operator`) lands on an endpoint only by coincidence:
+    /// for topologies whose node-ID assignment doesn't follow the graph's
+    /// path order -- e.g. quantics `NBlock`/`Comb` layouts, which assign IDs
+    /// by a fixed per-axis interleaving unrelated to the constructed tree's
+    /// actual edges -- the smallest ID is typically an interior node. That
+    /// silently forces every SRC contraction onto the more expensive general
+    /// tree path even though a cheap endpoint choice was available and would
+    /// have produced an equally valid canonical center (zip-up's chain
+    /// specialization does not suffer the same fast/slow split, so this
+    /// choice is a pure win for SRC and neutral elsewhere).
+    ///
+    /// For a non-chain topology (a genuine branching tree), there is no
+    /// endpoint pair for a chain-only fast path to key on, so this falls
+    /// back to the same smallest-node-name choice used before. Returns
+    /// `None` only when the network has no nodes.
+    pub(crate) fn preferred_contraction_center(&self) -> Option<V>
+    where
+        V: Ord,
+    {
+        let mut node_names: Vec<V> = self.node_names();
+        node_names.sort();
+        if node_names.is_empty() {
+            return None;
+        }
+
+        let graph = self.graph.graph();
+        let node_count = graph.node_count();
+        if node_count > 1 && graph.edge_count() == node_count - 1 {
+            let mut endpoints: Vec<V> = graph
+                .node_indices()
+                .filter(|node| graph.neighbors_undirected(*node).count() == 1)
+                .filter_map(|node| self.graph.node_name(node).cloned())
+                .collect();
+            if endpoints.len() == 2 {
+                endpoints.sort();
+                return Some(endpoints[0].clone());
+            }
+        }
+
+        node_names.into_iter().next()
     }
 
     // Inspired by ITensorMPS.jl v0.3.45, commit 794c97d, src/mpo.jl;
@@ -1319,6 +1392,16 @@ where
 use super::fit::FitContractionOptions;
 
 /// Contraction method for TreeTN operations.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::contraction::{ContractionMethod, ContractionOptions};
+///
+/// let options = ContractionOptions::new(ContractionMethod::Src)
+///     .with_max_bond_dim(8);
+/// assert_eq!(options.method, ContractionMethod::Src);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContractionMethod {
     /// Zip-up contraction (faster, one-pass).
@@ -1333,6 +1416,297 @@ pub enum ContractionMethod {
     /// is not the algorithm used by `apply_linear_operator(...,
     /// ApplyOptions::naive())`, which has a dedicated local exact apply path.
     Naive,
+    /// Successive randomized compression (sketch, QR, and projection).
+    Src,
+}
+
+/// Options specific to successive randomized compression (SRC).
+///
+/// `rtol = None` selects fixed-rank mode; fixed-rank SRC requires
+/// [`ContractionOptions::with_max_bond_dim`] to provide the requested output
+/// rank. `rtol = Some(_)` selects adaptive mode and requires a finite maximum
+/// rank, supplied either by [`Self::max_rank`] or by the contraction's
+/// `max_bond_dim`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::contraction::SrcOptions;
+///
+/// let options = SrcOptions::adaptive(1.0e-8, 32);
+/// assert_eq!(options.rtol, Some(1.0e-8));
+/// assert_eq!(options.max_rank, Some(32));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct SrcOptions {
+    /// Relative stopping tolerance in adaptive mode; `None` selects fixed rank.
+    /// Adaptive values must be finite and non-negative.
+    pub rtol: Option<f64>,
+    /// Absolute stopping tolerance in adaptive mode. The default is zero.
+    /// Fixed-rank mode requires this to remain zero because it has no stopping
+    /// test.
+    pub atol: f64,
+    /// Minimum adaptive sketch rank before the stopping test may succeed.
+    /// The default is 2.
+    pub min_rank: usize,
+    /// Number of columns added when adaptive SRC expands its sketch. The
+    /// default is 3.
+    pub rank_increment: usize,
+    /// Maximum adaptive sketch rank. Fixed-rank mode leaves this as `None`.
+    pub max_rank: Option<usize>,
+    /// Whether to run the optional TreeTN SVD truncation sweep after the SRC
+    /// projection. The default is `false`, matching the paper's core SRC
+    /// algorithm; enable it explicitly when an oversampled final round is
+    /// desired.
+    pub final_svd: bool,
+    /// Seed for deterministic Gaussian probe generation. The default is zero.
+    /// [`contract_src_with_rng`] ignores this field and consumes its supplied
+    /// random stream directly.
+    pub seed: u64,
+}
+
+impl Default for SrcOptions {
+    fn default() -> Self {
+        Self {
+            rtol: None,
+            atol: 0.0,
+            min_rank: 2,
+            rank_increment: 3,
+            max_rank: None,
+            final_svd: false,
+            seed: 0,
+        }
+    }
+}
+
+impl SrcOptions {
+    /// Tightens the sketch's own adaptive `rtol` to a tenth of itself when a
+    /// final SVD round with a tolerance-bearing policy will run afterward.
+    /// This scales `self.rtol`, not the final truncation policy's threshold —
+    /// the two tolerances are independent and are not reconciled here, so
+    /// callers who set both should keep them consistent by hand.
+    fn sketch_options(&self, final_truncation_has_tolerance: bool) -> Self {
+        let mut options = self.clone();
+        if self.final_svd && final_truncation_has_tolerance {
+            if let Some(rtol) = self.rtol {
+                options.rtol = Some(0.1 * rtol);
+            }
+        }
+        options
+    }
+
+    /// Create fixed-rank SRC options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_seed(7);
+    /// assert_eq!(options.rtol, None);
+    /// assert_eq!(options.seed, 7);
+    /// ```
+    pub fn fixed() -> Self {
+        Self::default()
+    }
+
+    /// Create adaptive SRC options.
+    ///
+    /// # Arguments
+    /// * `rtol` - Relative stopping tolerance.
+    /// * `max_rank` - Mandatory finite maximum sketch rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-8, 32);
+    /// assert_eq!(options.rtol, Some(1.0e-8));
+    /// assert_eq!(options.max_rank, Some(32));
+    /// ```
+    pub fn adaptive(rtol: f64, max_rank: usize) -> Self {
+        Self {
+            rtol: Some(rtol),
+            max_rank: Some(max_rank),
+            ..Self::default()
+        }
+    }
+
+    /// Set the adaptive relative tolerance, selecting adaptive mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_rtol(1.0e-7);
+    /// assert_eq!(options.rtol, Some(1.0e-7));
+    /// ```
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
+    }
+
+    /// Set the adaptive absolute tolerance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-7, 16).with_atol(1.0e-10);
+    /// assert_eq!(options.atol, 1.0e-10);
+    /// ```
+    pub fn with_atol(mut self, atol: f64) -> Self {
+        self.atol = atol;
+        self
+    }
+
+    /// Set the minimum adaptive sketch rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-7, 16).with_min_rank(4);
+    /// assert_eq!(options.min_rank, 4);
+    /// ```
+    pub fn with_min_rank(mut self, min_rank: usize) -> Self {
+        self.min_rank = min_rank;
+        self
+    }
+
+    /// Set the adaptive sketch expansion size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::adaptive(1.0e-7, 16).with_rank_increment(4);
+    /// assert_eq!(options.rank_increment, 4);
+    /// ```
+    pub fn with_rank_increment(mut self, rank_increment: usize) -> Self {
+        self.rank_increment = rank_increment;
+        self
+    }
+
+    /// Set the maximum adaptive sketch rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_rtol(1.0e-7).with_max_rank(16);
+    /// assert_eq!(options.max_rank, Some(16));
+    /// ```
+    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
+        self.max_rank = Some(max_rank);
+        self
+    }
+
+    /// Set whether final SVD truncation is applied after SRC projection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_final_svd(false);
+    /// assert!(!options.final_svd);
+    /// ```
+    pub fn with_final_svd(mut self, final_svd: bool) -> Self {
+        self.final_svd = final_svd;
+        self
+    }
+
+    /// Set the deterministic Gaussian probe seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// let options = SrcOptions::fixed().with_seed(123);
+    /// assert_eq!(options.seed, 123);
+    /// ```
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Validate SRC-specific options against the requested output rank.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when fixed rank has no output cap, adaptive mode has no
+    /// finite maximum rank, tolerances are invalid, or rank controls are zero
+    /// or inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::SrcOptions;
+    ///
+    /// SrcOptions::adaptive(1.0e-8, 32)
+    ///     .validate(Some(32))
+    ///     .unwrap();
+    /// assert!(SrcOptions::fixed().validate(None).is_err());
+    /// ```
+    pub fn validate(&self, output_max_bond_dim: Option<usize>) -> Result<()> {
+        if !self.atol.is_finite() || self.atol < 0.0 {
+            anyhow::bail!("SRC absolute tolerance must be finite and non-negative");
+        }
+        if self.min_rank == 0 {
+            anyhow::bail!("SRC minimum rank must be at least 1");
+        }
+        if self.rank_increment == 0 {
+            anyhow::bail!("SRC rank increment must be at least 1");
+        }
+
+        match self.rtol {
+            None => {
+                if self.atol != 0.0 {
+                    anyhow::bail!("SRC absolute tolerance is only valid in adaptive mode");
+                }
+                if self.max_rank.is_some() {
+                    anyhow::bail!("SRC maximum rank is only valid in adaptive mode");
+                }
+                if output_max_bond_dim.is_none() {
+                    anyhow::bail!("fixed-rank SRC requires an explicit max_bond_dim output rank");
+                }
+            }
+            Some(rtol) => {
+                if !rtol.is_finite() || rtol < 0.0 {
+                    anyhow::bail!("SRC relative tolerance must be finite and non-negative");
+                }
+                let max_rank = self.max_rank.or(output_max_bond_dim).ok_or_else(|| {
+                    anyhow::anyhow!("adaptive SRC requires an explicit maximum rank")
+                })?;
+                if max_rank == 0 {
+                    anyhow::bail!("adaptive SRC maximum rank must be at least 1");
+                }
+                if self.min_rank > max_rank {
+                    anyhow::bail!(
+                        "adaptive SRC minimum rank {} exceeds maximum rank {}",
+                        self.min_rank,
+                        max_rank
+                    );
+                }
+                if !self.final_svd
+                    && output_max_bond_dim.is_some_and(|output_max| max_rank > output_max)
+                {
+                    anyhow::bail!(
+                        "adaptive SRC max_rank exceeds max_bond_dim when final_svd is disabled"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Options for the generic contract function.
@@ -1369,6 +1743,8 @@ pub struct ContractionOptions {
     /// materialization. Set this only for small reference/debug cases where
     /// full dense materialization is acceptable if structural alignment fails.
     pub mismatched_topology_dense_limit: Option<usize>,
+    /// SRC-specific rank, tolerance, probe, and finalization controls.
+    pub src_options: SrcOptions,
 }
 
 impl Default for ContractionOptions {
@@ -1383,6 +1759,7 @@ impl Default for ContractionOptions {
             factorize_alg: FactorizeAlg::default(),
             dense_reference_limit: None,
             mismatched_topology_dense_limit: None,
+            src_options: SrcOptions::default(),
         }
     }
 }
@@ -1404,6 +1781,37 @@ impl ContractionOptions {
     /// Create options for fit contraction.
     pub fn fit() -> Self {
         Self::new(ContractionMethod::Fit)
+    }
+
+    /// Create options for successive randomized compression.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::{ContractionMethod, ContractionOptions};
+    ///
+    /// let options = ContractionOptions::src().with_max_bond_dim(16);
+    /// assert_eq!(options.method, ContractionMethod::Src);
+    /// ```
+    pub fn src() -> Self {
+        Self::new(ContractionMethod::Src)
+    }
+
+    /// Replace the SRC-specific options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::{ContractionOptions, SrcOptions};
+    ///
+    /// let options = ContractionOptions::src()
+    ///     .with_max_bond_dim(16)
+    ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
+    /// assert_eq!(options.src_options.rtol, Some(1.0e-8));
+    /// ```
+    pub fn with_src_options(mut self, src_options: SrcOptions) -> Self {
+        self.src_options = src_options;
+        self
     }
 
     /// Set maximum bond dimension.
@@ -1571,7 +1979,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction fails (a shape or index mismatch,
-/// /// or a backend failure).
+/// or a backend failure).
 ///
 pub fn contract<T, V>(
     tn_a: &TreeTN<T, V>,
@@ -1589,6 +1997,12 @@ where
     // single-node / zero-sweep / dense short-cuts.
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("contract: invalid contraction options")?;
+    if options.method == ContractionMethod::Src {
+        options
+            .src_options
+            .validate(options.max_bond_dim)
+            .context("contract: invalid SRC options")?;
+    }
 
     match options.method {
         ContractionMethod::Zipup => {
@@ -1630,7 +2044,110 @@ where
                 options.qr_rtol,
             )
         }
+        ContractionMethod::Src => {
+            let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
+            contract_src_with_rng_impl(tn_a, tn_b, center, &options, &mut rng)
+        }
     }
+}
+
+/// Contract two TreeTNs with SRC using a caller-owned random number generator.
+///
+/// This is the low-level counterpart of [`contract`]. It consumes Gaussian
+/// probe randomness directly from `rng`; [`SrcOptions::seed`] is ignored.
+///
+/// # Errors
+///
+/// Returns an error when `options` does not select [`ContractionMethod::Src`],
+/// an SRC rank or tolerance is invalid, the network topologies are incompatible,
+/// or probe generation, tensor contraction, or factorization fails.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{
+///     contraction::{contract_src_with_rng, ContractionOptions, SrcOptions},
+///     TreeTN,
+/// };
+///
+/// let shared = DynIndex::new_dyn(2);
+/// let output_a = DynIndex::new_dyn(2);
+/// let output_b = DynIndex::new_dyn(2);
+/// let tensor_a = IdxTensor::from_dense(
+///     vec![shared.clone(), output_a],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// )?;
+/// let tensor_b = IdxTensor::from_dense(
+///     vec![shared, output_b],
+///     vec![2.0, 0.0, 0.0, 3.0],
+/// )?;
+/// let tn_a = TreeTN::from_tensors(vec![tensor_a], vec![0])?;
+/// let tn_b = TreeTN::from_tensors(vec![tensor_b], vec![0])?;
+/// let options = ContractionOptions::src()
+///     .with_max_bond_dim(1)
+///     .with_src_options(SrcOptions::fixed());
+/// let mut rng = ChaCha8Rng::seed_from_u64(7);
+/// let result = contract_src_with_rng(&tn_a, &tn_b, &0, options, &mut rng)?;
+/// assert_eq!(result.node_count(), 1);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn contract_src_with_rng<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: ContractionOptions,
+    rng: &mut R,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng + ?Sized,
+{
+    if options.method != ContractionMethod::Src {
+        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_src_with_rng requires ContractionMethod::Src"
+        )));
+    }
+    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
+        .context("contract_src_with_rng: invalid contraction options")?;
+    options
+        .src_options
+        .validate(options.max_bond_dim)
+        .context("contract_src_with_rng: invalid SRC options")?;
+    contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng)
+}
+
+fn contract_src_with_rng_impl<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: &ContractionOptions,
+    rng: R,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng,
+{
+    let output_rank = options
+        .max_bond_dim
+        .or(options.src_options.max_rank)
+        .ok_or_else(|| anyhow::anyhow!("contract: SRC requires a finite output rank"))?;
+    src_tree::contract(
+        tn_a,
+        tn_b,
+        center,
+        options.svd_policy,
+        output_rank,
+        &options.src_options,
+        rng,
+    )
+    .map_err(TreeTNOperationError::from)
 }
 
 /// Contract two TreeTNs using naive contraction, then decompose back to TreeTN.
@@ -1645,7 +2162,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction fails (a shape or index mismatch,
-/// /// or a backend failure).
+/// or a backend failure).
 ///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,

@@ -22,6 +22,9 @@ mod context;
 #[cfg(feature = "tenferro-cuda")]
 /// Explicit visible-ordinal-0 CUDA execution and transfer boundaries.
 mod cuda;
+#[cfg(feature = "global-defaults")]
+/// Incremental QR state for successive randomized compression.
+mod incremental_qr;
 #[cfg(feature = "explicit-context")]
 /// Backend-free tensor snapshots for execution-domain transfer.
 mod logical_tensor;
@@ -45,9 +48,10 @@ pub use any_scalar::BackendScalar;
 #[cfg(feature = "global-defaults")]
 pub use backend::{
     full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,
-    solve_matrix_owned, svd_backend, triangular_solve_backend, triangular_solve_matrix,
-    triangular_solve_matrix_owned, BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult,
-    FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
+    solve_matrix_owned, src_error_estimate, svd_backend, triangular_solve_backend,
+    triangular_solve_matrix, triangular_solve_matrix_owned, BackendLinalgError,
+    BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult, FullPivLuScalar,
+    MatrixSolveScalar, MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,
 };
 #[cfg(feature = "global-defaults")]
 pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
@@ -55,6 +59,8 @@ pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 pub use context::{CpuExecutionContext, CpuExecutionContextError};
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::{CudaExecutionContext, CudaExecutionContextError, CUDA_ORDINAL};
+#[cfg(feature = "global-defaults")]
+pub use incremental_qr::{IncrementalQr, IncrementalQrScalar};
 #[cfg(feature = "explicit-context")]
 pub use logical_tensor::{LogicalTensor, LogicalTensorData, LogicalTensorError};
 #[cfg(feature = "global-defaults")]
