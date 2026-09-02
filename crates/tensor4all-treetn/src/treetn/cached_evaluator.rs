@@ -3715,6 +3715,23 @@ fn tensor_from_cached_values(
     )?)
 }
 
+// [AI Supplied] Test-only observation seam for the Hiroshi #671 work-count
+// invariant. Production builds compile out both storage and loop increments.
+#[cfg(test)]
+thread_local! {
+    static RAW_CENTER_CORE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_raw_center_core_visits_for_test() {
+    RAW_CENTER_CORE_VISITS.set(0);
+}
+
+#[cfg(test)]
+fn raw_center_core_visits_for_test() -> usize {
+    RAW_CENTER_CORE_VISITS.get()
+}
+
 fn contract_raw_center<T>(
     core: &[T],
     dims: &[usize],
@@ -3784,6 +3801,8 @@ where
         let assignment = component.point_to_assignment[point];
         component.values[assignment * component.dim + bond]
     };
+    #[cfg(test)]
+    let mut core_visits = 0usize;
     let mut output = Vec::with_capacity(physical_values.len());
     for (point, &physical) in physical_values.iter().enumerate() {
         ensure!(
@@ -3798,6 +3817,10 @@ where
                     let first_value = component_value(first, point, first_bond);
                     let mut inner = T::default();
                     for second_bond in 0..second.dim {
+                        #[cfg(test)]
+                        {
+                            core_visits += 1;
+                        }
                         let second_value = component_value(second, point, second_bond);
                         let offset = physical_offset
                             + first_bond * strides[first.axis]
@@ -3815,6 +3838,10 @@ where
                         let second_value = component_value(second, point, second_bond);
                         let mut inner = T::default();
                         for third_bond in 0..third.dim {
+                            #[cfg(test)]
+                            {
+                                core_visits += 1;
+                            }
                             let third_value = component_value(third, point, third_bond);
                             let offset = physical_offset
                                 + first_bond * strides[first.axis]
@@ -3831,6 +3858,8 @@ where
         }
         output.push(sum);
     }
+    #[cfg(test)]
+    RAW_CENTER_CORE_VISITS.set(core_visits);
     Ok(output)
 }
 
@@ -4446,6 +4475,105 @@ where
 mod tests {
     use super::*;
     use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+
+    #[derive(Clone, Copy, Default)]
+    struct WorkToken;
+
+    impl std::ops::AddAssign for WorkToken {
+        fn add_assign(&mut self, _rhs: Self) {}
+    }
+
+    impl std::ops::Mul for WorkToken {
+        type Output = Self;
+
+        fn mul(self, _rhs: Self) -> Self::Output {
+            self
+        }
+    }
+
+    // [AI Supplied] Small exact fixture plumbing around the #671 relation.
+    fn measured_raw_center_core_visits(physical_dim: usize, bond_dims: &[usize]) -> usize {
+        let mut dims = Vec::with_capacity(1 + bond_dims.len());
+        dims.push(physical_dim);
+        dims.extend_from_slice(bond_dims);
+        // A zero-sized scalar executes the real loop nest at chi=256 without
+        // allocating the equivalent 268 MiB f64 degree-3 core.
+        let core = vec![WorkToken; dims.iter().product()];
+        let physical_values = (0..physical_dim).collect::<Vec<_>>();
+        let components = bond_dims
+            .iter()
+            .enumerate()
+            .map(|(position, &dim)| RawCenterComponent {
+                axis: position + 1,
+                dim,
+                point_to_assignment: vec![0; physical_dim],
+                values: vec![WorkToken; dim],
+            })
+            .collect::<Vec<_>>();
+
+        reset_raw_center_core_visits_for_test();
+        let values = contract_raw_center(&core, &dims, 0, &physical_values, &components).unwrap();
+        assert_eq!(values.len(), physical_dim);
+        raw_center_core_visits_for_test()
+    }
+
+    fn assert_representative_raw_center_values(physical_dim: usize, bond_dims: &[usize]) {
+        let mut dims = Vec::with_capacity(1 + bond_dims.len());
+        dims.push(physical_dim);
+        dims.extend_from_slice(bond_dims);
+        let core = vec![1.0_f64; dims.iter().product()];
+        let physical_values = (0..physical_dim).collect::<Vec<_>>();
+        let components = bond_dims
+            .iter()
+            .enumerate()
+            .map(|(position, &dim)| RawCenterComponent {
+                axis: position + 1,
+                dim,
+                point_to_assignment: vec![0; physical_dim],
+                values: vec![1.0; dim],
+            })
+            .collect::<Vec<_>>();
+
+        let values = contract_raw_center(&core, &dims, 0, &physical_values, &components).unwrap();
+        let expected_value = bond_dims.iter().product::<usize>() as f64;
+        assert_eq!(values, vec![expected_value; physical_dim]);
+    }
+
+    /// Hiroshi's issue #671 complexity relation is a deterministic work-count
+    /// invariant, not a wall-clock threshold: a dense center contraction must
+    /// visit `d * product(incident bond dimensions)` core elements when every
+    /// physical value is evaluated once.
+    #[test]
+    fn raw_center_work_scales_with_coordination_number_and_actual_bond_dimensions() {
+        const REPRESENTATIVE_BONDS: [usize; 3] = [64, 128, 256];
+        let z2_visits = REPRESENTATIVE_BONDS.map(|chi| {
+            let visits = measured_raw_center_core_visits(2, &[chi, chi]);
+            assert_eq!(visits, 2 * chi.pow(2));
+            visits
+        });
+        assert!(z2_visits
+            .windows(2)
+            .all(|pair| pair[1] / pair[0] == 2usize.pow(2)));
+
+        let z3_visits = REPRESENTATIVE_BONDS.map(|chi| {
+            let visits = measured_raw_center_core_visits(2, &[chi, chi, chi]);
+            assert_eq!(visits, 2 * chi.pow(3));
+            visits
+        });
+        assert!(z3_visits
+            .windows(2)
+            .all(|pair| pair[1] / pair[0] == 2usize.pow(3)));
+
+        assert_eq!(
+            measured_raw_center_core_visits(3, &[64, 128, 256]),
+            3 * 64 * 128 * 256,
+            "unequal bonds must use their actual product rather than max(chi)^z"
+        );
+
+        // Exercise real f64 arithmetic and storage at a representative
+        // degree-3 bond dimension (about 32 MiB of dense core payload).
+        assert_representative_raw_center_values(2, &[128, 128, 128]);
+    }
 
     #[test]
     fn tensor_from_cached_values_preserves_each_scalar_storage_kind() {

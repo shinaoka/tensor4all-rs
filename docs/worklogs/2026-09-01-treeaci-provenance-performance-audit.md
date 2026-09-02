@@ -366,6 +366,34 @@ The unresolved branch-specific implementation costs are elsewhere:
   end-to-end branch-message trace. Treat it as a measured-next hypothesis, not
   a confirmed dominant cause.
 
+#### Deterministic bond-exponent regression gate
+
+`raw_center_work_scales_with_coordination_number_and_actual_bond_dimensions`
+is a release unit test for the exponent itself. Test-only instrumentation
+increments a local counter in the actual innermost dense-core multiplication
+loop and publishes it through a thread-local counter after the contraction;
+production builds contain neither the counter nor its increments.
+
+The test evaluates every physical value once and asserts:
+
+- uniform z=2 at `chi = 64, 128, 256`: each doubling grows visits by `2^2`;
+- uniform z=3 at `chi = 64, 128, 256`: each doubling grows visits by `2^3`;
+- unequal bonds `[64, 128, 256]` at `d=3`: exactly
+  `3 * 64 * 128 * 256 = 6,291,456` visits;
+- real `f64` arithmetic at z=3, `chi=128` (about 32 MiB of dense core payload):
+  the all-one result equals `128^3` at both physical values.
+
+The exponent-only calls use a zero-sized test scalar, so the actual loop nest
+executes through z=3, `chi=256` without allocating the otherwise 268 MiB `f64`
+core. The separate `f64`, `chi=128` case prevents a counter-only change from
+satisfying the test while still exercising representative dense storage.
+
+The complexity expectation is **Hiroshi review**. The thread-local
+instrumentation, zero-sized scalar, and fixture are **[AI Supplied]**.
+This is deliberately a deterministic work-count gate rather than a flaky
+wall-clock assertion. Criterion remains responsible for detecting constant-
+factor and cache-management regressions that preserve the exponent.
+
 ### P1: the packed message cache still violates part of the review protocol
 
 The persistent cache implements the broad shape of Hiroshi's PR #646 design,
