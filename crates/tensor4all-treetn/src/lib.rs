@@ -60,7 +60,7 @@ pub use gse::{
     GseResult, GseTdvpOptions, GseTdvpResult,
 };
 pub use treetn::contraction;
-pub use treetn::contraction::SrcOptions;
+pub use treetn::contraction::{contract_src_with_rng, SrcOptions};
 
 // dyn_treetn exports removed - use TreeTN<IdxTensor, V> directly
 pub use link_index_network::LinkIndexNetwork;

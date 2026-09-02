@@ -574,6 +574,21 @@ variation. No tolerance was relaxed: that test now checks bitwise replay of the
 same cached misaligned range, while a separate new test checks the new directed
 messages against the old reference numerically at the existing `1e-10` scale.
 
+### Reproducible randomized API boundary
+
+SRC now has two entry points over one implementation. `contract` remains the
+high-level seed API and constructs a named `ChaCha8Rng`; the low-level
+`contract_src_with_rng` consumes a caller-owned `&mut R` directly. A regression
+checks that equal ChaCha8 streams produce equal dense results and that the
+low-level path ignores `SrcOptions::seed`. SRC tests use explicitly seeded
+`ChaCha8Rng` rather than `StdRng`, whose stream is not stable across dependency
+versions.
+
+The longer-chain cache regression now checks relative max error. Its former
+absolute threshold varied with the five-site fixture's compounded value scale;
+the observed relative error is about `1.4e-12`, and the retained `1e-10` gate
+leaves numerical headroom without weakening the invariant.
+
 ## Remaining risks and follow-ups
 
 - Directed messages still repeat one planner contraction per outgoing

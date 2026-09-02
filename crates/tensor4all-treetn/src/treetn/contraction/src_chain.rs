@@ -11,6 +11,7 @@
 //! the same Rust abstractions; they are labelled `[AI-Supplied]` in the audit.
 
 use anyhow::Result;
+use rand::Rng;
 use std::hash::Hash;
 
 use tensor4all_core::{
@@ -27,19 +28,21 @@ use super::{SrcOptions, TreeTN};
 use crate::algorithm::CanonicalForm;
 
 /// Execute the paper's successive randomized compression schedule on a chain.
-pub(super) fn contract<T, V>(
+pub(super) fn contract<T, V, R>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     svd_policy: Option<SvdTruncationPolicy>,
     max_bond_dim: usize,
     src_options: &SrcOptions,
+    rng: R,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng,
 {
     let chain = tn_a
         .chain_order(center)
@@ -88,7 +91,7 @@ where
     if last_maximum_width == 0 {
         anyhow::bail!("contract_src: last-site output space has zero dimension");
     }
-    let mut probes = ProbeBank::new(probe_indices, 1, src_options.seed)?;
+    let mut probes = ProbeBank::new(probe_indices, 1, rng)?;
     if src_options.rtol.is_none() {
         return contract_fixed(FixedContractionRequest {
             center,
@@ -250,7 +253,7 @@ where
     Ok(result)
 }
 
-struct FixedContractionRequest<'a, T, V>
+struct FixedContractionRequest<'a, T, V, R>
 where
     T: TensorLike,
 {
@@ -261,16 +264,17 @@ where
     local: &'a [(&'a T, &'a T)],
     outputs: &'a [Vec<T::Index>],
     cut_dimensions: &'a [usize],
-    probes: &'a mut ProbeBank<T::Index>,
+    probes: &'a mut ProbeBank<T::Index, R>,
     final_svd: bool,
 }
 
-fn contract_fixed<T, V>(request: FixedContractionRequest<'_, T, V>) -> Result<TreeTN<T, V>>
+fn contract_fixed<T, V, R>(request: FixedContractionRequest<'_, T, V, R>) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng,
 {
     let FixedContractionRequest {
         center,
@@ -474,13 +478,13 @@ where
     Ok((factorized.left, factorized.bond_index))
 }
 
-struct PrefixCache<'a, T>
+struct PrefixCache<'a, T, R>
 where
     T: TensorLike,
 {
     local: &'a [(&'a T, &'a T)],
     outputs: &'a [Vec<T::Index>],
-    probes: &'a mut ProbeBank<T::Index>,
+    probes: &'a mut ProbeBank<T::Index, R>,
     batch_size: usize,
     // Per-site list of (batch tensor, batch index, width) segments, storing
     // whatever chunk each `grow_segment` call actually produced. The first
@@ -505,27 +509,28 @@ where
 /// segments already carry a batch axis from their own construction).
 /// Mirrors how the reference Python implementation's `envs` cache needs no
 /// re-concatenation once a column is computed for a site.
-struct BatchedPrefixCache<'a, T>
+struct BatchedPrefixCache<'a, T, R>
 where
     T: TensorLike,
 {
     local: &'a [(&'a T, &'a T)],
     outputs: &'a [Vec<T::Index>],
-    probes: &'a mut ProbeBank<T::Index>,
+    probes: &'a mut ProbeBank<T::Index, R>,
     combined: Vec<T>,
     combined_batch: Option<T::Index>,
     generated_width: usize,
 }
 
-impl<'a, T> BatchedPrefixCache<'a, T>
+impl<'a, T, R> BatchedPrefixCache<'a, T, R>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
+    R: Rng,
 {
     fn new(
         local: &'a [(&'a T, &'a T)],
         outputs: &'a [Vec<T::Index>],
-        probes: &'a mut ProbeBank<T::Index>,
+        probes: &'a mut ProbeBank<T::Index, R>,
     ) -> Self {
         Self {
             local,
@@ -614,15 +619,16 @@ where
     }
 }
 
-impl<'a, T> PrefixCache<'a, T>
+impl<'a, T, R> PrefixCache<'a, T, R>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
+    R: Rng,
 {
     fn new(
         local: &'a [(&'a T, &'a T)],
         outputs: &'a [Vec<T::Index>],
-        probes: &'a mut ProbeBank<T::Index>,
+        probes: &'a mut ProbeBank<T::Index, R>,
         batch_size: usize,
     ) -> Self {
         Self {
@@ -847,7 +853,7 @@ mod tests {
         let (a0, b0, a1, b1) = two_site_local(3);
         let local = vec![(&a0, &b0), (&a1, &b1)];
         let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
-        let mut probes = ProbeBank::new(
+        let mut probes = ProbeBank::from_seed(
             outputs.iter().flat_map(|o| o.iter().cloned()).collect(),
             1,
             42,
@@ -882,7 +888,7 @@ mod tests {
         let (a0, b0, a1, b1) = two_site_local(3);
         let local = vec![(&a0, &b0), (&a1, &b1)];
         let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
-        let mut probes = ProbeBank::new(
+        let mut probes = ProbeBank::from_seed(
             outputs.iter().flat_map(|o| o.iter().cloned()).collect(),
             1,
             42,
@@ -930,7 +936,7 @@ mod tests {
             .cloned()
             .map(|output| vec![output])
             .collect::<Vec<_>>();
-        let mut probes = ProbeBank::new(outputs.clone(), 1, 42).unwrap();
+        let mut probes = ProbeBank::from_seed(outputs.clone(), 1, 42).unwrap();
         let mut cache = PrefixCache::new(&local, &site_outputs, &mut probes, 2);
 
         cache.request(0, 0, 2).unwrap();
@@ -948,7 +954,7 @@ mod tests {
             "requesting the first range must not extend a later segment"
         );
 
-        let mut direct_probes = ProbeBank::new(outputs, 1, 42).unwrap();
+        let mut direct_probes = ProbeBank::from_seed(outputs, 1, 42).unwrap();
         let mut direct = PrefixCache::new(&local, &site_outputs, &mut direct_probes, 2);
         let (expected, _) = direct.request(1, 0, 2).unwrap();
         assert_eq!(
@@ -985,7 +991,7 @@ mod tests {
             .iter()
             .flat_map(|o| o.iter().cloned())
             .collect::<Vec<_>>();
-        let mut probes = ProbeBank::new(index_list.clone(), 1, 42).unwrap();
+        let mut probes = ProbeBank::from_seed(index_list.clone(), 1, 42).unwrap();
         // batch_size 2: the first request exactly fills one aligned segment
         // [0,2); the second request [1,3) straddles that segment's right
         // boundary and the freshly grown [2,3) segment, so neither stored
@@ -1014,7 +1020,7 @@ mod tests {
         // Ground truth: an independent probe bank/prefix computation for the
         // same [1, 3) range, built without going through `PrefixCache` at
         // all.
-        let mut reference_probes = ProbeBank::new(index_list, 1, 42).unwrap();
+        let mut reference_probes = ProbeBank::from_seed(index_list, 1, 42).unwrap();
         reference_probes.extend_to(3).unwrap();
         let reference_batch = DynIndex::new_link(2).unwrap();
         let reference = crate::treetn::contraction::src_probe::probed_site_pair_batch_range(

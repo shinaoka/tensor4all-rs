@@ -1,10 +1,9 @@
 use super::*;
 use num_complex::Complex64;
-use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
-    AnyScalar, DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike,
-    TensorIndex,
+    DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
 };
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
@@ -605,7 +604,7 @@ fn src_adaptive_matches_exact_contraction_with_a_multi_column_lookahead_batch() 
     );
 }
 
-fn random_dense_tensor(indices: Vec<DynIndex>, rng: &mut StdRng) -> IdxTensor {
+fn random_dense_tensor(indices: Vec<DynIndex>, rng: &mut ChaCha8Rng) -> IdxTensor {
     let elements = indices.iter().map(IndexLike::dim).product();
     let data = (0..elements)
         .map(|_| rng.random_range(-1.0_f64..1.0_f64))
@@ -618,7 +617,7 @@ fn random_dense_tensor(indices: Vec<DynIndex>, rng: &mut StdRng) -> IdxTensor {
 /// `physical_dim`), and independent chain bonds of `bond_dim` for each of
 /// the two networks -- the same index-construction shape as
 /// `make_three_node_chain_pair` above, generalized to 5 sites with
-/// `StdRng`-seeded random values (mirroring `benchmark_src.rs`'s
+/// `ChaCha8Rng`-seeded random values (mirroring `benchmark_src.rs`'s
 /// `make_mpo_mps`) so callers can pick a `physical_dim`/`bond_dim`/`seed`
 /// combination that forces a ragged `PrefixCache` segment.
 fn make_five_site_chain_pair(
@@ -627,7 +626,7 @@ fn make_five_site_chain_pair(
     seed: u64,
 ) -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     let n_sites = 5;
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let shared = (0..n_sites)
         .map(|_| DynIndex::new_dyn(physical_dim))
         .collect::<Vec<_>>();
@@ -848,6 +847,48 @@ fn src_dispatch_preserves_public_contract() {
 }
 
 #[test]
+fn src_with_rng_matches_the_seeded_high_level_api() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    let options = ContractionOptions::src()
+        .with_max_bond_dim(4)
+        .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false));
+    let seeded = contract(&tn_a, &tn_b, &"C".to_string(), options.clone())
+        .unwrap()
+        .to_dense()
+        .unwrap();
+
+    let mut rng = ChaCha8Rng::seed_from_u64(123);
+    let supplied = contract_src_with_rng(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        options.with_src_options(SrcOptions::fixed().with_seed(999).with_final_svd(false)),
+        &mut rng,
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+
+    let error = supplied.sub(&seeded).unwrap().maxabs().unwrap();
+    assert!(
+        error < 1.0e-12,
+        "seeded and caller-owned RNG paths differ by {error}"
+    );
+
+    let error = contract_src_with_rng(
+        &tn_a,
+        &tn_b,
+        &"C".to_string(),
+        ContractionOptions::zipup(),
+        &mut rng,
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("requires ContractionMethod::Src"));
+}
+
+#[test]
 fn src_adaptive_contracts_and_honors_rank_cap() {
     let (tn_a, tn_b) = make_three_node_chain_pair();
     let options = ContractionOptions::src()
@@ -884,14 +925,11 @@ fn src_adaptive_contracts_and_honors_rank_cap() {
 /// branches must produce identical, correct results, since they compute
 /// the same underlying probe-batch data by construction.
 ///
-/// Scaling both inputs keeps the absolute dense-oracle assertion stable
-/// across randomized sketch layouts without changing relative adaptive
-/// decisions or the cache request pattern.
+/// The dense-oracle assertion uses relative max error because the fixture's
+/// values compound across five sites.
 #[test]
 fn src_adaptive_matches_naive_on_a_longer_chain_with_multiple_interior_sites() {
     let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true, true]);
-    let tn_a = tn_a.scale(AnyScalar::new_real(0.1)).unwrap();
-    let tn_b = tn_b.scale(AnyScalar::new_real(0.1)).unwrap();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
     let options = ContractionOptions::src()
         .with_max_bond_dim(4)
@@ -907,10 +945,12 @@ fn src_adaptive_matches_naive_on_a_longer_chain_with_multiple_interior_sites() {
         .to_dense()
         .unwrap();
 
-    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    let absolute_error = actual.sub(&expected).unwrap().maxabs().unwrap();
+    let expected_scale = expected.maxabs().unwrap();
+    let relative_error = absolute_error / expected_scale;
     assert!(
-        error < 1.0e-4,
-        "adaptive SRC residual on a multi-interior-site chain is {error}"
+        relative_error < 1.0e-10,
+        "adaptive SRC relative max error is {relative_error} (absolute={absolute_error}, reference scale={expected_scale})"
     );
 }
 

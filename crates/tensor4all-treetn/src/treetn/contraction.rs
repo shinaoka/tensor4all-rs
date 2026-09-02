@@ -25,6 +25,8 @@
 
 use crate::error::TreeTNOperationError;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -1458,6 +1460,8 @@ pub struct SrcOptions {
     /// desired.
     pub final_svd: bool,
     /// Seed for deterministic Gaussian probe generation. The default is zero.
+    /// [`contract_src_with_rng`] ignores this field and consumes its supplied
+    /// random stream directly.
     pub seed: u64,
 }
 
@@ -1975,7 +1979,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction fails (a shape or index mismatch,
-/// /// or a backend failure).
+/// or a backend failure).
 ///
 pub fn contract<T, V>(
     tn_a: &TreeTN<T, V>,
@@ -2041,21 +2045,109 @@ where
             )
         }
         ContractionMethod::Src => {
-            let output_rank = options
-                .max_bond_dim
-                .or(options.src_options.max_rank)
-                .ok_or_else(|| anyhow::anyhow!("contract: SRC requires a finite output rank"))?;
-            src_tree::contract(
-                tn_a,
-                tn_b,
-                center,
-                options.svd_policy,
-                output_rank,
-                &options.src_options,
-            )
-            .map_err(TreeTNOperationError::from)
+            let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
+            contract_src_with_rng_impl(tn_a, tn_b, center, &options, &mut rng)
         }
     }
+}
+
+/// Contract two TreeTNs with SRC using a caller-owned random number generator.
+///
+/// This is the low-level counterpart of [`contract`]. It consumes Gaussian
+/// probe randomness directly from `rng`; [`SrcOptions::seed`] is ignored.
+///
+/// # Errors
+///
+/// Returns an error when `options` does not select [`ContractionMethod::Src`],
+/// an SRC rank or tolerance is invalid, the network topologies are incompatible,
+/// or probe generation, tensor contraction, or factorization fails.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{
+///     contraction::{contract_src_with_rng, ContractionOptions, SrcOptions},
+///     TreeTN,
+/// };
+///
+/// let shared = DynIndex::new_dyn(2);
+/// let output_a = DynIndex::new_dyn(2);
+/// let output_b = DynIndex::new_dyn(2);
+/// let tensor_a = IdxTensor::from_dense(
+///     vec![shared.clone(), output_a],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// )?;
+/// let tensor_b = IdxTensor::from_dense(
+///     vec![shared, output_b],
+///     vec![2.0, 0.0, 0.0, 3.0],
+/// )?;
+/// let tn_a = TreeTN::from_tensors(vec![tensor_a], vec![0])?;
+/// let tn_b = TreeTN::from_tensors(vec![tensor_b], vec![0])?;
+/// let options = ContractionOptions::src()
+///     .with_max_bond_dim(1)
+///     .with_src_options(SrcOptions::fixed());
+/// let mut rng = ChaCha8Rng::seed_from_u64(7);
+/// let result = contract_src_with_rng(&tn_a, &tn_b, &0, options, &mut rng)?;
+/// assert_eq!(result.node_count(), 1);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn contract_src_with_rng<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: ContractionOptions,
+    rng: &mut R,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng + ?Sized,
+{
+    if options.method != ContractionMethod::Src {
+        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_src_with_rng requires ContractionMethod::Src"
+        )));
+    }
+    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
+        .context("contract_src_with_rng: invalid contraction options")?;
+    options
+        .src_options
+        .validate(options.max_bond_dim)
+        .context("contract_src_with_rng: invalid SRC options")?;
+    contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng)
+}
+
+fn contract_src_with_rng_impl<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: &ContractionOptions,
+    rng: R,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng,
+{
+    let output_rank = options
+        .max_bond_dim
+        .or(options.src_options.max_rank)
+        .ok_or_else(|| anyhow::anyhow!("contract: SRC requires a finite output rank"))?;
+    src_tree::contract(
+        tn_a,
+        tn_b,
+        center,
+        options.svd_policy,
+        output_rank,
+        &options.src_options,
+        rng,
+    )
+    .map_err(TreeTNOperationError::from)
 }
 
 /// Contract two TreeTNs using naive contraction, then decompose back to TreeTN.
@@ -2070,7 +2162,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction fails (a shape or index mismatch,
-/// /// or a backend failure).
+/// or a backend failure).
 ///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,

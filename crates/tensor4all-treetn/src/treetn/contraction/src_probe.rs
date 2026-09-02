@@ -13,7 +13,11 @@
 //! marks unsupported choices `[AI-Supplied]`.
 
 use anyhow::Result;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
+#[cfg(test)]
+use rand::SeedableRng;
+#[cfg(test)]
+use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use tensor4all_core::{IndexLike, TensorLike};
@@ -27,19 +31,31 @@ use crate::algorithm::CanonicalForm;
 /// matrix. Extending the bank advances one persistent RNG and appends columns,
 /// so an adaptive run observes exactly the same prefix as a fixed-width run
 /// with the same seed and index order.
-pub(super) struct ProbeBank<I> {
+pub(super) struct ProbeBank<I, R> {
     indices: Vec<I>,
     coefficients: HashMap<I, Vec<f64>>,
-    rng: rand::rngs::StdRng,
+    rng: R,
     width: usize,
 }
 
-impl<I> ProbeBank<I>
+#[cfg(test)]
+impl<I> ProbeBank<I, ChaCha8Rng>
 where
     I: IndexLike,
 {
-    /// Construct a bank with `width` Gaussian columns.
-    pub(super) fn new(indices: Vec<I>, width: usize, seed: u64) -> Result<Self> {
+    #[cfg(test)]
+    pub(super) fn from_seed(indices: Vec<I>, width: usize, seed: u64) -> Result<Self> {
+        Self::new(indices, width, ChaCha8Rng::seed_from_u64(seed))
+    }
+}
+
+impl<I, R> ProbeBank<I, R>
+where
+    I: IndexLike,
+    R: Rng,
+{
+    /// Construct a bank with `width` Gaussian columns from `rng`.
+    pub(super) fn new(indices: Vec<I>, width: usize, rng: R) -> Result<Self> {
         if width == 0 {
             anyhow::bail!("SRC probe bank width must be at least 1");
         }
@@ -62,13 +78,18 @@ where
         let mut bank = Self {
             indices,
             coefficients,
-            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            rng,
             width: 0,
         };
         bank.extend_to(width)?;
         Ok(bank)
     }
+}
 
+impl<I, R> ProbeBank<I, R>
+where
+    I: IndexLike,
+{
     /// Return the number of columns currently stored in the bank.
     pub(super) fn width(&self) -> usize {
         self.width
@@ -102,7 +123,13 @@ where
             .get(start..end)
             .ok_or_else(|| anyhow::anyhow!("SRC probe column storage is inconsistent"))
     }
+}
 
+impl<I, R> ProbeBank<I, R>
+where
+    I: IndexLike,
+    R: Rng,
+{
     /// Append Gaussian columns until the bank reaches `target_width`.
     pub(super) fn extend_to(&mut self, target_width: usize) -> Result<()> {
         if target_width <= self.width {
@@ -129,7 +156,7 @@ fn standard_normal<R: Rng + ?Sized>(rng: &mut R) -> f64 {
     (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
 }
 
-fn single_probe<T>(index: &T::Index, probes: &ProbeBank<T::Index>, column: usize) -> Result<T>
+fn single_probe<T, R>(index: &T::Index, probes: &ProbeBank<T::Index, R>, column: usize) -> Result<T>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
@@ -139,9 +166,9 @@ where
         .map_err(|error| anyhow::anyhow!("contract_src: probe construction failed: {error}"))
 }
 
-fn single_probe_batch<T>(
+fn single_probe_batch<T, R>(
     index: &T::Index,
-    probes: &ProbeBank<T::Index>,
+    probes: &ProbeBank<T::Index, R>,
     first_column: usize,
     width: usize,
     batch: &T::Index,
@@ -171,9 +198,9 @@ where
 /// `batch` index. Keeping these tensors separate lets a tree-message
 /// contraction eliminate incoming branch bonds before joining the two local
 /// operands, instead of materializing their full virtual-bond product.
-pub(super) fn probe_batch_tensors<T>(
+pub(super) fn probe_batch_tensors<T, R>(
     outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
+    probes: &ProbeBank<T::Index, R>,
     first_column: usize,
     width: usize,
     batch: &T::Index,
@@ -191,7 +218,7 @@ where
     }
     outputs
         .iter()
-        .map(|index| single_probe_batch::<T>(index, probes, first_column, width, batch))
+        .map(|index| single_probe_batch::<T, R>(index, probes, first_column, width, batch))
         .collect()
 }
 
@@ -208,11 +235,11 @@ pub(super) fn product_dim<I: IndexLike>(indices: &[I]) -> Result<usize> {
 /// Keeping the probes as separate one-index tensors is the factorized
 /// MPO--MPO path from the paper: the shared physical leg is contracted between
 /// the operands without first constructing a fused `d^2` local product.
-pub(super) fn probed_site_pair<T>(
+pub(super) fn probed_site_pair<T, R>(
     tensor_a: &T,
     tensor_b: &T,
     outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
+    probes: &ProbeBank<T::Index, R>,
     column: usize,
 ) -> Result<T>
 where
@@ -221,7 +248,7 @@ where
 {
     let probe_tensors = outputs
         .iter()
-        .map(|index| single_probe::<T>(index, probes, column))
+        .map(|index| single_probe::<T, R>(index, probes, column))
         .collect::<Result<Vec<_>>>()?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, None)?;
@@ -232,11 +259,11 @@ where
 }
 
 /// Contract two local operands with a block of factorized probes.
-pub(super) fn probed_site_pair_batch_range<T>(
+pub(super) fn probed_site_pair_batch_range<T, R>(
     tensor_a: &T,
     tensor_b: &T,
     outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
+    probes: &ProbeBank<T::Index, R>,
     first_column: usize,
     width: usize,
     batch: &T::Index,
@@ -294,12 +321,12 @@ where
 // `contract_prefix_with_probed_site_pair_batch_range`. It follows the same
 // environment-first ordering while retaining the independent probe vectors
 // on the local output legs.
-pub(super) fn contract_prefix_with_probed_site_pair<T>(
+pub(super) fn contract_prefix_with_probed_site_pair<T, R>(
     prefix: &T,
     tensor_a: &T,
     tensor_b: &T,
     outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
+    probes: &ProbeBank<T::Index, R>,
     column: usize,
 ) -> Result<T>
 where
@@ -308,7 +335,7 @@ where
 {
     let probe_tensors = outputs
         .iter()
-        .map(|index| single_probe::<T>(index, probes, column))
+        .map(|index| single_probe::<T, R>(index, probes, column))
         .collect::<Result<Vec<_>>>()?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let mut result = prefix
@@ -326,12 +353,12 @@ where
 // range are all one contraction step; keeping them explicit prevents the
 // factorized MPO--MPO path from hiding a fused physical product.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn contract_prefix_with_probed_site_pair_batch_range<T>(
+pub(super) fn contract_prefix_with_probed_site_pair_batch_range<T, R>(
     prefix: &T,
     tensor_a: &T,
     tensor_b: &T,
     outputs: &[T::Index],
-    probes: &ProbeBank<T::Index>,
+    probes: &ProbeBank<T::Index, R>,
     first_column: usize,
     width: usize,
     batch: &T::Index,
@@ -797,12 +824,12 @@ mod tests {
         let second = DynIndex::new_dyn(2);
         let indices = vec![first.clone(), second.clone()];
 
-        let mut extended = ProbeBank::new(indices.clone(), 2, 17).unwrap();
+        let mut extended = ProbeBank::from_seed(indices.clone(), 2, 17).unwrap();
         let prefix_first = extended.coefficients(&first).unwrap().to_vec();
         let prefix_second = extended.coefficients(&second).unwrap().to_vec();
         extended.extend_to(5).unwrap();
 
-        let reference = ProbeBank::new(indices, 5, 17).unwrap();
+        let reference = ProbeBank::from_seed(indices, 5, 17).unwrap();
         assert_eq!(extended.width(), 5);
         assert_eq!(
             &extended.coefficients(&first).unwrap()[..6],
@@ -827,10 +854,10 @@ mod tests {
     #[test]
     fn probe_bank_rejects_zero_width_and_zero_dimensional_indices() {
         let index = DynIndex::new_dyn(2);
-        assert!(ProbeBank::new(vec![index.clone()], 0, 0).is_err());
+        assert!(ProbeBank::from_seed(vec![index.clone()], 0, 0).is_err());
 
         let zero_dimensional = DynIndex::new_dyn(0);
-        assert!(ProbeBank::new(vec![zero_dimensional], 1, 0).is_err());
+        assert!(ProbeBank::from_seed(vec![zero_dimensional], 1, 0).is_err());
     }
 
     #[test]
@@ -846,7 +873,7 @@ mod tests {
         let tensor_b =
             IdxTensor::from_dense(vec![shared, output_b.clone()], vec![5.0, 6.0, 7.0, 8.0])
                 .unwrap();
-        let probes = ProbeBank::new(vec![output_a.clone(), output_b.clone()], 1, 23).unwrap();
+        let probes = ProbeBank::from_seed(vec![output_a.clone(), output_b.clone()], 1, 23).unwrap();
         let x = probes.column(&output_a, 0).unwrap();
         let y = probes.column(&output_b, 0).unwrap();
         let a_values = tensor_a.to_vec::<f64>().unwrap();
@@ -886,7 +913,7 @@ mod tests {
         let tensor_b =
             IdxTensor::from_dense(vec![shared, output_b.clone()], vec![5.0, 6.0, 7.0, 8.0])
                 .unwrap();
-        let probes = ProbeBank::new(vec![output_a.clone(), output_b.clone()], 2, 23).unwrap();
+        let probes = ProbeBank::from_seed(vec![output_a.clone(), output_b.clone()], 2, 23).unwrap();
         let actual = probed_site_pair_batch_range(
             &tensor_a,
             &tensor_b,
@@ -966,7 +993,7 @@ mod tests {
             (0..24).map(|value| value as f64 + 2.0).collect(),
         )
         .unwrap();
-        let probes = ProbeBank::new(vec![output_a.clone(), output_b.clone()], 2, 31).unwrap();
+        let probes = ProbeBank::from_seed(vec![output_a.clone(), output_b.clone()], 2, 31).unwrap();
         let local = probed_site_pair_batch_range(
             &tensor_a,
             &tensor_b,
@@ -1039,7 +1066,7 @@ mod tests {
     #[test]
     fn scalar_probed_site_pair_batch_range_broadcasts_over_the_batch_axis() {
         let batch = DynIndex::new_dyn(3);
-        let bank = ProbeBank::new(vec![], 3, 17).unwrap();
+        let bank = ProbeBank::from_seed(vec![], 3, 17).unwrap();
 
         let left = DynIndex::new_dyn(2);
         let shared = DynIndex::new_dyn(1);

@@ -1321,7 +1321,9 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` under the same conditions as [`Self::from_dense_any`].
+    /// Returns `Self::Error` when the index-dimension product overflows, the
+    /// data length does not match that product, the scalar dtype is unsupported,
+    /// or [`Self::from_dense_any`] otherwise rejects construction.
     ///
     /// # Examples
     ///

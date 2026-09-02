@@ -99,6 +99,15 @@
 
 ## Tensor Network Test Comparisons
 
+- Randomized algorithms must provide both a high-level deterministic seed API
+  and a low-level API that accepts a caller-owned `&mut R` where
+  `R: rand::Rng + ?Sized`. The high-level API must delegate to the low-level
+  implementation, and the low-level implementation must consume the supplied
+  stream directly rather than deriving a seed for a hidden RNG.
+- Seed-based production entry points must use an explicitly named RNG algorithm,
+  not `StdRng`, so dependency upgrades do not silently change the stream.
+- Tests of randomized algorithms must use `ChaCha8Rng` with an explicit seed.
+  Do not use `StdRng`, `thread_rng`, or an implicit entropy source in those tests.
 - Small reference tests may materialize dense tensors. Materialize each full
   result once, subtract tensors, and compare the whole result with `maxabs()`.
   Do not compare by re-contracting or re-evaluating every element one by one.

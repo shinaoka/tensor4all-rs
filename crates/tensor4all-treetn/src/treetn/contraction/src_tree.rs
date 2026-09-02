@@ -10,6 +10,7 @@
 //! derivation and are explicitly marked `[AI-Supplied]` in the audit worklog.
 
 use anyhow::Result;
+use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -37,18 +38,20 @@ type EnvironmentSegment<T, V> = (
 );
 
 /// Execute successive randomized compression on a chain or a rooted tree.
-pub(super) fn contract<T, V>(
+pub(super) fn contract<T, V, R>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     svd_policy: Option<SvdTruncationPolicy>,
     max_bond_dim: usize,
     src_options: &SrcOptions,
+    rng: R,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng,
 {
     if let Some(chain) = tn_a.chain_order(center) {
         // The chain recurrence produces a left-canonical sweep whose center
@@ -62,6 +65,7 @@ where
                 svd_policy,
                 max_bond_dim,
                 src_options,
+                rng,
             );
         }
     }
@@ -134,7 +138,7 @@ where
     {
         anyhow::bail!("contract_src: tree output space has zero dimension");
     }
-    let mut probes = ProbeBank::new(probe_indices, 1, src_options.seed)?;
+    let mut probes = ProbeBank::new(probe_indices, 1, rng)?;
     let mut environment_cache = EnvironmentCache::new(
         &tn_a_sim,
         &edges,
@@ -298,7 +302,7 @@ where
     Ok(result)
 }
 
-struct EnvironmentCache<'a, T, V>
+struct EnvironmentCache<'a, T, V, R>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
@@ -308,18 +312,19 @@ where
     nodes: &'a [V],
     local: &'a HashMap<V, (&'a T, &'a T)>,
     outputs: &'a HashMap<V, Vec<T::Index>>,
-    probes: &'a mut ProbeBank<T::Index>,
+    probes: &'a mut ProbeBank<T::Index, R>,
     batched_environments: HashMap<usize, BatchedEnvironment<T, V>>,
     batch_size: usize,
     segments: Vec<EnvironmentSegment<T, V>>,
     segment_total_width: usize,
 }
 
-impl<'a, T, V> EnvironmentCache<'a, T, V>
+impl<'a, T, V, R> EnvironmentCache<'a, T, V, R>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    R: Rng,
 {
     fn new(
         tn: &'a TreeTN<T, V>,
@@ -327,7 +332,7 @@ where
         nodes: &'a [V],
         local: &'a HashMap<V, (&'a T, &'a T)>,
         outputs: &'a HashMap<V, Vec<T::Index>>,
-        probes: &'a mut ProbeBank<T::Index>,
+        probes: &'a mut ProbeBank<T::Index, R>,
         batch_size: usize,
     ) -> Self {
         Self {
@@ -373,7 +378,7 @@ where
                     .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
                 Ok((
                     node.clone(),
-                    probe_batch_tensors::<T>(site_outputs, self.probes, 0, width, &batch)?,
+                    probe_batch_tensors::<T, R>(site_outputs, self.probes, 0, width, &batch)?,
                 ))
             })
             .collect::<Result<HashMap<_, _>>>()?;
@@ -415,7 +420,7 @@ where
                     .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
                 Ok((
                     node.clone(),
-                    probe_batch_tensors::<T>(site_outputs, self.probes, start, width, &batch)?,
+                    probe_batch_tensors::<T, R>(site_outputs, self.probes, start, width, &batch)?,
                 ))
             })
             .collect::<Result<HashMap<_, _>>>()?;
@@ -892,7 +897,7 @@ mod tests {
             .iter()
             .flat_map(|node| outputs[node].iter().cloned())
             .collect::<Vec<_>>();
-        let mut probes = ProbeBank::new(std::mem::take(&mut probe_indices), 1, 99).unwrap();
+        let mut probes = ProbeBank::from_seed(std::mem::take(&mut probe_indices), 1, 99).unwrap();
         // batch_size 3 matches the request width exactly, so this exercises
         // the aligned single-segment path only -- see the misaligned/
         // multi-edge test below for the fixed-grid growth and fallback.
@@ -958,7 +963,7 @@ mod tests {
             .flat_map(|node| outputs[node].iter().cloned())
             .collect::<Vec<_>>();
 
-        let mut probes = ProbeBank::new(index_list, 1, 7).unwrap();
+        let mut probes = ProbeBank::from_seed(index_list, 1, 7).unwrap();
         let mut cache =
             EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 2);
 
@@ -1022,7 +1027,7 @@ mod tests {
             .iter()
             .flat_map(|node| outputs[node].iter().cloned())
             .collect::<Vec<_>>();
-        let probes = ProbeBank::new(probe_indices, 3, 41).unwrap();
+        let probes = ProbeBank::from_seed(probe_indices, 3, 41).unwrap();
         let batch = DynIndex::new_link(3).unwrap();
 
         let prepaired = nodes

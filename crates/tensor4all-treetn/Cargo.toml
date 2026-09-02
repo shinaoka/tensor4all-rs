@@ -39,12 +39,12 @@ anyhow.workspace = true
 num-complex.workspace = true
 dyn-clone.workspace = true
 rand.workspace = true
+rand_chacha.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 criterion.workspace = true
-rand_chacha.workspace = true
 
 [[bench]]
 name = "cached_evaluator"
