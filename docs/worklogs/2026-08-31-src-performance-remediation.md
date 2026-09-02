@@ -430,8 +430,132 @@ The low-bond crossover moved from about 80 to about 64. Dense-oracle relative
 errors remained `6.255e-26`, `1.120e-28`, and `2.099e-31` at bonds 32, 64, and
 128.
 
+## Adopt backend results without creating new leaves
+
+The no-gradient native contraction paths produced derived backend values but
+wrapped them with `EagerTensor::from_tensor_in`, which registers an external
+input leaf and constructs a semantic trace. One internal constructor now uses
+tenferro's existing `adopt_untracked_eager_value` contract for derived native
+results. Borrowed and owned N-ary contraction, mixed-dtype pairwise contraction,
+`tensordot`, and outer product share this path. Tracked and structured paths are
+unchanged. Regression tests verify exact values and that every adopted result
+remains a valid constant in a later tracked contraction with the expected
+gradient.
+
+Across 30 paired bond-32 processes (five timed repetitions per process), the
+median changed from 35.112 ms to 32.290 ms (`-7.44%` paired median, 2.822 ms by
+ratio of medians). Ten paired processes at larger bonds measured paired median
+changes of `-1.37%` at bond 64 and `-2.75%` at bond 128, with larger host noise.
+Dense-oracle relative errors remained below `6.255e-26`, `1.176e-28`, and
+`2.240e-31` respectively.
+
+A fresh matched Python comparison measured:
+
+| Input bond | Rust (ms) | Python (ms) | Rust / Python |
+| ---: | ---: | ---: | ---: |
+| 32 | 32.279 | 20.066 | 1.609 |
+| 64 | 70.903 | 76.613 | 0.925 |
+| 128 | 300.290 | 447.741 | 0.671 |
+
+Small mixed-dtype operation microbenchmarks measured the general adoption path
+against the former leaf path:
+
+| Operation | Leaf (us) | Adopted result (us) | Paired median change |
+| --- | ---: | ---: | ---: |
+| Pairwise contraction | 103.732 | 90.469 | -13.03% |
+| `tensordot` | 103.494 | 90.333 | -12.08% |
+| Outer product | 105.646 | 91.363 | -12.66% |
+
+Three broader experiments were rejected and removed:
+
+- Replacing small planner hash tables with dense vectors was neutral at bond 32
+  (`-0.08%` paired median).
+- A bounded cache keyed by actual indices recorded zero hits and 263 misses in
+  one warmed bond-32 SRC run because each batch and bond carries fresh index
+  identities. A safe normalized key must rediscover the same contractability
+  graph as the planner; useful reuse needs a caller-owned prepared-plan API.
+- Updating tenferro and replacing incremental BCGS2 with compact Householder QR
+  was neutral to slower in SRC. A general five-column plus nine three-column
+  append benchmark was 41-52% slower for 64-256 rows, so both the adapter and
+  dependency-pin experiment were removed.
+
+## Remove probe conversion and no-gradient inspection overhead
+
+A type-generic `TensorConstructionLike::from_dense<T>` constructor now defaults
+to the existing `AnyScalar` compatibility path while allowing native tensor
+types to override it. `IdxTensor` delegates directly to its existing typed
+column-major constructor. SRC scalar and batched probes therefore pass their
+stored `f64` coefficients directly instead of constructing one eager-backed
+`AnyScalar` per coefficient and then converting the whole payload back to
+`f64`. This resolves the earlier API objection without adding an `f64`-specific
+entry point. A regression test covers both the generic fallback and preservation
+of an `f32` native payload.
+
+No-gradient N-ary contraction also no longer computes dtype equality and scans
+structured axis classes. Those checks only select tracked AD paths and were
+unconditionally repeated for every prefix/sketch contraction. Tracked and
+structured behavior remains unchanged.
+
+Controlled one-thread A/B measurements with 100 repetitions per process found:
+
+- typed probe construction alone: `-8.46%` paired median at bond 32;
+- skipping AD-only inspection after typed probes: another `-0.28%` paired
+  median (`-0.47%` paired mean);
+- combined candidate: `-9.05%`, `-3.00%`, and noise-level at bonds 32, 64, and
+  128 respectively. Dense-oracle errors stayed below `6.255e-26`, `1.176e-28`,
+  and `2.240e-31`.
+
+A same-period bond-32 Rust-baseline/Rust-candidate/Python triplet measured
+36.463/33.582/20.022 ms. The Rust/Python ratio changed from 1.821 to 1.677 and
+the absolute gap from 16.441 to 13.560 ms. Absolute timing varied with host
+load, so the paired Rust A/B percentage is the primary result.
+
+Three attempted fixed-cost reductions were removed after paired measurement:
+
+- fusing prefix and sketch stages into larger N-ary calls removed 57 of 230
+  contraction boundaries but was neutral over 100 repetitions;
+- replacing the backend plan-cache hash lookup with allocation-free linear
+  matching was neutral (`+0.14%` paired median);
+- linear-time internal-label grouping changed the contraction label order and
+  slowed bond 32 by `1.63%`.
+
+The compact Householder small-append follow-up is tracked in
+[tenferro-rs#1750](https://github.com/tensor4all/tenferro-rs/issues/1750).
+
+A final temporary section profile on the typed-probe candidate counted 254
+N-ary contractions and 545 result/index validations at bond 32. Median nested
+section totals were 1.649 ms for core plan construction, 0.763 ms for native
+operand preparation, 1.232 ms for untracked adoption/result wrapping, 0.633 ms
+for the backend session shell, 0.423 ms for backend input/subscript preparation,
+0.132 ms for core size validation, and 0.282 ms for result index validation.
+The deep profiler inflated plan lookup and total execution time, so the earlier
+low-overhead 0.449 ms plan-lookup measurement remains authoritative. All added
+instrumentation was removed.
+
+A second temporary profile split the untracked result boundary. For one
+adaptive bond-32 run, backend-value adoption cost 0.641 ms, unique-index
+validation cost 0.265 ms, and axis-class validation cost 0.196 ms. Every caller
+of the private untracked constructor receives result indices and axis classes
+from a contraction planner that already validates or constructs those
+invariants. The retained path therefore reuses that proof for dense derived
+results, keeps native-shape validation in release builds, keeps structured
+axis-class and diagonal validation, and repeats all skipped checks through
+`debug_assert!`. Ten alternating single-thread bond-32 pairs measured a -2.18%
+paired median and -1.10% paired mean for the conservative final form;
+the dense-oracle error stayed at or below `6.021e-26`.
+
+The raw records, scripts, exact candidate patches, and machine metadata are
+archived in `tensor4all-benchmark` under `studies/2026-09-02-src-pr694/`.
+
 ## Verification
 
+- `cargo test --release -p tensor4all-core --lib`: 442 passed, one ignored.
+- Five adopted-result AD regression tests passed for borrowed and owned N-ary
+  contraction plus mixed-dtype pairwise contraction, `tensordot`, and outer
+  product.
+- The typed-constructor fallback/native regression test and both affected
+  `TensorConstructionLike` doctests passed; `xtask api-dump` verified the full
+  public-crate inventory.
 - `cargo test --release -p tensor4all-tensorbackend --lib`:
   219 passed.
 - `cargo test --release -p tensor4all-treetn 'treetn::contraction::' --lib`:
@@ -439,7 +563,7 @@ errors remained `6.255e-26`, `1.120e-28`, and `2.099e-31` at bonds 32, 64, and
 - `cargo test --release -p tensor4all-treetn --lib`:
   498 library tests passed; prior integration tests and 140 doctests passed;
   one pre-existing diagnostic test remained ignored.
-- `cargo clippy -p tensor4all-treetn --all-targets -- -D warnings
+- `cargo clippy -p tensor4all-core -p tensor4all-treetn --all-targets -- -D warnings
   -D clippy::missing_errors_doc -D clippy::missing_panics_doc`: passed.
 - `cargo fmt --all -- --check`: passed.
 - `git diff --check`: passed.

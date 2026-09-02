@@ -18,6 +18,7 @@ use crate::tensor_index::TensorIndex;
 use crate::truncation::{
     validate_svd_truncation_options, SvdTruncationOptionsError, SvdTruncationPolicy,
 };
+use crate::TensorElement;
 use num_complex::Complex64;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -1301,6 +1302,49 @@ pub trait TensorConstructionLike: TensorContractionLike {
             result = result.axpby(one.clone(), &term, one.clone())?;
         }
         Ok(result)
+    }
+
+    /// Construct a tensor directly from a typed column-major dense payload.
+    ///
+    /// Implementations with native typed storage should override this method to
+    /// avoid converting every element through [`AnyScalar`].
+    ///
+    /// # Arguments
+    ///
+    /// * `indices` - External indices in the intended column-major axis order.
+    /// * `data` - Typed dense values in column-major order; its length must equal
+    ///   the product of the index dimensions.
+    ///
+    /// # Returns
+    ///
+    /// A tensor whose dtype is selected from `T` by the implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` under the same conditions as [`Self::from_dense_any`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorConstructionLike};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = <IdxTensor as TensorConstructionLike>::from_dense(
+    ///     vec![index],
+    ///     vec![2.0_f64, 3.0],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![2.0, 3.0]);
+    /// ```
+    fn from_dense<T>(
+        indices: Vec<<Self as TensorIndex>::Index>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, Self::Error>
+    where
+        Self: TensorVectorSpace,
+        T: TensorElement + Into<AnyScalar>,
+    {
+        Self::from_dense_any(indices, data.into_iter().map(Into::into).collect())
     }
 
     /// Stack tensors along a newly created batch index.

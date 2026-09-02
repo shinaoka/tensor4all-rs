@@ -4,10 +4,10 @@ use crate::{DynIndex, IdxTensor};
 // ============================================================================
 // `DefaultOnlyTensor`: a minimal `TensorLike` implementor that never
 // overrides `factorize_probe_columns_incremental`, `src_error_estimate`,
-// `from_dense_any`, `stack_along_new_index`, `concatenate_along_new_index`,
-// or `select_indices`.
+// `from_dense_any`, `from_dense`, `stack_along_new_index`,
+// `concatenate_along_new_index`, or `select_indices`.
 //
-// `IdxTensor` (the only production `TensorLike`) overrides all six, so those
+// `IdxTensor` (the only production `TensorLike`) overrides all seven, so those
 // default bodies in `tensor_like.rs` are otherwise unreachable. This type
 // exists solely to drive them; its arithmetic is a plain column-major dense
 // `Vec<f64>` (real-only, no symmetry/complex support) and its error type
@@ -504,6 +504,18 @@ fn tensor_like_default_from_dense_any_reconstructs_column_major_payload() {
     .unwrap();
     assert_eq!(tensor.indices, vec![index]);
     assert_eq!(tensor.data, vec![2.0, 3.0]);
+}
+
+#[test]
+fn tensor_like_typed_dense_uses_default_and_native_paths() {
+    let index = DynIndex::new_dyn(2);
+    let fallback = DefaultOnlyTensor::from_dense(vec![index.clone()], vec![2.0_f64, 3.0]).unwrap();
+    assert_eq!(fallback.data, vec![2.0, 3.0]);
+
+    let native =
+        <IdxTensor as TensorConstructionLike>::from_dense(vec![index], vec![2.0_f32, 3.0]).unwrap();
+    assert!(native.is_f32());
+    assert_eq!(native.to_vec::<f32>().unwrap(), vec![2.0, 3.0]);
 }
 
 #[test]

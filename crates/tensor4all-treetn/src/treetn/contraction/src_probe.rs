@@ -16,7 +16,7 @@ use anyhow::Result;
 use rand::{Rng, SeedableRng};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
+use tensor4all_core::{IndexLike, TensorLike};
 
 use super::{SrcOptions, TreeTN};
 use crate::algorithm::CanonicalForm;
@@ -134,13 +134,8 @@ where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
 {
-    let data = probes
-        .column(index, column)?
-        .iter()
-        .copied()
-        .map(AnyScalar::new_real)
-        .collect();
-    T::from_dense_any(vec![index.clone()], data)
+    let data = probes.column(index, column)?.to_vec();
+    T::from_dense(vec![index.clone()], data)
         .map_err(|error| anyhow::anyhow!("contract_src: probe construction failed: {error}"))
 }
 
@@ -164,15 +159,9 @@ where
         .ok_or_else(|| anyhow::anyhow!("contract_src: probe batch column range overflow"))?;
     let mut data = Vec::with_capacity(capacity);
     for column in first_column..end_column {
-        data.extend(
-            probes
-                .column(index, column)?
-                .iter()
-                .copied()
-                .map(AnyScalar::new_real),
-        );
+        data.extend_from_slice(probes.column(index, column)?);
     }
-    T::from_dense_any(vec![index.clone(), batch.clone()], data)
+    T::from_dense(vec![index.clone(), batch.clone()], data)
         .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
 }
 

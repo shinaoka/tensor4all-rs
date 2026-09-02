@@ -510,7 +510,7 @@ fn contract_owned_with_options_impl(
                 })
                 .collect::<Result<Vec<_>>>()?;
             let result_native = einsum_native_tensors_owned(native_operands, &plan.output_ids)?;
-            IdxTensor::from_native_with_axis_classes(
+            IdxTensor::from_untracked_native_with_axis_classes(
                 plan.result_indices,
                 result_native,
                 plan.result_axis_classes,
@@ -777,42 +777,37 @@ fn execute_contraction_plan(
     has_retained_indices: bool,
 ) -> Result<IdxTensor> {
     let any_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
-    let first_dtype = tensors[0].as_inner()?.dtype();
-    let same_dtype = tensors
-        .iter()
-        .map(|tensor| Ok(tensor.as_inner()?.dtype() == first_dtype))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .all(|same| same);
-    let has_non_dense_axis_classes = tensors
-        .iter()
-        .map(|tensor| {
-            Ok(tensor
+    if any_grad {
+        let first_dtype = tensors[0].as_inner()?.dtype();
+        let same_dtype = tensors
+            .iter()
+            .map(|tensor| Ok(tensor.as_inner()?.dtype() == first_dtype))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .all(|same| same);
+        let has_non_dense_axis_classes = tensors.iter().any(|tensor| {
+            tensor
                 .axis_classes()
                 .iter()
                 .copied()
                 .enumerate()
-                .any(|(axis, class)| axis != class))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .any(|non_dense| non_dense);
+                .any(|(axis, class)| axis != class)
+        });
 
-    if any_grad && same_dtype && has_non_dense_axis_classes && !has_retained_indices {
-        // Structured payload AD still relies on the existing pairwise structured
-        // path until structured N-ary planning is implemented.
-        let mut iter = tensors.iter();
-        let Some(first) = iter.next() else {
-            return Err(anyhow::anyhow!("No tensors to contract"));
-        };
-        let mut result = (*first).clone();
-        for tensor in iter {
-            result = contract_pair(&result, tensor)?;
+        if same_dtype && has_non_dense_axis_classes && !has_retained_indices {
+            // Structured payload AD still relies on the existing pairwise structured
+            // path until structured N-ary planning is implemented.
+            let mut iter = tensors.iter();
+            let Some(first) = iter.next() else {
+                return Err(anyhow::anyhow!("No tensors to contract"));
+            };
+            let mut result = (*first).clone();
+            for tensor in iter {
+                result = contract_pair(&result, tensor)?;
+            }
+            return Ok(result);
         }
-        return Ok(result);
-    }
 
-    if any_grad {
         let operands = tensors
             .iter()
             .map(|tensor| tensor.as_inner())
@@ -841,7 +836,7 @@ fn execute_contraction_plan(
         .map(|(tensor, ids)| (tensor, *ids))
         .collect::<Vec<_>>();
     let result_native = einsum_native_tensor_reads(&operand_refs, &plan.output_ids)?;
-    IdxTensor::from_native_with_axis_classes(
+    IdxTensor::from_untracked_native_with_axis_classes(
         plan.result_indices.clone(),
         result_native,
         plan.result_axis_classes.clone(),

@@ -14,8 +14,10 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tenferro::{DType, DotGeneralConfig, Tensor as NativeTensor, TensorRead, TensorView};
-use tenferro_ad::EagerTensor;
+use tenferro::{
+    DType, DotGeneralConfig, Tensor as NativeTensor, TensorRead, TensorValue, TensorView,
+};
+use tenferro_ad::{extension::adopt_untracked_eager_value, EagerTensor};
 use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
 use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{
@@ -2857,6 +2859,20 @@ impl IdxTensor {
         )
     }
 
+    /// Adopt a backend-derived value whose result indices and axis classes were
+    /// validated by the contraction planner that produced it.
+    pub(crate) fn from_untracked_native_with_axis_classes(
+        indices: Vec<DynIndex>,
+        native: NativeTensor,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        Self::from_inner_with_validated_metadata(
+            indices,
+            adopt_untracked_eager_value(default_eager_ctx()?, TensorValue::from_tensor(native))?,
+            axis_classes,
+        )
+    }
+
     pub(crate) fn from_inner(indices: Vec<DynIndex>, inner: EagerTensor) -> Result<Self> {
         let axis_classes = Self::dense_axis_classes(indices.len());
         Self::from_inner_with_axis_classes(indices, inner, axis_classes)
@@ -3013,13 +3029,38 @@ impl IdxTensor {
         inner: EagerTensor,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
+        Self::from_inner_with_axis_classes_impl(indices, inner, axis_classes, false)
+    }
+
+    fn from_inner_with_validated_metadata(
+        indices: Vec<DynIndex>,
+        inner: EagerTensor,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        Self::from_inner_with_axis_classes_impl(indices, inner, axis_classes, true)
+    }
+
+    fn from_inner_with_axis_classes_impl(
+        indices: Vec<DynIndex>,
+        inner: EagerTensor,
+        axis_classes: Vec<usize>,
+        validated: bool,
+    ) -> Result<Self> {
         let dims = profile_pairwise_contract_section("from_inner_expected_dims", || {
             Self::expected_dims_from_indices(&indices)
         });
-        profile_pairwise_contract_section("from_inner_validate_indices", || {
-            Self::validate_indices(&indices)
-        })?;
-        Self::validate_axis_classes(&axis_classes, indices.len())?;
+        let dense_axis_classes = axis_classes.iter().copied().eq(0..indices.len());
+        if validated {
+            debug_assert!(Self::validate_indices(&indices).is_ok());
+            if !dense_axis_classes {
+                Self::validate_axis_classes(&axis_classes, indices.len())?;
+            }
+        } else {
+            profile_pairwise_contract_section("from_inner_validate_indices", || {
+                Self::validate_indices(&indices)
+            })?;
+            Self::validate_axis_classes(&axis_classes, indices.len())?;
+        }
         if dims != inner.shape() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
@@ -3032,7 +3073,7 @@ impl IdxTensor {
                 Self::validate_diag_dims(&dims)
             })?;
         }
-        let storage = if axis_classes == Self::dense_axis_classes(indices.len()) {
+        let storage = if dense_axis_classes {
             IdxTensorStorage::from_eager_dense(inner, indices.len())
         } else {
             let payload = Self::compact_inner_from_logical(&inner, &axis_classes)?;
@@ -3609,7 +3650,7 @@ impl IdxTensor {
                 contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)
             })?;
             return profile_pairwise_contract_section("from_native", || {
-                Self::from_native_with_axis_classes(
+                Self::from_untracked_native_with_axis_classes(
                     spec.result_indices.into_vec(),
                     result_native,
                     result_axis_classes,
@@ -3859,7 +3900,7 @@ impl IdxTensor {
             let other_native = other.try_materialized_inner()?.duplicate_value()?;
             let result_native =
                 contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)?;
-            return Self::from_native_with_axis_classes(
+            return Self::from_untracked_native_with_axis_classes(
                 spec.result_indices.into_vec(),
                 result_native,
                 result_axis_classes,
@@ -3922,7 +3963,7 @@ impl IdxTensor {
             let self_native = self.try_materialized_inner()?.duplicate_value()?;
             let other_native = other.try_materialized_inner()?.duplicate_value()?;
             let result_native = contract_native_tensor(&self_native, &[], &other_native, &[])?;
-            return Self::from_native_with_axis_classes(
+            return Self::from_untracked_native_with_axis_classes(
                 result_indices,
                 result_native,
                 result_axis_classes,
@@ -6151,6 +6192,13 @@ impl TensorConstructionLike for IdxTensor {
         data: Vec<AnyScalar>,
     ) -> std::result::Result<Self, Self::Error> {
         IdxTensor::from_dense_any(indices, data)
+    }
+
+    fn from_dense<T: TensorElement + Into<AnyScalar>>(
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::from_dense(indices, data)
     }
 
     fn stack_along_new_index(
