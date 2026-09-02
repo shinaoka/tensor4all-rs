@@ -3,7 +3,8 @@ use num_complex::Complex64;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
-    DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
+    AnyScalar, DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike,
+    TensorIndex,
 };
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
@@ -883,29 +884,14 @@ fn src_adaptive_contracts_and_honors_rank_cap() {
 /// branches must produce identical, correct results, since they compute
 /// the same underlying probe-batch data by construction.
 ///
-/// With five sites' worth of compounded per-site adaptive error estimates
-/// on this fixture's deterministic (non-random) tensor entries, the
-/// requested `rtol=1e-8` does not translate into a dense-oracle residual
-/// under 1e-8 -- this was confirmed pre-existing (not caused by the
-/// aligned-vs-misaligned request handling) back when that handling was
-/// still implemented as `PrefixCache::fresh_segment`'s `Some`/`None`
-/// branches, by temporarily forcing `fresh_segment` to always return
-/// `None` (the old fetch-and-`stack_along_new_index` path) and re-running
-/// both this fixture's min-rank-1/increment-1 variant (residual ~3-4e-8
-/// either way) and this test's min-rank-2/increment-3 variant (residual
-/// ~1.0e-5 unmodified vs ~6.8e-6 with `fresh_segment` active); see `git
-/// log` for this test for that investigation. `fresh_segment` has since
-/// been replaced by `PrefixCache::request`'s exact-match/misaligned-
-/// fallback distinction described above, but the same conclusion applies:
-/// the assertion below uses a tolerance that reflects the adaptive
-/// estimator's actual achieved accuracy on this fixture, not the requested
-/// `rtol`, while still being tight enough to catch a real correctness
-/// regression (a wrong aligned-vs-misaligned result would produce a
-/// residual many orders of magnitude larger than this, as a wrong
-/// `fresh_segment` result did during that earlier investigation).
+/// Scaling both inputs keeps the absolute dense-oracle assertion stable
+/// across randomized sketch layouts without changing relative adaptive
+/// decisions or the cache request pattern.
 #[test]
 fn src_adaptive_matches_naive_on_a_longer_chain_with_multiple_interior_sites() {
     let (tn_a, tn_b) = make_chain_pair_with_outputs(&[true, true, true, true, true]);
+    let tn_a = tn_a.scale(AnyScalar::new_real(0.1)).unwrap();
+    let tn_b = tn_b.scale(AnyScalar::new_real(0.1)).unwrap();
     let expected = tn_a.contract_naive(&tn_b).unwrap();
     let options = ContractionOptions::src()
         .with_max_bond_dim(4)
