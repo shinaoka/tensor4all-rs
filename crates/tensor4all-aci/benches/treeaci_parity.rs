@@ -5,7 +5,7 @@
 //! directly comparable, and a difference in fitted scaling exponent against bond
 //! dimension would be an algorithmic defect that no amount of interface work
 //! would fix. At small bond dimension almost all of the cost is a per-call
-//! constant, so such a defect is invisible there; this runs at 16 through 128.
+//! constant, so such a defect is invisible there; this runs at 16 through 256.
 //!
 //! Both arms start from the same first input, converted to their native network
 //! type. This keeps initialization, numerical state, and canonicalization work
@@ -30,7 +30,7 @@ const TOLERANCE: f64 = 1e-8;
 const MAX_BOND_DIM: usize = 4096;
 const MAX_SWEEPS: usize = 20;
 const MIN_SWEEPS: usize = 2;
-const CHI_VALUES: [usize; 4] = [16, 32, 64, 128];
+const CHI_VALUES: [usize; 5] = [16, 32, 64, 128, 256];
 const MAX_PARITY_ERROR_FACTOR: f64 = 10.0;
 
 fn link_dims(n_sites: usize, local_dim: usize, chi: usize) -> Vec<usize> {
@@ -211,32 +211,47 @@ fn accuracy_oracle(
     }
 }
 
-fn train_options(guess: Option<SimpleTensorTrain<f64>>) -> AciOptions<f64> {
+fn train_options(
+    guess: Option<SimpleTensorTrain<f64>>,
+    enable_global_guard: bool,
+) -> AciOptions<f64> {
     AciOptions {
         tolerance: TOLERANCE,
         max_bond_dim: Some(MAX_BOND_DIM),
         max_iters: MAX_SWEEPS,
         min_iters: MIN_SWEEPS,
         initial_guess: guess,
-        enable_global_guard: false,
+        enable_global_guard,
         ..AciOptions::default()
     }
 }
 
-fn tree_options(guess: Option<TreeTN<IdxTensor, usize>>) -> TreeAciOptions<usize> {
+fn tree_options(
+    guess: Option<TreeTN<IdxTensor, usize>>,
+    enable_global_guard: bool,
+) -> TreeAciOptions<usize> {
     TreeAciOptions {
         tolerance: TOLERANCE,
         max_bond_dim: Some(MAX_BOND_DIM),
         max_sweeps: MAX_SWEEPS,
         min_sweeps: MIN_SWEEPS,
         initial_guess: guess,
-        enable_global_guard: false,
+        enable_global_guard,
         ..TreeAciOptions::default()
     }
 }
 
 fn bench_parity(c: &mut Criterion) {
-    let mut group = c.benchmark_group("aci_vs_treeaci_chain");
+    // [AI Supplied] Keep the established no-Guard sweep comparison as the
+    // default, while allowing an explicit default-path run that includes the
+    // global guard without maintaining a second copy of this fixture.
+    let enable_global_guard = std::env::var_os("T4A_TREEACI_PARITY_ENABLE_GUARD").is_some();
+    let group_name = if enable_global_guard {
+        "aci_vs_treeaci_chain_guard"
+    } else {
+        "aci_vs_treeaci_chain"
+    };
+    let mut group = c.benchmark_group(group_name);
     group.sample_size(10);
 
     for chi in CHI_VALUES {
@@ -253,13 +268,13 @@ fn bench_parity(c: &mut Criterion) {
                 multiply_train(batch, output)
             },
             &case.trains,
-            &train_options(Some(case.trains[0].clone())),
+            &train_options(Some(case.trains[0].clone()), enable_global_guard),
         )
         .unwrap();
         let tree = tree_elementwise_batched::<f64, _, _>(
             multiply_tree,
             &case.trees,
-            &tree_options(Some(case.trees[0].clone())),
+            &tree_options(Some(case.trees[0].clone()), enable_global_guard),
         )
         .unwrap();
         let accuracy = accuracy_oracle(&case, &train, &tree);
@@ -303,7 +318,7 @@ fn bench_parity(c: &mut Criterion) {
                 elementwise_batched(
                     multiply_train,
                     black_box(&case.trains),
-                    &train_options(Some(case.trains[0].clone())),
+                    &train_options(Some(case.trains[0].clone()), enable_global_guard),
                 )
                 .unwrap()
             })
@@ -313,7 +328,7 @@ fn bench_parity(c: &mut Criterion) {
                 tree_elementwise_batched::<f64, _, _>(
                     multiply_tree,
                     black_box(&case.trees),
-                    &tree_options(Some(case.trees[0].clone())),
+                    &tree_options(Some(case.trees[0].clone()), enable_global_guard),
                 )
                 .unwrap()
             })

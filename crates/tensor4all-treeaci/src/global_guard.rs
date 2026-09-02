@@ -206,10 +206,18 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         return Ok(0);
     }
     let checkpoint = state.sample_arena.checkpoint();
+    #[cfg(test)]
+    let clone_started = std::time::Instant::now();
     let mut proposed_active = state.candidates.clone();
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.guard_candidate_clone += clone_started.elapsed();
+    });
     let mut injected = 0usize;
     let mut growth = vec![0usize; state.edge_ranks.len()];
     let staged = (|| {
+        #[cfg(test)]
+        let projection_started = std::time::Instant::now();
         for point in points {
             let activate_directed_cut = growth_capacity
                 .iter()
@@ -247,6 +255,10 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
                 }
             }
         }
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_projection += projection_started.elapsed();
+        });
         if growth
             .iter()
             .zip(growth_capacity)
@@ -259,11 +271,23 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         if injected == 0 {
             return Ok(None);
         }
+        #[cfg(test)]
+        let padding_started = std::time::Instant::now();
         let proposed_output = pad_output_bonds(state, &growth)?;
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_output_padding += padding_started.elapsed();
+        });
+        #[cfg(test)]
+        let frames_started = std::time::Instant::now();
         let proposed_frames =
             state
                 .input_frames
                 .extend(state.inputs, &state.problem, &state.sample_arena)?;
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_frame_extension += frames_started.elapsed();
+        });
         Ok(Some((proposed_output, proposed_frames)))
     })();
     let Some((proposed_output, proposed_frames)) = (match staged {
@@ -696,6 +720,8 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         coordinates: &[usize],
         hint: EvaluationHint<V>,
     ) -> Result<Vec<T>> {
+        #[cfg(test)]
+        let evaluation_started = std::time::Instant::now();
         let shape = [self.index_count, points.len()];
         let values = ColMajorArrayRef::new(coordinates, &shape).map_err(|error| {
             TreeAciError::Numerical {
@@ -722,6 +748,12 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                     })?;
             }
         }
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_input_evaluation += evaluation_started.elapsed();
+            stats.guard_input_points += points.len() * input_count;
+            stats.guard_input_calls += 1;
+        });
         Ok(result)
     }
 
@@ -825,13 +857,16 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         coordinates: &[usize],
         hint: EvaluationHint<V>,
     ) -> Result<Vec<T>> {
+        #[cfg(test)]
+        let evaluation_started = std::time::Instant::now();
         let shape = [input_evaluators.index_count, points.len()];
         let values = ColMajorArrayRef::new(coordinates, &shape).map_err(|error| {
             TreeAciError::Numerical {
                 message: error.to_string(),
             }
         })?;
-        self.evaluator
+        let result = self
+            .evaluator
             .evaluate_batched_with_hint(values, hint)?
             .into_iter()
             .map(|value| {
@@ -839,7 +874,14 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
                     message: message.into(),
                 })
             })
-            .collect()
+            .collect();
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_output_evaluation += evaluation_started.elapsed();
+            stats.guard_output_points += points.len();
+            stats.guard_output_calls += 1;
+        });
+        result
     }
 }
 

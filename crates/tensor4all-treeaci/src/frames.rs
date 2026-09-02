@@ -79,6 +79,17 @@ fn enforce_frame_working_elements_with_extra_bytes<T: TreeAciScalar, V: TreeAciN
     enforce_limit("working bytes", bytes, problem.max_working_bytes)
 }
 
+// [AI Supplied] Test-only A/B switch for aggregate candidate-cache cost.
+#[cfg(test)]
+fn candidate_cache_enabled() -> bool {
+    std::env::var("T4A_TREEACI_DISABLE_CANDIDATE_CACHE").as_deref() != Ok("1")
+}
+
+#[cfg(not(test))]
+fn candidate_cache_enabled() -> bool {
+    true
+}
+
 /// Test-only counter of `contract_prepared_core` invocations via the
 /// memoized `FrameBuilder::compute` path, used to prove
 /// `InputFrameStore::extend` recomputes only newly interned samples (see
@@ -296,6 +307,10 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         arena: &SampleArena,
         existing: Option<&Self>,
     ) -> Result<Self> {
+        #[cfg(test)]
+        let extension_profile = existing.is_some();
+        #[cfg(test)]
+        let extension_setup_started = std::time::Instant::now();
         let edge_count = problem.directed_edges.len();
         let sample_counts = (0..edge_count)
             .map(|edge| arena.directed_record_count(edge))
@@ -310,7 +325,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         // rather than reaching the ceiling first.
         let mut retained_bytes = 0usize;
         let mut records = 0usize;
+        #[cfg(test)]
+        if extension_profile {
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.frame_extension_calls += 1;
+                stats.frame_extension_setup += extension_setup_started.elapsed();
+            });
+        }
         for (input_index, input) in inputs.iter().enumerate() {
+            #[cfg(test)]
+            let input_setup_started = std::time::Instant::now();
             let existing_input = existing.and_then(|store| store.frames.get(input_index));
             let cores = match existing.and_then(|store| store.cores.get(input_index)) {
                 Some(cores) => Rc::clone(cores),
@@ -338,8 +362,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .iter()
                 .map(|&count| vec![None; count])
                 .collect::<Vec<_>>();
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_memo_slots += sample_counts.iter().sum::<usize>();
+                });
+            }
             let mut builder = FrameBuilder {
                 input,
+                #[cfg(test)]
+                input_index,
                 problem,
                 arena,
                 cores,
@@ -349,6 +381,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let bond_dims = (0..edge_count)
                 .map(|edge| builder.outgoing_bond(edge).map(IndexLike::dim))
                 .collect::<Result<Vec<_>>>()?;
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_setup += input_setup_started.elapsed();
+                });
+            }
 
             // Pass 1: account for every edge (in edge-index order, so the
             // running `retained_bytes` total and the point at which a
@@ -365,6 +403,8 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let mut input_frames: Vec<Option<Rc<DirectedFrame<T>>>> = vec![None; edge_count];
             let mut frame_elements = vec![0usize; edge_count];
             let mut known_samples = vec![0usize; edge_count];
+            #[cfg(test)]
+            let scan_started = std::time::Instant::now();
             for edge in 0..edge_count {
                 let sample_count = sample_counts[edge];
                 let bond_dim = bond_dims[edge];
@@ -423,6 +463,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     continue;
                 }
             }
+            #[cfg(test)]
+            if extension_profile {
+                let reused = input_frames.iter().filter(|frame| frame.is_some()).count();
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_scan += scan_started.elapsed();
+                    stats.frame_extension_scanned_edges += edge_count;
+                    stats.frame_extension_reused_edges += reused;
+                    stats.frame_extension_grown_edges += edge_count - reused;
+                });
+            }
 
             // Materialize missing edges only after their incoming frame
             // dependencies have been materialized. The old edge-index order
@@ -432,16 +482,26 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             // first materialization. `frame_order` is a topological order of
             // this directed-frame dependency graph, so a single-incoming
             // ancestor is fully batched before it is read by its dependent.
+            #[cfg(test)]
+            let compute_started = std::time::Instant::now();
             for &edge in frame_order {
                 if input_frames[edge].is_some() {
                     continue;
                 }
                 builder.compute_batch(edge, known_samples[edge]..sample_counts[edge])?;
             }
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_compute += compute_started.elapsed();
+                });
+            }
 
             // Pass 2: rebuild only the edges pass 1 left empty (grown or
             // brand new). Reused edges keep the `Rc` pass 1 put in their slot
             // and are not touched.
+            #[cfg(test)]
+            let rebuild_started = std::time::Instant::now();
             for edge in 0..edge_count {
                 if input_frames[edge].is_some() {
                     continue;
@@ -449,6 +509,14 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 let sample_count = sample_counts[edge];
                 let bond_dim = bond_dims[edge];
                 let previous = existing_input.and_then(|frames| frames.get(edge));
+                #[cfg(test)]
+                if extension_profile {
+                    crate::state::profile_debug_stats::record(|stats| {
+                        stats.frame_extension_old_values_copied += known_samples[edge] * bond_dim;
+                        stats.frame_extension_new_values_copied +=
+                            (sample_count - known_samples[edge]) * bond_dim;
+                    });
+                }
                 let mut data = Vec::with_capacity(frame_elements[edge]);
                 for sample in 0..sample_count {
                     // Samples at or above `known` were just materialized into
@@ -479,7 +547,15 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     values: data,
                 }));
             }
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_rebuild += rebuild_started.elapsed();
+                });
+            }
 
+            #[cfg(test)]
+            let finalize_started = std::time::Instant::now();
             let input_frames = input_frames
                 .into_iter()
                 .map(|frame| {
@@ -490,6 +566,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .collect::<Result<Vec<_>>>()?;
             all_inputs.push(input_frames);
             all_cores.push(builder.cores);
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_finalize += finalize_started.elapsed();
+                });
+            }
         }
         let (candidate_cache, candidate_cache_bytes) = match existing {
             Some(store) => (
@@ -528,12 +610,24 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             .saturating_add(self.candidate_cache_bytes.get())
     }
 
+    #[cfg(test)]
+    pub(crate) fn cache_debug_totals(&self) -> (usize, usize, usize) {
+        (
+            self.retained_bytes,
+            self.candidate_cache.borrow().len(),
+            self.candidate_cache_bytes.get(),
+        )
+    }
+
     fn cache_candidate_if_fits(
         &self,
         problem: &PreparedTreeProblem<impl TreeAciNode>,
         key: CandidateCacheKey,
         values: &[T],
     ) {
+        if !candidate_cache_enabled() {
+            return;
+        }
         let Some(entry_bytes) = values
             .len()
             .checked_mul(size_of::<T>())
@@ -561,6 +655,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     .set(candidate_bytes + entry_bytes);
             }
         }
+    }
+
+    fn cached_candidate(&self, key: &CandidateCacheKey) -> Option<Vec<T>> {
+        candidate_cache_enabled()
+            .then(|| self.candidate_cache.borrow().get(key).cloned())
+            .flatten()
     }
 
     fn candidate_cache_key<V: TreeAciNode>(
@@ -833,20 +933,22 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         let (mut diag_hits, mut diag_misses) = (0u64, 0u64);
+        #[cfg(test)]
+        let cache_scan_started = std::time::Instant::now();
         for (candidate_index, candidate) in candidates.iter().enumerate() {
             let key = self
                 .candidate_cache_key(problem, input, directed_edge, candidate)?
                 .ok_or(TreeAciError::InternalInvariant {
                     message: "single-incoming candidate has no compact cache key",
                 })?;
-            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            if let Some(cached) = self.cached_candidate(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
                 {
                     diag_hits += 1;
                 }
-                results[candidate_index] = Some(cached.clone());
+                results[candidate_index] = Some(cached);
                 continue;
             }
             #[cfg(test)]
@@ -865,8 +967,15 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
             pending.push((candidate_index, key));
         }
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.candidate_cache_scan += cache_scan_started.elapsed();
+            stats.candidate_scan_items += candidates.len();
+        });
 
         if !pending.is_empty() {
+            #[cfg(test)]
+            let group_setup_started = std::time::Instant::now();
             let mut incoming_ids = Vec::new();
             let mut incoming_positions = HashMap::new();
             for &(candidate_index, _) in &pending {
@@ -902,6 +1011,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 scratch,
                 physical_offset_bytes,
             )?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_group_setup += group_setup_started.elapsed();
+            });
+            #[cfg(test)]
+            let core_pack_started = std::time::Instant::now();
             let core_matrix = single_incoming_all_physical_core_matrix(
                 core,
                 outgoing_axis,
@@ -911,6 +1026,21 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 outgoing_dim,
                 incoming_dim,
             );
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_core_pack += core_pack_started.elapsed();
+                stats.candidate_core_pack_calls += 1;
+                stats.candidate_core_pack_values +=
+                    outgoing_dim * physical.local_dim * incoming_dim;
+            });
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record_core_pack_identity(
+                input,
+                directed_edge,
+                outgoing_dim * physical.local_dim * incoming_dim,
+            );
+            #[cfg(test)]
+            let frame_pack_started = std::time::Instant::now();
             let mut frame_data = Vec::with_capacity(incoming_dim * incoming_ids.len());
             for &sample in &incoming_ids {
                 let values = self.frame_slice(input, incoming_edge, sample)?;
@@ -923,7 +1053,29 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
             let frame_matrix =
                 Matrix::from_col_major_vec(incoming_dim, incoming_ids.len(), frame_data);
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_frame_pack += frame_pack_started.elapsed();
+            });
+            #[cfg(test)]
+            let backend_started = std::time::Instant::now();
+            // [AI Supplied] Test-only A/B for consuming the two ephemeral
+            // matrices instead of copying them through borrowed `mat_mul`.
+            #[cfg(test)]
+            let batched =
+                if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
+                    contract_prepared_core_batched_owned(core_matrix, frame_matrix)?
+                } else {
+                    contract_prepared_core_batched(&core_matrix, &frame_matrix)?
+                };
+            #[cfg(not(test))]
             let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_backend += backend_started.elapsed();
+            });
+            #[cfg(test)]
+            let result_cache_started = std::time::Instant::now();
             for (candidate_index, key) in pending {
                 let candidate = &candidates[candidate_index];
                 let column = incoming_positions[&candidate.incoming[0].1];
@@ -933,6 +1085,10 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 self.cache_candidate_if_fits(problem, key, &values);
                 results[candidate_index] = Some(values);
             }
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_result_cache += result_cache_started.elapsed();
+            });
         }
 
         #[cfg(feature = "diagnostics")]
@@ -1034,14 +1190,14 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .ok_or(TreeAciError::InternalInvariant {
                     message: "two-incoming candidate has no compact cache key",
                 })?;
-            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            if let Some(cached) = self.cached_candidate(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
                 {
                     diag_hits += 1;
                 }
-                results[candidate_index] = Some(cached.clone());
+                results[candidate_index] = Some(cached);
                 continue;
             }
             #[cfg(test)]
@@ -1199,7 +1355,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     message: "candidate frame references an unknown directed edge",
                 })?;
         if let Some(key) = cache_key {
-            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            if let Some(cached) = self.cached_candidate(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
@@ -1213,7 +1369,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     1,
                     0,
                 );
-                return Ok(cached.clone());
+                return Ok(cached);
             }
         }
         #[cfg(test)]
@@ -1264,6 +1420,8 @@ where
     V: TreeAciNode,
 {
     input: &'a TreeTN<IdxTensor, V>,
+    #[cfg(test)]
+    input_index: usize,
     problem: &'a PreparedTreeProblem<V>,
     arena: &'a SampleArena,
     cores: Rc<Vec<PreparedCore<T>>>,
@@ -1490,6 +1648,8 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             scratch,
             physical_offset_bytes,
         )?;
+        #[cfg(test)]
+        let core_pack_started = std::time::Instant::now();
         let core_matrix = single_incoming_all_physical_core_matrix(
             core,
             outgoing_axis,
@@ -1498,6 +1658,18 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             &physical_axes,
             outgoing_dim,
             incoming_dim,
+        );
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.stored_core_pack += core_pack_started.elapsed();
+            stats.stored_core_pack_calls += 1;
+            stats.stored_core_pack_values += outgoing_dim * physical.local_dim * incoming_dim;
+        });
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record_core_pack_identity(
+            self.input_index,
+            edge,
+            outgoing_dim * physical.local_dim * incoming_dim,
         );
         let mut frame_data = Vec::with_capacity(incoming_dim * incoming_ids.len());
         for &incoming_sample in &incoming_ids {
@@ -1514,6 +1686,15 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             frame_data.extend_from_slice(values);
         }
         let frame_matrix = Matrix::from_col_major_vec(incoming_dim, incoming_ids.len(), frame_data);
+        // [AI Supplied] Same diagnostic switch as the candidate path above:
+        // both matrices are newly assembled and dead after this contraction.
+        #[cfg(test)]
+        let batched = if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
+            contract_prepared_core_batched_owned(core_matrix, frame_matrix)?
+        } else {
+            contract_prepared_core_batched(&core_matrix, &frame_matrix)?
+        };
+        #[cfg(not(test))]
         let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
         for (sample, record) in pending {
             let incoming_sample = record.incoming[0].1;
@@ -1926,6 +2107,18 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
     incoming_frame_matrix: &Matrix<T>,
 ) -> Result<Matrix<T>> {
     tensor4all_tensorbackend::mat_mul(core_matrix, incoming_frame_matrix).map_err(|error| {
+        TreeAciError::Numerical {
+            message: error.to_string(),
+        }
+    })
+}
+
+#[cfg(test)]
+fn contract_prepared_core_batched_owned<T: TreeAciScalar>(
+    core_matrix: Matrix<T>,
+    incoming_frame_matrix: Matrix<T>,
+) -> Result<Matrix<T>> {
+    tensor4all_tensorbackend::mat_mul_owned(core_matrix, incoming_frame_matrix).map_err(|error| {
         TreeAciError::Numerical {
             message: error.to_string(),
         }

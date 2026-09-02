@@ -18,6 +18,33 @@ mod phase_timing {
     pub static TENSOR_VALUES_NS: AtomicU64 = AtomicU64::new(0);
     pub static RECONSTRUCT_NS: AtomicU64 = AtomicU64::new(0);
     pub static INSERT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BUILD_ENV_NS: AtomicU64 = AtomicU64::new(0);
+    pub static CENTER_NS: AtomicU64 = AtomicU64::new(0);
+    // [AI Supplied] Diagnostic-only split of immutable-capability checks and
+    // per-call assignment rebuilding inside `build_environment_cache`.
+    pub static RAW_CAPABILITY_NS: AtomicU64 = AtomicU64::new(0);
+    pub static ASSIGNMENT_BATCH_NS: AtomicU64 = AtomicU64::new(0);
+    pub static MESSAGE_LOOP_NS: AtomicU64 = AtomicU64::new(0);
+    pub static COMPONENT_ASSEMBLY_NS: AtomicU64 = AtomicU64::new(0);
+    // [AI Supplied] Diagnostic-only accounting for the per-center rooted
+    // metadata retained while Guard moves its evaluation hint across sites.
+    pub static PLAN_BUILD_NS: AtomicU64 = AtomicU64::new(0);
+    pub static LAYOUT_BUILD_NS: AtomicU64 = AtomicU64::new(0);
+    pub static PLAN_COUNT: AtomicU64 = AtomicU64::new(0);
+    pub static PLAN_SUBTREE_NODE_REFS: AtomicU64 = AtomicU64::new(0);
+    pub static LAYOUT_INPUT_POSITION_REFS: AtomicU64 = AtomicU64::new(0);
+    // [AI Supplied] Diagnostic-only value counts for distinguishing all-hit
+    // descendant reconstruction from the messages that reach the center.
+    pub static RECONSTRUCT_VALUES: AtomicU64 = AtomicU64::new(0);
+    pub static FINAL_ENV_VALUES: AtomicU64 = AtomicU64::new(0);
+    // [AI Supplied] Diagnostic-only split of the raw internal-center path.
+    pub static RAW_CENTER_PREP_NS: AtomicU64 = AtomicU64::new(0);
+    pub static RAW_CENTER_CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static RAW_CENTER_DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
+    pub static RAW_CENTER_PRELUDE_NS: AtomicU64 = AtomicU64::new(0);
+    pub static RAW_CENTER_RESULT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static RAW_CENTER_VALUES_COPIED: AtomicU64 = AtomicU64::new(0);
+    pub static RAW_CENTER_ASSIGNMENTS_COPIED: AtomicU64 = AtomicU64::new(0);
 
     pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
         counter.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
@@ -29,6 +56,26 @@ mod phase_timing {
         TENSOR_VALUES_NS.store(0, Ordering::Relaxed);
         RECONSTRUCT_NS.store(0, Ordering::Relaxed);
         INSERT_NS.store(0, Ordering::Relaxed);
+        BUILD_ENV_NS.store(0, Ordering::Relaxed);
+        CENTER_NS.store(0, Ordering::Relaxed);
+        RAW_CAPABILITY_NS.store(0, Ordering::Relaxed);
+        ASSIGNMENT_BATCH_NS.store(0, Ordering::Relaxed);
+        MESSAGE_LOOP_NS.store(0, Ordering::Relaxed);
+        COMPONENT_ASSEMBLY_NS.store(0, Ordering::Relaxed);
+        PLAN_BUILD_NS.store(0, Ordering::Relaxed);
+        LAYOUT_BUILD_NS.store(0, Ordering::Relaxed);
+        PLAN_COUNT.store(0, Ordering::Relaxed);
+        PLAN_SUBTREE_NODE_REFS.store(0, Ordering::Relaxed);
+        LAYOUT_INPUT_POSITION_REFS.store(0, Ordering::Relaxed);
+        RECONSTRUCT_VALUES.store(0, Ordering::Relaxed);
+        FINAL_ENV_VALUES.store(0, Ordering::Relaxed);
+        RAW_CENTER_PREP_NS.store(0, Ordering::Relaxed);
+        RAW_CENTER_CONTRACT_NS.store(0, Ordering::Relaxed);
+        RAW_CENTER_DISPATCH_NS.store(0, Ordering::Relaxed);
+        RAW_CENTER_PRELUDE_NS.store(0, Ordering::Relaxed);
+        RAW_CENTER_RESULT_NS.store(0, Ordering::Relaxed);
+        RAW_CENTER_VALUES_COPIED.store(0, Ordering::Relaxed);
+        RAW_CENTER_ASSIGNMENTS_COPIED.store(0, Ordering::Relaxed);
     }
 }
 
@@ -46,6 +93,13 @@ pub(crate) mod contraction_diagnostics {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     pub static BRANCH_SETUP_NS: AtomicU64 = AtomicU64::new(0);
+    // [AI Supplied] Diagnostic-only split around the two representation
+    // copies that precede the already-instrumented branch kernel.
+    pub static BRANCH_CHILD_DECODE_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_CHILD_GATHER_NS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_CHILD_DECODE_VALUES: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_CHILD_GATHER_VALUES: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_SETUP_VALUES: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_MATMUL_NS: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_ACCUMULATE_NS: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_BLAS_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -83,6 +137,11 @@ pub(crate) mod contraction_diagnostics {
     pub fn reset_all() {
         for counter in [
             &BRANCH_SETUP_NS,
+            &BRANCH_CHILD_DECODE_NS,
+            &BRANCH_CHILD_GATHER_NS,
+            &BRANCH_CHILD_DECODE_VALUES,
+            &BRANCH_CHILD_GATHER_VALUES,
+            &BRANCH_SETUP_VALUES,
             &BRANCH_MATMUL_NS,
             &BRANCH_ACCUMULATE_NS,
             &BRANCH_BLAS_CALLS,
@@ -107,13 +166,19 @@ pub(crate) mod contraction_diagnostics {
     /// Renders every counter as one human-readable line.
     pub fn summary() -> String {
         format!(
-            "branch: blas_calls={} blas_points={} blas_groups={} setup_ns={} matmul_ns={} accumulate_ns={} \
+            "branch: blas_calls={} blas_points={} blas_groups={} child_decode_ns={} child_gather_ns={} \
+             child_decode_values={} child_gather_values={} setup_values={} setup_ns={} matmul_ns={} accumulate_ns={} \
              scalar_calls={} scalar_points={} fast_axis[parent={} child1={} child2={} physical={}] \
              | chain: blas_calls={} blas_points={} contract_ns={} \
              scalar_calls={} scalar_points={}",
             BRANCH_BLAS_CALLS.load(Ordering::Relaxed),
             BRANCH_BLAS_POINTS.load(Ordering::Relaxed),
             BRANCH_BLAS_GROUPS.load(Ordering::Relaxed),
+            BRANCH_CHILD_DECODE_NS.load(Ordering::Relaxed),
+            BRANCH_CHILD_GATHER_NS.load(Ordering::Relaxed),
+            BRANCH_CHILD_DECODE_VALUES.load(Ordering::Relaxed),
+            BRANCH_CHILD_GATHER_VALUES.load(Ordering::Relaxed),
+            BRANCH_SETUP_VALUES.load(Ordering::Relaxed),
             BRANCH_SETUP_NS.load(Ordering::Relaxed),
             BRANCH_MATMUL_NS.load(Ordering::Relaxed),
             BRANCH_ACCUMULATE_NS.load(Ordering::Relaxed),
@@ -133,7 +198,7 @@ pub(crate) mod contraction_diagnostics {
 }
 
 use anyhow::{bail, ensure, Context, Result};
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tensor4all_core::{
     contract_with_options,
     index_key::{FlatIndexer, IndexKey},
@@ -178,6 +243,14 @@ struct ChainContractionSpec {
 /// dimensions `scalar_work` alone already justifies BLAS even for a single
 /// point per group (see `grouped_branch_message_contraction`).
 const BRANCH_BLAS_WORK_THRESHOLD: usize = 4096;
+
+// [AI Supplied] Test-only A/B seam for independently checking whether the
+// existing generic `contract_with_options` path can replace the specialized
+// raw message kernels without relying on historical worklog claims.
+#[cfg(test)]
+fn raw_message_kernels_disabled_for_test() -> bool {
+    std::env::var_os("T4A_TREETN_DISABLE_RAW_MESSAGES").is_some()
+}
 
 #[derive(Clone, Copy, Debug)]
 struct BranchContractionSpec {
@@ -257,24 +330,29 @@ struct StackedMessage {
 
 #[derive(Clone, Copy, Debug)]
 enum CachedScalar {
-    Real(f64),
-    Complex(Complex64),
+    F32(f32),
+    F64(f64),
+    C32(Complex32),
+    C64(Complex64),
 }
 
 impl CachedScalar {
-    fn from_any(value: AnyScalar) -> Self {
-        value
-            .as_c64()
-            .map(Self::Complex)
-            .unwrap_or_else(|| Self::Real(value.real()))
-    }
-
     fn into_any(self) -> AnyScalar {
         match self {
-            Self::Real(value) => AnyScalar::new_real(value),
-            Self::Complex(value) => AnyScalar::new_complex(value.re, value.im),
+            Self::F32(value) => AnyScalar::from_value(value),
+            Self::F64(value) => AnyScalar::from_value(value),
+            Self::C32(value) => AnyScalar::from_value(value),
+            Self::C64(value) => AnyScalar::from_value(value),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScalarKind {
+    F32,
+    F64,
+    C32,
+    C64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1117,14 +1195,23 @@ where
             }
             None => self.ensure_center(values)?.clone(),
         };
-        let (component_batches, environment_cache) =
-            self.build_environment_cache(&center, values)?;
-        let results = self.contract_center_for_points(
+        #[cfg(test)]
+        let environment_started = std::time::Instant::now();
+        let environment_result = self.build_environment_cache(&center, values);
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::BUILD_ENV_NS, environment_started.elapsed());
+        let (component_batches, environment_cache) = environment_result?;
+        #[cfg(test)]
+        let center_started = std::time::Instant::now();
+        let result = self.contract_center_for_points(
             &center,
             values,
             &component_batches,
             &environment_cache,
-        )?;
+        );
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::CENTER_NS, center_started.elapsed());
+        let results = result?;
         self.last_stats.batched_center_contract_count = 1;
         Ok(results)
     }
@@ -1149,8 +1236,37 @@ where
     ) -> Result<CacheBuildResult<V>> {
         self.last_stats = CachedEvaluationStats::default();
         if !self.rooted_plans.contains_key(center) {
+            #[cfg(test)]
+            let plan_build_started = std::time::Instant::now();
             let plan = Arc::new(RootedMessagePlan::new(self.tree, center)?);
+            #[cfg(test)]
+            {
+                use std::sync::atomic::Ordering;
+                phase_timing::add(&phase_timing::PLAN_BUILD_NS, plan_build_started.elapsed());
+                phase_timing::PLAN_COUNT.fetch_add(1, Ordering::Relaxed);
+                phase_timing::PLAN_SUBTREE_NODE_REFS.fetch_add(
+                    plan.subtree_nodes.values().map(Vec::len).sum::<usize>() as u64,
+                    Ordering::Relaxed,
+                );
+            }
+            #[cfg(test)]
+            let layout_build_started = std::time::Instant::now();
             let layouts = Arc::new(self.build_message_cache_layouts(&plan)?);
+            #[cfg(test)]
+            {
+                use std::sync::atomic::Ordering;
+                phase_timing::add(
+                    &phase_timing::LAYOUT_BUILD_NS,
+                    layout_build_started.elapsed(),
+                );
+                phase_timing::LAYOUT_INPUT_POSITION_REFS.fetch_add(
+                    layouts
+                        .values()
+                        .map(|layout| layout.input_positions.len())
+                        .sum::<usize>() as u64,
+                    Ordering::Relaxed,
+                );
+            }
             self.rooted_plans.insert(center.clone(), plan);
             self.message_cache_layouts_by_center
                 .insert(center.clone(), layouts);
@@ -1165,9 +1281,25 @@ where
                 .get(center)
                 .ok_or_else(|| anyhow::anyhow!("missing message cache layouts"))?,
         );
+        #[cfg(test)]
+        let raw_capability_started = std::time::Instant::now();
         self.raw_messages = self.can_use_raw_messages(center)?;
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::RAW_CAPABILITY_NS,
+            raw_capability_started.elapsed(),
+        );
+        #[cfg(test)]
+        let assignment_batch_started = std::time::Instant::now();
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::ASSIGNMENT_BATCH_NS,
+            assignment_batch_started.elapsed(),
+        );
 
+        #[cfg(test)]
+        let message_loop_started = std::time::Instant::now();
         let mut messages = HashMap::<V, StackedMessage>::new();
         let mut directed_message_count = 0usize;
         let mut batched_message_contract_count = 0usize;
@@ -1187,7 +1319,14 @@ where
             batched_message_contract_count += 1;
             messages.insert(node.clone(), node_message);
         }
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::MESSAGE_LOOP_NS,
+            message_loop_started.elapsed(),
+        );
 
+        #[cfg(test)]
+        let component_assembly_started = std::time::Instant::now();
         let mut component_batches = Vec::new();
         let mut cache = HashMap::new();
         let mut subtree_environment_count = 0usize;
@@ -1204,6 +1343,12 @@ where
                     neighbor
                 )
             })?;
+            #[cfg(test)]
+            if let Some(raw_values) = environment.raw_values.as_ref() {
+                use std::sync::atomic::Ordering;
+                phase_timing::FINAL_ENV_VALUES
+                    .fetch_add(raw_values.len() as u64, Ordering::Relaxed);
+            }
             subtree_environment_count += assignment_batch.first_points.len();
             cache.insert(neighbor.clone(), environment);
             component_batches.push(ComponentBatch {
@@ -1211,6 +1356,11 @@ where
                 point_to_assignment: assignment_batch.point_to_assignment.clone(),
             });
         }
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::COMPONENT_ASSEMBLY_NS,
+            component_assembly_started.elapsed(),
+        );
         self.last_stats.subtree_environment_count = subtree_environment_count;
         self.last_stats.directed_message_count = directed_message_count;
         self.last_stats.batched_message_contract_count = batched_message_contract_count;
@@ -1320,6 +1470,10 @@ where
     }
 
     fn can_use_raw_messages(&self, center: &V) -> Result<bool> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(false);
+        }
         let neighbors = sorted_neighbors(self.tree);
         if !neighbors.contains_key(center) {
             return Ok(false);
@@ -1338,22 +1492,28 @@ where
         {
             return Ok(false);
         }
-        let mut scalar_is_complex = None;
+        let mut scalar_kind = None;
         for (node, node_neighbors) in &neighbors {
             let tensor = tensor_for_node(self.tree, node)?;
             if tensor.indices().len() != node_neighbors.len() + 1 {
                 return Ok(false);
             }
-            let is_complex = tensor.is_complex();
-            if let Some(previous) = scalar_is_complex {
-                if previous != is_complex {
+            let kind = tensor_scalar_kind(tensor)?;
+            if let Some(previous) = scalar_kind {
+                if previous != kind {
                     return Ok(false);
                 }
             } else {
-                scalar_is_complex = Some(is_complex);
+                scalar_kind = Some(kind);
             }
         }
-        Ok(true)
+        // The specialized raw kernels currently operate on the two 64-bit
+        // scalar kinds. The generic contraction path below preserves f32/c32;
+        // do not route those tensors through mismatched f64/c64 readers.
+        Ok(matches!(
+            scalar_kind,
+            Some(ScalarKind::F64 | ScalarKind::C64)
+        ))
     }
 
     fn message_cache_key(
@@ -1405,6 +1565,10 @@ where
         values: ColMajorArrayRef<'_, usize>,
         points: &[usize],
     ) -> Result<Option<Vec<f64>>> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
         let entries = self
             .layout
             .entries_by_node
@@ -1465,6 +1629,10 @@ where
         values: ColMajorArrayRef<'_, usize>,
         points: &[usize],
     ) -> Result<Option<Vec<Complex64>>> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
         let entries = self
             .layout
             .entries_by_node
@@ -1798,6 +1966,8 @@ where
             // dominates a branch node's contraction time at realistic bond
             // dimensions (setup_ns >> matmul_ns).
             let left_len = parent_dim * child_dim_2 * child_dim_1;
+            #[cfg(feature = "diagnostics")]
+            contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_SETUP_VALUES, left_len);
             let mut left = vec![T::default(); left_len];
             let physical_base = physical_value * strides[physical_axis];
             if strides[child_axis_2] == 1 {
@@ -1957,6 +2127,10 @@ where
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
     ) -> Result<Option<Vec<f64>>> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
         let entries = self
             .layout
             .entries_by_node
@@ -2008,7 +2182,7 @@ where
         let child_values = if let Some(raw_values) = &child_message.raw_values {
             let mut values = Vec::with_capacity(raw_values.len());
             for value in raw_values {
-                let CachedScalar::Real(value) = value else {
+                let CachedScalar::F64(value) = value else {
                     return Ok(None);
                 };
                 values.push(*value);
@@ -2099,6 +2273,10 @@ where
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
     ) -> Result<Option<Vec<Complex64>>> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
         let entries = self
             .layout
             .entries_by_node
@@ -2150,7 +2328,7 @@ where
         let child_values = if let Some(raw_values) = &child_message.raw_values {
             let mut values = Vec::with_capacity(raw_values.len());
             for value in raw_values {
-                let CachedScalar::Complex(value) = value else {
+                let CachedScalar::C64(value) = value else {
                     return Ok(None);
                 };
                 values.push(*value);
@@ -2244,6 +2422,10 @@ where
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
     ) -> Result<Option<Vec<f64>>> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
         let entries = self
             .layout
             .entries_by_node
@@ -2299,6 +2481,11 @@ where
             return Ok(None);
         };
 
+        // [AI Supplied] Diagnostic split: `raw_values` is already one packed
+        // message buffer, but the dynamic enum representation is decoded into
+        // a second typed buffer before the requested columns are gathered.
+        #[cfg(feature = "diagnostics")]
+        let child_decode_started = std::time::Instant::now();
         let child_1_message = messages.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing message for child {:?}",
@@ -2308,7 +2495,7 @@ where
         let child_1_values = if let Some(raw_values) = &child_1_message.raw_values {
             let mut values = Vec::with_capacity(raw_values.len());
             for value in raw_values {
-                let CachedScalar::Real(value) = value else {
+                let CachedScalar::F64(value) = value else {
                     return Ok(None);
                 };
                 values.push(*value);
@@ -2332,7 +2519,7 @@ where
         let child_2_values = if let Some(raw_values) = &child_2_message.raw_values {
             let mut values = Vec::with_capacity(raw_values.len());
             for value in raw_values {
-                let CachedScalar::Real(value) = value else {
+                let CachedScalar::F64(value) = value else {
                     return Ok(None);
                 };
                 values.push(*value);
@@ -2347,6 +2534,17 @@ where
             }
             tensor.to_vec::<f64>()?
         };
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::add(
+                &contraction_diagnostics::BRANCH_CHILD_DECODE_NS,
+                child_decode_started.elapsed(),
+            );
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_CHILD_DECODE_VALUES,
+                child_1_values.len() + child_2_values.len(),
+            );
+        }
 
         let child_1_assignment_batch = assignment_batches.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
@@ -2386,6 +2584,8 @@ where
             child_dim_1,
             child_dim_2,
         };
+        #[cfg(feature = "diagnostics")]
+        let child_gather_started = std::time::Instant::now();
         let mut physical_values = Vec::with_capacity(points.len());
         let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
         let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
@@ -2432,6 +2632,17 @@ where
                     .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
             );
         }
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::add(
+                &contraction_diagnostics::BRANCH_CHILD_GATHER_NS,
+                child_gather_started.elapsed(),
+            );
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_CHILD_GATHER_VALUES,
+                child_1_columns.len() + child_2_columns.len(),
+            );
+        }
         let result = tensor.with_dense_slice::<f64, _>(|raw| {
             Self::grouped_branch_message_contraction(
                 spec,
@@ -2454,6 +2665,10 @@ where
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
     ) -> Result<Option<Vec<Complex64>>> {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
         let entries = self
             .layout
             .entries_by_node
@@ -2509,6 +2724,9 @@ where
             return Ok(None);
         };
 
+        // [AI Supplied] Complex counterpart of the diagnostic split above.
+        #[cfg(feature = "diagnostics")]
+        let child_decode_started = std::time::Instant::now();
         let child_1_message = messages.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing message for child {:?}",
@@ -2518,7 +2736,7 @@ where
         let child_1_values = if let Some(raw_values) = &child_1_message.raw_values {
             let mut values = Vec::with_capacity(raw_values.len());
             for value in raw_values {
-                let CachedScalar::Complex(value) = value else {
+                let CachedScalar::C64(value) = value else {
                     return Ok(None);
                 };
                 values.push(*value);
@@ -2542,7 +2760,7 @@ where
         let child_2_values = if let Some(raw_values) = &child_2_message.raw_values {
             let mut values = Vec::with_capacity(raw_values.len());
             for value in raw_values {
-                let CachedScalar::Complex(value) = value else {
+                let CachedScalar::C64(value) = value else {
                     return Ok(None);
                 };
                 values.push(*value);
@@ -2557,6 +2775,17 @@ where
             }
             tensor.to_vec::<Complex64>()?
         };
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::add(
+                &contraction_diagnostics::BRANCH_CHILD_DECODE_NS,
+                child_decode_started.elapsed(),
+            );
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_CHILD_DECODE_VALUES,
+                child_1_values.len() + child_2_values.len(),
+            );
+        }
 
         let child_1_assignment_batch = assignment_batches.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
@@ -2596,6 +2825,8 @@ where
             child_dim_1,
             child_dim_2,
         };
+        #[cfg(feature = "diagnostics")]
+        let child_gather_started = std::time::Instant::now();
         let mut physical_values = Vec::with_capacity(points.len());
         let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
         let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
@@ -2642,6 +2873,17 @@ where
                     .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
             );
         }
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::add(
+                &contraction_diagnostics::BRANCH_CHILD_GATHER_NS,
+                child_gather_started.elapsed(),
+            );
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_CHILD_GATHER_VALUES,
+                child_1_columns.len() + child_2_columns.len(),
+            );
+        }
         let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
             Self::grouped_branch_message_contraction(
                 spec,
@@ -2652,6 +2894,25 @@ where
             )
         })??;
         Ok(Some(result))
+    }
+
+    fn compute_generic_cached_message_values(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+    ) -> Result<Vec<CachedScalar>> {
+        let missing_message =
+            self.compute_stacked_message(node, values, points, plan, assignment_batches, messages)?;
+        tensor_values_cached(
+            missing_message
+                .tensor
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("generic message did not materialize a tensor"))?,
+        )
     }
 
     /// Computes `node`'s directed message toward its parent, consulting the
@@ -2779,6 +3040,12 @@ where
                 for position in positions {
                     data.extend_from_slice(cache.column(position));
                 }
+                #[cfg(test)]
+                {
+                    use std::sync::atomic::Ordering;
+                    phase_timing::RECONSTRUCT_VALUES
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
+                }
                 let (tensor, raw_values) = if self.raw_messages {
                     (None, Some(data))
                 } else {
@@ -2849,97 +3116,93 @@ where
             .collect::<Vec<_>>();
         #[cfg(test)]
         let contract_start = std::time::Instant::now();
-        let tensor_is_complex = tensor_for_node(self.tree, node)?.is_complex();
-        let missing_values: Vec<CachedScalar> = if tensor_is_complex {
-            let leaf = self.try_compute_leaf_message_complex_raw(node, values, &missing_points)?;
-            let chain = if leaf.is_some() {
-                leaf
-            } else {
-                self.try_compute_chain_message_complex_raw(
-                    node,
-                    values,
-                    &missing_points,
-                    plan,
-                    assignment_batches,
-                    messages,
-                )?
-            };
-            let raw_missing_values = if chain.is_some() {
-                chain
-            } else {
-                self.try_compute_branch_message_complex_raw(
-                    node,
-                    values,
-                    &missing_points,
-                    plan,
-                    assignment_batches,
-                    messages,
-                )?
-            };
-            match raw_missing_values {
-                Some(raw) => raw.into_iter().map(CachedScalar::Complex).collect(),
-                None => {
-                    let missing_message = self.compute_stacked_message(
+        let tensor_kind = tensor_scalar_kind(tensor_for_node(self.tree, node)?)?;
+        let missing_values: Vec<CachedScalar> = match tensor_kind {
+            ScalarKind::C64 => {
+                let leaf =
+                    self.try_compute_leaf_message_complex_raw(node, values, &missing_points)?;
+                let chain = if leaf.is_some() {
+                    leaf
+                } else {
+                    self.try_compute_chain_message_complex_raw(
                         node,
                         values,
                         &missing_points,
                         plan,
                         assignment_batches,
                         messages,
-                    )?;
-                    tensor_values_any(missing_message.tensor.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!("generic message did not materialize a tensor")
-                    })?)?
-                    .into_iter()
-                    .map(CachedScalar::from_any)
-                    .collect()
-                }
-            }
-        } else {
-            let leaf = self.try_compute_leaf_message_raw(node, values, &missing_points)?;
-            let chain = if leaf.is_some() {
-                leaf
-            } else {
-                self.try_compute_chain_message_raw(
-                    node,
-                    values,
-                    &missing_points,
-                    plan,
-                    assignment_batches,
-                    messages,
-                )?
-            };
-            let raw_missing_values = if chain.is_some() {
-                chain
-            } else {
-                self.try_compute_branch_message_raw(
-                    node,
-                    values,
-                    &missing_points,
-                    plan,
-                    assignment_batches,
-                    messages,
-                )?
-            };
-            match raw_missing_values {
-                Some(raw) => raw.into_iter().map(CachedScalar::Real).collect(),
-                None => {
-                    let missing_message = self.compute_stacked_message(
+                    )?
+                };
+                let raw_missing_values = if chain.is_some() {
+                    chain
+                } else {
+                    self.try_compute_branch_message_complex_raw(
                         node,
                         values,
                         &missing_points,
                         plan,
                         assignment_batches,
                         messages,
-                    )?;
-                    tensor_values_any(missing_message.tensor.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!("generic message did not materialize a tensor")
-                    })?)?
-                    .into_iter()
-                    .map(CachedScalar::from_any)
-                    .collect()
+                    )?
+                };
+                match raw_missing_values {
+                    Some(raw) => raw.into_iter().map(CachedScalar::C64).collect(),
+                    None => self.compute_generic_cached_message_values(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?,
                 }
             }
+            ScalarKind::F64 => {
+                let leaf = self.try_compute_leaf_message_raw(node, values, &missing_points)?;
+                let chain = if leaf.is_some() {
+                    leaf
+                } else {
+                    self.try_compute_chain_message_raw(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?
+                };
+                let raw_missing_values = if chain.is_some() {
+                    chain
+                } else {
+                    self.try_compute_branch_message_raw(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?
+                };
+                match raw_missing_values {
+                    Some(raw) => raw.into_iter().map(CachedScalar::F64).collect(),
+                    None => self.compute_generic_cached_message_values(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                    )?,
+                }
+            }
+            ScalarKind::F32 | ScalarKind::C32 => self.compute_generic_cached_message_values(
+                node,
+                values,
+                &missing_points,
+                plan,
+                assignment_batches,
+                messages,
+            )?,
         };
         #[cfg(test)]
         phase_timing::add(&phase_timing::CONTRACT_NS, contract_start.elapsed());
@@ -3014,6 +3277,11 @@ where
             missing_slot_iter.next().is_none(),
             "TreeTNCachedEvaluator::evaluate_batched: extra cache slots after merge"
         );
+        #[cfg(test)]
+        {
+            use std::sync::atomic::Ordering;
+            phase_timing::RECONSTRUCT_VALUES.fetch_add(data.len() as u64, Ordering::Relaxed);
+        }
         let (tensor, raw_values) = if self.raw_messages {
             (None, Some(data))
         } else {
@@ -3178,41 +3446,45 @@ where
         let center_strides = [1usize, center_dims[0]];
         let n_points = values.shape()[1];
 
-        if center_tensor.is_complex() {
-            let center_raw = center_tensor.to_vec::<Complex64>()?;
-            let mut result = Vec::with_capacity(n_points);
-            for point in 0..n_points {
-                let physical_value = value_at(
-                    values,
-                    entry.input_position,
-                    point,
-                    "TreeTNCachedEvaluator::try_contract_leaf_center_from_raw",
-                )?;
-                let assignment = component
-                    .point_to_assignment
-                    .get(point)
-                    .copied()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("missing centre assignment for point {point}")
-                    })?;
-                ensure!(
+        match tensor_scalar_kind(center_tensor)? {
+            ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
+            ScalarKind::F64 => {}
+            ScalarKind::C64 => {
+                let center_raw = center_tensor.to_vec::<Complex64>()?;
+                let mut result = Vec::with_capacity(n_points);
+                for point in 0..n_points {
+                    let physical_value = value_at(
+                        values,
+                        entry.input_position,
+                        point,
+                        "TreeTNCachedEvaluator::try_contract_leaf_center_from_raw",
+                    )?;
+                    let assignment = component
+                        .point_to_assignment
+                        .get(point)
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("missing centre assignment for point {point}")
+                        })?;
+                    ensure!(
                     assignment < assignment_dim,
                     "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
                 );
-                let mut sum = Complex64::new(0.0, 0.0);
-                for bond in 0..bond_dim {
-                    let center_offset = physical_value * center_strides[physical_axis]
-                        + bond * center_strides[bond_axis];
-                    let environment_offset = assignment * bond_dim + bond;
-                    let CachedScalar::Complex(environment_value) = raw_values[environment_offset]
-                    else {
-                        return Ok(None);
-                    };
-                    sum += center_raw[center_offset] * environment_value;
+                    let mut sum = Complex64::new(0.0, 0.0);
+                    for bond in 0..bond_dim {
+                        let center_offset = physical_value * center_strides[physical_axis]
+                            + bond * center_strides[bond_axis];
+                        let environment_offset = assignment * bond_dim + bond;
+                        let CachedScalar::C64(environment_value) = raw_values[environment_offset]
+                        else {
+                            return Ok(None);
+                        };
+                        sum += center_raw[center_offset] * environment_value;
+                    }
+                    result.push(AnyScalar::new_complex(sum.re, sum.im));
                 }
-                result.push(AnyScalar::new_complex(sum.re, sum.im));
+                return Ok(Some(result));
             }
-            return Ok(Some(result));
         }
 
         let center_raw = center_tensor.to_vec::<f64>()?;
@@ -3238,7 +3510,7 @@ where
                 let center_offset = physical_value * center_strides[physical_axis]
                     + bond * center_strides[bond_axis];
                 let environment_offset = assignment * bond_dim + bond;
-                let CachedScalar::Real(environment_value) = raw_values[environment_offset] else {
+                let CachedScalar::F64(environment_value) = raw_values[environment_offset] else {
                     return Ok(None);
                 };
                 sum += center_raw[center_offset] * environment_value;
@@ -3314,42 +3586,47 @@ where
         let environment_strides = [1usize, environment_dims[0]];
         let physical_position = entry.input_position;
 
-        if center_tensor.is_complex() != environment_tensor.is_complex() {
+        let center_kind = tensor_scalar_kind(center_tensor)?;
+        if center_kind != tensor_scalar_kind(environment_tensor)? {
             return Ok(None);
         }
-        if center_tensor.is_complex() {
-            let center_raw = center_tensor.to_vec::<Complex64>()?;
-            let environment_raw = environment_tensor.to_vec::<Complex64>()?;
-            let mut result = Vec::with_capacity(n_points);
-            for point in 0..n_points {
-                let physical_value = value_at(
-                    values,
-                    physical_position,
-                    point,
-                    "TreeTNCachedEvaluator::try_contract_leaf_center_raw",
-                )?;
-                let assignment = component
-                    .point_to_assignment
-                    .get(point)
-                    .copied()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("missing centre assignment for point {point}")
-                    })?;
-                ensure!(
+        match center_kind {
+            ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
+            ScalarKind::F64 => {}
+            ScalarKind::C64 => {
+                let center_raw = center_tensor.to_vec::<Complex64>()?;
+                let environment_raw = environment_tensor.to_vec::<Complex64>()?;
+                let mut result = Vec::with_capacity(n_points);
+                for point in 0..n_points {
+                    let physical_value = value_at(
+                        values,
+                        physical_position,
+                        point,
+                        "TreeTNCachedEvaluator::try_contract_leaf_center_raw",
+                    )?;
+                    let assignment = component
+                        .point_to_assignment
+                        .get(point)
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("missing centre assignment for point {point}")
+                        })?;
+                    ensure!(
                     assignment < assignment_dim,
                     "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
                 );
-                let mut sum = Complex64::new(0.0, 0.0);
-                for bond in 0..bond_dim {
-                    let center_offset = physical_value * center_strides[physical_axis]
-                        + bond * center_strides[bond_axis];
-                    let environment_offset = bond * environment_strides[environment_bond_axis]
-                        + assignment * environment_strides[assignment_axis];
-                    sum += center_raw[center_offset] * environment_raw[environment_offset];
+                    let mut sum = Complex64::new(0.0, 0.0);
+                    for bond in 0..bond_dim {
+                        let center_offset = physical_value * center_strides[physical_axis]
+                            + bond * center_strides[bond_axis];
+                        let environment_offset = bond * environment_strides[environment_bond_axis]
+                            + assignment * environment_strides[assignment_axis];
+                        sum += center_raw[center_offset] * environment_raw[environment_offset];
+                    }
+                    result.push(AnyScalar::new_complex(sum.re, sum.im));
                 }
-                result.push(AnyScalar::new_complex(sum.re, sum.im));
+                return Ok(Some(result));
             }
-            return Ok(Some(result));
         }
 
         let center_raw = center_tensor.to_vec::<f64>()?;
@@ -3399,6 +3676,8 @@ where
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
     ) -> Result<Option<Vec<AnyScalar>>> {
+        #[cfg(test)]
+        let prelude_started = std::time::Instant::now();
         if !(2..=3).contains(&component_batches.len()) {
             return Ok(None);
         }
@@ -3432,49 +3711,81 @@ where
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::RAW_CENTER_PRELUDE_NS,
+            prelude_started.elapsed(),
+        );
 
-        if center_tensor.is_complex() {
-            let Some(components) = self.raw_center_components::<Complex64>(
-                center,
-                component_batches,
-                environment_cache,
-                |value| match value {
-                    CachedScalar::Complex(value) => Some(*value),
-                    CachedScalar::Real(_) => None,
-                },
-            )?
-            else {
-                return Ok(None);
-            };
-            let result = center_tensor.with_dense_slice::<Complex64, _>(|core| {
-                contract_raw_center(
-                    core,
-                    &center_tensor.dims(),
-                    physical_axis,
-                    &physical_values,
-                    &components,
-                )
-            })??;
-            return Ok(Some(
-                result
+        match tensor_scalar_kind(center_tensor)? {
+            ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
+            ScalarKind::F64 => {}
+            ScalarKind::C64 => {
+                #[cfg(test)]
+                let prep_started = std::time::Instant::now();
+                let Some(components) = self.raw_center_components::<Complex64>(
+                    center,
+                    component_batches,
+                    environment_cache,
+                    |value| match value {
+                        CachedScalar::C64(value) => Some(*value),
+                        _ => None,
+                    },
+                )?
+                else {
+                    return Ok(None);
+                };
+                #[cfg(test)]
+                phase_timing::add(&phase_timing::RAW_CENTER_PREP_NS, prep_started.elapsed());
+                #[cfg(test)]
+                let contract_started = std::time::Instant::now();
+                let result = center_tensor.with_dense_slice::<Complex64, _>(|core| {
+                    contract_raw_center(
+                        core,
+                        &center_tensor.dims(),
+                        physical_axis,
+                        &physical_values,
+                        &components,
+                    )
+                })??;
+                #[cfg(test)]
+                phase_timing::add(
+                    &phase_timing::RAW_CENTER_CONTRACT_NS,
+                    contract_started.elapsed(),
+                );
+                #[cfg(test)]
+                let result_started = std::time::Instant::now();
+                let result = result
                     .into_iter()
                     .map(|value| AnyScalar::new_complex(value.re, value.im))
-                    .collect(),
-            ));
+                    .collect();
+                #[cfg(test)]
+                phase_timing::add(
+                    &phase_timing::RAW_CENTER_RESULT_NS,
+                    result_started.elapsed(),
+                );
+                return Ok(Some(result));
+            }
         }
 
+        #[cfg(test)]
+        let prep_started = std::time::Instant::now();
         let Some(components) = self.raw_center_components::<f64>(
             center,
             component_batches,
             environment_cache,
             |value| match value {
-                CachedScalar::Real(value) => Some(*value),
-                CachedScalar::Complex(_) => None,
+                CachedScalar::F64(value) => Some(*value),
+                _ => None,
             },
         )?
         else {
             return Ok(None);
         };
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::RAW_CENTER_PREP_NS, prep_started.elapsed());
+        #[cfg(test)]
+        let contract_started = std::time::Instant::now();
         let result = center_tensor.with_dense_slice::<f64, _>(|core| {
             contract_raw_center(
                 core,
@@ -3484,7 +3795,20 @@ where
                 &components,
             )
         })??;
-        Ok(Some(result.into_iter().map(AnyScalar::new_real).collect()))
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::RAW_CENTER_CONTRACT_NS,
+            contract_started.elapsed(),
+        );
+        #[cfg(test)]
+        let result_started = std::time::Instant::now();
+        let result = result.into_iter().map(AnyScalar::new_real).collect();
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::RAW_CENTER_RESULT_NS,
+            result_started.elapsed(),
+        );
+        Ok(Some(result))
     }
 
     fn raw_center_components<T>(
@@ -3531,6 +3855,14 @@ where
             let Some(values) = raw_values.iter().map(&convert).collect::<Option<Vec<_>>>() else {
                 return Ok(None);
             };
+            #[cfg(test)]
+            {
+                use std::sync::atomic::Ordering;
+                phase_timing::RAW_CENTER_VALUES_COPIED
+                    .fetch_add(values.len() as u64, Ordering::Relaxed);
+                phase_timing::RAW_CENTER_ASSIGNMENTS_COPIED
+                    .fetch_add(batch.point_to_assignment.len() as u64, Ordering::Relaxed);
+            }
             ensure!(
                 dim > 0 && values.len() % dim == 0,
                 "raw center environment length {} is incompatible with bond dimension {dim}",
@@ -3567,12 +3899,20 @@ where
         {
             return Ok(result);
         }
-        if let Some(result) = self.try_contract_internal_center_raw(
+        #[cfg(test)]
+        let raw_dispatch_started = std::time::Instant::now();
+        let raw_internal_result = self.try_contract_internal_center_raw(
             center,
             values,
             component_batches,
             environment_cache,
-        )? {
+        );
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::RAW_CENTER_DISPATCH_NS,
+            raw_dispatch_started.elapsed(),
+        );
+        if let Some(result) = raw_internal_result? {
             return Ok(result);
         }
         let center_entries = self
@@ -3692,8 +4032,8 @@ fn tensor_from_cached_values(
     if let Some(data) = values
         .iter()
         .map(|value| match value {
-            CachedScalar::Real(value) => Some(*value),
-            CachedScalar::Complex(_) => None,
+            CachedScalar::F32(value) => Some(*value),
+            _ => None,
         })
         .collect::<Option<Vec<_>>>()
     {
@@ -3702,8 +4042,28 @@ fn tensor_from_cached_values(
     if let Some(data) = values
         .iter()
         .map(|value| match value {
-            CachedScalar::Complex(value) => Some(*value),
-            CachedScalar::Real(_) => None,
+            CachedScalar::F64(value) => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        return Ok(IdxTensor::from_dense(indices, data)?);
+    }
+    if let Some(data) = values
+        .iter()
+        .map(|value| match value {
+            CachedScalar::C32(value) => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        return Ok(IdxTensor::from_dense(indices, data)?);
+    }
+    if let Some(data) = values
+        .iter()
+        .map(|value| match value {
+            CachedScalar::C64(value) => Some(*value),
+            _ => None,
         })
         .collect::<Option<Vec<_>>>()
     {
@@ -4154,6 +4514,23 @@ where
         .ok_or_else(|| anyhow::anyhow!("tensor for node {:?} is not present", node))
 }
 
+fn tensor_scalar_kind(tensor: &IdxTensor) -> Result<ScalarKind> {
+    if tensor.is_f32() {
+        Ok(ScalarKind::F32)
+    } else if tensor.is_f64() {
+        Ok(ScalarKind::F64)
+    } else if tensor.is_c32() {
+        Ok(ScalarKind::C32)
+    } else if tensor.is_c64() {
+        Ok(ScalarKind::C64)
+    } else {
+        bail!(
+            "TreeTNCachedEvaluator: unsupported tensor scalar kind {:?}",
+            tensor.storage_kind()
+        )
+    }
+}
+
 fn slice_tensor(tensor: &IdxTensor, index_vals: &[(DynIndex, usize)]) -> Result<IdxTensor> {
     if index_vals.is_empty() {
         return Ok(tensor.clone());
@@ -4173,21 +4550,60 @@ fn slice_tensor(tensor: &IdxTensor, index_vals: &[(DynIndex, usize)]) -> Result<
 }
 
 fn tensor_values_any(tensor: &IdxTensor) -> Result<Vec<AnyScalar>> {
-    if tensor.is_complex() {
+    if tensor.is_f32() {
         tensor
-            .to_vec::<Complex64>()
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| AnyScalar::new_complex(value.re, value.im))
-                    .collect()
-            })
+            .to_vec::<f32>()
+            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
             .map_err(anyhow::Error::from)
-    } else {
+    } else if tensor.is_f64() {
         tensor
             .to_vec::<f64>()
-            .map(|values| values.into_iter().map(AnyScalar::new_real).collect())
+            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
             .map_err(anyhow::Error::from)
+    } else if tensor.is_c32() {
+        tensor
+            .to_vec::<Complex32>()
+            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
+            .map_err(anyhow::Error::from)
+    } else if tensor.is_c64() {
+        tensor
+            .to_vec::<Complex64>()
+            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
+            .map_err(anyhow::Error::from)
+    } else {
+        bail!(
+            "TreeTNCachedEvaluator: unsupported tensor scalar kind {:?}",
+            tensor.storage_kind()
+        )
+    }
+}
+
+fn tensor_values_cached(tensor: &IdxTensor) -> Result<Vec<CachedScalar>> {
+    if tensor.is_f32() {
+        tensor
+            .to_vec::<f32>()
+            .map(|values| values.into_iter().map(CachedScalar::F32).collect())
+            .map_err(anyhow::Error::from)
+    } else if tensor.is_f64() {
+        tensor
+            .to_vec::<f64>()
+            .map(|values| values.into_iter().map(CachedScalar::F64).collect())
+            .map_err(anyhow::Error::from)
+    } else if tensor.is_c32() {
+        tensor
+            .to_vec::<Complex32>()
+            .map(|values| values.into_iter().map(CachedScalar::C32).collect())
+            .map_err(anyhow::Error::from)
+    } else if tensor.is_c64() {
+        tensor
+            .to_vec::<Complex64>()
+            .map(|values| values.into_iter().map(CachedScalar::C64).collect())
+            .map_err(anyhow::Error::from)
+    } else {
+        bail!(
+            "TreeTNCachedEvaluator: unsupported tensor scalar kind {:?}",
+            tensor.storage_kind()
+        )
     }
 }
 
@@ -4474,6 +4890,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_complex::Complex32;
     use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 
     #[derive(Clone, Copy, Default)]
@@ -4577,20 +4994,42 @@ mod tests {
 
     #[test]
     fn tensor_from_cached_values_preserves_each_scalar_storage_kind() {
+        let real32_index = DynIndex::new_dyn(2);
+        let real32 = tensor_from_cached_values(
+            vec![real32_index],
+            vec![CachedScalar::F32(1.0), CachedScalar::F32(2.0)],
+        )
+        .unwrap();
+        assert_eq!(real32.to_vec::<f32>().unwrap(), vec![1.0, 2.0]);
+
         let real_index = DynIndex::new_dyn(2);
         let real = tensor_from_cached_values(
             vec![real_index],
-            vec![CachedScalar::Real(1.0), CachedScalar::Real(2.0)],
+            vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)],
         )
         .unwrap();
         assert_eq!(real.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+
+        let complex32_index = DynIndex::new_dyn(2);
+        let complex32 = tensor_from_cached_values(
+            vec![complex32_index],
+            vec![
+                CachedScalar::C32(Complex32::new(1.0, -2.0)),
+                CachedScalar::C32(Complex32::new(3.0, -4.0)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            complex32.to_vec::<Complex32>().unwrap(),
+            vec![Complex32::new(1.0, -2.0), Complex32::new(3.0, -4.0)]
+        );
 
         let complex_index = DynIndex::new_dyn(2);
         let complex = tensor_from_cached_values(
             vec![complex_index],
             vec![
-                CachedScalar::Complex(Complex64::new(1.0, -2.0)),
-                CachedScalar::Complex(Complex64::new(3.0, -4.0)),
+                CachedScalar::C64(Complex64::new(1.0, -2.0)),
+                CachedScalar::C64(Complex64::new(3.0, -4.0)),
             ],
         )
         .unwrap();
@@ -4603,8 +5042,8 @@ mod tests {
         let mixed = tensor_from_cached_values(
             vec![mixed_index],
             vec![
-                CachedScalar::Real(5.0),
-                CachedScalar::Complex(Complex64::new(6.0, 7.0)),
+                CachedScalar::F64(5.0),
+                CachedScalar::C64(Complex64::new(6.0, 7.0)),
             ],
         )
         .unwrap();
@@ -6406,6 +6845,107 @@ mod tests {
         assert_eq!(evaluator.center(), Some(&0));
     }
 
+    /// [AI Supplied] Correctness regression for the raw-path dtype dispatch.
+    #[test]
+    fn cached_evaluator_preserves_32_bit_scalar_dtypes() {
+        let s0 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let bond = DynIndex::new_dyn(2);
+        let values = [0usize, 0, 1, 1];
+        let shape = [2usize, 2usize];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+        let real_tree = TreeTN::<_, usize>::from_tensors(
+            vec![
+                IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f32, 2.0, 3.0, 4.0])
+                    .unwrap(),
+                IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![5.0_f32, 6.0, 7.0, 8.0])
+                    .unwrap(),
+            ],
+            vec![0, 1],
+        )
+        .unwrap();
+        let real_baseline = real_tree
+            .evaluate(&[s0.clone(), s1.clone()], points)
+            .unwrap();
+        assert_eq!(real_baseline[0].as_f64(), Some(23.0));
+        assert_eq!(real_baseline[1].as_f64(), Some(46.0));
+        let mut real_evaluator = TreeTNCachedEvaluator::new(
+            &real_tree,
+            &[s0.clone(), s1.clone()],
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let real_result = real_evaluator.evaluate_batched(points);
+        let real_cached_result = real_evaluator.evaluate_batched(points);
+
+        let c = |re| Complex32::new(re, 0.0);
+        let complex_tree = TreeTN::<_, usize>::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![s0.clone(), bond.clone()],
+                    vec![c(1.0), c(2.0), c(3.0), c(4.0)],
+                )
+                .unwrap(),
+                IdxTensor::from_dense(vec![bond, s1.clone()], vec![c(5.0), c(6.0), c(7.0), c(8.0)])
+                    .unwrap(),
+            ],
+            vec![0, 1],
+        )
+        .unwrap();
+        let complex_baseline = complex_tree
+            .evaluate(&[s0.clone(), s1.clone()], points)
+            .unwrap();
+        assert_eq!(
+            complex_baseline[0].as_c64(),
+            Some(Complex64::new(23.0, 0.0))
+        );
+        assert_eq!(
+            complex_baseline[1].as_c64(),
+            Some(Complex64::new(46.0, 0.0))
+        );
+        let mut complex_evaluator = TreeTNCachedEvaluator::new(
+            &complex_tree,
+            &[s0, s1],
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let complex_result = complex_evaluator.evaluate_batched(points);
+        let complex_cached_result = complex_evaluator.evaluate_batched(points);
+
+        assert!(
+            real_result.is_ok()
+                && real_cached_result.is_ok()
+                && complex_result.is_ok()
+                && complex_cached_result.is_ok(),
+            "32-bit cached evaluations must succeed cold and warm: f32={real_result:?}/{real_cached_result:?}, c32={complex_result:?}/{complex_cached_result:?}"
+        );
+        let real_result = real_result.unwrap();
+        let real_cached_result = real_cached_result.unwrap();
+        let complex_result = complex_result.unwrap();
+        let complex_cached_result = complex_cached_result.unwrap();
+        assert_eq!(real_result[0].as_f64(), Some(23.0));
+        assert_eq!(real_result[1].as_f64(), Some(46.0));
+        assert_eq!(real_cached_result[0].as_f64(), Some(23.0));
+        assert_eq!(real_cached_result[1].as_f64(), Some(46.0));
+        assert_eq!(complex_result[0].as_c64(), Some(Complex64::new(23.0, 0.0)));
+        assert_eq!(complex_result[1].as_c64(), Some(Complex64::new(46.0, 0.0)));
+        assert_eq!(
+            complex_cached_result[0].as_c64(),
+            Some(Complex64::new(23.0, 0.0))
+        );
+        assert_eq!(
+            complex_cached_result[1].as_c64(),
+            Some(Complex64::new(46.0, 0.0))
+        );
+    }
+
     #[test]
     fn component_cost_index_counts_unique_directed_components() {
         let (tree, indices) = three_node_chain();
@@ -7028,6 +7568,197 @@ mod tests {
         assert!(total > 0);
     }
 
+    /// [AI Supplied] Diagnostic-only split of a fully warm, same-batch call.
+    ///
+    /// The existing floating-zone phase test intentionally changes points and
+    /// therefore measures cache misses.  This fixture repeats exactly one
+    /// 64-point batch after warming it, so any remaining environment or centre
+    /// work is work the persistent cache did not eliminate.
+    #[test]
+    #[ignore]
+    fn diagnostic_same_batch_warm_environment_vs_center_cost() {
+        use std::sync::atomic::Ordering;
+        use std::time::Instant;
+
+        const N_SITES: usize = 16;
+        const LOCAL_DIM: usize = 2;
+        const N_POINTS: usize = 64;
+        const REPEATS: usize = 50;
+        const CENTER: usize = N_SITES / 2;
+
+        // [AI Supplied] Representation census for the packed-cache audit.
+        eprintln!(
+            "representation sizes: f64={} CachedScalar={} IndexKey={} AnyScalar={}",
+            std::mem::size_of::<f64>(),
+            std::mem::size_of::<CachedScalar>(),
+            std::mem::size_of::<IndexKey>(),
+            std::mem::size_of::<AnyScalar>(),
+        );
+
+        for bond_dim in [64usize, 128, 256] {
+            let physical = (0..N_SITES)
+                .map(|_| DynIndex::new_dyn(LOCAL_DIM))
+                .collect::<Vec<_>>();
+            let bonds = (0..N_SITES - 1)
+                .map(|_| DynIndex::new_dyn(bond_dim))
+                .collect::<Vec<_>>();
+            let mut tensors = Vec::with_capacity(N_SITES);
+            for site in 0..N_SITES {
+                let mut indices = vec![physical[site].clone()];
+                if site > 0 {
+                    indices.push(bonds[site - 1].clone());
+                }
+                if site + 1 < N_SITES {
+                    indices.push(bonds[site].clone());
+                }
+                let len = indices.iter().map(IndexLike::dim).product();
+                tensors.push(IdxTensor::from_dense(indices, vec![1.0_f64; len]).unwrap());
+            }
+            let tree = TreeTN::from_tensors(tensors, (0..N_SITES).collect()).unwrap();
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &physical,
+                CachedEvaluatorOptions::<usize> {
+                    center: Some(CENTER),
+                    ..CachedEvaluatorOptions::default()
+                },
+            )
+            .unwrap();
+            let mut values = vec![0usize; N_SITES * N_POINTS];
+            for point in 0..N_POINTS {
+                for site in 0..N_SITES {
+                    values[site + N_SITES * point] = (point >> (site % 6)) & 1;
+                }
+            }
+            let shape = [N_SITES, N_POINTS];
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+            evaluator.evaluate_batched(points).unwrap();
+
+            phase_timing::reset_all();
+            let started = Instant::now();
+            for _ in 0..REPEATS {
+                std::hint::black_box(evaluator.evaluate_batched(points).unwrap());
+            }
+            let total_ns = started.elapsed().as_nanos() as u64;
+            let environment_ns = phase_timing::BUILD_ENV_NS.load(Ordering::Relaxed);
+            let center_ns = phase_timing::CENTER_NS.load(Ordering::Relaxed);
+            let raw_capability_ns = phase_timing::RAW_CAPABILITY_NS.load(Ordering::Relaxed);
+            let assignment_batch_ns = phase_timing::ASSIGNMENT_BATCH_NS.load(Ordering::Relaxed);
+            let message_loop_ns = phase_timing::MESSAGE_LOOP_NS.load(Ordering::Relaxed);
+            let component_assembly_ns = phase_timing::COMPONENT_ASSEMBLY_NS.load(Ordering::Relaxed);
+            let raw_prep_ns = phase_timing::RAW_CENTER_PREP_NS.load(Ordering::Relaxed);
+            let raw_contract_ns = phase_timing::RAW_CENTER_CONTRACT_NS.load(Ordering::Relaxed);
+            let raw_dispatch_ns = phase_timing::RAW_CENTER_DISPATCH_NS.load(Ordering::Relaxed);
+            let raw_prelude_ns = phase_timing::RAW_CENTER_PRELUDE_NS.load(Ordering::Relaxed);
+            let raw_result_ns = phase_timing::RAW_CENTER_RESULT_NS.load(Ordering::Relaxed);
+            let raw_values_copied = phase_timing::RAW_CENTER_VALUES_COPIED.load(Ordering::Relaxed);
+            let raw_assignments_copied =
+                phase_timing::RAW_CENTER_ASSIGNMENTS_COPIED.load(Ordering::Relaxed);
+            let key_ns = phase_timing::KEY_AND_LOOKUP_NS.load(Ordering::Relaxed);
+            let reconstruct_ns = phase_timing::RECONSTRUCT_NS.load(Ordering::Relaxed);
+            let reconstructed_values = phase_timing::RECONSTRUCT_VALUES.load(Ordering::Relaxed);
+            let final_env_values = phase_timing::FINAL_ENV_VALUES.load(Ordering::Relaxed);
+            let contract_ns = phase_timing::CONTRACT_NS.load(Ordering::Relaxed);
+            let insert_ns = phase_timing::INSERT_NS.load(Ordering::Relaxed);
+            let stats = evaluator.stats_for_test();
+            assert_eq!(stats.message_cache_misses, 0);
+            assert!(stats.message_cache_hits > 0);
+            assert_eq!(contract_ns, 0);
+            assert_eq!(insert_ns, 0);
+            eprintln!(
+                "warm same-batch bond={bond_dim}: total={:.3}ms/call, environment={:.3}ms/call ({:.1}%) {{raw_capability={:.3}ms/call, assignments={:.3}ms/call, message_loop={:.3}ms/call, component_assembly={:.3}ms/call, reconstructed_values={}/call, final_env_values={}/call}}, center={:.3}ms/call ({:.1}%) {{raw_dispatch={:.3}ms/call: prelude={:.3}ms/call, prep={:.3}ms/call, contract={:.3}ms/call, AnyScalar_wrap={:.3}ms/call, copied_values={}/call, copied_assignments={}/call}}, key={:.3}ms/call, reconstruct={:.3}ms/call, hits/call={}",
+                total_ns as f64 / REPEATS as f64 / 1e6,
+                environment_ns as f64 / REPEATS as f64 / 1e6,
+                100.0 * environment_ns as f64 / total_ns as f64,
+                raw_capability_ns as f64 / REPEATS as f64 / 1e6,
+                assignment_batch_ns as f64 / REPEATS as f64 / 1e6,
+                message_loop_ns as f64 / REPEATS as f64 / 1e6,
+                component_assembly_ns as f64 / REPEATS as f64 / 1e6,
+                reconstructed_values / REPEATS as u64,
+                final_env_values / REPEATS as u64,
+                center_ns as f64 / REPEATS as f64 / 1e6,
+                100.0 * center_ns as f64 / total_ns as f64,
+                raw_dispatch_ns as f64 / REPEATS as f64 / 1e6,
+                raw_prelude_ns as f64 / REPEATS as f64 / 1e6,
+                raw_prep_ns as f64 / REPEATS as f64 / 1e6,
+                raw_contract_ns as f64 / REPEATS as f64 / 1e6,
+                raw_result_ns as f64 / REPEATS as f64 / 1e6,
+                raw_values_copied / REPEATS as u64,
+                raw_assignments_copied / REPEATS as u64,
+                key_ns as f64 / REPEATS as f64 / 1e6,
+                reconstruct_ns as f64 / REPEATS as f64 / 1e6,
+                stats.message_cache_hits,
+            );
+
+            if bond_dim == 256 {
+                // [AI Supplied] Reproduce Guard's moving-center call pattern
+                // and count the rooted metadata retained for an immutable
+                // chain after every site has served as a center.
+                let scan_all_centers = |evaluator: &mut TreeTNCachedEvaluator<'_, usize>| {
+                    for scan_center in 0..N_SITES {
+                        let mut scan_values = vec![0usize; N_SITES * 2];
+                        scan_values[scan_center + N_SITES] = 1;
+                        let scan_shape = [N_SITES, 2usize];
+                        let scan_points = ColMajorArrayRef::new(&scan_values, &scan_shape).unwrap();
+                        evaluator
+                            .evaluate_batched_with_hint(
+                                scan_points,
+                                EvaluationHint::around(scan_center),
+                            )
+                            .unwrap();
+                    }
+                };
+
+                phase_timing::reset_all();
+                let first_scan_started = Instant::now();
+                scan_all_centers(&mut evaluator);
+                let first_scan_ns = first_scan_started.elapsed().as_nanos() as u64;
+                let plan_build_ns = phase_timing::PLAN_BUILD_NS.load(Ordering::Relaxed);
+                let layout_build_ns = phase_timing::LAYOUT_BUILD_NS.load(Ordering::Relaxed);
+                let new_plan_count = phase_timing::PLAN_COUNT.load(Ordering::Relaxed);
+                let new_subtree_refs = phase_timing::PLAN_SUBTREE_NODE_REFS.load(Ordering::Relaxed);
+                let new_layout_refs =
+                    phase_timing::LAYOUT_INPUT_POSITION_REFS.load(Ordering::Relaxed);
+
+                let second_scan_started = Instant::now();
+                scan_all_centers(&mut evaluator);
+                let second_scan_ns = second_scan_started.elapsed().as_nanos() as u64;
+                let retained_subtree_refs = evaluator
+                    .rooted_plans
+                    .values()
+                    .flat_map(|plan| plan.subtree_nodes.values())
+                    .map(Vec::len)
+                    .sum::<usize>();
+                let retained_layout_refs = evaluator
+                    .message_cache_layouts_by_center
+                    .values()
+                    .flat_map(|layouts| layouts.values())
+                    .map(|layout| layout.input_positions.len())
+                    .sum::<usize>();
+                let unique_directed_component_refs = N_SITES * (N_SITES - 1);
+                eprintln!(
+                    "moving-center bond={bond_dim}: first_scan={:.3}ms second_scan={:.3}ms newly_built_plans={} plan_build={:.3}ms layout_build={:.3}ms new_subtree_refs={} new_layout_refs={} retained_centers={} retained_subtree_refs={} retained_layout_refs={} unique_directed_component_refs={}",
+                    first_scan_ns as f64 / 1e6,
+                    second_scan_ns as f64 / 1e6,
+                    new_plan_count,
+                    plan_build_ns as f64 / 1e6,
+                    layout_build_ns as f64 / 1e6,
+                    new_subtree_refs,
+                    new_layout_refs,
+                    evaluator.rooted_plans.len(),
+                    retained_subtree_refs,
+                    retained_layout_refs,
+                    unique_directed_component_refs,
+                );
+                assert_eq!(new_plan_count, (N_SITES - 1) as u64);
+                assert_eq!(evaluator.rooted_plans.len(), N_SITES);
+                assert_eq!(retained_subtree_refs, 1_616);
+                assert_eq!(retained_layout_refs, 1_616);
+                assert_eq!(unique_directed_component_refs, 240);
+            }
+        }
+    }
+
     // Measurement tooling rather than a wall-clock regression assertion
     // (mirroring `message_cache_wall_time_on_realistic_floating_zone_walk`'s
     // own framing above), kept from the investigation for gw-rs issue
@@ -7199,7 +7930,13 @@ mod tests {
             CachedEvaluatorOptions::default(),
         )
         .unwrap();
+        #[cfg(feature = "diagnostics")]
+        contraction_diagnostics::reset_all();
         let chain_elapsed = timed_walk(chain_evaluator, N_SITES);
+        #[cfg(feature = "diagnostics")]
+        let chain_diagnostics = contraction_diagnostics::summary();
+        #[cfg(not(feature = "diagnostics"))]
+        let chain_diagnostics = "diagnostics feature disabled";
         let _ = &site_dims;
 
         let (comb_tree, comb_indices, comb_center) = build_comb(7);
@@ -7212,12 +7949,20 @@ mod tests {
             },
         )
         .unwrap();
+        #[cfg(feature = "diagnostics")]
+        contraction_diagnostics::reset_all();
         let comb_elapsed = timed_walk(comb_evaluator, N_SITES);
+        #[cfg(feature = "diagnostics")]
+        let comb_diagnostics = contraction_diagnostics::summary();
+        #[cfg(not(feature = "diagnostics"))]
+        let comb_diagnostics = "diagnostics feature disabled";
 
         println!(
             "chain (N={N_SITES}, bond={BOND_DIM}): {chain_elapsed:?}\n\
              comb  (N={N_SITES}, bond={BOND_DIM}, 1 hub): {comb_elapsed:?}\n\
-             ratio (comb/chain): {:.2}x",
+             ratio (comb/chain): {:.2}x\n\
+             chain diagnostics: {chain_diagnostics}\n\
+             comb diagnostics: {comb_diagnostics}",
             comb_elapsed.as_secs_f64() / chain_elapsed.as_secs_f64()
         );
         assert!(chain_elapsed.as_nanos() > 0);

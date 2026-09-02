@@ -166,6 +166,8 @@ where
     // batch's interleaved-by-input layout remains a plain loop.
     if point_count > 0 {
         for input in 0..inputs.len() {
+            #[cfg(test)]
+            let row_frames_started = std::time::Instant::now();
             let row_input_frames = frames.candidate_frames_for_edge(
                 inputs,
                 problem,
@@ -173,6 +175,12 @@ where
                 forward,
                 &row_candidates,
             )?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.local_row_frames += row_frames_started.elapsed();
+            });
+            #[cfg(test)]
+            let col_frames_started = std::time::Instant::now();
             let col_input_frames = frames.candidate_frames_for_edge(
                 inputs,
                 problem,
@@ -180,6 +188,12 @@ where
                 reverse,
                 &col_candidates,
             )?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.local_col_frames += col_frames_started.elapsed();
+            });
+            #[cfg(test)]
+            let pack_started = std::time::Instant::now();
             let bond_dim = row_input_frames.first().map_or(0, |frame| frame.len());
             for frame in row_input_frames.iter().chain(col_input_frames.iter()) {
                 if frame.len() != bond_dim {
@@ -203,17 +217,42 @@ where
                 .collect();
             let row_candidate_matrix = Matrix::from_col_major_vec(row_count, bond_dim, row_flat);
             let col_bond_matrix = Matrix::from_col_major_vec(bond_dim, col_count, col_flat);
-            let product = mat_mul(&row_candidate_matrix, &col_bond_matrix).map_err(|error| {
-                TreeAciError::Numerical {
-                    message: error.to_string(),
-                }
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.local_frame_pack += pack_started.elapsed();
+            });
+            #[cfg(test)]
+            let matmul_started = std::time::Instant::now();
+            // [AI Supplied] Test-only switch isolates the cost of copying
+            // freshly built matrices through the borrowed backend seam.
+            #[cfg(test)]
+            let product_result =
+                if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
+                    tensor4all_tensorbackend::mat_mul_owned(row_candidate_matrix, col_bond_matrix)
+                } else {
+                    mat_mul(&row_candidate_matrix, &col_bond_matrix)
+                };
+            #[cfg(not(test))]
+            let product_result = mat_mul(&row_candidate_matrix, &col_bond_matrix);
+            let product = product_result.map_err(|error| TreeAciError::Numerical {
+                message: error.to_string(),
             })?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.local_frame_matmul += matmul_started.elapsed();
+            });
+            #[cfg(test)]
+            let scatter_started = std::time::Instant::now();
             for col in 0..col_count {
                 for row in 0..row_count {
                     let point = row + row_count * col;
                     input_values[input + inputs.len() * point] = product[[row, col]];
                 }
             }
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.local_frame_scatter += scatter_started.elapsed();
+            });
         }
     }
     #[cfg(test)]

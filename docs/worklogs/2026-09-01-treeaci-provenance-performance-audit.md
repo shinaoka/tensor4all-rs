@@ -124,6 +124,105 @@ nodes produces `d^2*r^4` local points, while a uniform chain edge produces
 `d^2*r^2`. The implementation can still avoid unnecessary allocations,
 repacking, hash tables, and scalar contractions around this unavoidable count.
 
+## 2026-09-02 performance-suspect follow-up
+
+Previous worklogs were read only to locate prior experiments. They were not
+treated as authority. In particular, the rejected two-GEMM branch experiment
+in `2026-08-23-treeaci-branched-hotpaths.md` changed the floating-point
+reduction order and moved downstream pivot paths; it is not evidence that the
+same rewrite is safe.
+
+Fresh release-mode diagnostics found three distinct effects.
+
+### Ephemeral matrices use the wrong existing upstream seam
+
+`tensor4all-tensorbackend::mat_mul_owned` has existed since 2026-05-22 and its
+contract explicitly says that it reuses consumed matrix buffers when building
+tenferro tensors. TreeACI's chain paths instead create fresh `Matrix` values,
+call borrowed `mat_mul`, and immediately discard those matrices in:
+
+- the stored-frame single-incoming batch;
+- the candidate-frame single-incoming batch; and
+- the final row-frame by column-frame local materialization.
+
+This is not a new algorithm. It is an existing upstream API used with the same
+matrix product and reduction order. A test-only `[AI Supplied]` switch changed
+only those three eligible calls. On a 32-site chain with two inputs and a
+genuine high-rank plateau, three interleaved release runs gave these medians:
+
+| maximum input bond | borrowed init | owned init | borrowed 2 sweeps | owned 2 sweeps |
+|---:|---:|---:|---:|---:|
+| 256 | 200 ms | 159 ms | 315 ms | 265 ms |
+
+The combined median fell by about 17.6%. With the switch enabled, the complete
+TreeACI release suite passed: 136 unit tests, 7 public-API integration tests, 1
+rank-scaling test, and 18 doctests (4 opt-in diagnostics remained ignored).
+This proves a material copy/ownership overhead in the current chain path; it
+does not yet constitute a production fix or a full numerical regression gate.
+
+The same-shape batched upstream API was also tested for two large, compatible
+input GEMMs. Unlike the owned-vs-borrowed result, it was unstable and was
+usually slower at batch size two. Therefore batching across operands is not
+currently accepted as a remedy merely because simplett ACI uses it.
+
+### Branch frame kernel misses an existing upstream batch capability
+
+The two-incoming TreeACI kernel dispatches `incoming_dim_2 + 1` borrowed
+matrix multiplications. Keeping exactly the existing per-`incoming_dim_2`
+reduction decomposition but submitting its same-shaped first-stage products
+through `tensor4all-tensorbackend::batched_mat_mul_same_shape_owned` produced
+bit-identical results in the diagnostic fixtures and reduced the representative
+32-by-256-by-256, 40-column kernel median from 115 ms to 21 ms (5.4x).
+
+That direct prototype repeats the shared right-hand matrix once per job (about
+20 MiB in this fixture), so it cannot replace the production path without
+respecting `max_working_bytes`. The pinned tenferro revision already has
+`GroupedGemmJob`/`grouped_gemm_cached`, whose offset descriptors permit every
+job to refer to the same RHS buffer. TreeACI must not depend on tenferro
+directly; the appropriate production direction is a budgeted
+tensorbackend-level grouped/shared-operand seam. This seam and its policy are
+**[AI Supplied]** until separately designed and tested.
+
+### A vertex-centered warm evaluator repeats avoidable work
+
+Fresh phase timing of an identical, fully warmed 64-point batch on a native
+16-site TreeTN chain showed zero message-cache misses and zero message
+contractions, yet `contract_center_for_points` still consumed 87--95% of each
+call at bond dimensions 64, 128, and 256. The current raw center kernel visits
+`d * product(incident bond dimensions)` core entries per distinct center
+evaluation. Hiroshi's issue #671 comment is authority for that node-local work
+count, but it does not establish that every warm whole-tree evaluation must end
+at a vertex.
+
+The following alternative tree extension has no direct source in the paper or
+simplett implementation and is therefore **[AI Supplied]**. It is re-derived
+here rather than assumed. For any tree edge `e`, deleting `e` partitions the
+vertices into `L_e` and `R_e`. Leave only the cut index `a_e` uncontracted and
+define the two directed component messages
+
+```text
+L_e(x_L, a_e) = contraction of every tensor and internal bond in L_e,
+R_e(x_R, a_e) = contraction of every tensor and internal bond in R_e.
+```
+
+Because a tree has no second connection between these components,
+
+```text
+X(x) = sum over a_e L_e(x_L, a_e) * R_e(x_R, a_e).       (T6)
+```
+
+Equation (T6) is the arbitrary-tree form of simplett `TTCache::evaluate_many`'s
+left/right split. Once both component messages hit the cache, final assembly is
+`O(chi_e)` per point, not `O(d_u * product(incident chi))`. A branch node's
+high-coordination contraction has not disappeared: it is paid when a component
+message containing that node is first built, then can be cached per component
+assignment instead of being repeated as an uncached center contraction.
+
+Consequently the existing deterministic `d*chi^z` work-count test correctly
+describes `contract_raw_center`, but it must not be interpreted as the desired
+warm-evaluation complexity regression. An edge-centered cached evaluator and a
+test that gates its warm final assembly at `O(chi_e)` require a separate design.
+
 ## Exhaustive production-code provenance ledger
 
 Line numbers refer to the audited revision. Imports, derives, error conversion,
@@ -260,6 +359,51 @@ range inherit the range's label unless a narrower row says otherwise.
 | `src/*/tests/mod.rs`, `tests/*.rs` | Correctness, error-path, resource, and timing checks | Evidence only; never used as provenance |
 | `tensor4all-treetn/benches/cached_evaluator.rs` additions | Same-input cold/warm evaluator parity and `d * product(chi_e)` scaling fixtures | Measurement protocol and representative `chi` values: **Hiroshi review**; star/chain fixtures, tolerances, Criterion configuration, and benchmark plumbing: **[AI Supplied]** |
 
+## Correctness fix: preserve exact 32-bit cached-evaluator dtypes
+
+TreeACI's public `TreeAciScalar` contract includes `f32`, `f64`, `Complex32`,
+and `Complex64`.  `TreeTNCachedEvaluator::can_use_raw_messages` distinguishes
+only real versus complex, while all real raw leaf/chain/branch kernels read
+`f64` and all complex kernels read `Complex64`.  The generic fallback helper
+`tensor_values_any` makes the same two-way choice.  Consequently 32-bit tensors
+are accepted into a 64-bit reader rather than dispatched by their exact dtype.
+
+An **[AI Supplied]** numerical regression fixture evaluates the same
+two-node contraction through ordinary `TreeTN::evaluate` and the cached
+evaluator.  The ordinary evaluator produces the asserted values 23 and 46 for
+both 32-bit scalar kinds.  Before the fix, the cached evaluator failed before
+arithmetic:
+
+```text
+f32: expected F64, actual F32
+c32: expected C64, actual C32
+```
+
+No new dtype API is required to correct the dispatch.  Upstream `IdxTensor`
+already exposes the backend-neutral predicates `is_f32`, `is_f64`, `is_c32`,
+and `is_c64`.  `tensor4all-partitionedtreetn` already demonstrates the exact
+four-way pattern with its internal `ScalarKind`; the private
+`IdxTensor::scalar_dtype` and CUDA-only `cuda_dtype` are therefore not blockers.
+The cached evaluator ignored those existing high-level capabilities and
+collapsed the type to a real/complex bit.  A correction must use exact typed
+dispatch rather than probing through failed `to_vec` calls and must not add a
+TreeACI-local tenferro dependency.  Every raw leaf, chain, branch, leaf-center,
+internal-center, and generic tensor-to-scalar path must be checked together
+when this is fixed.
+
+The implemented small correction now classifies tensors with those four
+upstream predicates, preserves all four variants in `CachedScalar`, materializes
+generic message/final-result tensors through the matching typed reader, and
+keeps the existing specialized raw kernels restricted to their actual
+`f64`/`Complex64` contract.  The formerly ignored regression now passes for
+both cold computation and typed cache reconstruction, alongside explicit
+`f32`/`Complex32` cache-payload tests.  This restores correctness without
+claiming performance parity: 32-bit evaluation currently uses the generic
+contraction path, and extending the specialized raw kernels generically is a
+separate optimization task.  The dispatch structure follows the existing
+upstream `tensor4all-partitionedtreetn::ScalarKind` pattern; the new regression
+fixture and the choice to defer a 32-bit raw fast path are **[AI Supplied]**.
+
 ## Performance findings
 
 ### P0: warm chain evaluation does not reuse the center contraction
@@ -277,7 +421,7 @@ closest representable midpoint, not an identical contraction object. That
 difference is itself causal on warm calls.
 
 | chi | TTCache cold | TreeTN cold | Tree/TT cold | TTCache warm | TreeTN warm | Tree/TT warm |
-|---:|---:|---:|---:|---:|---:|---:|
+|---:|---:|---:|---:|---:|---:|
 | 64 | 2.189 ms | 4.429 ms | 2.02x | 10.58 us | 3.318 ms | 314x |
 | 128 | 9.058 ms | 9.860 ms | 1.09x | 13.49 us | 4.516 ms | 335x |
 | 256 | 37.79 ms | 25.04 ms | 0.66x | 19.17 us | 8.265 ms | 431x |
@@ -328,7 +472,7 @@ in every benchmark ID and compares the same two-point warm center scan on a
 degree-2 chain node and degree-3 star hub.
 
 | chi | z=2 local elements | z=2 time | z=3 local elements | z=3 time | z3/z2 time |
-|---:|---:|---:|---:|---:|---:|
+|---:|---:|---:|---:|---:|---:|---:|
 | 32 | 2,048 | 105.2 us | 65,536 | 188.4 us | 1.79x |
 | 64 | 8,192 | 112.0 us | 524,288 | 823.2 us | 7.35x |
 
@@ -355,16 +499,68 @@ therefore, nearly the entire apparent branch slowdown is explained by the
 larger dense tensors, including the non-center branch-message path. It is not
 evidence of a large residual Guard branch-kernel regression.
 
-The unresolved branch-specific implementation costs are elsewhere:
+The topology-normalized total does not make the implementation overhead
+innocent.  A diagnostic split of the same run found that the degree-3 hub's
+non-center branch-message path executed 60 one-point/one-physical-value BLAS
+groups and spent:
+
+| phase | copied/processed values | elapsed |
+|---|---:|---:|
+| decode two cached child messages | 21,376 | 0.038 ms |
+| gather the requested child columns | 15,360 | 0.022 ms |
+| repack the immutable hub tensor slice into `left` | 125,829,120 | 384.408 ms |
+| first-child matrix multiplication | - | 72.239 ms |
+| second-child accumulation | - | 0.243 ms |
+
+At `chi=128`, every `left` contains `128^3 = 2,097,152` `f64` values,
+or 16 MiB.  Rebuilding it 60 times writes 960 MiB.  The local physical
+dimension is two and the rooted orientation and tensor are fixed, so those 60
+groups can refer to at most two distinct physical slices: each distinct slice
+is repacked at least 30 times on average.  Setup alone is 75.6% of the measured
+508.409 ms comb walk and 5.32x the measured matrix-multiplication time.
+
+This repacking has the same `product(chi_e)` element count as one necessary
+local contraction, but it is data rearrangement, not one of the multiplications
+required by Hiroshi's `d * product(chi_e)` arithmetic bound.  Therefore the
+earlier 1.033 topology-normalized total concealed a confirmed large constant
+factor: the necessary dense branch arithmetic is accompanied by repeated
+same-order full-slice traffic.
+
+The unresolved branch-specific implementation costs are therefore:
 
 - TreeACI candidate frames still fall from a batched kernel to per-candidate
   scalar recursion at three or more incoming components (next section).
-- A non-center degree-3 node uses the grouped branch-message path, which
-  rebuilds the physical-slice `left` packing on each cache miss even though the
-  local core is immutable. Existing diagnostics can split setup/matmul/
-  accumulation, but this audit has not yet produced a representative
-  end-to-end branch-message trace. Treat it as a measured-next hypothesis, not
-  a confirmed dominant cause.
+- A non-center degree-3 node uses the grouped branch-message path described
+  above, which rebuilds the physical-slice `left` packing on every call even
+  though the local core and rooted orientation are immutable.  Reusing a
+  prepared orientation/slice, or exposing a borrowed strided/permuted matrix
+  view from the tensor backend, is **[AI Supplied]** until the replacement is
+  derived and reviewed.  The current tensorbackend `Matrix` API has owned
+  matrices and borrowed multiplication, but no borrowed matrix-view seam that
+  can express this layout without packing.  Tensorbackend's lower-level
+  `einsum_native_tensor_reads` can accept non-contiguous native views, and
+  `tensor4all-core::contract_with_options` already reaches that path.  What is
+  missing is a high-level TreeTN/tensorbackend seam that combines a fixed
+  physical slice, the required axis permutation, and batched/shared operands
+  without rebuilding the packed matrix.  Reaching directly into native
+  tenferro reads from TreeTN would violate the repository layering rule; the
+  new high-level facility belongs upstream.
+
+  A test-only A/B independently checked whether the existing generic
+  `contract_with_options` pipeline is already that facility.  Disabling all
+  specialized raw message kernels changed the same `chi=128` walk from about
+  48 ms to 3.458 s on the chain and from about 508 ms to 4.676 s on the comb:
+  approximately 71x and 9.2x regressions.  The generic comb/chain ratio looks
+  smaller only because the chain was made drastically slower.  Thus the
+  existing generic path is not a usable direct replacement; the missing piece
+  is specifically a low-copy high-level seam usable by the specialized
+  contraction, not merely a call to the generic contraction API.  The A/B
+  switch is **[AI Supplied]**.
+
+The child decode and gather copies are also implementation overhead and remain
+valid suspects despite being only about 0.060 ms in this trace.  Their small
+share here does not justify retaining them: it only establishes ordering for
+future changes.
 
 #### Deterministic bond-exponent regression gate
 
@@ -397,15 +593,43 @@ factor and cache-management regressions that preserve the exponent.
 ### P1: the packed message cache still violates part of the review protocol
 
 The persistent cache implements the broad shape of Hiroshi's PR #646 design,
-but two details remain avoidable:
+but several details remain avoidable:
 
 - `get_or_compute_node_message` maps each requested missing key back to its
   column with `missing_keys.iter().position(...)` and then `to_vec()`. For `m`
   misses this is `O(m^2)` key comparison plus one allocation/copy per message,
   before the columns are appended to the packed buffer.
+- Every node/call clones `assignment_batch.first_points`; all-hit lookup
+  allocates a vector of positions; a partial-hit path performs a second
+  `get_all_cached(&hit_keys)` lookup and allocates positions only to discard
+  them; and result reconstruction copies every requested packed column into a
+  new flat vector.
+- The miss path separately allocates `missing_points`, `missing_keys`, a
+  `HashSet` for deduplication, a temporary `HashMap` for over-budget columns,
+  and a `Vec<CacheSlot<_>>`.  An over-budget column is cloned out of the
+  temporary map before being copied again into reconstructed output.
 - `PackedMessageCache::retained_bytes` counts only
   `columns.len() * size_of::<T>()`. Hiroshi explicitly required real cache
   memory to include key/HashMap/capacity overhead, not payload alone.
+
+A release representation census on this target measured:
+
+```text
+f64 = 8 bytes
+CachedScalar = 24 bytes
+IndexKey = 48 bytes
+AnyScalar = 96 bytes
+```
+
+The packed cache stores `CachedScalar`, so an all-real message consumes three
+times the scalar payload before accounting for `HashMap` buckets, the 48-byte
+inline `IndexKey`, boxed limbs for wide keys, and unused capacities.  The
+configured byte budget is therefore not a numerical-payload budget, and the
+current `retained_bytes` name still understates the allocator-visible retained
+memory.  A typed TreeTN evaluation seam like SimpleTT's `TTCache<T>` would
+avoid the real/complex enum inflation, but that API/generalization is
+**[AI Supplied]** and must be added upstream in TreeTN rather than by making
+TreeACI depend on SimpleTT.
 
 This is not the primary cost in the measured 16-site, `chi=128` floating-zone
 walk: test-only phase timing reported contraction 82.8%, insert 7.7%, lookup
@@ -514,6 +738,390 @@ the branch slowdown.
 does not clear the form, so after the first finalization this is not repeated on
 every pass. It is a one-time analogue of simplett ACI's initial right
 canonicalization, though the post-first-pass timing is **[AI Supplied]**.
+
+## 2026-09-02 cumulative-overhead follow-up
+
+The following items remain suspects even where their individual measured share
+is small.  The classification is deliberately per mechanism rather than an
+attempt to name one exclusive root cause.
+
+### Confirmed: an owned local-matrix path was available upstream but unused
+
+The one-incoming candidate-frame path, one-incoming stored-frame path, and
+final local row-by-column materialization passed freshly allocated matrices to
+borrowed `tensor4all_tensorbackend::mat_mul`.  That function must clone its
+inputs while the already-existing `mat_mul_owned` consumes them and reuses the
+buffers when constructing tenferro tensors.  An isolated test-only switch over
+exactly those three call sites reduced the median combined initialization plus
+two-sweep time of the 32-site, two-input, `chi=256` chain by about 17.6% across
+three interleaved runs.  The full TreeACI release suite passed with the switch.
+
+This is direct **upstream implementation evidence**.  It is not a tree
+derivation and does not use simplett as a dependency.
+
+### Confirmed: immutable input cores are repacked repeatedly
+
+At `chi=256`, the two one-incoming paths performed 372 oriented-core packs but
+only 120 distinct `(input, directed edge)` identities existed.  They copied
+30,233,856 scalar values in total versus 9,087,616 distinct oriented values:
+21,146,240 redundant `f64` copies, or about 161.3 MiB.  Candidate packs took
+38.3--39.2 ms and stored-frame packs 48.4--49.4 ms in representative runs.
+
+The packed matrix is a pure function of an immutable prepared input core and a
+directed edge's axis order.  Caching that orientation follows from code
+inspection and is **[AI Supplied]**.  As a comparison-only legal reference,
+simplett ACI prepares `InputCoreMatrices` once in
+`tensor4all-aci/src/state.rs`; TreeACI must not depend on it.
+
+### Confirmed: candidate cache is useful but has an expensive miss layout
+
+Disabling the candidate cache made the `chi=256` candidate row/column phase
+about 9% slower and increased candidate core packs from 160 to 240, so removing
+the cache is not a remedy.  However, the enabled cache retained 20,580 entries
+and 38,731,712 payload bytes for only 1,004 hits and 20,580 misses in the
+two-sweep fixture.  Its payload slightly exceeded the base-frame payload.
+
+On a miss, the batched `Matrix` result is extracted into many `Vec<T>` values,
+cloned again into the cache, returned as `Vec<Vec<T>>`, and immediately packed
+back into a `Matrix` in `local_update.rs`.  At `chi=256`, result extraction plus
+cache insertion cost about 17 ms and the later local repack about 6--8 ms.
+This representation cycle and a future packed cache/result seam are
+**[AI Supplied]**; the measured timings and allocation sites are runtime/code
+evidence.
+
+### Confirmed small cost: frame growth recopies old prefixes
+
+Across 62 commits of the no-Guard `chi=256` run, `InputFrameStore::extend`
+initialized 1,217,338 memo slots, copied 4,153,180 old values, and copied only
+75,924 newly computed values.  Old-prefix copies outnumbered new values by
+54.7x.  Fixed scanning/setup was only about 1.8 ms and rebuilding about
+3.6--3.8 ms in this fixture, so neither dominates here; both remain scaling
+suspects because the operation is repeated after every edge commit.  A
+persistent/chunked frame representation is **[AI Supplied]**.
+
+### Confirmed upstream constructor mismatch during output commits
+
+`TreeTN::clone` shares every `IdxTensor` numerical payload through `Arc`; it is
+not a deep tensor copy.  For the no-Guard `chi=256` run, 62 whole-tree metadata
+clones cost about 0.95--1.06 ms.  The rest of output staging was dominated by
+constructing the two replacement tensors: about 8.07 ms of an 8.53 ms
+`replace_edge_cores` total.  Bond replacement was about 0.09 ms and both tensor
+replacements about 0.19 ms.
+
+The cause is an upstream ownership mismatch:
+`IdxTensor::from_dense(indices, data: Vec<T>)` consumes a vector, but calls the
+slice-based `dense_native_tensor_from_col_major(&data, ...)`; the
+`TensorElement` implementation then calls `data.to_vec()` before constructing
+the native tensor.  Thus every left/right factor payload is copied once and
+the original allocation is discarded.  No public generic owned constructor
+exists in the API inventory.  `IdxTensor::from_storage` can preserve ownership
+for the storage-supported scalar kinds: composing it with
+`Storage::from_dense_col_major` already gives the common `f64`/`Complex64`
+paths an ownership-preserving public route.  That two-step compact-storage API
+does not support the also-public `f32`/`Complex32` TreeACI contract, so it is
+not a generic TreeACI fix; whether downstream use of the explicit storage
+representation is the desired abstraction also needs layering review.  The
+complete remedy is a generic owned core/tensorbackend constructor seam, not a
+TreeACI-to-tenferro reach-through.  This conclusion is direct **upstream API
+and implementation evidence**.
+
+### Confirmed related ownership losses in full-rank CI/LU factorization
+
+The one-time deferred CI canonicalization measured about 14.6--16.2 ms in the
+no-Guard chain profile (roughly 4--9% of the measured sweep phase, depending on
+the input bond dimension).  Its implementation contains several independent
+copies.  They remain findings even though this canonicalization is not repeated
+after `canonical_form()` becomes `Some(CI)`:
+
+1. `eager_tensor_to_matrix` and `native_tensor_to_matrix` first extract a
+   column-major `Vec<T>`.  `matrix_from_col_major_values` then allocates
+   `Matrix::zeros(m, n)` and copies the same column-major values into it with a
+   nested loop.  The existing upstream
+   `Matrix::try_from_col_major_vec(m, n, data)` accepts that allocation
+   directly.  The hand-written loop therefore also performs an unnecessary
+   zero-fill before overwriting every entry.
+2. `factorize_ci_with_options` passes that newly owned matrix to
+   `matrix_luci_factors_from_matrix(&a_matrix, ...)`.  The borrowed facade calls
+   `rrlu`, whose documented and implemented behavior clones the entire matrix.
+   The already-existing `matrix_luci_factors_from_matrix_owned(a_matrix, ...)`
+   calls `rrlu_mut` on the consumed buffer instead.  TreeACI's edge-local LUCI
+   path already uses this owned facade correctly.
+3. The related `factorize_lu_with_options` path has the same input-side issue:
+   it creates an owned matrix and immediately calls `rrlu(&a_matrix, ...)`
+   despite the existing `rrlu_mut` seam.
+4. Both factorization paths convert owned output matrices with the local
+   `matrix_to_vec(&matrix)`, which iterates and clones every scalar.  The
+   upstream `Matrix::into_col_major_vec` consumes the matrix allocation
+   directly.  The resulting `Vec` is then passed through the separately
+   confirmed copying `IdxTensor::from_dense` constructor.
+
+These statements are direct **upstream API and implementation evidence**, not
+an inferred tree algorithm.  Fixes belong in `tensor4all-core` and
+`tensor4all-tensorbackend`; TreeACI must not grow a parallel conversion or a
+direct tenferro dependency.  Whether the entire deferred canonicalization can
+be removed after a continuous TreeACI pass has not been proved: that would
+require a separate tree-CI invariant derivation and remains **[AI Supplied]**.
+
+### Confirmed upstream borrowed-read seam is missed in smaller hot paths
+
+`IdxTensor::to_vec` always duplicates/materializes the tensor value and then
+copies its slice into a new `Vec`.  The existing upstream
+`IdxTensor::with_dense_slice` explicitly provides the same column-major values
+without a new vector for an ordinary host-contiguous tensor, falling back to
+materialization only when borrowing is impossible.  The following TreeTN/
+TreeACI paths call `to_vec` even though their values do not escape the function:
+
+- real and complex raw leaf-message construction;
+- real and complex leaf-center contraction from a raw cached environment;
+- the tensor-backed leaf-center fallback, for both the center and environment;
+- TreeACI's post-Guard output-core padding before it fills the larger buffer.
+
+The same TreeTN file already uses `with_dense_slice` for internal chain/branch
+cores and internal-center contraction, so this is an existing upstream seam,
+not a proposed dependency or a simplett reuse.  The leaf tensors contain only
+`d*chi` values and output padding measured about 7--8 ms in the earlier Guard
+profile, so these copies are not promoted to the sole root cause; they remain
+independent defects.  Rewriting the loop bodies inside nested borrowed-read
+closures is a mechanical implementation task, but it has not yet been applied
+to production.
+
+### Confirmed P0 for default Guard: every result creates a rank-zero tensor
+
+`TreeTNCachedEvaluator::evaluate_batched_with_hint` returns
+`Vec<AnyScalar>`.  `AnyScalar::new_real`/`new_complex` calls
+`AnyScalar::from_value`, which eagerly initializes `IdxTensor::scalar(value)`;
+it is not a lightweight numeric enum.  TreeACI Guard immediately converts each
+result back to its generic `T` through `TreeAciScalar::from_evaluated_scalar`.
+
+The fully warm 16-site, 64-point chain fixture measured only the final output
+wrapping as 2.61, 2.98, and 3.03 ms/call at `chi=64,128,256`, respectively --
+roughly 41--47 microseconds per scalar and independent of the bond contraction.
+The actual raw center contractions were 0.26, 1.04, and 4.30 ms/call.
+
+The older, non-authoritative
+`2026-08-18-treeaci-message-cache-prototype.md` is a useful clue: its Update 13
+already found the same rank-zero construction inside the message cache and
+replaced cached values with private lightweight `CachedScalar`.  The current
+source confirms that fix stopped at internal cache storage; the final public
+batch result is still converted back into one `AnyScalar` per point.  The old
+worklog is not used as proof for the present claim; the source path and timings
+above independently reproduce it.
+
+The legal simplett comparison makes the boundary difference concrete:
+`TTCache<T>::evaluate_many` returns `Vec<T>`, and simplett ACI's Guard consumes
+those typed values directly.  TreeTN exposes only `Vec<AnyScalar>` from its
+batched evaluator in the current API inventory.  Its private `CachedScalar`
+keeps internal messages lightweight, but final raw center results are converted
+back to `AnyScalar` before TreeACI immediately converts them to `T`.  Thus a
+typed TreeTN result seam is currently missing rather than an existing simplett
+function that TreeACI is permitted to call.
+
+The 32-site TreeACI fixture with the default Guard enabled measured:
+
+| input bond | Guard search | pivot injection | complete sweep time | combined Guard share | input evaluation | output evaluation |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 1.096 s | 0.137 s | 1.531 s | 80.5% | 0.750 s / 8,460 results | 0.341 s / 4,195 results |
+| 128 | 1.344 s | 0.223 s | 2.027 s | 77.3% | 0.979 s / 8,588 results | 0.359 s / 4,259 results |
+| 256 | 2.265 s | 0.366 s | 3.241 s | 81.2% | 1.856 s / 8,844 results | 0.402 s / 4,387 results |
+
+Each run completed seven sweeps because Guard injected pivots; the no-Guard
+fixture completed two.  These timings therefore compare phase shares within
+each run, not total algorithm parity between Guard modes.  They establish that
+Guard dominates the default path and that thousands of dynamic-scalar tensor
+initializations are real work.  A generic typed TreeTN batch-evaluation API is
+the **[AI Supplied]** proposed upstream seam.
+
+Injection was measured separately because it is outside
+`find_global_pivots`.  Its dominant subphase was the one post-injection
+`InputFrameStore::extend`: 127.7, 213.9, and 355.6 ms at
+`chi=64,128,256`, respectively.  Candidate-set cloning cost less than 0.9 ms,
+global-point projection less than 0.7 ms, and output padding about 7--8 ms.
+Thus the injection extension is another material contributor, while the
+whole-candidate clone is currently only a scaling suspect.
+
+A direct complete-ACI chain comparison now separates the local-sweep and
+default-Guard cases at input bond 256.  Both arms used the same deterministic
+16-site inputs and first-input initial guess.  In each comparison they
+completed two sweeps with maximum output rank 17, and dense numerical checks
+passed:
+
+| mode | simplett ACI | TreeACI | Tree/simplett | evaluated points (simple/tree) |
+|---|---:|---:|---:|---:|
+| Guard disabled | 87.274 ms | 77.003 ms | 0.88x | 46,732 / 36,516 |
+| Guard enabled | 151.85 ms | 374.37 ms | 2.47x | 47,904 / 37,752 |
+
+The relative dense max errors in the Guard run were `1.442e-8` and
+`1.343e-8`, respectively.  With Guard disabled, TreeACI is about 11.8% faster;
+with the default Guard it is about 147% slower despite requesting fewer
+operator points.  Subtracting the matched no-Guard medians gives approximately
+64.6 ms of added simplett work versus 297.4 ms of added TreeACI work, a 4.6x
+larger Guard increment.  This subtraction is a diagnostic attribution rather
+than an algorithmic identity, but the equal sweep/rank outcomes and nearly
+equal additional point counts (`1,172` versus `1,236`) make it substantially
+more specific than an unmatched end-to-end ratio.
+
+The opt-in benchmark mode selected by
+`T4A_TREEACI_PARITY_ENABLE_GUARD=1` and the subtraction above are
+**[AI Supplied]**.  They reproduce the reported chain regression on the default
+path while showing that the local chain sweep itself is not currently slower
+in this representative case.  The separately matched evaluator benchmark and
+source paths remain the causal evidence for the warm-center and `AnyScalar`
+costs; a whole-ACI timing alone cannot distinguish them.
+
+Likewise, the older audit notes say injection was changed from rebuilding every
+frame from scratch to `extend`.  That historical statement is only a clue.  The
+current counters show the incremental replacement is still substantial because
+new global samples grow many directed frames and every grown buffer recopies
+its retained prefix.
+
+### Confirmed: warm cache and center work solve different problems
+
+Repeating an identical batch after all directed messages were warm produced
+zero message contractions and zero insertions, yet center contraction still
+accounted for 86.0%, 87.5%, and 94.8% of calls at `chi=64,128,256`.  At an
+internal chain center the current raw kernel visits `P*chi^2` core elements;
+at a degree-`z` center its direct generalization visits
+`P*d*product(chi_i)` local elements.  The component conversion itself copied
+8,192/16,384/32,768 values per call but cost only 0.009/0.017/0.037 ms, so it is
+a valid small overhead rather than the main center cost.
+
+Splitting the warm environment phase further retained several smaller
+contributors.  On the same 16-site, 64-point batches, rebuilding compact
+assignments cost about 0.122--0.123 ms/call, the all-hit message walk and
+reconstruction cost 0.189--0.241 ms/call, the immutable raw-path capability
+scan cost 0.019--0.024 ms/call, and final component assembly about 0.001
+ms/call.  These are below the center cost in this fixture, but Guard invokes
+the evaluator thousands of times on small batches, where the fixed work is less
+amortized.
+
+The assignment builder explains the fixed allocation pressure.  For the
+ordinary one-physical-index-per-node case, every node/point builds one local
+coordinate `Vec`, `validate_entry_values` builds another `Vec` of cloned-index
+pairs, and `build_compact_assignment_batch` builds a third `Vec` for the local
+and child assignment IDs.  The 16-site, 64-point fixture therefore creates at
+least 3,072 short-lived vectors per evaluator call before cache-key and result
+allocations.  Direct bounds checks and an allocation-free compact assignment
+key are **[AI Supplied]** implementation directions.
+
+The actual Guard workload makes those fixed per-call costs more important than
+the 64-point evaluator microbenchmark suggests.  An opt-in 32-site, two-input
+chain profile made about 2,100--2,200 input-evaluator calls and the same number
+of output-evaluator calls per run, with only about two points per call:
+
+| input bond | Guard search | input evaluation | input ms/call | output evaluation | output ms/call |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 1.064 s | 725.4 ms / 2,122 calls | 0.342 | 333.6 ms / 2,115 calls | 0.158 |
+| 128 | 1.326 s | 964.2 ms / 2,154 calls | 0.448 | 356.4 ms / 2,147 calls | 0.166 |
+| 256 | 2.197 s | 1.793 s / 2,218 calls | 0.809 | 395.9 ms / 2,211 calls | 0.179 |
+
+Input plus output evaluation accounts for 99.5--99.7% of the measured Guard
+search time.  The input cost grows with the deliberately large fixed input
+bond, while the learned output remains much lower rank and its cost is nearly
+flat.  This is direct evidence that the reproduced chain regression is the
+high-rank input evaluator being invoked thousands of times in tiny batches,
+not an unexplained cost in the random-walk bookkeeping.  The phase counters
+and timing fixture are **[AI Supplied]**; the Guard algorithm itself is the
+authorized simplett comparison.
+
+There is another independent lifetime mismatch.  Input evaluators are retained
+across Guard invocations, but `find_global_pivots` constructs a fresh output
+evaluator on every invocation.  The output tensors change between sweeps, so
+their numerical messages cannot simply be reused.  However, the immutable
+topology, rooted plans, and directed-component layouts are discarded with the
+numerical cache and rebuilt.  Separating those lifetimes or sharing immutable
+plans is **[AI Supplied]** and its whole-run benefit has not yet been isolated;
+it remains a valid small suspect rather than the primary high-rank cost above.
+
+There is also a concrete existing upstream facility that the current tree
+cache does not use.  `tensor4all-core::index_key::KeyBuilder` documents and
+implements append-style tree-key composition (`local ++ child_1 ++ ...`) and
+normalizes the result to the same opaque `IndexKey` as direct
+`FlatIndexer::encode`.  `TreeTNCachedEvaluator` instead stores every rooted
+subtree's full physical-position list, gathers that complete coordinate vector
+again for each requested message key, and directly re-encodes it.  Reworking
+the cache-key pipeline around the upstream composition API requires a careful
+ownership/uniqueness design and is not yet measured as a replacement, but the
+current full-subtree gather is not justified by the absence of an upstream
+primitive.
+
+The provenance is unusually explicit: upstream commit `7f56754` is titled
+`core: checked bit-packed index-key encoder for tree cache keys`, and the
+`KeyBuilder` rustdoc itself states the tree composition rule.  The existing
+upstream Criterion fixture also permits a primitive-only comparison.  On this
+machine a 64-bit binary key took about 51.2 ns to encode directly and 29.1 ns
+to compose from four already-encoded pieces.  This does **not** predict a 1.76x
+evaluator improvement: the current and proposed pipelines allocate and retain
+different surrounding data, and a chain still copies successively wider keys.
+It does establish that the intended upstream composition operation is both
+present and individually cheaper in this representative width.  Applying it
+to evaluator ownership and traversal is **[AI Supplied]** until an end-to-end
+A/B exists.
+
+The layout ownership is also keyed at the wrong granularity.  Numerical
+message caches are correctly keyed by `(from, to)`, but
+`message_cache_layouts_by_center` retains a complete node-to-layout map for
+every center, and each `RootedMessagePlan` retains every node's full subtree
+list solely to build those layouts.  A directed component and its physical-key
+layout depend on `(from, to)`, not on which more distant node was selected as
+the center.  Guard visits every site as the varying center, so a length-`N`
+chain retains `O(N^3)` physical-position/node references rather than the
+`O(N^2)` total content of its `2E` distinct directed components.
+
+A moving-center `N=16`, `chi=256` diagnostic confirmed the exact counts after
+all 16 centers had been visited: 1,616 retained subtree-node references and
+1,616 retained layout-position references versus 240 positions across unique
+directed components, a 6.73x duplication before counting the `FlatIndexer`
+dimension/offset vectors and `HashMap` capacities.  Fifteen newly visited
+centers built 1,536 references of each kind; plan construction took 0.214 ms
+and layout construction 0.122 ms in that run.  The first complete center scan
+took 8.906 ms and the second 4.373 ms, but their difference also includes
+new-message/cache warming and is not attributed wholly to metadata.
+
+The count follows directly from the retained structures and the directed-cut
+identity.  Moving immutable topology and physical key layouts to one
+directed-edge table is **[AI Supplied]** implementation design.  The existing
+TreeTN `CachedTopology` and lazy `FitEnvironment::get_or_compute` demonstrate
+that fixed topology and hit-before-recursion patterns already exist upstream,
+but their linsolve/fit-specific types do not directly implement an
+assignment-keyed evaluator cache and should not be coupled into this module as
+an ad hoc fix.
+
+The eager postorder walk also materializes cache hits that cannot be observed.
+In the fully warm `N=16`, 64-point chain call, 444 cached message columns were
+reconstructed at every bond dimension.  At `chi=256` that copied 113,664
+`CachedScalar` values, or about 2.60 MiB at the measured 24-byte representation.
+Only the two center-adjacent environments, 32,768 values (0.75 MiB), reached
+the center.  The remaining 80,896 values (about 1.85 MiB, 71.2% of the
+reconstruction) were descendant messages built before an already-cached parent
+message was returned and never consumed.  The same reconstructed/final ratio
+appeared at `chi=64` and `128`; wall time was 0.147--0.290 ms/call for the
+reconstruction portion in representative runs.
+
+A top-down request for each center-adjacent directed message can test that
+message's exact subtree key first and recurse into children only on a miss.
+This follows the cache dependency itself and matches the lazy-hit pattern
+already used by TreeTN's fit environments, but adapting it to per-assignment
+batch compaction is **[AI Supplied]**.  It is independent of the edge-centered
+final contraction: lazy message lookup removes dead descendant work even if
+the current vertex-center arithmetic remains temporarily unchanged.
+
+Simplett's legal comparison path cuts an edge and combines two cached side
+messages with a length-`chi` dot product.  Extending that identity to an
+arbitrary tree edge is the previously recorded **[AI Supplied]** edge-cut
+derivation; it changes desired warm complexity rather than merely tuning the
+current vertex-center loop.
+
+### Measured small/absent pass overheads retained in the ledger
+
+Cloning the forward/reverse schedule for a pass cost less than one microsecond
+in the high-rank chain fixture, so it is not a current contributor, although
+borrowing the immutable plan would still remove needless work.  The
+`FrameBuilder` memo-hit branch, which clones a cached vector when reached,
+recorded zero memo-hit clones in the same chain runs (19,888 batched/scalar
+computations at `chi=256`).  It is therefore absent from this chain trace, not
+proved harmless for branch scalar fallbacks.  Both observations are retained
+to avoid conflating “small or not exercised in this fixture” with “not a
+performance defect.”
 
 ## Measurements and limitations
 

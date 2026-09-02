@@ -1265,6 +1265,7 @@ fn build_frame_builder<'a>(
         .collect::<Vec<_>>();
     super::FrameBuilder {
         input,
+        input_index: 0,
         problem,
         arena,
         cores,
@@ -1859,6 +1860,7 @@ fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputi
         .collect::<Vec<_>>();
     let mut builder = super::FrameBuilder {
         input: &input,
+        input_index: 0,
         problem: &problem,
         arena: &arena,
         cores,
@@ -2118,5 +2120,273 @@ fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
     eprintln!(
         "batched (two-incoming fix): {batched_elapsed:?}\nscalar (old fallback, still used for 3+ incoming): {scalar_elapsed:?}\nspeedup: {:.2}x",
         scalar_elapsed.as_secs_f64() / batched_elapsed.as_secs_f64()
+    );
+}
+
+/// [AI Supplied] Diagnostic-only A/B for the existing tensorbackend batch API.
+///
+/// Unlike the previously rejected two-GEMM experiment, this preserves the
+/// current first-stage contraction decomposition: every fixed-second-bond
+/// core slice is still multiplied by `v1` independently.  The only change is
+/// whether those same-shaped products are dispatched one at a time or through
+/// `batched_mat_mul_same_shape_owned`.  It therefore isolates backend dispatch
+/// consolidation from a change in the mathematical reduction tree.
+#[test]
+#[ignore]
+fn diagnostic_two_incoming_sequential_vs_upstream_same_shape_batch() {
+    use std::time::{Duration, Instant};
+
+    use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, Matrix};
+
+    const OUTGOING_DIM: usize = 32;
+    const INCOMING_DIM_1: usize = 256;
+    const INCOMING_DIM_2: usize = 256;
+    const N1: usize = 40;
+    const N2: usize = 40;
+    const REPEATS: usize = 9;
+
+    let dims = vec![1, OUTGOING_DIM, INCOMING_DIM_1, INCOMING_DIM_2];
+    let mut strides = Vec::with_capacity(dims.len());
+    let mut stride = 1usize;
+    for &dim in &dims {
+        strides.push(stride);
+        stride *= dim;
+    }
+    let core = super::PreparedCore {
+        indices: dims.iter().map(|&dim| DynIndex::new_dyn(dim)).collect(),
+        dims,
+        strides,
+        values: (0..stride)
+            .map(|i| ((i * 17 + 3) % 257) as f64 / 257.0)
+            .collect(),
+    };
+    let v1 = Matrix::from_col_major_vec(
+        INCOMING_DIM_1,
+        N1,
+        (0..INCOMING_DIM_1 * N1)
+            .map(|i| ((i * 13 + 5) % 251) as f64 / 251.0)
+            .collect(),
+    );
+    let v2 = Matrix::from_col_major_vec(
+        INCOMING_DIM_2,
+        N2,
+        (0..INCOMING_DIM_2 * N2)
+            .map(|i| ((i * 11 + 7) % 241) as f64 / 241.0)
+            .collect(),
+    );
+
+    let upstream = || {
+        let mut a = Vec::with_capacity(INCOMING_DIM_2 * OUTGOING_DIM * INCOMING_DIM_1);
+        let mut b = Vec::with_capacity(INCOMING_DIM_2 * INCOMING_DIM_1 * N1);
+        for i2 in 0..INCOMING_DIM_2 {
+            let core_matrix = super::single_incoming_core_matrix(
+                &core,
+                1,
+                2,
+                i2 * core.strides[3],
+                OUTGOING_DIM,
+                INCOMING_DIM_1,
+            );
+            a.extend(core_matrix.into_col_major_vec());
+            b.extend_from_slice(v1.as_col_major_slice());
+        }
+        let stage1 = batched_mat_mul_same_shape_owned(
+            INCOMING_DIM_2,
+            OUTGOING_DIM,
+            INCOMING_DIM_1,
+            N1,
+            a,
+            b,
+        )
+        .unwrap();
+        let stage1 = Matrix::from_col_major_vec(OUTGOING_DIM * N1, INCOMING_DIM_2, stage1);
+        mat_mul(&stage1, &v2).unwrap()
+    };
+
+    let sequential = || {
+        super::two_incoming_core_matrix_batched(
+            &core,
+            1,
+            2,
+            3,
+            0,
+            OUTGOING_DIM,
+            INCOMING_DIM_1,
+            INCOMING_DIM_2,
+            &v1,
+            &v2,
+        )
+        .unwrap()
+    };
+
+    let expected = sequential();
+    let actual = upstream();
+    let max_abs = expected
+        .as_col_major_slice()
+        .iter()
+        .zip(actual.as_col_major_slice())
+        .map(|(&left, &right)| (left - right).abs())
+        .fold(0.0_f64, f64::max);
+    let scale = expected
+        .as_col_major_slice()
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_abs <= 2.0e-14 * scale.max(1.0),
+        "max_abs={max_abs}, scale={scale}"
+    );
+
+    let mut sequential_times = Vec::with_capacity(REPEATS);
+    let mut upstream_times = Vec::with_capacity(REPEATS);
+    for repeat in 0..REPEATS {
+        if repeat % 2 == 0 {
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+        } else {
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+        }
+    }
+    sequential_times.sort_unstable();
+    upstream_times.sort_unstable();
+    let sequential_median: Duration = sequential_times[REPEATS / 2];
+    let upstream_median: Duration = upstream_times[REPEATS / 2];
+    let repeated_rhs_bytes = INCOMING_DIM_2 * INCOMING_DIM_1 * N1 * std::mem::size_of::<f64>();
+    eprintln!(
+        "sequential median: {sequential_median:?}\nupstream same-shape batch median: {upstream_median:?}\nupstream/sequential: {:.3}x\nrepeated RHS payload: {repeated_rhs_bytes} bytes\nmax relative disagreement: {:.3e}",
+        upstream_median.as_secs_f64() / sequential_median.as_secs_f64(),
+        max_abs / scale.max(1.0),
+    );
+}
+
+/// [AI Supplied] Diagnostic for the chain path's per-input dispatch loop.
+///
+/// The dimensions model a binary-physical chain plateau with two same-shaped
+/// operands. SimpleTT ACI already batches this dimension-compatible case, but
+/// TreeACI currently calls the backend separately for each input.
+#[test]
+#[ignore]
+fn diagnostic_chain_two_inputs_sequential_vs_upstream_same_shape_batch() {
+    use std::time::{Duration, Instant};
+
+    use tensor4all_tensorbackend::{
+        batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix,
+    };
+
+    const BATCH: usize = 2;
+    const M: usize = 512;
+    const K: usize = 256;
+    const N: usize = 256;
+    const REPEATS: usize = 9;
+
+    let a_items = M * K;
+    let b_items = K * N;
+    let a = (0..BATCH * a_items)
+        .map(|i| ((i * 17 + 3) % 257) as f64 / 257.0)
+        .collect::<Vec<_>>();
+    let b = (0..BATCH * b_items)
+        .map(|i| ((i * 13 + 5) % 251) as f64 / 251.0)
+        .collect::<Vec<_>>();
+
+    let sequential = || {
+        let mut outputs = Vec::with_capacity(BATCH * M * N);
+        for input in 0..BATCH {
+            let left = Matrix::from_col_major_vec(
+                M,
+                K,
+                a[input * a_items..(input + 1) * a_items].to_vec(),
+            );
+            let right = Matrix::from_col_major_vec(
+                K,
+                N,
+                b[input * b_items..(input + 1) * b_items].to_vec(),
+            );
+            outputs.extend(mat_mul(&left, &right).unwrap().into_col_major_vec());
+        }
+        outputs
+    };
+    let sequential_owned = || {
+        let mut outputs = Vec::with_capacity(BATCH * M * N);
+        for input in 0..BATCH {
+            let left = Matrix::from_col_major_vec(
+                M,
+                K,
+                a[input * a_items..(input + 1) * a_items].to_vec(),
+            );
+            let right = Matrix::from_col_major_vec(
+                K,
+                N,
+                b[input * b_items..(input + 1) * b_items].to_vec(),
+            );
+            outputs.extend(mat_mul_owned(left, right).unwrap().into_col_major_vec());
+        }
+        outputs
+    };
+    let upstream =
+        || batched_mat_mul_same_shape_owned(BATCH, M, K, N, a.clone(), b.clone()).unwrap();
+
+    let expected = sequential();
+    assert_eq!(expected, sequential_owned());
+    let actual = upstream();
+    let max_abs = expected
+        .iter()
+        .zip(&actual)
+        .map(|(&left, &right)| (left - right).abs())
+        .fold(0.0_f64, f64::max);
+    let scale = expected
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_abs <= 2.0e-14 * scale.max(1.0),
+        "max_abs={max_abs}, scale={scale}"
+    );
+
+    let mut sequential_times = Vec::with_capacity(REPEATS);
+    let mut sequential_owned_times = Vec::with_capacity(REPEATS);
+    let mut upstream_times = Vec::with_capacity(REPEATS);
+    for repeat in 0..REPEATS {
+        if repeat % 2 == 0 {
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential_owned());
+            sequential_owned_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+        } else {
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential_owned());
+            sequential_owned_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+        }
+    }
+    sequential_times.sort_unstable();
+    sequential_owned_times.sort_unstable();
+    upstream_times.sort_unstable();
+    let sequential_median: Duration = sequential_times[REPEATS / 2];
+    let sequential_owned_median: Duration = sequential_owned_times[REPEATS / 2];
+    let upstream_median: Duration = upstream_times[REPEATS / 2];
+    eprintln!(
+        "two sequential borrowed inputs median: {sequential_median:?}\ntwo sequential owned inputs median: {sequential_owned_median:?}\nupstream same-shape batch median: {upstream_median:?}\nowned/borrowed: {:.3}x\nbatch/borrowed: {:.3}x\nmax relative disagreement: {:.3e}",
+        sequential_owned_median.as_secs_f64() / sequential_median.as_secs_f64(),
+        upstream_median.as_secs_f64() / sequential_median.as_secs_f64(),
+        max_abs / scale.max(1.0),
     );
 }
