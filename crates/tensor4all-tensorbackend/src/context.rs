@@ -8,6 +8,19 @@ use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuBackend};
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 
+/// Caller-owned execution domain used by context-aware tensor algorithms.
+///
+/// Values are validated against the exact runtime represented by the selected
+/// context; no implicit host/device transfer is performed by this enum.
+#[derive(Clone, Debug)]
+pub enum ExecutionContext {
+    /// Host execution through one caller-owned CPU context.
+    Cpu(Arc<CpuExecutionContext>),
+    /// CUDA execution through one caller-owned CUDA context.
+    #[cfg(feature = "tenferro-cuda")]
+    Cuda(Arc<crate::cuda::CudaExecutionContext>),
+}
+
 /// Error returned by explicit CPU context graph or eager-runtime operations.
 ///
 /// The original tenferro diagnostic is retained as the error source.

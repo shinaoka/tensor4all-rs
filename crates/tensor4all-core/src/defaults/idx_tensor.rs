@@ -23,8 +23,8 @@ use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{
     contract_native_tensor, default_eager_ctx, dense_native_tensor_from_col_major,
     diag_native_tensor_from_col_major, native_tensor_primal_to_diag,
-    storage_payload_native_read_input, storage_to_native_tensor, NativeTensorReadInput,
-    TensorElement,
+    storage_payload_native_read_input, storage_to_native_tensor, ExecutionContext,
+    NativeTensorReadInput, TensorElement,
 };
 use tensor4all_tensorbackend::{src_error_estimate as backend_src_error_estimate, Matrix};
 use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
@@ -7138,6 +7138,171 @@ impl IdxTensor {
     /// ```
     pub fn is_complex(&self) -> bool {
         self.storage.is_complex()
+    }
+    /// Create a dense tensor in a caller-owned execution context.
+    ///
+    /// Host data is explicitly uploaded when `context` is CUDA-resident; no
+    /// global default context is consulted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense_in(&context, vec![index], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(tensor.to_vec::<f64>()?, vec![1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the indices, payload, context, or
+    /// explicit transfer is invalid.
+    pub fn from_dense_in<T: TensorElement>(
+        context: &ExecutionContext,
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let native = dense_native_tensor_from_col_major(&data, &dims)
+            .map_err(|error| IdxTensorError::operation("context-scoped construction", error))?;
+        let inner = match context {
+            ExecutionContext::Cpu(context) => {
+                let runtime = context.eager_runtime().map_err(|error| {
+                    IdxTensorError::operation("CPU context construction", anyhow::Error::new(error))
+                })?;
+                EagerTensor::from_tensor_in(native, runtime).map_err(|error| {
+                    IdxTensorError::operation(
+                        "CPU context eager wrapping",
+                        anyhow::Error::new(error),
+                    )
+                })?
+            }
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(context) => {
+                let uploaded = context.upload_cuda(&native).map_err(|error| {
+                    IdxTensorError::operation(
+                        "CUDA context construction",
+                        anyhow::Error::new(error),
+                    )
+                })?;
+                EagerTensor::from_tensor_in(
+                    uploaded,
+                    context.eager_runtime().map_err(|error| {
+                        IdxTensorError::operation(
+                            "CUDA context eager runtime",
+                            anyhow::Error::new(error),
+                        )
+                    })?,
+                )
+                .map_err(|error| {
+                    IdxTensorError::operation(
+                        "CUDA context eager wrapping",
+                        anyhow::Error::new(error),
+                    )
+                })?
+            }
+        };
+        Self::from_inner(indices, inner).map_err(IdxTensorError::from)
+    }
+
+    /// Create an all-ones tensor in a caller-owned execution context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::ones_in(&context, &[index])?;
+    /// assert_eq!(tensor.to_vec::<f64>()?, vec![1.0, 1.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the index dimensions or context
+    /// construction is invalid.
+    pub fn ones_in(
+        context: &ExecutionContext,
+        indices: &[DynIndex],
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let dims = Self::expected_dims_from_indices(indices);
+        let total_size = checked_total_size(&dims)?;
+        Self::from_dense_in(context, indices.to_vec(), vec![1.0_f64; total_size])
+    }
+
+    /// Validate that this tensor belongs to the supplied execution context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense_in(&context, vec![index], vec![1.0_f64, 2.0])?;
+    /// tensor.validate_context(&context)?;
+    /// assert_eq!(tensor.dims(), vec![2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the tensor does not belong to `context`.
+    pub fn validate_context(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<(), IdxTensorError> {
+        let Some(inner) = self.storage.eager() else {
+            if matches!(context, ExecutionContext::Cpu(_)) {
+                return Ok(());
+            }
+            return Err(IdxTensorError::operation(
+                "context validation",
+                anyhow::anyhow!("tensor has no CUDA eager runtime"),
+            ));
+        };
+        match context {
+            ExecutionContext::Cpu(context) => {
+                let expected = context.eager_runtime().map_err(|error| {
+                    IdxTensorError::operation("CPU context validation", anyhow::Error::new(error))
+                })?;
+                if inner.ctx_id() != expected.id() {
+                    return Err(IdxTensorError::operation(
+                        "context validation",
+                        anyhow::anyhow!("tensor belongs to a different CPU eager context"),
+                    ));
+                }
+            }
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(context) => {
+                self.validate_cuda_residency(context).map_err(|error| {
+                    IdxTensorError::operation("CUDA context validation", anyhow::Error::new(error))
+                })?;
+            }
+        }
+        Ok(())
     }
 }
 

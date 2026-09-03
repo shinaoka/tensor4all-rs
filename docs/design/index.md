@@ -9,6 +9,7 @@
 | [explicit-cpu-execution-context.md](./explicit-cpu-execution-context.md) | Issue #663 explicit plain, graph, eager-AD, and logical reconstruction context |
 | [tensorbackend-session-entry.md](./tensorbackend-session-entry.md) | Issue #623 slice: centralize concrete CPU sessions on explicit contexts before CUDA dispatch |
 | [cuda-tree-contraction.md](./cuda-tree-contraction.md) | Issues #623/#553 single-CUDA explicit transfer and TreeTN contraction vertical slice |
+| [context-scoped-src-contraction.md](./context-scoped-src-contraction.md) | Issue #720 caller-owned context construction, factorization, adaptive decisions, and CUDA-resident SRC |
 | [torch_backend.md](./torch_backend.md) | PyTorch backend design exploration |
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
 | [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles and the opt-in full-debug release profile |
