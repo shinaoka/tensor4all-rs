@@ -1,9 +1,10 @@
 //! Benchmark cached TreeTN batch evaluation against TTCache and uncached TreeTN evaluation.
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use num_complex::{Complex32, Complex64};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
 use tensor4all_simplett::{
     tensor3_zeros, MultiIndex, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
 };
@@ -113,6 +114,130 @@ fn create_uniform_three_leaf_star(
         TreeTN::from_tensors(tensors, vec![0, 1, 2, 3]).unwrap(),
         physical,
     )
+}
+
+trait BenchmarkScalar: TensorElement {
+    fn from_parts(real: f64, imag: f64) -> Self;
+}
+
+impl BenchmarkScalar for f32 {
+    fn from_parts(real: f64, _imag: f64) -> Self {
+        real as f32
+    }
+}
+
+impl BenchmarkScalar for f64 {
+    fn from_parts(real: f64, _imag: f64) -> Self {
+        real
+    }
+}
+
+impl BenchmarkScalar for Complex32 {
+    fn from_parts(real: f64, imag: f64) -> Self {
+        Self::new(real as f32, imag as f32)
+    }
+}
+
+impl BenchmarkScalar for Complex64 {
+    fn from_parts(real: f64, imag: f64) -> Self {
+        Self::new(real, imag)
+    }
+}
+
+fn create_typed_benchmark_chain<T: BenchmarkScalar>() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    let s0 = DynIndex::new_dyn(3);
+    let b01 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let b12 = DynIndex::new_dyn(3);
+    let s2 = DynIndex::new_dyn(3);
+    let t0 = IdxTensor::from_dense(
+        vec![s0.clone(), b01.clone()],
+        (0..6)
+            .map(|value| T::from_parts(value as f64 * 0.25 - 0.5, 0.125))
+            .collect(),
+    )
+    .unwrap();
+    let t1 = IdxTensor::from_dense(
+        vec![b01, s1.clone(), b12.clone()],
+        (0..12)
+            .map(|value| T::from_parts(value as f64 * 0.125, -0.25))
+            .collect(),
+    )
+    .unwrap();
+    let t2 = IdxTensor::from_dense(
+        vec![b12, s2.clone()],
+        (0..9)
+            .map(|value| T::from_parts(1.0 - value as f64 * 0.1, 0.0625))
+            .collect(),
+    )
+    .unwrap();
+    (
+        TreeTN::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap(),
+        vec![s0, s1, s2],
+    )
+}
+
+fn bench_typed_scalar_kind<T: BenchmarkScalar>(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    label: &str,
+) {
+    let (tree, indices) = create_typed_benchmark_chain::<T>();
+    let values = (0..16)
+        .flat_map(|point| [point % 3, (point / 2) % 2, (point + 1) % 3])
+        .collect::<Vec<_>>();
+    let shape = [3usize, 16usize];
+    group.bench_function(BenchmarkId::new("cold", label), |b| {
+        b.iter_batched_ref(
+            || {
+                TreeTNCachedEvaluator::new(
+                    &tree,
+                    &indices,
+                    CachedEvaluatorOptions {
+                        center: Some(1),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            },
+            |evaluator| {
+                let points = ColMajorArrayRef::new(black_box(&values), &shape).unwrap();
+                evaluator.evaluate_batched(points).unwrap()
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    evaluator.evaluate_batched(points).unwrap();
+    group.bench_function(BenchmarkId::new("warm", label), |b| {
+        b.iter(|| {
+            let points = ColMajorArrayRef::new(black_box(&values), &shape).unwrap();
+            evaluator.evaluate_batched(points).unwrap()
+        })
+    });
+}
+
+/// Scalar-kind cold/warm baseline for #717. This is intentionally a paired
+/// measurement fixture: the same topology, assignments, center, and batch are
+/// used for f32, f64, Complex32, and Complex64, while the evaluator keeps its
+/// existing raw-vs-generic dispatch policy.
+fn bench_cached_evaluator_scalar_kinds(c: &mut Criterion) {
+    let mut group = c.benchmark_group("treetn_cached_scalar_kind");
+    group.sample_size(10);
+    bench_typed_scalar_kind::<f32>(&mut group, "f32");
+    bench_typed_scalar_kind::<f64>(&mut group, "f64");
+    bench_typed_scalar_kind::<Complex32>(&mut group, "c32");
+    bench_typed_scalar_kind::<Complex64>(&mut group, "c64");
+    group.finish();
 }
 
 fn bench_chain_size_scaling(c: &mut Criterion) {
@@ -597,6 +722,7 @@ criterion_group!(
     bench_bond_dim_scaling,
     bench_warm_call_vs_bond,
     bench_hiroshi_chain_evaluator_parity,
-    bench_warm_center_coordination_vs_bond
+    bench_warm_center_coordination_vs_bond,
+    bench_cached_evaluator_scalar_kinds
 );
 criterion_main!(benches);

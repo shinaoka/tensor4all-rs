@@ -4890,8 +4890,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_complex::Complex32;
-    use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
+    use num_complex::{Complex32, Complex64};
+    use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
 
     #[derive(Clone, Copy, Default)]
     struct WorkToken;
@@ -4906,6 +4906,467 @@ mod tests {
         fn mul(self, _rhs: Self) -> Self::Output {
             self
         }
+    }
+
+    trait CachedEvaluatorTestScalar: TensorElement {
+        const DEBUG_DTYPE: &'static str;
+        const TOLERANCE: f64;
+
+        fn from_parts(real: f64, imag: f64) -> Self;
+    }
+
+    impl CachedEvaluatorTestScalar for f32 {
+        const DEBUG_DTYPE: &'static str = "f32";
+        const TOLERANCE: f64 = 1.0e-5;
+
+        fn from_parts(real: f64, _imag: f64) -> Self {
+            real as f32
+        }
+    }
+
+    impl CachedEvaluatorTestScalar for f64 {
+        const DEBUG_DTYPE: &'static str = "f64";
+        const TOLERANCE: f64 = 1.0e-12;
+
+        fn from_parts(real: f64, _imag: f64) -> Self {
+            real
+        }
+    }
+
+    impl CachedEvaluatorTestScalar for Complex32 {
+        const DEBUG_DTYPE: &'static str = "c32";
+        const TOLERANCE: f64 = 1.0e-5;
+
+        fn from_parts(real: f64, imag: f64) -> Self {
+            Self::new(real as f32, imag as f32)
+        }
+    }
+
+    impl CachedEvaluatorTestScalar for Complex64 {
+        const DEBUG_DTYPE: &'static str = "c64";
+        const TOLERANCE: f64 = 1.0e-12;
+
+        fn from_parts(real: f64, imag: f64) -> Self {
+            Self::new(real, imag)
+        }
+    }
+
+    fn typed_three_node_chain<T: CachedEvaluatorTestScalar>(
+    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let s0 = DynIndex::new_dyn(3);
+        let b01 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let b12 = DynIndex::new_dyn(3);
+        let s2 = DynIndex::new_dyn(3);
+
+        let t0 = IdxTensor::from_dense(
+            vec![s0.clone(), b01.clone()],
+            vec![
+                T::from_parts(1.0, 0.25),
+                T::from_parts(-0.5, -0.75),
+                T::from_parts(2.0, -1.0),
+                T::from_parts(0.75, 0.5),
+                T::from_parts(-1.25, 0.75),
+                T::from_parts(0.125, -0.25),
+            ],
+        )
+        .unwrap();
+        let t1 = IdxTensor::from_dense(
+            vec![b01, s1.clone(), b12.clone()],
+            (0..12)
+                .map(|value| T::from_parts(value as f64 * 0.5 - 1.0, (value as f64 + 1.0) * 0.125))
+                .collect(),
+        )
+        .unwrap();
+        let t2 = IdxTensor::from_dense(
+            vec![b12, s2.clone()],
+            vec![
+                T::from_parts(0.25, -0.5),
+                T::from_parts(1.5, 0.75),
+                T::from_parts(-0.75, 1.25),
+                T::from_parts(2.0, -1.5),
+                T::from_parts(0.5, 0.25),
+                T::from_parts(-1.25, -0.75),
+                T::from_parts(1.25, 0.5),
+                T::from_parts(-0.25, 1.0),
+                T::from_parts(0.875, -0.625),
+            ],
+        )
+        .unwrap();
+
+        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
+        (tree, vec![s0, s1, s2])
+    }
+
+    fn typed_unequal_y_tree<T: CachedEvaluatorTestScalar>(
+    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let sc = DynIndex::new_dyn(2);
+        let s0 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let s2 = DynIndex::new_dyn(2);
+        let b0 = DynIndex::new_dyn(2);
+        let b1 = DynIndex::new_dyn(3);
+        let b2 = DynIndex::new_dyn(4);
+
+        let center = IdxTensor::from_dense(
+            vec![sc.clone(), b0.clone(), b1.clone(), b2.clone()],
+            (0..48)
+                .map(|value| {
+                    T::from_parts(value as f64 * 0.125 - 1.0, (value as f64 + 1.0) * 0.0625)
+                })
+                .collect(),
+        )
+        .unwrap();
+        let leaf0 = IdxTensor::from_dense(
+            vec![b0, s0.clone()],
+            vec![
+                T::from_parts(1.0, 0.25),
+                T::from_parts(-0.5, -0.5),
+                T::from_parts(1.5, 0.75),
+                T::from_parts(0.25, -1.0),
+            ],
+        )
+        .unwrap();
+        let leaf1 = IdxTensor::from_dense(
+            vec![b1, s1.clone()],
+            (0..6)
+                .map(|value| T::from_parts(value as f64 * 0.25 + 0.5, -0.125))
+                .collect(),
+        )
+        .unwrap();
+        let leaf2 = IdxTensor::from_dense(
+            vec![b2, s2.clone()],
+            (0..8)
+                .map(|value| T::from_parts(1.0 - value as f64 * 0.125, 0.5))
+                .collect(),
+        )
+        .unwrap();
+
+        let tree =
+            TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
+                .unwrap();
+        (tree, vec![sc, s0, s1, s2])
+    }
+
+    fn assert_typed_results<T: CachedEvaluatorTestScalar>(
+        actual: &[AnyScalar],
+        expected: &[AnyScalar],
+    ) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            let scale = actual
+                .real()
+                .abs()
+                .max(actual.imag().abs())
+                .max(expected.real().abs())
+                .max(expected.imag().abs())
+                .max(1.0);
+            assert!(
+                (actual.real() - expected.real()).abs() <= T::TOLERANCE * scale
+                    && (actual.imag() - expected.imag()).abs() <= T::TOLERANCE * scale,
+                "actual={actual:?} expected={expected:?}"
+            );
+            let debug = format!("{actual:?}");
+            assert!(
+                debug.contains(&format!("dtype: \"{}\"", T::DEBUG_DTYPE)),
+                "cached result lost dtype {}: {actual:?}",
+                T::DEBUG_DTYPE
+            );
+        }
+    }
+
+    fn assert_four_scalar_kind_chain<T: CachedEvaluatorTestScalar>() {
+        let (tree, indices) = typed_three_node_chain::<T>();
+        let values = [
+            0usize, 0, 0, // point 0
+            1, 0, 1, // point 1
+            0, 1, 1, // point 2
+            1, 1, 0, // point 3
+            1, 0, 1, // duplicate point 1
+        ];
+        let points = ColMajorArrayRef::new(&values, &[3, 5]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let cold = evaluator.evaluate_batched(points).unwrap();
+        let warm = evaluator.evaluate_batched(points).unwrap();
+
+        assert_typed_results::<T>(&cold, &expected);
+        assert_typed_results::<T>(&warm, &expected);
+        assert!(
+            evaluator.stats_for_test().message_cache_hits > 0,
+            "warm four-scalar evaluation must reuse message cache"
+        );
+    }
+
+    /// [AI Supplied] Regression matrix for all supported cached-evaluator
+    /// scalar kinds. The ordinary evaluator is the dense-result oracle; the
+    /// debug dtype assertion ensures a cache round trip does not silently
+    /// promote 32-bit payloads.
+    #[test]
+    fn cached_evaluator_four_scalar_kinds_match_tree_evaluate() {
+        assert_four_scalar_kind_chain::<f32>();
+        assert_four_scalar_kind_chain::<f64>();
+        assert_four_scalar_kind_chain::<Complex32>();
+        assert_four_scalar_kind_chain::<Complex64>();
+    }
+
+    fn assert_reordered_duplicate_and_partial_hit<T: CachedEvaluatorTestScalar>() {
+        let (tree, indices) = typed_three_node_chain::<T>();
+        let initial = ColMajorArrayRef::new(&[0usize, 0, 0, 1, 0, 1], &[3usize, 2usize]).unwrap();
+        let reordered =
+            ColMajorArrayRef::new(&[1usize, 0, 1, 0, 0, 0, 1, 0, 1], &[3usize, 3usize]).unwrap();
+        let partial =
+            ColMajorArrayRef::new(&[1usize, 0, 1, 2, 1, 2, 0, 0, 0], &[3usize, 3usize]).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let initial_expected = tree.evaluate(&indices, initial).unwrap();
+        let initial_actual = evaluator.evaluate_batched(initial).unwrap();
+        assert_typed_results::<T>(&initial_actual, &initial_expected);
+
+        let reordered_expected = tree.evaluate(&indices, reordered).unwrap();
+        let reordered_actual = evaluator.evaluate_batched(reordered).unwrap();
+        assert_typed_results::<T>(&reordered_actual, &reordered_expected);
+        assert!(
+            evaluator.stats_for_test().message_cache_hits > 0,
+            "reordered duplicate batch must reuse cached columns"
+        );
+        assert_eq!(reordered_actual[0], reordered_actual[2]);
+
+        let partial_expected = tree.evaluate(&indices, partial).unwrap();
+        let partial_actual = evaluator.evaluate_batched(partial).unwrap();
+        assert_typed_results::<T>(&partial_actual, &partial_expected);
+        let stats = evaluator.stats_for_test();
+        assert!(
+            stats.message_cache_hits > 0,
+            "partial batch must retain hits"
+        );
+        assert!(
+            stats.message_cache_misses > 0,
+            "partial batch must compute misses"
+        );
+    }
+
+    /// [AI Supplied] Cache-key metamorphic coverage: reordering and duplicating
+    /// point columns must preserve output order, while a mixed hit/miss batch
+    /// must agree with a fresh ordinary evaluation for every scalar kind.
+    #[test]
+    fn cached_evaluator_reordered_duplicate_and_partial_hit_batches_match() {
+        assert_reordered_duplicate_and_partial_hit::<f32>();
+        assert_reordered_duplicate_and_partial_hit::<f64>();
+        assert_reordered_duplicate_and_partial_hit::<Complex32>();
+        assert_reordered_duplicate_and_partial_hit::<Complex64>();
+    }
+
+    fn assert_cache_capacity_and_clear_reuse<T: CachedEvaluatorTestScalar>() {
+        let (tree, indices) = typed_three_node_chain::<T>();
+        let values = [0usize, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0];
+        let points = ColMajorArrayRef::new(&values, &[3usize, 4usize]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+
+        let mut zero_budget = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                message_cache_max_bytes: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let zero_cold = zero_budget.evaluate_batched(points).unwrap();
+        let zero_warm = zero_budget.evaluate_batched(points).unwrap();
+        assert_typed_results::<T>(&zero_cold, &expected);
+        assert_typed_results::<T>(&zero_warm, &expected);
+        assert!(zero_budget
+            .message_caches
+            .values()
+            .all(|cache| cache.retained_bytes() == 0));
+        assert_eq!(zero_budget.stats_for_test().message_cache_hits, 0);
+
+        let one_column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+        let mut bounded = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                message_cache_max_bytes: one_column_bytes,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bounded_result = bounded.evaluate_batched(points).unwrap();
+        assert_typed_results::<T>(&bounded_result, &expected);
+        assert!(bounded
+            .message_caches
+            .values()
+            .all(|cache| cache.retained_bytes() <= one_column_bytes));
+        bounded.message_caches.clear();
+        let after_clear = bounded.evaluate_batched(points).unwrap();
+        assert_typed_results::<T>(&after_clear, &expected);
+        assert!(
+            bounded.stats_for_test().message_cache_misses > 0,
+            "clearing message caches must force a fresh miss"
+        );
+    }
+
+    /// [AI Supplied] Retention and invalidation coverage for the four scalar
+    /// kinds. Zero-budget and partially retaining caches must still return the
+    /// ordinary result, and clearing/reusing a cache must not expose stale data.
+    #[test]
+    fn cached_evaluator_capacity_zero_over_budget_and_clear_reuse_match() {
+        assert_cache_capacity_and_clear_reuse::<f32>();
+        assert_cache_capacity_and_clear_reuse::<f64>();
+        assert_cache_capacity_and_clear_reuse::<Complex32>();
+        assert_cache_capacity_and_clear_reuse::<Complex64>();
+    }
+
+    fn assert_unequal_y_tree_matches<T: CachedEvaluatorTestScalar>() {
+        let (tree, indices) = typed_unequal_y_tree::<T>();
+        let values = [
+            0usize, 0, 0, 0, // all-zero assignment
+            1, 1, 1, 1, // all-one assignment
+            0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0,
+        ];
+        let points = ColMajorArrayRef::new(&values, &[4usize, 5usize]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let cold = evaluator.evaluate_batched(points).unwrap();
+        let warm = evaluator.evaluate_batched(points).unwrap();
+        assert_typed_results::<T>(&cold, &expected);
+        assert_typed_results::<T>(&warm, &expected);
+        let hub_message = evaluator
+            .build_environment_cache(&1, points)
+            .unwrap()
+            .1
+            .remove(&0)
+            .unwrap();
+        if matches!(T::DEBUG_DTYPE, "f32" | "c32") {
+            assert!(hub_message.tensor.is_some());
+            assert!(hub_message.raw_values.is_none());
+        }
+    }
+
+    /// [AI Supplied] Topology differential coverage for a Y-comb with unequal
+    /// incident bond dimensions. The leaf-centered root forces the hub's
+    /// two-child message path, while the ordinary evaluator remains the dense
+    /// oracle for cold and warm calls.
+    #[test]
+    fn cached_evaluator_path_y_comb_and_unequal_bond_layouts_match() {
+        assert_unequal_y_tree_matches::<f32>();
+        assert_unequal_y_tree_matches::<f64>();
+        assert_unequal_y_tree_matches::<Complex32>();
+        assert_unequal_y_tree_matches::<Complex64>();
+    }
+
+    /// [AI Supplied] Error and fallback coverage for the cached evaluator.
+    /// Shape and coordinate failures must return contextual errors, while a
+    /// degree-four hub (outside the raw-kernel degree limit) must use the
+    /// generic route and still match the dense oracle.
+    #[test]
+    fn cached_evaluator_error_paths_and_unsupported_raw_dispatch_are_typed() {
+        let (tree, indices) = two_node_tree();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+
+        let wrong_rank = ColMajorArrayRef::new(&[0usize, 0, 0], &[1usize, 3usize, 1usize]).unwrap();
+        let error = evaluator.evaluate_batched(wrong_rank).unwrap_err();
+        assert!(
+            error.to_string().contains("2D"),
+            "unexpected error: {error}"
+        );
+
+        let wrong_rows = ColMajorArrayRef::new(&[0usize, 0], &[1usize, 2usize]).unwrap();
+        let error = evaluator.evaluate_batched(wrong_rows).unwrap_err();
+        assert!(
+            error.to_string().contains("row count"),
+            "unexpected error: {error}"
+        );
+
+        let out_of_range = ColMajorArrayRef::new(&[0usize, 2], &[2usize, 1usize]).unwrap();
+        let error = evaluator.evaluate_batched(out_of_range).unwrap_err();
+        assert!(
+            error.to_string().contains("out of range"),
+            "unexpected error: {error}"
+        );
+
+        let s0 = DynIndex::new_dyn(2);
+        let bond = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let mixed = TreeTN::<_, usize>::from_tensors(
+            vec![
+                IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f32, 0.0, 0.0, 1.0])
+                    .unwrap(),
+                IdxTensor::from_dense(vec![bond, s1.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])
+                    .unwrap(),
+            ],
+            vec![0, 1],
+        )
+        .unwrap();
+        let mixed_points = ColMajorArrayRef::new(&[0usize, 0], &[2usize, 1usize]).unwrap();
+        let mixed_indices = vec![s0.clone(), s1.clone()];
+        let mut mixed_evaluator =
+            TreeTNCachedEvaluator::new(&mixed, &mixed_indices, CachedEvaluatorOptions::default())
+                .unwrap();
+        let mixed_expected = mixed.evaluate(&mixed_indices, mixed_points);
+        let mixed_expected = mixed_expected.unwrap();
+        let mixed_cold = mixed_evaluator.evaluate_batched(mixed_points).unwrap();
+        let mixed_warm = mixed_evaluator.evaluate_batched(mixed_points).unwrap();
+        assert_typed_results::<f64>(&mixed_cold, &mixed_expected);
+        assert_typed_results::<f64>(&mixed_warm, &mixed_expected);
+
+        let (degree_four, degree_four_indices) = four_arm_star_tree();
+        let values = [
+            0usize, 0, 0, 0, 0, // point 0
+            1, 0, 1, 0, 1, // point 1
+            0, 1, 0, 1, 0, // point 2
+        ];
+        let points = ColMajorArrayRef::new(&values, &[5usize, 3usize]).unwrap();
+        let expected = degree_four.evaluate(&degree_four_indices, points).unwrap();
+        let mut fallback = TreeTNCachedEvaluator::new(
+            &degree_four,
+            &degree_four_indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual = fallback.evaluate_batched(points).unwrap();
+        assert_typed_results::<f64>(&actual, &expected);
+        let hub = fallback
+            .build_environment_cache(&1, points)
+            .unwrap()
+            .1
+            .remove(&0)
+            .unwrap();
+        assert!(hub.tensor.is_some());
+        assert!(hub.raw_values.is_none());
     }
 
     // [AI Supplied] Small exact fixture plumbing around the #671 relation.

@@ -1253,6 +1253,87 @@ No production algorithm code was changed for #707. The next implementation
 subissue is **#717**, which will complete the four-scalar-kind cache/topology
 regression matrix around the already-landed dispatch correction.
 
+## 2026-09-04 #717 closure: four-scalar cached-evaluator matrix
+
+This section closes the #717 matrix-completion scope around the already-landed
+dtype dispatch correction in commit `2dfabd6c5f116e0897d72735642c93de8acc5f4d`.
+The implementation change in this subissue is regression coverage and
+benchmark instrumentation only: no raw f32/Complex32 kernel was added, no
+public API changed, and the existing f64/Complex64 raw path remains intact.
+All fixture topology, test-policy, and acceptance labels in this section are
+**[AI Supplied]** engineering evidence, not claims copied from the cited
+papers. The full-text paper/spec clones and concrete page/equation/source-line
+locators remain in the `ACI-C*`, `TCI-C*`, and `TEN-C*` evidence register above;
+this subissue makes no new algorithmic literature claim.
+
+### #717 changes
+
+- `crates/tensor4all-treetn/src/treetn/cached_evaluator.rs` now has one
+  parameterized test fixture for `f32`, `f64`, `Complex32`, and `Complex64`.
+  It checks the complete dense result against `TreeTN::evaluate`, verifies the
+  dynamic result dtype through `AnyScalar`'s debug dtype tag, and exercises
+  cold/warm calls, reordered and duplicated columns, a genuine partial hit,
+  zero/limited cache budgets, explicit cache clear/reuse, a leaf-centered
+  unequal-bond Y-comb, mixed f32/f64 promotion, invalid shapes/coordinates,
+  and the degree-four generic fallback.
+- `crates/tensor4all-treeaci/src/global_guard/tests/mod.rs` adds the same
+  four-kind check through `GuardOutputEvaluator` and
+  `TreeAciScalar::from_evaluated_scalar`, comparing its output to one ordinary
+  dense TreeTN materialization.
+- `crates/tensor4all-treetn/benches/cached_evaluator.rs` adds paired cold/warm
+  measurements using the same three-site, unequal physical-dimension fixture
+  for all four scalar kinds. The benchmark keeps f32/Complex32 on the generic
+  route and f64/Complex64 on the existing raw route; it does not silently
+  convert the 32-bit inputs to 64-bit storage.
+
+### #717 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C2` correctness | **PASS** | `cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast`: 60 passed, 2 ignored; all four new scalar/cache/topology tests pass. `cargo test --release -p tensor4all-treeaci global_guard::tests::guard_cached_evaluator_preserves_all_scalar_kinds`: passed. Full values are compared after one dense ordinary-evaluator materialization; f32/c32 use a `1e-5` relative envelope and f64/c64 `1e-12`, without relaxing existing tests. |
+| `E2` efficiency | **N/A — test-only scope** | Focused optimized Criterion run (`cargo bench -p tensor4all-treetn --bench cached_evaluator -- treetn_cached_scalar_kind`, 10 samples per case) recorded cold/warm medians: f32 `4.007/3.152 ms`, f64 `0.749/0.770 ms`, c32 `4.195/3.176 ms`, c64 `0.784/0.781 ms`. Raw files are retained under `target/criterion/treetn_cached_scalar_kind/**/{base,new}/{sample,estimates}.json`; this patch changes no production path, so it cannot honestly claim a before/after speedup or resource delta. The measurement does identify the generic 32-bit fallback as materially slower than raw 64-bit dispatch; deciding whether that warrants duplicated kernels belongs to the later raw-kernel/performance issue, not #717's coverage closure. |
+| `R2` release/regression | **PASS** | The cached-evaluator matrix and Guard typed gate pass in optimized builds. Existing raw/generic differential tests also pass; no direct `tenferro-*` dependency or public API was introduced. The full unfiltered bench command was started but stopped at an unrelated legacy `40x40` uncached case estimated at 202.7 s for ten samples; the affected focused group completed successfully. |
+| `N` numerical stability | **N/A (scope)** | This is storage/dispatch coverage, not factorization or convergence. Nonzero complex values, f32/c32 precision envelopes, and mixed promotion are covered by `C2`; rank/pivot/convergence claims remain delegated to the relevant TreeACI issues. |
+| `M` metamorphic semantics | **PASS** | Reordered and duplicated point batches are compared in original output order; the partial-hit batch uses a third endpoint coordinate not present in the initial cache, and its hit/miss counters are both asserted. |
+| `F` fallback parity | **PASS** | f32/c32 are exercised through the generic fallback, f64/c64 through the raw path, degree-four topology explicitly forces the generic route, and existing raw-vs-generic chain/branch tests remain green. Mixed f32/f64 promotion is compared against the ordinary evaluator. |
+| `I` invalidation/retention | **PASS** | Zero budget, one-column budget, repeated warm calls, direct unit-test cache clear/reuse, and retained-byte upper bounds are asserted for all four scalar kinds. |
+| `D` determinism | **PASS** | The fixture is fixed-seed-free and deterministic; cold/warm/reordered/partial outputs are exact-repeat comparisons. The dedicated correctness test was rerun three times with the same release command before closure. |
+| `S` scaling law | **N/A (scope)** | No production loop or complexity claim changed in #717. Existing #707 chain-size measurements remain historical evidence; a new asymptotic claim is deferred to #708/#710. |
+| `P` provenance/observability | **PASS** | New engineering assertions are explicitly tagged **[AI Supplied]**. No paper/spec locator is used as authority for the fixture or implementation. The existing full cloned sources and their exact page/equation/spec-line locators remain recorded above, and Criterion command/configuration/raw paths are recorded here. |
+
+### Boundary and downstream decisions
+
+The mixed f32/f64 test confirms the existing core/tenferro promotion behavior
+by comparing cached and ordinary evaluation; it is not treated as an error
+case. Invalid rank and out-of-range coordinates retain contextual evaluator
+errors. Wide-key construction and working-memory overflow are not reimplemented
+in TreeTN: the former belongs to the core/#710 key gate, and the latter to the
+TreeACI Guard budget gate already covered by
+`guard_working_budget_counts_all_coexisting_evaluation_buffers` and related
+tests.
+
+The requested `../../gw-rs/sgw` checkout exists but has a heavily dirty working
+tree, so it was not modified or used as a candidate patch target. Since #717
+changes no production evaluator behavior, an isolated downstream ACI run would
+not distinguish this coverage patch from its current base; downstream evidence
+is recorded **N/A** for this subissue. The optional
+`../../tensor4all-benchmark` checkout is also dirty and contains no maintained
+four-kind TreeTN cached-evaluator case, so it is **N/A** rather than an
+unrelated benchmark claim.
+
+### Verification commands
+
+```text
+cargo fmt --all
+cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
+cargo test --release -p tensor4all-treeaci global_guard::tests::guard_cached_evaluator_preserves_all_scalar_kinds
+cargo bench -p tensor4all-treetn --bench cached_evaluator -- treetn_cached_scalar_kind
+```
+
+The next implementation subissue is **#715** (cut-local frame growth and
+failure-atomic commits). Per the execution protocol, stop here after reporting
+this #717 closure; do not begin #715 in the same run.
+
 ## Measurements and limitations
 
 Commands were run in release mode in the isolated worktree.

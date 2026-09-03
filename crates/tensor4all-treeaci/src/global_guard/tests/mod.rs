@@ -1,3 +1,4 @@
+use num_complex::{Complex32, Complex64};
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
@@ -35,6 +36,101 @@ fn zero_tree(left_site: DynIndex, right_site: DynIndex) -> TreeTN<IdxTensor, usi
     let left = IdxTensor::from_dense(vec![left_site, bond.clone()], vec![0.0, 0.0]).unwrap();
     let right = IdxTensor::from_dense(vec![bond, right_site], vec![1.0, 1.0]).unwrap();
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
+fn typed_delta_tree<T: crate::TreeAciScalar>() -> (TreeTN<IdxTensor, usize>, DynIndex, DynIndex) {
+    let left_site = DynIndex::new_dyn(2);
+    let right_site = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let left = IdxTensor::from_dense(
+        vec![left_site.clone(), bond.clone()],
+        vec![
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+        ],
+    )
+    .unwrap();
+    let right = IdxTensor::from_dense(
+        vec![bond, right_site.clone()],
+        vec![
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+        ],
+    )
+    .unwrap();
+    (
+        TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap(),
+        left_site,
+        right_site,
+    )
+}
+
+trait GuardTestScalar: crate::TreeAciScalar {
+    const TOLERANCE: f64;
+}
+
+impl GuardTestScalar for f32 {
+    const TOLERANCE: f64 = 1.0e-5;
+}
+
+impl GuardTestScalar for f64 {
+    const TOLERANCE: f64 = 1.0e-12;
+}
+
+impl GuardTestScalar for Complex32 {
+    const TOLERANCE: f64 = 1.0e-5;
+}
+
+impl GuardTestScalar for Complex64 {
+    const TOLERANCE: f64 = 1.0e-12;
+}
+
+fn assert_guard_typed_evaluation<T: GuardTestScalar>() {
+    let (input, _, _) = typed_delta_tree::<T>();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let state = TreeAciState::<T, usize>::initialize(&inputs, &options).unwrap();
+    let input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let mut output_evaluator = GuardOutputEvaluator::new(
+        &state.output,
+        &state.problem,
+        options.message_cache_max_bytes,
+    )
+    .unwrap();
+    let points = vec![vec![0usize, 0], vec![1, 0], vec![0, 1], vec![1, 1]];
+
+    let actual = output_evaluator
+        .evaluate::<T>(&input_evaluators, &points)
+        .unwrap();
+    let coordinates = input_evaluators.expand_points(&points).unwrap();
+    let indices = state
+        .problem
+        .physical
+        .iter()
+        .flat_map(|physical| physical.indices.iter().cloned())
+        .collect::<Vec<_>>();
+    let expected = state
+        .output
+        .evaluate(
+            &indices,
+            ColMajorArrayRef::new(&coordinates, &[indices.len(), points.len()]).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        let expected = T::from_evaluated_scalar(expected).unwrap();
+        let residual = tensor4all_core::Scalar::abs_val(actual - expected);
+        let scale = tensor4all_core::Scalar::abs_val(expected).max(1.0);
+        assert!(
+            residual <= T::TOLERANCE * scale,
+            "guard result residual {residual} exceeds tolerance for {}",
+            std::any::type_name::<T>()
+        );
+    }
 }
 
 #[test]
@@ -486,6 +582,17 @@ fn shared_guard_hint_preserves_input_and_output_values() {
     for (actual, expected) in output_values.iter().zip(expected) {
         assert!((actual - expected.real()).abs() < 1.0e-12);
     }
+}
+
+/// [AI Supplied] Guard-facing dtype gate: the cached output evaluator and its
+/// `TreeAciScalar` conversion must agree with an ordinary dense evaluation for
+/// all four supported scalar kinds.
+#[test]
+fn guard_cached_evaluator_preserves_all_scalar_kinds() {
+    assert_guard_typed_evaluation::<f32>();
+    assert_guard_typed_evaluation::<f64>();
+    assert_guard_typed_evaluation::<Complex32>();
+    assert_guard_typed_evaluation::<Complex64>();
 }
 
 #[test]
