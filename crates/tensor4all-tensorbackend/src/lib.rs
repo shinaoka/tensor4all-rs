@@ -56,7 +56,7 @@ pub use backend::{
 #[cfg(feature = "global-defaults")]
 pub use context::{default_eager_ctx, with_default_backend, EagerContextError};
 #[cfg(feature = "explicit-context")]
-pub use context::{CpuExecutionContext, CpuExecutionContextError};
+pub use context::{CpuExecutionContext, CpuExecutionContextError, ExecutionContext};
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::{CudaExecutionContext, CudaExecutionContextError, CUDA_ORDINAL};
 #[cfg(feature = "global-defaults")]

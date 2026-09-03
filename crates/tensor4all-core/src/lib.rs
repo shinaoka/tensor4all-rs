@@ -119,6 +119,8 @@ pub use defaults::idx_tensor::{
 };
 #[cfg(feature = "tenferro-cuda")]
 pub use defaults::IdxTensorCudaError;
+#[cfg(feature = "backend-tenferro")]
+pub use tensor4all_tensorbackend::ExecutionContext;
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{
     print_and_reset_native_einsum_profile, reset_native_einsum_profile,

@@ -69,6 +69,7 @@ tenferro-tensor.workspace = true
 [dev-dependencies]
 rand_chacha.workspace = true
 tenferro-tensor.workspace = true
+tenferro-cpu.workspace = true
 approx.workspace = true
 criterion.workspace = true
 
