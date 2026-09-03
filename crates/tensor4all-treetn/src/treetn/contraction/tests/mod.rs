@@ -517,25 +517,57 @@ fn zipup_chain_matches_naive_without_truncation() {
     assert!(error < 1e-9, "exact zip-up residual is {error}");
 }
 
-#[test]
-fn src_fixed_matches_exact_contraction_when_probe_cap_is_full() {
-    let (tn_a, tn_b) = make_three_node_chain_pair();
-    let expected = tn_a.contract_naive(&tn_b).unwrap();
-    let options = ContractionOptions::src()
-        .with_max_bond_dim(4)
-        .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(false));
-    let actual = contract(&tn_a, &tn_b, &"C".to_string(), options)
-        .unwrap()
-        .to_dense()
-        .unwrap();
+fn max_internal_bond(network: &TreeTN<IdxTensor, String>) -> usize {
+    network
+        .graph
+        .graph()
+        .edge_indices()
+        .map(|edge| network.bond_index(edge).unwrap().dim())
+        .max()
+        .unwrap_or(1)
+}
 
-    let error = actual.sub(&expected).unwrap().maxabs().unwrap();
-    assert!(error < 1.0e-8, "full-probe SRC residual is {error}");
-    assert!(actual
-        .clone()
-        .external_indices()
-        .iter()
-        .all(|index| index.dim() == 2));
+fn assert_fixed_src_rank_cap_semantics(
+    tn_a: &TreeTN<IdxTensor, String>,
+    tn_b: &TreeTN<IdxTensor, String>,
+    center: &str,
+    support: usize,
+) {
+    let expected = tn_a.contract_naive(tn_b).unwrap();
+    for (requested, final_svd, should_be_exact) in [
+        (support - 1, false, false),
+        (support, false, true),
+        (support * 4, false, true),
+        (support * 4, true, true),
+    ] {
+        let actual = contract(
+            tn_a,
+            tn_b,
+            &center.to_string(),
+            ContractionOptions::src()
+                .with_max_bond_dim(requested)
+                .with_src_options(SrcOptions::fixed().with_seed(123).with_final_svd(final_svd)),
+        )
+        .unwrap();
+        assert!(
+            max_internal_bond(&actual) <= requested.min(support),
+            "requested={requested}, support={support}, final_svd={final_svd}"
+        );
+        if should_be_exact {
+            let dense = actual.to_dense().unwrap();
+            let error = dense.sub(&expected).unwrap().maxabs().unwrap();
+            assert!(
+                error < 1.0e-8,
+                "fixed SRC residual is {error} for requested={requested}, support={support}, final_svd={final_svd}"
+            );
+        }
+    }
+}
+
+#[test]
+fn src_fixed_chain_clamps_requested_rank_to_cut_support() {
+    let (tn_a, tn_b) = make_three_node_chain_pair();
+    assert_fixed_src_rank_cap_semantics(&tn_a, &tn_b, "C", 4);
 }
 
 #[test]
@@ -1077,28 +1109,9 @@ fn src_adaptive_traverses_a_branched_tree_and_matches_dense_reference() {
 }
 
 #[test]
-fn src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
+fn src_fixed_tree_clamps_requested_rank_to_cut_support() {
     let (tn_a, tn_b) = make_branched_pair();
-    let expected = tn_a.contract_naive(&tn_b).unwrap();
-    let actual = contract(
-        &tn_a,
-        &tn_b,
-        &"C".to_string(),
-        ContractionOptions::src()
-            .with_max_bond_dim(4)
-            .with_src_options(SrcOptions::fixed().with_seed(77).with_final_svd(false)),
-    )
-    .unwrap();
-
-    let error = actual
-        .to_dense()
-        .unwrap()
-        .sub(&expected)
-        .unwrap()
-        .maxabs()
-        .unwrap();
-    assert!(error < 1.0e-8, "branched SRC residual is {error}");
-    actual.validate_ortho_consistency().unwrap();
+    assert_fixed_src_rank_cap_semantics(&tn_a, &tn_b, "C", 4);
 }
 
 #[test]
@@ -1133,7 +1146,7 @@ fn src_adaptive_contracts_a_branched_tree_with_a_rank_cap() {
 #[test]
 fn src_adaptive_matches_naive_on_a_branched_tree_when_probe_cap_is_full() {
     // Same fixture and interior center ("C", the degree-3 hub) as
-    // `src_fixed_matches_naive_on_a_branched_tree_when_probe_cap_is_full`,
+    // `src_fixed_tree_clamps_requested_rank_to_cut_support`,
     // but with `SrcOptions::adaptive` so this exercises the `rtol.is_some()`
     // dispatch branch (`EnvironmentCache::request`/`grow_segment`, the
     // batch-native probe path) with a numeric dense-oracle comparison,

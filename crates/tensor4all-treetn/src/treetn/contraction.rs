@@ -148,7 +148,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the dense contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -311,7 +311,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the zip-up contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn contract_zipup(
         &self,
@@ -354,7 +354,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the zip-up contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn contract_zipup_with(
         &self,
@@ -1194,7 +1194,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the naive contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn contract_naive(&self, other: &Self) -> std::result::Result<T, TreeTNOperationError>
     where
@@ -1242,7 +1242,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the orthogonality structure is inconsistent (an
-    /// /// graph consistency failure).
+    /// graph consistency failure).
     ///
     pub fn validate_ortho_consistency(&self) -> std::result::Result<(), TreeTNOperationError> {
         // If not canonicalized, require no ortho_towards at all
@@ -1423,9 +1423,11 @@ pub enum ContractionMethod {
 /// Options specific to successive randomized compression (SRC).
 ///
 /// `rtol = None` selects fixed-rank mode; fixed-rank SRC requires
-/// [`ContractionOptions::with_max_bond_dim`] to provide the requested output
-/// rank. `rtol = Some(_)` selects adaptive mode and requires a finite maximum
-/// rank, supplied either by [`Self::max_rank`] or by the contraction's
+/// [`ContractionOptions::with_max_bond_dim`] to provide an upper bound for the
+/// output rank. Each cut clamps that bound to its local row dimension and
+/// opposite-side support, so a realized bond may be smaller than requested.
+/// `rtol = Some(_)` selects adaptive mode and requires a finite maximum rank,
+/// supplied either by [`Self::max_rank`] or by the contraction's
 /// `max_bond_dim`.
 ///
 /// # Examples
@@ -1714,7 +1716,8 @@ impl SrcOptions {
 pub struct ContractionOptions {
     /// Contraction method to use.
     pub method: ContractionMethod,
-    /// Maximum bond dimension (optional).
+    /// Upper bound on the bond dimension. SRC additionally clamps this bound
+    /// at each cut to the local row dimension and opposite-side support.
     pub max_bond_dim: Option<usize>,
     /// Explicit SVD truncation policy (optional).
     pub svd_policy: Option<SvdTruncationPolicy>,
@@ -1814,7 +1817,10 @@ impl ContractionOptions {
         self
     }
 
-    /// Set maximum bond dimension.
+    /// Set the upper bound on bond dimensions.
+    ///
+    /// Fixed-rank SRC may realize smaller bonds when a cut has less row-space
+    /// or opposite-side support than this bound.
     pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
         self.max_bond_dim = Some(max_bond_dim);
         self

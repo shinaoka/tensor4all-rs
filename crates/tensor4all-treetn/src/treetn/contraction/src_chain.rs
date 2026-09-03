@@ -372,8 +372,7 @@ where
         .map_err(|error| {
             anyhow::anyhow!("contract_src: site {site} prefix contraction failed: {error}")
         })?;
-        let sketch = prefix_local
-            .contract_pair(&right_environment)
+        let sketch = T::contract(&[&prefix_local, &right_environment])
             .map_err(|error| anyhow::anyhow!("contract_src: site {site} sketch failed: {error}"))?;
         let (factor, cap) = factorize_fixed_batch(&sketch, &left_indices, &format!("site {site}"))?;
         let factor_conj = factor.conj();

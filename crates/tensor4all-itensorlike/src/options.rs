@@ -205,7 +205,10 @@ impl ContractOptions {
         }
     }
 
-    /// Set the maximum retained bond dimension.
+    /// Set the upper bound on retained bond dimensions.
+    ///
+    /// Fixed-rank SRC may realize smaller bonds when a cut has less row-space
+    /// or opposite-side support than this bound.
     pub fn with_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
         self.max_bond_dim = Some(max_bond_dim);
         self
@@ -280,7 +283,7 @@ impl ContractOptions {
         self.method
     }
 
-    /// Get the maximum retained bond dimension.
+    /// Get the upper bound on retained bond dimensions.
     #[inline]
     pub fn max_bond_dim(&self) -> Option<usize> {
         self.max_bond_dim

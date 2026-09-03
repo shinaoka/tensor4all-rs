@@ -1,7 +1,9 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike};
+use tensor4all_core::{
+    ContractionOptions, DynIndex, IdxTensor, PreparedContraction, TensorContractionLike,
+};
 use tensor4all_tensorbackend::{dense_native_tensor_from_col_major, einsum_native_tensors};
 
 fn make_data(dims: &[usize], offset: usize) -> Vec<f64> {
@@ -216,8 +218,19 @@ fn bench_contract_fit_patterns_vs_native() {
     let env6_f_native = dense_native_tensor_from_col_major(&env6_f_data, &env6_f_dims).unwrap();
 
     eprintln!("\n=== IdxTensor contract vs native einsum ===");
+    let env3_plan =
+        PreparedContraction::new(&[&env3_a, &env3_b, &env3_c], ContractionOptions::new()).unwrap();
+    let env3_expected =
+        <IdxTensor as TensorContractionLike>::contract(&[&env3_a, &env3_b, &env3_c]).unwrap();
+    let env3_prepared_result = env3_plan.execute(&[&env3_a, &env3_b, &env3_c]).unwrap();
+    assert!(env3_prepared_result
+        .isapprox(&env3_expected, 1.0e-12, 0.0)
+        .unwrap());
     let env3_contract = time_best_of("env3 IdxTensor::contract", 2_000, || {
         <IdxTensor as TensorContractionLike>::contract(&[&env3_a, &env3_b, &env3_c]).unwrap()
+    });
+    let env3_prepared = time_best_of("env3 PreparedContraction", 2_000, || {
+        env3_plan.execute(&[&env3_a, &env3_b, &env3_c]).unwrap()
     });
     let env3_native = time_best_of("env3 native einsum", 2_000, || {
         einsum_native_tensors(
@@ -268,6 +281,10 @@ fn bench_contract_fit_patterns_vs_native() {
         .unwrap()
     });
 
+    eprintln!(
+        "  ratio env3 IdxTensor/prepared     = {:.2}x",
+        env3_contract.as_secs_f64() / env3_prepared.as_secs_f64()
+    );
     eprintln!(
         "  ratio env3 IdxTensor/native       = {:.2}x",
         env3_contract.as_secs_f64() / env3_native.as_secs_f64()

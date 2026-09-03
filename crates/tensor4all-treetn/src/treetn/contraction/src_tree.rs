@@ -408,7 +408,14 @@ where
     /// per-edge environment tensors, without ever materializing a
     /// per-column (`width == 1`) representation.
     fn grow_segment(&mut self, start: usize, width: usize) -> Result<()> {
-        self.probes.extend_to(start + width)?;
+        let end = start
+            .checked_add(width)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: tree segment range overflows"))?;
+        self.probes.extend_to(end)?;
+        let next_total_width = self
+            .segment_total_width
+            .checked_add(width)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: tree cached width overflows"))?;
         let batch = T::Index::new_link(width)?;
         let probe_batches = self
             .nodes
@@ -437,7 +444,7 @@ where
             &batch,
         )?;
         self.segments.push((start, width, batch, directed));
-        self.segment_total_width += width;
+        self.segment_total_width = next_total_width;
         Ok(())
     }
 
@@ -446,19 +453,12 @@ where
     ///
     /// `EnvironmentCache` is shared across every edge in the tree -- unlike
     /// `PrefixCache` (one instance per site), one `EnvironmentCache` serves
-    /// every edge's own `site_max_width`. Segments therefore grow on a fixed
-    /// `batch_size`-wide grid regardless of which edge's request triggers
-    /// growth first, so a later edge's request can still land on an earlier
-    /// edge's segment boundaries. The common case (the request aligns
-    /// exactly with one already-grown or newly-grown segment's boundaries)
-    /// returns that segment's environment directly, no
-    /// `select_indices`/`stack_along_new_index` at all. A request that only
-    /// partially overlaps a segment boundary (possible when an edge's own
-    /// `site_max_width` caps a segment at a width narrower than
-    /// `batch_size`) falls back to splitting and re-stacking the covering
-    /// segments' environments -- mirrors `PrefixCache::request`
-    /// (`src_chain.rs`) exactly, adapted for one `(parent, child)` map per
-    /// segment instead of one tensor per segment.
+    /// every edge's own `site_max_width`. Only the initial segment may be
+    /// narrower than `batch_size`; later growth computes a full segment so
+    /// requests remain aligned even when one edge caps an earlier request.
+    /// The common case returns one segment directly. A genuinely partial
+    /// overlap falls back to splitting and re-stacking the covering segments'
+    /// environments.
     fn request(
         &mut self,
         parent: &V,
@@ -466,10 +466,19 @@ where
         start: usize,
         width: usize,
     ) -> Result<(T, T::Index)> {
-        self.probes.extend_to(start + width)?;
-        while self.segment_total_width < start + width {
+        if width == 0 {
+            anyhow::bail!("contract_src: tree environment request must be non-empty");
+        }
+        let requested_end = start
+            .checked_add(width)
+            .ok_or_else(|| anyhow::anyhow!("contract_src: requested tree probe range overflows"))?;
+        while self.segment_total_width < requested_end {
             let next_start = self.segment_total_width;
-            let next_width = self.batch_size.min(start + width - next_start);
+            let next_width = if next_start == 0 {
+                self.batch_size.min(requested_end)
+            } else {
+                self.batch_size
+            };
             self.grow_segment(next_start, next_width)?;
         }
 
@@ -498,9 +507,11 @@ where
         let mut collected = Vec::with_capacity(width);
         for (segment_start, segment_width, batch_index, environments) in &self.segments {
             let segment_start = *segment_start;
-            let segment_end = segment_start + *segment_width;
+            let segment_end = segment_start
+                .checked_add(*segment_width)
+                .ok_or_else(|| anyhow::anyhow!("contract_src: cached tree segment overflows"))?;
             let overlap_start = segment_start.max(start);
-            let overlap_end = segment_end.min(start + width);
+            let overlap_end = segment_end.min(requested_end);
             if overlap_start >= overlap_end {
                 continue;
             }
@@ -529,10 +540,9 @@ where
         }
         anyhow::ensure!(
             collected.len() == width,
-            "contract_src: {:?}->{:?} misaligned segment request [{start}, {}) only found {} of {} columns",
+            "contract_src: {:?}->{:?} misaligned segment request [{start}, {requested_end}) only found {} of {} columns",
             parent,
             child,
-            start + width,
             collected.len(),
             width
         );
@@ -541,10 +551,9 @@ where
         let stacked = T::stack_along_new_index(&collected_refs, batch_index.clone(), -1)
             .map_err(|error| {
                 anyhow::anyhow!(
-                    "contract_src: {:?}->{:?} misaligned segment request [{start}, {}) failed: {error}",
+                    "contract_src: {:?}->{:?} misaligned segment request [{start}, {requested_end}) failed: {error}",
                     parent,
-                    child,
-                    start + width
+                    child
                 )
             })?;
         Ok((stacked, batch_index))
@@ -898,11 +907,13 @@ mod tests {
             .flat_map(|node| outputs[node].iter().cloned())
             .collect::<Vec<_>>();
         let mut probes = ProbeBank::from_seed(std::mem::take(&mut probe_indices), 1, 99).unwrap();
-        // batch_size 3 matches the request width exactly, so this exercises
-        // the aligned single-segment path only -- see the misaligned/
-        // multi-edge test below for the fixed-grid growth and fallback.
+        // The first width-3 request is narrower than batch_size 5, so this
+        // exercises the permitted short initial segment and its direct replay.
         let mut cache =
-            EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 3);
+            EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 5);
+        assert!(cache
+            .request(&"B".to_string(), &"A".to_string(), 0, 0)
+            .is_err());
 
         let (first, first_batch) = cache
             .request(&"B".to_string(), &"A".to_string(), 0, 3)
@@ -929,12 +940,12 @@ mod tests {
     fn request_shared_across_edges_replays_a_misaligned_range_exactly() {
         // `EnvironmentCache` is shared across every edge in the tree, and
         // different edges generally need different widths (different ranks).
-        // This reproduces exactly that: edge (B, A) grows the cache to width
-        // 5 on a batch_size-2 grid (segments [0,2), [2,2), [4,1)), then edge
-        // (B, C) requests [0,3) -- a width that lands on none of those
-        // segment boundaries -- forcing the misaligned split/re-stack
-        // fallback. Re-reading the same range must reproduce the cached
-        // columns bit-for-bit without growing or recomputing environments.
+        // This reproduces exactly that: edge (B, A) requests width 5 on a
+        // batch_size-2 grid. Later segments stay full, producing [0,2),
+        // [2,2), [4,2), so future rank increments remain aligned. Edge (B, C)
+        // then requests [0,3), which still genuinely spans segment boundaries
+        // and exercises the split/re-stack fallback. Re-reading the same range
+        // must reproduce the cached columns bit-for-bit.
         let tn_a = three_node_path(1.0);
         let tn_b = three_node_path(2.0);
         let mut nodes = tn_a.node_names();
@@ -971,11 +982,18 @@ mod tests {
             .request(&"B".to_string(), &"A".to_string(), 0, 5)
             .unwrap();
         assert_eq!(wide_batch.dim(), 5);
+        assert_eq!(cache.segments.len(), 3);
         assert_eq!(
-            cache.segments.len(),
-            3,
-            "batch_size 2 growing to width 5 should produce segments [0,2), [2,2), [4,1)"
+            cache
+                .segments
+                .iter()
+                .map(|(_, width, _, _)| *width)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 2],
+            "later tree segments must keep the rank-increment grid aligned"
         );
+        assert_eq!(cache.segment_total_width - 5, 1);
+        assert!(cache.segment_total_width - 5 < cache.batch_size);
 
         let (narrow, narrow_batch) = cache
             .request(&"B".to_string(), &"C".to_string(), 0, 3)
@@ -997,6 +1015,11 @@ mod tests {
             replayed.to_vec::<f64>().unwrap(),
             "misaligned fallback must replay cached columns exactly"
         );
+
+        let (_aligned, aligned_batch) = cache
+            .request(&"B".to_string(), &"C".to_string(), 4, 2)
+            .unwrap();
+        assert_eq!(aligned_batch, cache.segments[2].2);
     }
 
     #[test]
