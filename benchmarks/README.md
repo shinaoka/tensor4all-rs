@@ -37,6 +37,48 @@ Prepared local linsolve:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
 ```
 
+### SRC performance gates
+
+`benchmark_src` uses deterministic MPO--MPS chains and maximum-degree-3 binary
+trees. It rejects oversized input fixtures and dense correctness oracles before
+allocation; override the 512 MiB input or 256 MiB oracle defaults only with an
+explicit memory budget:
+
+```bash
+commit=$(git rev-parse HEAD)
+T4A_BENCH_GIT_COMMIT=$commit \
+  cargo build --release -p tensor4all-treetn --example benchmark_src
+python3 scripts/run-src-benchmark-gates.py \
+  --candidate target/release/examples/benchmark_src \
+  --candidate-commit "$commit" --suite quick --pairs 1 --reps 1 \
+  --expected-backend tenferro --expected-features tenferro-cpu-faer \
+  --output /tmp/src-quick.json
+```
+
+A promotion study builds baseline and candidate binaries separately with their
+own `T4A_BENCH_GIT_COMMIT`, then passes both binaries and commits to the runner.
+Use at least 5 pairs for the quick suite and 10 for `--suite full`; declare
+`--primary`, `--required-improvement-percent`,
+`--allowed-regression-percent`, and `--max-dispersion-percent` before running.
+The runner rejects commit, release-profile, backend, or feature mismatches. The
+JSON report records binary SHA-256 values, raw output, timings, correctness,
+peak RSS, load, paired medians/MAD, and bootstrap intervals. All Rayon/BLAS
+thread counts are fixed to one. `T4A_BENCH_MAX_INPUT_BYTES` and
+`T4A_BENCH_MAX_DENSE_BYTES` control fixture/oracle preflight; runner flags
+`--max-rss-mib` and `--max-virtual-mib` separately control measured RSS and
+`RLIMIT_AS`.
+
+The required CPU lane uses the default tenferro/faer backend. Provider-injected
+and CUDA SRC are currently unsupported because the high-level SRC API does not
+own an execution context and constructs CPU probes. Do not infer SRC support
+from unrelated backend tests. On a CUDA host, verify the existing resident
+TreeTN contraction lane separately:
+
+```bash
+cargo test --release -p tensor4all-treetn \
+  --features tenferro-cuda --test cuda_tree_contraction -- --nocapture
+```
+
 Two-site TreeTN DMRG against a Pauli Heisenberg Hamiltonian
 `sum_(i,j in E) X_i X_j + Y_i Y_j + Z_i Z_j` on chain and star topologies.
 The benchmark compresses the summed MPO before timing, uses the repository

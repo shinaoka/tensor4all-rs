@@ -253,7 +253,7 @@ where
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, None)?;
     let probed_b = contract_operand_with_probes(tensor_b, &b_probes, None)?;
-    probed_a.contract_pair(&probed_b).map_err(|error| {
+    T::contract(&[&probed_a, &probed_b]).map_err(|error| {
         anyhow::anyhow!("contract_src: factorized probe contraction failed: {error}")
     })
 }
@@ -280,7 +280,7 @@ where
         );
     }
     if outputs.is_empty() {
-        let local = tensor_a.contract_pair(tensor_b).map_err(|error| {
+        let local = T::contract(&[tensor_a, tensor_b]).map_err(|error| {
             anyhow::anyhow!("contract_src: scalar local pair contraction failed: {error}")
         })?;
         let batch_values = T::ones(std::slice::from_ref(batch)).map_err(|error| {
@@ -308,11 +308,9 @@ pub(super) fn contract_prefix_with_site_pair<T>(prefix: &T, tensor_a: &T, tensor
 where
     T: TensorLike,
 {
-    let after_a = prefix
-        .contract_pair(tensor_a)
+    let after_a = T::contract(&[prefix, tensor_a])
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
-    after_a
-        .contract_pair(tensor_b)
+    T::contract(&[&after_a, tensor_b])
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))
 }
 
@@ -338,12 +336,10 @@ where
         .map(|index| single_probe::<T, R>(index, probes, column))
         .collect::<Result<Vec<_>>>()?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    let mut result = prefix
-        .contract_pair(tensor_a)
+    let mut result = T::contract(&[prefix, tensor_a])
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
     result = contract_operand_with_probes(&result, &a_probes, None)?;
-    result = result
-        .contract_pair(tensor_b)
+    result = T::contract(&[&result, tensor_b])
         .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
     contract_operand_with_probes(&result, &b_probes, None)
 }
@@ -1082,9 +1078,14 @@ mod tests {
     }
 
     #[test]
-    fn maximum_probe_width_respects_the_exact_product_cut_dimension() {
+    fn maximum_probe_width_respects_rank_row_and_cut_bounds() {
         let fixed = SrcOptions::fixed();
-        assert_eq!(maximum_site_width(4096, 1024, 256, &fixed), 256);
+        assert_eq!(maximum_site_width(8, 16, 12, &fixed), 8);
+        assert_eq!(maximum_site_width(12, 16, 12, &fixed), 12);
+        assert_eq!(maximum_site_width(32, 16, 12, &fixed), 12);
+
+        let oversampled = SrcOptions::fixed().with_final_svd(true);
+        assert_eq!(maximum_site_width(8, 16, 12, &oversampled), 12);
 
         let adaptive = SrcOptions::adaptive(1.0e-6, 4096);
         assert_eq!(maximum_site_width(4096, 1024, 256, &adaptive), 256);

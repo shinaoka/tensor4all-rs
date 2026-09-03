@@ -159,6 +159,9 @@ jobs:
       - name: Test coverage threshold checker
         run: python3 scripts/test-check-coverage.py
 
+      - name: Test SRC benchmark gate runner
+        run: python3 scripts/test-run-src-benchmark-gates.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-22.04

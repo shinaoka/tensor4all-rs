@@ -6,6 +6,7 @@
 //! bond-dimension argument controls the MPO bond dimension and
 //! `T4A_BENCH_MPS_BOND_DIM` optionally sets a different MPS bond dimension.
 
+use std::mem::size_of;
 use std::time::Instant;
 
 use rand::rngs::StdRng;
@@ -16,8 +17,170 @@ use tensor4all_treetn::TreeTN;
 
 type Network = TreeTN<IdxTensor, String>;
 
+const DEFAULT_MAX_INPUT_BYTES: usize = 512 << 20;
+const DEFAULT_MAX_DENSE_BYTES: usize = 256 << 20;
+const BUILD_GIT_COMMIT: &str = match option_env!("T4A_BENCH_GIT_COMMIT") {
+    Some(commit) => commit,
+    None => "unknown",
+};
+
+#[derive(Debug, Clone, Copy)]
+struct MemoryEstimate {
+    total_input_bytes: usize,
+    largest_input_tensor_bytes: usize,
+    dense_output_bytes: usize,
+    max_degree: usize,
+}
+
+fn checked_mul(lhs: usize, rhs: usize, label: &str) -> usize {
+    lhs.checked_mul(rhs)
+        .unwrap_or_else(|| panic!("{label} overflow"))
+}
+
+fn checked_pow(mut base: usize, mut exponent: usize, label: &str) -> usize {
+    let mut result = 1usize;
+    while exponent > 0 {
+        if exponent % 2 == 1 {
+            result = checked_mul(result, base, label);
+        }
+        exponent /= 2;
+        if exponent > 0 {
+            base = checked_mul(base, base, label);
+        }
+    }
+    result
+}
+
+fn bytes(elements: usize, label: &str) -> usize {
+    checked_mul(elements, size_of::<f64>(), label)
+}
+
+fn env_bytes(name: &str, default: usize) -> usize {
+    std::env::var(name).map_or(default, |value| {
+        let parsed = value
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} must be a positive byte count"));
+        assert!(parsed > 0, "{name} must be a positive byte count");
+        parsed
+    })
+}
+
+fn chain_elements(n_sites: usize, local_dim: usize, bond_dim: usize) -> (usize, usize) {
+    let endpoint = checked_mul(local_dim, bond_dim, "chain endpoint elements");
+    let interior = checked_mul(endpoint, bond_dim, "chain interior elements");
+    let total = checked_mul(2, endpoint, "chain endpoint total")
+        .checked_add(checked_mul(
+            n_sites.saturating_sub(2),
+            interior,
+            "chain interior total",
+        ))
+        .expect("chain input element count overflow");
+    (total, endpoint.max(interior))
+}
+
+fn binary_tree_degrees(n_nodes: usize) -> Vec<usize> {
+    let mut degrees = vec![0usize; n_nodes];
+    for child in 1..n_nodes {
+        let parent = (child - 1) / 2;
+        degrees[parent] += 1;
+        degrees[child] += 1;
+    }
+    degrees
+}
+
+fn estimate_memory(
+    mode: &str,
+    n_sites: usize,
+    physical_dim: usize,
+    bond_dim: usize,
+    mps_bond_dim: usize,
+) -> MemoryEstimate {
+    let physical_squared = checked_mul(physical_dim, physical_dim, "physical dimension");
+    let (input_elements, largest_input_elements, output_local_dim, max_degree) = match mode {
+        "mpo-mps" => {
+            let (mpo_total, mpo_largest) = chain_elements(n_sites, physical_squared, bond_dim);
+            let (mps_total, mps_largest) = chain_elements(n_sites, physical_dim, mps_bond_dim);
+            (
+                mpo_total
+                    .checked_add(mps_total)
+                    .expect("MPO-MPS input element count overflow"),
+                mpo_largest.max(mps_largest),
+                physical_dim,
+                2,
+            )
+        }
+        "mpo-mpo" => {
+            let (one_total, one_largest) = chain_elements(n_sites, physical_squared, bond_dim);
+            (
+                checked_mul(2, one_total, "MPO-MPO input elements"),
+                one_largest,
+                physical_squared,
+                2,
+            )
+        }
+        "tree" => {
+            let degrees = binary_tree_degrees(n_sites);
+            let mut one_total = 0usize;
+            let mut one_largest = 0usize;
+            for degree in degrees.iter().copied() {
+                let elements = checked_mul(
+                    physical_squared,
+                    checked_pow(bond_dim, degree, "tree bond product"),
+                    "tree tensor elements",
+                );
+                one_total = one_total
+                    .checked_add(elements)
+                    .expect("tree input element count overflow");
+                one_largest = one_largest.max(elements);
+            }
+            (
+                checked_mul(2, one_total, "tree pair input elements"),
+                one_largest,
+                physical_squared,
+                degrees.into_iter().max().unwrap_or(0),
+            )
+        }
+        _ => panic!("mode must be mpo-mps, mpo-mpo, both, or tree"),
+    };
+    MemoryEstimate {
+        total_input_bytes: bytes(input_elements, "total input bytes"),
+        largest_input_tensor_bytes: bytes(largest_input_elements, "largest input tensor bytes"),
+        dense_output_bytes: bytes(
+            checked_pow(output_local_dim, n_sites, "dense output elements"),
+            "dense output bytes",
+        ),
+        max_degree,
+    }
+}
+
+fn validate_memory(mode: &str, estimate: MemoryEstimate, exact: bool, network_seed: u64) {
+    let max_input_bytes = env_bytes("T4A_BENCH_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES);
+    let max_dense_bytes = env_bytes("T4A_BENCH_MAX_DENSE_BYTES", DEFAULT_MAX_DENSE_BYTES);
+    assert!(
+        estimate.total_input_bytes <= max_input_bytes,
+        "estimated input {} bytes exceeds T4A_BENCH_MAX_INPUT_BYTES={max_input_bytes}",
+        estimate.total_input_bytes
+    );
+    assert!(
+        !exact || estimate.dense_output_bytes <= max_dense_bytes,
+        "estimated dense oracle {} bytes exceeds T4A_BENCH_MAX_DENSE_BYTES={max_dense_bytes}",
+        estimate.dense_output_bytes
+    );
+    println!(
+        "record=preflight mode={mode} network_seed={network_seed} total_input_bytes={} largest_input_tensor_bytes={} dense_output_bytes={} max_degree={} max_input_bytes={max_input_bytes} max_dense_bytes={max_dense_bytes}",
+        estimate.total_input_bytes,
+        estimate.largest_input_tensor_bytes,
+        estimate.dense_output_bytes,
+        estimate.max_degree,
+    );
+}
+
 fn random_tensor(indices: Vec<DynIndex>, rng: &mut StdRng) -> IdxTensor {
-    let elements = indices.iter().map(IndexLike::dim).product();
+    let elements = indices
+        .iter()
+        .map(IndexLike::dim)
+        .try_fold(1usize, |size, dim| size.checked_mul(dim))
+        .expect("tensor element count was checked by benchmark preflight");
     let data = (0..elements)
         .map(|_| rng.random_range(-1.0_f64..1.0_f64))
         .collect();
@@ -134,60 +297,54 @@ fn make_mpo_mpo(
     )
 }
 
-fn make_star_pair(
-    n_leaves: usize,
+fn make_binary_tree_pair(
+    n_nodes: usize,
     physical_dim: usize,
     bond_dim: usize,
     seed: u64,
 ) -> (Network, Network) {
-    assert!(n_leaves >= 2);
+    assert!(n_nodes >= 3);
     let mut rng = StdRng::seed_from_u64(seed);
-    let shared = (0..n_leaves + 1)
+    let shared = (0..n_nodes)
         .map(|_| DynIndex::new_dyn(physical_dim))
         .collect::<Vec<_>>();
-    let outputs_a = (0..n_leaves + 1)
+    let outputs_a = (0..n_nodes)
         .map(|_| DynIndex::new_dyn(physical_dim))
         .collect::<Vec<_>>();
-    let outputs_b = (0..n_leaves + 1)
+    let outputs_b = (0..n_nodes)
         .map(|_| DynIndex::new_dyn(physical_dim))
         .collect::<Vec<_>>();
-    let bonds_a = (0..n_leaves)
+    let bonds_a = (1..n_nodes)
         .map(|_| DynIndex::new_dyn(bond_dim))
         .collect::<Vec<_>>();
-    let bonds_b = (0..n_leaves)
+    let bonds_b = (1..n_nodes)
         .map(|_| DynIndex::new_dyn(bond_dim))
         .collect::<Vec<_>>();
-    let names = std::iter::once("C".to_string())
-        .chain((0..n_leaves).map(|leaf| format!("L{leaf}")))
+    let names = (0..n_nodes)
+        .map(|node| format!("N{node:04}"))
         .collect::<Vec<_>>();
 
-    let mut center_a = vec![shared[0].clone(), outputs_a[0].clone()];
-    center_a.extend(bonds_a.iter().cloned());
-    let mut center_b = vec![shared[0].clone(), outputs_b[0].clone()];
-    center_b.extend(bonds_b.iter().cloned());
-    let mut tensors_a = vec![random_tensor(center_a, &mut rng)];
-    let mut tensors_b = vec![random_tensor(center_b, &mut rng)];
-    for leaf in 0..n_leaves {
-        tensors_a.push(random_tensor(
-            vec![
-                shared[leaf + 1].clone(),
-                outputs_a[leaf + 1].clone(),
-                bonds_a[leaf].clone(),
-            ],
-            &mut rng,
-        ));
-        tensors_b.push(random_tensor(
-            vec![
-                shared[leaf + 1].clone(),
-                outputs_b[leaf + 1].clone(),
-                bonds_b[leaf].clone(),
-            ],
-            &mut rng,
-        ));
-    }
+    let build_indices = |node: usize, outputs: &[DynIndex], bonds: &[DynIndex]| {
+        let mut indices = vec![shared[node].clone(), outputs[node].clone()];
+        if node > 0 {
+            indices.push(bonds[node - 1].clone());
+        }
+        for child in [2 * node + 1, 2 * node + 2] {
+            if child < n_nodes {
+                indices.push(bonds[child - 1].clone());
+            }
+        }
+        indices
+    };
+    let tensors_a = (0..n_nodes)
+        .map(|node| random_tensor(build_indices(node, &outputs_a, &bonds_a), &mut rng))
+        .collect();
+    let tensors_b = (0..n_nodes)
+        .map(|node| random_tensor(build_indices(node, &outputs_b, &bonds_b), &mut rng))
+        .collect();
     (
-        Network::from_tensors(tensors_a, names.clone()).expect("first star topology"),
-        Network::from_tensors(tensors_b, names).expect("second star topology"),
+        Network::from_tensors(tensors_a, names.clone()).expect("first binary-tree topology"),
+        Network::from_tensors(tensors_b, names).expect("second binary-tree topology"),
     )
 }
 
@@ -206,6 +363,7 @@ fn run_case(
     left: &Network,
     right: &Network,
     options: ContractionOptions,
+    requested_max_rank: usize,
     reps: usize,
     exact: Option<&IdxTensor>,
 ) {
@@ -218,6 +376,8 @@ fn run_case(
             .min()
             .expect("non-empty benchmark network")
     });
+    let warmup = contract(left, right, &center, options.clone()).expect("benchmark warm-up");
+    std::hint::black_box(warmup);
     let start = Instant::now();
     let mut result = None;
     for _ in 0..reps {
@@ -237,17 +397,33 @@ fn run_case(
         }
     });
     println!(
-        "case={label} reps={reps} elapsed={:.6}s per_run={:.6}s nodes={} edges={} max_bond={} relative_error={}",
+        "record=case name={label} reps={reps} elapsed_seconds={:.6} per_run_seconds={:.6} nodes={} edges={} requested_max_rank={requested_max_rank} effective_max_bond={} src_seed={} relative_error={}",
         elapsed.as_secs_f64(),
         elapsed.as_secs_f64() / reps as f64,
         result.node_count(),
         result.edge_count(),
         max_bond(&result),
+        options.src_options.seed,
         rel_error.map_or_else(|| "n/a".to_string(), |e| format!("{e:.3e}")),
     );
     tensor4all_core::print_and_reset_contract_profile();
     tensor4all_core::print_and_reset_native_einsum_profile();
     tensor4all_core::print_and_reset_pairwise_contract_profile();
+}
+
+fn enabled_features() -> String {
+    [
+        ("tenferro-cpu-faer", cfg!(feature = "tenferro-cpu-faer")),
+        (
+            "tenferro-provider-inject",
+            cfg!(feature = "tenferro-provider-inject"),
+        ),
+        ("tenferro-cuda", cfg!(feature = "tenferro-cuda")),
+    ]
+    .into_iter()
+    .filter_map(|(name, enabled)| enabled.then_some(name))
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 fn main() {
@@ -284,6 +460,16 @@ fn main() {
         value.parse().expect("target_rank")
     });
     let algorithm = std::env::var("T4A_BENCH_ALGORITHM").unwrap_or_else(|_| "all".to_string());
+    assert!(n_sites >= 2, "n_sites must be at least 2");
+    assert!(reps >= 1, "reps must be at least 1");
+    assert!(
+        mode != "tree" || n_sites >= 3,
+        "tree mode requires at least 3 nodes"
+    );
+    assert!(
+        matches!(mode.as_str(), "mpo-mps" | "mpo-mpo" | "both" | "tree"),
+        "mode must be mpo-mps, mpo-mpo, both, or tree"
+    );
     assert!(
         matches!(
             algorithm.as_str(),
@@ -292,11 +478,19 @@ fn main() {
         "T4A_BENCH_ALGORITHM must be all, zipup, src-fixed, or src-adaptive"
     );
 
-    println!(
-        "config=n_sites:{n_sites} physical_dim:{physical_dim} mpo_bond:{bond_dim} mps_bond:{mps_bond_dim} max_rank:{max_rank} reps:{reps} mode:{mode} algorithm:{algorithm} rank_increment:{rank_increment} final_svd:{final_svd}"
-    );
-
     let skip_exact = std::env::var("T4A_BENCH_SKIP_EXACT").is_ok();
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    println!(
+        "record=build git_commit={BUILD_GIT_COMMIT} profile={profile} backend=tenferro features={}",
+        enabled_features()
+    );
+    println!(
+        "record=config n_sites={n_sites} physical_dim={physical_dim} mpo_bond={bond_dim} mps_bond={mps_bond_dim} requested_max_rank={max_rank} reps={reps} mode={mode} algorithm={algorithm} rank_increment={rank_increment} final_svd={final_svd} src_seed=1234 adaptive_rtol=1e-4 adaptive_atol=0 adaptive_min_rank=2"
+    );
     let run = |label: &str, left: Network, right: Network| {
         let exact = if skip_exact {
             None
@@ -306,7 +500,7 @@ fn main() {
                 .contract_naive(&right)
                 .expect("benchmark naive exact contraction");
             println!(
-                "case={label}/naive-exact elapsed={:.6}s (reference only)",
+                "record=reference name={label}/naive-exact elapsed_seconds={:.6}",
                 start.elapsed().as_secs_f64()
             );
             Some(dense)
@@ -318,6 +512,7 @@ fn main() {
                 &left,
                 &right,
                 ContractionOptions::zipup().with_max_bond_dim(max_rank),
+                max_rank,
                 reps,
                 exact_ref,
             );
@@ -334,6 +529,7 @@ fn main() {
                             .with_seed(1234)
                             .with_final_svd(final_svd),
                     ),
+                max_rank,
                 reps,
                 exact_ref,
             );
@@ -352,6 +548,7 @@ fn main() {
                             .with_seed(1234)
                             .with_final_svd(final_svd),
                     ),
+                max_rank,
                 reps,
                 exact_ref,
             );
@@ -359,15 +556,63 @@ fn main() {
     };
 
     if mode == "mpo-mps" || mode == "both" {
+        validate_memory(
+            "mpo-mps",
+            estimate_memory("mpo-mps", n_sites, physical_dim, bond_dim, mps_bond_dim),
+            !skip_exact,
+            7,
+        );
         let (operator, state) = make_mpo_mps(n_sites, physical_dim, bond_dim, mps_bond_dim, 7);
         run("mpo-mps", operator, state);
     }
     if mode == "mpo-mpo" || mode == "both" {
+        validate_memory(
+            "mpo-mpo",
+            estimate_memory("mpo-mpo", n_sites, physical_dim, bond_dim, mps_bond_dim),
+            !skip_exact,
+            11,
+        );
         let (left, right) = make_mpo_mpo(n_sites, physical_dim, bond_dim, 11);
         run("mpo-mpo", left, right);
     }
     if mode == "tree" {
-        let (left, right) = make_star_pair(n_sites - 1, physical_dim, bond_dim, 13);
+        validate_memory(
+            "tree",
+            estimate_memory("tree", n_sites, physical_dim, bond_dim, mps_bond_dim),
+            !skip_exact,
+            13,
+        );
+        let (left, right) = make_binary_tree_pair(n_sites, physical_dim, bond_dim, 13);
         run("tree-mpo-mpo", left, right);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_memory_estimate_is_checked_and_exact() {
+        let estimate = estimate_memory("mpo-mps", 3, 2, 2, 2);
+        assert_eq!(estimate.total_input_bytes, 384);
+        assert_eq!(estimate.largest_input_tensor_bytes, 128);
+        assert_eq!(estimate.dense_output_bytes, 64);
+        assert_eq!(estimate.max_degree, 2);
+    }
+
+    #[test]
+    fn binary_tree_estimate_has_bounded_degree_and_core_size() {
+        let estimate = estimate_memory("tree", 7, 2, 4, 4);
+        assert_eq!(estimate.total_input_bytes, 10_240);
+        assert_eq!(estimate.largest_input_tensor_bytes, 2_048);
+        assert_eq!(estimate.dense_output_bytes, 131_072);
+        assert_eq!(estimate.max_degree, 3);
+        assert_eq!(binary_tree_degrees(15).into_iter().max(), Some(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "dense output elements overflow")]
+    fn memory_estimate_rejects_dense_output_overflow() {
+        let _ = estimate_memory("mpo-mpo", usize::BITS as usize, 2, 2, 2);
     }
 }

@@ -10,6 +10,7 @@
 //!
 //! - [`contract`]: Contracts one connected tensor network
 //! - [`contract_with_options`]: Contracts one connected tensor network with retained indices
+//! - [`PreparedContraction`]: Reuses index matching and labels for compatible repeated calls
 //!
 //! # Structured Tensor Handling
 //!
@@ -170,6 +171,228 @@ impl<'a> ContractionOptions<'a> {
 impl Default for ContractionOptions<'_> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A caller-owned plan for repeated contractions with fixed index metadata.
+///
+/// Prepare this once when repeated operands keep the same ordered indices,
+/// dimensions, and axis classes but their values, dtypes, or gradient state may
+/// change. Fresh index identities require a fresh plan.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{ContractionOptions, DynIndex, IdxTensor, PreparedContraction};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let k = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0, 2.0, 3.0, 4.0])?;
+/// let b = IdxTensor::from_dense(vec![k, j.clone()], vec![5.0, 6.0, 7.0, 8.0])?;
+/// let c = IdxTensor::from_dense(vec![j], vec![1.0, 2.0])?;
+/// let plan = PreparedContraction::new(&[&a, &b, &c], ContractionOptions::new())?;
+/// let result = plan.execute(&[&a, &b, &c])?;
+/// assert_eq!(result.indices(), &[i]);
+/// assert_eq!(result.to_vec::<f64>()?, vec![85.0, 126.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone)]
+pub struct PreparedContraction {
+    expected_indices: Vec<Vec<DynIndex>>,
+    expected_dims: Vec<Vec<usize>>,
+    expected_axis_classes: Vec<Vec<usize>>,
+    plan: ContractionPlan,
+    has_retained_indices: bool,
+}
+
+impl std::fmt::Debug for PreparedContraction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedContraction")
+            .field("operand_count", &self.expected_indices.len())
+            .field("result_rank", &self.plan.result_indices.len())
+            .field("has_retained_indices", &self.has_retained_indices)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedContraction {
+    /// Prepare index matching, label assignment, and result ordering.
+    ///
+    /// # Arguments
+    ///
+    /// * `tensors` - Representative operands whose ordered index metadata defines
+    ///   the execution contract.
+    /// * `options` - Retained indices to preserve in every execution result.
+    ///
+    /// # Returns
+    ///
+    /// An immutable caller-owned plan reusable with compatible operands.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when no operands are supplied, retained indices
+    /// are absent, the index relationships do not form the requested connected
+    /// network, or the result would contain duplicate output indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{ContractionOptions, DynIndex, IdxTensor, PreparedContraction};
+    ///
+    /// let shared = DynIndex::new_dyn(2);
+    /// let a = IdxTensor::from_dense(vec![shared.clone()], vec![1.0, 2.0])?;
+    /// let b = IdxTensor::from_dense(vec![shared], vec![3.0, 4.0])?;
+    /// let plan = PreparedContraction::new(&[&a, &b], ContractionOptions::new())?;
+    /// assert_eq!(plan.execute(&[&a, &b])?.to_vec::<f64>()?, vec![11.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(
+        tensors: &[&IdxTensor],
+        options: ContractionOptions<'_>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        Self::new_impl(tensors, options).map_err(IdxTensorError::from)
+    }
+
+    fn new_impl(tensors: &[&IdxTensor], options: ContractionOptions<'_>) -> Result<Self> {
+        if tensors.is_empty() {
+            return Err(anyhow::anyhow!("No tensors to contract"));
+        }
+        validate_retained_indices_exist(tensors, options.retain_indices)?;
+        if tensors.len() > 1 {
+            let components =
+                find_tensor_connected_components_with_retained(tensors, options.retain_indices);
+            if components.len() > 1 {
+                return Err(anyhow::anyhow!(
+                    "Disconnected tensor network: {} components found",
+                    components.len()
+                ));
+            }
+        }
+        let plan = build_contraction_plan(tensors, options)?;
+        Ok(Self {
+            expected_indices: tensors
+                .iter()
+                .map(|tensor| tensor.indices().to_vec())
+                .collect(),
+            expected_dims: tensors.iter().map(|tensor| tensor.dims()).collect(),
+            expected_axis_classes: tensors
+                .iter()
+                .map(|tensor| tensor.axis_classes().to_vec())
+                .collect(),
+            plan,
+            has_retained_indices: !options.retain_indices.is_empty(),
+        })
+    }
+
+    /// Execute this plan with compatible operands.
+    ///
+    /// Operand values, dtypes, and gradient state may differ from preparation;
+    /// ordered full indices, dimensions, and axis classes must match exactly.
+    ///
+    /// # Returns
+    ///
+    /// The contracted tensor in the result-index order fixed at preparation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError::ShapeMismatch`] before backend execution when
+    /// operand count, indices, dimensions, or axis classes differ. Storage,
+    /// dtype-promotion, AD, or backend execution failures retain their ordinary
+    /// [`IdxTensorError`] diagnostics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{ContractionOptions, DynIndex, IdxTensor, PreparedContraction};
+    ///
+    /// let shared = DynIndex::new_dyn(2);
+    /// let a = IdxTensor::from_dense(vec![shared.clone()], vec![1.0, 2.0])?;
+    /// let b = IdxTensor::from_dense(vec![shared.clone()], vec![3.0, 4.0])?;
+    /// let plan = PreparedContraction::new(&[&a, &b], ContractionOptions::new())?;
+    /// let updated = IdxTensor::from_dense(vec![shared], vec![5.0, 6.0])?;
+    /// assert_eq!(plan.execute(&[&a, &updated])?.to_vec::<f64>()?, vec![17.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn execute(
+        &self,
+        tensors: &[&IdxTensor],
+    ) -> std::result::Result<IdxTensor, IdxTensorError> {
+        self.validate_operands(tensors)?;
+        self.execute_impl(tensors).map_err(IdxTensorError::from)
+    }
+
+    fn validate_operands(&self, tensors: &[&IdxTensor]) -> std::result::Result<(), IdxTensorError> {
+        if tensors.len() != self.expected_indices.len() {
+            return Err(IdxTensorError::ShapeMismatch {
+                operation: "prepared contraction",
+                expected: format!("{} operands", self.expected_indices.len()),
+                actual: format!("{} operands", tensors.len()),
+            });
+        }
+        for (operand, tensor) in tensors.iter().enumerate() {
+            let dims = tensor.dims();
+            if dims != self.expected_dims[operand] {
+                return Err(IdxTensorError::ShapeMismatch {
+                    operation: "prepared contraction",
+                    expected: format!(
+                        "operand {operand} dimensions {:?}",
+                        self.expected_dims[operand]
+                    ),
+                    actual: format!("operand {operand} dimensions {dims:?}"),
+                });
+            }
+            if tensor.indices() != self.expected_indices[operand] {
+                return Err(IdxTensorError::ShapeMismatch {
+                    operation: "prepared contraction",
+                    expected: format!(
+                        "operand {operand} indices {:?}",
+                        self.expected_indices[operand]
+                    ),
+                    actual: format!("operand {operand} indices {:?}", tensor.indices()),
+                });
+            }
+            if tensor.axis_classes() != self.expected_axis_classes[operand] {
+                return Err(IdxTensorError::ShapeMismatch {
+                    operation: "prepared contraction",
+                    expected: format!(
+                        "operand {operand} axis classes {:?}",
+                        self.expected_axis_classes[operand]
+                    ),
+                    actual: format!("operand {operand} axis classes {:?}", tensor.axis_classes()),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn execute_impl(&self, tensors: &[&IdxTensor]) -> Result<IdxTensor> {
+        if tensors.len() == 1 {
+            return Ok((*tensors[0]).clone());
+        }
+        if tensors.len() == 2 && !self.has_retained_indices {
+            return tensors[0].try_contract_pairwise_default_with_options(
+                tensors[1],
+                PairwiseContractionOptions::new(),
+            );
+        }
+        let has_structured_storage = tensors
+            .iter()
+            .map(|tensor| has_dense_axis_classes(tensor).map(|dense| !dense))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .any(|structured| structured);
+        let has_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
+        if has_structured_storage || has_grad {
+            return IdxTensor::contract_structured_payloads_nary(
+                tensors,
+                self.plan.result_indices.clone(),
+                self.plan.input_ids.clone(),
+                self.plan.output_ids.clone(),
+            );
+        }
+        execute_contraction_plan(tensors, &self.plan, self.has_retained_indices)
     }
 }
 
@@ -547,6 +770,13 @@ fn contract_with_options_impl(
                     "Disconnected tensor network: {} components found",
                     components.len()
                 ));
+            }
+
+            if tensors.len() == 2 && options.retain_indices.is_empty() {
+                return tensors[0].try_contract_pairwise_default_with_options(
+                    tensors[1],
+                    PairwiseContractionOptions::new(),
+                );
             }
 
             let has_structured_storage = tensors

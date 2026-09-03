@@ -164,6 +164,35 @@ let product = outer_product(&a, &c).unwrap();
 assert_eq!(product.dims().iter().product::<usize>(), 2 * 3 * 4 * 5);
 ```
 
+### Repeated contraction with a prepared plan
+
+When repeated operands keep exactly the same ordered indices, dimensions, and
+axis classes, prepare the index matching and label assignment once. Values,
+dtypes, and gradient-tracking state may change; fresh index identities require a
+new plan.
+
+```rust
+use tensor4all_core::{ContractionOptions, IdxTensor, Index, PreparedContraction};
+
+let i = Index::new_dyn(2);
+let j = Index::new_dyn(2);
+let k = Index::new_dyn(2);
+let a = IdxTensor::from_dense(
+    vec![i.clone(), k.clone()],
+    vec![1.0, 2.0, 3.0, 4.0],
+).unwrap();
+let b = IdxTensor::from_dense(
+    vec![k, j.clone()],
+    vec![5.0, 6.0, 7.0, 8.0],
+).unwrap();
+let c = IdxTensor::from_dense(vec![j], vec![1.0, 2.0]).unwrap();
+
+let plan = PreparedContraction::new(&[&a, &b, &c], ContractionOptions::new()).unwrap();
+let result = plan.execute(&[&a, &b, &c]).unwrap();
+assert_eq!(result.indices(), &[i]);
+assert_eq!(result.to_vec::<f64>().unwrap(), vec![85.0, 126.0]);
+```
+
 ## Factorization
 
 The unified `factorize()` function dispatches to SVD, QR, LU, or CI based on
