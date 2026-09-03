@@ -10,7 +10,7 @@
 //!
 //! - [`contract`]: Contracts one connected tensor network
 //! - [`contract_with_options`]: Contracts one connected tensor network with retained indices
-//! - [`PreparedContraction`]: Reuses index matching and labels for compatible repeated calls
+//! - [`PreparedContraction`]: Reuses N-ary or retained-call labels for compatible repeated calls
 //!
 //! # Structured Tensor Handling
 //!
@@ -178,7 +178,10 @@ impl Default for ContractionOptions<'_> {
 ///
 /// Prepare this once when repeated operands keep the same ordered indices,
 /// dimensions, and axis classes but their values, dtypes, or gradient state may
-/// change. Fresh index identities require a fresh plan.
+/// change. Planning reuse applies to N-ary or retained-index execution. A binary
+/// call without retained indices preserves the faster pairwise path and does not
+/// consume the stored N-ary labels; use [`contract_pair`] directly for that case.
+/// Fresh index identities require a fresh plan.
 ///
 /// # Examples
 ///
@@ -241,11 +244,16 @@ impl PreparedContraction {
     /// ```
     /// use tensor4all_core::{ContractionOptions, DynIndex, IdxTensor, PreparedContraction};
     ///
-    /// let shared = DynIndex::new_dyn(2);
-    /// let a = IdxTensor::from_dense(vec![shared.clone()], vec![1.0, 2.0])?;
-    /// let b = IdxTensor::from_dense(vec![shared], vec![3.0, 4.0])?;
-    /// let plan = PreparedContraction::new(&[&a, &b], ContractionOptions::new())?;
-    /// assert_eq!(plan.execute(&[&a, &b])?.to_vec::<f64>()?, vec![11.0]);
+    /// let left = DynIndex::new_dyn(2);
+    /// let right = DynIndex::new_dyn(2);
+    /// let a = IdxTensor::from_dense(vec![left.clone()], vec![1.0, 2.0])?;
+    /// let b = IdxTensor::from_dense(
+    ///     vec![left, right.clone()],
+    ///     vec![3.0, 0.0, 0.0, 4.0],
+    /// )?;
+    /// let c = IdxTensor::from_dense(vec![right], vec![5.0, 6.0])?;
+    /// let plan = PreparedContraction::new(&[&a, &b, &c], ContractionOptions::new())?;
+    /// assert_eq!(plan.execute(&[&a, &b, &c])?.to_vec::<f64>()?, vec![63.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn new(
@@ -307,12 +315,17 @@ impl PreparedContraction {
     /// ```
     /// use tensor4all_core::{ContractionOptions, DynIndex, IdxTensor, PreparedContraction};
     ///
-    /// let shared = DynIndex::new_dyn(2);
-    /// let a = IdxTensor::from_dense(vec![shared.clone()], vec![1.0, 2.0])?;
-    /// let b = IdxTensor::from_dense(vec![shared.clone()], vec![3.0, 4.0])?;
-    /// let plan = PreparedContraction::new(&[&a, &b], ContractionOptions::new())?;
-    /// let updated = IdxTensor::from_dense(vec![shared], vec![5.0, 6.0])?;
-    /// assert_eq!(plan.execute(&[&a, &updated])?.to_vec::<f64>()?, vec![17.0]);
+    /// let left = DynIndex::new_dyn(2);
+    /// let right = DynIndex::new_dyn(2);
+    /// let a = IdxTensor::from_dense(vec![left.clone()], vec![1.0, 2.0])?;
+    /// let b = IdxTensor::from_dense(
+    ///     vec![left, right.clone()],
+    ///     vec![3.0, 0.0, 0.0, 4.0],
+    /// )?;
+    /// let c = IdxTensor::from_dense(vec![right.clone()], vec![5.0, 6.0])?;
+    /// let plan = PreparedContraction::new(&[&a, &b, &c], ContractionOptions::new())?;
+    /// let updated = IdxTensor::from_dense(vec![right], vec![1.0, 1.0])?;
+    /// assert_eq!(plan.execute(&[&a, &b, &updated])?.to_vec::<f64>()?, vec![11.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn execute(
@@ -500,8 +513,8 @@ impl PairwiseContractionOptions {
 /// # Errors
 ///
 /// Returns an error when the network is disconnected (a disconnected-network
-/// /// failure), when indices are incompatible (a shape or index mismatch), or
-/// /// when the contraction reports a failure (a backend failure).
+/// failure), when indices are incompatible (a shape or index mismatch), or
+/// when the contraction reports a failure (a backend failure).
 ///
 pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_with_options(tensors, ContractionOptions::new())
@@ -511,8 +524,8 @@ pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTen
 /// # Errors
 ///
 /// Returns an error when the network is disconnected (a disconnected-network
-/// /// failure), when indices are incompatible (a shape or index mismatch), or
-/// /// when the contraction reports a failure (a backend failure).
+/// failure), when indices are incompatible (a shape or index mismatch), or
+/// when the contraction reports a failure (a backend failure).
 ///
 pub fn contract_with_options(
     tensors: &[&IdxTensor],
@@ -525,8 +538,8 @@ pub fn contract_with_options(
 /// # Errors
 ///
 /// Returns an error when the network is disconnected (a disconnected-network
-/// /// failure), when indices are incompatible (a shape or index mismatch), or
-/// /// when the contraction reports a failure (a backend failure).
+/// failure), when indices are incompatible (a shape or index mismatch), or
+/// when the contraction reports a failure (a backend failure).
 ///
 pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_owned_with_options(tensors, ContractionOptions::new())
@@ -536,8 +549,8 @@ pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor,
 /// # Errors
 ///
 /// Returns an error when the network is disconnected (a disconnected-network
-/// /// failure), when indices are incompatible (a shape or index mismatch), or
-/// /// when the contraction reports a failure (a backend failure).
+/// failure), when indices are incompatible (a shape or index mismatch), or
+/// when the contraction reports a failure (a backend failure).
 ///
 pub fn contract_owned_with_options(
     tensors: Vec<IdxTensor>,
@@ -563,8 +576,8 @@ pub fn contract_owned_with_options(
 /// # Errors
 ///
 /// Returns an error when the pair is disconnected or has incompatible indices
-/// /// (a shape or index mismatch), or when the contraction reports a failure (a
-/// /// backend failure).
+/// (a shape or index mismatch), or when the contraction reports a failure (a
+/// backend failure).
 ///
 pub fn contract_pair(
     lhs: &IdxTensor,
@@ -584,8 +597,8 @@ pub fn contract_pair(
 /// # Errors
 ///
 /// Returns an error when the pair is disconnected or has incompatible indices
-/// /// (a shape or index mismatch), or when the contraction reports a failure (a
-/// /// backend failure).
+/// (a shape or index mismatch), or when the contraction reports a failure (a
+/// backend failure).
 ///
 /// # Examples
 ///
@@ -628,8 +641,8 @@ pub fn contract_pair_with_operand_options(
 /// # Errors
 ///
 /// Returns an error when the pair is disconnected or has incompatible indices
-/// /// (a shape or index mismatch), or when the contraction reports a failure (a
-/// /// backend failure).
+/// (a shape or index mismatch), or when the contraction reports a failure (a
+/// backend failure).
 ///
 pub fn contract_pair_with_options(
     lhs: &IdxTensor,
@@ -643,7 +656,7 @@ pub fn contract_pair_with_options(
 /// # Errors
 ///
 /// Returns an error when the contracted indices are incompatible (a shape or
-/// /// index mismatch) or the contraction reports a failure (a backend failure).
+/// index mismatch) or the contraction reports a failure (a backend failure).
 ///
 pub fn tensordot(
     lhs: &IdxTensor,
@@ -661,8 +674,8 @@ pub fn tensordot(
 /// # Errors
 ///
 /// Returns an error when the two tensors share contractable indices (a
-/// /// shared-index mismatch) or the construction reports a failure (a backend
-/// /// failure).
+/// shared-index mismatch) or the construction reports a failure (a backend
+/// failure).
 ///
 pub fn outer_product(
     lhs: &IdxTensor,

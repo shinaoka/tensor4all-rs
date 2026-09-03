@@ -148,7 +148,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the dense contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -311,7 +311,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the zip-up contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn contract_zipup(
         &self,
@@ -354,7 +354,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the zip-up contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn contract_zipup_with(
         &self,
@@ -1194,7 +1194,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the naive contraction fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn contract_naive(&self, other: &Self) -> std::result::Result<T, TreeTNOperationError>
     where
@@ -1242,7 +1242,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the orthogonality structure is inconsistent (an
-    /// /// graph consistency failure).
+    /// graph consistency failure).
     ///
     pub fn validate_ortho_consistency(&self) -> std::result::Result<(), TreeTNOperationError> {
         // If not canonicalized, require no ortho_towards at all

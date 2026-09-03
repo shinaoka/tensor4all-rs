@@ -3,9 +3,11 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -46,6 +48,8 @@ class SrcBenchmarkGateTests(unittest.TestCase):
         candidate_error: str,
         baseline_features: str = "fake",
         candidate_features: str = "fake",
+        pairs: int = 5,
+        required_improvement: str = "0",
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -73,7 +77,9 @@ class SrcBenchmarkGateTests(unittest.TestCase):
                     "--expected-features",
                     "fake",
                     "--pairs",
-                    "1",
+                    str(pairs),
+                    "--required-improvement-percent",
+                    required_improvement,
                     "--reps",
                     "1",
                     "--max-dispersion-percent",
@@ -84,8 +90,14 @@ class SrcBenchmarkGateTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
+                env=os.environ
+                | {
+                    "T4A_BENCH_CENTER": "stale-center",
+                    "T4A_PROFILE_CONTRACT": "stale-profile",
+                },
             )
-            return completed.returncode, json.loads(report.read_text())
+            report_data = json.loads(report.read_text()) if report.exists() else None
+            return completed.returncode, report_data
 
     @staticmethod
     def write_fake(
@@ -97,8 +109,12 @@ class SrcBenchmarkGateTests(unittest.TestCase):
     ) -> Path:
         path.write_text(
             "#!/bin/sh\n"
+            "n=$1; bond=$2; reps=$3; mode=$4; increment=$5; final_svd=$6; max_rank=$7\n"
+            "if [ \"$mode\" = mpo-mps ]; then seed=7; center=S0; name=mpo-mps/$T4A_BENCH_ALGORITHM; else seed=13; center=N0000; name=tree-mpo-mpo/$T4A_BENCH_ALGORITHM; fi\n"
             f"echo 'record=build git_commit={commit} profile=release backend=fake features={features}'\n"
-            f"echo 'record=case name=fake reps=1 elapsed_seconds={seconds} per_run_seconds={seconds} nodes=1 edges=0 requested_max_rank=32 effective_max_bond=1 src_seed=1234 relative_error={relative_error}'\n"
+            "echo \"record=config n_sites=$n physical_dim=2 mpo_bond=$bond mps_bond=$bond requested_max_rank=$max_rank reps=$reps mode=$mode algorithm=$T4A_BENCH_ALGORITHM rank_increment=$increment final_svd=$final_svd src_seed=1234 adaptive_rtol=1e-4 adaptive_atol=0 adaptive_min_rank=2\"\n"
+            "echo \"record=preflight mode=$mode network_seed=$seed total_input_bytes=8 largest_input_tensor_bytes=8 dense_output_bytes=8 max_degree=2 max_input_bytes=1024 max_dense_bytes=1024\"\n"
+            f"echo \"record=case name=$name reps=$reps elapsed_seconds={seconds} per_run_seconds={seconds} nodes=1 edges=0 requested_max_rank=$max_rank effective_max_bond=1 src_seed=1234 center=$center relative_error={relative_error}\"\n"
         )
         path.chmod(0o700)
         return path
@@ -107,6 +123,7 @@ class SrcBenchmarkGateTests(unittest.TestCase):
         code, report = self.run_gate("0", "0")
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["protocol"]["pairs"], 5)
 
     def test_candidate_correctness_failure_is_fail(self):
         code, report = self.run_gate("0", "1")
@@ -127,6 +144,54 @@ class SrcBenchmarkGateTests(unittest.TestCase):
         code, report = self.run_gate("0", "0", candidate_features="wrong")
         self.assertEqual(code, 1)
         self.assertEqual(report["status"], "FAIL")
+
+    def test_non_finite_error_is_fail(self):
+        code, report = self.run_gate("0", "nan")
+        self.assertEqual(code, 1)
+        self.assertEqual(report["status"], "FAIL")
+
+    def test_paired_quick_gate_rejects_fewer_than_five_pairs(self):
+        code, report = self.run_gate("0", "0", pairs=1)
+        self.assertEqual(code, 2)
+        self.assertIsNone(report)
+
+    def test_non_finite_improvement_is_rejected(self):
+        code, report = self.run_gate("0", "0", required_improvement="nan")
+        self.assertEqual(code, 2)
+        self.assertIsNone(report)
+
+    def test_timeout_kills_the_benchmark_process_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid = root / "child.pid"
+            binary = root / "hang"
+            binary.write_text(
+                "#!/bin/sh\n"
+                f"sleep 30 & echo $! > {child_pid}\n"
+                "wait\n"
+            )
+            binary.chmod(0o700)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                MODULE.run_once(
+                    binary,
+                    None,
+                    MODULE.cases("quick")[0],
+                    1,
+                    0.1,
+                    1 << 30,
+                    1 << 20,
+                    1.0e-8,
+                    "fake",
+                    "fake",
+                )
+            pid = int(child_pid.read_text())
+            time.sleep(0.1)
+            self.assertNotEqual(
+                subprocess.run(
+                    ["ps", "-p", str(pid)], capture_output=True, check=False
+                ).returncode,
+                0,
+            )
 
 
 if __name__ == "__main__":

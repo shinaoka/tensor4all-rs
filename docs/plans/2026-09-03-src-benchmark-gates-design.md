@@ -22,16 +22,17 @@ allocation, and make unavailable backend lanes explicit.
 - Warm each selected algorithm once before timed repetitions. Keep setup and
   dense-oracle time outside the measured section.
 - Print machine-parseable requested/effective ranks, estimates, topology, seed,
-  relative error, compile-time git commit, release/debug profile, enabled
-  backend features, and backend selection. The runner rejects an expected
+  relative error, selected center, compile-time git commit, release/debug
+  profile, enabled backend features, and backend selection. The runner rejects an expected
   commit/profile/feature mismatch and records each binary's SHA-256.
 
 ## Gate runner
 
 Add a Python-stdlib runner under `scripts/` that accepts prebuilt baseline and
-candidate binaries, alternates their order for each pair, fixes Rayon/BLAS
-threads to one, applies a child-process address-space ceiling, captures host load
-and every raw result, and writes JSON. GNU `time` records each child's peak RSS;
+candidate binaries, alternates their order for each pair, removes ambient
+`T4A_BENCH_*`/`T4A_PROFILE_*` overrides, fixes Rayon/BLAS threads to one, applies
+a child-process address-space ceiling, kills the complete benchmark process
+group on timeout, captures host load and every raw result, and writes JSON. GNU `time` records each child's peak RSS;
 `RLIMIT_AS` is reported separately as virtual-memory enforcement, never as an
 RSS measurement.
 

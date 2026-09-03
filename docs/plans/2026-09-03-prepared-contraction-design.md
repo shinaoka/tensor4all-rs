@@ -3,8 +3,8 @@
 ## Decision
 
 Add `tensor4all_core::PreparedContraction`, an explicitly caller-owned immutable
-plan for repeatedly contracting `IdxTensor` operands with the same index and
-axis-layout contract. It owns core label assignment and result ordering; no
+plan for repeatedly contracting N-ary or retained-index `IdxTensor` operands
+with the same index and axis-layout contract. It owns core label assignment and result ordering; no
 thread-local/global core cache is added.
 
 ```rust
@@ -39,7 +39,8 @@ existing source chain.
 - Zero operands fail during preparation; disconnected inputs retain generic
   contraction's rejection.
 - One operand returns a clone.
-- Connected binary/no-retain execution keeps the existing pairwise fast path.
+- Connected binary/no-retain execution keeps the existing pairwise fast path;
+  it provides semantic parity but does not reuse the stored N-ary labels.
 - N-ary and retained dense execution reuses stored input/output labels and the
   backend's existing shape/dtype-aware `ConcreteEinsumPlan` cache/session.
 - Structured and AD execution uses the same structured/AD-preserving path as the

@@ -10,6 +10,7 @@ import math
 import os
 import random
 import resource
+import signal
 import statistics
 import subprocess
 import tempfile
@@ -96,7 +97,11 @@ def run_once(
     expected_backend: str,
     expected_features: str,
 ) -> dict[str, object]:
-    env = os.environ.copy()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("T4A_BENCH_") and not key.startswith("T4A_PROFILE_")
+    }
     env.update(
         {
             "RAYON_NUM_THREADS": "1",
@@ -126,25 +131,39 @@ def run_once(
         raise OSError("GNU /usr/bin/time is required for per-child peak RSS")
     with tempfile.NamedTemporaryFile() as rss_file:
         timed = [str(gnu_time), "-f", "%M", "-o", rss_file.name, *command]
-        completed = subprocess.run(
+        process = subprocess.Popen(
             timed,
             env=env,
             text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
             preexec_fn=limit_address_space,
         )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                command,
+                timeout,
+                output=stdout,
+                stderr=stderr,
+            ) from error
         rss_file.seek(0)
         rss_text = rss_file.read().decode().strip()
-    if completed.returncode != 0:
+    if process.returncode != 0:
+        raise RuntimeError(f"exit={process.returncode}; stderr={stderr[-2000:]}")
+    records = parse_records(stdout)
+    required_records = ("build", "config", "preflight", "case")
+    if any(len(records.get(kind, [])) != 1 for kind in required_records):
         raise RuntimeError(
-            f"exit={completed.returncode}; stderr={completed.stderr[-2000:]}"
+            "benchmark output lacks exactly one build, config, preflight, and case record"
         )
-    records = parse_records(completed.stdout)
-    if len(records.get("build", [])) != 1 or len(records.get("case", [])) != 1:
-        raise RuntimeError("benchmark output lacks exactly one build and case record")
     build = records["build"][0]
+    config = records["config"][0]
+    preflight = records["preflight"][0]
     result = records["case"][0]
     if build.get("profile") != "release":
         raise RuntimeError(f"expected release profile, got {build.get('profile')}")
@@ -160,20 +179,68 @@ def run_once(
         raise RuntimeError(
             f"expected features {expected_features}, got {build.get('features')}"
         )
+
+    expected_config = {
+        "n_sites": str(case.n_sites),
+        "physical_dim": "2",
+        "mpo_bond": str(case.bond),
+        "mps_bond": str(case.bond),
+        "requested_max_rank": str(case.max_rank),
+        "reps": str(reps),
+        "mode": case.mode,
+        "algorithm": case.algorithm,
+        "rank_increment": str(case.rank_increment),
+        "final_svd": "false",
+        "src_seed": "1234",
+        "adaptive_rtol": "1e-4",
+        "adaptive_atol": "0",
+        "adaptive_min_rank": "2",
+    }
+    if any(config.get(key) != value for key, value in expected_config.items()):
+        raise RuntimeError(f"benchmark config mismatch: expected {expected_config}, got {config}")
+    expected_network_seed = "7" if case.mode == "mpo-mps" else "13"
+    if preflight.get("mode") != case.mode or preflight.get("network_seed") != expected_network_seed:
+        raise RuntimeError("benchmark preflight mode or network seed mismatch")
+    expected_name = (
+        f"mpo-mps/{case.algorithm}"
+        if case.mode == "mpo-mps"
+        else f"tree-mpo-mpo/{case.algorithm}"
+    )
+    expected_result = {
+        "name": expected_name,
+        "reps": str(reps),
+        "requested_max_rank": str(case.max_rank),
+        "src_seed": "1234",
+        "center": "S0" if case.mode == "mpo-mps" else "N0000",
+    }
+    if any(result.get(key) != value for key, value in expected_result.items()):
+        raise RuntimeError(f"benchmark case mismatch: expected {expected_result}, got {result}")
+
+    seconds = float(result["per_run_seconds"])
+    elapsed = float(result["elapsed_seconds"])
     relative_error = float(result["relative_error"])
-    if relative_error > correctness_tol:
+    effective_max_bond = int(result["effective_max_bond"])
+    if not math.isfinite(seconds) or seconds <= 0 or not math.isfinite(elapsed) or elapsed <= 0:
+        raise RuntimeError("benchmark timing must be finite and positive")
+    if (
+        not math.isfinite(relative_error)
+        or relative_error < 0
+        or relative_error > correctness_tol
+    ):
         raise ValueError(
-            f"relative error {relative_error} exceeds {correctness_tol}"
+            f"relative error {relative_error} is outside [0, {correctness_tol}]"
         )
+    if not 1 <= effective_max_bond <= case.max_rank:
+        raise RuntimeError("effective max bond is outside the declared rank cap")
     rss_kib = int(rss_text)
     if rss_kib > max_rss_kib:
         raise MemoryError(f"peak RSS {rss_kib} KiB exceeds {max_rss_kib} KiB")
     return {
-        "seconds": float(result["per_run_seconds"]),
+        "seconds": seconds,
         "relative_error": relative_error,
         "peak_rss_kib": rss_kib,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
+        "stdout": stdout,
+        "stderr": stderr,
         "build": build,
         "result": result,
     }
@@ -182,7 +249,7 @@ def run_once(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", type=Path, required=True)
-    parser.add_argument("--candidate-commit")
+    parser.add_argument("--candidate-commit", required=True)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--baseline-commit")
     parser.add_argument("--suite", choices=("quick", "full"), default="quick")
@@ -209,15 +276,21 @@ def main() -> int:
         parser.error("--baseline-commit requires --baseline")
     if args.baseline is not None and args.baseline_commit is None:
         parser.error("paired runs require --baseline-commit")
-    if args.baseline is not None and args.candidate_commit is None:
-        parser.error("paired runs require --candidate-commit")
-    pairs = args.pairs or (10 if args.suite == "full" else 5)
+    pairs = (10 if args.suite == "full" else 5) if args.pairs is None else args.pairs
     if pairs < 1 or args.reps < 1:
         parser.error("pairs and reps must be positive")
+    minimum_pairs = 10 if args.suite == "full" else 5
+    if args.baseline is not None and pairs < minimum_pairs:
+        parser.error(
+            f"paired {args.suite} runs require at least {minimum_pairs} pairs"
+        )
     if not math.isfinite(args.correctness_tol) or args.correctness_tol < 0:
         parser.error("--correctness-tol must be finite and non-negative")
-    if not 0 <= args.required_improvement_percent < 100:
-        parser.error("--required-improvement-percent must be in [0, 100)")
+    if (
+        not math.isfinite(args.required_improvement_percent)
+        or not 0 <= args.required_improvement_percent < 100
+    ):
+        parser.error("--required-improvement-percent must be finite and in [0, 100)")
     if (
         not math.isfinite(args.allowed_regression_percent)
         or args.allowed_regression_percent < 0
@@ -238,7 +311,13 @@ def main() -> int:
     if unknown_primary:
         parser.error(f"unknown primary cases: {sorted(unknown_primary)}")
     report: dict[str, object] = {
-        "protocol": vars(args) | {"candidate": str(args.candidate), "baseline": str(args.baseline) if args.baseline else None, "output": str(args.output)},
+        "protocol": vars(args)
+        | {
+            "candidate": str(args.candidate),
+            "baseline": str(args.baseline) if args.baseline else None,
+            "output": str(args.output),
+            "pairs": pairs,
+        },
         "loadavg_before": os.getloadavg(),
         "binaries": {"candidate": {"path": str(args.candidate), "sha256": sha256(args.candidate)}},
         "cases": {},
@@ -250,7 +329,9 @@ def main() -> int:
     candidate_errors: list[str] = []
     correctness_errors: list[str] = []
     shared_errors: list[str] = []
-    for case_index, case in enumerate(selected):
+    if not Path("/usr/bin/time").is_file():
+        shared_errors.append("GNU /usr/bin/time is required for per-child peak RSS")
+    for case_index, case in enumerate([] if shared_errors else selected):
         case_report: dict[str, object] = {"config": asdict(case), "baseline": [], "candidate": []}
         report["cases"][case.name] = case_report
         for pair in range(pairs):
@@ -273,8 +354,8 @@ def main() -> int:
                     )
                     case_report[kind].append(result)
                 except OSError as error:
-                    message = f"{case.name} pair={pair} shared environment: {error}"
-                    shared_errors.append(message)
+                    message = f"{case.name} pair={pair} {kind} launch: {error}"
+                    (baseline_errors if kind == "baseline" else candidate_errors).append(message)
                     case_report[kind].append({"error": message})
                 except ValueError as error:
                     message = f"{case.name} pair={pair} {kind} correctness: {error}"

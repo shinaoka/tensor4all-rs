@@ -3,14 +3,16 @@
 ## Summary
 
 Added public `PreparedContraction`, which owns core index matching, internal
-labels, retained-label output order, and result axis metadata for repeated
-`IdxTensor` contractions. Execution requires the same operand count, ordered
+labels, retained-label output order, and result axis metadata for repeated N-ary
+or retained-index `IdxTensor` contractions. Execution requires the same operand count, ordered
 full indices, explicit dimensions, and axis classes; values, dtype, payload, and
 gradient state may change. Compatibility failures return
 `IdxTensorError::ShapeMismatch` before backend execution.
 
 The implementation preserves ordinary single clone, binary pairwise, N-ary
-native, retained, structured, and AD dispatch. Backend shape/dtype/label plans
+native, retained, structured, and AD dispatch. Binary calls without retained
+indices deliberately keep the faster pairwise path and do not reuse the stored
+N-ary labels; their support is semantic parity, not a reuse claim. Backend shape/dtype/label plans
 continue through the existing backend-owned cache/session. No new global or
 thread-local core cache was added.
 
@@ -47,7 +49,7 @@ rerun used 10 pairs and 30 repetitions with the unchanged 5% threshold and
 ## Verification
 
 - `cargo test --release -p tensor4all-core --test prepared_contraction`: 8 passed.
-- `cargo test --doc --release -p tensor4all-core PreparedContraction`: 3 passed before the review additions; rerun in final integration verification.
+- `cargo test --doc --release -p tensor4all-core PreparedContraction`: 3 passed after final review fixes.
 - Ignored repeated-contraction benchmark: 5/5 performance pairs passed.
 - #706 quick SRC non-regression: final 10-pair/30-repetition run passed.
 - No tolerance changed.

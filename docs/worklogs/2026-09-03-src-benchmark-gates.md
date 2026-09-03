@@ -28,7 +28,9 @@ PASS/FAIL/INCONCLUSIVE classification. Its design and final diff received
 
 ## Verification
 
-- `python3 scripts/test-run-src-benchmark-gates.py`: 7 passed.
+- `python3 scripts/test-run-src-benchmark-gates.py`: 11 passed, including
+  process-group timeout cleanup, strict config/provenance checks, minimum paired
+  samples, non-finite rejection, and classification precedence.
 - `cargo test --release -p tensor4all-treetn --example benchmark_src`: 3 passed.
 - Quick candidate smoke (4 exact cases, one warm-up + one timed run each): PASS.
   - chain bond-32 fixed: relative error `6.562e-26`;

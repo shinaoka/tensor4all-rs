@@ -21,9 +21,12 @@ and submitted 254 N-ary contractions. Totals were:
 | result wrapping | 0.747 | 1.96% |
 | backend execution | 17.237 | 45.26% |
 
-No non-backend fixed section reached the 10% need gate; together they were about
-7.7%. The remaining dominant time is required backend contraction work, not one
-owner-level fixed-cost defect. No optimization was added. Previously rejected
+No measured non-backend fixed N-ary contraction section reached the 10% need
+gate; together they were about 7.7%. These section totals intentionally do not
+account for the complete SRC runtime: the remainder includes QR, probe/cache
+work, pairwise contractions, and other algorithm stages and is not classified
+here as backend work. #701 concerns the named fixed per-N-ary sections above;
+none justified another production optimization. Previously rejected
 planner-map, linear cache, label-grouping, and fusion candidates were not
 repeated.
 

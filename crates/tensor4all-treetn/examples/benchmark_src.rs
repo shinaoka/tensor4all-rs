@@ -78,14 +78,14 @@ fn chain_elements(n_sites: usize, local_dim: usize, bond_dim: usize) -> (usize, 
     (total, endpoint.max(interior))
 }
 
-fn binary_tree_degrees(n_nodes: usize) -> Vec<usize> {
-    let mut degrees = vec![0usize; n_nodes];
-    for child in 1..n_nodes {
-        let parent = (child - 1) / 2;
-        degrees[parent] += 1;
-        degrees[child] += 1;
-    }
-    degrees
+fn binary_tree_shape_counts(n_nodes: usize) -> (usize, usize, usize, usize) {
+    assert!(n_nodes >= 3, "binary tree requires at least three nodes");
+    let two_child_nodes = (n_nodes - 1) / 2;
+    let nonroot_two_child_nodes = two_child_nodes - 1;
+    let one_child_nodes = usize::from(n_nodes.is_multiple_of(2));
+    let leaves = n_nodes - n_nodes / 2;
+    let max_degree = if nonroot_two_child_nodes > 0 { 3 } else { 2 };
+    (leaves, one_child_nodes, nonroot_two_child_nodes, max_degree)
 }
 
 fn estimate_memory(
@@ -119,25 +119,43 @@ fn estimate_memory(
             )
         }
         "tree" => {
-            let degrees = binary_tree_degrees(n_sites);
-            let mut one_total = 0usize;
-            let mut one_largest = 0usize;
-            for degree in degrees.iter().copied() {
-                let elements = checked_mul(
-                    physical_squared,
-                    checked_pow(bond_dim, degree, "tree bond product"),
-                    "tree tensor elements",
-                );
-                one_total = one_total
-                    .checked_add(elements)
-                    .expect("tree input element count overflow");
-                one_largest = one_largest.max(elements);
-            }
+            let (leaves, one_child, nonroot_two_child, max_degree) =
+                binary_tree_shape_counts(n_sites);
+            let degree_one = checked_mul(physical_squared, bond_dim, "tree leaf elements");
+            let degree_two = checked_mul(
+                physical_squared,
+                checked_pow(bond_dim, 2, "tree degree-two bond product"),
+                "tree degree-two elements",
+            );
+            let degree_three = checked_mul(
+                physical_squared,
+                checked_pow(bond_dim, 3, "tree degree-three bond product"),
+                "tree degree-three elements",
+            );
+            let one_total = checked_mul(leaves, degree_one, "tree leaf total")
+                .checked_add(checked_mul(
+                    one_child + 1,
+                    degree_two,
+                    "tree degree-two total",
+                ))
+                .and_then(|total| {
+                    total.checked_add(checked_mul(
+                        nonroot_two_child,
+                        degree_three,
+                        "tree degree-three total",
+                    ))
+                })
+                .expect("tree input element count overflow");
+            let one_largest = if max_degree == 3 {
+                degree_three
+            } else {
+                degree_two
+            };
             (
                 checked_mul(2, one_total, "tree pair input elements"),
                 one_largest,
                 physical_squared,
-                degrees.into_iter().max().unwrap_or(0),
+                max_degree,
             )
         }
         _ => panic!("mode must be mpo-mps, mpo-mpo, both, or tree"),
@@ -397,7 +415,7 @@ fn run_case(
         }
     });
     println!(
-        "record=case name={label} reps={reps} elapsed_seconds={:.6} per_run_seconds={:.6} nodes={} edges={} requested_max_rank={requested_max_rank} effective_max_bond={} src_seed={} relative_error={}",
+        "record=case name={label} reps={reps} elapsed_seconds={:.6} per_run_seconds={:.6} nodes={} edges={} requested_max_rank={requested_max_rank} effective_max_bond={} src_seed={} center={center} relative_error={}",
         elapsed.as_secs_f64(),
         elapsed.as_secs_f64() / reps as f64,
         result.node_count(),
@@ -607,7 +625,7 @@ mod tests {
         assert_eq!(estimate.largest_input_tensor_bytes, 2_048);
         assert_eq!(estimate.dense_output_bytes, 131_072);
         assert_eq!(estimate.max_degree, 3);
-        assert_eq!(binary_tree_degrees(15).into_iter().max(), Some(3));
+        assert_eq!(binary_tree_shape_counts(15).3, 3);
     }
 
     #[test]
