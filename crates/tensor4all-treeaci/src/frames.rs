@@ -141,6 +141,14 @@ pub(crate) mod debug_stats {
         MEMO_HIT_COPIES.with(Cell::get)
     }
 
+    pub(crate) fn old_values_copied() -> usize {
+        crate::state::profile_debug_stats::snapshot().frame_extension_old_values_copied
+    }
+
+    pub(crate) fn new_values_copied() -> usize {
+        crate::state::profile_debug_stats::snapshot().frame_extension_new_values_copied
+    }
+
     pub(crate) fn reset() {
         COMPUTE_CALLS.with(|count| count.set(0));
         SCALAR_COMPUTE_CALLS.with(|count| count.set(0));
@@ -188,12 +196,30 @@ pub(crate) mod candidate_debug_stats {
 pub(crate) struct DirectedFrame<T> {
     pub(crate) sample_count: usize,
     pub(crate) bond_dim: usize,
-    /// Sample-major frame values, so one sample's bond vector is contiguous.
+    /// An optional immutable prefix retained by a cut-local extension.
+    ///
+    /// The prefix is kept as an `Rc` instead of being copied into `values` when
+    /// an append-only sample arena grows. This makes a grown frame a persistent
+    /// frame segment: old rows remain addressable and only the newly interned
+    /// rows consume a new payload allocation. This is an **[AI Supplied]**
+    /// storage design; numerical equivalence is established by the differential
+    /// frame tests.
+    base: Option<Rc<DirectedFrame<T>>>,
+    /// Sample-major values for this frame segment, so one sample's bond vector
+    /// is contiguous. For a full frame this contains every row; for a grown
+    /// frame it contains rows in `base.sample_count..sample_count`.
     pub(crate) values: Vec<T>,
 }
 
 impl<T: TreeAciScalar> DirectedFrame<T> {
     fn row_slice(&self, sample: SampleId) -> &[T] {
+        if let Some(base) = &self.base {
+            if sample < base.sample_count {
+                return base.row_slice(sample);
+            }
+            let start = (sample - base.sample_count) * self.bond_dim;
+            return &self.values[start..start + self.bond_dim];
+        }
         let start = sample * self.bond_dim;
         &self.values[start..start + self.bond_dim]
     }
@@ -276,7 +302,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
     ) -> Result<Self> {
-        Self::build_or_extend(inputs, problem, arena, None)
+        Self::build_or_extend(inputs, problem, arena, None, None)
     }
 
     /// Extends this store to cover every sample now retained by `arena`,
@@ -298,7 +324,68 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
     ) -> Result<Self> {
-        Self::build_or_extend(inputs, problem, arena, Some(self))
+        let previous_counts = self
+            .frames
+            .iter()
+            .map(|edges| edges.iter().map(|frame| frame.sample_count).collect())
+            .collect::<Vec<Vec<_>>>();
+        self.extend_new_samples(inputs, problem, arena, &previous_counts)
+    }
+
+    /// Extends the store using the explicitly supplied append-only prefix
+    /// counts.
+    ///
+    /// `previous_counts[input][edge]` must equal the number of rows retained
+    /// by `self.frames[input][edge]`. Only rows in each newly grown range are
+    /// contracted and allocated; unchanged edges are `Rc`-shared and grown
+    /// edges retain their old prefix through [`DirectedFrame::base`]. The
+    /// explicit counts are an internal transaction seam so callers can stage
+    /// an arena extension without treating a whole-store rebuild as the
+    /// default. The seam and its cost policy are **[AI Supplied]** and are
+    /// guarded by complete differential tests.
+    pub(crate) fn extend_new_samples<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        arena: &SampleArena,
+        previous_counts: &[Vec<usize>],
+    ) -> Result<Self> {
+        if previous_counts.len() != self.frames.len()
+            || inputs.len() != self.frames.len()
+            || self.cores.len() != self.frames.len()
+        {
+            return Err(TreeAciError::InternalInvariant {
+                message: "frame extension prefix counts differ from input count",
+            });
+        }
+        let edge_count = problem.directed_edges.len();
+        for (input_index, (counts, frames)) in previous_counts.iter().zip(&self.frames).enumerate()
+        {
+            if counts.len() != edge_count || frames.len() != edge_count {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "frame extension prefix counts differ from directed edge count",
+                });
+            }
+            for (edge, (&count, frame)) in counts.iter().zip(frames).enumerate() {
+                if count != frame.sample_count {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "frame extension prefix count disagrees with stored frame",
+                    });
+                }
+                let current = arena.directed_record_count(edge)?;
+                if count > current {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "frame extension prefix exceeds the sample arena",
+                    });
+                }
+            }
+            let _ = inputs
+                .get(input_index)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "frame extension is missing an input tensor",
+                })?;
+        }
+        Self::build_or_extend(inputs, problem, arena, Some(self), Some(previous_counts))
     }
 
     fn build_or_extend<V: TreeAciNode>(
@@ -306,6 +393,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
         existing: Option<&Self>,
+        previous_counts: Option<&[Vec<usize>]>,
     ) -> Result<Self> {
         #[cfg(test)]
         let extension_profile = existing.is_some();
@@ -446,7 +534,21 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 })?;
 
                 let previous = existing_input.and_then(|frames| frames.get(edge));
-                let known = previous.map_or(0, |frame| frame.sample_count);
+                let known = previous_counts
+                    .and_then(|counts| counts.get(input_index))
+                    .and_then(|counts| counts.get(edge))
+                    .copied()
+                    .unwrap_or_else(|| previous.map_or(0, |frame| frame.sample_count));
+                if known > sample_count {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "stored frame prefix exceeds the sample arena",
+                    });
+                }
+                if previous.is_some_and(|frame| frame.bond_dim != bond_dim) {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "stored frame prefix has a different bond dimension",
+                    });
+                }
                 known_samples[edge] = known;
                 // `SampleArena` is append-only with immutable `SampleId`s (see
                 // `samples.rs`), so an unchanged sample count means an
@@ -512,28 +614,25 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 #[cfg(test)]
                 if extension_profile {
                     crate::state::profile_debug_stats::record(|stats| {
-                        stats.frame_extension_old_values_copied += known_samples[edge] * bond_dim;
                         stats.frame_extension_new_values_copied +=
                             (sample_count - known_samples[edge]) * bond_dim;
                     });
                 }
-                let mut data = Vec::with_capacity(frame_elements[edge]);
-                for sample in 0..sample_count {
-                    // Samples at or above `known` were just materialized into
-                    // `memo` by pass 1's `compute_batch`. Samples below it are
-                    // in `memo` only if something read them -- an ancestor
-                    // priming recursion, which lazily pulls through
-                    // `existing_frames` -- so an untouched old sample is
-                    // pulled from the previous store right here instead.
-                    let values = match std::mem::take(&mut builder.memo[edge][sample]) {
-                        Some(values) => values,
-                        None => previous
-                            .filter(|frame| sample < frame.sample_count)
-                            .map(|frame| frame.row(sample))
-                            .ok_or(TreeAciError::InternalInvariant {
-                                message: "directed frame memoization left a sample uncomputed",
-                            })?,
-                    };
+                let new_elements = (sample_count - known_samples[edge])
+                    .checked_mul(bond_dim)
+                    .ok_or(TreeAciError::SizeOverflow {
+                        context: "new directed frame elements",
+                    })?;
+                let mut data = Vec::with_capacity(new_elements);
+                for sample in known_samples[edge]..sample_count {
+                    // Only newly interned rows are materialized here. Old rows
+                    // remain in `previous` and are addressed through the
+                    // persistent prefix rather than copied into this vector.
+                    let values = std::mem::take(&mut builder.memo[edge][sample]).ok_or(
+                        TreeAciError::InternalInvariant {
+                            message: "new directed frame memoization left a sample uncomputed",
+                        },
+                    )?;
                     if values.len() != bond_dim {
                         return Err(TreeAciError::InternalInvariant {
                             message: "computed frame length differs from cut bond dimension",
@@ -542,6 +641,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     data.extend(values);
                 }
                 input_frames[edge] = Some(Rc::new(DirectedFrame {
+                    base: previous.cloned(),
                     sample_count,
                     bond_dim,
                     values: data,

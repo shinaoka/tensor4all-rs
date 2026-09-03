@@ -182,6 +182,245 @@ fn extend_matches_a_full_rebuild_on_the_grown_arena() {
     }
 }
 
+#[test]
+fn extend_new_samples_matches_full_rebuild_on_chain_and_branch() {
+    let cases = [
+        (
+            chain_tree_for_batched_compute(),
+            vec![0, 0, 0],
+            vec![1, 0, 0],
+        ),
+        (y_tree::<f64>(), vec![0, 0, 0, 0], vec![0, 1, 1, 1]),
+    ];
+
+    for (input, seed0, seed1) in cases {
+        let problem =
+            prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        let (mut arena, mut candidates) =
+            SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+        let initial =
+            InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+                .expect("initial store");
+        let previous_counts = initial.frames[0]
+            .iter()
+            .map(|frame| frame.sample_count)
+            .collect::<Vec<_>>();
+
+        arena
+            .inject_global_point(&mut candidates, &problem, &seed1)
+            .expect("grow the arena");
+        let extended = initial
+            .extend_new_samples(
+                std::slice::from_ref(&input),
+                &problem,
+                &arena,
+                std::slice::from_ref(&previous_counts),
+            )
+            .expect("extend only new samples");
+        let rebuilt =
+            InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+                .expect("rebuild from scratch");
+
+        for edge in 0..problem.directed_edges.len() {
+            let sample_count = arena.directed_record_count(edge).unwrap();
+            for sample in 0..sample_count {
+                assert_eq!(
+                    extended.frame_values(0, edge, sample).unwrap(),
+                    rebuilt.frame_values(0, edge, sample).unwrap(),
+                    "edge {edge} sample {sample} disagrees between cut-local extension and rebuild"
+                );
+            }
+        }
+
+        let unchanged = (0..problem.directed_edges.len())
+            .filter(|&edge| arena.directed_record_count(edge).unwrap() == previous_counts[edge]);
+        for edge in unchanged {
+            assert!(
+                Rc::ptr_eq(&initial.frames[0][edge], &extended.frames[0][edge]),
+                "unchanged edge {edge} must retain its frame allocation"
+            );
+        }
+    }
+}
+
+#[test]
+fn extend_new_samples_computes_only_new_ranges() {
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (mut arena, _candidates) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let previous_counts = initial.frames[0]
+        .iter()
+        .map(|frame| frame.sample_count)
+        .collect::<Vec<_>>();
+    let grown_edge = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == 1 && edge.to == 0)
+        .expect("chain must have the selected directed edge");
+    arena
+        .project_point_onto_edge(&problem, grown_edge, &[0, 0, 0, 0, 1])
+        .expect("project a new point onto one cut");
+
+    super::debug_stats::reset();
+    crate::state::profile_debug_stats::reset();
+    let extended = initial
+        .extend_new_samples(
+            std::slice::from_ref(&input),
+            &problem,
+            &arena,
+            std::slice::from_ref(&previous_counts),
+        )
+        .expect("extend only new samples");
+    let expected_new_values = (0..problem.directed_edges.len())
+        .map(|edge| {
+            let current = arena.directed_record_count(edge).unwrap();
+            (current - previous_counts[edge]) * initial.frames[0][edge].bond_dim
+        })
+        .sum::<usize>();
+
+    assert!(
+        super::debug_stats::compute_calls() > 0,
+        "the new ranges must still be contracted"
+    );
+    assert_eq!(
+        super::debug_stats::old_values_copied(),
+        0,
+        "cut-local extension must not copy old frame rows into a new allocation"
+    );
+    assert_eq!(super::debug_stats::new_values_copied(), expected_new_values);
+    assert!(
+        extended.frames[0][grown_edge]
+            .base
+            .as_ref()
+            .is_some_and(|base| { Rc::ptr_eq(base, &initial.frames[0][grown_edge]) }),
+        "grown frame must retain the old prefix by Rc"
+    );
+}
+
+#[test]
+#[ignore = "paired release measurement; correctness is covered by the non-ignored full matrix"]
+fn paired_release_measurement_for_cut_local_extension() {
+    use std::time::{Duration, Instant};
+
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (mut arena, _candidates) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let previous_counts = initial.frames[0]
+        .iter()
+        .map(|frame| frame.sample_count)
+        .collect::<Vec<_>>();
+    let grown_edge = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == 1 && edge.to == 0)
+        .expect("chain must have the selected directed edge");
+    arena
+        .project_point_onto_edge(&problem, grown_edge, &[0, 0, 0, 0, 1])
+        .expect("project a new point onto one cut");
+
+    for _ in 0..8 {
+        let extended = initial
+            .extend_new_samples(
+                std::slice::from_ref(&input),
+                &problem,
+                &arena,
+                std::slice::from_ref(&previous_counts),
+            )
+            .expect("cut-local extension");
+        let rebuilt =
+            InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+                .expect("full rebuild");
+        assert_eq!(
+            extended.frame_values(0, grown_edge, 1).unwrap(),
+            rebuilt.frame_values(0, grown_edge, 1).unwrap()
+        );
+    }
+
+    super::debug_stats::reset();
+    crate::state::profile_debug_stats::reset();
+    let extended = initial
+        .extend_new_samples(
+            std::slice::from_ref(&input),
+            &problem,
+            &arena,
+            std::slice::from_ref(&previous_counts),
+        )
+        .expect("cut-local extension");
+    let candidate_compute_calls = super::debug_stats::compute_calls();
+    let candidate_profile = crate::state::profile_debug_stats::snapshot();
+    let extended_bytes = extended.retained_bytes();
+
+    super::debug_stats::reset();
+    let rebuilt =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("full rebuild");
+    let full_rebuild_compute_calls = super::debug_stats::compute_calls();
+    assert_eq!(
+        extended.frame_values(0, grown_edge, 1).unwrap(),
+        rebuilt.frame_values(0, grown_edge, 1).unwrap()
+    );
+    eprintln!(
+        "#715 paired release resources: chain_nodes={}, max_degree=2, directed_edges={}, candidate_compute_calls={candidate_compute_calls}, full_rebuild_compute_calls={full_rebuild_compute_calls}, old_values_copied={}, new_values_copied={}, extension_calls={}, reused_edges={}, grown_edges={}, retained_bytes={extended_bytes}",
+        problem.node_order.len(),
+        problem.directed_edges.len(),
+        candidate_profile.frame_extension_old_values_copied,
+        candidate_profile.frame_extension_new_values_copied,
+        candidate_profile.frame_extension_calls,
+        candidate_profile.frame_extension_reused_edges,
+        candidate_profile.frame_extension_grown_edges,
+    );
+
+    const REPETITIONS: usize = 128;
+    const SAMPLES: usize = 7;
+    let mut cut_local = Vec::with_capacity(SAMPLES);
+    let mut full_rebuild = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let started = Instant::now();
+        for _ in 0..REPETITIONS {
+            let extended = initial
+                .extend_new_samples(
+                    std::slice::from_ref(&input),
+                    &problem,
+                    &arena,
+                    std::slice::from_ref(&previous_counts),
+                )
+                .expect("cut-local extension");
+            std::hint::black_box(extended.records());
+        }
+        cut_local.push(started.elapsed());
+
+        let started = Instant::now();
+        for _ in 0..REPETITIONS {
+            let rebuilt = InputFrameStore::<f64>::from_samples(
+                std::slice::from_ref(&input),
+                &problem,
+                &arena,
+            )
+            .expect("full rebuild");
+            std::hint::black_box(rebuilt.records());
+        }
+        full_rebuild.push(started.elapsed());
+    }
+    cut_local.sort_unstable();
+    full_rebuild.sort_unstable();
+    let median = |samples: &[Duration]| samples[samples.len() / 2];
+    eprintln!(
+        "#715 paired release measurement: repetitions={REPETITIONS}, samples={SAMPLES}, cut_local_median={:?}, full_rebuild_median={:?}, cut_local_all={cut_local:?}, full_rebuild_all={full_rebuild:?}",
+        median(&cut_local),
+        median(&full_rebuild),
+    );
+}
+
 /// `extend` must not repeat work: computing frames for samples the store
 /// already covers is the exact bug `commit_edge_proposal` had (see
 /// `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`). Growing

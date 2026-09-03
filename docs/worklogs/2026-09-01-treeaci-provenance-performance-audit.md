@@ -1334,6 +1334,71 @@ The next implementation subissue is **#715** (cut-local frame growth and
 failure-atomic commits). Per the execution protocol, stop here after reporting
 this #717 closure; do not begin #715 in the same run.
 
+## 2026-09-04 #715 closure: cut-local frame growth and failure-atomic commits
+
+This subissue changes the internal TreeACI frame storage and Guard/edge
+transaction publication order. The persistent frame-segment representation,
+the `BC3` benchmark-correctness ordering rule, the paired measurement fixture,
+and the rollback test scenarios are **[AI Supplied]** engineering design and
+validation policy. No new claim is attributed to ACI/TCI literature here; the
+full-text source clones and exact page/equation/algorithm/specification
+locators already recorded in the evidence register remain the only literature
+authority for the earlier algorithm and backend-boundary claims.
+
+### #715 changes
+
+- `InputFrameStore::extend_new_samples` now validates explicit
+  `previous_counts`, computes only newly interned sample ranges, and keeps
+  unchanged directed frames `Rc`-shared.
+- A grown `DirectedFrame` retains its old prefix through an immutable `Rc`
+  base and stores only the new sample rows in its segment. `row_slice` keeps
+  the existing sample-major row contract, so consumers do not observe a new
+  layout or sample-order convention.
+- `commit_edge_proposal` validates proposal/state metadata before staging.
+  `inject_global_pivots` computes all next edge ranks before publishing output,
+  candidates, frames, or generation; an overflow therefore rolls back the
+  arena and leaves the logical state unchanged.
+- Added chain/branch frame differential tests, new-range work counters,
+  factor-shape and incomplete-metadata transaction tests, Guard rank-overflow
+  rollback coverage, and a paired release measurement with a non-smoke
+  5-node chain fixture.
+
+### #715 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C3` correctness | **PASS** | `extend_new_samples_matches_full_rebuild_on_chain_and_branch` compares every retained frame row against a fresh rebuild and checks unchanged-edge `Rc` identity. `extend_new_samples_computes_only_new_ranges` checks new-range values, no old-prefix row copy, and retained-prefix identity. Transaction and Guard tests cover callback failure, frame-budget/sample rollback, invalid factor shape, incomplete metadata, and rank-overflow publication. |
+| `BC3` benchmark correctness | **PASS** | The complete release TreeACI matrix was run before the speed measurement: 142 unit tests passed with 4 existing ignored diagnostics/high-cost cases, 7 public-API integration tests passed, 1 rank-scaling test passed, and 18 doctests passed. Focused tests were not used as a substitute for this full matrix. |
+| `E3` efficiency | **PASS** | After `BC3`, the paired release test used 7 timing samples × 128 repetitions: cut-local median `15.359826 ms`, full rebuild median `35.948933 ms`, an observed improvement of approximately `57.3%`. The candidate used 4 genuine contraction calls versus 12 for the full rebuild, copied 0 old-prefix values, materialized 8 new values, reused 4 edges, grew 4 edges, and retained 192 logical frame bytes. The 7 raw sample durations are printed in the test output recorded below; this is a fixture-level paired result, not an asymptotic claim. |
+| `R3` release/regression/downstream | **PASS** | The full local TreeACI matrix passed. An isolated copy of the dirty `/root/projects/gw-rs/sgw` checkout was patched to all local tensor4all-rs crates and ran the complete downstream suite: the first run passed 106/108 lib tests and all other targets except two fixed-checkout-path tests; after providing the exact expected provenance path, those two reruns passed. Combined result: 108/108 lib tests and every integration target passed. The original dirty checkout was not modified. |
+| `N` numerical stability | **PASS** | Full frame differential parity passed on chain and branched fixtures; all existing TreeACI numerical/convergence tests remained green. No tolerance was relaxed. |
+| `M` metamorphic semantics | **PASS** | Append-only sample IDs, duplicate/no-growth behavior, frame row order, and chain/branch extension parity remain unchanged; existing duplicate global-pivot and candidate/pivot separation tests pass. |
+| `F` fallback parity | **N/A (scope)** | #715 does not change scalar fallback or batched contraction formulas; their complete existing TreeACI coverage passed. |
+| `I` invalidation/retention | **PASS** | Arena checkpoints roll back failed staging; empty/no-growth paths preserve generation; frame-budget and rank-overflow tests verify no partial publication; persistent segments retain only the logical current prefix plus new rows. |
+| `D` determinism | **PASS** | Complete release tests and the fixed-seed/fixed-fixture paired measurement are repeatable; output/sample/frame order is compared deterministically. |
+| `S` scaling law | **N/A (scope)** | The measurement demonstrates a target-path resource/time delta on a 5-node chain but makes no new complexity claim; larger scaling belongs to the later evaluator/ownership issues. |
+| `P` provenance/observability | **PASS** | All new design and measurement-policy claims are tagged **[AI Supplied]**. No new paper/spec claim was introduced. The benchmark correctness ordering and exact raw command/output are recorded here. |
+
+### Verification commands and raw measurement output
+
+```text
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+142 unit passed, 4 ignored; 7 public_api passed; 1 rank_scaling passed; 18 doctests passed
+
+cargo test --release -p tensor4all-treeaci frames::tests::paired_release_measurement_for_cut_local_extension -- --ignored --nocapture
+#715 paired release resources: chain_nodes=5, max_degree=2, directed_edges=8, candidate_compute_calls=4, full_rebuild_compute_calls=12, old_values_copied=0, new_values_copied=8, extension_calls=1, reused_edges=4, grown_edges=4, retained_bytes=192
+#715 paired release measurement: repetitions=128, samples=7, cut_local_median=15.359826ms, full_rebuild_median=35.948933ms, cut_local_all=[14.780307ms, 14.920691ms, 15.27676ms, 15.359826ms, 15.68705ms, 16.51782ms, 17.431146ms], full_rebuild_all=[35.438795ms, 35.459784ms, 35.934676ms, 35.948933ms, 36.42147ms, 36.566873ms, 36.619442ms]
+
+cargo test --release --manifest-path /tmp/sgw-treeaci-gate.6RkGZ6/Cargo.toml --no-fail-fast
+combined after the exact provenance-path rerun: 108/108 lib tests and every integration target passed
+```
+
+The optional `/root/projects/tensor4all-rust/tensor4all-benchmark` checkout is
+dirty and has no maintained TreeTN frame-extension case, so it remains
+**N/A**, not an unrelated benchmark claim. The temporary isolated downstream
+copy and its path symlink are external validation artifacts and are not part
+of the repository change.
+
 ## Measurements and limitations
 
 Commands were run in release mode in the isolated worktree.

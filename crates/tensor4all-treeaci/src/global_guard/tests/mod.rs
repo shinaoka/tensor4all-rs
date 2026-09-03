@@ -509,6 +509,77 @@ fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
 }
 
 #[test]
+fn injection_rank_overflow_rolls_back_every_staged_state_change() {
+    let (input, _, _) = delta_tree();
+    let options = TreeAciOptions {
+        max_bond_dim: Some(1),
+        ..TreeAciOptions::default()
+    };
+    let inputs = vec![input];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let output_before = state.output.to_dense().unwrap();
+    let candidates_before = state.candidates.clone();
+    let pivots_before = state.pivots.clone();
+    let frames_before = state.input_frames.clone();
+    let arena_records_before = state.sample_arena.record_count();
+    let arena_bytes_before = state.sample_arena.retained_bytes();
+    let frame_records_before = state.input_frames.records();
+    let frame_bytes_before = state.input_frames.retained_bytes();
+    let generation_before = state.generation;
+    let ranks_before = state.edge_ranks.clone();
+    state.edge_ranks[0] = usize::MAX;
+    let ranks_before_injected_overflow = state.edge_ranks.clone();
+
+    let error = inject_global_pivots(&mut state, &[vec![1, 1]], &[1])
+        .expect_err("rank overflow must be reported before publication");
+
+    assert!(matches!(
+        error,
+        crate::TreeAciError::SizeOverflow {
+            context: "global-pivot output rank"
+        }
+    ));
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&output_before, 0.0, 0.0)
+        .unwrap());
+    assert_eq!(state.candidates, candidates_before);
+    assert_eq!(state.pivots, pivots_before);
+    assert_eq!(state.sample_arena.record_count(), arena_records_before);
+    assert_eq!(state.sample_arena.retained_bytes(), arena_bytes_before);
+    for (input_index, edges) in frames_before.frames.iter().enumerate() {
+        for (edge, frame) in edges.iter().enumerate() {
+            assert_eq!(
+                state.input_frames.frames[input_index][edge].sample_count,
+                frame.sample_count
+            );
+            assert_eq!(
+                state.input_frames.frames[input_index][edge].bond_dim,
+                frame.bond_dim
+            );
+            for sample in 0..frame.sample_count {
+                assert_eq!(
+                    state
+                        .input_frames
+                        .frame_values(input_index, edge, sample)
+                        .unwrap(),
+                    frames_before
+                        .frame_values(input_index, edge, sample)
+                        .unwrap()
+                );
+            }
+        }
+    }
+    assert_eq!(state.input_frames.records(), frame_records_before);
+    assert_eq!(state.input_frames.retained_bytes(), frame_bytes_before);
+    assert_eq!(state.generation, generation_before);
+    assert_eq!(state.edge_ranks, ranks_before_injected_overflow);
+    assert_ne!(state.edge_ranks, ranks_before);
+}
+
+#[test]
 fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
     let (input, left_site, right_site) = delta_tree();
     let options = TreeAciOptions::default();

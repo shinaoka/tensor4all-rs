@@ -300,14 +300,33 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         state.sample_arena.rollback(checkpoint)?;
         return Ok(0);
     };
+    // Validate the last fallible arithmetic before publishing any staged
+    // state. The old order assigned `output`, `candidates`, and `input_frames`
+    // first, then used `checked_add` while updating `edge_ranks`; a malformed
+    // or test-injected rank overflow could therefore return an error with a
+    // partially committed state. This precomputed vector makes the following
+    // replacement block no-failure and preserves transaction atomicity.
+    let next_edge_ranks = state
+        .edge_ranks
+        .iter()
+        .zip(&growth)
+        .map(|(&rank, &added)| {
+            rank.checked_add(added).ok_or(TreeAciError::SizeOverflow {
+                context: "global-pivot output rank",
+            })
+        })
+        .collect::<Result<Vec<_>>>();
+    let next_edge_ranks = match next_edge_ranks {
+        Ok(ranks) => ranks,
+        Err(error) => {
+            state.sample_arena.rollback(checkpoint)?;
+            return Err(error);
+        }
+    };
     state.output = proposed_output;
     state.candidates = proposed_active;
     state.input_frames = proposed_frames;
-    for (rank, added) in state.edge_ranks.iter_mut().zip(growth) {
-        *rank = rank.checked_add(added).ok_or(TreeAciError::SizeOverflow {
-            context: "global-pivot output rank",
-        })?;
-    }
+    state.edge_ranks = next_edge_ranks;
     state.generation = state.candidates.generation;
     Ok(injected)
 }

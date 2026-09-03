@@ -86,6 +86,19 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
             message: "edge proposal factors and selected samples disagree on rank",
         });
     }
+    let edge_number = forward / 2;
+    if state.edge_ranks.get(edge_number).is_none()
+        || state.algebraic_edge_bounds.get(edge_number).is_none()
+        || state.edge_errors.get(edge_number).is_none()
+        || state.edge_scales.get(edge_number).is_none()
+        || state.pivots.per_edge.get(edge_number).is_none()
+        || state.candidates.ids.get(forward).is_none()
+        || state.candidates.ids.get(reverse).is_none()
+    {
+        return Err(TreeAciError::InternalInvariant {
+            message: "edge proposal state metadata is incomplete",
+        });
+    }
 
     let next_generation = state
         .generation
@@ -154,7 +167,6 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         }
     };
 
-    let edge_number = forward / 2;
     // The commit rule: pivot pairs set the bond rank and own `P_e`, while the
     // candidate sets are *replaced* by the same selections so that neighbouring
     // edges see them. Replacement rather than union is what keeps candidate

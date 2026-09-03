@@ -115,10 +115,17 @@ smoke test. The order is `C` (correctness), `E` (efficiency), then `R`
   states, layouts, error/rollback paths, and boundary degrees. Use one dense
   materialization plus a whole-result residual where applicable; do not accept
   pointwise-only spot checks.
+- `BC` (benchmark correctness): a benchmark or performance harness is
+  admissible only after the complete affected-crate correctness matrix has
+  passed in release mode, including integration tests, error/rollback paths,
+  and any exercised downstream ACI stage. A smoke benchmark or one passing
+  micro-case may diagnose a failure, but it cannot close `C`, `BC`, or `E`.
 - `E`: run baseline and candidate in paired release-mode measurements with the
   same input, seed, backend/provider, thread affinity, and memory limit. Record
   at least three measurements per side (five for noisy end-to-end runs), report
   medians and the observed noise floor, and keep the raw result files.
+- `E` is ordered after `BC`: if the full correctness gate fails, discard the
+  corresponding timing/resource result and do not claim an efficiency gain.
 - `E` passes for either a wall-time improvement above the measured noise floor
   or a causal resource improvement in the target path (for example fewer
   allocations/copies, lower peak bytes, fewer reconstructed messages, or fewer
@@ -557,9 +564,15 @@ gate and must not be smuggled into this coverage task.
 - `C3`: edge commit and Guard injection produce the same complete tensors,
   frame IDs, candidate order, pivots, and errors as the reference; injected
   failures leave the original state logically unchanged.
+- `BC3`: before any timing is admissible, the complete release-mode TreeACI
+  correctness matrix must pass: frames, transaction, state, global Guard,
+  all crate unit/integration tests, and the affected downstream ACI stage when
+  Guard/message injection is exercised. Focused tests and smoke benchmarks are
+  diagnostic only and cannot satisfy this gate.
 - `E3`: old-prefix copying and full-store extension calls decrease on the
   scaling fixture, and paired timing or allocation/byte counters show a
-  measurable improvement above noise with no memory-budget regression.
+  measurable improvement above noise with no memory-budget regression. Run
+  this gate only after `BC3` passes and retain the raw paired measurements.
 - `R3`: cut-local and full-extension paths, zero/new/duplicate samples, long
   chains, branch degrees, and affected downstream ACI stages pass release
   checks. Run the downstream stage gate when Guard or message injection is
@@ -567,27 +580,27 @@ gate and must not be smuggled into this coverage task.
 - Secondary gates: `N`, `M`, `F`, `I`, `D`, `S`, `P`; rollback, invalidation,
   repeated-cycle retention, and source authority must be explicitly recorded.
 
-- [ ] **Step 1: Add red frame-growth differential tests.**
+- [x] **Step 1: Add red frame-growth differential tests.**
 
   Add `extend_new_samples_matches_full_rebuild_on_chain_and_branch` and `extend_new_samples_computes_only_new_ranges`. The tests must compare every affected and unaffected directed frame against a fresh `from_samples` store and assert that existing frame allocations remain shared where their sample range is unchanged.
 
-- [ ] **Step 2: Add red transaction rollback tests before changing commit order.**
+- [x] **Step 2: Add red transaction rollback tests before changing commit order.**
 
   Add failure injection for operator failure, invalid factor shape, sample interning failure, frame budget overflow, and output metadata validation. Snapshot output tensors, graph/topology metadata, canonical region, sample arena, candidates, pivots, frames, and generation before the staged operation; assert byte/value/equality preservation after each error.
 
-- [ ] **Step 3: Implement cut-local frame staging.**
+- [x] **Step 3: Implement cut-local frame staging.**
 
   Record `previous_counts` from the existing store, identify directed edges whose arena record count grew, allocate only the new frame ranges, and use dependency order only for those new records. Keep `records`, retained-byte accounting, memo capacity, and over-budget errors checked with `checked_*` arithmetic. Unchanged frame payloads must remain `Rc`-shared.
 
-- [ ] **Step 4: Stage output replacement before mutating state.**
+- [x] **Step 4: Stage output replacement before mutating state.**
 
   Factor indices, dense tensors, bond metadata, and all validation must complete before the commit mutation. Keep `SampleArena::checkpoint` around the complete fallible staging block. After staging succeeds, apply the already-validated edge replacement, candidate/pivot updates, frame swap, and generation update in a no-failure commit section. Do not clone the complete frame store or candidate sets for rollback after the last fallible operation.
 
-- [ ] **Step 5: Replace both edge-commit and Guard-injection full extensions.**
+- [x] **Step 5: Replace both edge-commit and Guard-injection full extensions.**
 
   `commit_edge_proposal` and `inject_global_pivots` must call the same cut-local extension seam. Empty input remains validated first and returns without changing generation or arena state. The operation must not duplicate the separate #686 random-start evaluation work.
 
-- [ ] **Step 6: Run focused and scaling tests.**
+- [x] **Step 6: Run focused and scaling tests.**
 
   ```bash
   cargo test --release -p tensor4all-treeaci frames --no-fail-fast
@@ -597,7 +610,10 @@ gate and must not be smuggled into this coverage task.
   cargo test --release -p tensor4all-treeaci --no-fail-fast
   ```
 
-  Record old-prefix copies, new values, frame-extension calls, chain length, branch degree, and complete-ACI numerical/convergence parity.
+  This full release matrix is the `BC3` gate; a smoke-only result cannot close
+  it. Only after it passes, record paired old-prefix copies, new values,
+  frame-extension calls, chain length, branch degree, and complete-ACI
+  numerical/convergence parity for `E3`.
 
 - [ ] **Step 7: Commit #715.**
 
