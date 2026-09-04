@@ -100,6 +100,12 @@ pub(crate) mod contraction_diagnostics {
     pub static BRANCH_CHILD_DECODE_VALUES: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_CHILD_GATHER_VALUES: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_SETUP_VALUES: AtomicU64 = AtomicU64::new(0);
+    // [AI Supplied] Counts the evaluator-owned immutable branch-slice cache
+    // decisions separately from the GEMM dispatch counters.
+    pub static BRANCH_PREPARED_SLICE_HITS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_PREPARED_SLICE_MISSES: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_PREPARED_SLICE_REFUSALS: AtomicU64 = AtomicU64::new(0);
+    pub static BRANCH_PREPARED_SLICE_BYTES: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_MATMUL_NS: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_ACCUMULATE_NS: AtomicU64 = AtomicU64::new(0);
     pub static BRANCH_BLAS_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -142,6 +148,10 @@ pub(crate) mod contraction_diagnostics {
             &BRANCH_CHILD_DECODE_VALUES,
             &BRANCH_CHILD_GATHER_VALUES,
             &BRANCH_SETUP_VALUES,
+            &BRANCH_PREPARED_SLICE_HITS,
+            &BRANCH_PREPARED_SLICE_MISSES,
+            &BRANCH_PREPARED_SLICE_REFUSALS,
+            &BRANCH_PREPARED_SLICE_BYTES,
             &BRANCH_MATMUL_NS,
             &BRANCH_ACCUMULATE_NS,
             &BRANCH_BLAS_CALLS,
@@ -167,7 +177,7 @@ pub(crate) mod contraction_diagnostics {
     pub fn summary() -> String {
         format!(
             "branch: blas_calls={} blas_points={} blas_groups={} child_decode_ns={} child_gather_ns={} \
-             child_decode_values={} child_gather_values={} setup_values={} setup_ns={} matmul_ns={} accumulate_ns={} \
+             child_decode_values={} child_gather_values={} setup_values={} prepared_slice[hits={} misses={} refusals={} bytes={}] setup_ns={} matmul_ns={} accumulate_ns={} \
              scalar_calls={} scalar_points={} fast_axis[parent={} child1={} child2={} physical={}] \
              | chain: blas_calls={} blas_points={} contract_ns={} \
              scalar_calls={} scalar_points={}",
@@ -179,6 +189,10 @@ pub(crate) mod contraction_diagnostics {
             BRANCH_CHILD_DECODE_VALUES.load(Ordering::Relaxed),
             BRANCH_CHILD_GATHER_VALUES.load(Ordering::Relaxed),
             BRANCH_SETUP_VALUES.load(Ordering::Relaxed),
+            BRANCH_PREPARED_SLICE_HITS.load(Ordering::Relaxed),
+            BRANCH_PREPARED_SLICE_MISSES.load(Ordering::Relaxed),
+            BRANCH_PREPARED_SLICE_REFUSALS.load(Ordering::Relaxed),
+            BRANCH_PREPARED_SLICE_BYTES.load(Ordering::Relaxed),
             BRANCH_SETUP_NS.load(Ordering::Relaxed),
             BRANCH_MATMUL_NS.load(Ordering::Relaxed),
             BRANCH_ACCUMULATE_NS.load(Ordering::Relaxed),
@@ -205,7 +219,7 @@ use tensor4all_core::{
     AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor, IndexLike,
     TensorContractionLike, TensorIndex, TensorLike,
 };
-use tensor4all_tensorbackend::{mat_mul_owned, BlasMul, Matrix, TensorElement};
+use tensor4all_tensorbackend::{mat_mul, mat_mul_owned, BlasMul, Matrix, TensorElement};
 
 #[cfg(feature = "diagnostics")]
 use super::diagnostics;
@@ -262,6 +276,14 @@ struct BranchContractionSpec {
     parent_dim: usize,
     child_dim_1: usize,
     child_dim_2: usize,
+}
+
+struct BranchMessageBatch<'a, T> {
+    spec: BranchContractionSpec,
+    raw: &'a [T],
+    physical_values: &'a [usize],
+    child1_columns: &'a [T],
+    child2_columns: &'a [T],
 }
 
 #[derive(Clone, Debug)]
@@ -347,7 +369,7 @@ impl CachedScalar {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ScalarKind {
     F32,
     F64,
@@ -671,6 +693,7 @@ where
 /// assert!(options.initial_centers.is_empty());
 /// assert!(options.max_greedy_steps_per_start.is_none());
 /// assert_eq!(options.message_cache_max_bytes, usize::MAX);
+/// assert_eq!(options.branch_slice_cache_max_bytes, usize::MAX);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedEvaluatorOptions<V> {
@@ -695,6 +718,17 @@ pub struct CachedEvaluatorOptions<V> {
     /// unbounded cache policy; callers that evaluate many changing batches
     /// should set an explicit finite budget or `0`.
     pub message_cache_max_bytes: usize,
+    /// Maximum logical payload bytes retained by the evaluator's prepared
+    /// branch physical-slice cache.
+    ///
+    /// A value of `0` disables retention while preserving the same numerical
+    /// result: each branch slice is prepared for the current group and then
+    /// released. The default is `usize::MAX`, bounded in practice by the
+    /// physical slices of the branch tensors visited by this evaluator.
+    /// Setting a finite value bounds retained slice payloads across directed
+    /// orientations and scalar kinds; cache metadata is not included in this
+    /// logical payload budget.
+    pub branch_slice_cache_max_bytes: usize,
 }
 
 impl<V> Default for CachedEvaluatorOptions<V> {
@@ -704,6 +738,7 @@ impl<V> Default for CachedEvaluatorOptions<V> {
             initial_centers: Vec::new(),
             max_greedy_steps_per_start: None,
             message_cache_max_bytes: usize::MAX,
+            branch_slice_cache_max_bytes: usize::MAX,
         }
     }
 }
@@ -986,6 +1021,8 @@ where
     /// center without rebuilding O(nodes) metadata for every small batch.
     rooted_plans: HashMap<V, Arc<RootedMessagePlan<V>>>,
     message_cache_layouts_by_center: HashMap<V, Arc<HashMap<V, MessageCacheLayout>>>,
+    prepared_branch_slices_f64: PreparedBranchSliceCache<V, f64>,
+    prepared_branch_slices_c64: PreparedBranchSliceCache<V, Complex64>,
     raw_messages: bool,
 }
 
@@ -1038,6 +1075,7 @@ where
             )?;
         }
         let center = options.center.clone();
+        let branch_slice_cache_max_bytes = options.branch_slice_cache_max_bytes;
         Ok(Self {
             tree,
             layout,
@@ -1048,6 +1086,8 @@ where
             parent_bond_indices: HashMap::new(),
             rooted_plans: HashMap::new(),
             message_cache_layouts_by_center: HashMap::new(),
+            prepared_branch_slices_f64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
+            prepared_branch_slices_c64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
             raw_messages: false,
         })
     }
@@ -1838,6 +1878,140 @@ where
         Ok(output)
     }
 
+    /// Prepares one physical branch slice as the column-major left operand
+    /// used by the grouped branch GEMM.
+    ///
+    /// The returned matrix has shape `(parent_dim * child_dim_2) x
+    /// child_dim_1`. Parent values remain contiguous inside each child-2
+    /// block, preserving the existing reduction order.
+    fn prepare_branch_slice<T>(
+        spec: BranchContractionSpec,
+        raw: &[T],
+        physical_value: usize,
+    ) -> Result<Matrix<T>>
+    where
+        T: Copy + Default,
+    {
+        let left_rows = spec
+            .parent_dim
+            .checked_mul(spec.child_dim_2)
+            .ok_or_else(|| anyhow::anyhow!("branch matrix row count overflows usize"))?;
+        let left_len = left_rows
+            .checked_mul(spec.child_dim_1)
+            .ok_or_else(|| anyhow::anyhow!("branch matrix size overflows usize"))?;
+        let mut left = vec![T::default(); left_len];
+        let physical_base = physical_value
+            .checked_mul(spec.strides[spec.physical_axis])
+            .ok_or_else(|| anyhow::anyhow!("branch tensor offset overflows usize"))?;
+
+        if spec.strides[spec.child_axis_2] == 1 {
+            // Read a contiguous child-2 run, then scatter it into the
+            // parent-fast matrix layout. This is the old specialized read
+            // path, now paid only when an owner cache misses.
+            for c1 in 0..spec.child_dim_1 {
+                let base_after_c1 =
+                    physical_base
+                        .checked_add(c1.checked_mul(spec.strides[spec.child_axis_1]).ok_or_else(
+                            || anyhow::anyhow!("branch tensor offset overflows usize"),
+                        )?)
+                        .ok_or_else(|| anyhow::anyhow!("branch tensor offset overflows usize"))?;
+                let left_c1_offset = left_rows
+                    .checked_mul(c1)
+                    .ok_or_else(|| anyhow::anyhow!("branch matrix offset overflows usize"))?;
+                for parent in 0..spec.parent_dim {
+                    let base = base_after_c1
+                        .checked_add(
+                            parent
+                                .checked_mul(spec.strides[spec.parent_axis])
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("branch tensor offset overflows usize")
+                                })?,
+                        )
+                        .ok_or_else(|| anyhow::anyhow!("branch tensor offset overflows usize"))?;
+                    let end = base
+                        .checked_add(spec.child_dim_2)
+                        .ok_or_else(|| anyhow::anyhow!("branch tensor offset overflows usize"))?;
+                    let slice = raw.get(base..end).ok_or_else(|| {
+                        anyhow::anyhow!("branch tensor offset {base}..{end} is out of bounds")
+                    })?;
+                    let left_base = left_c1_offset
+                        .checked_add(parent)
+                        .ok_or_else(|| anyhow::anyhow!("branch matrix offset overflows usize"))?;
+                    for (c2, &value) in slice.iter().enumerate() {
+                        let offset = left_base
+                            .checked_add(spec.parent_dim.checked_mul(c2).ok_or_else(|| {
+                                anyhow::anyhow!("branch matrix offset overflows usize")
+                            })?)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("branch matrix offset overflows usize")
+                            })?;
+                        left[offset] = value;
+                    }
+                }
+            }
+        } else {
+            for c1 in 0..spec.child_dim_1 {
+                let base_after_c1 =
+                    physical_base
+                        .checked_add(c1.checked_mul(spec.strides[spec.child_axis_1]).ok_or_else(
+                            || anyhow::anyhow!("branch tensor offset overflows usize"),
+                        )?)
+                        .ok_or_else(|| anyhow::anyhow!("branch tensor offset overflows usize"))?;
+                let left_c1_offset = left_rows
+                    .checked_mul(c1)
+                    .ok_or_else(|| anyhow::anyhow!("branch matrix offset overflows usize"))?;
+                for c2 in 0..spec.child_dim_2 {
+                    let base_after_c2 = base_after_c1
+                        .checked_add(c2.checked_mul(spec.strides[spec.child_axis_2]).ok_or_else(
+                            || anyhow::anyhow!("branch tensor offset overflows usize"),
+                        )?)
+                        .ok_or_else(|| anyhow::anyhow!("branch tensor offset overflows usize"))?;
+                    let left_c2_offset = left_c1_offset
+                        .checked_add(spec.parent_dim.checked_mul(c2).ok_or_else(|| {
+                            anyhow::anyhow!("branch matrix offset overflows usize")
+                        })?)
+                        .ok_or_else(|| anyhow::anyhow!("branch matrix offset overflows usize"))?;
+                    if spec.strides[spec.parent_axis] == 1 {
+                        let end = base_after_c2.checked_add(spec.parent_dim).ok_or_else(|| {
+                            anyhow::anyhow!("branch tensor offset overflows usize")
+                        })?;
+                        let slice = raw.get(base_after_c2..end).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "branch tensor offset {base_after_c2}..{end} is out of bounds"
+                            )
+                        })?;
+                        left[left_c2_offset..left_c2_offset + spec.parent_dim]
+                            .copy_from_slice(slice);
+                    } else {
+                        for parent in 0..spec.parent_dim {
+                            let flat = base_after_c2
+                                .checked_add(
+                                    parent
+                                        .checked_mul(spec.strides[spec.parent_axis])
+                                        .ok_or_else(|| {
+                                            anyhow::anyhow!("branch tensor offset overflows usize")
+                                        })?,
+                                )
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("branch tensor offset overflows usize")
+                                })?;
+                            left[left_c2_offset + parent] = *raw.get(flat).ok_or_else(|| {
+                                anyhow::anyhow!("branch tensor offset {flat} is out of bounds")
+                            })?;
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "diagnostics")]
+        contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_SETUP_VALUES, left_len);
+        Ok(Matrix::from_col_major_vec(
+            left_rows,
+            spec.child_dim_1,
+            left,
+        ))
+    }
+
     /// Contracts a branch node's raw tensor data against two children's
     /// already-computed raw message columns, generalizing
     /// [`Self::grouped_chain_message_contraction`] from one child to two.
@@ -2099,6 +2273,199 @@ where
             }
         }
         Ok(output)
+    }
+
+    /// Runs the common grouped branch reduction when each physical group can
+    /// obtain its already-prepared left operand through `group_gemm`.
+    fn grouped_branch_message_from_gemm<T, F>(
+        spec: BranchContractionSpec,
+        physical_values: &[usize],
+        child1_columns: &[T],
+        child2_columns: &[T],
+        mut group_gemm: F,
+    ) -> Result<Vec<T>>
+    where
+        T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+        F: FnMut(usize, &[usize]) -> Result<Matrix<T>>,
+    {
+        let point_count = physical_values.len();
+        let expected_child1_len = point_count
+            .checked_mul(spec.child_dim_1)
+            .ok_or_else(|| anyhow::anyhow!("branch child-1 message length overflows usize"))?;
+        let expected_child2_len = point_count
+            .checked_mul(spec.child_dim_2)
+            .ok_or_else(|| anyhow::anyhow!("branch child-2 message length overflows usize"))?;
+        anyhow::ensure!(
+            child1_columns.len() == expected_child1_len,
+            "branch child-1 message length {} does not match {} points x {} child values",
+            child1_columns.len(),
+            point_count,
+            spec.child_dim_1
+        );
+        anyhow::ensure!(
+            child2_columns.len() == expected_child2_len,
+            "branch child-2 message length {} does not match {} points x {} child values",
+            child2_columns.len(),
+            point_count,
+            spec.child_dim_2
+        );
+
+        let mut groups = HashMap::<usize, Vec<usize>>::new();
+        for (point, &physical_value) in physical_values.iter().enumerate() {
+            groups.entry(physical_value).or_default().push(point);
+        }
+        #[cfg(feature = "diagnostics")]
+        let fast_axis_counter = if spec.strides[spec.parent_axis] == 1 {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_PARENT
+        } else if spec.strides[spec.child_axis_1] == 1 {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_CHILD1
+        } else if spec.strides[spec.child_axis_2] == 1 {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_CHILD2
+        } else {
+            &contraction_diagnostics::BRANCH_FAST_AXIS_IS_PHYSICAL
+        };
+        #[cfg(feature = "diagnostics")]
+        {
+            contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_POINTS, point_count);
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_BLAS_GROUPS,
+                groups.len(),
+            );
+        }
+
+        let output_len = point_count
+            .checked_mul(spec.parent_dim)
+            .ok_or_else(|| anyhow::anyhow!("branch output length overflows usize"))?;
+        let mut output = vec![T::default(); output_len];
+        for (physical_value, points) in groups {
+            #[cfg(feature = "diagnostics")]
+            let matmul_start = std::time::Instant::now();
+            let intermediate = group_gemm(physical_value, &points)?;
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::add(
+                    &contraction_diagnostics::BRANCH_MATMUL_NS,
+                    matmul_start.elapsed(),
+                );
+                contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_CALLS, 1);
+                contraction_diagnostics::inc(fast_axis_counter, 1);
+            }
+            let expected_rows = spec
+                .parent_dim
+                .checked_mul(spec.child_dim_2)
+                .ok_or_else(|| anyhow::anyhow!("branch GEMM row count overflows usize"))?;
+            anyhow::ensure!(
+                intermediate.nrows() == expected_rows && intermediate.ncols() == points.len(),
+                "branch GEMM returned shape {}x{}, expected {}x{}",
+                intermediate.nrows(),
+                intermediate.ncols(),
+                expected_rows,
+                points.len()
+            );
+            let intermediate = intermediate.as_col_major_slice();
+
+            // Keep the previous c2-major/parent-minor reduction order. The
+            // prepared representation changes ownership and reuse only.
+            #[cfg(feature = "diagnostics")]
+            let accumulate_start = std::time::Instant::now();
+            for (column, &point) in points.iter().enumerate() {
+                let column_base = column * spec.parent_dim * spec.child_dim_2;
+                let destination = point * spec.parent_dim;
+                for c2 in 0..spec.child_dim_2 {
+                    let child2_value = child2_columns[point * spec.child_dim_2 + c2];
+                    let row_base = column_base + c2 * spec.parent_dim;
+                    for parent in 0..spec.parent_dim {
+                        output[destination + parent] +=
+                            intermediate[row_base + parent] * child2_value;
+                    }
+                }
+            }
+            #[cfg(feature = "diagnostics")]
+            contraction_diagnostics::add(
+                &contraction_diagnostics::BRANCH_ACCUMULATE_NS,
+                accumulate_start.elapsed(),
+            );
+        }
+        Ok(output)
+    }
+
+    /// Contracts a branch with evaluator-owned prepared physical slices.
+    fn grouped_branch_message_contraction_cached<T>(
+        cache: &mut PreparedBranchSliceCache<V, T>,
+        node: &V,
+        parent: &V,
+        scalar_kind: ScalarKind,
+        batch: BranchMessageBatch<'_, T>,
+    ) -> Result<Vec<T>>
+    where
+        T: BlasMul + Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+    {
+        let BranchMessageBatch {
+            spec,
+            raw,
+            physical_values,
+            child1_columns,
+            child2_columns,
+        } = batch;
+        let scalar_work = spec
+            .parent_dim
+            .checked_mul(spec.child_dim_1)
+            .and_then(|value| value.checked_mul(spec.child_dim_2))
+            .and_then(|value| value.checked_mul(physical_values.len()))
+            .ok_or_else(|| anyhow::anyhow!("branch scalar work overflows usize"))?;
+        if scalar_work < BRANCH_BLAS_WORK_THRESHOLD {
+            #[cfg(feature = "diagnostics")]
+            {
+                contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_SCALAR_CALLS, 1);
+                contraction_diagnostics::inc(
+                    &contraction_diagnostics::BRANCH_SCALAR_POINTS,
+                    physical_values.len(),
+                );
+            }
+            return scalar_branch_message_contraction(
+                spec,
+                raw,
+                physical_values,
+                child1_columns,
+                child2_columns,
+            );
+        }
+
+        Self::grouped_branch_message_from_gemm(
+            spec,
+            physical_values,
+            child1_columns,
+            child2_columns,
+            |physical_value, points| {
+                let key = (node.clone(), parent.clone(), physical_value, scalar_kind);
+                let mut right = Vec::with_capacity(points.len() * spec.child_dim_1);
+                for &point in points {
+                    let start = point * spec.child_dim_1;
+                    right.extend_from_slice(&child1_columns[start..start + spec.child_dim_1]);
+                }
+                cache.with_prepared_slice(
+                    key,
+                    || {
+                        #[cfg(feature = "diagnostics")]
+                        let setup_start = std::time::Instant::now();
+                        let left = Self::prepare_branch_slice(spec, raw, physical_value);
+                        #[cfg(feature = "diagnostics")]
+                        if left.is_ok() {
+                            contraction_diagnostics::add(
+                                &contraction_diagnostics::BRANCH_SETUP_NS,
+                                setup_start.elapsed(),
+                            );
+                        }
+                        left
+                    },
+                    |left| {
+                        let right =
+                            Matrix::from_col_major_vec(spec.child_dim_1, points.len(), right);
+                        mat_mul(left, &right).map_err(anyhow::Error::from)
+                    },
+                )
+            },
+        )
     }
 
     /// Computes an interior chain node's (exactly one child) message directly
@@ -2368,7 +2735,7 @@ where
     /// an unexpected axis count), so the caller falls back to
     /// [`Self::compute_stacked_message`].
     fn try_compute_branch_message_raw(
-        &self,
+        &mut self,
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         points: &[usize],
@@ -2391,6 +2758,9 @@ where
         };
         let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
         let [child_1, child_2] = children else {
+            return Ok(None);
+        };
+        let Some(parent) = plan.parent.get(node).and_then(Clone::clone) else {
             return Ok(None);
         };
 
@@ -2538,13 +2908,20 @@ where
                 child_1_columns.len() + child_2_columns.len(),
             );
         }
+        let cache = &mut self.prepared_branch_slices_f64;
         let result = tensor.with_dense_slice::<f64, _>(|raw| {
-            Self::grouped_branch_message_contraction(
-                spec,
-                raw,
-                &physical_values,
-                &child_1_columns,
-                &child_2_columns,
+            Self::grouped_branch_message_contraction_cached(
+                cache,
+                node,
+                &parent,
+                ScalarKind::F64,
+                BranchMessageBatch {
+                    spec,
+                    raw,
+                    physical_values: &physical_values,
+                    child1_columns: &child_1_columns,
+                    child2_columns: &child_2_columns,
+                },
             )
         })??;
         Ok(Some(result))
@@ -2552,7 +2929,7 @@ where
 
     /// Complex-valued counterpart of [`Self::try_compute_branch_message_raw`].
     fn try_compute_branch_message_complex_raw(
-        &self,
+        &mut self,
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         points: &[usize],
@@ -2575,6 +2952,9 @@ where
         };
         let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
         let [child_1, child_2] = children else {
+            return Ok(None);
+        };
+        let Some(parent) = plan.parent.get(node).and_then(Clone::clone) else {
             return Ok(None);
         };
 
@@ -2722,13 +3102,20 @@ where
                 child_1_columns.len() + child_2_columns.len(),
             );
         }
+        let cache = &mut self.prepared_branch_slices_c64;
         let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
-            Self::grouped_branch_message_contraction(
-                spec,
-                raw,
-                &physical_values,
-                &child_1_columns,
-                &child_2_columns,
+            Self::grouped_branch_message_contraction_cached(
+                cache,
+                node,
+                &parent,
+                ScalarKind::C64,
+                BranchMessageBatch {
+                    spec,
+                    raw,
+                    physical_values: &physical_values,
+                    child1_columns: &child_1_columns,
+                    child2_columns: &child_2_columns,
+                },
             )
         })??;
         Ok(Some(result))
@@ -4688,6 +5075,119 @@ enum CacheSlot<T> {
     Uncached(Vec<T>),
 }
 
+/// One evaluator-owned, column-major physical slice used as the left operand
+/// of a branch GEMM.
+struct PreparedBranchSlice<T> {
+    matrix: Matrix<T>,
+    payload_bytes: usize,
+}
+
+/// Bounded cache of immutable branch slices.
+///
+/// The key includes the directed orientation, physical coordinate, and scalar
+/// kind. The cache charges only matrix payload bytes; metadata remains outside
+/// the logical payload budget and is bounded by the number of inserted keys.
+struct PreparedBranchSliceCache<V, T> {
+    max_bytes: usize,
+    retained_bytes: usize,
+    slices: HashMap<(V, V, usize, ScalarKind), PreparedBranchSlice<T>>,
+}
+
+impl<V, T> PreparedBranchSliceCache<V, T>
+where
+    V: Clone + Eq + Hash,
+{
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            max_bytes,
+            retained_bytes: 0,
+            slices: HashMap::new(),
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.slices.len()
+    }
+
+    fn with_prepared_slice<R, F, G>(
+        &mut self,
+        key: (V, V, usize, ScalarKind),
+        prepare: F,
+        use_slice: G,
+    ) -> Result<R>
+    where
+        F: FnOnce() -> Result<Matrix<T>>,
+        G: FnOnce(&Matrix<T>) -> Result<R>,
+    {
+        if self.slices.contains_key(&key) {
+            #[cfg(feature = "diagnostics")]
+            contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_PREPARED_SLICE_HITS, 1);
+            let slice = self
+                .slices
+                .get(&key)
+                .ok_or_else(|| anyhow::anyhow!("prepared branch slice disappeared after lookup"))?;
+            return use_slice(&slice.matrix);
+        }
+
+        #[cfg(feature = "diagnostics")]
+        contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_PREPARED_SLICE_MISSES, 1);
+        let matrix = prepare()?;
+        let payload_bytes = matrix
+            .as_col_major_slice()
+            .len()
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| anyhow::anyhow!("prepared branch slice byte count overflows usize"))?;
+        let can_retain = self
+            .retained_bytes
+            .checked_add(payload_bytes)
+            .is_some_and(|bytes| bytes <= self.max_bytes);
+        if can_retain {
+            self.retained_bytes += payload_bytes;
+            self.slices.insert(
+                key.clone(),
+                PreparedBranchSlice {
+                    matrix,
+                    payload_bytes,
+                },
+            );
+            #[cfg(feature = "diagnostics")]
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_PREPARED_SLICE_BYTES,
+                payload_bytes,
+            );
+            let slice = self
+                .slices
+                .get(&key)
+                .ok_or_else(|| anyhow::anyhow!("prepared branch slice missing after insertion"))?;
+            use_slice(&slice.matrix)
+        } else {
+            #[cfg(feature = "diagnostics")]
+            contraction_diagnostics::inc(
+                &contraction_diagnostics::BRANCH_PREPARED_SLICE_REFUSALS,
+                1,
+            );
+            use_slice(&matrix)
+        }
+    }
+}
+
+impl<V, T> Drop for PreparedBranchSliceCache<V, T> {
+    fn drop(&mut self) {
+        debug_assert_eq!(
+            self.retained_bytes,
+            self.slices
+                .values()
+                .map(|slice| slice.payload_bytes)
+                .sum::<usize>()
+        );
+    }
+}
+
 impl<K, T> PackedMessageCache<K, T>
 where
     K: Eq + Hash + Clone,
@@ -6202,6 +6702,281 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepared_branch_slice_cache_reuses_hits_and_returns_over_budget_fallbacks() {
+        let spec = BranchContractionSpec {
+            strides: [1, 2, 16, 128],
+            physical_axis: 0,
+            parent_axis: 1,
+            child_axis_1: 2,
+            child_axis_2: 3,
+            parent_dim: 8,
+            child_dim_1: 8,
+            child_dim_2: 8,
+        };
+        let raw: Vec<f64> = (0..2 * 8 * 8 * 8).map(|value| value as f64).collect();
+        let physical_values = vec![0usize; 16];
+        let child1_columns = vec![1.0_f64; 16 * 8];
+        let child2_columns = vec![1.0_f64; 16 * 8];
+        let slice_bytes = 8 * 8 * 8 * std::mem::size_of::<f64>();
+        let mut cache = PreparedBranchSliceCache::new(slice_bytes);
+
+        let first = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+            &mut cache,
+            &0,
+            &1,
+            ScalarKind::F64,
+            BranchMessageBatch {
+                spec,
+                raw: &raw,
+                physical_values: &physical_values,
+                child1_columns: &child1_columns,
+                child2_columns: &child2_columns,
+            },
+        )
+        .unwrap();
+        let second = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+            &mut cache,
+            &0,
+            &1,
+            ScalarKind::F64,
+            BranchMessageBatch {
+                spec,
+                raw: &vec![999.0; raw.len()],
+                physical_values: &physical_values,
+                child1_columns: &child1_columns,
+                child2_columns: &child2_columns,
+            },
+        )
+        .unwrap();
+        assert_eq!(first, second, "a cache hit must reuse the immutable slice");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.retained_bytes(), slice_bytes);
+
+        let physical_values_with_new_slice = vec![1usize; 16];
+        let third = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+            &mut cache,
+            &0,
+            &1,
+            ScalarKind::F64,
+            BranchMessageBatch {
+                spec,
+                raw: &raw,
+                physical_values: &physical_values_with_new_slice,
+                child1_columns: &child1_columns,
+                child2_columns: &child2_columns,
+            },
+        )
+        .unwrap();
+        let expected_third = scalar_branch_message_contraction(
+            spec,
+            &raw,
+            &physical_values_with_new_slice,
+            &child1_columns,
+            &child2_columns,
+        )
+        .unwrap();
+        assert_eq!(third, expected_third);
+        assert_eq!(cache.len(), 1, "an over-budget slice must not be retained");
+        assert_eq!(cache.retained_bytes(), slice_bytes);
+
+        let mut zero_budget_cache = PreparedBranchSliceCache::new(0);
+        let zero_budget =
+            TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+                &mut zero_budget_cache,
+                &0,
+                &1,
+                ScalarKind::F64,
+                BranchMessageBatch {
+                    spec,
+                    raw: &raw,
+                    physical_values: &physical_values,
+                    child1_columns: &child1_columns,
+                    child2_columns: &child2_columns,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            zero_budget,
+            scalar_branch_message_contraction(
+                spec,
+                &raw,
+                &physical_values,
+                &child1_columns,
+                &child2_columns,
+            )
+            .unwrap()
+        );
+        assert_eq!(zero_budget_cache.len(), 0);
+        assert_eq!(zero_budget_cache.retained_bytes(), 0);
+    }
+
+    #[test]
+    fn prepared_branch_slices_match_scalar_for_all_real_axis_orders_and_unequal_bonds() {
+        let point_count = 256;
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 3).collect();
+        let child1_columns: Vec<f64> = (0..point_count * 2)
+            .map(|value| (value % 17) as f64 - 8.0)
+            .collect();
+        let child2_columns: Vec<f64> = (0..point_count * 4)
+            .map(|value| (value % 23) as f64 - 11.0)
+            .collect();
+
+        for physical_axis in 0..4 {
+            for parent_axis in 0..4 {
+                if parent_axis == physical_axis {
+                    continue;
+                }
+                for child_axis_1 in 0..4 {
+                    if child_axis_1 == physical_axis || child_axis_1 == parent_axis {
+                        continue;
+                    }
+                    let child_axis_2 = (0..4)
+                        .find(|axis| {
+                            *axis != physical_axis && *axis != parent_axis && *axis != child_axis_1
+                        })
+                        .unwrap();
+                    let mut dims = [0usize; 4];
+                    dims[physical_axis] = 3;
+                    dims[parent_axis] = 3;
+                    dims[child_axis_1] = 2;
+                    dims[child_axis_2] = 4;
+                    let mut strides = [1usize; 4];
+                    for axis in 1..4 {
+                        strides[axis] = strides[axis - 1] * dims[axis - 1];
+                    }
+                    let spec = BranchContractionSpec {
+                        strides,
+                        physical_axis,
+                        parent_axis,
+                        child_axis_1,
+                        child_axis_2,
+                        parent_dim: 3,
+                        child_dim_1: 2,
+                        child_dim_2: 4,
+                    };
+                    let raw: Vec<f64> = (0..dims.iter().product())
+                        .map(|value| (value % 29) as f64 - 14.0)
+                        .collect();
+                    let mut cache = PreparedBranchSliceCache::new(usize::MAX);
+                    let actual =
+                        TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+                            &mut cache,
+                            &0,
+                            &1,
+                            ScalarKind::F64,
+                            BranchMessageBatch {
+                                spec,
+                                raw: &raw,
+                                physical_values: &physical_values,
+                                child1_columns: &child1_columns,
+                                child2_columns: &child2_columns,
+                            },
+                        )
+                        .unwrap();
+                    let expected = scalar_branch_message_contraction(
+                        spec,
+                        &raw,
+                        &physical_values,
+                        &child1_columns,
+                        &child2_columns,
+                    )
+                    .unwrap();
+                    assert!(actual
+                        .iter()
+                        .zip(expected)
+                        .all(|(actual, expected)| (actual - expected).abs() < 1.0e-8));
+                    let expected_bytes = 3 * 3 * 2 * 4 * std::mem::size_of::<f64>();
+                    assert_eq!(cache.retained_bytes(), expected_bytes);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_branch_slices_match_scalar_for_all_complex_axis_orders_and_unequal_bonds() {
+        let point_count = 256;
+        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 3).collect();
+        let child1_columns: Vec<Complex64> = (0..point_count * 2)
+            .map(|value| Complex64::new((value % 17) as f64 - 8.0, (value % 7) as f64 - 3.0))
+            .collect();
+        let child2_columns: Vec<Complex64> = (0..point_count * 4)
+            .map(|value| Complex64::new((value % 23) as f64 - 11.0, (value % 5) as f64 - 2.0))
+            .collect();
+
+        for physical_axis in 0..4 {
+            for parent_axis in 0..4 {
+                if parent_axis == physical_axis {
+                    continue;
+                }
+                for child_axis_1 in 0..4 {
+                    if child_axis_1 == physical_axis || child_axis_1 == parent_axis {
+                        continue;
+                    }
+                    let child_axis_2 = (0..4)
+                        .find(|axis| {
+                            *axis != physical_axis && *axis != parent_axis && *axis != child_axis_1
+                        })
+                        .unwrap();
+                    let mut dims = [0usize; 4];
+                    dims[physical_axis] = 3;
+                    dims[parent_axis] = 3;
+                    dims[child_axis_1] = 2;
+                    dims[child_axis_2] = 4;
+                    let mut strides = [1usize; 4];
+                    for axis in 1..4 {
+                        strides[axis] = strides[axis - 1] * dims[axis - 1];
+                    }
+                    let spec = BranchContractionSpec {
+                        strides,
+                        physical_axis,
+                        parent_axis,
+                        child_axis_1,
+                        child_axis_2,
+                        parent_dim: 3,
+                        child_dim_1: 2,
+                        child_dim_2: 4,
+                    };
+                    let raw: Vec<Complex64> = (0..dims.iter().product())
+                        .map(|value| {
+                            Complex64::new((value % 29) as f64 - 14.0, (value % 11) as f64 - 5.0)
+                        })
+                        .collect();
+                    let mut cache = PreparedBranchSliceCache::new(usize::MAX);
+                    let actual =
+                        TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+                            &mut cache,
+                            &0,
+                            &1,
+                            ScalarKind::C64,
+                            BranchMessageBatch {
+                                spec,
+                                raw: &raw,
+                                physical_values: &physical_values,
+                                child1_columns: &child1_columns,
+                                child2_columns: &child2_columns,
+                            },
+                        )
+                        .unwrap();
+                    let expected = scalar_branch_message_contraction(
+                        spec,
+                        &raw,
+                        &physical_values,
+                        &child1_columns,
+                        &child2_columns,
+                    )
+                    .unwrap();
+                    assert!(actual
+                        .iter()
+                        .zip(expected)
+                        .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-8));
+                    let expected_bytes = 3 * 3 * 2 * 4 * std::mem::size_of::<Complex64>();
+                    assert_eq!(cache.retained_bytes(), expected_bytes);
+                }
+            }
+        }
+    }
+
     fn scalar_grouped_chain_reference<
         T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
     >(
@@ -6740,6 +7515,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn evaluator_reuses_unequal_branch_slices_and_zero_budget_falls_back() {
+        let (tree, indices) = unequal_branch_tree();
+        let values1 = unequal_branch_values(0);
+        let points1 = ColMajorArrayRef::new(&values1, &[4, 64]).unwrap();
+        let expected1 = tree.evaluate(&indices, points1).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual1 = evaluator.evaluate_batched(points1).unwrap();
+        assert_scalars_close(&actual1, &expected1);
+        assert_eq!(evaluator.prepared_branch_slices_f64.len(), 3);
+        assert_eq!(
+            evaluator.prepared_branch_slices_f64.retained_bytes(),
+            3 * 8 * 6 * 4 * std::mem::size_of::<f64>()
+        );
+
+        let values2 = unequal_branch_values(1);
+        let points2 = ColMajorArrayRef::new(&values2, &[4, 64]).unwrap();
+        let expected2 = tree.evaluate(&indices, points2).unwrap();
+        let actual2 = evaluator.evaluate_batched(points2).unwrap();
+        assert_scalars_close(&actual2, &expected2);
+        assert_eq!(evaluator.prepared_branch_slices_f64.len(), 3);
+
+        let mut zero_budget = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                branch_slice_cache_max_bytes: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual_zero = zero_budget.evaluate_batched(points1).unwrap();
+        assert_scalars_close(&actual_zero, &expected1);
+        assert_eq!(zero_budget.prepared_branch_slices_f64.len(), 0);
+        assert_eq!(zero_budget.prepared_branch_slices_f64.retained_bytes(), 0);
+    }
+
     #[cfg(feature = "diagnostics")]
     #[test]
     fn build_environment_cache_records_guard_diagnostics_per_node_with_correct_coordination_numbers(
@@ -7187,6 +8008,68 @@ mod tests {
             TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
                 .unwrap();
         (tree, vec![sc, s0, s1, s2])
+    }
+
+    fn unequal_branch_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let physical = DynIndex::new_dyn(3);
+        let parent_site = DynIndex::new_dyn(2);
+        let child1_site = DynIndex::new_dyn(4);
+        let child2_site = DynIndex::new_dyn(4);
+        let parent_bond = DynIndex::new_dyn(8);
+        let child1_bond = DynIndex::new_dyn(4);
+        let child2_bond = DynIndex::new_dyn(6);
+
+        // Axis order is [child1, physical, child2, parent], deliberately
+        // non-canonical. The three incident bonds have unequal dimensions.
+        let center_data: Vec<f64> = (0..3 * 4 * 6 * 8)
+            .map(|value| (value % 31) as f64 / 17.0 - 0.8)
+            .collect();
+        let center = IdxTensor::from_dense(
+            vec![
+                child1_bond.clone(),
+                physical.clone(),
+                child2_bond.clone(),
+                parent_bond.clone(),
+            ],
+            center_data,
+        )
+        .unwrap();
+        let parent = IdxTensor::from_dense(
+            vec![parent_bond, parent_site.clone()],
+            (0..16)
+                .map(|value| (value % 7) as f64 / 5.0 - 0.4)
+                .collect(),
+        )
+        .unwrap();
+        let child1 = IdxTensor::from_dense(
+            vec![child1_bond, child1_site.clone()],
+            (0..16)
+                .map(|value| (value % 5) as f64 / 3.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let child2 = IdxTensor::from_dense(
+            vec![child2_bond, child2_site.clone()],
+            (0..24)
+                .map(|value| (value % 11) as f64 / 7.0 - 0.7)
+                .collect(),
+        )
+        .unwrap();
+        let tree =
+            TreeTN::from_tensors(vec![center, parent, child1, child2], vec![0, 1, 2, 3]).unwrap();
+        (tree, vec![physical, parent_site, child1_site, child2_site])
+    }
+
+    fn unequal_branch_values(offset: usize) -> Vec<usize> {
+        let point_count = 64;
+        let mut values = vec![0usize; 4 * point_count];
+        for point in 0..point_count {
+            values[4 * point] = (point + offset) % 3;
+            values[4 * point + 1] = (point / 2 + offset) % 2;
+            values[4 * point + 2] = (point / 3 + offset) % 4;
+            values[4 * point + 3] = (point / 5 + offset) % 4;
+        }
+        values
     }
 
     fn four_arm_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {

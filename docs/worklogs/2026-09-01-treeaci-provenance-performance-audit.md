@@ -1711,6 +1711,104 @@ TreeACI local-update workload, so its gate is **N/A**. No new direct
 `tenferro-*` dependency was introduced and no tenferro-layer functionality
 change is required for #714.
 
-The next implementation subissue is **#711** (reusable TreeTN branch-slice
-preparation). Per the execution protocol, stop after reporting this #714
-closure; do not begin #711 in the same run.
+## 2026-09-04 #711 reusable TreeTN branch-slice preparation
+
+This entry records the #711 implementation and its local/downstream gates.
+The cache ownership, packed layout, threshold, and benchmark interpretation
+are **[AI Supplied]** engineering decisions. No new numerical algorithm is
+attributed to a paper in this entry; the full ACI/TCI and tenferro clones,
+hashes, and concrete page/equation/paragraph locators already recorded in the
+evidence register remain authoritative. No source-derived claim is made here
+without one of those locators.
+
+### Implementation
+
+- `TreeTNCachedEvaluator` now owns separate real and Complex64 prepared-slice
+  caches. A key is `(node, parent, physical coordinate, exact scalar kind)`.
+  On a miss, `with_dense_slice` prepares the existing parent-fast,
+  child-2-major column-major matrix once; subsequent physical-value groups use
+  the borrowed tensorbackend `mat_mul` operand. The existing scalar threshold,
+  GEMM grouping, and c2-major/parent-minor accumulation order are unchanged.
+- `CachedEvaluatorOptions` adds
+  `branch_slice_cache_max_bytes`. `0` retains no prepared payload and follows
+  the uncached route; a finite budget refuses entries that do not fit; the
+  default preserves the historical unbounded evaluator policy. Only matrix
+  payload bytes are charged, and retained bytes are checked against the sum of
+  owned payloads on drop. No full-network dense materialization or direct
+  `tenferro-*` dependency was added.
+- Diagnostics now report prepared-slice hits, misses, budget refusals, and
+  retained payload bytes in addition to child decode/gather, setup, GEMM, and
+  accumulation counters. The f32/Complex32 and unsupported-shape routes keep
+  their existing generic fallback; the new cache is only used for the already
+  eligible f64/Complex64 raw branch routes.
+- Related code was reviewed: the existing scalar branch contraction remains
+  the oracle used by direct tests, higher-than-two-incoming branches remain
+  on the existing generic/fallback path owned by the later arbitrary-degree
+  task, and the chain raw path was left unchanged except for shared test
+  coverage.
+
+### #711 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C6` correctness | **PASS** | The complete `tensor4all-treetn` release package passed: 513 unit tests, all integration targets, and 141 doctests, with no failures. The new matrix includes all 24 permutations of physical/parent/child axes for unequal bonds in both f64 and Complex64, scalar-oracle differential checks, evaluator reuse, cache hit/miss, zero-budget, over-budget, and retained-byte assertions. The affected TreeACI and standalone ACI release packages also passed (145 unit, 7 public API, 1 rank-scaling, 18 doctests; and 85 unit, 4 integration, 1 rank-scaling, 19 doctests respectively). No smoke-only result closed this gate. |
+| `BC6` benchmark correctness | **PASS** | The full affected-crate release matrices above were completed before accepting timing data. The benchmark uses the same fixed tree, assignments, center, backend, and warm-up for both cases; numerical correctness is established by the complete test/oracle matrix, not by a benchmark smoke sample. |
+| `E6` efficiency | **PASS** above the measured noise floor | The paired Criterion release benchmark disables message retention in both cases and changes only prepared-slice retention. Medians were: bond 64 prepared 1.6107 ms vs repacked 2.9664 ms (45.7% lower); bond 128 6.7952 ms vs 56.331 ms (87.9% lower); bond 256 156.11 ms vs 357.95 ms (56.4% lower). After warm-up the prepared route performed zero per-iteration branch-slice writes; the repacked route wrote 524,288, 4,194,304, and 33,554,432 f64 values per iteration respectively. The chain parity repeat at bond 256 was 25.093 ms and remained consistent with the prior ~25.04 ms baseline; warm chain points and the other cold points showed no reproducible regression. The first full-run bond-256 Criterion comparison was noisy, so the exact target was repeated and the repeat, not the noisy first comparison, is the reported regression decision. |
+| `R6` release/regression/downstream | **PASS** | Full TreeTN, TreeACI, and ACI release matrices passed. In clean archive `/tmp/sgw-treeaci-gate.3XdbB5`, the complete `SGW_RUN_TAG=aci-gate-711 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0` workflow passed for SimpleTT, TreeACI, CTTN, all four checkpoint stages, five row slices, assembly, and plotting. Isolated TreeACI diagnostics converged: `pi_rtau` in 7 sweeps with 177,706 evaluated points and `sigma_rtau` in 5 sweeps with 99,554 evaluated points. The dirty SGW checkout was not modified. |
+| `N` numerical stability/convergence | **PASS** | All prepared-path outputs match the existing scalar/generic contraction within existing dtype behavior across the complete axis permutation and unequal-bond matrix. The downstream ACI stages converged with the configured tolerance; no tolerance was relaxed and reduction order was preserved. |
+| `M` metamorphic semantics | **PASS** | Axis permutations, unequal incident bonds, directed orientation keys, repeated warm calls, and cache-disabled/over-budget equivalence are covered. The original point order and duplicate-preserving grouped reduction remain unchanged. |
+| `F` fallback parity | **PASS** | Scalar work below the existing threshold, zero budget, insufficient budget, f32/Complex32, unsupported shapes, and higher-degree generic routes retain fallback behavior and pass the relevant release tests. |
+| `I` invalidation/retention | **PASS** | The evaluator owns the prepared slices for its lifetime, the key includes direction/coordinate/dtype, zero budget retains none, finite budgets refuse non-fitting payloads, and the retained-byte invariant is checked. No input tensor is mutated and no hidden full-network copy is introduced. |
+| `D` determinism | **PASS** | Fixed fixtures, axis permutations, oracle results, cache counters, downstream stages, and release test outcomes are repeatable. Timing outliers are explicitly reported as noise rather than used as correctness evidence. |
+| `S` scaling law | **N/A** | #711 is a constant-factor setup/copy reduction, not an asymptotic claim. The 64/128/256 paired benchmark demonstrates the target-path resource reduction; the plan's formal 1x/2x/4x scaling-law gate remains owned by #718. |
+| `P` provenance/observability | **PASS** | All #711 design and performance claims are labelled **[AI Supplied]**. No new literature claim was introduced. The API dump was regenerated successfully, the new public option is documented with its budget semantics, and commands, backend settings, raw medians, counters, and clean downstream path are recorded here. `tensor4all-benchmark` remains **N/A** because its maintained checkout has no semantically comparable TreeACI workload. |
+| `CI6` remote regression | **PENDING PUSH** | The preceding failed CI_rs run was inspected before push: run `33820251118`, head `d5de28f0d77b0dde667e0dfddb5c5892c6b78c9a`, failed job `Maintenance scripts`, step `Audit public Result APIs`, with the concrete log anchor `dense_native_tensor_from_col_major_owned: # Errors does not name a concrete variant or condition`; the Test, Coverage, Doctests, and Lint jobs passed and rollup failed because Maintenance failed. The local reproduction `python3 scripts/check-public-error-docs.py` is green after the earlier repair, with its complete 15-test suite passing. After pushing #711, the new required checks must be inspected and this row updated with the new run ID/head SHA and final conclusion; a pending check is not a pass. |
+
+### #711 verification commands and raw measurements
+
+```text
+cargo run -p xtask --release -- api-dump
+complete API inventory verified
+
+cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
+66 filtered tests: 64 passed, 2 existing ignored
+
+cargo test --release -p tensor4all-treetn --no-fail-fast
+513 unit tests and all integration targets passed; 141 doctests passed
+
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+passed
+cargo bench -p tensor4all-treetn --bench cached_evaluator --no-run
+passed
+
+cargo bench -p tensor4all-treetn --bench cached_evaluator -- treetn_prepared_branch_slice_reuse
+prepared/repacked medians (ms): 64=1.6107/2.9664, 128=6.7952/56.331, 256=156.11/357.95
+
+cargo bench -p tensor4all-treetn --bench cached_evaluator -- 'hiroshi_chain_evaluator_parity/treetn_cold/256'
+repeat median 25.093 ms; Criterion exact-target comparison [-11.133%, -9.2949%, -7.1677%]
+
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+145 unit, 7 public_api, 1 rank_scaling, 18 doctests passed; 6 existing ignored
+cargo test --release -p tensor4all-aci --no-fail-fast
+85 unit, 4 integration, 1 rank_scaling, 19 doctests passed; 1 existing ignored
+
+SGW_RUN_TAG=aci-gate-711 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0
+complete clean-copy A/B workflow passed
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-711/treeaci pi_rtau
+Converged; sweeps=7; evaluated_points=177706
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-711/treeaci sigma_rtau
+Converged; sweeps=5; evaluated_points=99554
+
+gh run view 33820251118 --json headSha,conclusion,status,jobs
+failed CI_rs: Maintenance scripts / Audit public Result APIs; other jobs passed
+gh run view 33820251118 --log-failed
+concrete failure: dense_native_tensor_from_col_major_owned # Errors documentation incomplete
+python3 scripts/check-public-error-docs.py
+public-error-docs-ok
+python3 scripts/test-check-public-error-docs.py
+15 tests passed
+```
+
+The next implementation subissue is **#710** (directed-component keys,
+layouts, and cache accounting). Per the execution protocol, stop after this
+#711 report; do not begin #710 in the same run.

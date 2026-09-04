@@ -715,6 +715,55 @@ fn bench_warm_center_coordination_vs_bond(c: &mut Criterion) {
     group.finish();
 }
 
+/// Measures the #711 owner-cache effect while deliberately disabling message
+/// retention. Each iteration therefore recomputes the branch contraction, but
+/// the prepared evaluator reuses the immutable physical slices it owns.
+///
+/// The paired cases use the same TreeTN, centre, assignments, and tenferro
+/// backend settings. The only changed variable is the prepared-slice payload
+/// budget, so the result isolates slice setup rather than claiming that a
+/// warm message cache made the branch faster.
+fn bench_prepared_branch_slice_reuse(c: &mut Criterion) {
+    const LOCAL_DIM: usize = 2;
+    let mut group = c.benchmark_group("treetn_prepared_branch_slice_reuse");
+    group.sample_size(10);
+
+    for bond_dim in [64usize, 128, 256] {
+        let (tree, indices) = create_uniform_three_leaf_star(LOCAL_DIM, bond_dim);
+        let point_count = 8;
+        let values = (0..point_count)
+            .flat_map(|point| [point % 2, 0, (point / 2) % 2, (point / 4) % 2])
+            .collect::<Vec<_>>();
+        let shape = [4usize, point_count];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let common = |branch_slice_cache_max_bytes| CachedEvaluatorOptions {
+            center: Some(1usize),
+            message_cache_max_bytes: 0,
+            branch_slice_cache_max_bytes,
+            ..CachedEvaluatorOptions::default()
+        };
+
+        let mut prepared = TreeTNCachedEvaluator::new(&tree, &indices, common(usize::MAX)).unwrap();
+        prepared.evaluate_batched(points).unwrap();
+        group.bench_function(BenchmarkId::new("prepared", bond_dim), |b| {
+            b.iter(|| {
+                let points = ColMajorArrayRef::new(black_box(&values), &shape).unwrap();
+                prepared.evaluate_batched(points).unwrap()
+            })
+        });
+
+        let mut repacked = TreeTNCachedEvaluator::new(&tree, &indices, common(0)).unwrap();
+        repacked.evaluate_batched(points).unwrap();
+        group.bench_function(BenchmarkId::new("repacked", bond_dim), |b| {
+            b.iter(|| {
+                let points = ColMajorArrayRef::new(black_box(&values), &shape).unwrap();
+                repacked.evaluate_batched(points).unwrap()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_chain_size_scaling,
@@ -723,6 +772,7 @@ criterion_group!(
     bench_warm_call_vs_bond,
     bench_hiroshi_chain_evaluator_parity,
     bench_warm_center_coordination_vs_bond,
-    bench_cached_evaluator_scalar_kinds
+    bench_cached_evaluator_scalar_kinds,
+    bench_prepared_branch_slice_reuse
 );
 criterion_main!(benches);

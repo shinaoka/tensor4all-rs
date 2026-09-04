@@ -806,23 +806,23 @@ gate and must not be smuggled into this coverage task.
 - Secondary gates: `N`, `M`, `F`, `I`, `D`, `S`, `P`; mark any provider/layout
   combination not exercised by the benchmark as N/A rather than extrapolating.
 
-- [ ] **Step 1: Add a scalar reference test for all axis arrangements.**
+- [x] **Step 1: Add a scalar reference test for all axis arrangements.**
 
   Cover degree-three and higher branch nodes, unequal incident bond dimensions, physical axes in non-canonical order, `f64` and `Complex64`, and compare the prepared-slice path to the existing scalar/generic result with a declared tight tolerance.
 
-- [ ] **Step 2: Add budget and fallback tests.**
+- [x] **Step 2: Add budget and fallback tests.**
 
   Verify that a cache budget large enough retains one entry per required physical slice, a zero budget retains none, and an insufficient budget falls back without allocating a hidden full-network dense tensor. Assert reported retained/peak bytes.
 
-- [ ] **Step 3: Prepare immutable slices once.**
+- [x] **Step 3: Prepare immutable slices once.**
 
   Build the physical slice and axis permutation once per evaluator owner using `with_dense_slice`; reuse the resulting `Matrix` for all message groups with the same key. Preserve the existing loop and reduction order in the branch contraction.
 
-- [ ] **Step 4: Measure child gather separately.**
+- [x] **Step 4: Measure child gather separately.**
 
   Keep diagnostics for decode, child gather, prepared-slice lookup, and GEMM. Remove child copies only when the new owner representation makes them unnecessary; otherwise retain and report them.
 
-- [ ] **Step 5: Run the branch regression.**
+- [x] **Step 5: Run the branch regression.**
 
   ```bash
   cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
@@ -831,7 +831,7 @@ gate and must not be smuggled into this coverage task.
 
   Compare paired chain/comb runs at bond 64, 128, and 256. Require no chain regression, bounded memory, matching outputs, and improvement in the repeated degree-three branch-slice setup cost.
 
-- [ ] **Step 6: Commit #711.**
+- [x] **Step 6: Commit #711.**
 
   ```bash
   cargo fmt --all
