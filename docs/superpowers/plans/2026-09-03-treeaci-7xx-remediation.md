@@ -921,6 +921,15 @@ gate and must not be smuggled into this coverage task.
   git commit -m "perf(treetn): deduplicate directed evaluator metadata"
   ```
 
+- [x] **Step 7: Start the remote CI gate without blocking the next task.**
+
+  After pushing #710, inspect the new required checks and record their run
+  ID, head SHA, job/log anchors, and current conclusion in the worklog. The
+  repaired #711 Maintenance failure is already closed by its passing
+  replacement run; a pending #710 check is not a pass, but it does not block
+  starting #708. If the new run fails, repair that CI failure as part of the
+  next implementation round and re-monitor the replacement run.
+
 ---
 
 ### Task 8: Implement #708 complete warm edge-cut evaluation
