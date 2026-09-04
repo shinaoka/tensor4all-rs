@@ -2206,10 +2206,10 @@ where
 /// ```
 ///
 /// # Errors
-/// Returns an error when `options` does not select [`ContractionMethod::Src`],
-/// an option is invalid, the networks are incompatible, either input fails
-/// context validation, or probe generation, contraction, or factorization
-/// fails.
+/// Returns [`TreeTNOperationError`] when `options` does not select [`ContractionMethod::Src`],
+/// an option is invalid, the networks have incompatible topologies, either input
+/// fails context validation (missing tensor or foreign placement), or probe
+/// generation, contraction, or factorization fails.
 pub fn contract_src_with_rng_in<T, V, R>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,

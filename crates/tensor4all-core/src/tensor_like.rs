@@ -681,9 +681,9 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when scoped scaling is unsupported for this
-    /// tensor type, when the tensor does not belong to `context`, or when
-    /// the construction, upload, or multiplication fails.
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when scoped
+    /// scaling is unsupported for this tensor type; other failures report a
+    /// missing tensor context, an invalid payload, or a backend failure.
     fn scale_in(
         &self,
         _factor: f64,
@@ -734,9 +734,9 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when scoped norm evaluation is unsupported for
-    /// this tensor type, when the tensor does not belong to `context`, or
-    /// when the reductions or explicit readback fail.
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when scoped
+    /// norm evaluation is unsupported for this tensor type; other failures
+    /// report a missing tensor context or a backend failure.
     fn norm_in(
         &self,
         _context: &tensor4all_tensorbackend::ExecutionContext,
@@ -1417,9 +1417,9 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when construction is unsupported for this tensor
-    /// type, when the tensor would not belong to `context`, or when the
-    /// explicit transfer fails.
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when
+    /// construction is unsupported for this tensor type; other failures
+    /// report an invalid payload or a backend transfer failure.
     fn ones_in(
         _context: &tensor4all_tensorbackend::ExecutionContext,
         _indices: &[<Self as TensorIndex>::Index],
@@ -1438,8 +1438,9 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when validation is unsupported for this tensor
-    /// type or when the tensor does not belong to `context`.
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when
+    /// validation is unsupported for this tensor type, or a backend failure
+    /// when tensor placement does not belong to `context`.
     fn validate_context(
         &self,
         _context: &tensor4all_tensorbackend::ExecutionContext,
@@ -1594,8 +1595,9 @@ pub trait TensorConstructionLike: TensorContractionLike {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when construction is unsupported for this tensor
-    /// type, when the payload is invalid, or when the explicit transfer fails.
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when
+    /// construction is unsupported for this tensor type; other failures
+    /// report an invalid payload or a backend transfer failure.
     fn from_dense_in<T>(
         _context: &tensor4all_tensorbackend::ExecutionContext,
         _indices: Vec<<Self as TensorIndex>::Index>,
