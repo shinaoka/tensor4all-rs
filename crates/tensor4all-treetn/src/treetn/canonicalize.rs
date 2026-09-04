@@ -167,12 +167,42 @@ where
         form: CanonicalForm,
         context_name: &str,
     ) -> Result<()> {
+        self.canonicalize_impl_scoped(canonical_region, form, context_name, None)
+    }
+
+    /// Context-scoped canonicalization.
+    ///
+    /// Only the unitary (QR) form has a scoped path; LU/CI forms and scalar
+    /// edge normalization return typed errors instead of running.
+    pub(crate) fn canonicalize_impl_in(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        context_name: &str,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> Result<()> {
+        self.canonicalize_impl_scoped(canonical_region, form, context_name, Some(context))
+    }
+
+    fn canonicalize_impl_scoped(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        context_name: &str,
+        context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+    ) -> Result<()> {
         // Determine algorithm from form
         let alg = match form {
             CanonicalForm::Unitary => FactorizeAlg::QR,
             CanonicalForm::LU => FactorizeAlg::LU,
             CanonicalForm::CI => FactorizeAlg::CI,
         };
+        if context.is_some() && alg != FactorizeAlg::QR {
+            return Err(anyhow::anyhow!(
+                "{}: unsupported canonical form (only unitary has a context-scoped path)",
+                context_name
+            ));
+        }
 
         // Prepare sweep context
         let sweep_ctx = self.prepare_sweep_to_center(canonical_region, context_name)?;
@@ -185,7 +215,19 @@ where
 
         // Process edges in order (leaves towards center)
         for (src, dst) in &sweep_ctx.edges {
-            self.sweep_edge_full_rank(*src, *dst, alg, Canonical::Left, context_name)?;
+            match context {
+                Some(execution) => self.sweep_edge_full_rank_in(
+                    *src,
+                    *dst,
+                    alg,
+                    Canonical::Left,
+                    context_name,
+                    execution,
+                )?,
+                None => {
+                    self.sweep_edge_full_rank(*src, *dst, alg, Canonical::Left, context_name)?
+                }
+            }
         }
 
         // Set the canonical form

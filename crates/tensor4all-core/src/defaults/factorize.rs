@@ -42,13 +42,16 @@ use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
-use crate::defaults::svd::{compute_retained_rank, svd_for_factorize};
-use crate::qr::{qr_with, QrOptions};
+use crate::defaults::svd::{
+    compute_retained_rank, svd_for_factorize, svd_for_factorize_in, SvdFactorizeResult,
+};
+use crate::qr::{qr_with, qr_with_in, QrOptions};
 use crate::svd::SvdOptions;
 use crate::truncation::{
     validate_svd_truncation_policy, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
     TruncationRule,
 };
+use crate::ExecutionContext;
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{
@@ -424,6 +427,221 @@ pub fn factorize_full_rank(
     }
 }
 
+/// Factorize a tensor in a caller-owned execution context.
+///
+/// Context-scoped counterpart of [`factorize`]: the input must belong to
+/// `context`, and QR/SVD factors, truncation, and results stay in `context`
+/// with only bounded decision payloads crossing the explicit readback
+/// boundary on CUDA. LU and CI have no context-scoped path and return a typed
+/// error; run them through [`factorize`] on host inputs instead.
+///
+/// # Arguments
+/// * `t` - Input tensor, which must belong to `context`.
+/// * `left_inds` - Indices to place on the left side.
+/// * `options` - Factorization options.
+/// * `context` - Caller-owned execution context owning the input and results.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use tensor4all_core::{
+///     DynIndex, ExecutionContext, FactorizeOptions, TensorContractionLike,
+///     factorize_in, Canonical, FactorizeAlg,
+/// };
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = ExecutionContext::Cpu(Arc::new(
+///     CpuExecutionContext::from_backend(CpuBackend::new()),
+/// ));
+/// let i = DynIndex::new_dyn(4);
+/// let j = DynIndex::new_dyn(3);
+/// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+/// let tensor =
+///     tensor4all_core::IdxTensor::from_dense_in(&context, vec![i.clone(), j.clone()], data)?;
+/// let options = FactorizeOptions::qr();
+/// let result = factorize_in(&tensor, &[i.clone()], &options, &context)?;
+/// let recovered = result.left.contract_pair(&result.right)?;
+/// assert_eq!(recovered.dims(), vec![4, 3]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Errors
+/// Returns `FactorizeError` when the tensor does not belong to `context`,
+/// when the storage, algorithm, or options are unsupported, or when the
+/// factorization or explicit decision readback fails.
+pub fn factorize_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    options.validate()?;
+    t.validate_context(context)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "Diagonal storage not supported for factorize",
+        ));
+    }
+
+    if !(t.is_f64() || t.is_complex()) {
+        return Err(FactorizeError::UnsupportedStorage(
+            "factorize currently supports only f64 and Complex64 tensors",
+        ));
+    }
+
+    match options.alg {
+        FactorizeAlg::SVD => factorize_svd_with_options_in(t, left_inds, options, context),
+        FactorizeAlg::QR => factorize_qr_with_options_in(t, left_inds, options, context),
+        FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization have no context-scoped path; use factorize() on host inputs",
+        )),
+    }
+}
+
+/// Full-rank factorization in a caller-owned execution context.
+///
+/// Context-scoped counterpart of [`factorize_full_rank`] with the same
+/// algorithm coverage: QR and SVD execute in `context`; LU and CI return a
+/// typed error.
+///
+/// # Errors
+/// Returns `FactorizeError` when the tensor does not belong to `context`,
+/// when the storage or algorithm is unsupported, or when the factorization
+/// fails.
+pub fn factorize_full_rank_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    alg: FactorizeAlg,
+    canonical: Canonical,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    t.validate_context(context)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "Diagonal storage not supported for factorize",
+        ));
+    }
+
+    if !(t.is_f64() || t.is_complex()) {
+        return Err(FactorizeError::UnsupportedStorage(
+            "factorize currently supports only f64 and Complex64 tensors",
+        ));
+    }
+
+    match alg {
+        FactorizeAlg::SVD => {
+            factorize_svd_with_options_in_full_rank(t, left_inds, canonical, context)
+        }
+        FactorizeAlg::QR => factorize_qr_full_rank_in(t, left_inds, canonical, context),
+        FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization have no context-scoped path; use factorize_full_rank() on host inputs",
+        )),
+    }
+}
+
+fn factorize_svd_with_options_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let mut svd_options = SvdOptions::new();
+    if let Some(policy) = options.svd_policy {
+        svd_options = svd_options.with_policy(policy);
+    }
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        svd_options = svd_options.with_max_bond_dim(max_bond_dim);
+    }
+
+    factorize_svd_with_eager_options_in(t, left_inds, options.canonical, &svd_options, context)
+}
+
+fn factorize_svd_with_options_in_full_rank(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let svd_options = SvdOptions::full_rank();
+    factorize_svd_with_eager_options_in(t, left_inds, canonical, &svd_options, context)
+}
+
+fn factorize_svd_with_eager_options_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+    svd_options: &SvdOptions,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let result = svd_for_factorize_in(t, left_inds, svd_options, context)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    assemble_svd_factors(result, canonical)
+}
+
+fn factorize_qr_with_options_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.canonical == Canonical::Right {
+        return Err(FactorizeError::UnsupportedCanonical(
+            "QR only supports Canonical::Left (would need LQ for right)",
+        ));
+    }
+
+    let qr_options = if let Some(rtol) = options.qr_rtol {
+        QrOptions::new().with_rtol(rtol)
+    } else {
+        QrOptions::new()
+    };
+
+    factorize_qr_with_eager_options_in(t, left_inds, &qr_options, context)
+}
+
+fn factorize_qr_full_rank_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if canonical == Canonical::Right {
+        return Err(FactorizeError::UnsupportedCanonical(
+            "QR only supports Canonical::Left (would need LQ for right)",
+        ));
+    }
+
+    factorize_qr_with_eager_options_in(t, left_inds, &QrOptions::full_rank(), context)
+}
+
+fn factorize_qr_with_eager_options_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    qr_options: &QrOptions,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let (q, r) = qr_with_in::<f64>(t, left_inds, qr_options, context)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+
+    let bond_index = q
+        .indices
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned a rank-0 Q tensor"))?;
+    let q_dims = q.dims();
+    let rank = *q_dims
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned Q with no dimensions"))?;
+
+    Ok(FactorizeResult::new(q, r, bond_index, None, rank))
+}
+
 fn factorize_impl_f64(
     t: &IdxTensor,
     left_inds: &[DynIndex],
@@ -511,6 +729,17 @@ fn factorize_svd_with_options(
     svd_options: &SvdOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let result = svd_for_factorize(t, left_inds, svd_options)?;
+    assemble_svd_factors(result, canonical)
+}
+
+/// Absorb the SVD factors into left/right canonical form.
+///
+/// Shared by the host and context-scoped SVD factorization paths: contracts
+/// `S` into one side and renames the leftover `sim` leg back to `bond`.
+fn assemble_svd_factors(
+    result: SvdFactorizeResult,
+    canonical: Canonical,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let u = result.u;
     let s = result.s;
     let vh = result.vh;

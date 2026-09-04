@@ -496,6 +496,10 @@ pub struct TruncateUpdater {
     pub max_bond_dim: Option<usize>,
     /// Explicit SVD truncation policy.
     pub svd_policy: Option<SvdTruncationPolicy>,
+    /// Caller-owned execution context. When set, the two-site SVD runs
+    /// through the context-scoped factorization path; otherwise the legacy
+    /// host path is used.
+    pub context: Option<tensor4all_tensorbackend::ExecutionContext>,
 }
 
 impl TruncateUpdater {
@@ -508,6 +512,25 @@ impl TruncateUpdater {
         Self {
             max_bond_dim,
             svd_policy,
+            context: None,
+        }
+    }
+
+    /// Create a truncation updater bound to a caller-owned execution context.
+    ///
+    /// # Arguments
+    /// * `max_bond_dim` - Maximum bond dimension (None for no limit)
+    /// * `svd_policy` - SVD truncation policy override (None uses the global default)
+    /// * `context` - Execution context owning the truncated tensors
+    pub fn new_in(
+        max_bond_dim: Option<usize>,
+        svd_policy: Option<SvdTruncationPolicy>,
+        context: tensor4all_tensorbackend::ExecutionContext,
+    ) -> Self {
+        Self {
+            max_bond_dim,
+            svd_policy,
+            context: Some(context),
         }
     }
 }
@@ -593,10 +616,15 @@ where
             .validate()
             .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
 
-        // Factorize
-        let factorize_result = tensor_ab
-            .factorize(&left_inds, &options)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
+        // Factorize (context-scoped when the updater carries a context).
+        let factorize_result = match &self.context {
+            Some(context) => tensor_ab
+                .factorize_in(&left_inds, &options, context)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?,
+            None => tensor_ab
+                .factorize(&left_inds, &options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?,
+        };
 
         let new_tensor_a = factorize_result.left;
         let new_tensor_b = factorize_result.right;

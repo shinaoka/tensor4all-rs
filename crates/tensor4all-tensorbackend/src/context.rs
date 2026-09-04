@@ -21,6 +21,34 @@ pub enum ExecutionContext {
     Cuda(Arc<crate::cuda::CudaExecutionContext>),
 }
 
+impl ExecutionContext {
+    /// Check whether this is the process-global CPU context.
+    ///
+    /// Compatibility boundary: legacy CPU-global callers route through the
+    /// historical host code paths (bitwise-identical numerics) while explicit
+    /// contexts use the scoped primitives. Without the global-defaults
+    /// feature there is no global context, so this always reports false.
+    pub fn is_global_default_cpu(&self) -> bool {
+        #[cfg(feature = "global-defaults")]
+        {
+            match self {
+                ExecutionContext::Cpu(context) => {
+                    let own = context.eager_runtime().map(|runtime| runtime.id());
+                    let global = defaults::default_eager_ctx().map(|runtime| runtime.id());
+                    matches!((own, global), (Ok(a), Ok(b)) if a == b)
+                }
+                #[cfg(feature = "tenferro-cuda")]
+                ExecutionContext::Cuda(_) => false,
+            }
+        }
+        #[cfg(not(feature = "global-defaults"))]
+        {
+            let _ = self;
+            false
+        }
+    }
+}
+
 /// Error returned by explicit CPU context graph or eager-runtime operations.
 ///
 /// The original tenferro diagnostic is retained as the error source.
@@ -492,6 +520,25 @@ mod defaults {
             })
     }
 
+    /// Borrow the process-global CPU execution context.
+    ///
+    /// Compatibility entry for CPU-global convenience APIs (e.g. the legacy
+    /// context-free SRC entry): host tensors constructed through the global
+    /// default belong to this exact context, so they validate against it.
+    /// New code must take a caller-owned context instead of consulting this.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
+    ///
+    /// let context = ExecutionContext::Cpu(default_cpu_execution_context());
+    /// assert!(matches!(context, ExecutionContext::Cpu(_)));
+    /// ```
+    pub fn default_cpu_execution_context() -> Arc<CpuExecutionContext> {
+        Arc::clone(default_context())
+    }
+
     #[cfg(test)]
     pub(crate) fn default_context_hits() -> usize {
         DEFAULT_CONTEXT_HITS.load(std::sync::atomic::Ordering::Relaxed)
@@ -509,7 +556,9 @@ mod defaults {
 #[cfg(all(test, feature = "global-defaults"))]
 pub(crate) use defaults::with_forced_eager_context_failure;
 #[cfg(feature = "global-defaults")]
-pub use defaults::{default_eager_ctx, with_default_backend, EagerContextError};
+pub use defaults::{
+    default_cpu_execution_context, default_eager_ctx, with_default_backend, EagerContextError,
+};
 #[cfg(feature = "global-defaults")]
 pub(crate) use defaults::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,

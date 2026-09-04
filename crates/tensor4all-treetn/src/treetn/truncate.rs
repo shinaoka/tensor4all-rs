@@ -137,6 +137,52 @@ where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
     {
+        self.truncate_impl_scoped(
+            canonical_region,
+            svd_policy,
+            max_bond_dim,
+            context_name,
+            None,
+        )
+    }
+
+    /// Context-scoped truncation.
+    ///
+    /// Pre-canonicalization and the two-site SVD sweep run through the scoped
+    /// factorization paths, so all intermediates stay in `context`.
+    pub(crate) fn truncate_impl_in(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        context_name: &str,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> Result<()>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
+    {
+        self.truncate_impl_scoped(
+            canonical_region,
+            svd_policy,
+            max_bond_dim,
+            context_name,
+            Some(context),
+        )
+    }
+
+    fn truncate_impl_scoped(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        context_name: &str,
+        context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+    ) -> Result<()>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
+    {
         // Validate before the empty-center no-op shortcut so a NaN policy or
         // `max_bond_dim == 0` is rejected on single-node and empty sweeps too.
         validate_svd_truncation_options(max_bond_dim, svd_policy)
@@ -168,11 +214,19 @@ where
         // Step 1: Canonicalize towards the center (required before truncation sweep)
         let canonicalize_options =
             CanonicalizationOptions::default().with_form(CanonicalForm::Unitary);
-        self.canonicalize_impl(
-            [center_node.clone()],
-            canonicalize_options.form,
-            &format!("{}: pre-canonicalize", context_name),
-        )?;
+        match context {
+            Some(execution) => self.canonicalize_impl_in(
+                [center_node.clone()],
+                canonicalize_options.form,
+                &format!("{}: pre-canonicalize", context_name),
+                execution,
+            )?,
+            None => self.canonicalize_impl(
+                [center_node.clone()],
+                canonicalize_options.form,
+                &format!("{}: pre-canonicalize", context_name),
+            )?,
+        }
 
         // Step 2: Generate sweep plan (nsite=2 for two-site truncation)
         let plan = LocalUpdateSweepPlan::from_treetn(self, &center_node, 2)
@@ -187,7 +241,10 @@ where
         }
 
         // Step 3: Apply truncation sweep
-        let mut updater = TruncateUpdater::new(max_bond_dim, svd_policy);
+        let mut updater = match context {
+            Some(execution) => TruncateUpdater::new_in(max_bond_dim, svd_policy, execution.clone()),
+            None => TruncateUpdater::new(max_bond_dim, svd_policy),
+        };
         apply_local_update_sweep(self, &plan, &mut updater)
             .context(format!("{}: truncation sweep failed", context_name))?;
 

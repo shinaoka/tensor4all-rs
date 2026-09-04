@@ -672,6 +672,26 @@ pub trait TensorVectorSpace: TensorIndex {
     /// failure.
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error>;
 
+    /// Real scalar multiplication in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::scale`] for real factors: the
+    /// scalar is constructed in the tensor's owning runtime (explicit upload
+    /// for CUDA), so explicit-context tensors never enter the process-global
+    /// default context.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when scoped
+    /// scaling is unsupported for this tensor type; other failures report a
+    /// missing tensor context, an invalid payload, or a backend failure.
+    fn scale_in(
+        &self,
+        _factor: f64,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(anyhow::anyhow!("context-scoped scaling is not supported for this tensor type").into())
+    }
+
     /// Inner product (dot product) of two tensors.
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
@@ -703,6 +723,25 @@ pub trait TensorVectorSpace: TensorIndex {
     /// ```
     fn norm(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.norm_squared()?.sqrt())
+    }
+
+    /// Frobenius norm in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::norm`]: reductions run in the
+    /// tensor's owning runtime and only the scalar result crosses the
+    /// explicit readback boundary on CUDA. CPU contexts delegate to
+    /// [`Self::norm`] unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when scoped
+    /// norm evaluation is unsupported for this tensor type; other failures
+    /// report a missing tensor context or a backend failure.
+    fn norm_in(
+        &self,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<f64, Self::Error> {
+        Err(anyhow::anyhow!("context-scoped norm is not supported for this tensor type").into())
     }
 
     /// Compute the maximum absolute value of all tensor elements.
@@ -944,6 +983,29 @@ pub trait TensorFactorizationLike: TensorIndex {
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
+    /// Factorize this tensor in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::factorize`]: the input must
+    /// belong to `context`, and factors, truncation, and results stay in
+    /// `context` with only bounded decision payloads crossing the explicit
+    /// readback boundary on device-resident inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when scoped factorization is unsupported for
+    /// this tensor type, when the tensor does not belong to `context`, or
+    /// when the factorization fails.
+    fn factorize_in(
+        &self,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _options: &FactorizeOptions,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "context-scoped factorization is not supported for this tensor type",
+        ))
+    }
+
     /// Factorize this tensor using policy-aware automatic SVD/eigen selection.
     ///
     /// Implementations may use Hermitian Gram eigendecomposition when the
@@ -1010,6 +1072,29 @@ pub trait TensorFactorizationLike: TensorIndex {
         alg: FactorizeAlg,
         canonical: Canonical,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
+    /// Full-rank factorization in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::factorize_full_rank`] with the
+    /// same algorithm coverage as the scoped free functions: QR and SVD
+    /// execute in `context`; other algorithms return a typed error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when scoped factorization is unsupported for
+    /// this tensor type, when the tensor does not belong to `context`, or
+    /// when the factorization fails.
+    fn factorize_full_rank_in(
+        &self,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _alg: FactorizeAlg,
+        _canonical: Canonical,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "context-scoped full-rank factorization is not supported for this tensor type",
+        ))
+    }
 
     /// Factorize a probe prefix, optionally extending an existing QR prefix.
     ///
@@ -1305,6 +1390,64 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// overflow failure) or the underlying construction reports a failure.
     fn ones(indices: &[<Self as TensorIndex>::Index]) -> std::result::Result<Self, Self::Error>;
 
+    /// Create an all-ones tensor in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::ones`]: the result belongs to
+    /// `context`, with an explicit host-to-device transfer for CUDA contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, TensorConstructionLike};
+    /// use tensor4all_core::IdxTensor;
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let tensor = <IdxTensor as TensorConstructionLike>::ones_in(
+    ///     &context,
+    ///     &[DynIndex::new_dyn(2)],
+    /// )?;
+    /// assert_eq!(tensor.to_vec::<f64>()?, vec![1.0, 1.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when
+    /// construction is unsupported for this tensor type; other failures
+    /// report an invalid payload or a backend transfer failure.
+    fn ones_in(
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+        _indices: &[<Self as TensorIndex>::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(anyhow::anyhow!(
+            "context-scoped ones construction is not supported for this tensor type"
+        )
+        .into())
+    }
+
+    /// Validate that this tensor belongs to the supplied execution context.
+    ///
+    /// Generic SRC entries call this on every input tensor before RNG
+    /// advancement or contraction, so mixed host/CUDA inputs and foreign CUDA
+    /// contexts fail at the boundary with typed errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when
+    /// validation is unsupported for this tensor type, or a backend failure
+    /// when tensor placement does not belong to `context`.
+    fn validate_context(
+        &self,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<(), Self::Error> {
+        Err(anyhow::anyhow!("context validation is not supported for this tensor type").into())
+    }
+
     /// Construct a tensor from a column-major dense payload.
     ///
     /// Implementations with a native dense storage path should override this
@@ -1420,6 +1563,54 @@ pub trait TensorConstructionLike: TensorContractionLike {
         T: TensorElement + Into<AnyScalar>,
     {
         Self::from_dense_any(indices, data.into_iter().map(Into::into).collect())
+    }
+
+    /// Construct a tensor from a column-major dense payload in a caller-owned
+    /// execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::from_dense`]: host-originated
+    /// data takes one explicit construction transfer for CUDA contexts, and
+    /// the result belongs to `context`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, TensorConstructionLike};
+    /// use tensor4all_core::IdxTensor;
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let tensor = <IdxTensor as TensorConstructionLike>::from_dense_in(
+    ///     &context,
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![2.0_f64, 3.0],
+    /// )?;
+    /// assert_eq!(tensor.to_vec::<f64>()?, vec![2.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when
+    /// construction is unsupported for this tensor type; other failures
+    /// report an invalid payload or a backend transfer failure.
+    fn from_dense_in<T>(
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+        _indices: Vec<<Self as TensorIndex>::Index>,
+        _data: Vec<T>,
+    ) -> std::result::Result<Self, Self::Error>
+    where
+        Self: TensorVectorSpace,
+        T: TensorElement + Into<AnyScalar>,
+    {
+        Err(anyhow::anyhow!(
+            "context-scoped dense construction is not supported for this tensor type"
+        )
+        .into())
     }
 
     /// Stack tensors along a newly created batch index.

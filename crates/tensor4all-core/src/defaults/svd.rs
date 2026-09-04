@@ -610,6 +610,36 @@ pub(crate) fn svd_for_factorize(
     )
 }
 
+/// Compute truncated SVD for factorization in a caller-owned context.
+///
+/// Context-scoped counterpart of [`svd_for_factorize`]: the factorization and
+/// truncation slicing execute in `context`, with only the singular-value
+/// decision vector crossing the explicit readback boundary on CUDA.
+///
+/// # Errors
+///
+/// Returns `SvdError` when the tensor does not belong to `context`, when the
+/// indices or options are invalid, or when the factorization or explicit
+/// decision readback fails.
+pub(crate) fn svd_for_factorize_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+    context: &ExecutionContext,
+) -> Result<SvdFactorizeResult, SvdError> {
+    let (u_inner, s_inner, vt_inner, singular_values, bond_index, left_indices, right_indices) =
+        svd_truncated_inner_in(t, left_inds, options, context)?;
+    svd_factorize_assemble(
+        u_inner,
+        s_inner,
+        vt_inner,
+        singular_values,
+        bond_index,
+        left_indices,
+        right_indices,
+    )
+}
+
 /// Wrap the truncated eager factors as [`IdxTensor`]s, returning `V^H` directly.
 fn svd_factorize_assemble(
     u_inner: EagerTensor,

@@ -365,6 +365,26 @@ single `L d^p chi^q` expression would hide the main trade-off. The Gaussian
 probes are reproducible through `SrcOptions::with_seed` and should be held
 fixed when comparing implementations.
 
+### Running SRC in an explicit execution context
+
+`contract_src_with_rng_in` accepts a caller-owned execution context and runs
+the same schedule against CUDA-resident trees: upload both inputs into one
+`CudaExecutionContext`, validate them, and pass the matching
+`ExecutionContext::Cuda` alongside a caller-seeded RNG. Every tensor the
+algorithm creates stays resident; only bounded decision payloads (singular
+values, norm vectors, stopping scalars) are read back explicitly, and the
+result validates against the exact caller-owned context. Host trees built for
+an explicit CPU context work the same way through `ExecutionContext::Cpu`.
+The context-free `contract`/`contract_src_with_rng` entries keep the
+CPU-global behavior for host inputs and reject resident inputs.
+
+When timing CUDA SRC, report context setup, explicit input upload, probe/cap
+construction transfer, warm-up/JIT, synchronized steady-state, decision
+synchronization, and explicit result download separately: on small problems
+the transfers dominate and a single end-to-end number hides the steady-state
+cost. No CUDA performance claims are made here; the committed benchmark
+runner remains the CPU gate.
+
 ## 6. Summary and comparison
 
 | method | FLOPs (leading) | passes | peak memory | truncation quality |

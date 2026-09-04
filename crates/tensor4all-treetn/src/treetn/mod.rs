@@ -623,6 +623,35 @@ where
         canonical: Canonical,
         context_name: &str,
     ) -> Result<()> {
+        self.sweep_edge_full_rank_scoped(src, dst, alg, canonical, context_name, None)
+    }
+
+    /// Context-scoped full-rank edge sweep.
+    ///
+    /// Factorizes through `factorize_full_rank_in`, so LU/CI forms and scalar
+    /// edge normalization (which needs unscoped scalar construction) return
+    /// typed errors instead of running.
+    pub(crate) fn sweep_edge_full_rank_in(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        canonical: Canonical,
+        context_name: &str,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> Result<()> {
+        self.sweep_edge_full_rank_scoped(src, dst, alg, canonical, context_name, Some(context))
+    }
+
+    fn sweep_edge_full_rank_scoped(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        canonical: Canonical,
+        context_name: &str,
+        context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+    ) -> Result<()> {
         // Find edge between src and dst
         let edge = {
             let g = self.graph.graph();
@@ -658,45 +687,32 @@ where
 
         let tensor_external_indices = tensor_src.external_indices();
         if left_inds.is_empty() {
-            let tensor_dst = self
-                .tensor(dst)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
-                .with_context(|| format!("{}: dst tensor not found", context_name))?;
-
-            let src_norm = tensor_src.norm()?;
-            let updated_src_tensor = if src_norm > 0.0 {
-                tensor_src
-                    .scale(tensor4all_core::AnyScalar::new_real(1.0 / src_norm))
-                    .with_context(|| format!("{}: failed to normalize src tensor", context_name))?
-            } else {
-                tensor_src.clone()
-            };
-            let updated_dst_tensor = if src_norm > 0.0 {
-                tensor_dst
-                    .scale(tensor4all_core::AnyScalar::new_real(src_norm))
-                    .with_context(|| format!("{}: failed to scale dst tensor", context_name))?
-            } else {
-                tensor_dst.clone()
-            };
-
-            self.replace_tensor(src, updated_src_tensor)
-                .with_context(|| {
-                    format!("{}: failed to replace tensor at src node", context_name)
-                })?;
-            self.replace_tensor(dst, updated_dst_tensor)
-                .with_context(|| {
-                    format!("{}: failed to replace tensor at dst node", context_name)
-                })?;
-
-            let dst_name = self
-                .graph
-                .node_name(dst)
-                .ok_or_else(|| anyhow::anyhow!("Dst node name not found"))?
+            // Compatibility boundary: no-context and process-global CPU
+            // callers keep the historical scalar-norm transfer. Every other
+            // explicit context uses the scoped norm/scale path.
+            let tensor_src = self
+                .tensor(src)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", src))
+                .with_context(|| format!("{}: tensor not found", context_name))?
                 .clone();
-            self.set_edge_ortho_towards(edge, Some(dst_name))
-                .with_context(|| format!("{}: failed to set ortho_towards", context_name))?;
-
-            return Ok(());
+            match context {
+                None => {
+                    return self.sweep_scalar_edge_legacy(src, dst, edge, tensor_src, context_name);
+                }
+                Some(execution) if execution.is_global_default_cpu() => {
+                    return self.sweep_scalar_edge_legacy(src, dst, edge, tensor_src, context_name);
+                }
+                Some(execution) => {
+                    return self.sweep_scalar_edge_in(
+                        src,
+                        dst,
+                        edge,
+                        tensor_src,
+                        execution,
+                        context_name,
+                    );
+                }
+            }
         }
 
         if left_inds.len() == tensor_external_indices.len() {
@@ -707,11 +723,17 @@ where
             .with_context(|| format!("{}: invalid tensor rank for factorization", context_name));
         }
 
-        // Perform factorization
-        let factorize_result = tensor_src
-            .factorize_full_rank(&left_inds, alg, canonical)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-            .with_context(|| format!("{}: factorization failed", context_name))?;
+        // Perform factorization (context-scoped when a context is supplied).
+        let factorize_result = match context {
+            Some(execution) => tensor_src
+                .factorize_full_rank_in(&left_inds, alg, canonical, execution)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .with_context(|| format!("{}: factorization failed", context_name))?,
+            None => tensor_src
+                .factorize_full_rank(&left_inds, alg, canonical)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .with_context(|| format!("{}: factorization failed", context_name))?,
+        };
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
@@ -755,6 +777,122 @@ where
     // ------------------------------------------------------------------------
     // Public accessors
     // ------------------------------------------------------------------------
+
+    /// Historical scalar-edge normalization (no-context and global callers).
+    fn sweep_scalar_edge_legacy(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        edge: EdgeIndex,
+        tensor_src: T,
+        context_name: &str,
+    ) -> Result<()> {
+        let tensor_dst = self
+            .tensor(dst)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
+            .with_context(|| format!("{}: dst tensor not found", context_name))?;
+
+        let src_norm = tensor_src.norm()?;
+        let updated_src_tensor = if src_norm > 0.0 {
+            tensor_src
+                .scale(tensor4all_core::AnyScalar::new_real(1.0 / src_norm))
+                .with_context(|| format!("{}: failed to normalize src tensor", context_name))?
+        } else {
+            tensor_src.clone()
+        };
+        let updated_dst_tensor = if src_norm > 0.0 {
+            tensor_dst
+                .scale(tensor4all_core::AnyScalar::new_real(src_norm))
+                .with_context(|| format!("{}: failed to scale dst tensor", context_name))?
+        } else {
+            tensor_dst.clone()
+        };
+
+        self.finish_scalar_edge_swap(
+            src,
+            dst,
+            edge,
+            updated_src_tensor,
+            updated_dst_tensor,
+            context_name,
+        )
+    }
+
+    /// Context-scoped scalar-edge normalization for explicit contexts.
+    ///
+    /// Transfers the source norm with `norm_in`/`scale_in`, so every value
+    /// stays in `context` on CPU and CUDA alike.
+    fn sweep_scalar_edge_in(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        edge: EdgeIndex,
+        tensor_src: T,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+        context_name: &str,
+    ) -> Result<()> {
+        let tensor_dst = self
+            .tensor(dst)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
+            .with_context(|| format!("{}: dst tensor not found", context_name))?;
+
+        let src_norm = tensor_src.norm_in(context).map_err(|error| {
+            anyhow::Error::new(error).context(format!("{context_name}: scalar norm failed"))
+        })?;
+        let updated_src_tensor = if src_norm > 0.0 {
+            tensor_src
+                .scale_in(1.0 / src_norm, context)
+                .map_err(|error| {
+                    anyhow::Error::new(error)
+                        .context(format!("{context_name}: failed to normalize src tensor"))
+                })?
+        } else {
+            tensor_src.clone()
+        };
+        let updated_dst_tensor = if src_norm > 0.0 {
+            tensor_dst.scale_in(src_norm, context).map_err(|error| {
+                anyhow::Error::new(error)
+                    .context(format!("{context_name}: failed to scale dst tensor"))
+            })?
+        } else {
+            tensor_dst.clone()
+        };
+
+        self.finish_scalar_edge_swap(
+            src,
+            dst,
+            edge,
+            updated_src_tensor,
+            updated_dst_tensor,
+            context_name,
+        )
+    }
+
+    /// Shared tail of both scalar-edge paths: replace tensors and orient.
+    fn finish_scalar_edge_swap(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        edge: EdgeIndex,
+        updated_src_tensor: T,
+        updated_dst_tensor: T,
+        context_name: &str,
+    ) -> Result<()> {
+        self.replace_tensor(src, updated_src_tensor)
+            .with_context(|| format!("{}: failed to replace tensor at src node", context_name))?;
+        self.replace_tensor(dst, updated_dst_tensor)
+            .with_context(|| format!("{}: failed to replace tensor at dst node", context_name))?;
+
+        let dst_name = self
+            .graph
+            .node_name(dst)
+            .ok_or_else(|| anyhow::anyhow!("Dst node name not found"))?
+            .clone();
+        self.set_edge_ortho_towards(edge, Some(dst_name))
+            .with_context(|| format!("{}: failed to set ortho_towards", context_name))?;
+
+        Ok(())
+    }
 
     /// Get a reference to a tensor by NodeIndex.
     pub fn tensor(&self, node: NodeIndex) -> Option<&T> {
@@ -1240,6 +1378,62 @@ where
     /// Get all node indices in the tree tensor network.
     pub fn node_indices(&self) -> Vec<NodeIndex> {
         self.graph.graph().node_indices().collect()
+    }
+
+    /// Validate that every node tensor belongs to the supplied execution context.
+    ///
+    /// Generic SRC entries call this on both input trees before RNG advancement
+    /// or contraction, so mixed host/CUDA inputs and foreign CUDA contexts fail
+    /// at the boundary with the offending node identified.
+    ///
+    /// # Arguments
+    /// * `context` - Caller-owned execution context both inputs must belong to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorConstructionLike};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tensor4all_treetn::TreeTN;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = <IdxTensor as TensorConstructionLike>::from_dense_in(
+    ///     &context,
+    ///     vec![index],
+    ///     vec![1.0_f64, 2.0],
+    /// )?;
+    /// let tree = TreeTN::from_tensors(vec![tensor], vec![0])?;
+    /// tree.validate_context(&context)?;
+    /// assert_eq!(tree.node_count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`TreeTNOperationError`] identifying the offending node when any
+    /// tensor does not belong to `context`.
+    pub fn validate_context(
+        &self,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        for node in self.graph.graph().node_indices() {
+            let tensor = self.tensor(node).ok_or_else(|| {
+                TreeTNOperationError::from(anyhow::anyhow!(
+                    "context validation: node {node:?} has no tensor"
+                ))
+            })?;
+            tensor.validate_context(context).map_err(|error| {
+                let name = self.graph.node_name(node);
+                TreeTNOperationError::from(anyhow::anyhow!(
+                    "context validation: node {name:?} does not belong to the supplied execution context: {error}"
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     /// Get all node names in the tree tensor network.
@@ -2090,5 +2284,94 @@ mod tests {
         assert_eq!(tn.node_count(), 0);
         assert_eq!(tn.edge_count(), 0);
         assert!(tn.node_names().is_empty());
+    }
+
+    #[test]
+    fn sweep_scalar_edge_in_matches_legacy_on_explicit_cpu() {
+        use std::sync::Arc;
+
+        use tenferro_cpu::CpuBackend;
+        use tensor4all_core::{DynIndex, TensorConstructionLike};
+        use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
+
+        let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+            CpuBackend::new(),
+        )));
+        // Two-node tree: node 0 carries only the shared bond (scalar leaf),
+        // node 1 carries the bond plus a site leg.
+        let bond = DynIndex::new_dyn(3);
+        let site = DynIndex::new_dyn(2);
+        let leaf = <IdxTensor as TensorConstructionLike>::from_dense_in(
+            &context,
+            vec![bond.clone()],
+            vec![1.0_f64, 2.0, 3.0],
+        )
+        .unwrap();
+        let parent = <IdxTensor as TensorConstructionLike>::from_dense_in(
+            &context,
+            vec![bond.clone(), site.clone()],
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+        .unwrap();
+        let mut tree = TreeTN::from_tensors(vec![leaf, parent], vec![0, 1]).unwrap();
+        let (src, dst) = (tree.node_index(&0).unwrap(), tree.node_index(&1).unwrap());
+
+        tree.sweep_edge_full_rank_in(
+            src,
+            dst,
+            FactorizeAlg::QR,
+            Canonical::Left,
+            "test",
+            &context,
+        )
+        .unwrap();
+
+        // Norm transfer: leaf normalized, parent scaled by the leaf norm.
+        let expected_norm = 14.0_f64.sqrt();
+        let leaf_back = tree.tensor(src).unwrap();
+        leaf_back.validate_context(&context).unwrap();
+        let leaf_values = leaf_back.to_vec::<f64>().unwrap();
+        for (got, want) in leaf_values
+            .iter()
+            .zip([1.0, 2.0, 3.0].iter().map(|v| v / expected_norm))
+        {
+            assert!((got - want).abs() < 1e-12, "leaf {leaf_values:?}");
+        }
+        let parent_back = tree.tensor(dst).unwrap();
+        parent_back.validate_context(&context).unwrap();
+        let parent_values = parent_back.to_vec::<f64>().unwrap();
+        for (got, want) in parent_values.iter().zip(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+                .iter()
+                .map(|v| v * expected_norm),
+        ) {
+            assert!((got - want).abs() < 1e-12, "parent {parent_values:?}");
+        }
+
+        // Legacy entry agrees exactly on host inputs.
+        let host_leaf = IdxTensor::from_dense(vec![bond.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+        let host_parent = IdxTensor::from_dense(
+            vec![bond.clone(), site.clone()],
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+        .unwrap();
+        let mut host_tree = TreeTN::from_tensors(vec![host_leaf, host_parent], vec![0, 1]).unwrap();
+        let (host_src, host_dst) = (
+            host_tree.node_index(&0).unwrap(),
+            host_tree.node_index(&1).unwrap(),
+        );
+        host_tree
+            .sweep_edge_full_rank(
+                host_src,
+                host_dst,
+                FactorizeAlg::QR,
+                Canonical::Left,
+                "test",
+            )
+            .unwrap();
+        let legacy_leaf = host_tree.tensor(host_src).unwrap().to_vec::<f64>().unwrap();
+        assert_eq!(legacy_leaf, leaf_values);
+        let legacy_parent = host_tree.tensor(host_dst).unwrap().to_vec::<f64>().unwrap();
+        assert_eq!(legacy_parent, parent_values);
     }
 }

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tenferro::{
     DType, DotGeneralConfig, Tensor as NativeTensor, TensorRead, TensorValue, TensorView,
 };
-use tenferro_ad::{extension::adopt_untracked_eager_value, EagerTensor};
+use tenferro_ad::{extension::adopt_untracked_eager_value, EagerRuntime, EagerTensor};
 use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
 use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{
@@ -1754,7 +1754,29 @@ impl IdxTensor {
             &refs,
             &plan.output_payload_roots,
         )?;
-        let payload_inner = EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?;
+        // Wrap the result in the operands' common eager runtime when they share
+        // one, so explicit-context tensors (e.g. SVD factors) stay in their
+        // context instead of falling back to the process-global default.
+        // Mixed runtimes keep the legacy default wrap; rejecting them is #623
+        // scope, not this seam's.
+        let mut common: Option<Arc<EagerRuntime>> = None;
+        let mut mixed = false;
+        for operand in operands {
+            if let Some(inner) = operand.storage.eager() {
+                match &common {
+                    None => common = Some(Arc::clone(inner.runtime())),
+                    Some(runtime) => {
+                        if runtime.id() != inner.ctx_id() {
+                            mixed = true;
+                        }
+                    }
+                }
+            }
+        }
+        let payload_inner = match (common, mixed) {
+            (Some(runtime), false) => EagerTensor::from_tensor_in(payload, runtime)?,
+            _ => EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?,
+        };
         Self::from_structured_payload_inner(
             result_indices,
             payload_inner,
@@ -2422,22 +2444,16 @@ impl IdxTensor {
             .into());
         }
 
-        let rank = self.indices.len();
-        let mut starts = vec![0_i64; rank];
-        let mut slice_sizes = self.dims();
+        // Slice positionally axis by axis in the operand's own runtime.
+        // (A starts-tensor + dynamic_slice build would need an explicit
+        // host-to-device upload for resident operands, which this
+        // context-free helper cannot name.)
+        let mut sliced = self.try_materialized_inner()?.clone();
         for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
-            starts[axis] = i64::try_from(position)
-                .map_err(|_| anyhow::anyhow!("selected coordinate does not fit in i64"))?;
-            slice_sizes[axis] = 1;
+            sliced = sliced
+                .slice_axis(axis, position..position + 1)
+                .map_err(|error| anyhow::anyhow!("select_indices slicing failed: {error}"))?;
         }
-
-        let starts_tensor = EagerTensor::from_tensor_in(
-            NativeTensor::from_vec_col_major(vec![rank], starts).map_err(anyhow::Error::new)?,
-            default_eager_ctx()?,
-        )?;
-        let sliced = self
-            .try_materialized_inner()?
-            .dynamic_slice(&starts_tensor, &slice_sizes)?;
         Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?).map_err(IdxTensorError::from)
     }
 
@@ -3112,6 +3128,17 @@ impl IdxTensor {
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
     }
 
+    /// Borrow the owning eager runtime without materializing or transferring.
+    ///
+    /// Returns `None` for tensors with no eager value. Used to keep
+    /// contraction results in their operands' context.
+    pub(crate) fn eager_runtime(&self) -> Option<Arc<EagerRuntime>> {
+        self.storage
+            .eager()
+            .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
+            .map(|inner| Arc::clone(inner.runtime()))
+    }
+
     /// Check whether this tensor's eager value is device-resident.
     ///
     /// Metadata-only: inspects placement without reading data, transferring,
@@ -3571,6 +3598,18 @@ impl IdxTensor {
         other: &Self,
         options: PairwiseContractionOptions,
     ) -> Result<Self> {
+        // Device-resident structured/diagonal operands cannot enter the native
+        // host session used below; route them through the owning-runtime eager
+        // plan executor (which also serves N-ary resident contraction).
+        // Dense-dense resident pairs keep the pairwise eager path, and host
+        // operands keep this function unchanged.
+        #[cfg(feature = "tenferro-cuda")]
+        if self.is_cuda_resident()
+            && other.is_cuda_resident()
+            && self.should_use_structured_payload_contract(other)
+        {
+            return super::contract::contract_pair_via_plan(self, other, options);
+        }
         let self_indices = profile_pairwise_contract_section("operand_indices", || {
             self.operand_indices_for_contraction(options.lhs_conj)
         });
@@ -5676,6 +5715,18 @@ impl TensorVectorSpace for IdxTensor {
         IdxTensor::scale(self, scalar)
     }
 
+    fn scale_in(
+        &self,
+        factor: f64,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::scale_in(self, factor, context)
+    }
+
+    fn norm_in(&self, context: &ExecutionContext) -> std::result::Result<f64, Self::Error> {
+        IdxTensor::norm_in(self, context)
+    }
+
     fn inner_product(&self, other: &Self) -> std::result::Result<crate::AnyScalar, Self::Error> {
         IdxTensor::inner_product(self, other)
     }
@@ -5688,6 +5739,15 @@ impl TensorFactorizationLike for IdxTensor {
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize(self, left_inds, options)
+    }
+
+    fn factorize_in(
+        &self,
+        left_inds: &[DynIndex],
+        options: &FactorizeOptions,
+        context: &ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_in(self, left_inds, options, context)
     }
 
     fn factorize_auto(
@@ -5705,6 +5765,16 @@ impl TensorFactorizationLike for IdxTensor {
         canonical: crate::Canonical,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize_full_rank(self, left_inds, alg, canonical)
+    }
+
+    fn factorize_full_rank_in(
+        &self,
+        left_inds: &[DynIndex],
+        alg: crate::FactorizeAlg,
+        canonical: crate::Canonical,
+        context: &ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_full_rank_in(self, left_inds, alg, canonical, context)
     }
 
     fn factorize_probe_columns_incremental(
@@ -5745,13 +5815,19 @@ impl TensorFactorizationLike for IdxTensor {
         batch_tensor
             .validate_context(context)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        #[cfg(feature = "tenferro-cuda")]
-        if matches!(context, ExecutionContext::Cuda(_)) {
-            return Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds);
+        // Compatibility boundary: the process-global CPU context keeps the
+        // historical host `IncrementalQr` matrix path (bitwise-identical
+        // numerics for legacy callers). Every other explicit context uses the
+        // scoped recompute path with no host round-trip.
+        if context.is_global_default_cpu() {
+            return factorize_probe_batch_incremental_impl(
+                previous,
+                batch_tensor,
+                batch_index,
+                left_inds,
+            );
         }
-        #[cfg(not(feature = "tenferro-cuda"))]
-        let _ = context;
-        factorize_probe_batch_incremental_impl(previous, batch_tensor, batch_index, left_inds)
+        Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds)
     }
 
     fn src_error_estimate(
@@ -5828,7 +5904,6 @@ impl IdxTensor {
     /// SRC probe blocks are iid random draws, for which dependence is
     /// measure-zero; a device-side rank guard plus a dependent-block test is a
     /// tracked follow-up, not part of this primitive.
-    #[cfg(feature = "tenferro-cuda")]
     fn resident_probe_batch_qr(
         previous: Option<&FactorizeResult<IdxTensor>>,
         batch_tensor: &IdxTensor,
@@ -6562,6 +6637,20 @@ impl TensorConstructionLike for IdxTensor {
         IdxTensor::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
     }
 
+    fn ones_in(
+        context: &tensor4all_tensorbackend::ExecutionContext,
+        indices: &[DynIndex],
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::ones_in(context, indices)
+    }
+
+    fn validate_context(
+        &self,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<(), Self::Error> {
+        IdxTensor::validate_context(self, context)
+    }
+
     fn from_dense_any(
         indices: Vec<DynIndex>,
         data: Vec<AnyScalar>,
@@ -6574,6 +6663,14 @@ impl TensorConstructionLike for IdxTensor {
         data: Vec<T>,
     ) -> std::result::Result<Self, Self::Error> {
         IdxTensor::from_dense(indices, data)
+    }
+
+    fn from_dense_in<T: TensorElement + Into<AnyScalar>>(
+        context: &tensor4all_tensorbackend::ExecutionContext,
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::from_dense_in(context, indices, data)
     }
 
     fn stack_along_new_index(
@@ -7754,6 +7851,190 @@ impl IdxTensor {
                 anyhow::anyhow!("decision payloads support f64 and Complex64 storage only"),
             ))
         }
+    }
+
+    /// Scale every element by a real factor in a caller-owned context.
+    ///
+    /// The scalar is built in the tensor's owning runtime (explicit upload
+    /// for CUDA) and multiplied there; host-storage CPU tensors are adopted
+    /// into `context` first via explicit construction. With a CPU context
+    /// this matches [`IdxTensor::scale`] bit-for-bit.
+    ///
+    /// # Arguments
+    ///
+    /// * `factor` - Real scaling factor.
+    /// * `context` - Caller-owned execution context the tensor belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let tensor = IdxTensor::from_dense_in(
+    ///     &context,
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![1.0_f64, 2.0],
+    /// )?;
+    /// let scaled = tensor.scale_in(3.0, &context)?;
+    /// assert_eq!(scaled.to_vec::<f64>()?, vec![3.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the tensor does not belong to
+    /// `context`, when the storage is neither `f64` nor `Complex64`, or when
+    /// the scalar construction, upload, or multiplication fails.
+    pub fn scale_in(
+        &self,
+        factor: f64,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        self.validate_context(context)?;
+        let adopted_storage;
+        let operand: &EagerTensor = match self.eager_runtime() {
+            Some(_) => self.as_inner()?,
+            // Host storage (CPU only; CUDA validated above): adopt into the
+            // context through explicit construction.
+            None => {
+                adopted_storage = Self::adopt_host_into_context(self, context)?;
+                adopted_storage.as_inner()?
+            }
+        };
+        let scalar = Self::context_scalar_in(operand, factor, context)?;
+        let scaled = operand.mul(&scalar).map_err(|error| {
+            IdxTensorError::operation(
+                "context-scoped scaling",
+                anyhow::Error::new(error).context("eager multiplication failed"),
+            )
+        })?;
+        Self::from_inner(self.indices.clone(), scaled).map_err(IdxTensorError::from)
+    }
+
+    /// Adopt host storage into a context through explicit construction.
+    fn adopt_host_into_context(
+        tensor: &Self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        if tensor.is_f64() {
+            let values = tensor.to_vec::<f64>().map_err(|error| {
+                IdxTensorError::operation("context adoption", anyhow::Error::new(error))
+            })?;
+            Self::from_dense_in(context, tensor.indices.clone(), values)
+        } else if tensor.is_c64() {
+            let values = tensor.to_vec::<Complex64>().map_err(|error| {
+                IdxTensorError::operation("context adoption", anyhow::Error::new(error))
+            })?;
+            Self::from_dense_in(context, tensor.indices.clone(), values)
+        } else {
+            Err(IdxTensorError::operation(
+                "context adoption",
+                anyhow::anyhow!("adoption supports f64 and Complex64 storage only"),
+            ))
+        }
+    }
+
+    /// Build a scalar in the operand's owning runtime (explicit upload for CUDA).
+    fn context_scalar_in(
+        operand: &EagerTensor,
+        factor: f64,
+        context: &ExecutionContext,
+    ) -> std::result::Result<EagerTensor, IdxTensorError> {
+        let native: NativeTensor = match operand.dtype() {
+            DType::F64 => NativeTensor::from_vec_col_major(vec![], vec![factor]),
+            DType::C64 => {
+                NativeTensor::from_vec_col_major(vec![], vec![Complex64::new(factor, 0.0)])
+            }
+            other => {
+                return Err(IdxTensorError::operation(
+                    "context-scoped scaling",
+                    anyhow::anyhow!("unsupported scalar dtype {other:?}"),
+                ));
+            }
+        }
+        .map_err(|error| {
+            IdxTensorError::operation("context-scoped scaling", anyhow::anyhow!("{error}"))
+        })?;
+        let runtime = Self::context_eager_runtime(context)?;
+        let resident = match context {
+            ExecutionContext::Cpu(_) => native,
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(cuda) => cuda.upload_cuda(&native).map_err(|error| {
+                IdxTensorError::operation(
+                    "context-scoped scaling",
+                    anyhow::Error::new(error).context("scalar upload failed"),
+                )
+            })?,
+        };
+        EagerTensor::from_tensor_in(resident, runtime).map_err(|error| {
+            IdxTensorError::operation(
+                "context-scoped scaling",
+                anyhow::Error::new(error).context("scalar wrapping failed"),
+            )
+        })
+    }
+
+    /// Resolve the eager runtime owned by a context.
+    fn context_eager_runtime(
+        context: &ExecutionContext,
+    ) -> std::result::Result<Arc<EagerRuntime>, IdxTensorError> {
+        match context {
+            ExecutionContext::Cpu(context) => context.eager_runtime().map_err(|error| {
+                IdxTensorError::operation("context-scoped scaling", anyhow::Error::new(error))
+            }),
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(context) => context.eager_runtime().map_err(|error| {
+                IdxTensorError::operation("context-scoped scaling", anyhow::Error::new(error))
+            }),
+        }
+    }
+
+    /// Frobenius norm in a caller-owned execution context.
+    ///
+    /// Reductions run in the tensor's owning runtime; only the scalar result
+    /// crosses the explicit readback boundary on CUDA. With a CPU context
+    /// this delegates to [`IdxTensor::norm`] unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the tensor does not belong to
+    /// `context`, when the storage is neither `f64` nor `Complex64`, or when
+    /// the reductions or explicit readback fail.
+    pub fn norm_in(&self, context: &ExecutionContext) -> std::result::Result<f64, IdxTensorError> {
+        self.validate_context(context)?;
+        #[cfg(feature = "tenferro-cuda")]
+        if matches!(context, ExecutionContext::Cuda(_)) {
+            let inner = self.cuda_eager_inner().ok_or_else(|| {
+                IdxTensorError::operation(
+                    "context-scoped norm",
+                    anyhow::anyhow!("tensor has no resident eager value"),
+                )
+            })?;
+            let rank = inner.shape().len();
+            let axes: Vec<usize> = (0..rank).collect();
+            let squared = inner
+                .abs()
+                .and_then(|magnitudes| magnitudes.reduce_sum_squares(&axes))
+                .map_err(|error| {
+                    IdxTensorError::operation("context-scoped norm", anyhow::anyhow!("{error}"))
+                })?;
+            let scalar = squared.reshape(&[1]).map_err(|error| {
+                IdxTensorError::operation("context-scoped norm", anyhow::anyhow!("{error}"))
+            })?;
+            let values = Self::read_resident_vector(&scalar, 1, context).map_err(|error| {
+                IdxTensorError::operation("context-scoped norm", anyhow::Error::new(error))
+            })?;
+            return Ok(values[0].sqrt());
+        }
+        #[cfg(not(feature = "tenferro-cuda"))]
+        let _ = context;
+        self.norm()
     }
 }
 
