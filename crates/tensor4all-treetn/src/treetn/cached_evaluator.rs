@@ -1351,10 +1351,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the tree has no nodes, when `indices` does not
-    /// cover exactly the tree's site indices, when an index is duplicated or
-    /// unknown, or when a component key layout does not fit this platform's
-    /// key width.
+    /// Returns a [`TreeTNOperationError`] when `tree` has no nodes, when
+    /// `indices` does not cover exactly the tree's site indices, when an index
+    /// is duplicated or is carried by no node, or when a component key layout
+    /// needs more bits than this platform's key width and would overflow.
     ///
     /// # Examples
     ///
@@ -1663,9 +1663,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when `tree` does not have the plan's node set,
-    /// neighbour structure, or physical index placement, or when a configured
-    /// centre is not a node of the tree.
+    /// Returns a [`TreeTNOperationError`] when `tree` does not carry the
+    /// plan's node set, neighbour structure, or physical index placement, so
+    /// that the plan and the tree mismatch, or when `options.center` or any
+    /// entry of `options.initial_centers` is not a node of `tree`. Bond
+    /// dimensions, tensor values, and dtype are deliberately not checked,
+    /// because the plan does not describe them.
     ///
     /// # Examples
     ///

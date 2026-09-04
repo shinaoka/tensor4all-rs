@@ -633,8 +633,19 @@ pub fn grouped_mat_mul_shared<T: MatrixScalar + TensorScalar>(
 ///
 /// # Errors
 ///
-/// Returns the same validation and backend errors as
-/// [`grouped_mat_mul_shared`].
+/// Rejects the request before touching `output`, with
+/// [`GroupedGemmError::DimensionOverflow`] or
+/// [`GroupedGemmError::SpanOverflow`] on checked descriptor arithmetic,
+/// [`GroupedGemmError::BufferOutOfBounds`] when a job's span leaves `lhs`,
+/// `rhs`, or `output`, [`GroupedGemmError::OverlappingOutputs`] when two jobs
+/// write the same element, [`GroupedGemmError::IncompatibleSharedLhs`] or
+/// [`GroupedGemmError::IncompatibleSharedRhs`] when jobs sharing an input
+/// offset disagree on its shape, and
+/// [`GroupedGemmError::WorkingMemoryExceeded`] when the batch exceeds
+/// `options.max_working_bytes`. Returns [`GroupedGemmError::Backend`] when
+/// building a view over a buffer fails or when `backend`'s configured
+/// provider fails to execute the batch; `output` may then be partially
+/// written.
 pub fn grouped_mat_mul_shared_with_backend<T: MatrixScalar + TensorScalar>(
     backend: &mut tenferro_cpu::CpuBackend,
     lhs: &[T],
