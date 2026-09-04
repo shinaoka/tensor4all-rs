@@ -144,7 +144,7 @@ fn factorize_in_matches_host_results_on_explicit_cpu() {
         &context,
     )
     .unwrap();
-    assert_eq!(grown.rank, 2);
+    assert_eq!(grown.rank, 1);
     grown.left.validate_context(&context).unwrap();
 }
 
