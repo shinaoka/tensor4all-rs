@@ -3037,7 +3037,7 @@ from that checkout is used anywhere above as a TreeACI efficiency signal.
 |---|---|---|
 | `C12` correctness | **PASS** | Deterministic work-count gates are asserted independently of timing and all pass exactly (`L2` table). Complete-ACI parity against simplett covers all five bond dimensions with and without the default Guard, comparing sweeps, maximum output rank, last pivot error, callbacks, evaluated points, retained frame/sample/candidate accounting, and the dense residual against the exact elementwise product; at `chi=256` the relative residuals are `1.442e-8` (simplett) and `1.343e-8` (TreeACI). Every scaling case checks one dense materialization against one dense reference before its timed loop and aborts otherwise. Release matrices: `tensor4all-treetn` 524 lib tests passed / 2 pre-existing ignored; `tensor4all-treeaci` 159 lib / 7 pre-existing ignored, 1 `branch_degree`, 7 `public_api`, 1 `rank_scaling`, 18 doctests. No tolerance was relaxed anywhere. **Limit:** the four scalar kinds are not re-swept here; that matrix is #717's and remains green. |
 | `E12` efficiency | **PASS** | Every claim above carries a median, a run-to-run noise floor, and a named primary metric fixed in the predeclared protocol before measuring. `L1`: bond-256 default-Guard ratio `2.47x -> 0.829x`, no-Guard `0.88x -> 0.509x`, worst per-case spread `9.34%`. `L4`: baseline/candidate paired medians at two temperatures, deltas `9.1--20.8%` whole-binary and `20--30%` stage-only against a `<= 5.0%` noise floor, with identical outputs. `L2`: exact counter equalities, no threshold involved. No issue is closed on a single favourable run: three whole-binary repetitions per benchmark, three repetitions per side downstream. **Limit:** `L3` reports observed growth only; it establishes the gate and deliberately makes no speedup claim, because a speedup claim would need a baseline/candidate pair on the same new fixture. |
-| `R12` regression/integration | **PASS with three named exceptions** | Changed-crate release matrices pass (above). `cargo fmt --all -- --check` clean. `cargo clippy --release -p tensor4all-treeaci -p tensor4all-treetn -p tensor4all-aci --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc` clean. `python3 scripts/repository-rules-review.py --base main --worktree --dry-run` pass. The affected downstream isolated stages and the full `run_r10_nblock_treeaci_ab.sh` workflow were run at `T=1.0` and `T=0.1` (`L4`). The sibling benchmark is explicitly not applicable, with evidence. **Exception 1:** the workspace-wide pre-PR gate (`cargo clippy --workspace`, `cargo nextest run --cargo-profile ci --workspace`, `cargo test --doc --profile ci --workspace`, `cargo doc --workspace`) was **not run** in this task and is **pending**; it is owned by the integrating run. **Exception 2:** the remote `CI` gate is **not run** because this branch is deliberately not pushed. **Exception 3:** `python3 scripts/check-public-error-docs.py` **fails**, with three findings that all reproduce on a clean `git archive a7632cc` tree and are therefore inherited from #712 and #709 rather than caused by #718; `audit-library-panics.py` and `check-crate-boundaries.py` pass. This will fail the CI `Maintenance scripts` job and must be fixed before the branch is pushed (Open items item 6). |
+| `R12` regression/integration | **PASS with two open exceptions and one resolved** | Changed-crate release matrices pass (above). `cargo fmt --all -- --check` clean. `cargo clippy --release -p tensor4all-treeaci -p tensor4all-treetn -p tensor4all-aci --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc` clean. `python3 scripts/repository-rules-review.py --base main --worktree --dry-run` pass. The affected downstream isolated stages and the full `run_r10_nblock_treeaci_ab.sh` workflow were run at `T=1.0` and `T=0.1` (`L4`). The sibling benchmark is explicitly not applicable, with evidence. **Exception 1:** the workspace-wide pre-PR gate (`cargo clippy --workspace`, `cargo nextest run --cargo-profile ci --workspace`, `cargo test --doc --profile ci --workspace`, `cargo doc --workspace`) was **not run** in this task and is **pending**; it is owned by the integrating run. **Exception 2:** the remote `CI` gate is **not run** because this branch is deliberately not pushed. **Exception 3 (resolved during integration):** `python3 scripts/check-public-error-docs.py` failed with three findings that all reproduced on a clean `git archive a7632cc` tree, i.e. inherited from #712 and #709 rather than caused by #718. The integrating run fixed them in `971d817` by naming the concrete `GroupedGemmError` variants on `grouped_mat_mul_shared_with_backend` and spelling out the observable conditions on `CachedEvaluatorPlan::new` and `TreeTNCachedEvaluator::with_plan`; the script now reports `public-error-docs-ok` and its own 15-test suite passes. `audit-library-panics.py` and `check-crate-boundaries.py` pass. |
 | `N` numerical stability | **PASS** | Every parity and scaling case asserts a dense whole-result residual against an exact reference before its timing is accepted; the rank-capped sweep reports a genuine truncation trajectory (`2.308e-4 -> 1.460e-5 -> 3.255e-7`) rather than an accidental exact case; the downstream stages converge to their configured `1e-4` tolerance with identical maximum bond and final error on both sides. No tolerance was relaxed. |
 | `M` metamorphic semantics | **PASS** | The unequal-bond group is three permutations of one bond multiset at a fixed product; the coordination group is four rearrangements of one fixed 13-site budget; the counter gates vary points, cut bond, and descendant bond independently and check that only the first two appear in the law. Batch reorder/duplicate/partial-hit equivalence is covered by the existing #708/#709/#710 matrices, which remain green. |
 | `F` fallback parity | **PASS** | The working-budget ladder drives the same fixture from a 512 MiB budget down to the smallest feasible 512 KiB rung and asserts identical rank, evaluated points, and residual; the next rung down and a 1-byte budget are both refused with the exact `ResourceLimit` requested/limit pair. Cold and warm evaluator routes are compared against `TreeTN::evaluate` at every batch size. |
@@ -3081,15 +3081,16 @@ so no earlier `C`/`E` result can have been invalidated by this commit.
 | 11 | #713 | `S` | **PASS**, strengthened by #718 | the timing-based exponent argument is now a deterministic counter law (`L2` row 3) |
 | 11 | #713 | `CI` | **N/A (deferred)** (carried) | not pushed |
 | 12 | #718 | `C12`, `E12`, `N`, `M`, `F`, `I`, `D`, `S`, `P` | **PASS** | this entry |
-| 12 | #718 | `R12` | **PASS with three named exceptions** | workspace-wide pre-PR gate pending; remote `CI` not run; inherited `check-public-error-docs.py` failure (Open items item 6) |
+| 12 | #718 | `R12` | **PASS with two open exceptions** | workspace-wide pre-PR gate pending; remote `CI` not run. The inherited `check-public-error-docs.py` failure was fixed during integration in `971d817`. |
 | 12 | #718 | `CI` | **NOT RUN** | branch not pushed |
 
-Three things are open across the whole umbrella. Two are the same kind: a
-remote CI conclusion that only a push can produce (#710, #708, #709, #713,
-#718), and the workspace-wide pre-PR gate; neither can be closed by a task that
-is instructed not to push. The third is concrete and actionable now: the
-`check-public-error-docs.py` Maintenance script fails on the base branch for
-three public `Result` APIs introduced by #712 and #709 (Open items item 6).
+Three things were open across the whole umbrella at the end of #718. Two are
+the same kind: a remote CI conclusion that only a push can produce (#710,
+#708, #709, #713, #718), and the workspace-wide pre-PR gate; neither can be
+closed by a task that is instructed not to push. The third, the
+`check-public-error-docs.py` Maintenance failure on three public `Result` APIs
+introduced by #712 and #709, was concrete and actionable and the integrating
+run fixed it in `971d817` (Open items item 6).
 
 ### Verification commands and raw measurement output
 
@@ -3215,15 +3216,23 @@ not part of this change. They are disposable; the numbers above are the record.
    and a process peak-byte figure are not reachable from a benchmark through
    the public surface. Exposing them would be a public-API change with its own
    documentation and review, so it was not bundled into a gates task.
-6. **`scripts/check-public-error-docs.py` fails on the base branch and will
-   fail the CI `Maintenance scripts` job on push.** Three public `Result` APIs
-   have an `# Errors` section that does not name a concrete variant or
+6. **RESOLVED during integration (`971d817`).**
+   `scripts/check-public-error-docs.py` failed on the base branch for three
+   public `Result` APIs whose `# Errors` section named no concrete variant or
    condition: `tensor4all-tensorbackend/src/matrix.rs:638
    grouped_mat_mul_shared_with_backend` (from #712) and
    `tensor4all-treetn/src/treetn/cached_evaluator.rs:1373
    CachedEvaluatorPlan::new` and `:1714 TreeTNCachedEvaluator::with_plan`
-   (from #709). All three reproduce on a clean `git archive a7632cc` tree, so
-   none is caused by #718; this is exactly the failure class that #711's `CI6`
-   record already hit once on a different symbol. It must be fixed before the
-   branch is pushed. #718 did not fix it because it is another subissue's
-   public API documentation and this task was scoped to gates.
+   (from #709). All three reproduced on a clean `git archive a7632cc` tree, so
+   none was caused by #718; this is exactly the failure class that #711's `CI6`
+   record already hit once on a different symbol. #718 correctly declined to
+   fix another subissue's public API documentation from a gates-scoped task.
+   The integrating run fixed it instead: the backend entry point now names
+   every `GroupedGemmError` variant it can return and states that validation
+   failures leave `output` untouched while a backend failure may leave it
+   partially written; the two plan constructors spell out key-width overflow
+   and plan/tree mismatch plus unknown configured centres, since
+   `TreeTNOperationError` is an opaque struct with no variants to name. The
+   script reports `public-error-docs-ok`, its own 15-test suite passes, and
+   the affected crates' doctests (154 + 152) and strict clippy pass. No
+   behavior changed.
