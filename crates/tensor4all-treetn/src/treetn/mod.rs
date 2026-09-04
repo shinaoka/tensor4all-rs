@@ -840,10 +840,12 @@ where
             anyhow::Error::new(error).context(format!("{context_name}: scalar norm failed"))
         })?;
         let updated_src_tensor = if src_norm > 0.0 {
-            tensor_src.scale_in(1.0 / src_norm, context).map_err(|error| {
-                anyhow::Error::new(error)
-                    .context(format!("{context_name}: failed to normalize src tensor"))
-            })?
+            tensor_src
+                .scale_in(1.0 / src_norm, context)
+                .map_err(|error| {
+                    anyhow::Error::new(error)
+                        .context(format!("{context_name}: failed to normalize src tensor"))
+                })?
         } else {
             tensor_src.clone()
         };
