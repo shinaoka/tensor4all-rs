@@ -1762,7 +1762,7 @@ without one of those locators.
 | `D` determinism | **PASS** | Fixed fixtures, axis permutations, oracle results, cache counters, downstream stages, and release test outcomes are repeatable. Timing outliers are explicitly reported as noise rather than used as correctness evidence. |
 | `S` scaling law | **N/A** | #711 is a constant-factor setup/copy reduction, not an asymptotic claim. The 64/128/256 paired benchmark demonstrates the target-path resource reduction; the plan's formal 1x/2x/4x scaling-law gate remains owned by #718. |
 | `P` provenance/observability | **PASS** | All #711 design and performance claims are labelled **[AI Supplied]**. No new literature claim was introduced. The API dump was regenerated successfully, the new public option is documented with its budget semantics, and commands, backend settings, raw medians, counters, and clean downstream path are recorded here. `tensor4all-benchmark` remains **N/A** because its maintained checkout has no semantically comparable TreeACI workload. |
-| `CI6` remote regression | **PENDING PUSH** | The preceding failed CI_rs run was inspected before push: run `33820251118`, head `d5de28f0d77b0dde667e0dfddb5c5892c6b78c9a`, failed job `Maintenance scripts`, step `Audit public Result APIs`, with the concrete log anchor `dense_native_tensor_from_col_major_owned: # Errors does not name a concrete variant or condition`; the Test, Coverage, Doctests, and Lint jobs passed and rollup failed because Maintenance failed. The local reproduction `python3 scripts/check-public-error-docs.py` is green after the earlier repair, with its complete 15-test suite passing. After pushing #711, the new required checks must be inspected and this row updated with the new run ID/head SHA and final conclusion; a pending check is not a pass. |
+| `CI6` remote regression | **REPAIRED; RERUN PENDING** | The preceding failed CI_rs run was inspected before push: run `33820251118`, head `d5de28f0d77b0dde667e0dfddb5c5892c6b78c9a`, failed job `Maintenance scripts`, step `Audit public Result APIs`, with the concrete log anchor `dense_native_tensor_from_col_major_owned: # Errors does not name a concrete variant or condition`; the Test, Coverage, Doctests, and Lint jobs passed and rollup failed because Maintenance failed. The first #711 run `33856026628`, head `11904ad4503d1d3d7ddf41b28853a122faabf907`, reached the same Maintenance job but failed earlier at `Audit library panic paths`, log anchor `crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:5181:debug_assert_eq`; the new assertion was test-only scoped and the exact local `python3 scripts/audit-library-panics.py` now passes with zero unbaselined findings. The local `python3 scripts/check-public-error-docs.py` is also green with its complete 15-test suite passing. A new required-check run after this repair must still be inspected and recorded; a pending check is not a pass. |
 
 ### #711 verification commands and raw measurements
 
@@ -1807,6 +1807,12 @@ python3 scripts/check-public-error-docs.py
 public-error-docs-ok
 python3 scripts/test-check-public-error-docs.py
 15 tests passed
+
+gh run view 33856026628 --json headSha,conclusion,status,jobs
+first #711 run: Maintenance scripts failed at Audit library panic paths
+concrete failure: cached_evaluator.rs:5181:debug_assert_eq was unbaselined
+python3 scripts/audit-library-panics.py
+Audit passed: 0 unbaselined findings, 0 stale baseline entries
 ```
 
 The next implementation subissue is **#710** (directed-component keys,

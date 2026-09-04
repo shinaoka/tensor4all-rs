@@ -5176,6 +5176,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<V, T> Drop for PreparedBranchSliceCache<V, T> {
     fn drop(&mut self) {
         debug_assert_eq!(
