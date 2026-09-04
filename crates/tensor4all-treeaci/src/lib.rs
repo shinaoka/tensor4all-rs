@@ -29,9 +29,13 @@
 //! `InputFrameStore::build_or_extend` retains edge-index order for accounting
 //! and reuse decisions, but now materializes missing directed frames in
 //! dependency order, so ancestor samples reach the batched path before a
-//! dependent edge can prime them. Nodes with exactly two incoming edges use a
-//! batched branch contraction; leaf nodes and nodes with three or more incoming
-//! edges retain the scalar fallback.
+//! dependent edge can prime them. Candidate frames use a batched branch
+//! contraction at every incoming degree: exactly two incoming edges use the
+//! two-incoming kernel, and three or more use its arbitrary-degree
+//! generalization whenever the requested candidates are a complete cross that
+//! fits the working-byte budget. Leaf edges, sparse candidate sets, and
+//! over-budget crosses keep the scalar fallback, as does stored-sample
+//! materialization at three or more incoming edges.
 //! Guard input evaluators persist across scans, reuse directed messages, and
 //! share a bounded aggregate message-cache budget with each scan's output
 //! evaluator.

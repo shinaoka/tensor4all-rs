@@ -2107,3 +2107,239 @@ Converged; sweeps=7; evaluated_points=2027526
 cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T0.1_mu0.5_aci-gate-712-t01/treeaci sigma_rtau
 Converged; sweeps=6; evaluated_points=933280
 ```
+
+## 2026-09-04 #713 closure: arbitrary-degree candidate-frame batching
+
+This entry closes the implementation half of #713: the three-or-more-incoming
+candidate-frame contraction no longer falls back to a per-candidate scalar
+recursion. Every design choice, routing rule, and measurement interpretation
+below is **[AI Supplied]** engineering work. No new paper- or
+specification-derived claim is introduced, so no new literature locator is
+asserted; the existing full-source register at
+`## 2026-09-03 #707 closure` remains the authority for algorithmic claims.
+The generalization is labelled **Tree generalization — re-derived**: it
+continues the accepted exactly-two-incoming decomposition one incoming
+component at a time and is validated against the production scalar
+accumulator, not copied from pseudocode.
+
+### #713 changes
+
+- `incoming_batch_matrix(core, outgoing_axis, incoming_axes, physical_offset,
+  frame_matrices) -> Result<PackedCandidateBatch<T>>` in
+  `crates/tensor4all-treeaci/src/frames.rs` is the degree-generic kernel. It
+  handles degree 0 (a gather), 1 (`single_incoming_core_matrix` plus one
+  `mat_mul`), 2 (delegates to the untouched
+  `two_incoming_core_matrix_batched`), and 3-or-more (`generalized_incoming_batch`).
+  All four routes produce the same column-major layout, so the flat offsets
+  the existing kernels already read back with are unchanged.
+- `PackedCandidateBatch<T>` owns that cross with checked prefix strides
+  `strides[k] = outgoing_dim * n_0 * ... * n_{k-1}`; `frame(&coordinates)`
+  returns one contiguous `outgoing_dim` slice and rejects a wrong degree or an
+  out-of-range column instead of indexing blindly.
+- `generalized_incoming_batch` keeps the two-incoming kernel's memory shape:
+  step one gathers one `outgoing_dim x d_0` core block per remaining incoming
+  coordinate combination, so the complete `outgoing_dim * prod d_k` core cross
+  is never materialized. Each later step contracts the next component out of
+  the whole running buffer through one shared-operand grouped GEMM
+  (`tensor4all_tensorbackend::grouped_mat_mul_shared`, the #712 facade): the
+  blocks share one frame matrix and write disjoint output spans, so no block
+  is copied into its own matrix. No direct `tenferro-*` dependency is added.
+- Contraction proceeds in incoming-edge order — the same order and the same
+  association the accepted degree-two kernel uses — so degree three and above
+  are the literal continuation of the existing reduction rather than a new
+  one. Candidate order, sample order, cache semantics, dtype behavior, pivot
+  selection, and evaluated-point accounting are untouched.
+- `multi_incoming_scratch_elements` generalizes the working-byte charge;
+  `two_incoming_scratch_elements` is now literally its `q = 2` case and a test
+  pins the degree-two value against the pre-#713 literal formula, so the
+  degree-two contract is unchanged byte for byte.
+- `InputFrameStore::candidate_frames_for_edge` dispatches degree >= 3 to the
+  new `candidate_frames_for_edge_multi_incoming`; the zero-incoming leaf edge
+  keeps the scalar route (its contraction is a plain gather that batching
+  cannot improve) and stored-sample materialization
+  (`FrameBuilder::compute_batch`) keeps its scalar route at degree >= 3, see
+  the boundary note below.
+
+### #713 routing contract
+
+Each `local_coordinate` group takes exactly one of two documented routes:
+
+1. **batched** — when the group's complete Cartesian cross is no larger than
+   the number of candidates the caller actually requested *and* every
+   simultaneously live buffer of that cross fits `max_working_bytes`
+   (`multi_incoming_scratch_elements` plus `grouped_gemm_descriptor_bytes`);
+2. **scalar** — the same `contract_prepared_core_slices` contraction
+   `candidate_frame` performs, otherwise.
+
+The cross-size condition is what prevents a sparse or diagonal candidate set
+from silently materializing the full edge cross: the batched kernel computes
+every combination, so it is used only where every combination was requested.
+`enumerate_candidates` always emits the complete cross, so production groups
+take the batched route whenever their intermediates are affordable. The
+budget condition selects a route rather than raising a limit error, so a tight
+budget degrades to the previous per-candidate cost instead of failing. The one
+intentional accounting change is that
+`enumerated_candidate_frame_scratch_elements` now reports the batched charge
+for degree >= 3 whenever the batched route will actually run, which is exactly
+what #713's acceptance criterion "working memory is checked against the
+Cartesian candidate and intermediate sizes" requires; degree 0/1/2 accounting
+is unchanged. Both the pre-flight estimate and the kernel use the same
+predicate against the same limit, so they cannot disagree about the route.
+
+### #713 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C11` correctness | **PASS** | Degrees 0/1/2/3/4 are compared against the production scalar reduction. `incoming_batch_matrix_matches_the_scalar_accumulator_for_degree_zero_to_four` drives the kernel at every degree, for `f64` and `Complex64` with a genuinely nonzero imaginary part, with unequal bond dimensions, unequal candidate counts, two physical coordinates, and a reversed core axis order (outgoing axis fastest, incoming axes in strictly decreasing axis order), and compares one materialized whole result against `accumulate_incoming` — the exact accumulator `contract_prepared_core` calls. `three_incoming_candidate_batches_match_the_scalar_oracle` and `four_incoming_candidate_batches_match_the_scalar_oracle` do the same through the dispatched `candidate_frames_for_edge` against the `candidate_frame` oracle on 4-arm and 5-arm stars with unequal bonds, two hub physical legs, and permuted hub axis order, asserting candidate order, candidate count, bond dimension, and routing. The pre-existing integer-valued 4-arm fixture still asserts exact equality (`candidate_frames_for_edge_batches_three_incoming_edges`). `tests/branch_degree.rs` runs a full `tree_elementwise` on a hub whose tree coordination number is four (four bonds, i.e. three incoming components per outward arc) and compares one dense materialization against `dense(a).sub(&dense(b))` by `maxabs()`. Complete TreeACI release matrix: 155 unit, 1 branch-degree, 7 public-API, 1 rank-scaling, 18 doctests; 7 ignored diagnostics/measurement tests. |
+| `BC11` benchmark correctness | **PASS** | The complete affected-crate matrix above was green before any timing was accepted, and every timed pair inside the measurement itself asserts `max_residual <= 1e-12 * scale` against the scalar oracle before its medians are reported. No smoke case was used to close a gate. |
+| `E11` efficiency | **PASS** on wall time far above noise, plus a causal resource reduction | Paired release measurements, same fixture, seeds, backend, and `taskset -c 0`, 5 samples per side per size, 3 independent runs. Medians (batched vs scalar): `m=6` 0.949/0.974/1.134 ms vs 15.796/16.029/18.160 ms (16.65x/16.46x/16.01x); `m=12` 1.169/1.207/2.449 ms vs 126.02/127.24/176.41 ms (107.8x/105.4x/72.0x); `m=24` 3.328/3.279/5.210 ms vs 1.0330/1.0253/1.3171 s (310.4x/312.7x/252.8x). Observed noise floor: within-run 5-sample relative spread on the scalar side is 0.3%-28%, and the worst run-to-run scalar median drift is 40% (`m=12`, loaded machine); the smallest observed speedup, 16.0x, is more than an order of magnitude above that. The causal resource reduction is exact and independent of timing: at `m=12` the scalar route performs `candidates * outgoing_dim * prod(d_k) = 1728 * 4 * 4096 = 28,311,552` core-element reads, while the batched route reads the core exactly `outgoing_dim * prod(d_k) = 16,384` times, a reduction by exactly the candidate count (1728x). The #712 grouped-GEMM facade removes a further 15 backend launches and 21,504 element block copies per group in that shape (16 blocks of 768 elements at step two plus 1 block of 9,216 at step three). |
+| `R11` release/regression | **PASS** | The exactly-two-incoming kernel, its scratch formula, its dispatch, and its tests are untouched, and `multi_incoming_scratch_matches_the_two_incoming_specialization` pins the degree-two charge against the literal pre-#713 formula for four shapes. Ranks, pivots, dense residuals, and errors are unchanged: the complete TreeACI release matrix and the `rank_scaling` bound test pass. `cargo clippy --release -p tensor4all-treeaci --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc` is clean, `scripts/check-crate-boundaries.py` reports `crate-boundary-ok`, and `scripts/repository-rules-review.py --base main --worktree --dry-run` reports pass with no findings. **Downstream ACI validation is N/A with evidence**: the SGW production runs use `SGW_TOPOLOGY=comb`, whose graph is `(0,1),(0,3),(1,2),(1,4),(2,5)` with maximum coordination number 3, and the repository's `branching_topology.json` fixture also has maximum coordination 3. A coordination-3 node has at most two incoming components on any directed edge, so the downstream tree never reaches the degree >= 3 route this task changes. |
+| `CI` prior-round check | **N/A (deferred)** | The branch is committed locally and deliberately not pushed, per this task's instructions; the coordinator owns the push and the required-check comparison. No CI conclusion is claimed here. |
+| `N` numerical stability/convergence | **PASS** | The differential tests use non-degenerate, non-power-of-two fixture values with unequal bonds and complex data, and assert a whole-result residual at `1e-13 * scale` (kernel) and `1e-12 * scale` (dispatch) rather than a relaxed tolerance. No tolerance anywhere was relaxed. The degenerate-fixture guards (`scale > 1e-3`, first-two-candidates-differ, `maximum_rank >= 2`) prevent a vacuous pass. Zero/identity and rank-deficient behavior is inherited unchanged from the scalar route, which remains the fallback. The batched association across incoming axes is the one the accepted degree-two kernel already uses; it differs from the scalar nesting order only in the same way degree two has always differed, which is why the residual, not bitwise equality, is the criterion on non-exactly-representable fixtures. |
+| `M` metamorphic semantics | **PASS** | `multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates` reverses the complete cross and appends duplicates, then compares against the scalar oracle in the caller's order; duplicates do not collapse into one column. The kernel test uses a reversed core axis order so the incoming axes are not in ascending core-axis order, and the dispatch fixtures interleave physical legs between bonds and give the outgoing bond a middle axis position. Local-coordinate grouping is a `BTreeMap`, so group order is independent of candidate order. |
+| `F` fallback parity | **PASS** | Both documented routes are exercised and compared: `multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set` (diagonal set, `batched_groups == 0`, `scalar_groups == 1`, exact equality with the oracle) and `multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight` (one byte under the batched charge: no error, scalar route taken, exact equality with the oracle, and the pre-flight estimate shrinks back to the scalar charge so kernel and pre-flight agree). Shape and axis error classes are covered by `incoming_batch_matrix_rejects_inconsistent_shapes` and `multi_incoming_scratch_rejects_overflowing_or_inconsistent_shapes`, including a checked `usize` overflow. Leaf edges and the stored-sample path keep their scalar routes and their existing tests. |
+| `I` invalidation/retention | **PASS** | Cache semantics are unchanged: three-or-more-incoming candidates are still never cached (their exact identity would need an unbounded vector key), and `multi_incoming_batch_is_deterministic_and_never_caches_candidates` asserts one recorded miss per candidate and zero hits across three repeated calls on the same store. No new retained state is introduced; every intermediate is released at the end of its group. The existing frame-cache bound, reclamation, and extension tests remain green. |
+| `D` determinism | **PASS** | Three repeats of the same call on the same store produce bitwise-identical packed payloads (`runs[0] == runs[1] == runs[2]`, exact `Vec<f64>` equality). Routing is a pure function of dimensions, counts, and the configured limit, so it cannot vary between runs. The three independent measurement runs report the same ordering and the same structural counters. |
+| `S` scaling law | **PASS** | Independent 1x/8x/64x candidate-product sweep at fixed `chi = [16,16,16]`, `outgoing_dim = 4` (`m = 6, 12, 24`). Scalar time per unit candidate product is flat — 73,130 / 72,930 / 74,727 ns in run 1 — confirming the scalar route costs a constant per candidate and therefore scales as the full candidate product. Batched time per unit candidate product falls 4,392 -> 676 -> 241 ns over the same sweep, i.e. strictly sub-linear in the candidate product. Normalized by the topology-required `d * prod(chi_e) = 16,384`, which is constant across the sweep, the scalar route grows 964 -> 7,692 -> 63,051 ns (proportional to the candidate product) while the batched route grows 58 -> 71 -> 203 ns. Counters, not wall clock, carry the exponent claim: core-element reads are `candidates * outgoing_dim * prod(d_k)` for the scalar route and exactly `outgoing_dim * prod(d_k)` for the batched route, independent of the candidate count. |
+| `P` provenance/observability | **PASS** | Every #713 statement in this section is **[AI Supplied]**, and the generalization itself is **Tree generalization — re-derived** from the existing two-incoming kernel plus differential tests against the production scalar accumulator; it is not attributed to any paper. The tensorbackend grouped-GEMM facade is cited to #712's own closure entry and its recorded tenferro source locators, not re-attributed. Raw commands, medians, all five samples per side, relative spreads, structural counters, charged peak bytes, and the fixture shapes are recorded below. |
+
+### #713 verification commands and raw measurement output
+
+```text
+cargo test --release -p tensor4all-treeaci frames --no-fail-fast
+49 passed, 0 failed, 5 ignored in the filtered frame target
+
+cargo test --release -p tensor4all-treeaci --test rank_scaling --no-fail-fast
+1 passed, 0 failed
+
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+155 unit passed, 7 ignored; 1 branch_degree passed; 7 public_api passed;
+1 rank_scaling passed; 18 doctests passed
+
+cargo fmt --all -- --check
+clean
+
+cargo clippy --release -p tensor4all-treeaci --all-targets \
+  -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+clean
+
+python3 scripts/check-crate-boundaries.py
+crate-boundary-ok
+
+python3 scripts/repository-rules-review.py --base main --worktree --dry-run
+Verdict: pass; No findings.
+```
+
+Test-first record: the differential and routing tests were added and run
+before the generalized kernel existed. That run reported
+`39 passed; 4 failed; 4 ignored` — the four failures were
+`three_incoming_candidate_batches_match_the_scalar_oracle` and
+`four_incoming_candidate_batches_match_the_scalar_oracle`
+(`batched groups: left 0, right 4` and `left 0, right 2`),
+`multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates`
+(`batched_groups() > 0` false), and
+`multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight`
+(the pre-flight still charged the scalar estimate). The residual comparisons
+against the scalar oracle passed on the scalar route in that same run, which
+is what establishes the oracle harness itself before the route changed.
+
+```text
+taskset -c 0 cargo test --release -p tensor4all-treeaci --lib \
+  frames::tests::three_incoming_batched_vs_scalar_release_measurement \
+  -- --ignored --nocapture
+
+run 1
+m=6,  d=16, outgoing_dim=4, chi=[16,16,16], counts=[6,6,6],    candidates=216,   samples=5
+  batched_median=948.724us  scalar_median=15.796134ms  speedup=16.65x
+  batched_all=[904.732us, 946.069us, 948.724us, 980.113us, 7.212663ms]
+  scalar_all=[15.727104ms, 15.75103ms, 15.796134ms, 15.93801ms, 16.085979ms]
+  ns per d*prod(chi_e)=16384: batched=57.9055  scalar=964.1195
+  ns per candidate product=216: batched=4392.2407  scalar=73130.2500
+  full_cross_elements=864    peak_charged_elements=9688    peak_charged_bytes=77504
+m=12, d=16, outgoing_dim=4, chi=[16,16,16], counts=[12,12,12], candidates=1728,  samples=5
+  batched_median=1.168878ms scalar_median=126.023577ms speedup=107.82x
+  batched_all=[1.138431ms, 1.142648ms, 1.168878ms, 1.17018ms, 1.638832ms]
+  scalar_all=[125.578942ms, 125.772745ms, 126.023577ms, 126.694108ms, 131.555069ms]
+  ns per d*prod(chi_e)=16384: batched=71.3427  scalar=7691.8687
+  ns per candidate product=1728: batched=676.4340  scalar=72930.3108
+  full_cross_elements=6912   peak_charged_elements=29104   peak_charged_bytes=232832
+m=24, d=16, outgoing_dim=4, chi=[16,16,16], counts=[24,24,24], candidates=13824, samples=5
+  batched_median=3.328473ms scalar_median=1.033025774s speedup=310.36x
+  batched_all=[3.306846ms, 3.311766ms, 3.328473ms, 3.504829ms, 4.117553ms]
+  scalar_all=[1.021731925s, 1.028326059s, 1.033025774s, 1.034817035s, 1.080357718s]
+  ns per d*prod(chi_e)=16384: batched=203.1539  scalar=63050.8895
+  ns per candidate product=13824: batched=240.7750  scalar=74726.9802
+  full_cross_elements=55296  peak_charged_elements=118048  peak_charged_bytes=944384
+
+run 2 (medians only)
+m=6   batched=974.117us  scalar=16.029238ms  speedup=16.46x
+m=12  batched=1.207124ms scalar=127.235003ms speedup=105.40x
+m=24  batched=3.279061ms scalar=1.02534917s  speedup=312.70x
+
+run 3 (medians only; loaded machine, both sides equally affected)
+m=6   batched=1.134313ms scalar=18.15953ms   speedup=16.01x
+m=12  batched=2.449385ms scalar=176.406725ms speedup=72.02x
+m=24  batched=5.210035ms scalar=1.317149311s speedup=252.81x
+```
+
+### #713 Step 4: full-cross measurement boundary
+
+Issue #713 requires that, once the implementation cliff is removed, the
+remaining question — whether materializing the complete edge cross is itself
+dominant — be measured and then closed without an algorithm change. It is
+dominant, and this task stops here.
+
+Per `local_coordinate` group at incoming degree three with outgoing dimension
+`o`, equal incoming bond dimension `d`, and equal candidate count `n`, the
+generalized route performs:
+
+- step one (gather + contract component 0): `o * d^3 * n` multiply-adds;
+- step two (contract component 1): `o * d^2 * n^2`;
+- step three (contract component 2, the step that produces the full cross):
+  `o * d * n^3`.
+
+For the measured `o = 4`, `d = 16` sweep this is 98,304 / 36,864 / 13,824 at
+`n = 6`; 196,608 / 147,456 / 110,592 at `n = 12`; and 393,216 / 589,824 /
+884,736 at `n = 24`. The final, cross-producing step's share of the total
+therefore grows 9.3% -> 24.3% -> 47.4% for a 1x/8x/64x candidate product and
+tends to 1 as `n^3 / (a + b n^2 + c n^3)`. The measured batched time follows
+that shape: 0.949 ms -> 1.169 ms -> 3.328 ms, an accelerating growth
+(x1.23 then x2.85) that is converging on linear-in-candidate-product. Peak
+charged working memory grows the same way, 77,504 -> 232,832 -> 944,384 bytes,
+because the dominant term is the `o * n^3` cross itself.
+
+The transient-memory cost of removing the cliff is explicit: the scalar route
+charged only the incoming frame slices (48 elements, 384 bytes at `m = 12`)
+while the batched route charges 29,104 elements (232,832 bytes) for the same
+group. That is precisely why the routing contract falls back to the scalar
+route rather than allocating over budget.
+
+Conclusion: the `[AI Supplied]` implementation cliff identified as
+`P0: arbitrary-degree branch contraction has a scalar efficiency cliff` is
+removed — the batched route no longer scales with the candidate count in
+core-element reads and is 16x-313x faster over the measured sweep. What
+remains is the mathematically real `C_(u->v) = d_u * prod(r_f)` full-cross
+cost recorded as `P0: branch candidates and local matrices grow
+multiplicatively`, which is an algorithmic limitation of materializing the
+complete edge cross. Per the plan's Step 4 instruction this task stops at the
+measurement boundary; a lazy/block/pivot-search formulation requires a
+separate derivation with its own correctness and convergence review.
+
+### #713 deliberate boundaries
+
+- `FrameBuilder::compute_batch` keeps its scalar route at degree >= 3. Stored
+  samples are arbitrary interned records rather than a complete cross, so the
+  same density guard that protects the candidate route would reject them and
+  the batched kernel would compute a superset. The existing
+  `compute_batch_keeps_the_scalar_route_on_three_incoming_edges` differential
+  test pins that behavior.
+- Step one still issues one small GEMM per remaining incoming coordinate
+  combination (256 launches in the `m = 12` shape) rather than one grouped
+  call, because a single grouped call there would require gathering the
+  complete `outgoing_dim * prod(d_k)` core cross — 134 MB at `chi = 64` — which
+  is exactly the allocation this kernel is written to avoid. Tiling that
+  gather under an explicit memory bound is a possible follow-up, not a
+  requirement of #713.
+- The zero-incoming leaf route is unchanged: its contraction is a plain
+  gather of `outgoing_dim` values with a compact cache key, and batching it
+  would change cache semantics for no arithmetic gain.
