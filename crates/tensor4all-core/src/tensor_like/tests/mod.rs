@@ -859,3 +859,30 @@ fn tensor_factorization_preserves_multi_axis_probe_row_order() {
         "reconstructed multi-axis sketch differs: actual={actual:?}, expected={expected:?}"
     );
 }
+
+#[test]
+fn tensor_like_default_context_seam_reports_unsupported() {
+    use std::sync::Arc;
+
+    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
+
+    let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::new(),
+    )));
+    let tensor = DefaultOnlyTensor {
+        indices: Vec::new(),
+        data: vec![1.0],
+    };
+    let error = tensor.src_error_estimate_in(&context).unwrap_err();
+    assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
+    let error = DefaultOnlyTensor::factorize_probe_batch_incremental_in(
+        None,
+        &tensor,
+        &DynIndex::new_dyn(1),
+        &[],
+        &context,
+    )
+    .unwrap_err();
+    assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
+}
