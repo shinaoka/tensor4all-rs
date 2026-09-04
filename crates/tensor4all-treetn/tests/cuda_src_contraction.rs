@@ -464,14 +464,11 @@ fn cuda_src_c64_fixed_chain_probe() {
                 &cpu,
             )
             .unwrap();
-            let got: Vec<Complex64> = result
-                .download(&cuda)
-                .unwrap()
-                .to_dense()
-                .unwrap()
-                .to_vec()
-                .unwrap();
-            let want: Vec<Complex64> = reference.to_dense().unwrap().to_vec().unwrap();
+            let got_dense = result.download(&cuda).unwrap().to_dense().unwrap();
+            let want_dense = reference.to_dense().unwrap();
+            let got_dense = got_dense.permuteinds(want_dense.indices()).unwrap();
+            let got: Vec<Complex64> = got_dense.to_vec().unwrap();
+            let want: Vec<Complex64> = want_dense.to_vec().unwrap();
             assert_eq!(got.len(), want.len());
             let residual = got
                 .iter()
