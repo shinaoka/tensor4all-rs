@@ -716,6 +716,9 @@ gate and must not be smuggled into this coverage task.
 **Acceptance gates:**
 - `C5`: scalar and packed local updates match for real/complex values, all
   listed cache/budget/axis/bond cases, candidate order, and frame dimensions.
+- `BC5`: the complete affected TreeACI release correctness matrix and the
+  standalone ACI release matrix pass before the paired measurement is
+  admissible; the ignored measurement is never the only correctness test.
 - `E5`: paired chain and branch runs show a measurable reduction in extracted
   or repacked values, copies/allocations, peak bytes, or release time above
   noise; no target-path time regression is hidden by a microbenchmark-only win.
@@ -725,27 +728,27 @@ gate and must not be smuggled into this coverage task.
 - Secondary gates: `N`, `M`, `F`, `I`, `S`, `P`; candidate-order invariance and
   packed-versus-scalar evidence must be retained with the benchmark records.
 
-- [ ] **Step 1: Add scalar-vs-packed differential tests.**
+- [x] **Step 1: Add scalar-vs-packed differential tests.**
 
   Add real/complex tests for one-incoming, two-incoming, leaf, unequal-bond, alternate-axis, cache-hit, cache-miss, and over-budget paths. Compare the packed batch once against the scalar frame oracle and assert candidate order and frame dimensions.
 
-- [ ] **Step 2: Add an immutable oriented-core preparation test.**
+- [x] **Step 2: Add an immutable oriented-core preparation test.**
 
   Instrument `prepare_cores`/oriented matrix construction and assert that one `(input, directed_edge)` identity is prepared once per `InputFrameStore` owner, while a changed sample set reuses the immutable core representation.
 
-- [ ] **Step 3: Route eligible products through owned GEMM.**
+- [x] **Step 3: Route eligible products through owned GEMM.**
 
   Change the stored-frame one-incoming path, candidate-frame one-incoming path, and final local row-by-column product to consume `Matrix` values with `mat_mul_owned`. Do not change the GEMM decomposition or floating-point reduction order.
 
-- [ ] **Step 4: Replace the candidate cache value cycle.**
+- [x] **Step 4: Replace the candidate cache value cycle.**
 
   Store packed candidate payloads keyed by the existing candidate identity. On a hit, return a shared packed view/owner in requested order; on a miss, retain or return the same packed allocation according to the existing budget policy. Charge payload capacity and metadata separately, and return an explicit over-budget uncached batch rather than cloning through nested vectors.
 
-- [ ] **Step 5: Keep the working-memory contract exact.**
+- [x] **Step 5: Keep the working-memory contract exact.**
 
   Charge simultaneously live row/column batches, GEMM output, candidate scratch, cache insertion, and local operator buffers with checked arithmetic. A cache optimization must never hide a duplicate RHS or exceed `max_working_bytes`.
 
-- [ ] **Step 6: Run correctness and paired ACI measurements.**
+- [x] **Step 6: Run correctness and paired ACI measurements.**
 
   ```bash
   cargo test --release -p tensor4all-treeaci frames --no-fail-fast
@@ -755,7 +758,7 @@ gate and must not be smuggled into this coverage task.
 
   Re-run the 32-site two-input `chi=256` chain and a branched fixture. Record owned-vs-borrowed products, oriented-core packs, candidate-cache hits/misses, extracted values, repacked values, peak working bytes, output ranks, pivot errors, and dense residuals.
 
-- [ ] **Step 7: Commit #714.**
+- [x] **Step 7: Commit #714.**
 
   ```bash
   cargo fmt --all

@@ -174,6 +174,33 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             limit: 3
         })
     ));
+
+    // For this 2x2 two-node case the exact live element contract is:
+    // input values 4 + operator output 4 + two packed candidate sides
+    // (2 + 2) * bond 2 * coexistence factor 2 = 24 elements = 192 bytes.
+    let working_limited = TreeAciOptions {
+        max_working_bytes: 191,
+        ..TreeAciOptions::default()
+    };
+    let mut working_unused =
+        |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| Ok(());
+    assert!(matches!(
+        materialize_and_factor_edge(
+            &inputs,
+            &problem,
+            &active,
+            &frames,
+            0,
+            &working_limited,
+            true,
+            &mut working_unused,
+        ),
+        Err(TreeAciError::ResourceLimit {
+            resource: "working bytes",
+            requested: 192,
+            limit: 191
+        })
+    ));
 }
 
 /// Builds a 3-node chain `0 -- 1 -- 2` whose middle node (`1`) has a
@@ -199,6 +226,203 @@ fn three_node_chain_for_batched_dispatch() -> TreeTN<IdxTensor, usize> {
     let node2 = IdxTensor::from_dense(vec![bond12, s2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     TreeTN::from_tensors(vec![node0, node1, node2], vec![0, 1, 2]).unwrap()
+}
+
+fn local_update_measurement_chain(n_sites: usize, bond_dim: usize) -> TreeTN<IdxTensor, usize> {
+    assert!(n_sites >= 3);
+    let sites = (0..n_sites)
+        .map(|_| DynIndex::new_dyn(2))
+        .collect::<Vec<_>>();
+    let bonds = (0..n_sites - 1)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+    let mut tensors = Vec::with_capacity(n_sites);
+    tensors.push(
+        IdxTensor::from_dense(
+            vec![sites[0].clone(), bonds[0].clone()],
+            (0..2 * bond_dim)
+                .map(|value| 0.25 + (value % 13) as f64 / 13.0)
+                .collect(),
+        )
+        .unwrap(),
+    );
+    for site in 1..n_sites - 1 {
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![
+                    bonds[site - 1].clone(),
+                    sites[site].clone(),
+                    bonds[site].clone(),
+                ],
+                (0..bond_dim * 2 * bond_dim)
+                    .map(|value| 0.25 + (value % 17) as f64 / 17.0)
+                    .collect(),
+            )
+            .unwrap(),
+        );
+    }
+    tensors.push(
+        IdxTensor::from_dense(
+            vec![bonds[n_sites - 2].clone(), sites[n_sites - 1].clone()],
+            (0..bond_dim * 2)
+                .map(|value| 0.25 + (value % 19) as f64 / 19.0)
+                .collect(),
+        )
+        .unwrap(),
+    );
+    TreeTN::from_tensors(tensors, (0..n_sites).collect()).unwrap()
+}
+
+fn local_update_measurement_branch(bond_dim: usize) -> TreeTN<IdxTensor, usize> {
+    let center_bonds = (0..3)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect::<Vec<_>>();
+    let center = IdxTensor::from_dense(
+        center_bonds.clone(),
+        (0..bond_dim * bond_dim * bond_dim)
+            .map(|value| 0.25 + (value % 23) as f64 / 23.0)
+            .collect(),
+    )
+    .unwrap();
+    let mut tensors = vec![center];
+    for bond in center_bonds {
+        let site = DynIndex::new_dyn(2);
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![bond, site],
+                (0..bond_dim * 2)
+                    .map(|value| 0.25 + (value % 29) as f64 / 29.0)
+                    .collect(),
+            )
+            .unwrap(),
+        );
+    }
+    TreeTN::from_tensors(tensors, vec![0, 1, 2, 3]).unwrap()
+}
+
+fn run_local_update_measurement(
+    input: &TreeTN<IdxTensor, usize>,
+    legacy_frame_pack: bool,
+    samples: &[Vec<usize>],
+    repetitions: usize,
+) -> (
+    std::time::Duration,
+    Vec<f64>,
+    crate::state::profile_debug_stats::Snapshot,
+) {
+    let inputs = vec![input.clone()];
+    let options = crate::TreeAciOptions::default();
+    let problem = crate::problem::prepare_problem(&inputs, &options).unwrap();
+    let (arena, active) = SampleArena::from_global_seeds(&problem, samples).unwrap();
+    let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+    let forward = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == 1 && edge.to == 2)
+        .or_else(|| {
+            problem
+                .directed_edges
+                .iter()
+                .position(|edge| edge.from == 0 && edge.to == 1)
+        })
+        .unwrap();
+
+    if legacy_frame_pack {
+        std::env::set_var("T4A_TREEACI_USE_LEGACY_LOCAL_FRAME_PACK", "1");
+    } else {
+        std::env::remove_var("T4A_TREEACI_USE_LEGACY_LOCAL_FRAME_PACK");
+    }
+    // Make the A/B isolate the packed-batch boundary. Both sides consume the
+    // dense matrices through the same owned GEMM path.
+    std::env::set_var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL", "1");
+    crate::state::profile_debug_stats::reset();
+    let started = std::time::Instant::now();
+    let mut checksum = Vec::new();
+    for _ in 0..repetitions {
+        let mut operator = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+            for (point, value) in output.iter_mut().enumerate() {
+                *value = batch.get(0, point)?;
+            }
+            Ok(())
+        };
+        let update = materialize_and_factor_edge(
+            &inputs,
+            &problem,
+            &active,
+            &frames,
+            forward,
+            &options,
+            true,
+            &mut operator,
+        )
+        .unwrap();
+        checksum.extend(update.local_values);
+    }
+    (
+        started.elapsed(),
+        checksum,
+        crate::state::profile_debug_stats::snapshot(),
+    )
+}
+
+/// [AI Supplied] Paired release measurement for #714's removed nested frame
+/// extraction. It is intentionally ignored: the complete crate matrix must be
+/// green before this diagnostic is admitted as an efficiency gate.
+#[test]
+#[ignore]
+fn packed_local_update_release_measurement_for_chain_and_branch() {
+    let chain_seeds = (0..16)
+        .map(|seed| (0..8).map(|site| (seed >> site) & 1).collect())
+        .collect::<Vec<Vec<_>>>();
+    let branch_seeds = (0..16)
+        .map(|seed| vec![0, seed & 1, (seed >> 1) & 1, (seed >> 2) & 1])
+        .collect::<Vec<Vec<_>>>();
+    let cases = [
+        (
+            "chain-8x16",
+            local_update_measurement_chain(8, 16),
+            chain_seeds,
+        ),
+        (
+            "branch-chi32",
+            local_update_measurement_branch(32),
+            branch_seeds,
+        ),
+    ];
+    let repetitions = 16;
+    let samples = 5;
+    for (name, input, seeds) in cases {
+        let mut legacy_times = Vec::with_capacity(samples);
+        let mut packed_times = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let (legacy_elapsed, legacy_values, legacy_profile) =
+                run_local_update_measurement(&input, true, &seeds, repetitions);
+            let (packed_elapsed, packed_values, packed_profile) =
+                run_local_update_measurement(&input, false, &seeds, repetitions);
+            assert_eq!(packed_values, legacy_values);
+            legacy_times.push(legacy_elapsed.as_secs_f64() * 1.0e3);
+            packed_times.push(packed_elapsed.as_secs_f64() * 1.0e3);
+            if legacy_times.len() == samples {
+                eprintln!(
+                    "#714 packed counters: case={name}, legacy_vectors={}, legacy_values={}, packed_batches={}, packed_values={}",
+                    legacy_profile.local_legacy_frame_vectors,
+                    legacy_profile.local_legacy_frame_values,
+                    packed_profile.local_packed_frame_batches,
+                    packed_profile.local_packed_frame_values,
+                );
+            }
+        }
+        legacy_times.sort_by(f64::total_cmp);
+        packed_times.sort_by(f64::total_cmp);
+        let legacy_median = legacy_times[samples / 2];
+        let packed_median = packed_times[samples / 2];
+        eprintln!(
+            "#714 paired release measurement: case={name}, repetitions={repetitions}, samples={samples}, legacy_median_ms={legacy_median:.3}, packed_median_ms={packed_median:.3}, reduction_pct={:.1}, legacy_all_ms={legacy_times:?}, packed_all_ms={packed_times:?}",
+            (legacy_median - packed_median) / legacy_median * 100.0,
+        );
+    }
+    std::env::remove_var("T4A_TREEACI_USE_LEGACY_LOCAL_FRAME_PACK");
+    std::env::remove_var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL");
 }
 
 #[test]

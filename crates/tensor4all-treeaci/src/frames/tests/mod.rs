@@ -1134,6 +1134,123 @@ fn two_incoming_core_matrix_batched_matches_complex_reference_for_every_axis_ord
 }
 
 #[test]
+fn packed_candidate_frame_batch_preserves_column_major_order() {
+    let batch =
+        super::PackedCandidateFrames::try_new(2, vec![1, 0], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
+
+    assert_eq!(batch.bond_dim(), 2);
+    assert_eq!(batch.candidate_count(), 2);
+    assert_eq!(batch.candidate_order(), &[1, 0]);
+    assert_eq!(batch.column(0), &[10.0, 20.0]);
+    assert_eq!(batch.column_for_candidate(0), Some(&[30.0, 40.0][..]));
+    assert_eq!(batch.as_col_major_slice(), &[10.0, 20.0, 30.0, 40.0]);
+
+    let matrix = batch.into_bond_by_candidate_matrix();
+    assert_eq!(matrix.nrows(), 2);
+    assert_eq!(matrix.ncols(), 2);
+    assert_eq!(matrix[[0, 0]], 10.0);
+    assert_eq!(matrix[[1, 1]], 40.0);
+
+    let row_batch = super::PackedCandidateFrames::try_new_with_layout(
+        2,
+        vec![0, 1],
+        vec![10.0, 30.0, 20.0, 40.0],
+        super::PackedCandidateFrameLayout::CandidateByBond,
+    )
+    .unwrap();
+    let row_matrix = row_batch.into_candidate_by_bond_matrix();
+    assert_eq!(row_matrix.as_col_major_slice(), &[10.0, 30.0, 20.0, 40.0]);
+}
+
+#[test]
+fn candidate_batches_reuse_one_oriented_core_for_distinct_candidates() {
+    let input = chain_tree_for_batched_compute();
+    let inputs = vec![input];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .unwrap();
+    let incoming_edge = problem.directed_edges[edge].incoming_to_from[0];
+    let (arena, candidate_sets) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let incoming_sample = candidate_sets.ids[incoming_edge][0];
+
+    // Force the first candidate lookup to materialize the oriented core, then
+    // use a different local coordinate so the candidate-result cache cannot
+    // hide whether the oriented-core cache was reused.
+    frames.oriented_core_cache[0].borrow_mut().remove(&edge);
+    super::super::state::profile_debug_stats::reset();
+    for local_coordinate in [0, 1] {
+        frames
+            .candidate_frames_for_edge(
+                &inputs,
+                &problem,
+                0,
+                edge,
+                &[ComponentSample {
+                    local_coordinate,
+                    incoming: vec![(incoming_edge, incoming_sample)],
+                }],
+            )
+            .unwrap();
+    }
+
+    let profile = super::super::state::profile_debug_stats::snapshot();
+    assert_eq!(profile.candidate_core_pack_calls, 1);
+    assert!(frames.oriented_core_cache[0].borrow().contains_key(&edge));
+}
+
+#[test]
+fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
+    let input = y_tree::<Complex64>();
+    let inputs = vec![input];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .unwrap();
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+    let (arena, candidate_sets) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0], vec![0, 1, 1, 1]]).unwrap();
+    let frames = InputFrameStore::<Complex64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let incoming_1 = directed.incoming_to_from[0];
+    let incoming_2 = directed.incoming_to_from[1];
+    let candidates = candidate_sets.ids[incoming_1]
+        .iter()
+        .flat_map(|&sample_1| {
+            candidate_sets.ids[incoming_2]
+                .iter()
+                .map(move |&sample_2| ComponentSample {
+                    local_coordinate: 0,
+                    incoming: vec![(incoming_1, sample_1), (incoming_2, sample_2)],
+                })
+        })
+        .collect::<Vec<_>>();
+
+    let packed = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(packed, scalar);
+    assert_eq!(packed.candidate_order(), &[0, 1, 2, 3]);
+    assert_eq!(packed.candidate_count(), candidates.len());
+    assert_eq!(packed.bond_dim(), 2);
+}
+
+#[test]
 fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
@@ -1508,6 +1625,7 @@ fn build_frame_builder<'a>(
         problem,
         arena,
         cores,
+        oriented_core_cache: Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         memo,
         existing_frames: None,
     }
@@ -1566,8 +1684,7 @@ fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
     assert_eq!(result[0], result[1]);
     assert_eq!(
         frames.retained_bytes() - retained_before,
-        result[0].len() * std::mem::size_of::<f64>()
-            + std::mem::size_of::<super::CandidateCacheKey>()
+        std::mem::size_of_val(&result[0]) + std::mem::size_of::<super::CandidateCacheKey>()
     );
     assert_eq!(frames.candidate_cache.borrow().len(), 1);
 }
@@ -2103,6 +2220,7 @@ fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputi
         problem: &problem,
         arena: &arena,
         cores,
+        oriented_core_cache: Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         memo,
         existing_frames: Some(initial.frames[0].as_slice()),
     };

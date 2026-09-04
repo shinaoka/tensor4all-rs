@@ -4,7 +4,11 @@ use std::mem::size_of;
 
 use tensor4all_core::IdxTensor;
 use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
-use tensor4all_tensorbackend::{mat_mul, Matrix};
+#[cfg(test)]
+use tensor4all_tensorbackend::mat_mul;
+#[cfg(not(test))]
+use tensor4all_tensorbackend::mat_mul_owned;
+use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
@@ -160,15 +164,16 @@ where
     // Per input, `input_values[.., point] = row_frames[row] . col_frames[col]`
     // is one (row_count x chi) times (chi x col_count) matrix product, not a
     // per-point scalar dot product: pack each side's candidate frame vectors
-    // into a dense matrix (they are already contiguous per candidate, so this
-    // is a flatten, not a transpose) and let BLAS do the O(row*col*chi)
-    // contraction in one `mat_mul` call. Only the O(row*col) scatter into the
-    // batch's interleaved-by-input layout remains a plain loop.
+    // into packed dense matrices and let BLAS do the O(row*col*chi)
+    // contraction in one `mat_mul_owned` call. The candidate-frame cache and
+    // frame batching no longer create a Vec<Vec<T>> round trip; only the
+    // row-side flat layout conversion and O(row*col) scatter remain plain
+    // loops.
     if point_count > 0 {
         for input in 0..inputs.len() {
             #[cfg(test)]
             let row_frames_started = std::time::Instant::now();
-            let row_input_frames = frames.candidate_frames_for_edge(
+            let row_input_frames = frames.candidate_frames_for_edge_rows(
                 inputs,
                 problem,
                 input,
@@ -194,37 +199,68 @@ where
             });
             #[cfg(test)]
             let pack_started = std::time::Instant::now();
-            let bond_dim = row_input_frames.first().map_or(0, |frame| frame.len());
-            for frame in row_input_frames.iter().chain(col_input_frames.iter()) {
-                if frame.len() != bond_dim {
-                    return Err(TreeAciError::InternalInvariant {
-                        message: "opposite input frames have different cut bond dimensions",
-                    });
-                }
+            let bond_dim = row_input_frames.bond_dim();
+            if col_input_frames.bond_dim() != bond_dim
+                || row_input_frames.candidate_count() != row_count
+                || col_input_frames.candidate_count() != col_count
+            {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "packed input frames have inconsistent candidate dimensions",
+                });
             }
             if bond_dim == 0 {
                 continue;
             }
-            let mut row_flat = Vec::with_capacity(row_count * bond_dim);
-            for bond in 0..bond_dim {
-                for frame in &row_input_frames {
-                    row_flat.push(frame[bond]);
+            #[cfg(test)]
+            let use_legacy_frame_pack =
+                std::env::var("T4A_TREEACI_USE_LEGACY_LOCAL_FRAME_PACK").as_deref() == Ok("1");
+            #[cfg(test)]
+            let (row_candidate_matrix, col_bond_matrix) = if use_legacy_frame_pack {
+                // [AI Supplied] Diagnostic-only pre-#714 path. It exists only
+                // for the paired release measurement and reproduces the old
+                // per-candidate extraction plus two flat repacks.
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.local_legacy_frame_vectors += row_count + col_count;
+                    stats.local_legacy_frame_values += (row_count + col_count) * bond_dim;
+                });
+                let row_frames = row_input_frames.to_candidate_vecs();
+                let col_frames = col_input_frames.to_candidate_vecs();
+                let mut row_flat = Vec::with_capacity(row_count * bond_dim);
+                for bond in 0..bond_dim {
+                    for frame in &row_frames {
+                        row_flat.push(frame[bond]);
+                    }
                 }
-            }
-            let col_flat: Vec<T> = col_input_frames
-                .iter()
-                .flat_map(|frame| frame.iter().copied())
-                .collect();
-            let row_candidate_matrix = Matrix::from_col_major_vec(row_count, bond_dim, row_flat);
-            let col_bond_matrix = Matrix::from_col_major_vec(bond_dim, col_count, col_flat);
+                let col_flat = col_frames
+                    .iter()
+                    .flat_map(|frame| frame.iter().copied())
+                    .collect::<Vec<_>>();
+                (
+                    Matrix::from_col_major_vec(row_count, bond_dim, row_flat),
+                    Matrix::from_col_major_vec(bond_dim, col_count, col_flat),
+                )
+            } else {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.local_packed_frame_batches += 2;
+                    stats.local_packed_frame_values += (row_count + col_count) * bond_dim;
+                });
+                (
+                    row_input_frames.into_candidate_by_bond_matrix(),
+                    col_input_frames.into_bond_by_candidate_matrix(),
+                )
+            };
+            #[cfg(not(test))]
+            let row_candidate_matrix = row_input_frames.into_candidate_by_bond_matrix();
+            #[cfg(not(test))]
+            let col_bond_matrix = col_input_frames.into_bond_by_candidate_matrix();
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
                 stats.local_frame_pack += pack_started.elapsed();
             });
             #[cfg(test)]
             let matmul_started = std::time::Instant::now();
-            // [AI Supplied] Test-only switch isolates the cost of copying
-            // freshly built matrices through the borrowed backend seam.
+            // [AI Supplied] Keep the diagnostic A/B switch in tests while
+            // production always consumes these short-lived matrices.
             #[cfg(test)]
             let product_result =
                 if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
@@ -233,7 +269,7 @@ where
                     mat_mul(&row_candidate_matrix, &col_bond_matrix)
                 };
             #[cfg(not(test))]
-            let product_result = mat_mul(&row_candidate_matrix, &col_bond_matrix);
+            let product_result = mat_mul_owned(row_candidate_matrix, col_bond_matrix);
             let product = product_result.map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
             })?;

@@ -35,6 +35,13 @@ pub(crate) mod profile_debug_stats {
         pub(crate) local_frame_pack: Duration,
         pub(crate) local_frame_matmul: Duration,
         pub(crate) local_frame_scatter: Duration,
+        // [AI Supplied] Paired #714 counters: the legacy diagnostic extracts
+        // one owned vector per candidate, while the production path consumes
+        // one packed batch per side.
+        pub(crate) local_legacy_frame_vectors: usize,
+        pub(crate) local_legacy_frame_values: usize,
+        pub(crate) local_packed_frame_batches: usize,
+        pub(crate) local_packed_frame_values: usize,
         pub(crate) operator: Duration,
         pub(crate) luci: Duration,
         pub(crate) output_staging: Duration,

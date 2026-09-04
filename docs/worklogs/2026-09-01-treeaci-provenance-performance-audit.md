@@ -1574,3 +1574,123 @@ branched fixtures with fixed degree/rank before changing production code.
 
 Every item above changes **[AI Supplied]** machinery or requires a new explicit
 tree derivation. None should be attributed to unshown pseudocode in the paper.
+
+## 2026-09-04 #714 closure and CI_rs / Maintenance repair
+
+This entry closes #714 after the complete affected-crate correctness matrix,
+the paired release measurement, and the isolated downstream ACI gate. The
+packed-batch design, ownership choices, resource interpretation, and CI
+diagnosis below are **[AI Supplied]** engineering work. No new numerical
+algorithm is attributed to a paper, and no literature-derived claim is made
+without the full-source locators already recorded in the evidence register.
+
+### CI_rs and Maintenance failures repaired first
+
+The PR Maintenance scripts check initially failed on
+`dense_native_tensor_from_col_major_owned` because its `# Errors` rustdoc
+described only generic failure classes. The error contract was made concrete:
+the docs now name checked shape-length mismatch and backend conversion failure
+at `crates/tensor4all-tensorbackend/src/tensor_element.rs:63`. The repair was
+validated by the public-error-doc checker and its complete 15-test regression
+suite.
+
+The standalone `tensor4all-aci` CI target also exposed a feature-forwarding
+failure: its `default-features = false` dependency graph did not enable the
+core `backend-tenferro` feature. The three provider features now forward both
+`tensor4all-core/backend-tenferro` and their matching core provider feature at
+`crates/tensor4all-aci/Cargo.toml:16–33`. Before the repair, the exact
+standalone release command failed with 32 unresolved backend imports; after
+the repair the complete package matrix passed. This is a manifest/CI
+integration repair, not a tenferro functionality change.
+
+### #714 implementation
+
+- `PackedCandidateFrames<T>` is an internal packed owner with explicit bond
+  dimension, candidate-order mapping, and checked column-major payload at
+  `crates/tensor4all-treeaci/src/frames.rs:255–457`. The local row side is
+  produced directly in candidate-by-bond layout and the column side directly
+  in bond-by-candidate layout, so the common local update no longer extracts
+  `Vec<Vec<T>>` and repacks both sides.
+- Candidate-cache values are `Rc<[T]>`, allowing a hit to share the computed
+  frame payload while the final batch is assembled. The immutable oriented
+  core matrix is also shared across candidate lookups and append-only frame
+  extension; its preparation identity is checked by a dedicated test.
+- The production one-incoming stored-frame path, candidate-frame path, and
+  local row-by-column product consume the configured backend's owned GEMM
+  seam. The test-only A/B switches retain the old borrowed/`Vec<Vec<T>>`
+  routes solely for paired diagnostics.
+- The existing checked working-byte contract remains in force for candidate
+  scratch, simultaneously retained frame payloads, local input values, and
+  local output/product buffers. A boundary test verifies the exact two-node
+  working-byte limit and the one-byte-under limit failure.
+- Real and Complex64 branch tests compare the complete packed result against
+  the scalar frame oracle and cover leaf, one-incoming, two-incoming,
+  three-plus-incoming fallback, unequal-bond, alternate-axis, duplicate,
+  cache-hit/miss, and over-budget paths.
+
+### #714 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C5` correctness | **PASS** | The full TreeACI release matrix passed: 145 unit tests, 7 public-API tests, 1 rank-scaling test, and 18 doctests; 6 existing high-cost/diagnostic tests remained ignored. The frame tests include real/Complex64 scalar-vs-packed differential checks, candidate order/dimensions, leaf and degree-three-plus fallback, cache-hit/miss, duplicate candidates, unequal bonds, alternate axes, extension, and exact budget boundaries. |
+| `BC5` benchmark correctness | **PASS** | The complete TreeACI matrix above and the complete standalone ACI release matrix were run before the ignored paired measurement. The standalone ACI result was 85 unit tests passed with 1 existing ignored test, 4 integration tests passed, 1 rank-scaling test passed, and 19 doctests passed. No smoke benchmark was used as the correctness gate. |
+| `E5` efficiency | **PASS** on causal target-path resource reduction | After `BC5`, paired release local-update runs used the same fixtures, seeds, backend, thread settings, and 16 repetitions × 5 samples. `chain-8x16`: legacy 128 extracted vectors/2048 values versus packed 32 batches/2048 values; medians 1.533 ms versus 1.358 ms, 11.4% lower. `branch-chi32`: legacy 96 vectors/3072 values versus packed 32 batches/3072 values; medians 3.437 ms versus 3.397 ms, 1.2% lower. The resource delta is deterministic (4× fewer candidate packing objects and no `Vec<Vec<T>>` production round trip); the small branch time result is reported without claiming a universal speedup. |
+| `R5` release/regression/downstream | **PASS** | Full TreeACI and standalone ACI release tests passed. The clean archived SGW copy ran the complete `run_r10_nblock_treeaci_ab.sh 1.0` A/B workflow successfully for its checked-in SimpleTT, TreeACI, and CTTN runs. `isolate_aci_stage` then passed for both `pi_rtau` and `sigma_rtau`; diagnostics reported convergence, 145,968 and 98,210 evaluated points respectively, and wrote both JSON records. The dirty `/root/projects/gw-rs/sgw` checkout was not modified. |
+| `N` numerical stability/convergence | **PASS** | Packed frame outputs match the scalar real/Complex64 oracle exactly within the existing dtype behavior; complete TreeACI/ACI rank-scaling, convergence, pivot, and dense-result tests remained green. No tolerance was relaxed and no reduction order was changed. |
+| `M` metamorphic semantics | **PASS** | Candidate-order mappings, duplicate candidates, physical-axis permutations, unequal incident bonds, and row/column layout conversion are covered. The complete existing edge-order/topology and candidate-set tests also remain green. |
+| `F` fallback parity | **PASS** | Leaf and three-plus-incoming routes retain the scalar fallback; two-incoming routes retain the existing batched contraction; cache-disabled, cache-over-budget, duplicate, and zero-headroom cases pass. The test-only legacy local pack path agrees with the production packed path. |
+| `I` invalidation/retention | **PASS** | Oriented-core preparation is shared per input/directed-edge owner and reused through `extend`; candidate payloads use shared `Rc` ownership, cache accounting remains bounded, cache reclamation tests pass, and the exact working-byte boundary rejects an over-limit request. |
+| `D` determinism | **PASS** | Fixed-seed scalar/packed differential tests, candidate order, ranks, and full release matrices are deterministic. Paired timing samples and all raw values are recorded below; timing is not used to assert an asymptotic law. |
+| `S` scaling law | **N/A** | #714 claims a local allocation/copy reduction, not an asymptotic complexity change. The required 1×/2×/4× scaling study belongs to #718 and is not inferred from these two fixtures. |
+| `P` provenance/observability | **PASS** | All new #714 implementation, CI, and performance claims in this section are **[AI Supplied]**. No new paper/specification claim was introduced, so no new literature locator is asserted. Existing full paper/specification clones, hashes, and page/equation/paragraph locators remain the authoritative register. Diagnostic counters, commands, configurations, baseline/candidate identity, and raw timing arrays are retained below. |
+
+### Verification commands and raw #714 measurement output
+
+```text
+cargo test --release -p tensor4all-treeaci frames --no-fail-fast
+39 passed, 0 failed, 4 ignored in the filtered frame target
+
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+145 unit passed, 6 ignored; 7 public_api passed; 1 rank_scaling passed; 18 doctests passed
+
+cargo test --release -p tensor4all-aci --no-fail-fast
+85 unit passed, 1 ignored; 4 integration tests passed; 1 rank_scaling passed; 19 doctests passed
+
+cargo test --release -p tensor4all-treeaci local_update::tests::packed_local_update_release_measurement_for_chain_and_branch -- --ignored --nocapture
+#714 packed counters: case=chain-8x16, legacy_vectors=128, legacy_values=2048, packed_batches=32, packed_values=2048
+#714 paired release measurement: case=chain-8x16, repetitions=16, samples=5, legacy_median_ms=1.533, packed_median_ms=1.358, reduction_pct=11.4, legacy_all_ms=[1.386798, 1.516191, 1.533022, 1.82989, 1.865387], packed_all_ms=[1.299653, 1.342134, 1.357532, 1.583277, 1.98956]
+#714 packed counters: case=branch-chi32, legacy_vectors=96, legacy_values=3072, packed_batches=32, packed_values=3072
+#714 paired release measurement: case=branch-chi32, repetitions=16, samples=5, legacy_median_ms=3.437, packed_median_ms=3.397, reduction_pct=1.2, legacy_all_ms=[3.339158, 3.3562, 3.436552, 3.450598, 3.605909], packed_all_ms=[3.271111, 3.341142, 3.396967, 3.438645, 3.457211]
+
+python3 scripts/check-public-error-docs.py
+public-error-docs-ok
+python3 scripts/test-check-public-error-docs.py
+15 tests passed
+python3 scripts/test-repository-rules-review.py
+90 tests passed
+python3 scripts/check-crate-boundaries.py
+crate-boundary-ok
+python3 scripts/repository-rules-review.py --base main --worktree --dry-run
+Verdict: pass; No findings.
+
+SGW_RUN_TAG=aci-gate SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0
+complete checked-in A/B workflow passed in clean archive /tmp/sgw-treeaci-gate.3XdbB5
+
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate/treeaci pi_rtau
+converged; sweeps=6; evaluated_points=145968; diagnostics JSON written
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate/treeaci sigma_rtau
+converged; sweeps=5; evaluated_points=98210; diagnostics JSON written
+```
+
+The first SGW attempt stopped before workload execution because the existing
+SGW binary requires the fixed path `/tensor4all-rust/tensor4all-rs`; this was
+resolved by an explicit temporary symlink to the candidate worktree and the
+complete run was repeated. The original dirty SGW checkout remains untouched.
+The sibling `../../tensor4all-benchmark` checkout still has no maintained
+TreeACI local-update workload, so its gate is **N/A**. No new direct
+`tenferro-*` dependency was introduced and no tenferro-layer functionality
+change is required for #714.
+
+The next implementation subissue is **#711** (reusable TreeTN branch-slice
+preparation). Per the execution protocol, stop after reporting this #714
+closure; do not begin #711 in the same run.
