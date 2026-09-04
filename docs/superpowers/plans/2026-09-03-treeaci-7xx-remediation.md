@@ -913,7 +913,7 @@ gate and must not be smuggled into this coverage task.
 
   Record key construction time as a primitive diagnostic only; do not claim the 51.2 ns versus 29.1 ns key result as an evaluator speedup.
 
-- [ ] **Step 6: Commit #710.**
+- [x] **Step 6: Commit #710.**
 
   ```bash
   cargo fmt --all
