@@ -826,6 +826,146 @@ fn bench_directed_component_scan(c: &mut Criterion) {
     group.finish();
 }
 
+/// Paired cold/warm comparison for #708. The vertex-center route is retained
+/// as the local baseline by omitting the scan hint; the edge-cut route is the
+/// production path used when Guard supplies the varying center. Correctness
+/// is checked against the ordinary TreeTN evaluator before either timed loop.
+fn bench_warm_edge_cut_vs_vertex_center(c: &mut Criterion) {
+    const N_SITES: usize = 16;
+    const LOCAL_DIM: usize = 2;
+    const VARYING: usize = N_SITES / 2;
+
+    let mut group = c.benchmark_group("treetn_warm_edge_cut_vs_vertex_center");
+    group.sample_size(10);
+    let mut values = vec![0usize; N_SITES * 2];
+    values[VARYING + N_SITES] = 1;
+    let shape = [N_SITES, 2usize];
+
+    for bond_dim in [16usize, 32, 64, 128, 256] {
+        let tt = create_tt_with_bond_dim(N_SITES, LOCAL_DIM, bond_dim);
+        let (tree, indices) = tensor_train_to_treetn(&tt).unwrap();
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+
+        let assert_matches_expected = |actual: &[tensor4all_core::AnyScalar]| {
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(&expected) {
+                let scale = actual
+                    .real()
+                    .abs()
+                    .max(actual.imag().abs())
+                    .max(expected.real().abs())
+                    .max(expected.imag().abs())
+                    .max(1.0);
+                assert!(
+                    (actual.real() - expected.real()).abs() <= 1.0e-12 * scale
+                        && (actual.imag() - expected.imag()).abs() <= 1.0e-12 * scale,
+                    "actual={actual:?} expected={expected:?}"
+                );
+            }
+        };
+
+        let mut cold_vertex = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(VARYING),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual_vertex = cold_vertex.evaluate_batched(points).unwrap();
+        assert_matches_expected(&actual_vertex);
+        group.bench_function(BenchmarkId::new("cold_vertex", bond_dim), |b| {
+            b.iter_batched_ref(
+                || {
+                    TreeTNCachedEvaluator::new(
+                        &tree,
+                        &indices,
+                        CachedEvaluatorOptions {
+                            center: Some(VARYING),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                },
+                |evaluator| evaluator.evaluate_batched(black_box(points)),
+                BatchSize::LargeInput,
+            )
+        });
+
+        let mut cold_edge = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(VARYING),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual_edge = cold_edge
+            .evaluate_batched_with_hint(points, EvaluationHint::around(VARYING))
+            .unwrap();
+        assert_matches_expected(&actual_edge);
+        group.bench_function(BenchmarkId::new("cold_edge", bond_dim), |b| {
+            b.iter_batched_ref(
+                || {
+                    TreeTNCachedEvaluator::new(
+                        &tree,
+                        &indices,
+                        CachedEvaluatorOptions {
+                            center: Some(VARYING),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                },
+                |evaluator| {
+                    evaluator.evaluate_batched_with_hint(
+                        black_box(points),
+                        EvaluationHint::around(VARYING),
+                    )
+                },
+                BatchSize::LargeInput,
+            )
+        });
+
+        let mut warm_vertex = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(VARYING),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        warm_vertex.evaluate_batched(points).unwrap();
+        group.bench_function(BenchmarkId::new("warm_vertex", bond_dim), |b| {
+            b.iter(|| warm_vertex.evaluate_batched(black_box(points)))
+        });
+
+        let mut warm_edge = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(VARYING),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        warm_edge
+            .evaluate_batched_with_hint(points, EvaluationHint::around(VARYING))
+            .unwrap();
+        group.bench_function(BenchmarkId::new("warm_edge", bond_dim), |b| {
+            b.iter(|| {
+                warm_edge
+                    .evaluate_batched_with_hint(black_box(points), EvaluationHint::around(VARYING))
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_chain_size_scaling,
@@ -836,6 +976,7 @@ criterion_group!(
     bench_warm_center_coordination_vs_bond,
     bench_cached_evaluator_scalar_kinds,
     bench_prepared_branch_slice_reuse,
-    bench_directed_component_scan
+    bench_directed_component_scan,
+    bench_warm_edge_cut_vs_vertex_center
 );
 criterion_main!(benches);

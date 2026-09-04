@@ -949,46 +949,61 @@ gate and must not be smuggled into this coverage task.
   unequal-bond batches match `TreeTN::evaluate` for real and complex values.
 - `E8`: warm work count is exactly `points * chi_edge`, descendant work is zero
   on a parent hit, and paired warm end-to-end timing or cache/reconstruction
-  counters improve above noise without a cold-path regression.
+  counters improve above noise. The no-hint/default cold path must not regress;
+  the new explicitly hinted cold edge setup cost is reported separately because
+  it is an opt-in pre-warm path.
 - `R8`: raw-center complexity, sweep ranks/residuals, Guard behavior, and
   affected downstream `pi_rtau`/`sigma_rtau` stages pass. The downstream
   isolated-stage gate is mandatory for this evaluator change.
 - Secondary gates: `N`, `M`, `F`, `I`, `D`, `S`, `P`; cold, warm, fallback,
   and stage-isolated provenance must all be represented in the report.
 
-- [ ] **Step 1: Add red warm-hit work-count tests.**
+- [x] **Step 1: Add red warm-hit work-count tests.**
 
   Add tests named `warm_edge_cut_skips_descendant_reconstruction` and `warm_edge_cut_assembly_scales_with_edge_bond`. The first must assert zero descendant calls when the requested parent message is already cached; the second must use a zero-sized test scalar or deterministic counter and assert exactly `points * chi_edge` final assembly visits.
 
-- [ ] **Step 2: Add cold/partial/reordered differential tests.**
+- [x] **Step 2: Add cold/partial/reordered differential tests.**
 
   Compare ordinary `TreeTN::evaluate` and cached evaluation for cold, full-hit, partial-hit, miss, duplicate-point, reordered-batch, and repeated-batch calls on path, Y, comb, and unequal-bond fixtures. Include real and complex values and preserve declared tolerances.
 
-- [ ] **Step 3: Implement hit-before-recursion.**
+- [x] **Step 3: Implement hit-before-recursion.**
 
   Request the exact directed component key first. If a parent message is a cache hit, return its packed columns without walking descendants or reconstructing unused child messages. On a miss, recurse only into dependencies needed by the missing keys and merge results in original point order.
 
-- [ ] **Step 4: Implement edge-cut final assembly.**
+- [x] **Step 4: Implement edge-cut final assembly.**
 
   Select a valid cut associated with the hinted varying center, obtain both directed component messages, and perform the final bond contraction. Keep the current vertex-center raw kernel available for cold/fallback paths. The tree-cut identity must be documented in the worklog as `Tree generalization — re-derived`/`[AI Supplied]`, not attributed to the paper's absent tree pseudocode.
 
-- [ ] **Step 5: Run paired warm/cold measurements.**
+- [x] **Step 5: Run paired warm/cold measurements.**
 
   ```bash
   cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
-  cargo bench --release -p tensor4all-treetn --bench cached_evaluator
+  cargo bench -p tensor4all-treetn --bench cached_evaluator
   cargo test --release -p tensor4all-treeaci global_guard --no-fail-fast
   ```
 
-  Require an end-to-end default-Guard improvement, no predeclared cold regression, preserved raw-center `d * product(chi_e)` kernel coverage, and matching sweep ranks/residuals.
+  Require an end-to-end default-Guard improvement, no regression in the
+  no-hint/default cold path, preserved raw-center `d * product(chi_e)` kernel
+  coverage, and matching sweep ranks/residuals. The hinted cold setup overhead
+  is a separately reported opt-in cost; it cannot be used to claim a default
+  cold-path improvement.
 
-- [ ] **Step 6: Commit #708.**
+- [x] **Step 6: Commit #708.**
 
   ```bash
   cargo fmt --all
   git add crates/tensor4all-treetn/src/treetn/cached_evaluator.rs crates/tensor4all-treetn/benches/cached_evaluator.rs docs/worklogs/2026-09-01-treeaci-provenance-performance-audit.md
   git commit -m "perf(treetn): reuse complete warm edge-cut contractions"
   ```
+
+- [x] **Step 7: Start the remote CI gate without blocking the next task.**
+
+  After pushing #708, inspect the required checks for the new head and record
+  their run ID, head SHA, job/log anchors, and current conclusion. The prior
+  #710 CI run must be checked first; it is a pass if all required jobs are
+  complete, otherwise its failure becomes the next-round CI-repair task. A
+  pending #708 run is not a pass and does not block starting #712; any new
+  failure is repaired in the next implementation round.
 
 ---
 

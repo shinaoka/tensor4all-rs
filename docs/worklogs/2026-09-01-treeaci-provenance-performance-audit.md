@@ -1908,3 +1908,89 @@ Converged; sweeps=7; evaluated_points=177646
 cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-710/treeaci sigma_rtau
 Converged; sweeps=5; evaluated_points=99554
 ```
+
+## 2026-09-04 #708 complete warm edge-cut evaluation
+
+This entry records the implementation and gates for #708. The complete
+warm-edge work count, deterministic cut selection, typed final dot product,
+and benchmark acceptance interpretation are **[AI Supplied]** engineering
+design and evidence policy. The tree-cut identity is explicitly
+`Tree generalization — re-derived`: after removing an edge, the two directed
+component messages are vectors on that bond and their dot product reconstructs
+the scalar tree contraction. It is not attributed to a tree pseudocode section
+in the ACI paper. No new literature-derived claim is introduced here. The
+full-text ACI/TCI/tenferro source clones and their concrete page/equation/
+pseudocode/source-line locators remain the evidence register above; no source
+locator is used for the new engineering identity.
+
+### Implementation
+
+- A hinted batch now uses a deterministic top-level edge cut and combines the
+  two directed messages with a typed f32/f64/Complex32/Complex64 bond dot
+  product. The existing vertex-center raw/generic contraction remains the
+  no-hint/default and fallback route.
+- `get_or_compute_node_message` checks the exact parent component cache before
+  recursively requesting children. A complete parent hit therefore returns
+  without descendant reconstruction. Partial/miss requests recurse only as
+  needed and preserve the original point order and duplicate semantics.
+- The warm reverse-message path builds only the endpoint assignment batch when
+  all requested keys are already cached; cold/partial requests retain the full
+  rooted assignment construction. The direct encoder uses the immutable
+  directed component layout and the same checked `FlatIndexer` contract as the
+  composed-key path.
+- Final edge assembly reads the cached scalar storage once and increments a
+  test-only work counter once per point/bond pair. Checked multiplication and
+  addition guard assignment and message offsets; scalar storage kind is never
+  silently promoted or converted.
+- The differential matrix covers path, unequal-bond Y, and comb fixtures,
+  cold/full-hit/partial/reordered/duplicate/repeated batches, and all four
+  scalar kinds. The ordinary `TreeTN::evaluate` result is the sole numerical
+  oracle.
+
+### #708 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C8` correctness | **PASS** | The full TreeTN release library matrix passed 522 tests: 520 passed and 2 existing tests remained ignored. All TreeTN integration targets passed, and 141 release doctests passed. The new complete edge-cut matrix passed path/Y/comb, unequal bonds, cold/full-hit/partial/reordered/duplicate/repeated batches, and f32/f64/Complex32/Complex64 against ordinary `TreeTN::evaluate`; no tolerance was relaxed. |
+| `BC8` benchmark correctness | **PASS** | The full affected TreeTN, TreeACI, and ACI release matrices plus TreeTN doctests completed before accepting timing data. The benchmark's fixed N=16, two-point, five-bond-dimension workload is checked against the ordinary evaluator before each timed family; full-matrix evidence, not a benchmark smoke call, closes correctness. |
+| `E8` efficiency | **PASS for the intended warm hinted path; opt-in cold setup disclosed** | The deterministic warm work counter is exact: 7 points × χ=2 gives 14 edge-assembly visits; a parent cache hit makes descendant message contracts zero. Pinned CPU-0 Criterion medians (µs, χ=16/32/64/128/256) were cold vertex `79.455/121.116/231.046/627.671/2699.512`, cold hinted edge `111.850/156.175/275.369/707.205/3048.775`, warm vertex `30.944/38.119/47.615/77.798/189.064`, and warm hinted edge `31.331/35.821/37.510/40.616/43.534`. Warm edge deltas versus vertex were `+1.3%/-6.0%/-21.2%/-47.8%/-77.0%`; the χ=16 case is within small fixed-cost noise and χ≥32 improves. The hinted cold setup is slower by `40.8%/28.9%/19.2%/12.7%/12.9%` because it materializes the reverse orientation; this is reported rather than hidden. The no-hint/default cold route remains the existing vertex-center path and is not replaced by the new edge route. |
+| `R8` release/regression/downstream | **PASS** | TreeTN, TreeACI, and ACI full release matrices passed. A clean SGW archive `/tmp/sgw-treeaci-gate-708.bi58t6` patched only with local tensor4all-rs path dependencies ran `SGW_RUN_TAG=aci-gate-708 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0`; SimpleTT, TreeACI, and CTTN completed their full configured pipelines, all four checkpoint stages, five row slices, assembly, and plotting. Isolated TreeACI diagnostics converged: `pi_rtau` in 6 sweeps with 142808 evaluated points and `sigma_rtau` in 5 sweeps with 96618 evaluated points. The dirty `/root/projects/gw-rs/sgw` checkout was not modified. |
+| `N` numerical stability/convergence | **PASS** | All four scalar kinds and unequal-bond/topology cases match the ordinary evaluator. Downstream TreeACI stages converge under the configured `1e-4` tolerance; no tolerance or reduction order was changed. |
+| `M` metamorphic semantics | **PASS** | Exact full-hit repeats, reordered columns, duplicate columns, a partial/miss batch, repeated partial batches, all output ordering, and all directed message orientations used by the fixtures pass. |
+| `F` fallback parity | **PASS** | No-hint calls continue through the existing center route; zero-bond, scalar-kind mismatch, unsupported raw shape, higher-degree generic, f32/c32 generic, zero-budget, and over-budget behavior remains covered by the full TreeTN release matrix. |
+| `I` invalidation/retention | **PASS** | Cache lookup is exact by directed component and assignment key; partial misses compute only required dependencies; no input tensor is mutated and no public cache/API contract changes. Existing clear, zero-budget, bounded-budget, and uncached miss tests remain green. |
+| `D` determinism | **PASS** | Sorted neighbor selection makes the cut deterministic; checked assignment encodings and stable point-order remapping preserve repeatable keys/results. The complete release matrices and fixed benchmark fixture are repeatable; timing outliers are not correctness evidence. |
+| `S` scaling law | **PASS for the scoped warm assembly law** | The test-only counter enforces exactly `points * chi_edge`, independent of descendant size. The benchmark shows the warm edge route becoming increasingly favorable as χ grows; this is a scoped final-assembly/resource claim, not a claim about the full tree evaluator's asymptotic miss cost. |
+| `P` provenance/observability | **PASS** | New algorithm/design and gate-policy statements are labelled **[AI Supplied]** or `Tree generalization — re-derived`. No new paper claim was made, no new tenferro dependency was added, and the pre-cloned full-text evidence register remains the source-compliance record. `tensor4all-benchmark` is N/A: its dirty checkout has no maintained comparable TreeTN edge-cut workload. |
+| `CI` remote regression | **PENDING for the new #708 head; prior run checked** | Before this push, #710's CI run `33863186382` at head `dd1fc895c78b5d33de80cbceae1f94c2b094bf07` passed Coverage, Doctests, Lint, Maintenance scripts, Test, and `rollup-rs`; review bot run `33863184261` also passed. A new #708-head run will be recorded after push. Pending remote checks are not treated as passes and do not block starting #712; a newly observed failure is the next-round CI-repair task. |
+
+### #708 verification commands and raw measurements
+
+```text
+cargo fmt --all
+cargo test --release -p tensor4all-treetn --lib --quiet
+522 tests ran: 520 passed, 2 existing ignored
+cargo test --release -p tensor4all-treetn --tests --quiet
+all integration targets passed
+cargo test --doc --release -p tensor4all-treetn --quiet
+141 doctests passed
+cargo clippy --release -p tensor4all-treetn --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+passed
+taskset -c 0 cargo bench --bench cached_evaluator -- treetn_warm_edge_cut_vs_vertex_center
+10 samples per case; raw Criterion estimates retained under target/criterion/treetn_warm_edge_cut_vs_vertex_center/**/new/estimates.json
+cargo test --release -p tensor4all-treeaci --no-fail-fast --quiet
+145 passed, 6 existing ignored; public_api/rank_scaling/doctest targets passed
+cargo test --release -p tensor4all-aci --no-fail-fast --quiet
+85 passed, 1 existing ignored; integration/rank_scaling/doctest targets passed
+SGW_RUN_TAG=aci-gate-708 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0
+clean-copy SimpleTT/TreeACI/CTTN workflow passed; all configured extraction and plotting stages passed
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-708/treeaci pi_rtau
+Converged; sweeps=6; evaluated_points=142808
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-708/treeaci sigma_rtau
+Converged; sweeps=5; evaluated_points=96618
+```
+
+The new implementation is ready to be committed and pushed as the #708
+subissue closure. The next implementation subissue is **#712** (the budgeted
+shared-operand grouped-GEMM tensorbackend facade); per the execution protocol,
+stop after reporting this #708 closure and do not begin #712 in the same run.
