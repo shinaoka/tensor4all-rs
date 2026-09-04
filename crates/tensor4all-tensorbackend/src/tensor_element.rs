@@ -34,8 +34,8 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns an error when the data length does not match the dimensions or
-    /// the backend conversion fails.
+    /// Returns an error for a shape mismatch when the data length does not
+    /// equal the dimension product, or for a backend conversion failure.
     ///
     /// # Arguments
     ///
