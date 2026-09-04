@@ -26,17 +26,25 @@ impl ExecutionContext {
     ///
     /// Compatibility boundary: legacy CPU-global callers route through the
     /// historical host code paths (bitwise-identical numerics) while explicit
-    /// contexts use the scoped primitives. Unavailable contexts report false.
-    #[cfg(feature = "global-defaults")]
+    /// contexts use the scoped primitives. Without the global-defaults
+    /// feature there is no global context, so this always reports false.
     pub fn is_global_default_cpu(&self) -> bool {
-        match self {
-            ExecutionContext::Cpu(context) => {
-                let own = context.eager_runtime().map(|runtime| runtime.id());
-                let global = defaults::default_eager_ctx().map(|runtime| runtime.id());
-                matches!((own, global), (Ok(a), Ok(b)) if a == b)
+        #[cfg(feature = "global-defaults")]
+        {
+            match self {
+                ExecutionContext::Cpu(context) => {
+                    let own = context.eager_runtime().map(|runtime| runtime.id());
+                    let global = defaults::default_eager_ctx().map(|runtime| runtime.id());
+                    matches!((own, global), (Ok(a), Ok(b)) if a == b)
+                }
+                #[cfg(feature = "tenferro-cuda")]
+                ExecutionContext::Cuda(_) => false,
             }
-            #[cfg(feature = "tenferro-cuda")]
-            ExecutionContext::Cuda(_) => false,
+        }
+        #[cfg(not(feature = "global-defaults"))]
+        {
+            let _ = self;
+            false
         }
     }
 }

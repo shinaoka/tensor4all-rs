@@ -836,21 +836,21 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let src_norm = tensor_src
-            .norm_in(context)
-            .map_err(|error| anyhow::anyhow!("{}: scalar norm failed: {error}", context_name))?;
+        let src_norm = tensor_src.norm_in(context).map_err(|error| {
+            anyhow::Error::new(error).context(format!("{context_name}: scalar norm failed"))
+        })?;
         let updated_src_tensor = if src_norm > 0.0 {
-            tensor_src
-                .scale_in(1.0 / src_norm, context)
-                .map_err(|error| {
-                    anyhow::anyhow!("{}: failed to normalize src tensor: {error}", context_name)
-                })?
+            tensor_src.scale_in(1.0 / src_norm, context).map_err(|error| {
+                anyhow::Error::new(error)
+                    .context(format!("{context_name}: failed to normalize src tensor"))
+            })?
         } else {
             tensor_src.clone()
         };
         let updated_dst_tensor = if src_norm > 0.0 {
             tensor_dst.scale_in(src_norm, context).map_err(|error| {
-                anyhow::anyhow!("{}: failed to scale dst tensor: {error}", context_name)
+                anyhow::Error::new(error)
+                    .context(format!("{context_name}: failed to scale dst tensor"))
             })?
         } else {
             tensor_dst.clone()
