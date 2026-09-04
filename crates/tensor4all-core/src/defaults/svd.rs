@@ -14,7 +14,7 @@ use crate::truncation::{
     validate_svd_truncation_options, validate_svd_truncation_policy, SingularValueMeasure,
     SvdTruncationOptionsError, SvdTruncationPolicy, ThresholdScale, TruncationRule,
 };
-use crate::IdxTensor;
+use crate::{ExecutionContext, IdxTensor};
 use num_complex::Complex64;
 use std::sync::Mutex;
 use tenferro::DType;
@@ -242,6 +242,27 @@ fn singular_values_from_eager(tensor: &EagerTensor) -> Result<Vec<f64>, SvdError
     }
 }
 
+/// Read the singular-value decision vector of a resident factor.
+///
+/// The factor stays resident; only its values cross the explicit readback
+/// boundary through `context`.
+#[cfg(feature = "tenferro-cuda")]
+fn resident_singular_values(
+    s_inner: &EagerTensor,
+    context: &ExecutionContext,
+) -> Result<Vec<f64>, SvdError> {
+    let indices: Vec<DynIndex> = s_inner
+        .shape()
+        .iter()
+        .map(|&dim| DynIndex::new_dyn(dim))
+        .collect();
+    let decision =
+        IdxTensor::from_inner(indices, s_inner.clone()).map_err(SvdError::ComputationError)?;
+    decision
+        .read_decision_data(context)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))
+}
+
 type SvdTruncatedEagerResult = (
     EagerTensor,
     EagerTensor,
@@ -257,6 +278,43 @@ fn svd_truncated_inner(
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<SvdTruncatedEagerResult, SvdError> {
+    if t.is_cuda_resident() {
+        return Err(SvdError::ComputationError(anyhow::anyhow!(
+            "CUDA-resident input requires svd_with_in with the owning execution context"
+        )));
+    }
+    svd_truncated_inner_scoped(t, left_inds, options, None)
+}
+
+/// Compute truncated SVD in a caller-owned execution context.
+///
+/// The factorization and truncation slicing execute in `context`. With a CUDA
+/// context only the singular-value decision vector crosses the explicit
+/// readback boundary (via [`IdxTensor::read_decision_data`); with a CPU
+/// context the decision uses the same host read as [`svd_with`].
+///
+/// # Errors
+///
+/// Returns `SvdError` when the tensor does not belong to `context`, when the
+/// indices or options are invalid, or when the factorization or explicit
+/// decision readback fails.
+pub(crate) fn svd_truncated_inner_in(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+    context: &ExecutionContext,
+) -> Result<SvdTruncatedEagerResult, SvdError> {
+    t.validate_context(context)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    svd_truncated_inner_scoped(t, left_inds, options, Some(context))
+}
+
+fn svd_truncated_inner_scoped(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+    context: Option<&ExecutionContext>,
+) -> Result<SvdTruncatedEagerResult, SvdError> {
     let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(SvdError::ComputationError)?;
@@ -265,7 +323,18 @@ fn svd_truncated_inner(
     let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
         .svd()
         .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
-    let s_full = singular_values_from_eager(&s_inner)?;
+    let s_full = match context {
+        #[cfg(feature = "tenferro-cuda")]
+        Some(ExecutionContext::Cuda(_)) => {
+            let context = context.expect("CUDA context is present");
+            resident_singular_values(&s_inner, context)?
+        }
+        _ => {
+            #[cfg(not(feature = "tenferro-cuda"))]
+            let _ = context;
+            singular_values_from_eager(&s_inner)?
+        }
+    };
     let mut r = if options.truncate {
         // Shared root guard: reject `max_bond_dim == Some(0)` and invalid
         // explicit policies before any truncation, so the caller cannot
@@ -396,6 +465,87 @@ pub fn svd_with<T>(
     let (u_inner, s_inner, vt_inner, _singular_values, bond_index, left_indices, right_indices) =
         svd_truncated_inner(t, left_inds, options)?;
 
+    svd_assemble(
+        u_inner,
+        s_inner,
+        vt_inner,
+        bond_index,
+        left_indices,
+        right_indices,
+    )
+}
+
+/// Compute SVD decomposition in a caller-owned execution context.
+///
+/// The factorization, truncation slicing, and result assembly all execute in
+/// `context`. With a CUDA context only the singular-value decision vector
+/// crosses the explicit readback boundary; with a CPU context the decision
+/// uses the same host read as [`svd_with`].
+///
+/// # Arguments
+///
+/// * `t` - Input tensor, which must belong to `context`.
+/// * `left_inds` - Indices to place on the left (row) side of the unfolded matrix.
+/// * `options` - SVD options including truncation policy and bond cap.
+/// * `context` - Caller-owned execution context owning the input and results.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use tensor4all_core::svd::{SvdOptions, svd_with_in};
+/// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, SvdTruncationPolicy};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = ExecutionContext::Cpu(Arc::new(
+///     CpuExecutionContext::from_backend(CpuBackend::new()),
+/// ));
+/// let i = DynIndex::new_dyn(4);
+/// let j = DynIndex::new_dyn(4);
+/// let mut data = vec![0.0_f64; 16];
+/// data[0] = 1.0;
+/// let tensor = IdxTensor::from_dense_in(&context, vec![i.clone(), j.clone()], data)?;
+/// let opts = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
+/// let (u, s, _v) = svd_with_in::<f64>(&tensor, &[i.clone()], &opts, &context)?;
+/// assert_eq!(s.dims()[0], 1);
+/// assert_eq!(u.dims()[0], 4);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns `SvdError` when the tensor does not belong to `context`, when the
+/// indices or options are invalid, or when the factorization or explicit
+/// decision readback fails.
+pub fn svd_with_in<T>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+    context: &ExecutionContext,
+) -> Result<(IdxTensor, IdxTensor, IdxTensor), SvdError> {
+    let (u_inner, s_inner, vt_inner, _singular_values, bond_index, left_indices, right_indices) =
+        svd_truncated_inner_in(t, left_inds, options, context)?;
+
+    svd_assemble(
+        u_inner,
+        s_inner,
+        vt_inner,
+        bond_index,
+        left_indices,
+        right_indices,
+    )
+}
+
+/// Wrap the truncated eager factors as [`IdxTensor`]s.
+fn svd_assemble(
+    u_inner: EagerTensor,
+    s_inner: EagerTensor,
+    vt_inner: EagerTensor,
+    bond_index: DynIndex,
+    left_indices: Vec<DynIndex>,
+    right_indices: Vec<DynIndex>,
+) -> Result<(IdxTensor, IdxTensor, IdxTensor), SvdError> {
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
@@ -446,8 +596,28 @@ pub(crate) fn svd_for_factorize(
 ) -> Result<SvdFactorizeResult, SvdError> {
     let (u_inner, s_inner, vt_inner, singular_values, bond_index, left_indices, right_indices) =
         svd_truncated_inner(t, left_inds, options)?;
-    let rank = singular_values.len();
+    svd_factorize_assemble(
+        u_inner,
+        s_inner,
+        vt_inner,
+        singular_values,
+        bond_index,
+        left_indices,
+        right_indices,
+    )
+}
 
+/// Wrap the truncated eager factors as [`IdxTensor`]s, returning `V^H` directly.
+fn svd_factorize_assemble(
+    u_inner: EagerTensor,
+    s_inner: EagerTensor,
+    vt_inner: EagerTensor,
+    singular_values: Vec<f64>,
+    bond_index: DynIndex,
+    left_indices: Vec<DynIndex>,
+    right_indices: Vec<DynIndex>,
+) -> Result<SvdFactorizeResult, SvdError> {
+    let rank = singular_values.len();
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();

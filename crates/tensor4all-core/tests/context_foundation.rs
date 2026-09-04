@@ -33,6 +33,25 @@ fn context_validation_rejects_a_different_cpu_runtime() {
     assert!(tensor.validate_context(&second).is_err());
 }
 
+#[test]
+fn decision_readback_returns_values_in_the_supplied_cpu_runtime() {
+    let context = cpu_context();
+    let tensor = IdxTensor::from_dense_in(
+        &context,
+        vec![DynIndex::new_dyn(3)],
+        vec![0.5_f64, 2.0, 1.0],
+    )
+    .unwrap();
+
+    assert_eq!(
+        tensor.read_decision_data(&context).unwrap(),
+        vec![0.5, 2.0, 1.0]
+    );
+
+    let other = cpu_context();
+    assert!(tensor.read_decision_data(&other).is_err());
+}
+
 #[cfg(feature = "tenferro-cuda")]
 #[test]
 #[ignore]
@@ -43,4 +62,21 @@ fn context_scoped_cuda_construction_stays_in_the_selected_runtime() {
         IdxTensor::from_dense_in(&context, vec![DynIndex::new_dyn(2)], vec![1.0_f64, 2.0]).unwrap();
 
     tensor.validate_context(&context).unwrap();
+}
+
+#[cfg(feature = "tenferro-cuda")]
+#[test]
+#[ignore]
+fn decision_readback_downloads_through_the_owning_cuda_runtime() {
+    let cuda = tensor4all_tensorbackend::CudaExecutionContext::new().unwrap();
+    let context = ExecutionContext::Cuda(Arc::new(cuda));
+    let tensor =
+        IdxTensor::from_dense_in(&context, vec![DynIndex::new_dyn(2)], vec![1.0_f64, 2.0]).unwrap();
+
+    assert_eq!(tensor.read_decision_data(&context).unwrap(), vec![1.0, 2.0]);
+
+    let foreign = ExecutionContext::Cuda(Arc::new(
+        tensor4all_tensorbackend::CudaExecutionContext::new().unwrap(),
+    ));
+    assert!(tensor.read_decision_data(&foreign).is_err());
 }

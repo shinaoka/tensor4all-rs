@@ -3112,6 +3112,27 @@ impl IdxTensor {
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
     }
 
+    /// Check whether this tensor's eager value is device-resident.
+    ///
+    /// Metadata-only: inspects placement without reading data, transferring,
+    /// or consulting any execution context. Used to route factorization to the
+    /// context-scoped path and to reject context-free calls on resident inputs
+    /// before algorithm work begins.
+    #[cfg(feature = "tenferro-cuda")]
+    pub(crate) fn is_cuda_resident(&self) -> bool {
+        self.cuda_eager_inner().is_some_and(|inner| {
+            inner.tensor_read().placement().memory_kind == tenferro_tensor::MemoryKind::Device
+        })
+    }
+
+    /// Check whether this tensor's eager value is device-resident.
+    ///
+    /// Without the CUDA feature no tensor can be device-resident.
+    #[cfg(not(feature = "tenferro-cuda"))]
+    pub(crate) fn is_cuda_resident(&self) -> bool {
+        false
+    }
+
     #[cfg(feature = "tenferro-cuda")]
     pub(crate) fn cuda_duplicate_native(&self) -> Result<NativeTensor> {
         Ok(self.try_materialized_inner()?.duplicate_value()?)
@@ -5704,9 +5725,43 @@ impl TensorFactorizationLike for IdxTensor {
         factorize_probe_batch_incremental_impl(previous, batch_tensor, batch_index, left_inds)
     }
 
+    fn factorize_probe_batch_incremental_in(
+        previous: Option<&FactorizeResult<IdxTensor>>,
+        batch_tensor: &IdxTensor,
+        batch_index: &DynIndex,
+        left_inds: &[DynIndex],
+        context: &ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError> {
+        if let Some(previous) = previous {
+            previous
+                .left
+                .validate_context(context)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            previous
+                .right
+                .validate_context(context)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        }
+        batch_tensor
+            .validate_context(context)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        #[cfg(feature = "tenferro-cuda")]
+        if matches!(context, ExecutionContext::Cuda(_)) {
+            return Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds);
+        }
+        #[cfg(not(feature = "tenferro-cuda"))]
+        let _ = context;
+        factorize_probe_batch_incremental_impl(previous, batch_tensor, batch_index, left_inds)
+    }
+
     fn src_error_estimate(
         &self,
     ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        if self.is_cuda_resident() {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "CUDA-resident QR factor requires src_error_estimate_in with the owning execution context"
+            )));
+        }
         let indices = self.indices();
         if indices.len() != 2 {
             return Err(FactorizeError::ComputationError(anyhow::anyhow!(
@@ -5738,6 +5793,326 @@ impl TensorFactorizationLike for IdxTensor {
             ));
         };
         result.map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))
+    }
+
+    fn src_error_estimate_in(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        self.validate_context(context)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        #[cfg(feature = "tenferro-cuda")]
+        if matches!(context, ExecutionContext::Cuda(_)) {
+            return self.resident_src_error_estimate(context);
+        }
+        #[cfg(not(feature = "tenferro-cuda"))]
+        let _ = context;
+        TensorFactorizationLike::src_error_estimate(self)
+    }
+}
+
+impl IdxTensor {
+    /// Resident batch-native probe factorization by full thin-QR recompute.
+    ///
+    /// Reconstructs the full sketch block `[Q_prev R_prev, A_new]` with resident
+    /// matmul/concatenation and runs one thin QR in the owning runtime. This
+    /// replaces the host `IncrementalQr` block update without any host
+    /// round-trip: no `IncrementalQrState` is stored, so the adaptive estimator
+    /// solves the full triangular system at each growth step. The recomputed
+    /// factor spans the same column space as the incremental update.
+    ///
+    /// Unlike the host block update, this recompute is not rank-revealing:
+    /// linearly dependent appended columns are retained, so a rank-deficient
+    /// (but not row-saturated) block reports a larger rank than the host path
+    /// and a square R where the host path yields a non-square one. Appended
+    /// SRC probe blocks are iid random draws, for which dependence is
+    /// measure-zero; a device-side rank guard plus a dependent-block test is a
+    /// tracked follow-up, not part of this primitive.
+    #[cfg(feature = "tenferro-cuda")]
+    fn resident_probe_batch_qr(
+        previous: Option<&FactorizeResult<IdxTensor>>,
+        batch_tensor: &IdxTensor,
+        batch_index: &DynIndex,
+        left_inds: &[DynIndex],
+    ) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError> {
+        use crate::defaults::idx_tensor::unfold_split_inner;
+
+        // The host path consumes `batch_index` as the appended-axis label;
+        // reject a mismatched label before any arithmetic, as the device path
+        // otherwise never observes it.
+        if !batch_tensor.indices().contains(batch_index) {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "resident probe batch is missing its batch index"
+            )));
+        }
+        let (appended_inner, _, m, b, _, _) = unfold_split_inner(batch_tensor, left_inds)
+            .context("resident probe batch unfold failed")
+            .map_err(FactorizeError::ComputationError)?;
+        if !matches!(appended_inner.dtype(), DType::F64 | DType::C64) {
+            return Err(FactorizeError::UnsupportedStorage(
+                "incremental SRC factorization currently supports f64 and Complex64 tensors",
+            ));
+        }
+        if b == 0 {
+            if let Some(previous) = previous {
+                return Ok(previous.clone());
+            }
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "incremental SRC factorization requires at least one column"
+            )));
+        }
+        let full_inner = if let Some(previous) = previous {
+            let (q_inner, _, previous_rows, _, _, _) =
+                unfold_split_inner(&previous.left, left_inds)
+                    .context("resident previous Q unfold failed")
+                    .map_err(FactorizeError::ComputationError)?;
+            if previous_rows != m {
+                return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                    "previous and appended sketch row dimensions differ: {previous_rows} vs {m}"
+                )));
+            }
+            let (r_inner, _, _, _, _, _) =
+                unfold_split_inner(&previous.right, std::slice::from_ref(&previous.bond_index))
+                    .context("resident previous R unfold failed")
+                    .map_err(FactorizeError::ComputationError)?;
+            let reconstructed = q_inner.matmul(&r_inner).map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error).context("resident sketch reconstruction failed"),
+                )
+            })?;
+            EagerTensor::concatenate(&[&reconstructed, &appended_inner], 1).map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error).context("resident sketch concatenation failed"),
+                )
+            })?
+        } else {
+            appended_inner
+        };
+        let total_width = *full_inner.shape().get(1).ok_or_else(|| {
+            FactorizeError::ComputationError(anyhow::anyhow!(
+                "resident sketch factor is not rank-2"
+            ))
+        })?;
+        let (q_full, r_full) = full_inner.qr().map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("resident probe batch QR failed"),
+            )
+        })?;
+        let rank = q_full.shape().get(1).copied().ok_or_else(|| {
+            FactorizeError::ComputationError(anyhow::anyhow!(
+                "resident probe batch Q factor is not rank-2"
+            ))
+        })?;
+        let cap = DynIndex::new_bond(rank)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let batch = DynIndex::new_link(total_width)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let mut q_indices = left_inds.to_vec();
+        q_indices.push(cap.clone());
+        let q_dims: Vec<usize> = q_indices.iter().map(|index| index.dim()).collect();
+        let left = Self::from_inner(
+            q_indices,
+            q_full.reshape(&q_dims).map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error).context("resident probe batch Q reshape failed"),
+                )
+            })?,
+        )
+        .map_err(FactorizeError::ComputationError)?;
+        let right = Self::from_inner(
+            vec![cap.clone(), batch],
+            r_full.reshape(&[rank, total_width]).map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error).context("resident probe batch R reshape failed"),
+                )
+            })?,
+        )
+        .map_err(FactorizeError::ComputationError)?;
+        Ok(FactorizeResult::new(left, right, cap, None, rank))
+    }
+
+    /// Device-side Appendix-C estimator: solve and reduce on-device, read back
+    /// `ncols + 1` decision scalars.
+    ///
+    /// Singularity and non-finiteness surface as typed solve/validation errors;
+    /// unlike the host path there is no separate diagonal pre-check, but every
+    /// invalid input still fails instead of producing an estimate.
+    #[cfg(feature = "tenferro-cuda")]
+    fn resident_src_error_estimate(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        use tensor4all_tensorbackend::SrcErrorEstimate;
+
+        let indices = self.indices();
+        if indices.len() != 2 {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC QR factor must have rank 2, got {}",
+                indices.len()
+            )));
+        }
+        let nrows = indices[0].dim();
+        let ncols = indices[1].dim();
+        if nrows != ncols {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC estimator requires a square R, got {nrows}x{ncols}"
+            )));
+        }
+        if nrows == 0 {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC estimator requires a non-empty R"
+            )));
+        }
+        let inner = self.cuda_eager_inner().ok_or_else(|| {
+            FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC estimator requires a resident eager QR factor"
+            ))
+        })?;
+        let ExecutionContext::Cuda(cuda) = context else {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC device estimator requires a CUDA execution context"
+            )));
+        };
+        // Adjoint R^H of the upper-triangular R is lower-triangular.
+        let adjoint = inner
+            .transpose(&[1, 0])
+            .and_then(|transposed| transposed.conj())
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let identity = Self::resident_identity(cuda, nrows, inner.dtype())?;
+        // Solve R^H X = I for X = R^{-†}.
+        let solved = adjoint
+            .triangular_solve(&identity, true, true, false, false)
+            .map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error)
+                        .context("SRC inverse-adjoint triangular solve failed"),
+                )
+            })?;
+        let column_sums = solved
+            .abs()
+            .and_then(|magnitudes| magnitudes.reduce_sum_squares(&[0]))
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let total = inner
+            .abs()
+            .and_then(|magnitudes| magnitudes.reduce_sum_squares(&[0, 1]))
+            .and_then(|scalar| scalar.reshape(&[1]))
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let column_norms_sq = Self::read_resident_vector(&column_sums, ncols, context)?;
+        let total_norm_sq = Self::read_resident_vector(&total, 1, context)?;
+        Self::src_estimate_from_decision_scalars(&column_norms_sq, total_norm_sq[0], ncols)
+            .map(|(error, norm)| SrcErrorEstimate { error, norm })
+            .map_err(FactorizeError::ComputationError)
+    }
+
+    /// Build an `n x n` identity in the operand's owning runtime.
+    ///
+    /// Host-originated construction data takes the same explicit upload path
+    /// as [`IdxTensor::from_dense_in`]; the transfer is part of the estimator's
+    /// decision payload, not hidden arithmetic.
+    #[cfg(feature = "tenferro-cuda")]
+    fn resident_identity(
+        cuda: &Arc<tensor4all_tensorbackend::CudaExecutionContext>,
+        n: usize,
+        dtype: DType,
+    ) -> std::result::Result<EagerTensor, FactorizeError> {
+        let native = match dtype {
+            DType::F64 => {
+                let mut data = vec![0.0_f64; n * n];
+                for diagonal in 0..n {
+                    data[diagonal + diagonal * n] = 1.0;
+                }
+                NativeTensor::from_vec_col_major(vec![n, n], data)
+            }
+            DType::C64 => {
+                let mut data = vec![Complex64::new(0.0, 0.0); n * n];
+                for diagonal in 0..n {
+                    data[diagonal + diagonal * n] = Complex64::new(1.0, 0.0);
+                }
+                NativeTensor::from_vec_col_major(vec![n, n], data)
+            }
+            _other => {
+                return Err(FactorizeError::UnsupportedStorage(
+                    "SRC adaptive estimation currently supports f64 and Complex64 QR factors",
+                ));
+            }
+        }
+        .map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("SRC estimator identity construction failed"),
+            )
+        })?;
+        let uploaded = cuda.upload_cuda(&native).map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("SRC estimator identity upload failed"),
+            )
+        })?;
+        let runtime = cuda.eager_runtime().map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("SRC estimator eager runtime failed"),
+            )
+        })?;
+        // `validate_context` already pinned the factor to this exact CUDA
+        // context, so the uploaded identity lands in the factor's runtime.
+        EagerTensor::from_tensor_in(uploaded, runtime).map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("SRC estimator identity wrapping failed"),
+            )
+        })
+    }
+
+    /// Wrap a resident decision vector and read it back through `context`.
+    #[cfg(feature = "tenferro-cuda")]
+    fn read_resident_vector(
+        eager: &EagerTensor,
+        len: usize,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Vec<f64>, FactorizeError> {
+        if eager.shape() != [len] {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "device SRC decision vector has shape {:?}, expected [{len}]",
+                eager.shape()
+            )));
+        }
+        let decision = Self::from_inner(vec![DynIndex::new_dyn(len)], eager.clone())
+            .map_err(FactorizeError::ComputationError)?;
+        decision
+            .read_decision_data(context)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+    }
+
+    /// Scalar Appendix-C formula from the `ncols + 1` decision values.
+    ///
+    /// Mirrors `src_error_estimate_from_inverse_adjoint`: column norms must be
+    /// finite and nonzero, and both estimates must be finite.
+    #[cfg(feature = "tenferro-cuda")]
+    fn src_estimate_from_decision_scalars(
+        column_norms_sq: &[f64],
+        total_norm_sq: f64,
+        ncols: usize,
+    ) -> std::result::Result<(f64, f64), anyhow::Error> {
+        if !total_norm_sq.is_finite() {
+            return Err(anyhow::anyhow!(
+                "SRC estimator requires finite entries in R"
+            ));
+        }
+        let mut inverse_column_error_sq = 0.0_f64;
+        for (col, &column_norm_sq) in column_norms_sq.iter().enumerate() {
+            if !column_norm_sq.is_finite() || column_norm_sq == 0.0 {
+                return Err(anyhow::anyhow!(
+                    "SRC inverse-adjoint solve returned an invalid column norm at column {col}"
+                ));
+            }
+            inverse_column_error_sq += 1.0 / column_norm_sq;
+        }
+        let sketch_width = ncols as f64;
+        let error_sq = inverse_column_error_sq / sketch_width;
+        let norm_estimate_sq = total_norm_sq / sketch_width;
+        if !error_sq.is_finite() || !norm_estimate_sq.is_finite() {
+            return Err(anyhow::anyhow!(
+                "SRC estimator produced a non-finite estimate"
+            ));
+        }
+        Ok((error_sq.sqrt(), norm_estimate_sq.sqrt()))
     }
 }
 
@@ -7303,6 +7678,82 @@ impl IdxTensor {
             }
         }
         Ok(())
+    }
+
+    /// Read back a small algorithm-decision tensor through its owning context.
+    ///
+    /// This is the explicit synchronization/readback boundary for rank
+    /// selection and adaptive stopping payloads (singular values, norm
+    /// vectors, scalar estimates). With a CUDA context the resident value is
+    /// downloaded through that exact context; no arithmetic operand is ever
+    /// reconstructed on the host from this payload.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Caller-owned execution context the tensor must belong to.
+    ///
+    /// # Returns
+    ///
+    /// The decision values in column-major order (`f64`, or the real part for
+    /// `Complex64`, matching the existing rank-selection semantics).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let tensor = IdxTensor::from_dense_in(
+    ///     &context,
+    ///     vec![DynIndex::new_dyn(3)],
+    ///     vec![0.5_f64, 2.0, 1.0],
+    /// )?;
+    /// assert_eq!(tensor.read_decision_data(&context)?, vec![0.5, 2.0, 1.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the tensor does not belong to `context`,
+    /// when the explicit transfer fails, or when the storage is neither `f64`
+    /// nor `Complex64`.
+    pub fn read_decision_data(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Vec<f64>, IdxTensorError> {
+        self.validate_context(context)?;
+        #[cfg(feature = "tenferro-cuda")]
+        if let ExecutionContext::Cuda(cuda) = context {
+            let host = self.download(cuda).map_err(|error| {
+                IdxTensorError::operation("decision readback download", anyhow::Error::new(error))
+            })?;
+            return Self::decision_values(&host);
+        }
+        Self::decision_values(self)
+    }
+
+    fn decision_values(host: &Self) -> std::result::Result<Vec<f64>, IdxTensorError> {
+        if host.is_f64() {
+            host.to_vec::<f64>().map_err(|error| {
+                IdxTensorError::operation("decision readback", anyhow::Error::new(error))
+            })
+        } else if host.is_c64() {
+            host.to_vec::<Complex64>()
+                .map(|values| values.into_iter().map(|value| value.re).collect())
+                .map_err(|error| {
+                    IdxTensorError::operation("decision readback", anyhow::Error::new(error))
+                })
+        } else {
+            Err(IdxTensorError::operation(
+                "decision readback",
+                anyhow::anyhow!("decision payloads support f64 and Complex64 storage only"),
+            ))
+        }
     }
 }
 
