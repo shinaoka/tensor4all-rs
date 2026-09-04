@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
+use tenferro::TensorValue;
 use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
 use tensor4all_tensorbackend::{
     einsum_native_tensor_reads, einsum_native_tensors_owned, NativeTensorReadInput,
@@ -1014,11 +1015,65 @@ fn contract_impl(tensors: &[&IdxTensor], options: ContractionOptions<'_>) -> Res
     Ok(result)
 }
 
+/// Contract a resident structured/diagonal pair through the eager plan path.
+///
+/// Pairwise fast paths borrow native host payloads, which device-resident
+/// operands cannot provide. This builds the same 2-tensor plan the N-ary
+/// executor uses (diagonal-aware) and runs it in the operands' owning
+/// runtime. Conjugation flags materialize first via resident eager ops.
+#[cfg(feature = "tenferro-cuda")]
+pub(crate) fn contract_pair_via_plan(
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+    options: PairwiseContractionOptions,
+) -> Result<IdxTensor> {
+    let lhs_owned;
+    let rhs_owned;
+    let (lhs, rhs) = match (options.lhs_conj, options.rhs_conj) {
+        (false, false) => (lhs, rhs),
+        (true, false) => {
+            lhs_owned = lhs.conj();
+            (&lhs_owned, rhs)
+        }
+        (false, true) => {
+            rhs_owned = rhs.conj();
+            (lhs, &rhs_owned)
+        }
+        (true, true) => {
+            lhs_owned = lhs.conj();
+            rhs_owned = rhs.conj();
+            (&lhs_owned, &rhs_owned)
+        }
+    };
+    let tensors = [lhs, rhs];
+    let plan = build_contraction_plan(&tensors, ContractionOptions::new())?;
+    execute_contraction_plan(&tensors, &plan, false)
+}
+
 fn execute_contraction_plan(
     tensors: &[&IdxTensor],
     plan: &ContractionPlan,
     has_retained_indices: bool,
 ) -> Result<IdxTensor> {
+    // Device-resident operands cannot enter the native host session below;
+    // run them through the owning-runtime eager einsum path (the same
+    // dispatch the tracked path uses). Host operands keep the native path
+    // unchanged. Mixed host/device sets keep failing loudly in the native
+    // path instead of silently migrating.
+    #[cfg(feature = "tenferro-cuda")]
+    if !tensors.is_empty() && tensors.iter().all(|tensor| tensor.is_cuda_resident()) {
+        let operands = tensors
+            .iter()
+            .map(|tensor| tensor.as_inner())
+            .collect::<Result<Vec<_>>>()?;
+        let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
+        let result = operands.as_slice().einsum_subscripts(&subscripts)?;
+        return IdxTensor::from_inner_with_axis_classes(
+            plan.result_indices.clone(),
+            result,
+            plan.result_axis_classes.clone(),
+        );
+    }
     let any_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
     if any_grad {
         let first_dtype = tensors[0].as_inner()?.dtype();
@@ -1079,11 +1134,42 @@ fn execute_contraction_plan(
         .map(|(tensor, ids)| (tensor, *ids))
         .collect::<Vec<_>>();
     let result_native = einsum_native_tensor_reads(&operand_refs, &plan.output_ids)?;
-    IdxTensor::from_untracked_native_with_axis_classes(
-        plan.result_indices.clone(),
-        result_native,
-        plan.result_axis_classes.clone(),
-    )
+    // Wrap the result in the operands' common eager runtime when they share
+    // one, so explicit-context tensors stay in their context instead of
+    // falling back to the process-global default. Mixed runtimes keep the
+    // legacy default wrap; rejecting them is #623 scope, not this seam's.
+    let mut common: Option<std::sync::Arc<tenferro_ad::EagerRuntime>> = None;
+    let mut mixed = false;
+    for tensor in tensors {
+        if let Some(runtime) = tensor.eager_runtime() {
+            match &common {
+                None => common = Some(runtime),
+                Some(first) => {
+                    if first.id() != runtime.id() {
+                        mixed = true;
+                    }
+                }
+            }
+        }
+    }
+    match (common, mixed) {
+        (Some(runtime), false) => {
+            let inner = tenferro_ad::extension::adopt_untracked_eager_value(
+                runtime,
+                TensorValue::from_tensor(result_native),
+            )?;
+            IdxTensor::from_inner_with_axis_classes(
+                plan.result_indices.clone(),
+                inner,
+                plan.result_axis_classes.clone(),
+            )
+        }
+        _ => IdxTensor::from_untracked_native_with_axis_classes(
+            plan.result_indices.clone(),
+            result_native,
+            plan.result_axis_classes.clone(),
+        ),
+    }
 }
 
 fn build_einsum_subscripts_from_usize_ids(

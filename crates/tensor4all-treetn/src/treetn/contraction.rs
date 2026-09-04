@@ -8,6 +8,20 @@
 //! - Successive randomized compression (`contract` with `ContractionMethod::Src`)
 //! - Validation (`validate_ortho_consistency`)
 //!
+//! ## SRC execution contexts
+//!
+//! [`contract_src_with_rng_in`](contract_src_with_rng_in) runs the full SRC
+//! schedule (chain and rooted-tree paths, fixed and adaptive modes, optional
+//! final SVD) against one caller-owned [`ExecutionContext`](tensor4all_tensorbackend::ExecutionContext).
+//! Both input trees, every probe/cap tensor, all intermediates, and the
+//! result belong to that context; only bounded decision payloads (rank
+//! selection, adaptive stopping scalars) cross the explicit readback
+//! boundary. Mixed host/CUDA inputs and foreign CUDA contexts fail validation
+//! before RNG advancement or contraction. The legacy [`contract`](contract)
+//! and [`contract_src_with_rng`](contract_src_with_rng) entries keep the
+//! CPU-global compatibility boundary for host inputs and reject resident
+//! inputs with a typed error.
+//!
 //! The SRC implementation follows Algorithm 1, Sections 3.1-3.5, and
 //! Appendices C--D of C. Camaño, E. N. Epperly, and J. A. Tropp,
 //! "Successive randomized compression: A randomized algorithm for the

@@ -2444,22 +2444,16 @@ impl IdxTensor {
             .into());
         }
 
-        let rank = self.indices.len();
-        let mut starts = vec![0_i64; rank];
-        let mut slice_sizes = self.dims();
+        // Slice positionally axis by axis in the operand's own runtime.
+        // (A starts-tensor + dynamic_slice build would need an explicit
+        // host-to-device upload for resident operands, which this
+        // context-free helper cannot name.)
+        let mut sliced = self.try_materialized_inner()?.clone();
         for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
-            starts[axis] = i64::try_from(position)
-                .map_err(|_| anyhow::anyhow!("selected coordinate does not fit in i64"))?;
-            slice_sizes[axis] = 1;
+            sliced = sliced
+                .slice_axis(axis, position..position + 1)
+                .map_err(|error| anyhow::anyhow!("select_indices slicing failed: {error}"))?;
         }
-
-        let starts_tensor = EagerTensor::from_tensor_in(
-            NativeTensor::from_vec_col_major(vec![rank], starts).map_err(anyhow::Error::new)?,
-            default_eager_ctx()?,
-        )?;
-        let sliced = self
-            .try_materialized_inner()?
-            .dynamic_slice(&starts_tensor, &slice_sizes)?;
         Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?).map_err(IdxTensorError::from)
     }
 
@@ -3134,6 +3128,17 @@ impl IdxTensor {
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
     }
 
+    /// Borrow the owning eager runtime without materializing or transferring.
+    ///
+    /// Returns `None` for tensors with no eager value. Used to keep
+    /// contraction results in their operands' context.
+    pub(crate) fn eager_runtime(&self) -> Option<Arc<EagerRuntime>> {
+        self.storage
+            .eager()
+            .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
+            .map(|inner| Arc::clone(inner.runtime()))
+    }
+
     /// Check whether this tensor's eager value is device-resident.
     ///
     /// Metadata-only: inspects placement without reading data, transferring,
@@ -3593,6 +3598,18 @@ impl IdxTensor {
         other: &Self,
         options: PairwiseContractionOptions,
     ) -> Result<Self> {
+        // Device-resident structured/diagonal operands cannot enter the native
+        // host session used below; route them through the owning-runtime eager
+        // plan executor (which also serves N-ary resident contraction).
+        // Dense-dense resident pairs keep the pairwise eager path, and host
+        // operands keep this function unchanged.
+        #[cfg(feature = "tenferro-cuda")]
+        if self.is_cuda_resident()
+            && other.is_cuda_resident()
+            && self.should_use_structured_payload_contract(other)
+        {
+            return super::contract::contract_pair_via_plan(self, other, options);
+        }
         let self_indices = profile_pairwise_contract_section("operand_indices", || {
             self.operand_indices_for_contraction(options.lhs_conj)
         });

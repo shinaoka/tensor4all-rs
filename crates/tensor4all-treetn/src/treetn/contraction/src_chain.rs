@@ -249,11 +249,12 @@ where
     }
 
     if src_options.final_svd {
-        result.truncate_impl(
+        result.truncate_impl_in(
             [center.clone()],
             svd_policy,
             Some(max_bond_dim),
             "contract_src: final truncate",
+            context,
         )?;
     } else {
         let rooted_edges = chain
