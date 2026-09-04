@@ -323,17 +323,20 @@ fn svd_truncated_inner_scoped(
     let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
         .svd()
         .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
-    let s_full = match context {
-        #[cfg(feature = "tenferro-cuda")]
-        Some(ExecutionContext::Cuda(_)) => {
-            let context = context.expect("CUDA context is present");
+    #[cfg(feature = "tenferro-cuda")]
+    let s_full = if let Some(context) = context {
+        if matches!(context, ExecutionContext::Cuda(_)) {
             resident_singular_values(&s_inner, context)?
-        }
-        _ => {
-            #[cfg(not(feature = "tenferro-cuda"))]
-            let _ = context;
+        } else {
             singular_values_from_eager(&s_inner)?
         }
+    } else {
+        singular_values_from_eager(&s_inner)?
+    };
+    #[cfg(not(feature = "tenferro-cuda"))]
+    let s_full = {
+        let _ = context;
+        singular_values_from_eager(&s_inner)?
     };
     let mut r = if options.truncate {
         // Shared root guard: reject `max_bond_dim == Some(0)` and invalid
