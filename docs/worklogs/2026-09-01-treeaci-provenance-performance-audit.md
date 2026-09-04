@@ -1962,7 +1962,7 @@ locator is used for the new engineering identity.
 | `D` determinism | **PASS** | Sorted neighbor selection makes the cut deterministic; checked assignment encodings and stable point-order remapping preserve repeatable keys/results. The complete release matrices and fixed benchmark fixture are repeatable; timing outliers are not correctness evidence. |
 | `S` scaling law | **PASS for the scoped warm assembly law** | The test-only counter enforces exactly `points * chi_edge`, independent of descendant size. The benchmark shows the warm edge route becoming increasingly favorable as χ grows; this is a scoped final-assembly/resource claim, not a claim about the full tree evaluator's asymptotic miss cost. |
 | `P` provenance/observability | **PASS** | New algorithm/design and gate-policy statements are labelled **[AI Supplied]** or `Tree generalization — re-derived`. No new paper claim was made, no new tenferro dependency was added, and the pre-cloned full-text evidence register remains the source-compliance record. `tensor4all-benchmark` is N/A: its dirty checkout has no maintained comparable TreeTN edge-cut workload. |
-| `CI` remote regression | **PENDING for the new #708 head; prior run checked** | Before this push, #710's CI run `33863186382` at head `dd1fc895c78b5d33de80cbceae1f94c2b094bf07` passed Coverage, Doctests, Lint, Maintenance scripts, Test, and `rollup-rs`; review bot run `33863184261` also passed. A new #708-head run will be recorded after push. Pending remote checks are not treated as passes and do not block starting #712; a newly observed failure is the next-round CI-repair task. |
+| `CI` remote regression | **PENDING for the current docs follow-up; implementation run recorded** | Before #708, #710's CI run `33863186382` at head `dd1fc895c78b5d33de80cbceae1f94c2b094bf07` passed Coverage, Doctests, Lint, Maintenance scripts, Test, and `rollup-rs`; review bot run `33863184261` also passed. The #708 implementation push is run `33867996612` at head `5a083908028f5a8618157340aee1a205c5a8729a`; its review bot `33867994373` passed, while CI_rs Coverage, Doctests, Lint, Maintenance scripts, and Test were pending when this entry was recorded. This worklog-only follow-up will trigger a replacement run; pending remote checks are not treated as passes and do not block starting #712. A newly observed failure is the next-round CI-repair task. |
 
 ### #708 verification commands and raw measurements
 
@@ -1990,7 +1990,7 @@ cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_
 Converged; sweeps=5; evaluated_points=96618
 ```
 
-The new implementation is ready to be committed and pushed as the #708
-subissue closure. The next implementation subissue is **#712** (the budgeted
+The new implementation has been committed and pushed as the #708 subissue
+closure. The next implementation subissue is **#712** (the budgeted
 shared-operand grouped-GEMM tensorbackend facade); per the execution protocol,
 stop after reporting this #708 closure and do not begin #712 in the same run.
