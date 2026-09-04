@@ -136,6 +136,13 @@ smoke test. The order is `C` (correctness), `E` (efficiency), then `R`
 - `R`: run the changed-crate release tests plus the relevant workspace or
   downstream checks, and verify that unaffected chain/simplett behavior,
   convergence/order, memory limits, and error messages did not regress.
+- `CI`: after the subissue commit is pushed, inspect the new required GitHub
+  checks together with the immediately preceding run's failure record. The
+  previous failure must either be absent in the new run or be reproduced,
+  fixed, and explicitly re-verified; a pending check is not a pass. Record the
+  old/new head SHAs, failed job name and log anchor, local reproduction command,
+  and final conclusion in the worklog. This gate is independent of local
+  release tests and cannot be closed from a smoke job or a green unrelated job.
 
 The following secondary gates are required whenever the task touches the
 corresponding behavior; otherwise the task must record `N/A` and explain why:
@@ -790,6 +797,12 @@ gate and must not be smuggled into this coverage task.
 - `R6`: evaluator release tests, cache policy, memory limits, and the affected
   downstream isolated ACI stage pass. A downstream run is required because
   branch setup is an end-to-end TreeACI hot path.
+- `CI6`: after pushing the #711 commit, inspect the preceding PR CI run (in
+  particular the earlier CI_rs / Maintenance failure) and the new required
+  checks. Re-run the exact failed job command locally when available; if the
+  old failure recurs, #711 remains open until the cause is fixed and the new
+  run passes. Record the old/new run IDs, head SHAs, job/log anchors, and
+  conclusion in the worklog; a pending remote check is not accepted as a pass.
 - Secondary gates: `N`, `M`, `F`, `I`, `D`, `S`, `P`; mark any provider/layout
   combination not exercised by the benchmark as N/A rather than extrapolating.
 
@@ -825,6 +838,26 @@ gate and must not be smuggled into this coverage task.
   git add crates/tensor4all-treetn/src/treetn/cached_evaluator.rs crates/tensor4all-treetn/benches/cached_evaluator.rs
   git commit -m "perf(treetn): reuse prepared branch core slices"
   ```
+
+- [ ] **Step 7: Run the remote CI regression gate after pushing #711.**
+
+  ```bash
+  git fetch origin
+  old_run_id="<preceding PR CI run>"
+  old_head_sha="<preceding PR head SHA>"
+  gh pr checks 722
+  gh run view "$old_run_id" --json headSha,conclusion,jobs
+  gh run view "$old_run_id" --log-failed
+  # After the new required checks finish:
+  gh pr checks 722
+  ```
+
+  Compare the old and new required-check conclusions. Confirm that the
+  previous CI_rs / Maintenance failure is absent or that its exact repair has
+  a passing replacement job. Record the old/new run IDs, head SHAs, job name,
+  log line, local reproduction, and final result in the worklog before marking
+  `CI6` and Task 6 complete. If the new run is still pending, stop at this
+  gate rather than declaring #711 complete.
 
 ---
 
