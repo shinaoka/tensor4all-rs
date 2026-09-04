@@ -346,6 +346,46 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
 }
 
 #[test]
+fn probe_cuda_incremental_probe_batch_drops_dependent_columns() {
+    use tensor4all_core::{
+        DynIndex, ExecutionContext, IdxTensor, IndexLike, TensorFactorizationLike,
+    };
+
+    let cuda = Arc::new(CudaExecutionContext::new().unwrap());
+    let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+    let row = DynIndex::new_dyn(4);
+    let block_a = DynIndex::new_dyn(1);
+    let block_b = DynIndex::new_dyn(1);
+    let values = vec![1.0, 2.0, 3.0, 4.0];
+    let host_a = IdxTensor::from_dense(vec![row.clone(), block_a.clone()], values.clone()).unwrap();
+    let host_b = IdxTensor::from_dense(vec![row.clone(), block_b.clone()], values).unwrap();
+    let resident_a = host_a.upload_cuda(&cuda).unwrap();
+    let resident_b = host_b.upload_cuda(&cuda).unwrap();
+
+    let first = IdxTensor::factorize_probe_batch_incremental_in(
+        None,
+        &resident_a,
+        &block_a,
+        std::slice::from_ref(&row),
+        &context,
+    )
+    .unwrap();
+    let grown = IdxTensor::factorize_probe_batch_incremental_in(
+        Some(&first),
+        &resident_b,
+        &block_b,
+        std::slice::from_ref(&row),
+        &context,
+    )
+    .unwrap();
+    assert_eq!(first.rank, 1);
+    assert_eq!(grown.rank, 1);
+    assert_eq!(grown.right.indices()[1].dim(), 2);
+    assert!(grown.left.validate_context(&context).is_ok());
+    assert!(grown.right.validate_context(&context).is_ok());
+}
+
+#[test]
 fn cuda_scale_and_norm_in_match_cpu() {
     use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
 
