@@ -3758,6 +3758,12 @@ fn candidate_product_accounting_separates_the_batched_and_scalar_exponents() {
 
     let records = COUNTS.map(|m| measure_candidate_product_accounting(m, CHI));
 
+    // Printed so the exact counts, not only the formulas they satisfy, are
+    // recoverable from a `--nocapture` run and quotable in the worklog.
+    for (m, record) in COUNTS.iter().zip(&records) {
+        eprintln!("#718 candidate-product accounting: m={m} {record:?}");
+    }
+
     for (m, record) in COUNTS.iter().zip(&records) {
         let required = record.outgoing_dim * record.chi_product;
         assert_eq!(

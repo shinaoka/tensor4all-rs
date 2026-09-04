@@ -1686,6 +1686,20 @@ crate-boundary-ok
 python3 scripts/repository-rules-review.py --base main --worktree --dry-run
 Verdict: pass; No findings.
 
+python3 scripts/check-crate-boundaries.py
+crate-boundary-ok
+python3 scripts/audit-library-panics.py
+Audit passed: 0 unbaselined findings, 0 stale baseline entries
+
+python3 scripts/check-public-error-docs.py
+public Result APIs with incomplete error documentation:
+- crates/tensor4all-tensorbackend/src/matrix.rs:638: grouped_mat_mul_shared_with_backend: # Errors does not name a concrete variant or condition
+- crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1373: new: # Errors does not name a concrete variant or condition
+- crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1714: with_plan: # Errors does not name a concrete variant or condition
+(the same three findings reproduce on a clean `git archive a7632cc` tree, so
+ they are inherited from #712 and #709 and are not caused by this commit --
+ see Open items item 6)
+
 SGW_RUN_TAG=aci-gate SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0
 complete checked-in A/B workflow passed in clean archive /tmp/sgw-treeaci-gate.3XdbB5
 
@@ -2228,6 +2242,20 @@ crate-boundary-ok
 
 python3 scripts/repository-rules-review.py --base main --worktree --dry-run
 Verdict: pass; No findings.
+
+python3 scripts/check-crate-boundaries.py
+crate-boundary-ok
+python3 scripts/audit-library-panics.py
+Audit passed: 0 unbaselined findings, 0 stale baseline entries
+
+python3 scripts/check-public-error-docs.py
+public Result APIs with incomplete error documentation:
+- crates/tensor4all-tensorbackend/src/matrix.rs:638: grouped_mat_mul_shared_with_backend: # Errors does not name a concrete variant or condition
+- crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1373: new: # Errors does not name a concrete variant or condition
+- crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1714: with_plan: # Errors does not name a concrete variant or condition
+(the same three findings reproduce on a clean `git archive a7632cc` tree, so
+ they are inherited from #712 and #709 and are not caused by this commit --
+ see Open items item 6)
 ```
 
 Test-first record: the differential and routing tests were added and run
@@ -2602,3 +2630,600 @@ invented at the benchmark level:
   records and logical retained bytes, not hit rates);
 - a process peak-byte figure. All byte numbers in this task are the documented
   logical payload accounting, never allocator or RSS measurements.
+
+## 2026-09-04 #718 closure: scaling and end-to-end gates
+
+This entry closes #718, the last subissue of the #699 umbrella. It records the
+gate machinery added in commit `5d4bdee`, the measurements taken against the
+protocol predeclared in the section above, the two carry-over downstream gates
+inherited from #713 and #709, and the `R12` final report covering every
+task-level gate of Tasks 1--12.
+
+Every design, gate-policy, and measurement-interpretation statement here is
+**[AI Supplied]** engineering evidence. No new literature claim is made and no
+existing source locator is repurposed: the full-text ACI/TCI/tenferro clones,
+hashes, and page/equation/pseudocode locators recorded in the `ACI-C*`,
+`TCI-C*`, and `TEN-C*` register above remain the algorithmic authority.
+
+### #718 changes
+
+Commit `5d4bdee` changes **no production code at all**. Every insertion in a
+`src/` file is inside `#[cfg(test)]` (a counter, or a test), and the remaining
+files are `benches/`, one `Cargo.toml` target entry, and this worklog.
+`git diff a7632cc..5d4bdee` covers:
+
+- `crates/tensor4all-treeaci/benches/aci_scaling.rs` (new) plus its
+  `[[bench]]` entry and a `criterion` dev-dependency. It varies chain length,
+  input bond dimension, output rank cap, hub coordination number, unequal
+  incident bonds at a fixed bond product, and evaluator batch size **one
+  dimension at a time**, and covers chain, exactly-two-incoming, three-or-more
+  incoming, cold evaluator, warm evaluator, and working-budget cases. Each case
+  materializes the interpolated tree once, compares it against one dense
+  elementwise reference, and prints residual, sweeps, maximum output rank,
+  evaluated points, global pivots, saturated edges, and retained frame/sample/
+  candidate accounting before its timed loop starts.
+- `crates/tensor4all-treetn/src/treetn/cached_evaluator.rs`:
+  `warm_edge_cut_assembly_work_is_points_times_edge_bond_only`, which sweeps
+  the point count, the cut bond dimension, and the descendant bond dimensions
+  independently at 1x/2x/4x and asserts the #708 law exactly.
+- `crates/tensor4all-treeaci/src/frames.rs` and `src/frames/tests/mod.rs`: a
+  test-only `debug_stats::core_element_reads` counter, recorded once per gather
+  and once per scalar contraction call from the shape that call is about to
+  walk (so the inner reduction loops keep their exact pre-instrumentation form
+  and the #713 timing measurement is not perturbed), plus
+  `candidate_product_accounting_separates_the_batched_and_scalar_exponents`.
+- `crates/tensor4all-aci/benches/treeaci_parity.rs`: the preserved
+  simplett-versus-TreeACI comparison now also reports callback counts for both
+  arms, sample-arena and candidate accounting, global pivots, saturated edges,
+  the configured budgets, retained-byte compliance assertions, and the
+  reproducibility metadata header.
+
+### Terminology used in every number below
+
+`z` is the tree coordination number (incident bonds); the candidate-frame
+kernel is chosen by the incoming-component count `z - 1`. `z = 3` (Y junction,
+comb branch point) has two incoming components and uses the exactly-two-incoming
+kernel; the #713 arbitrary-degree route is first reached at `z = 4`.
+
+### Measurement environment
+
+`AMD Ryzen 9 6900HX with Radeon Graphics`, 8 cores / 16 threads, 19 GiB RAM,
+`Linux 6.18.33.2-microsoft-standard-WSL2`. All timings pinned with
+`taskset -c 0` and `RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1
+TENFERRO_NUM_THREADS=1`, release/bench profile, three whole-binary repetitions
+per benchmark, Criterion median with a 95% bootstrap confidence interval, ten
+samples per case. Noise floor is reported per case as the run-to-run spread of
+per-run medians.
+
+### `L2` deterministic complexity gates (counters, not wall clock)
+
+All three laws hold exactly, at every measured size:
+
+| law | gate | measured |
+|---|---|---|
+| raw-centre topology work `d * product(chi_e)` | `raw_center_work_scales_with_coordination_number_and_actual_bond_dimensions` (kept, unchanged) | `z=2` at `chi=64/128/256`: `2*chi^2`, ratios exactly `4`; `z=3`: `2*chi^3`, ratios exactly `8`; unequal `[64,128,256]` with `d=3`: exactly `3*64*128*256 = 6291456`, not `max(chi)^z` |
+| #708 warm edge-cut assembly `points * chi_edge` | `warm_edge_cut_assembly_work_is_points_times_edge_bond_only` (new) | points `2/4/8` at `chi_edge=4`: `8/16/32` visits, exactly linear; `chi_edge` `2/4/8` at `4` points: `8/16/32`, exactly linear; descendant bonds `2/4/8` at fixed `points=4, chi_edge=4`: `16/16/16`, i.e. **no** dependence on descendant size. Each measurement also asserts `message_cache_misses == 0`, so it really is the warm route |
+| #713 candidate-product accounting | `candidate_product_accounting_separates_the_batched_and_scalar_exponents` (new) | at `chi=[3,3,3]`, `outgoing_dim=4`, candidates per component `m = 2/4/8` (candidate product `8/64/512`, i.e. 1x/8x/64x, with `outgoing_dim = 4` and `product(chi_k) = 27`): batched core reads `108/108/108` = `outgoing_dim * product(chi_k)` exactly, **constant** in the candidate product; scalar core reads `864/6912/55296` = `candidates * outgoing_dim * product(chi_k)` exactly, growing `1x/8x/64x`; packed full cross `32/256/2048` values, growing `1x/8x/64x`. Both routes are compared against each other with a whole-result residual `<= 1e-12 * scale` before any count is accepted |
+
+The third row is the counter-based statement of the #713 claim that the earlier
+closure could only make with a 16x--313x timing ratio: it is the candidate-count
+exponent, not a constant factor, that the batched route removes, and the
+remaining `outgoing_dim * product(n_k)` full cross is pinned so a future
+lazy/block formulation has a number to beat.
+
+### `L1` reported slow workload: the bond-256 default-Guard chain gate
+
+The #699 reference for this lane is "TreeACI is `0.88x` the simplett ACI time
+with Guard disabled but `2.47x` with the default Guard" on the deterministic
+input-bond-256 16-site chain. Both arms were re-measured in the same binary,
+three whole-binary repetitions each.
+
+Default Guard (`T4A_TREEACI_PARITY_ENABLE_GUARD=1`, group
+`aci_vs_treeaci_chain_guard`), medians of per-run medians in ms:
+
+| chi | simplett | spread | TreeACI | spread | tree/train | simplett points | tree points |
+|---|---|---|---|---|---|---|---|
+| 16 | 45.894 | 0.81% | 63.970 | 1.52% | **1.394** | 100472 | 71972 |
+| 32 | 20.840 | 0.58% | 100.050 | 1.70% | **4.801** | 30300 | 66226 |
+| 64 | 126.010 | 1.04% | 50.942 | 3.00% | **0.404** | 78816 | 29452 |
+| 128 | 73.619 | 1.66% | 69.115 | 9.34% | **0.939** | 41536 | 34756 |
+| 256 | 117.540 | 1.56% | 97.405 | 2.95% | **0.829** | 47904 | 37752 |
+
+Guard disabled (group `aci_vs_treeaci_chain`):
+
+| chi | simplett | spread | TreeACI | spread | tree/train | simplett points | tree points |
+|---|---|---|---|---|---|---|---|
+| 16 | 13.629 | 4.53% | 8.320 | 3.74% | **0.610** | 48584 | 29988 |
+| 32 | 12.248 | 3.71% | 9.396 | 3.89% | **0.767** | 29096 | 28312 |
+| 64 | 20.526 | 2.36% | 11.596 | 3.97% | **0.565** | 37660 | 28312 |
+| 128 | 23.897 | 8.08% | 16.525 | 7.66% | **0.692** | 40396 | 33584 |
+| 256 | 47.775 | 3.17% | 24.329 | 9.28% | **0.509** | 46732 | 36516 |
+
+At the reference point, bond 256: **`2.47x` slower with the default Guard has
+become `0.829x`, and `0.88x` without the Guard has become `0.509x`.** Both are
+far outside the observed noise floor (worst per-case run-to-run spread `9.34%`).
+Accuracy is unchanged and matched: at `chi=256` the relative dense residual is
+`1.442e-8` for simplett and `1.343e-8` for TreeACI against the exact product,
+both arms reach rank 17 in 2 sweeps, and TreeACI still evaluates fewer operator
+points (37,752 versus 47,904).
+
+Two honest caveats on this table.
+
+1. With the Guard enabled the two implementations no longer follow the same
+   trajectory: at `chi=32` TreeACI takes 5 sweeps and 66,226 points against
+   simplett's 2 sweeps and 30,300 points, which is why its `4.801` ratio there
+   is a *different amount of work*, not a slower implementation; at `chi=64`
+   the asymmetry runs the other way (simplett 6 sweeps / 78,816 points versus
+   TreeACI 2 sweeps / 29,452 points, ratio `0.404`). The `chi=128` and
+   `chi=256` rows are the ones where both arms take the same 2 sweeps at
+   comparable rank, and those are the rows the reference point lives on.
+2. This is a workload-level comparison of two implementations, not a
+   baseline/candidate pair of one implementation, so it states where TreeACI
+   now stands against the recorded reference. It is not used to attribute the
+   change to any single subissue.
+
+### `L1` reported slow workload: the audit's non-finishing phase profile
+
+`Measurements and limitations` item 2 above records that "the high-rank chain
+phase profile ... did not finish a single sweep within approximately 2.5
+minutes after compilation and was interrupted. No number from that run is
+used." The surviving fixture for that lane is
+`state::tests::profile_high_rank_chain_phases_and_candidate_cache`, a 32-site
+`d=2` two-input chain at `chi = 64/128/256` (the audit text says 16 sites; the
+fixture in the tree is 32, so the comparison below is a conservative lower
+bound on the improvement). It now completes both sweeps at every bond
+dimension:
+
+```text
+Guard disabled (the test's default)
+chi=64   initialize=22.951 ms  sweeps=18.897 ms   completed=2  candidate hits/misses 1160/7388
+chi=128  initialize=47.393 ms  sweeps=32.774 ms   completed=2  candidate hits/misses 1092/12072
+chi=256  initialize=232.399 ms sweeps=151.460 ms  completed=2  candidate hits/misses 1004/20580
+whole test: 0.60 s
+
+Guard enabled (T4A_TREEACI_ENABLE_PROFILE_GUARD=1)
+chi=64   initialize=23.170 ms  sweeps=313.861 ms   guard search=264.850 ms
+chi=128  initialize=45.254 ms  sweeps=507.381 ms   guard search=432.892 ms
+chi=256  initialize=215.336 ms sweeps=1.498733 s   guard search=1.231894 s
+whole test: 2.70 s
+```
+
+The audit's `chi=128` datum was ">= 150 s for less than one sweep"; the same
+fixture now completes two sweeps in `80.2 ms` without the Guard and `552.6 ms`
+with it. **The reported slow workload reproduces as a fixture and is no longer
+slow.** This lane is therefore closed as reproduced-and-resolved rather than
+inconclusive.
+
+One residual is visible and is recorded rather than hidden: with the Guard on,
+the guard's random-start search still dominates this 32-site fixture --
+`1.231894 s` of the `1.498733 s` sweep total at `chi=256`, of which
+`1.147752 s` is input evaluation over 2,218 calls returning 8,844 scalars. That
+is not a regression (#709's typed path is what makes those calls cheap enough
+to finish at all), but it is the next thing to look at on this fixture, and it
+is not covered by any #699 subissue. See **Open items** below.
+
+### `L3` independent scaling fixtures
+
+Criterion medians of per-run medians (ms), three whole-binary repetitions,
+`taskset -c 0`. Every case's dense residual and diagnostics are printed in the
+raw log and reproduced in part here.
+
+**Chain length** at fixed `chi=16`, no rank cap (1x/2x/4x in `N`):
+
+| N | median (ms) | spread | evaluated points | max output rank | sweeps | residual/scale |
+|---|---|---|---|---|---|---|
+| 4 | 0.645 | 0.66% | 96 | 4 | 2 | 2.220e-16 / 9.969e-1 |
+| 8 | 7.806 | 0.90% | 2260 | 15 | 2 | 5.371e-9 / 1.000e0 |
+| 16 | 64.857 | 2.45% | 51902 | 29 | 3 | 1.158e-8 / 8.923e-1 |
+
+Growth is `x12.1` then `x8.3`, tracking the evaluated-point count
+(`x23.5` then `x23.0`) rather than `N` itself: the cost of doubling a chain is
+the output rank it unlocks, and time *per evaluated point* actually falls
+(`6.7 -> 3.45 -> 1.25 us`).
+
+**Input bond dimension** at fixed `N=12`, no rank cap:
+
+| chi | median (ms) | spread | evaluated points | max output rank | frame bytes |
+|---|---|---|---|---|---|
+| 8 | 25.157 | 2.53% | 16182 | 22 | 162272 |
+| 16 | 20.620 | 4.35% | 14092 | 26 | 283168 |
+| 32 | 21.173 | 1.16% | 17628 | 27 | 468160 |
+
+Flat in `chi` to within noise while retained frame bytes grow `1.7x` per
+doubling. This is the useful negative result of the sweep: on this fixture the
+input bond dimension buys memory, not time -- the time is set by the output
+rank and the evaluated-point count. (The `chi=8` row runs one extra sweep and
+five global pivots, which is why it is the slowest.)
+
+**Active output rank** at fixed `N=12`, `chi=16`, cap `4/8/16`:
+
+| cap | median (ms) | spread | evaluated points | residual | termination |
+|---|---|---|---|---|---|
+| 4 | 3.801 | 2.03% | 1088 | 2.308e-4 | RankLimited |
+| 8 | 4.329 | 2.55% | 3392 | 1.460e-5 | RankLimited |
+| 16 | 5.175 | 1.26% | 9536 | 3.255e-7 | RankLimited |
+
+Each rank doubling costs about `1.15x` time and `2.8x` evaluated points, and
+buys between one and two orders of magnitude of accuracy. The observed rank
+equals the cap in every row, so the cap really is the control variable.
+
+**Coordination number** at a fixed 13 sites, fixed hub bond 4, arms rearranged
+so only `z` varies:
+
+| z | incoming | arm length | median (ms) | spread | evaluated points | max rank | sweeps |
+|---|---|---|---|---|---|---|---|
+| 2 | 1 | 6 | 66.332 | 3.15% | 28598 | 14 | 7 |
+| 3 | 2 | 4 | 39.820 | 6.82% | 60562 | 14 | 4 |
+| 4 | 3 | 3 | 9.613 | 0.46% | 38496 | 8 | 2 |
+| 6 | 5 | 2 | 69.727 | 2.48% | 98496 | 4 | 2 |
+
+Time is *not* monotone in `z` at fixed site count, because rearranging the same
+13 sites changes the achievable rank (14, 14, 8, 4) and the sweep count
+(7, 4, 2, 2) as well as the coordination. Evaluated points do grow with `z`
+(`28.6k -> 98.5k`), which is the topology-required part. The `z >= 4` rows are
+the ones that exercise the #713 arbitrary-degree route end to end, and they are
+the cheapest per evaluated point (`0.25 us` at `z=4` versus `2.32 us` at
+`z=2`), so the route is not a cliff at this scale.
+
+**Unequal incident bonds** at coordination 4, 13 sites, hub bond product 256 in
+all three layouts -- a new finding:
+
+| hub bonds | median (ms) | spread | evaluated points | us / evaluated point | max rank | residual |
+|---|---|---|---|---|---|---|
+| `4,4,4,4` | 9.619 | 0.39% | 38496 | 0.25 | 8 | 3.331e-16 |
+| `2,4,8,4` | 188.550 | 5.40% | 56784 | 3.32 | 8 | 7.772e-16 |
+| `8,4,2,4` | 136.100 | 11.45% | 22446 | 6.06 | 8 | 7.216e-16 |
+
+All three reach the same maximum output rank 8 with an exact residual, and all
+three have the same topology-required hub work: on every outward arc of the hub
+`outgoing_dim * product(incoming bonds)` equals the bond product 256,
+independently of how the 256 is split. The `8,4,2,4` layout nevertheless
+evaluates **fewer** points than the equal layout (22,446 versus 38,496) and
+still takes `14.2x` the wall time, i.e. `24x` more time per evaluated point.
+This is reproducible across all three repetitions (`146.59/136.10/131.00` ms
+versus `9.62/9.64/9.60` ms) and is not a convergence-trajectory artefact.
+
+**This is a new, previously unmeasured performance asymmetry**: at equal bond
+product, an unequal incident-bond layout costs an order of magnitude more per
+unit of required work than an equal one. It is exactly the kind of defect a
+single fixed-size fixture cannot see, and it is what this gate was built to
+find. #718 does not diagnose it -- diagnosis needs a profile of the routing,
+cache, and factorization paths under an unequal layout -- so it is recorded as
+an open follow-up rather than explained here. See **Open items**.
+
+**Evaluator batch size**, 16-site chain at `chi=32`, centre site 8, typed
+batch evaluation:
+
+| points | cold (ms) | spread | warm (ms) | spread | cold/warm |
+|---|---|---|---|---|---|
+| 4 | 0.170 | 2.85% | 0.020 | 2.58% | 8.5x |
+| 16 | 0.193 | 1.55% | 0.032 | 1.18% | 6.0x |
+| 64 | 0.288 | 1.55% | 0.086 | 1.05% | 3.3x |
+
+Cold cost is dominated by fixed setup (`1.7x` for `16x` the points); warm cost
+scales with the batch (`4.3x` for `16x` the points), i.e. sub-linear and
+consistent with the warm path paying per point and not per node. Every cold and
+warm answer is checked against `TreeTN::evaluate` first: residual `1.665e-16`
+at every size.
+
+**Working-memory limit**, coordination-4 spider, hub bonds `8,8,8,8`:
+
+```text
+ladder: 512 MiB ok | 16 MiB ok | 4 MiB ok | 1 MiB ok | 512 KiB ok
+        256 KiB refused: resource="working bytes" requested=429568 limit=262144
+1-byte budget refused: resource="working bytes" requested=64 limit=1
+generous 512 MiB   21.526 ms (spread 7.46%)  rank 8  66176 points  residual 4.441e-16
+tight    512 KiB   21.340 ms (spread 3.71%)  rank 8  66176 points  residual 4.441e-16
+```
+
+A budget 1024x smaller changes neither the answer, the rank, the evaluated-point
+count nor the time beyond noise, and the first rung below the prepared minimum
+is refused with the exact requested/limit pair rather than silently exceeded.
+The tight rung is found by a descending ladder at run time rather than
+hard-coded, because the charge depends on the candidate counts the run itself
+discovers.
+
+### `L4` #709 carry-over: the `../../gw-rs/sgw` downstream Guard stage
+
+This gate was recorded **open, not waived** in the #709 closure ("the
+`../../gw-rs/sgw` downstream stage isolation was deliberately not run in this
+task"). It is run here.
+
+Method. `git -C /root/projects/gw-rs/sgw archive HEAD` (`ba6fbf3e...`) was
+extracted into two clean temporary copies, each given a non-committed
+`[patch."https://github.com/tensor4all/tensor4all-rs.git"]` section pointing at
+a `git archive` of one tensor4all-rs revision: baseline `4713ba8` (the #713
+closure, i.e. #709 absent) and candidate `a7632cc` (the #709 closure). Both
+sides therefore contain #713 and differ only by #709. The dirty
+`/root/projects/gw-rs/sgw` checkout was never modified: its `HEAD` is still
+`ba6fbf3e...`, its 59 pre-existing dirty paths are unchanged, no stash was
+created, and no run directory was added to it.
+
+Full workflow, candidate side, `SGW_ACI_GLOBAL_GUARD=1`, `G0_THREADS=1`:
+
+```text
+T=1.0  SGW_RUN_TAG=aci-gate-718     simplett real 19.78 s | treeaci real 30.97 s | cttn real 11.18 s
+T=0.1  SGW_RUN_TAG=gate718t01       simplett real 29.76 s | treeaci real 26.23 s | cttn real 22.60 s
+```
+
+Both completed every configured stage: SimpleTT, TreeACI, and CTTN pipelines,
+all four checkpoint stages, five row slices, assembly, and plotting. The
+`T=1.0` wall times were taken while the baseline copy was still compiling and
+are reported only as completion evidence, not as timings; the `T=0.1` numbers
+are from a quiet machine. At `T=0.1` the nblock TreeACI arm is `0.88x` the
+SimpleTT arm and the comb CTTN arm `0.76x`, end to end.
+
+Paired isolated stage measurement. Both sides read the **same** candidate-produced
+checkpoints, three repetitions per side, `taskset -c 0`, whole-binary wall time
+from `/usr/bin/time` plus the stage's own reported ACI time.
+
+Parity first, at `T=1.0`:
+
+| stage | sweeps | max bond | final err | termination | global pivots | evaluated points (base / cand) |
+|---|---|---|---|---|---|---|
+| `pi_rtau` | 7 / 7 | 38 / 38 | 9.775e-5 / 9.775e-5 | Converged / Converged | `[3,1,2,0,1,0,0]` both | 177526--177586 / 177466--177766 |
+| `sigma_rtau` | 5 / 5 | 39 / 39 | 9.304e-5 / 9.304e-5 | Converged / Converged | `[4,3,2,0,0]` both | 99494--99554 / 99554--99614 |
+
+and at `T=0.1`:
+
+| stage | sweeps | max bond | final err | termination | global pivots | evaluated points (base / cand) |
+|---|---|---|---|---|---|---|
+| `pi_rtau` | 7 / 7 | 169 / 169 | 9.941e-5 / 9.941e-5 | Converged / Converged | `[4,4,3,1,1,0,0]` both | 2152690--2152990 / 2152750--2152810 |
+| `sigma_rtau` | 7 / 7 | 123 / 123 | 9.976e-5 / 9.976e-5 | Converged / Converged | `[2,2,2,2,0,0,0]` both | 1209430--1209550 / 1209430--1209670 |
+
+The stage diagnostics JSON also agrees exactly on both sides at both
+temperatures: `hub=0:9 (z=2, bond_dims=[4,4])` versus
+`chain=0:0 (bond_dims=[6,9])`. The evaluated-point counts differ by at most
+`0.17%` **within** each side as well as between sides, because the Guard's
+random-start search is not seeded deterministically in this harness; the sweep
+count, rank, error, termination, and pivot-per-sweep vector are bit-identical.
+
+Then paired medians:
+
+| stage | T | baseline wall (s) | candidate wall (s) | delta | baseline stage (s) | candidate stage (s) | delta | maxrss base / cand |
+|---|---|---|---|---|---|---|---|---|
+| `pi_rtau` | 1.0 | 1.44 `[1.41,1.44,1.44]` | 1.14 `[1.14,1.14,1.14]` | **-20.8%** | 1.0 | 0.7 | -30% | 84.9 / 84.6 MiB |
+| `sigma_rtau` | 1.0 | 1.33 `[1.32,1.33,1.34]` | 1.15 `[1.11,1.15,1.15]` | **-13.5%** | 0.7 | 0.5 | -29% | 81.0 / 80.9 MiB |
+| `pi_rtau` | 0.1 | 3.08 `[3.11,3.05,3.08]` | 2.80 `[2.84,2.80,2.70]` | **-9.1%** | 2.0 | 1.6 | -20% | 125.2 / 124.8 MiB |
+| `sigma_rtau` | 0.1 | 2.81 `[2.81,2.81,2.82]` | 2.46 `[2.43,2.47,2.46]` | **-12.5%** | 1.7 | 1.3 | -24% | 125.0 / 125.0 MiB |
+
+Observed noise floor: the within-side per-repetition wall spread is at most
+`5.0%` (candidate `pi_rtau` at `T=0.1`) and typically `0--2%`. Every delta is
+above it, and the stage-only deltas (`20--30%`) are several times above it. Peak
+resident memory is unchanged, so the improvement is time, not a memory trade.
+
+**`R10` for #709 is now PASS.** The gate is closed with parity first, then
+paired medians, at two temperatures, on the real production stage.
+
+### `L5` #713 carry-over: downstream applicability, verified not assumed
+
+The #713 closure recorded its downstream gate as `N/A` on the reasoning that
+SGW never reaches coordination `>= 4`. That reasoning was re-derived here from
+the downstream source at its clean `HEAD` `ba6fbf3e...`, not taken on trust:
+
+- `run_r10_nblock_treeaci_ab.sh:run_one` sets `SGW_LAYOUT=nblock`.
+  `src/topology.rs` builds `BuiltinTopology::NBlock` as `nblock_order(...)`
+  followed by `order.windows(2)`, i.e. a plain path. Maximum coordination 2,
+  so at most **one** incoming component.
+- `run_r10_nblock_treeaci_ab.sh:run_cttn` sets `SGW_TOPOLOGY=comb`.
+  `src/topology.rs` builds `BuiltinTopology::Comb` as `(0,1)`, `(1,2)`, plus
+  `(start + 3*(bit-1), start + 3*bit)` for `start in 0..3` and `bit in 1..r`.
+  For any `r`, node 1 carries `(0,1)`, `(1,2)` and `(1,4)` -- degree 3 -- and
+  every other node has degree at most 2. Maximum coordination 3, so at most
+  **two** incoming components.
+- `tests/fixtures/branching_topology.json` has edges
+  `[[0,1],[1,2],[1,3],[3,4]]`: degrees `1,3,1,2,1`, maximum coordination 3.
+
+The #713 route needs coordination `>= 4`. It is unreachable in both downstream
+arms and in the downstream branching fixture, for any `r`. **`N/A` is
+confirmed, with the source evidence, rather than assumed.**
+
+### Sibling `tensor4all-benchmark`: not applicable, with evidence
+
+Checkout `/root/projects/tensor4all-rust/tensor4all-benchmark`, `HEAD`
+`f1b139c0...` with 9 pre-existing dirty paths (untouched by this task). Its
+maintained binaries are `elementwise_fourier.rs`,
+`elementwise_gauss2d_patched.rs`, and `mpo_mpo_aniso_patched.rs`;
+`grep -rn "treeaci\|TreeAci" src/ Cargo.toml scripts/` returns nothing and its
+manifest has no `tensor4all-treeaci` dependency at all. Independently, this
+commit changes no production code, so there is no shared seam that could
+regress. The official single-core profile was therefore **not run** and this
+gate is **not applicable**, not a waived failure. No SimpleTT/chain ACI run
+from that checkout is used anywhere above as a TreeACI efficiency signal.
+
+### #718 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C12` correctness | **PASS** | Deterministic work-count gates are asserted independently of timing and all pass exactly (`L2` table). Complete-ACI parity against simplett covers all five bond dimensions with and without the default Guard, comparing sweeps, maximum output rank, last pivot error, callbacks, evaluated points, retained frame/sample/candidate accounting, and the dense residual against the exact elementwise product; at `chi=256` the relative residuals are `1.442e-8` (simplett) and `1.343e-8` (TreeACI). Every scaling case checks one dense materialization against one dense reference before its timed loop and aborts otherwise. Release matrices: `tensor4all-treetn` 524 lib tests passed / 2 pre-existing ignored; `tensor4all-treeaci` 159 lib / 7 pre-existing ignored, 1 `branch_degree`, 7 `public_api`, 1 `rank_scaling`, 18 doctests. No tolerance was relaxed anywhere. **Limit:** the four scalar kinds are not re-swept here; that matrix is #717's and remains green. |
+| `E12` efficiency | **PASS** | Every claim above carries a median, a run-to-run noise floor, and a named primary metric fixed in the predeclared protocol before measuring. `L1`: bond-256 default-Guard ratio `2.47x -> 0.829x`, no-Guard `0.88x -> 0.509x`, worst per-case spread `9.34%`. `L4`: baseline/candidate paired medians at two temperatures, deltas `9.1--20.8%` whole-binary and `20--30%` stage-only against a `<= 5.0%` noise floor, with identical outputs. `L2`: exact counter equalities, no threshold involved. No issue is closed on a single favourable run: three whole-binary repetitions per benchmark, three repetitions per side downstream. **Limit:** `L3` reports observed growth only; it establishes the gate and deliberately makes no speedup claim, because a speedup claim would need a baseline/candidate pair on the same new fixture. |
+| `R12` regression/integration | **PASS with two named exceptions** | Changed-crate release matrices pass (above). `cargo fmt --all -- --check` clean. `cargo clippy --release -p tensor4all-treeaci -p tensor4all-treetn -p tensor4all-aci --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc` clean. `python3 scripts/repository-rules-review.py --base main --worktree --dry-run` pass. The affected downstream isolated stages and the full `run_r10_nblock_treeaci_ab.sh` workflow were run at `T=1.0` and `T=0.1` (`L4`). The sibling benchmark is explicitly not applicable, with evidence. **Exception 1:** the workspace-wide pre-PR gate (`cargo clippy --workspace`, `cargo nextest run --cargo-profile ci --workspace`, `cargo test --doc --profile ci --workspace`, `cargo doc --workspace`) was **not run** in this task and is **pending**; it is owned by the integrating run. **Exception 2:** the remote `CI` gate is **not run** because this branch is deliberately not pushed. **Exception 3:** `python3 scripts/check-public-error-docs.py` **fails**, with three findings that all reproduce on a clean `git archive a7632cc` tree and are therefore inherited from #712 and #709 rather than caused by #718; `audit-library-panics.py` and `check-crate-boundaries.py` pass. This will fail the CI `Maintenance scripts` job and must be fixed before the branch is pushed (Open items item 6). |
+| `N` numerical stability | **PASS** | Every parity and scaling case asserts a dense whole-result residual against an exact reference before its timing is accepted; the rank-capped sweep reports a genuine truncation trajectory (`2.308e-4 -> 1.460e-5 -> 3.255e-7`) rather than an accidental exact case; the downstream stages converge to their configured `1e-4` tolerance with identical maximum bond and final error on both sides. No tolerance was relaxed. |
+| `M` metamorphic semantics | **PASS** | The unequal-bond group is three permutations of one bond multiset at a fixed product; the coordination group is four rearrangements of one fixed 13-site budget; the counter gates vary points, cut bond, and descendant bond independently and check that only the first two appear in the law. Batch reorder/duplicate/partial-hit equivalence is covered by the existing #708/#709/#710 matrices, which remain green. |
+| `F` fallback parity | **PASS** | The working-budget ladder drives the same fixture from a 512 MiB budget down to the smallest feasible 512 KiB rung and asserts identical rank, evaluated points, and residual; the next rung down and a 1-byte budget are both refused with the exact `ResourceLimit` requested/limit pair. Cold and warm evaluator routes are compared against `TreeTN::evaluate` at every batch size. |
+| `I` invalidation/retention | **PASS** | Every parity case asserts `frame_retained_bytes <= max_frame_bytes` and `sample_arena_retained_bytes <= max_sample_arena_bytes` against the configured budgets, and prints retained frame records, sample records, candidate entries, and saturated edges. Retained frame bytes grow smoothly with bond dimension (`162 KiB -> 283 KiB -> 468 KiB` over `chi = 8/16/32`) with no plateau failure. **Limit:** these are the documented logical payload figures, not allocator or RSS measurements; the only true peak-memory numbers in this entry are the downstream `maxrss` values. |
+| `D` determinism | **PASS** | The scaling fixtures are analytic and seed-free apart from one recorded constant, so repeated runs build bit-identical inputs; the three repetitions of each benchmark reproduce the same ordering and the same diagnostics, with only wall time varying. The counter gates are exact-equality assertions. **Limit:** the downstream Guard's random-start search is not seeded deterministically in the SGW harness, so evaluated points vary by up to `0.17%` between repetitions on *both* sides; every other stage output is bit-identical, and this is stated rather than smoothed over. |
+| `S` scaling law | **PASS** | Three exact counter laws at 1x/2x/4x or 1x/8x/64x (`L2`), plus 1x/2x/4x wall-clock sweeps in chain length, input bond, output rank, coordination, and batch size, each with the other dimensions held fixed and each reported with its evaluated-point count so that a trajectory change cannot be mistaken for a complexity change. |
+| `P` provenance/observability | **PASS** | Every statement in this entry is **[AI Supplied]**; no new paper or specification claim is made and no existing locator is repurposed. Baseline/candidate commits, hardware, affinity, provider/thread settings, seeds, build profile, warm-up, repetitions, statistic, noise gate, and threshold are printed by both benchmark binaries and reproduced above. The two counters #718 asks for that the public surface cannot supply -- evaluator message-cache hit/miss/eviction, and a process peak-byte figure -- were declared unavailable **before** measuring and are gated by crate-internal counter tests instead of being invented at the benchmark level. |
+| `CI` remote regression | **NOT RUN** | The branch is committed locally and deliberately not pushed, per this task's instructions. The required GitHub checks have not been triggered and no CI conclusion is claimed. |
+
+### `R12` final report: every task-level gate, Tasks 1--12
+
+Status as of this entry. "carried" means the gate was closed in its own task's
+section above and nothing in #718 disturbs it; #718 changes no production code,
+so no earlier `C`/`E` result can have been invalidated by this commit.
+
+| task | issue | gate | status | evidence |
+|---|---|---|---|---|
+| 1 | #707 | `C1`, `E1`, `R1`, `P` | **PASS** (carried) | `2026-09-03 #707 closure`, owner-layer matrix and source-evidence register |
+| 2 | #717 | `C2`, `R2`, `M`, `F`, `I`, `D`, `P` | **PASS** (carried) | `2026-09-04 #717 closure` gate ledger |
+| 2 | #717 | `E2`, `N`, `S` | **N/A** (carried) | test-only scope; no production path changed |
+| 2 | #717 | downstream, sibling benchmark | **N/A** (carried) | no production evaluator behaviour changed |
+| 3 | #715 | `C3`, `BC3`, `E3`, `R3`, `N`, `M`, `I`, `D`, `P` | **PASS** (carried) | `#715 gate ledger`; cut-local median `15.36 ms` versus rebuild `35.95 ms` |
+| 3 | #715 | `F`, `S` | **N/A** (carried) | no fallback formula changed; constant-factor claim only |
+| 4 | #716 | `C4`, `E4`, `R4`, `N`, `F`, `I`, `D`, `M`, `P` | **PASS** (carried) | `#716 gate ledger`; owned constructor `1.044 -> 0.082 ms` |
+| 5 | #714 | `C5`, `BC5`, `E5`, `R5`, `N`, `M`, `F`, `I`, `D`, `P` | **PASS** (carried) | `#714 gate ledger`; 4x fewer candidate packing objects |
+| 5 | #714 | `S` | **N/A** (resolved) | #714 deferred its scaling study to #718. #718's chain/bond/rank sweeps exercise the packed local-update path at 1x/2x/4x with no anomalous growth, but no dedicated per-call packing-count law was added, so this stays `N/A` rather than being upgraded to PASS |
+| 6 | #711 | `C6`, `BC6`, `E6`, `R6`, `N`, `M`, `F`, `I`, `D`, `P`, `CI6` | **PASS** (carried) | `#711 gate ledger`; prepared versus repacked `45.7%/87.9%/56.4%` lower at bond 64/128/256; `CI6` closed by run `33856551145` |
+| 6 | #711 | `S` | **N/A** (resolved the same way as #714) | constant-factor setup/copy reduction; #718 adds the ACI-level sweeps but no dedicated branch-slice scaling law |
+| 7 | #710 | `C7`, `BC7`, `E7`, `R7`, `N`, `M`, `F`, `I`, `D`, `S`, `P` | **PASS** (carried) | `#710 gate ledger`; `1616 -> 240` retained positions, scoped `O(N^2)` metadata law |
+| 7 | #710 | `CI` | **PENDING** (carried, unresolved here) | recorded pending at run `33862884867`; a later run `33863186382` at `dd1fc89` is recorded green in the #708 entry, but #718 pushed nothing and claims no CI conclusion |
+| 8 | #708 | `C8`, `BC8`, `E8`, `R8`, `N`, `M`, `F`, `I`, `D`, `P` | **PASS** (carried) | `#708 gate ledger`; warm edge versus vertex `-21.2%/-47.8%/-77.0%` at chi 64/128/256 |
+| 8 | #708 | `S` | **PASS**, strengthened by #718 | the scoped `points * chi_edge` law is now swept in all three factors independently and shown to be independent of descendant size (`L2`) |
+| 8 | #708 | `CI` | **PENDING** (carried, unresolved here) | run `33867996612` was pending when recorded; #718 pushed nothing |
+| 9 | #712 | `C9`, `BC9`, `E9`, `R9`, `DS9`, `F`, `D`, `P` | **PASS** (carried) | `#712 gate ledger`; shared-operand facade `2.4--17.3%` and `DS9` at `T=0.1` |
+| 9 | #712 | `CI` | **PASS / coverage pending** (carried) | run `33868111483`; coverage was pending when recorded |
+| 10 | #709 | `C10`, `BC10`, `E10`, `N`, `M`, `F`, `I`, `D`, `S`, `P` | **PASS** (carried) | `#709 gate ledger`; end-to-end Guard `1.85x--2.54x`, typed route 138 versus 1739 heap blocks |
+| 10 | #709 | `R10` downstream stage | **PASS**, closed by #718 | `L4` above: parity first, then paired medians at `T=1.0` and `T=0.1` on both `pi_rtau` and `sigma_rtau`, plus the full A/B workflow at both temperatures |
+| 10 | #709 | `CI` | **NOT RUN** (carried) | the #709 commit is local only; still owned by the integrating run |
+| 11 | #713 | `C11`, `BC11`, `E11`, `R11`, `N`, `M`, `F`, `I`, `D`, `S`, `P` | **PASS** (carried) | `#713 gate ledger`; `16x--313x` and the exact candidate-count core-read reduction |
+| 11 | #713 | downstream applicability | **N/A**, verified by #718 | `L5` above: nblock is a path (coordination 2), comb has maximum coordination 3 for any `r`, and the branching fixture has maximum coordination 3; the `z >= 4` route is unreachable downstream |
+| 11 | #713 | `S` | **PASS**, strengthened by #718 | the timing-based exponent argument is now a deterministic counter law (`L2` row 3) |
+| 11 | #713 | `CI` | **N/A (deferred)** (carried) | not pushed |
+| 12 | #718 | `C12`, `E12`, `N`, `M`, `F`, `I`, `D`, `S`, `P` | **PASS** | this entry |
+| 12 | #718 | `R12` | **PASS with two named exceptions** | workspace-wide pre-PR gate pending; remote `CI` not run |
+| 12 | #718 | `CI` | **NOT RUN** | branch not pushed |
+
+Three things are open across the whole umbrella. Two are the same kind: a
+remote CI conclusion that only a push can produce (#710, #708, #709, #713,
+#718), and the workspace-wide pre-PR gate; neither can be closed by a task that
+is instructed not to push. The third is concrete and actionable now: the
+`check-public-error-docs.py` Maintenance script fails on the base branch for
+three public `Result` APIs introduced by #712 and #709 (Open items item 6).
+
+### Verification commands and raw measurement output
+
+```text
+cargo fmt --all -- --check
+(clean)
+
+cargo clippy --release -p tensor4all-treeaci -p tensor4all-treetn -p tensor4all-aci --all-targets \
+  -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+Finished `release` profile [optimized] target(s) in 32.26s
+
+cargo test --release -p tensor4all-treetn --lib --no-fail-fast
+test result: ok. 524 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+running 166 tests
+test result: ok. 159 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out   (lib)
+test result: ok. 1 passed  (tests/branch_degree.rs)
+test result: ok. 7 passed  (tests/public_api.rs)
+test result: ok. 1 passed  (tests/rank_scaling.rs)
+test result: ok. 18 passed (doctests)
+
+python3 scripts/repository-rules-review.py --base main --worktree --dry-run
+Verdict: pass; No findings.
+
+python3 scripts/check-crate-boundaries.py
+crate-boundary-ok
+python3 scripts/audit-library-panics.py
+Audit passed: 0 unbaselined findings, 0 stale baseline entries
+
+python3 scripts/check-public-error-docs.py
+public Result APIs with incomplete error documentation:
+- crates/tensor4all-tensorbackend/src/matrix.rs:638: grouped_mat_mul_shared_with_backend: # Errors does not name a concrete variant or condition
+- crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1373: new: # Errors does not name a concrete variant or condition
+- crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1714: with_plan: # Errors does not name a concrete variant or condition
+(the same three findings reproduce on a clean `git archive a7632cc` tree, so
+ they are inherited from #712 and #709 and are not caused by this commit --
+ see Open items item 6)
+
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 T4A_TREEACI_PARITY_ENABLE_GUARD=1 \
+  taskset -c 0 ./target/release/deps/treeaci_parity-<hash> --bench --noplot     (x3)
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  taskset -c 0 ./target/release/deps/treeaci_parity-<hash> --bench --noplot     (x3)
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  taskset -c 0 ./target/release/deps/aci_scaling-<hash> --bench --noplot        (x3)
+(equivalently: taskset -c 0 cargo bench -p tensor4all-aci --bench treeaci_parity -- --noplot
+ and taskset -c 0 cargo bench -p tensor4all-treeaci --bench aci_scaling -- --noplot)
+
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 taskset -c 0 cargo test --release \
+  -p tensor4all-treeaci --lib state::tests::profile_high_rank_chain_phases_and_candidate_cache \
+  -- --ignored --nocapture --test-threads=1
+test result: ok. 1 passed; finished in 0.60 s   (Guard disabled)
+T4A_TREEACI_ENABLE_PROFILE_GUARD=1 (same command)
+test result: ok. 1 passed; finished in 2.70 s   (Guard enabled)
+
+# downstream, clean copies only; /root/projects/gw-rs/sgw was not modified
+git -C /root/projects/gw-rs/sgw archive HEAD | tar -x -C <tmp>     # HEAD ba6fbf3e
+# + a non-committed [patch."https://github.com/tensor4all/tensor4all-rs.git"]
+#   pointing at `git archive 4713ba8` (baseline) and `git archive a7632cc` (candidate)
+SGW_RUN_TAG=aci-gate-718  SGW_ACI_GLOBAL_GUARD=1 G0_THREADS=1 ./run_r10_nblock_treeaci_ab.sh 1.0
+SGW_RUN_TAG=gate718t01    SGW_ACI_GLOBAL_GUARD=1 G0_THREADS=1 ./run_r10_nblock_treeaci_ab.sh 0.1
+/usr/bin/time -f "TIMING %e s wall, %M KiB maxrss" taskset -c 0 \
+  <side>/target/release/isolate_aci_stage <run_dir> {pi_rtau,sigma_rtau}        (x3 per side)
+```
+
+Raw downstream output, `T=0.1`, one repetition per side (the other two agree to
+the digits shown except for wall time and the Guard's evaluated-point jitter):
+
+```text
+### cand pi_rtau rep 1
+  done in 1.7s, max bond=169, final err=9.941e-5
+  pi_rtau sweep diagnostics: sweeps=7 evaluated_points=2152810 termination=Converged global_pivots_found=[4, 4, 3, 1, 1, 0, 0]
+TIMING 2.84 s wall, 124772 KiB maxrss
+### base pi_rtau rep 1
+  done in 2.0s, max bond=169, final err=9.941e-5
+  pi_rtau sweep diagnostics: sweeps=7 evaluated_points=2152990 termination=Converged global_pivots_found=[4, 4, 3, 1, 1, 0, 0]
+TIMING 3.11 s wall, 124960 KiB maxrss
+### cand sigma_rtau rep 1
+  done in 1.3s, max bond=123, final err=9.976e-5
+  sigma_rtau sweep diagnostics: sweeps=7 evaluated_points=1209550 termination=Converged global_pivots_found=[2, 2, 2, 2, 0, 0, 0]
+TIMING 2.43 s wall, 124428 KiB maxrss
+### base sigma_rtau rep 1
+  done in 1.7s, max bond=123, final err=9.976e-5
+  sigma_rtau sweep diagnostics: sweeps=7 evaluated_points=1209490 termination=Converged global_pivots_found=[2, 2, 2, 2, 0, 0, 0]
+TIMING 2.81 s wall, 125000 KiB maxrss
+```
+
+External validation artefacts (clean SGW copies, two `git archive` trees of
+tensor4all-rs, two read-only clones used only so the SGW binary's provenance
+capture can resolve its fixed `../../tensor4all-rust/tensor4all-rs` path, and
+the raw logs) live outside the repository under `/root/downstream718` and are
+not part of this change. They are disposable; the numbers above are the record.
+
+### Open items
+
+1. **Unequal incident bonds cost an order of magnitude more per unit of
+   required work.** At coordination 4 with a fixed hub bond product of 256, the
+   `8,4,2,4` layout takes `6.06 us` per evaluated point against the equal
+   layout's `0.25 us`, while the topology-required `outgoing_dim *
+   product(incoming bonds)` is identical (256) on every outward arc and the
+   unequal layout evaluates *fewer* points. Reproducible across three
+   repetitions. Not diagnosed here; it needs a profile of the routing, cache,
+   and factorization paths under an unequal layout. This is a new finding of
+   the #718 gate and is not covered by any existing #699 subissue.
+2. **The Guard's random-start search still dominates the 32-site high-rank
+   chain.** At `chi=256` with the Guard enabled it is `1.231894 s` of a
+   `1.498733 s` sweep total, `1.147752 s` of which is input evaluation across
+   2,218 calls returning 8,844 scalars. Not a regression -- #709 is what makes
+   the fixture finish at all -- but it is the largest remaining single cost on
+   that fixture and no subissue owns it.
+3. **The workspace-wide pre-PR gate is pending.** `cargo clippy --workspace`,
+   `cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5`,
+   `cargo test --profile ci -p tensor4all-hdf5`,
+   `cargo test --doc --profile ci --workspace -j 8`, and
+   `cargo doc --workspace --no-deps` were deliberately not run in this task and
+   are owned by the integrating run.
+4. **Remote `CI` is not run for #710, #708, #709, #713, or #718.** No branch
+   was pushed. Each of those entries must have its required-check comparison
+   done by the run that pushes, against the immediately preceding failure
+   record.
+5. **Two observability gaps remain**, declared before measuring rather than
+   worked around: the cached evaluator's message-cache hit/miss/eviction counts
+   and a process peak-byte figure are not reachable from a benchmark through
+   the public surface. Exposing them would be a public-API change with its own
+   documentation and review, so it was not bundled into a gates task.
+6. **`scripts/check-public-error-docs.py` fails on the base branch and will
+   fail the CI `Maintenance scripts` job on push.** Three public `Result` APIs
+   have an `# Errors` section that does not name a concrete variant or
+   condition: `tensor4all-tensorbackend/src/matrix.rs:638
+   grouped_mat_mul_shared_with_backend` (from #712) and
+   `tensor4all-treetn/src/treetn/cached_evaluator.rs:1373
+   CachedEvaluatorPlan::new` and `:1714 TreeTNCachedEvaluator::with_plan`
+   (from #709). All three reproduce on a clean `git archive a7632cc` tree, so
+   none is caused by #718; this is exactly the failure class that #711's `CI6`
+   record already hit once on a different symbol. It must be fixed before the
+   branch is pushed. #718 did not fix it because it is another subissue's
+   public API documentation and this task was scoped to gates.
