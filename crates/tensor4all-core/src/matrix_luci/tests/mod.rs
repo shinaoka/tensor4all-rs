@@ -1,5 +1,6 @@
 use super::*;
 use crate::rrlu;
+use num_complex::{Complex32, Complex64};
 use std::time::{Duration, Instant};
 use tensor4all_tensorbackend::{from_vec2d, mat_mul};
 
@@ -39,6 +40,76 @@ fn matrix_luci_factors_from_matrix_owned_matches_borrowed() {
         owned.right.as_col_major_slice(),
         borrowed.right.as_col_major_slice()
     );
+}
+
+#[test]
+fn matrix_luci_owned_rectangular_roundtrip_preserves_column_major_storage() {
+    let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0];
+    let matrix = Matrix::try_from_col_major_vec(2, 3, data.clone()).unwrap();
+    assert_eq!(matrix.into_col_major_vec(), data);
+
+    let borrowed_matrix = Matrix::try_from_col_major_vec(2, 3, data.clone()).unwrap();
+    let borrowed = matrix_luci_factors_from_matrix(&borrowed_matrix, None).unwrap();
+    let owned = matrix_luci_factors_from_matrix_owned(
+        Matrix::try_from_col_major_vec(2, 3, data).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(owned.rank, borrowed.rank);
+    assert_eq!(owned.left.nrows(), 2);
+    assert_eq!(owned.right.ncols(), 3);
+    let reconstructed = mat_mul(&owned.left, &owned.right).unwrap();
+    for col in 0..3 {
+        for row in 0..2 {
+            let expected = [1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0][row + 2 * col];
+            assert!((reconstructed[[row, col]] - expected).abs() < 1.0e-10);
+        }
+    }
+}
+
+#[test]
+fn matrix_luci_owned_matches_borrowed_for_all_scalar_kinds() {
+    fn assert_matches<T>(data: Vec<T>)
+    where
+        T: crate::Scalar + crate::MatrixLuciScalar + std::fmt::Debug + PartialEq,
+    {
+        let borrowed_matrix = Matrix::try_from_col_major_vec(2, 3, data.clone()).unwrap();
+        let owned_matrix = Matrix::try_from_col_major_vec(2, 3, data).unwrap();
+        let borrowed = matrix_luci_factors_from_matrix(&borrowed_matrix, None).unwrap();
+        let owned = matrix_luci_factors_from_matrix_owned(owned_matrix, None).unwrap();
+
+        assert_eq!(owned.rank, borrowed.rank);
+        assert_eq!(owned.row_indices, borrowed.row_indices);
+        assert_eq!(owned.col_indices, borrowed.col_indices);
+        assert_eq!(
+            owned.left.as_col_major_slice(),
+            borrowed.left.as_col_major_slice()
+        );
+        assert_eq!(
+            owned.right.as_col_major_slice(),
+            borrowed.right.as_col_major_slice()
+        );
+    }
+
+    assert_matches(vec![1.0_f32, 3.0, 2.0, 5.0, 4.0, 6.0]);
+    assert_matches(vec![1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0]);
+    assert_matches(vec![
+        Complex32::new(1.0, 0.25),
+        Complex32::new(3.0, -0.5),
+        Complex32::new(2.0, 0.75),
+        Complex32::new(5.0, -1.0),
+        Complex32::new(4.0, 1.25),
+        Complex32::new(6.0, -1.5),
+    ]);
+    assert_matches(vec![
+        Complex64::new(1.0, 0.25),
+        Complex64::new(3.0, -0.5),
+        Complex64::new(2.0, 0.75),
+        Complex64::new(5.0, -1.0),
+        Complex64::new(4.0, 1.25),
+        Complex64::new(6.0, -1.5),
+    ]);
 }
 
 #[test]

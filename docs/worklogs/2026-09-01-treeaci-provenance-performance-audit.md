@@ -1399,6 +1399,93 @@ dirty and has no maintained TreeTN frame-extension case, so it remains
 copy and its path symlink are external validation artifacts and are not part
 of the repository change.
 
+## 2026-09-04 #716 closure: ownership-preserving dense and factorization paths
+
+This subissue removes avoidable payload copies at the dense tensor and matrix
+factorization boundaries. The ownership diagnosis, API seam, conversion choice,
+and efficiency interpretation below are **[AI Supplied]** engineering claims.
+They are not attributed to an ACI paper or to tenferro pseudocode. The complete
+paper/specification clones and their exact literature locators remain in the
+evidence register above.
+
+### #716 changes
+
+- `tensor4all_tensorbackend::TensorElement` and its bridge now provide
+  `dense_native_tensor_from_col_major_owned(Vec<T>, dims)`. The implementation
+  validates the checked dimension product and passes the owned payload to
+  `NativeTensor::from_vec_col_major` without cloning it
+  (`crates/tensor4all-tensorbackend/src/tensor_element.rs:29–66`,
+  `tenferro_bridge.rs:970–991`).
+- `IdxTensor::from_dense` uses the owned bridge after its existing index and
+  payload validation (`crates/tensor4all-core/src/defaults/idx_tensor.rs:6431–6488`).
+- Default LU/CI factorization constructs matrices with
+  `Matrix::try_from_col_major_vec`, uses owned rrLU/MatrixLUCI where available,
+  and moves factors out with `into_col_major_vec`; the rectangular internal
+  rrLU fallback remains in place
+  (`crates/tensor4all-core/src/defaults/factorize.rs:682–719, 794–842,
+  847–900`).
+- Raw TreeTN leaf, leaf-center, tensor-backed leaf-center, chain-message, and
+  branch-message paths now borrow contiguous dense payloads with
+  `with_dense_slice`; message gathers decode only requested assignment columns
+  (`crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:1597–1679,
+  2175–2365, 2435–2875, 4389–4463`). Values that intentionally escape as a
+  `Vec` remain materialized at the explicit output boundary.
+- Added all-four-scalar bridge, dense round-trip, rectangular LUCI, shape/error,
+  and TreeTN differential coverage. The owned bridge test also checks native
+  buffer pointer identity, which is a deterministic no-payload-clone check.
+
+### #716 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C4` correctness | **PASS** | Full release correctness was run before the efficiency measurement. The bridge and `IdxTensor::from_dense` tests cover f32, f64, Complex32, and Complex64 column-major values; shape mismatch and checked dimension overflow; square/rectangular MatrixLUCI rank/factor parity; and TreeTN cached-evaluator leaf/center/chain/branch raw/generic differential behavior. No tolerance was relaxed. |
+| `E4` efficiency | **PASS** | The all-four-kind owned bridge test proves the native tensor buffer pointer is the original `Vec` pointer, so the payload clone is removed deterministically. The paired release measurement (`9` samples × `32` repetitions, `[128,128]` f64 payload) reported borrowed median `1.044 ms`, owned median `0.082 ms`, and `92.1%` constructor-path reduction. This is a controlled constructor-boundary result, not a claim of a 92.1% end-to-end TreeACI speedup; no broad workload speed claim is made. |
+| `R4` release/regression/API | **PASS** | The complete tensorbackend, core, TreeTN, and TreeACI release suites passed; the new public method has a runnable asserted rustdoc example; `cargo fmt --all -- --check`, API inventory, clippy, and repository-rule preview were run before closure. The isolated SGW suite passed all 108 library tests and every integration target after its two fixed-path provenance cases were rerun with the required temporary path. No downstream crate gained a direct `tenferro-*` dependency. |
+| `N` numerical stability | **PASS** | Owned-vs-borrowed MatrixLUCI factors match for all four scalar kinds, rectangular reconstruction preserves column-major values, and the full core/TreeACI numerical suites remain green. |
+| `F` fallback parity | **PASS** | Existing `with_dense_slice` materialization/fallback behavior and raw/generic TreeTN routes remain covered by the complete cached-evaluator and TreeACI matrices; non-escaping reads do not change the fallback contract. |
+| `I` invalidation/retention | **PASS** | The owned bridge rejects mismatched lengths before backend construction and rejects overflowing dimension products; output factor buffers are moved into `IdxTensor` rather than retained in duplicate matrix/vector owners. |
+| `D` determinism | **PASS** | Exact column-major round trips, factor rank/index/value parity, and complete release suites pass deterministically. The paired measurement uses a fixed payload and reports all sample medians. |
+| `M` metamorphic semantics | **PASS** | Raw chain/branch message gathers preserve requested point order and duplicate assignments through the existing full evaluator differential tests; changing only ownership does not alter output layout. |
+| `P` provenance/observability | **PASS** | All #716 implementation and measurement claims are labelled **[AI Supplied]**. The only backend authority used is the already-cloned tenferro specification: `TEN-C1`, `docs/spec/backend-contract.md:194–208, 286–313, 317–330`, states the dense contiguous column-major/backend-session boundary; `TEN-C2`, `docs/spec/tensor-semantics.md:31–70, 133–162, 258–270`, states view/materialization and owned compact column-major semantics. The full repository clone and complete paper/spec reading record remain above; no page/equation is misrepresented as an ownership optimization source. |
+
+### Verification commands and raw measurement output
+
+```text
+cargo test --release -p tensor4all-tensorbackend --no-fail-fast
+221 unit tests passed; 2 bench tests ignored; 149 doctests passed
+
+cargo test --release -p tensor4all-core --test linalg_factorize --no-fail-fast
+20 passed, 0 failed
+
+cargo test --release -p tensor4all-core --test tensor_basic --no-fail-fast
+55 passed, 0 failed
+
+cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
+60 passed, 2 existing diagnostics ignored
+
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+142 unit passed, 5 ignored; 7 public_api passed; 1 rank_scaling passed; 18 doctests passed
+
+cargo test --release -p tensor4all-tensorbackend owned_dense_native_tensor_paired_release_measurement -- --ignored --nocapture
+#716 paired release dense constructor: dims=[128, 128], repetitions=32, samples=9, borrowed_median_ms=1.044, owned_median_ms=0.082, reduction_pct=92.1, borrowed_all_ms=[1.022128, 1.028541, 1.033501, 1.038069, 1.044171, 1.052276, 1.0643390000000001, 1.0652700000000002, 1.348325], owned_all_ms=[0.08079199999999999, 0.081484, 0.081533, 0.081784, 0.081995, 0.082246, 0.083237, 0.083718, 0.083748], checksum=-576
+
+cargo test --release --manifest-path /tmp/sgw-treeaci-gate.6RkGZ6/Cargo.toml --no-fail-fast
+all non-provenance targets passed in the complete run; the two fixed-path cases were then rerun exactly and both passed (108/108 library tests and every integration target)
+```
+
+The optional `../../tensor4all-benchmark` checkout contains no maintained
+semantically comparable dense-ownership case, so its gate is **N/A**. The
+downstream `../../gw-rs/sgw` checkout was not modified; its isolated copy was
+patched to this worktree and the complete release suite passed all 108 library
+tests and every integration target. The first run reported only the two known
+fixed-path provenance failures because the temporary `/tensor4all-rust/tensor4all-rs`
+path had not yet been created; exact reruns of both cases passed after the path
+was supplied. No new tenferro upstream change is needed.
+
+The next implementation subissue is **#714** (TreeACI local-update ownership
+and packed batches). Per the execution protocol, stop here after reporting this
+#716 closure; do not begin #714 in the same run.
+
 ## Measurements and limitations
 
 Commands were run in release mode in the isolated worktree.

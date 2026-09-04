@@ -24,6 +24,55 @@ fn make_tensor_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
     IdxTensor::from_dense(indices, data).unwrap()
 }
 
+#[test]
+fn from_dense_preserves_column_major_values_for_all_scalar_kinds() {
+    let make_indices = || vec![Index::new_dyn(2), Index::new_dyn(2)];
+
+    let f32_tensor = IdxTensor::from_dense(make_indices(), vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
+    assert_eq!(
+        f32_tensor
+            .with_dense_slice::<f32, _>(|values| values.to_vec())
+            .unwrap(),
+        vec![1.0_f32, 2.0, 3.0, 4.0]
+    );
+
+    let f64_tensor = IdxTensor::from_dense(make_indices(), vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    assert_eq!(
+        f64_tensor
+            .with_dense_slice::<f64, _>(|values| values.to_vec())
+            .unwrap(),
+        vec![1.0_f64, 2.0, 3.0, 4.0]
+    );
+
+    let c32_values = vec![
+        Complex32::new(1.0, 0.5),
+        Complex32::new(2.0, 1.5),
+        Complex32::new(3.0, 2.5),
+        Complex32::new(4.0, 3.5),
+    ];
+    let c32_tensor = IdxTensor::from_dense(make_indices(), c32_values.clone()).unwrap();
+    assert_eq!(
+        c32_tensor
+            .with_dense_slice::<Complex32, _>(|values| values.to_vec())
+            .unwrap(),
+        c32_values
+    );
+
+    let c64_values = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(2.0, 1.5),
+        Complex64::new(3.0, 2.5),
+        Complex64::new(4.0, 3.5),
+    ];
+    let c64_tensor = IdxTensor::from_dense(make_indices(), c64_values.clone()).unwrap();
+    assert_eq!(
+        c64_tensor
+            .with_dense_slice::<Complex64, _>(|values| values.to_vec())
+            .unwrap(),
+        c64_values
+    );
+}
+
 fn assert_from_diag_dense_constructor_contract<T>(data: Vec<T>)
 where
     T: TensorElement,

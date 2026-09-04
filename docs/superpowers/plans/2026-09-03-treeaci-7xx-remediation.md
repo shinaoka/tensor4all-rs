@@ -657,27 +657,27 @@ gate and must not be smuggled into this coverage task.
 - Secondary gates: `N`, `F`, `D`, `P`; include non-contiguous/trace fallback
   parity and the exact tenferro specification page used for each claim.
 
-- [ ] **Step 1: Add a failing owned-constructor test for all four scalar kinds.**
+- [x] **Step 1: Add a failing owned-constructor test for all four scalar kinds.**
 
   Exercise `IdxTensor::from_dense` with `f32`, `f64`, `Complex32`, and `Complex64`, then read once with `with_dense_slice`/typed extraction and assert exact column-major values. Add shape mismatch and checked dimension-overflow tests for the new owned bridge path.
 
-- [ ] **Step 2: Add the owned trait/bridge path.**
+- [x] **Step 2: Add the owned trait/bridge path.**
 
   Implement the new trait method with `NativeTensor::from_vec_col_major(dims.to_vec(), data)`. Keep the existing borrowed method for callers that truly borrow. Change `IdxTensor::from_dense` to call the owned method after validating indices and payload length; do not add a TreeACI-local constructor.
 
-- [ ] **Step 3: Add red factorization ownership tests.**
+- [x] **Step 3: Add red factorization ownership tests.**
 
   For rectangular and square LU/CI full-rank paths, compare factor reconstruction and reported rank against the existing reference for real and complex values. The test must exercise `try_from_col_major_vec`, owned rrLU/rrLUCI, and `into_col_major_vec` paths, including the rectangular internal rrLU fallback.
 
-- [ ] **Step 4: Replace the conversion round trips.**
+- [x] **Step 4: Replace the conversion round trips.**
 
   In `factorize_lu_with_options` and `factorize_ci_with_options`, construct matrices with `Matrix::try_from_col_major_vec`, pass them to the owned factorization facade, and extract outputs with `into_col_major_vec`. Remove the zero-fill nested copy and `matrix_to_vec` calls when ownership is available. Keep the existing rectangular fallback because tenferro `full_piv_lu` remains square-only.
 
-- [ ] **Step 5: Replace non-escaping `to_vec` calls with borrowed reads.**
+- [x] **Step 5: Replace non-escaping `to_vec` calls with borrowed reads.**
 
   Convert raw leaf, leaf-center, tensor-backed leaf-center, internal-center, and TreeACI output-padding paths to `with_dense_slice`, retaining materialization fallback for non-contiguous/backend-resident tensors. Keep closures short enough that no borrowed slice escapes.
 
-- [ ] **Step 6: Verify ownership and numerical behavior.**
+- [x] **Step 6: Verify ownership and numerical behavior.**
 
   ```bash
   cargo test --release -p tensor4all-tensorbackend --no-fail-fast
@@ -687,9 +687,9 @@ gate and must not be smuggled into this coverage task.
   cargo test --release -p tensor4all-treeaci --no-fail-fast
   ```
 
-  Use allocation/copy counters or controlled before/after timings to show that the old allocation is reused; API compilation alone does not close the issue.
+  Use allocation/copy counters or controlled before/after timings to show that the old allocation is reused; API compilation alone does not close the issue. Run the complete correctness matrix before the ignored paired-release measurement; a filtered smoke test is insufficient for this gate.
 
-- [ ] **Step 7: Commit #716.**
+- [x] **Step 7: Commit #716.**
 
   ```bash
   cargo fmt --all

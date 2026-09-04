@@ -205,7 +205,7 @@ use tensor4all_core::{
     AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor, IndexLike,
     TensorContractionLike, TensorIndex, TensorLike,
 };
-use tensor4all_tensorbackend::{mat_mul_owned, BlasMul, Matrix};
+use tensor4all_tensorbackend::{mat_mul_owned, BlasMul, Matrix, TensorElement};
 
 #[cfg(feature = "diagnostics")]
 use super::diagnostics;
@@ -1597,24 +1597,25 @@ where
         // Column-major: stride of axis k is the product of the dims before it.
         let strides = [1usize, dims[0]];
 
-        let raw = tensor.to_vec::<f64>()?;
-
-        let mut out = Vec::with_capacity(parent_dim * points.len());
-        for &point in points {
-            let physical_value = value_at(
-                values,
-                entry.input_position,
-                point,
-                "TreeTNCachedEvaluator::try_compute_leaf_message_raw",
-            )?;
-            for parent_value in 0..parent_dim {
-                let mut axis_values = [0usize; 2];
-                axis_values[physical_axis] = physical_value;
-                axis_values[parent_axis] = parent_value;
-                let flat = axis_values[0] * strides[0] + axis_values[1] * strides[1];
-                out.push(raw[flat]);
+        let out = tensor.with_dense_slice::<f64, _>(|raw| {
+            let mut out = Vec::with_capacity(parent_dim * points.len());
+            for &point in points {
+                let physical_value = value_at(
+                    values,
+                    entry.input_position,
+                    point,
+                    "TreeTNCachedEvaluator::try_compute_leaf_message_raw",
+                )?;
+                for parent_value in 0..parent_dim {
+                    let mut axis_values = [0usize; 2];
+                    axis_values[physical_axis] = physical_value;
+                    axis_values[parent_axis] = parent_value;
+                    let flat = axis_values[0] * strides[0] + axis_values[1] * strides[1];
+                    out.push(raw[flat]);
+                }
             }
-        }
+            Ok::<_, anyhow::Error>(out)
+        })??;
         Ok(Some(out))
     }
 
@@ -1659,24 +1660,25 @@ where
         let dims = tensor.dims();
         let parent_dim = dims[parent_axis];
         let strides = [1usize, dims[0]];
-        let raw = tensor.to_vec::<Complex64>()?;
-
-        let mut out = Vec::with_capacity(parent_dim * points.len());
-        for &point in points {
-            let physical_value = value_at(
-                values,
-                entry.input_position,
-                point,
-                "TreeTNCachedEvaluator::try_compute_leaf_message_complex_raw",
-            )?;
-            for parent_value in 0..parent_dim {
-                let mut axis_values = [0usize; 2];
-                axis_values[physical_axis] = physical_value;
-                axis_values[parent_axis] = parent_value;
-                let flat = axis_values[0] * strides[0] + axis_values[1] * strides[1];
-                out.push(raw[flat]);
+        let out = tensor.with_dense_slice::<Complex64, _>(|raw| {
+            let mut out = Vec::with_capacity(parent_dim * points.len());
+            for &point in points {
+                let physical_value = value_at(
+                    values,
+                    entry.input_position,
+                    point,
+                    "TreeTNCachedEvaluator::try_compute_leaf_message_complex_raw",
+                )?;
+                for parent_value in 0..parent_dim {
+                    let mut axis_values = [0usize; 2];
+                    axis_values[physical_axis] = physical_value;
+                    axis_values[parent_axis] = parent_value;
+                    let flat = axis_values[0] * strides[0] + axis_values[1] * strides[1];
+                    out.push(raw[flat]);
+                }
             }
-        }
+            Ok::<_, anyhow::Error>(out)
+        })??;
         Ok(Some(out))
     }
 
@@ -2173,40 +2175,36 @@ where
             return Ok(None);
         };
 
+        let dims = tensor.dims();
+        let child_dim = dims[child_axis];
         let child_message = messages.get(child).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_chain_message_raw: missing message for child {:?}",
                 child
             )
         })?;
-        let child_values = if let Some(raw_values) = &child_message.raw_values {
-            let mut values = Vec::with_capacity(raw_values.len());
-            for value in raw_values {
-                let CachedScalar::F64(value) = value else {
-                    return Ok(None);
-                };
-                values.push(*value);
-            }
-            values
-        } else {
-            let Some(tensor) = child_message.tensor.as_ref() else {
-                return Ok(None);
-            };
-            if tensor.is_complex() {
-                return Ok(None);
-            }
-            tensor.to_vec::<f64>()?
-        };
         let child_assignment_batch = assignment_batches.get(child).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_chain_message_raw: missing assignment batch for child {:?}",
                 child
             )
         })?;
+        let Some(child_values) = gather_message_columns(
+            child_message,
+            child_dim,
+            points,
+            child_assignment_batch,
+            |value| match value {
+                CachedScalar::F64(value) => Some(*value),
+                _ => None,
+            },
+            "TreeTNCachedEvaluator::try_compute_chain_message_raw",
+        )?
+        else {
+            return Ok(None);
+        };
 
-        let dims = tensor.dims();
         let parent_dim = dims[parent_axis];
-        let child_dim = dims[child_axis];
         let strides = [
             1usize,
             dims[0],
@@ -2223,7 +2221,6 @@ where
             child_dim,
         };
         let mut physical_values = Vec::with_capacity(points.len());
-        let mut child_columns = Vec::with_capacity(child_dim * points.len());
         for &point in points {
             let physical_value = value_at(
                 values,
@@ -2232,27 +2229,8 @@ where
                 "TreeTNCachedEvaluator::try_compute_chain_message_raw",
             )?;
             physical_values.push(physical_value);
-            let child_assignment = child_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "TreeTNCachedEvaluator::try_compute_chain_message_raw: missing child assignment for point {point}"
-                    )
-                })?;
-            let child_start = child_assignment
-                .checked_mul(child_dim)
-                .ok_or_else(|| anyhow::anyhow!("chain child assignment offset overflows usize"))?;
-            let child_end = child_start
-                .checked_add(child_dim)
-                .ok_or_else(|| anyhow::anyhow!("chain child assignment end overflows usize"))?;
-            child_columns.extend_from_slice(
-                child_values
-                    .get(child_start..child_end)
-                    .ok_or_else(|| anyhow::anyhow!("chain child assignment is out of bounds"))?,
-            );
         }
+        let child_columns = child_values;
         let result = tensor.with_dense_slice::<f64, _>(|raw| {
             Self::grouped_chain_message_contraction(spec, raw, &physical_values, &child_columns)
         })??;
@@ -2325,34 +2303,30 @@ where
                 child
             )
         })?;
-        let child_values = if let Some(raw_values) = &child_message.raw_values {
-            let mut values = Vec::with_capacity(raw_values.len());
-            for value in raw_values {
-                let CachedScalar::C64(value) = value else {
-                    return Ok(None);
-                };
-                values.push(*value);
-            }
-            values
-        } else {
-            let Some(tensor) = child_message.tensor.as_ref() else {
-                return Ok(None);
-            };
-            if !tensor.is_complex() {
-                return Ok(None);
-            }
-            tensor.to_vec::<Complex64>()?
-        };
         let child_assignment_batch = assignment_batches.get(child).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw: missing assignment batch for child {:?}",
                 child
             )
         })?;
-
         let dims = tensor.dims();
-        let parent_dim = dims[parent_axis];
         let child_dim = dims[child_axis];
+        let Some(child_values) = gather_message_columns(
+            child_message,
+            child_dim,
+            points,
+            child_assignment_batch,
+            |value| match value {
+                CachedScalar::C64(value) => Some(*value),
+                _ => None,
+            },
+            "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw",
+        )?
+        else {
+            return Ok(None);
+        };
+
+        let parent_dim = dims[parent_axis];
         let strides = [
             1usize,
             dims[0],
@@ -2369,7 +2343,6 @@ where
             child_dim,
         };
         let mut physical_values = Vec::with_capacity(points.len());
-        let mut child_columns = Vec::with_capacity(child_dim * points.len());
         for &point in points {
             let physical_value = value_at(
                 values,
@@ -2378,27 +2351,8 @@ where
                 "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw",
             )?;
             physical_values.push(physical_value);
-            let child_assignment = child_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "TreeTNCachedEvaluator::try_compute_chain_message_complex_raw: missing child assignment for point {point}"
-                    )
-                })?;
-            let child_start = child_assignment
-                .checked_mul(child_dim)
-                .ok_or_else(|| anyhow::anyhow!("chain child assignment offset overflows usize"))?;
-            let child_end = child_start
-                .checked_add(child_dim)
-                .ok_or_else(|| anyhow::anyhow!("chain child assignment end overflows usize"))?;
-            child_columns.extend_from_slice(
-                child_values
-                    .get(child_start..child_end)
-                    .ok_or_else(|| anyhow::anyhow!("chain child assignment is out of bounds"))?,
-            );
         }
+        let child_columns = child_values;
         let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
             Self::grouped_chain_message_contraction(spec, raw, &physical_values, &child_columns)
         })??;
@@ -2481,71 +2435,18 @@ where
             return Ok(None);
         };
 
-        // [AI Supplied] Diagnostic split: `raw_values` is already one packed
-        // message buffer, but the dynamic enum representation is decoded into
-        // a second typed buffer before the requested columns are gathered.
-        #[cfg(feature = "diagnostics")]
-        let child_decode_started = std::time::Instant::now();
         let child_1_message = messages.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing message for child {:?}",
                 child_1
             )
         })?;
-        let child_1_values = if let Some(raw_values) = &child_1_message.raw_values {
-            let mut values = Vec::with_capacity(raw_values.len());
-            for value in raw_values {
-                let CachedScalar::F64(value) = value else {
-                    return Ok(None);
-                };
-                values.push(*value);
-            }
-            values
-        } else {
-            let Some(tensor) = child_1_message.tensor.as_ref() else {
-                return Ok(None);
-            };
-            if tensor.is_complex() {
-                return Ok(None);
-            }
-            tensor.to_vec::<f64>()?
-        };
         let child_2_message = messages.get(child_2).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing message for child {:?}",
                 child_2
             )
         })?;
-        let child_2_values = if let Some(raw_values) = &child_2_message.raw_values {
-            let mut values = Vec::with_capacity(raw_values.len());
-            for value in raw_values {
-                let CachedScalar::F64(value) = value else {
-                    return Ok(None);
-                };
-                values.push(*value);
-            }
-            values
-        } else {
-            let Some(tensor) = child_2_message.tensor.as_ref() else {
-                return Ok(None);
-            };
-            if tensor.is_complex() {
-                return Ok(None);
-            }
-            tensor.to_vec::<f64>()?
-        };
-        #[cfg(feature = "diagnostics")]
-        {
-            contraction_diagnostics::add(
-                &contraction_diagnostics::BRANCH_CHILD_DECODE_NS,
-                child_decode_started.elapsed(),
-            );
-            contraction_diagnostics::inc(
-                &contraction_diagnostics::BRANCH_CHILD_DECODE_VALUES,
-                child_1_values.len() + child_2_values.len(),
-            );
-        }
-
         let child_1_assignment_batch = assignment_batches.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_raw: missing assignment batch for child {:?}",
@@ -2584,11 +2485,37 @@ where
             child_dim_1,
             child_dim_2,
         };
+        let Some(child_1_values) = gather_message_columns(
+            child_1_message,
+            child_dim_1,
+            points,
+            child_1_assignment_batch,
+            |value| match value {
+                CachedScalar::F64(value) => Some(*value),
+                _ => None,
+            },
+            "TreeTNCachedEvaluator::try_compute_branch_message_raw child 1",
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(child_2_values) = gather_message_columns(
+            child_2_message,
+            child_dim_2,
+            points,
+            child_2_assignment_batch,
+            |value| match value {
+                CachedScalar::F64(value) => Some(*value),
+                _ => None,
+            },
+            "TreeTNCachedEvaluator::try_compute_branch_message_raw child 2",
+        )?
+        else {
+            return Ok(None);
+        };
         #[cfg(feature = "diagnostics")]
         let child_gather_started = std::time::Instant::now();
         let mut physical_values = Vec::with_capacity(points.len());
-        let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
-        let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
         for &point in points {
             let physical_value = value_at(
                 values,
@@ -2597,41 +2524,9 @@ where
                 "TreeTNCachedEvaluator::try_compute_branch_message_raw",
             )?;
             physical_values.push(physical_value);
-
-            let child_1_assignment = child_1_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing child-1 assignment for point {point}"))?;
-            let start_1 = child_1_assignment.checked_mul(child_dim_1).ok_or_else(|| {
-                anyhow::anyhow!("branch child-1 assignment offset overflows usize")
-            })?;
-            let end_1 = start_1
-                .checked_add(child_dim_1)
-                .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment end overflows usize"))?;
-            child_1_columns.extend_from_slice(
-                child_1_values
-                    .get(start_1..end_1)
-                    .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment is out of bounds"))?,
-            );
-
-            let child_2_assignment = child_2_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing child-2 assignment for point {point}"))?;
-            let start_2 = child_2_assignment.checked_mul(child_dim_2).ok_or_else(|| {
-                anyhow::anyhow!("branch child-2 assignment offset overflows usize")
-            })?;
-            let end_2 = start_2
-                .checked_add(child_dim_2)
-                .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment end overflows usize"))?;
-            child_2_columns.extend_from_slice(
-                child_2_values
-                    .get(start_2..end_2)
-                    .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
-            );
         }
+        let child_1_columns = child_1_values;
+        let child_2_columns = child_2_values;
         #[cfg(feature = "diagnostics")]
         {
             contraction_diagnostics::add(
@@ -2724,69 +2619,18 @@ where
             return Ok(None);
         };
 
-        // [AI Supplied] Complex counterpart of the diagnostic split above.
-        #[cfg(feature = "diagnostics")]
-        let child_decode_started = std::time::Instant::now();
         let child_1_message = messages.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing message for child {:?}",
                 child_1
             )
         })?;
-        let child_1_values = if let Some(raw_values) = &child_1_message.raw_values {
-            let mut values = Vec::with_capacity(raw_values.len());
-            for value in raw_values {
-                let CachedScalar::C64(value) = value else {
-                    return Ok(None);
-                };
-                values.push(*value);
-            }
-            values
-        } else {
-            let Some(tensor) = child_1_message.tensor.as_ref() else {
-                return Ok(None);
-            };
-            if !tensor.is_complex() {
-                return Ok(None);
-            }
-            tensor.to_vec::<Complex64>()?
-        };
         let child_2_message = messages.get(child_2).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing message for child {:?}",
                 child_2
             )
         })?;
-        let child_2_values = if let Some(raw_values) = &child_2_message.raw_values {
-            let mut values = Vec::with_capacity(raw_values.len());
-            for value in raw_values {
-                let CachedScalar::C64(value) = value else {
-                    return Ok(None);
-                };
-                values.push(*value);
-            }
-            values
-        } else {
-            let Some(tensor) = child_2_message.tensor.as_ref() else {
-                return Ok(None);
-            };
-            if !tensor.is_complex() {
-                return Ok(None);
-            }
-            tensor.to_vec::<Complex64>()?
-        };
-        #[cfg(feature = "diagnostics")]
-        {
-            contraction_diagnostics::add(
-                &contraction_diagnostics::BRANCH_CHILD_DECODE_NS,
-                child_decode_started.elapsed(),
-            );
-            contraction_diagnostics::inc(
-                &contraction_diagnostics::BRANCH_CHILD_DECODE_VALUES,
-                child_1_values.len() + child_2_values.len(),
-            );
-        }
-
         let child_1_assignment_batch = assignment_batches.get(child_1).ok_or_else(|| {
             anyhow::anyhow!(
                 "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw: missing assignment batch for child {:?}",
@@ -2825,11 +2669,37 @@ where
             child_dim_1,
             child_dim_2,
         };
+        let Some(child_1_values) = gather_message_columns(
+            child_1_message,
+            child_dim_1,
+            points,
+            child_1_assignment_batch,
+            |value| match value {
+                CachedScalar::C64(value) => Some(*value),
+                _ => None,
+            },
+            "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw child 1",
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(child_2_values) = gather_message_columns(
+            child_2_message,
+            child_dim_2,
+            points,
+            child_2_assignment_batch,
+            |value| match value {
+                CachedScalar::C64(value) => Some(*value),
+                _ => None,
+            },
+            "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw child 2",
+        )?
+        else {
+            return Ok(None);
+        };
         #[cfg(feature = "diagnostics")]
         let child_gather_started = std::time::Instant::now();
         let mut physical_values = Vec::with_capacity(points.len());
-        let mut child_1_columns = Vec::with_capacity(child_dim_1 * points.len());
-        let mut child_2_columns = Vec::with_capacity(child_dim_2 * points.len());
         for &point in points {
             let physical_value = value_at(
                 values,
@@ -2838,41 +2708,9 @@ where
                 "TreeTNCachedEvaluator::try_compute_branch_message_complex_raw",
             )?;
             physical_values.push(physical_value);
-
-            let child_1_assignment = child_1_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing child-1 assignment for point {point}"))?;
-            let start_1 = child_1_assignment.checked_mul(child_dim_1).ok_or_else(|| {
-                anyhow::anyhow!("branch child-1 assignment offset overflows usize")
-            })?;
-            let end_1 = start_1
-                .checked_add(child_dim_1)
-                .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment end overflows usize"))?;
-            child_1_columns.extend_from_slice(
-                child_1_values
-                    .get(start_1..end_1)
-                    .ok_or_else(|| anyhow::anyhow!("branch child-1 assignment is out of bounds"))?,
-            );
-
-            let child_2_assignment = child_2_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing child-2 assignment for point {point}"))?;
-            let start_2 = child_2_assignment.checked_mul(child_dim_2).ok_or_else(|| {
-                anyhow::anyhow!("branch child-2 assignment offset overflows usize")
-            })?;
-            let end_2 = start_2
-                .checked_add(child_dim_2)
-                .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment end overflows usize"))?;
-            child_2_columns.extend_from_slice(
-                child_2_values
-                    .get(start_2..end_2)
-                    .ok_or_else(|| anyhow::anyhow!("branch child-2 assignment is out of bounds"))?,
-            );
         }
+        let child_1_columns = child_1_values;
+        let child_2_columns = child_2_values;
         #[cfg(feature = "diagnostics")]
         {
             contraction_diagnostics::add(
@@ -3450,74 +3288,82 @@ where
             ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
             ScalarKind::F64 => {}
             ScalarKind::C64 => {
-                let center_raw = center_tensor.to_vec::<Complex64>()?;
-                let mut result = Vec::with_capacity(n_points);
-                for point in 0..n_points {
-                    let physical_value = value_at(
-                        values,
-                        entry.input_position,
-                        point,
-                        "TreeTNCachedEvaluator::try_contract_leaf_center_from_raw",
-                    )?;
-                    let assignment = component
-                        .point_to_assignment
-                        .get(point)
-                        .copied()
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("missing centre assignment for point {point}")
-                        })?;
-                    ensure!(
-                    assignment < assignment_dim,
-                    "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-                );
-                    let mut sum = Complex64::new(0.0, 0.0);
-                    for bond in 0..bond_dim {
-                        let center_offset = physical_value * center_strides[physical_axis]
-                            + bond * center_strides[bond_axis];
-                        let environment_offset = assignment * bond_dim + bond;
-                        let CachedScalar::C64(environment_value) = raw_values[environment_offset]
-                        else {
-                            return Ok(None);
-                        };
-                        sum += center_raw[center_offset] * environment_value;
+                let result = center_tensor.with_dense_slice::<Complex64, _>(|center_raw| {
+                    let mut result = Vec::with_capacity(n_points);
+                    for point in 0..n_points {
+                        let physical_value = value_at(
+                            values,
+                            entry.input_position,
+                            point,
+                            "TreeTNCachedEvaluator::try_contract_leaf_center_from_raw",
+                        )?;
+                        let assignment = component
+                            .point_to_assignment
+                            .get(point)
+                            .copied()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("missing centre assignment for point {point}")
+                            })?;
+                        ensure!(
+                            assignment < assignment_dim,
+                            "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+                        );
+                        let mut sum = Complex64::new(0.0, 0.0);
+                        for bond in 0..bond_dim {
+                            let center_offset = physical_value * center_strides[physical_axis]
+                                + bond * center_strides[bond_axis];
+                            let environment_offset = assignment * bond_dim + bond;
+                            let CachedScalar::C64(environment_value) =
+                                raw_values[environment_offset]
+                            else {
+                                return Ok(None);
+                            };
+                            sum += center_raw[center_offset] * environment_value;
+                        }
+                        result.push(AnyScalar::new_complex(sum.re, sum.im));
                     }
-                    result.push(AnyScalar::new_complex(sum.re, sum.im));
-                }
-                return Ok(Some(result));
+                    Ok(Some(result))
+                })??;
+                return Ok(result);
             }
         }
 
-        let center_raw = center_tensor.to_vec::<f64>()?;
-        let mut result = Vec::with_capacity(n_points);
-        for point in 0..n_points {
-            let physical_value = value_at(
-                values,
-                entry.input_position,
-                point,
-                "TreeTNCachedEvaluator::try_contract_leaf_center_from_raw",
-            )?;
-            let assignment = component
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing centre assignment for point {point}"))?;
-            ensure!(
-                assignment < assignment_dim,
-                "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-            );
-            let mut sum = 0.0;
-            for bond in 0..bond_dim {
-                let center_offset = physical_value * center_strides[physical_axis]
-                    + bond * center_strides[bond_axis];
-                let environment_offset = assignment * bond_dim + bond;
-                let CachedScalar::F64(environment_value) = raw_values[environment_offset] else {
-                    return Ok(None);
-                };
-                sum += center_raw[center_offset] * environment_value;
+        let result = center_tensor.with_dense_slice::<f64, _>(|center_raw| {
+            let mut result = Vec::with_capacity(n_points);
+            for point in 0..n_points {
+                let physical_value = value_at(
+                    values,
+                    entry.input_position,
+                    point,
+                    "TreeTNCachedEvaluator::try_contract_leaf_center_from_raw",
+                )?;
+                let assignment = component
+                    .point_to_assignment
+                    .get(point)
+                    .copied()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("missing centre assignment for point {point}")
+                    })?;
+                ensure!(
+                    assignment < assignment_dim,
+                    "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+                );
+                let mut sum = 0.0;
+                for bond in 0..bond_dim {
+                    let center_offset = physical_value * center_strides[physical_axis]
+                        + bond * center_strides[bond_axis];
+                    let environment_offset = assignment * bond_dim + bond;
+                    let CachedScalar::F64(environment_value) = raw_values[environment_offset]
+                    else {
+                        return Ok(None);
+                    };
+                    sum += center_raw[center_offset] * environment_value;
+                }
+                result.push(AnyScalar::new_real(sum));
             }
-            result.push(AnyScalar::new_real(sum));
-        }
-        Ok(Some(result))
+            Ok(Some(result))
+        })??;
+        Ok(result)
     }
 
     /// Evaluates a one-component centre on a path without constructing a
@@ -3594,8 +3440,48 @@ where
             ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
             ScalarKind::F64 => {}
             ScalarKind::C64 => {
-                let center_raw = center_tensor.to_vec::<Complex64>()?;
-                let environment_raw = environment_tensor.to_vec::<Complex64>()?;
+                let result = center_tensor.with_dense_slice::<Complex64, _>(|center_raw| {
+                    environment_tensor.with_dense_slice::<Complex64, _>(|environment_raw| {
+                        let mut result = Vec::with_capacity(n_points);
+                        for point in 0..n_points {
+                            let physical_value = value_at(
+                                values,
+                                physical_position,
+                                point,
+                                "TreeTNCachedEvaluator::try_contract_leaf_center_raw",
+                            )?;
+                            let assignment = component
+                                .point_to_assignment
+                                .get(point)
+                                .copied()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("missing centre assignment for point {point}")
+                                })?;
+                            ensure!(
+                                assignment < assignment_dim,
+                                "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+                            );
+                            let mut sum = Complex64::new(0.0, 0.0);
+                            for bond in 0..bond_dim {
+                                let center_offset =
+                                    physical_value * center_strides[physical_axis]
+                                        + bond * center_strides[bond_axis];
+                                let environment_offset =
+                                    bond * environment_strides[environment_bond_axis]
+                                        + assignment * environment_strides[assignment_axis];
+                                sum += center_raw[center_offset] * environment_raw[environment_offset];
+                            }
+                            result.push(AnyScalar::new_complex(sum.re, sum.im));
+                        }
+                        Ok(Some(result))
+                    })?
+                })??;
+                return Ok(result);
+            }
+        }
+
+        let result = center_tensor.with_dense_slice::<f64, _>(|center_raw| {
+            environment_tensor.with_dense_slice::<f64, _>(|environment_raw| {
                 let mut result = Vec::with_capacity(n_points);
                 for point in 0..n_points {
                     let physical_value = value_at(
@@ -3608,57 +3494,26 @@ where
                         .point_to_assignment
                         .get(point)
                         .copied()
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("missing centre assignment for point {point}")
-                        })?;
+                        .ok_or_else(|| anyhow::anyhow!("missing centre assignment for point {point}"))?;
                     ensure!(
-                    assignment < assignment_dim,
-                    "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-                );
-                    let mut sum = Complex64::new(0.0, 0.0);
+                        assignment < assignment_dim,
+                        "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+                    );
+                    let mut sum = 0.0;
                     for bond in 0..bond_dim {
                         let center_offset = physical_value * center_strides[physical_axis]
                             + bond * center_strides[bond_axis];
-                        let environment_offset = bond * environment_strides[environment_bond_axis]
-                            + assignment * environment_strides[assignment_axis];
+                        let environment_offset =
+                            bond * environment_strides[environment_bond_axis]
+                                + assignment * environment_strides[assignment_axis];
                         sum += center_raw[center_offset] * environment_raw[environment_offset];
                     }
-                    result.push(AnyScalar::new_complex(sum.re, sum.im));
+                    result.push(AnyScalar::new_real(sum));
                 }
-                return Ok(Some(result));
-            }
-        }
-
-        let center_raw = center_tensor.to_vec::<f64>()?;
-        let environment_raw = environment_tensor.to_vec::<f64>()?;
-        let mut result = Vec::with_capacity(n_points);
-        for point in 0..n_points {
-            let physical_value = value_at(
-                values,
-                physical_position,
-                point,
-                "TreeTNCachedEvaluator::try_contract_leaf_center_raw",
-            )?;
-            let assignment = component
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing centre assignment for point {point}"))?;
-            ensure!(
-                assignment < assignment_dim,
-                "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-            );
-            let mut sum = 0.0;
-            for bond in 0..bond_dim {
-                let center_offset = physical_value * center_strides[physical_axis]
-                    + bond * center_strides[bond_axis];
-                let environment_offset = bond * environment_strides[environment_bond_axis]
-                    + assignment * environment_strides[assignment_axis];
-                sum += center_raw[center_offset] * environment_raw[environment_offset];
-            }
-            result.push(AnyScalar::new_real(sum));
-        }
-        Ok(Some(result))
+                Ok(Some(result))
+            })?
+        })??;
+        Ok(result)
     }
 
     /// Contracts a degree-2 or degree-3 center directly from raw core and
@@ -4529,6 +4384,82 @@ fn tensor_scalar_kind(tensor: &IdxTensor) -> Result<ScalarKind> {
             tensor.storage_kind()
         )
     }
+}
+
+/// Gather only the requested message columns while borrowing tensor-backed
+/// payloads for the duration of the gather.
+///
+/// Raw cached messages still need enum decoding, but the decoding is limited
+/// to the requested columns. An `IdxTensor` message uses `with_dense_slice` so
+/// ordinary host-contiguous payloads do not first materialize a full copy.
+fn gather_message_columns<T>(
+    message: &StackedMessage,
+    child_dim: usize,
+    points: &[usize],
+    assignment_batch: &AssignmentBatch,
+    decode: impl Fn(&CachedScalar) -> Option<T>,
+    context: &str,
+) -> Result<Option<Vec<T>>>
+where
+    T: TensorElement + Copy,
+{
+    if let Some(raw_values) = message.raw_values.as_ref() {
+        let mut columns = Vec::with_capacity(child_dim * points.len());
+        for &point in points {
+            let assignment = assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{context}: missing child assignment for point {point}")
+                })?;
+            let start = assignment.checked_mul(child_dim).ok_or_else(|| {
+                anyhow::anyhow!("{context}: child assignment offset overflows usize")
+            })?;
+            let end = start.checked_add(child_dim).ok_or_else(|| {
+                anyhow::anyhow!("{context}: child assignment end overflows usize")
+            })?;
+            let values = raw_values
+                .get(start..end)
+                .ok_or_else(|| anyhow::anyhow!("{context}: child assignment is out of bounds"))?;
+            for value in values {
+                let Some(value) = decode(value) else {
+                    return Ok(None);
+                };
+                columns.push(value);
+            }
+        }
+        return Ok(Some(columns));
+    }
+
+    let Some(tensor) = message.tensor.as_ref() else {
+        return Ok(None);
+    };
+    let columns = tensor
+        .with_dense_slice::<T, _>(|raw_values| {
+            let mut columns = Vec::with_capacity(child_dim * points.len());
+            for &point in points {
+                let assignment = assignment_batch
+                    .point_to_assignment
+                    .get(point)
+                    .copied()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("{context}: missing child assignment for point {point}")
+                    })?;
+                let start = assignment.checked_mul(child_dim).ok_or_else(|| {
+                    anyhow::anyhow!("{context}: child assignment offset overflows usize")
+                })?;
+                let end = start.checked_add(child_dim).ok_or_else(|| {
+                    anyhow::anyhow!("{context}: child assignment end overflows usize")
+                })?;
+                columns.extend_from_slice(raw_values.get(start..end).ok_or_else(|| {
+                    anyhow::anyhow!("{context}: child assignment is out of bounds")
+                })?);
+            }
+            Ok::<_, anyhow::Error>(Some(columns))
+        })
+        .map_err(anyhow::Error::from)??;
+    Ok(columns)
 }
 
 fn slice_tensor(tensor: &IdxTensor, index_vals: &[(DynIndex, usize)]) -> Result<IdxTensor> {

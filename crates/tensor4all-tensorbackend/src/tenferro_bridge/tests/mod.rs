@@ -118,6 +118,98 @@ fn dense_native_tensor_from_col_major_c64_roundtrip() {
 }
 
 #[test]
+fn owned_dense_native_tensor_preserves_values_for_all_scalar_kinds() {
+    fn assert_owned<T>(data: Vec<T>)
+    where
+        T: TensorElement + PartialEq + std::fmt::Debug,
+    {
+        let input_ptr = data.as_ptr();
+        let native = dense_native_tensor_from_col_major_owned(data, &[2, 2]).unwrap();
+        assert_eq!(native.shape(), &[2, 2]);
+        assert_eq!(native.as_slice::<T>().unwrap().as_ptr(), input_ptr);
+        assert_eq!(
+            native_tensor_primal_to_dense_col_major::<T>(&native)
+                .unwrap()
+                .len(),
+            4
+        );
+    }
+
+    assert_owned(vec![1.0_f32, 2.0, 3.0, 4.0]);
+    assert_owned(vec![1.0_f64, 2.0, 3.0, 4.0]);
+    assert_owned(vec![
+        Complex32::new(1.0, 0.5),
+        Complex32::new(2.0, 1.5),
+        Complex32::new(3.0, 2.5),
+        Complex32::new(4.0, 3.5),
+    ]);
+    assert_owned(vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(2.0, 1.5),
+        Complex64::new(3.0, 2.5),
+        Complex64::new(4.0, 3.5),
+    ]);
+}
+
+#[test]
+fn owned_dense_native_tensor_rejects_shape_mismatch_and_overflow() {
+    let err = dense_native_tensor_from_col_major_owned(vec![1.0_f64; 3], &[2, 2]).unwrap_err();
+    assert!(err.to_string().contains("does not match"), "{err}");
+
+    let err =
+        dense_native_tensor_from_col_major_owned(vec![1.0_f64; 4], &[65536, 65536, 65536, 65536])
+            .unwrap_err();
+    assert!(err.to_string().contains("overflow"), "{err}");
+}
+
+#[test]
+#[ignore = "paired release efficiency measurement; correctness runs in the full suite"]
+fn owned_dense_native_tensor_paired_release_measurement() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap());
+        values[values.len() / 2]
+    }
+
+    let dims = [128, 128];
+    let template = (0..(dims[0] * dims[1]))
+        .map(|index| index as f64 * 0.001 - 1.0)
+        .collect::<Vec<_>>();
+    let samples = 9;
+    let repetitions = 32;
+    let mut borrowed_ms = Vec::with_capacity(samples);
+    let mut owned_ms = Vec::with_capacity(samples);
+    let mut checksum = 0.0;
+
+    for _sample in 0..samples {
+        let borrowed_started = Instant::now();
+        for _ in 0..repetitions {
+            let data = black_box(template.clone());
+            let tensor = dense_native_tensor_from_col_major(&data, &dims).unwrap();
+            checksum += black_box(tensor.as_slice::<f64>().unwrap()[0]);
+        }
+        borrowed_ms.push(borrowed_started.elapsed().as_secs_f64() * 1_000.0);
+
+        let owned_started = Instant::now();
+        for _ in 0..repetitions {
+            let data = black_box(template.clone());
+            let tensor = dense_native_tensor_from_col_major_owned(data, &dims).unwrap();
+            checksum += black_box(tensor.as_slice::<f64>().unwrap()[0]);
+        }
+        owned_ms.push(owned_started.elapsed().as_secs_f64() * 1_000.0);
+    }
+
+    let borrowed_median = median(&mut borrowed_ms);
+    let owned_median = median(&mut owned_ms);
+    println!(
+        "#716 paired release dense constructor: dims={dims:?}, repetitions={repetitions}, samples={samples}, borrowed_median_ms={borrowed_median:.3}, owned_median_ms={owned_median:.3}, reduction_pct={:.1}, borrowed_all_ms={borrowed_ms:?}, owned_all_ms={owned_ms:?}, checksum={checksum}",
+        (1.0 - owned_median / borrowed_median) * 100.0,
+    );
+}
+
+#[test]
 fn diag_native_tensor_from_col_major_f64_roundtrip() {
     let data = vec![1.0_f64, 2.0, 3.0];
     let native = diag_native_tensor_from_col_major(&data, 2).unwrap();

@@ -36,7 +36,8 @@ use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor};
 use crate::{
-    matrix_luci_factors_from_matrix, rrlu, MatrixLuciFactors, RrLUOptions, Scalar as MatrixScalar,
+    matrix_luci_factors_from_matrix_owned, rrlu_mut, MatrixLuciFactors, RrLUOptions,
+    Scalar as MatrixScalar,
 };
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
@@ -907,7 +908,7 @@ where
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
-    // Convert to Matrix type for rrlu
+    // Convert to Matrix type for rrLU without rebuilding a zero-filled matrix.
     let a_matrix = native_tensor_to_matrix::<T>(&a_tensor, m, n)?;
 
     // Set up LU options
@@ -920,7 +921,8 @@ where
     };
 
     // Perform LU decomposition
-    let lu = rrlu(&a_matrix, Some(lu_options))?;
+    let mut a_matrix = a_matrix;
+    let lu = rrlu_mut(&mut a_matrix, Some(lu_options))?;
     let rank = lu.npivots();
 
     // Extract L and U matrices (permuted)
@@ -932,14 +934,14 @@ where
         .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
     // Convert L matrix back to tensor
-    let l_vec = matrix_to_vec(&l_matrix)?;
+    let l_vec = l_matrix.into_col_major_vec();
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
     let left = IdxTensor::from_dense(l_indices, l_vec)
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     // Convert U matrix back to tensor
-    let u_vec = matrix_to_vec(&u_matrix)?;
+    let u_vec = u_matrix.into_col_major_vec();
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let right = IdxTensor::from_dense(r_indices, u_vec)
@@ -1039,7 +1041,7 @@ where
     // previous path gathered pivot blocks into eager tensors and solved them
     // element-wise at this boundary, duplicating work already done by the
     // backend factorization.
-    let factors = matrix_luci_factors_from_matrix(&a_matrix, Some(lu_options))?;
+    let factors = matrix_luci_factors_from_matrix_owned(a_matrix, Some(lu_options))?;
     let rank = factors.rank;
     let (left, right, bond_index) =
         matrix_luci_factors_to_idx_tensors(factors, &left_indices, &right_indices)?;
@@ -1060,12 +1062,12 @@ where
 
     let mut l_indices = left_indices.to_vec();
     l_indices.push(bond_index.clone());
-    let left = IdxTensor::from_dense(l_indices, matrix_to_vec(&factors.left)?)
+    let left = IdxTensor::from_dense(l_indices, factors.left.into_col_major_vec())
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(right_indices);
-    let right = IdxTensor::from_dense(r_indices, matrix_to_vec(&factors.right)?)
+    let right = IdxTensor::from_dense(r_indices, factors.right.into_col_major_vec())
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok((left, right, bond_index))
@@ -1114,40 +1116,14 @@ fn matrix_from_col_major_values<T>(
 where
     T: MatrixScalar + Copy,
 {
-    let expected_len = checked_matrix_len(m, n, source)?;
-    if data.len() != expected_len {
-        return Err(FactorizeError::ComputationError(anyhow::anyhow!(
-            "{source} matrix materialization produced {} entries for shape ({m}, {n})",
-            data.len()
-        )));
-    }
-
-    let mut matrix = Matrix::zeros(m, n);
-    for i in 0..m {
-        for j in 0..n {
-            matrix[[i, j]] = data[j * m + i];
-        }
-    }
-    Ok(matrix)
+    Matrix::try_from_col_major_vec(m, n, data).map_err(|error| {
+        FactorizeError::ComputationError(anyhow::anyhow!(
+            "{source} matrix conversion failed for shape ({m}, {n}): {error}"
+        ))
+    })
 }
 
-/// Convert Matrix to Vec for storage.
-fn matrix_to_vec<T>(matrix: &Matrix<T>) -> Result<Vec<T>, FactorizeError>
-where
-    T: Clone,
-{
-    let m = matrix.nrows();
-    let n = matrix.ncols();
-    let len = checked_matrix_len(m, n, "factorize output")?;
-    let mut vec = Vec::with_capacity(len);
-    for j in 0..n {
-        for i in 0..m {
-            vec.push(matrix[[i, j]].clone());
-        }
-    }
-    Ok(vec)
-}
-
+#[cfg(test)]
 fn checked_matrix_len(m: usize, n: usize, source: &str) -> Result<usize, FactorizeError> {
     m.checked_mul(n).ok_or_else(|| {
         FactorizeError::ComputationError(anyhow::anyhow!(

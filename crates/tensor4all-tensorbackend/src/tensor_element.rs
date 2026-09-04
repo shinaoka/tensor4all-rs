@@ -26,6 +26,45 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     ///
     fn dense_native_tensor_from_col_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
+    /// Build a dense native tensor by moving an owned column-major payload.
+    ///
+    /// This is the allocation-preserving counterpart of
+    /// [`Self::dense_native_tensor_from_col_major`]. The payload must contain
+    /// exactly the product of `dims` elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the data length does not match the dimensions or
+    /// the backend conversion fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Owned column-major values whose length equals the product of
+    ///   `dims`.
+    /// * `dims` - Logical tensor dimensions in column-major axis order.
+    ///
+    /// # Returns
+    ///
+    /// A native dense tensor that owns the supplied payload without cloning it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::TensorElement;
+    ///
+    /// let tensor = f64::dense_native_tensor_from_col_major_owned(
+    ///     vec![1.0, 2.0, 3.0, 4.0],
+    ///     &[2, 2],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.shape(), &[2, 2]);
+    /// assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    fn dense_native_tensor_from_col_major_owned(
+        data: Vec<Self>,
+        dims: &[usize],
+    ) -> Result<NativeTensor>;
+
     /// Build a diagonal native tensor from column-major diagonal payload data.
     /// # Errors
     ///
@@ -122,6 +161,21 @@ macro_rules! impl_tensor_element {
                     dims.to_vec(),
                     data.to_vec(),
                 )?)
+            }
+
+            fn dense_native_tensor_from_col_major_owned(
+                data: Vec<Self>,
+                dims: &[usize],
+            ) -> Result<NativeTensor> {
+                let expected_len: usize = checked_product(dims)?;
+                ensure!(
+                    data.len() == expected_len,
+                    "dense tensor len {} does not match dims {:?} (expected {})",
+                    data.len(),
+                    dims,
+                    expected_len
+                );
+                Ok(NativeTensor::from_vec_col_major(dims.to_vec(), data)?)
             }
 
             fn diag_native_tensor_from_col_major(

@@ -967,6 +967,29 @@ pub fn dense_native_tensor_from_col_major<T: TensorElement>(
     T::dense_native_tensor_from_col_major(data, logical_dims)
 }
 
+/// Build a dense native tensor by moving an owned column-major payload.
+///
+/// # Arguments
+///
+/// * `data` - Owned column-major values whose length equals the product of
+///   `logical_dims`.
+/// * `logical_dims` - Logical tensor dimensions in column-major axis order.
+///
+/// # Returns
+///
+/// A native dense tensor that owns the supplied payload without cloning it.
+///
+/// # Errors
+///
+/// Returns an error when the data length does not match the logical dimension
+/// product (a shape mismatch) or the backend conversion fails.
+pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
+    data: Vec<T>,
+    logical_dims: &[usize],
+) -> Result<NativeTensor> {
+    T::dense_native_tensor_from_col_major_owned(data, logical_dims)
+}
+
 /// Build a dense native tensor whose logical values are diagonal.
 /// # Errors
 ///
