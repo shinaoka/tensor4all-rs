@@ -1166,6 +1166,79 @@ pub trait TensorFactorizationLike: TensorIndex {
             "SRC adaptive estimation is not supported for this tensor type",
         ))
     }
+
+    /// Evaluate the Appendix-C adaptive SRC error estimate in a caller-owned
+    /// execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::src_error_estimate`]: all
+    /// arithmetic executes in `context`, with only bounded decision scalars
+    /// crossing the explicit readback boundary on device-resident inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorFactorizationLike};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let cap = DynIndex::new_dyn(2);
+    /// let batch = DynIndex::new_dyn(2);
+    /// let r = IdxTensor::from_dense_in(
+    ///     &context,
+    ///     vec![cap, batch],
+    ///     vec![2.0_f64, 0.0, 0.0, 3.0],
+    /// )?;
+    /// let estimate = r.src_error_estimate_in(&context)?;
+    /// // error = sqrt(mean(1/||x_col||^2)) with x = R^{-T}: (4 + 9)/2 -> sqrt.
+    /// let expected = ((4.0_f64 + 9.0) / 2.0).sqrt();
+    /// assert!((estimate.error - expected).abs() < 1e-12, "got {}", estimate.error);
+    /// assert!((estimate.norm - (13.0_f64 / 2.0).sqrt()).abs() < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when the estimate is unsupported for this
+    /// tensor type, when the factor does not belong to `context`, or when the
+    /// solve, reductions, or explicit decision readback fail.
+    fn src_error_estimate_in(
+        &self,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "context-scoped SRC adaptive estimation is not supported for this tensor type",
+        ))
+    }
+
+    /// Batch-native incremental probe factorization in a caller-owned context.
+    ///
+    /// Context-scoped counterpart of
+    /// [`Self::factorize_probe_batch_incremental`]: sketch columns, QR factors,
+    /// and results all stay in `context` with no host round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FactorizeError` when the factorization is unsupported for this
+    /// tensor type, when an input does not belong to `context`, or when the
+    /// resident factorization fails.
+    fn factorize_probe_batch_incremental_in(
+        _previous: Option<&FactorizeResult<Self>>,
+        _batch_tensor: &Self,
+        _batch_index: &<Self as TensorIndex>::Index,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>
+    where
+        Self: TensorVectorSpace + TensorConstructionLike,
+    {
+        Err(FactorizeError::UnsupportedStorage(
+            "context-scoped incremental probe factorization is not supported for this tensor type",
+        ))
+    }
 }
 
 /// Constructors and selection helpers for index-labelled tensors.

@@ -160,8 +160,8 @@ pub mod qr {
 pub mod svd {
     //! Re-export of SVD decomposition operations.
     pub use crate::defaults::svd::{
-        default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdError,
-        SvdOptions,
+        default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with,
+        svd_with_in, SvdError, SvdOptions,
     };
 }
 

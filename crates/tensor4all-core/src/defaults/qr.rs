@@ -5,9 +5,10 @@
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
-use crate::IdxTensor;
+use crate::{ExecutionContext, IdxTensor};
 use num_complex::{Complex64, ComplexFloat};
 use tenferro::DType;
+use tenferro_ad::EagerTensor;
 use tenferro_linalg::EagerTensorLinalgExt;
 use thiserror::Error;
 
@@ -138,14 +139,55 @@ where
         })
         .collect();
 
+    Ok(retained_rank_from_row_norms(&row_norms, rtol))
+}
+
+/// Select the retained QR rank from per-row norms of the upper-triangular factor.
+///
+/// Shared by the host dense path and the device path (which reduces the norms
+/// on-device and reads back only this `k`-element decision vector).
+fn retained_rank_from_row_norms(row_norms: &[f64], rtol: f64) -> usize {
     let max_row_norm = row_norms.iter().cloned().fold(0.0_f64, f64::max);
     if max_row_norm == 0.0 {
-        return Ok(1);
+        return 1;
     }
 
     let threshold = rtol * max_row_norm;
     let r = row_norms.iter().filter(|&&norm| norm >= threshold).count();
-    Ok(r.max(1))
+    r.max(1)
+}
+
+/// Read the `k` upper-triangular row norms of a resident `R` factor.
+///
+/// All arithmetic stays in the operand's owning runtime; only the `k`-element
+/// decision vector crosses the explicit readback boundary through `context`.
+#[cfg(feature = "tenferro-cuda")]
+fn resident_row_norms(
+    r_inner: &EagerTensor,
+    k: usize,
+    context: &ExecutionContext,
+) -> Result<Vec<f64>, QrError> {
+    let upper = r_inner
+        .triu(0)
+        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
+    let magnitudes = upper
+        .abs()
+        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
+    let sum_squares = magnitudes
+        .reduce_sum_squares(&[1])
+        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
+    if sum_squares.shape() != [k] {
+        return Err(QrError::ComputationError(anyhow::anyhow!(
+            "device QR row-norm reduction returned shape {:?}, expected [{k}]",
+            sum_squares.shape()
+        )));
+    }
+    let decision = IdxTensor::from_inner(vec![DynIndex::new_dyn(k)], sum_squares)
+        .map_err(QrError::ComputationError)?;
+    let values = decision
+        .read_decision_data(context)
+        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
+    Ok(values.into_iter().map(|value| value.sqrt()).collect())
 }
 
 /// Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R).
@@ -250,47 +292,151 @@ pub fn qr_with<T>(
     left_inds: &[DynIndex],
     options: &QrOptions,
 ) -> Result<(IdxTensor, IdxTensor), QrError> {
+    if t.is_cuda_resident() {
+        return Err(QrError::ComputationError(anyhow::anyhow!(
+            "CUDA-resident input requires qr_with_in with the owning execution context"
+        )));
+    }
     // Unfold tensor into an eager rank-2 tensor so linalg AD nodes stay connected.
     let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (mut q_inner, mut r_inner) = matrix_inner
+    let (q_inner, r_inner) = matrix_inner
         .qr()
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
-    let r = if options.truncate {
-        // Determine rtol to use
-        let rtol = options.rtol.unwrap_or(default_qr_rtol());
-        if !rtol.is_finite() || rtol < 0.0 {
-            return Err(QrError::InvalidRtol(rtol));
-        }
+    let r = qr_retained_rank(&r_inner, k, n, options, None)?;
+    qr_assemble(q_inner, r_inner, k, r, left_indices, right_indices)
+}
 
-        let value = r_inner
-            .value()
-            .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
-        match r_inner.dtype() {
-            DType::F64 => {
-                let values = value
-                    .as_slice::<f64>()
-                    .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
-                compute_retained_rank_qr_from_dense(values, k, n, rtol)?
-            }
-            DType::C64 => {
-                let values = value
-                    .as_slice::<Complex64>()
-                    .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
-                compute_retained_rank_qr_from_dense(values, k, n, rtol)?
-            }
-            other => {
-                return Err(QrError::ComputationError(anyhow::anyhow!(
-                    "native QR returned unsupported scalar type {other:?}"
-                )));
-            }
+/// Compute QR decomposition in a caller-owned execution context.
+///
+/// The factorization, truncation slicing, and result assembly all execute in
+/// `context`. With a CUDA context the retained-rank decision reads back only
+/// the `k`-element row-norm vector through [`IdxTensor::read_decision_data`];
+/// with a CPU context the rank decision uses the same host read as [`qr_with`].
+///
+/// # Arguments
+///
+/// * `t` - Input tensor, which must belong to `context`.
+/// * `left_inds` - Indices to place on the left (row) side of the unfolded matrix.
+/// * `options` - QR options including rtol for truncation control.
+/// * `context` - Caller-owned execution context owning the input and results.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use tensor4all_core::qr::{QrOptions, qr_with_in};
+/// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorContractionLike};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = ExecutionContext::Cpu(Arc::new(
+///     CpuExecutionContext::from_backend(CpuBackend::new()),
+/// ));
+/// let i = DynIndex::new_dyn(4);
+/// let j = DynIndex::new_dyn(3);
+/// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+/// let t = IdxTensor::from_dense_in(&context, vec![i.clone(), j.clone()], data)?;
+/// let (q, r) = qr_with_in::<f64>(&t, &[i.clone()], &QrOptions::default(), &context)?;
+/// let recovered = q.contract_pair(&r)?;
+/// let expected = t.to_vec::<f64>()?;
+/// let actual = recovered.to_vec::<f64>()?;
+/// let residual = expected
+///     .iter()
+///     .zip(actual.iter())
+///     .map(|(a, b)| (a - b).abs())
+///     .fold(0.0_f64, f64::max);
+/// assert!(residual < 1e-12, "QR reconstruction residual {residual}");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns `QrError` when the tensor does not belong to `context`, when the
+/// indices, storage, or options are invalid, or when the factorization or
+/// explicit decision readback fails.
+pub fn qr_with_in<T>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &QrOptions,
+    context: &ExecutionContext,
+) -> Result<(IdxTensor, IdxTensor), QrError> {
+    t.validate_context(context)
+        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
+    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+        .map_err(QrError::ComputationError)?;
+    let k = m.min(n);
+    let (q_inner, r_inner) = matrix_inner
+        .qr()
+        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+
+    let r = qr_retained_rank(&r_inner, k, n, options, Some(context))?;
+    qr_assemble(q_inner, r_inner, k, r, left_indices, right_indices)
+}
+
+/// Select the retained QR rank, reading the decision payload through `context`
+/// for device-resident factors and directly from host memory otherwise.
+fn qr_retained_rank(
+    r_inner: &EagerTensor,
+    k: usize,
+    n: usize,
+    options: &QrOptions,
+    context: Option<&ExecutionContext>,
+) -> Result<usize, QrError> {
+    if !options.truncate {
+        return Ok(k);
+    }
+    // Determine rtol to use
+    let rtol = options.rtol.unwrap_or(default_qr_rtol());
+    if !rtol.is_finite() || rtol < 0.0 {
+        return Err(QrError::InvalidRtol(rtol));
+    }
+
+    #[cfg(feature = "tenferro-cuda")]
+    if let Some(context) = context {
+        if matches!(context, ExecutionContext::Cuda(_)) {
+            let row_norms = resident_row_norms(r_inner, k, context)?;
+            return Ok(retained_rank_from_row_norms(&row_norms, rtol));
         }
-    } else {
-        k
-    };
+    }
+    #[cfg(not(feature = "tenferro-cuda"))]
+    let _ = context;
+
+    let value = r_inner
+        .value()
+        .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
+    match r_inner.dtype() {
+        DType::F64 => {
+            let values = value
+                .as_slice::<f64>()
+                .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
+            compute_retained_rank_qr_from_dense(values, k, n, rtol)
+        }
+        DType::C64 => {
+            let values = value
+                .as_slice::<Complex64>()
+                .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
+            compute_retained_rank_qr_from_dense(values, k, n, rtol)
+        }
+        other => Err(QrError::ComputationError(anyhow::anyhow!(
+            "native QR returned unsupported scalar type {other:?}"
+        ))),
+    }
+}
+
+/// Slice the thin factors to the retained rank and wrap them as [`IdxTensor`]s.
+fn qr_assemble(
+    mut q_inner: EagerTensor,
+    mut r_inner: EagerTensor,
+    k: usize,
+    r: usize,
+    left_indices: Vec<DynIndex>,
+    right_indices: Vec<DynIndex>,
+) -> Result<(IdxTensor, IdxTensor), QrError> {
     if r < k {
         let keep: Vec<usize> = (0..r).collect();
         q_inner = q_inner

@@ -175,3 +175,33 @@ fn svd_with_rejects_zero_max_bond_dim_and_infinite_thresholds() {
         );
     }
 }
+
+#[test]
+fn svd_with_in_matches_host_path_on_explicit_cpu_context() {
+    use std::sync::Arc;
+
+    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::CpuExecutionContext;
+
+    use crate::ExecutionContext;
+
+    let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::new(),
+    )));
+    let i = DynIndex::new_dyn(4);
+    let j = DynIndex::new_dyn(4);
+    let mut data = vec![0.0_f64; 16];
+    data[0] = 1.0;
+    data[5] = 0.5;
+    let tensor = IdxTensor::from_dense_in(&context, vec![i.clone(), j.clone()], data).unwrap();
+
+    let options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
+    let (u_in, s_in, _v_in) =
+        svd_with_in::<f64>(&tensor, std::slice::from_ref(&i), &options, &context).unwrap();
+    let (u, s, _v) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &options).unwrap();
+
+    assert_eq!(s_in.dims(), s.dims());
+    assert_eq!(u_in.dims(), u.dims());
+    u_in.validate_context(&context).unwrap();
+    s_in.validate_context(&context).unwrap();
+}
