@@ -1,3 +1,4 @@
+use num_complex::{Complex32, Complex64};
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
@@ -35,6 +36,259 @@ fn zero_tree(left_site: DynIndex, right_site: DynIndex) -> TreeTN<IdxTensor, usi
     let left = IdxTensor::from_dense(vec![left_site, bond.clone()], vec![0.0, 0.0]).unwrap();
     let right = IdxTensor::from_dense(vec![bond, right_site], vec![1.0, 1.0]).unwrap();
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
+}
+
+fn typed_delta_tree<T: crate::TreeAciScalar>() -> (TreeTN<IdxTensor, usize>, DynIndex, DynIndex) {
+    let left_site = DynIndex::new_dyn(2);
+    let right_site = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let left = IdxTensor::from_dense(
+        vec![left_site.clone(), bond.clone()],
+        vec![
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+        ],
+    )
+    .unwrap();
+    let right = IdxTensor::from_dense(
+        vec![bond, right_site.clone()],
+        vec![
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(0.0),
+            <T as tensor4all_core::Scalar>::from_f64(1.0),
+        ],
+    )
+    .unwrap();
+    (
+        TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap(),
+        left_site,
+        right_site,
+    )
+}
+
+trait GuardTestScalar: crate::TreeAciScalar {
+    const TOLERANCE: f64;
+}
+
+impl GuardTestScalar for f32 {
+    const TOLERANCE: f64 = 1.0e-5;
+}
+
+impl GuardTestScalar for f64 {
+    const TOLERANCE: f64 = 1.0e-12;
+}
+
+impl GuardTestScalar for Complex32 {
+    const TOLERANCE: f64 = 1.0e-5;
+}
+
+impl GuardTestScalar for Complex64 {
+    const TOLERANCE: f64 = 1.0e-12;
+}
+
+fn assert_guard_typed_evaluation<T: GuardTestScalar>() {
+    let (input, _, _) = typed_delta_tree::<T>();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let state = TreeAciState::<T, usize>::initialize(&inputs, &options).unwrap();
+    let input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let mut output_evaluator = GuardOutputEvaluator::new(
+        &state.output,
+        input_evaluators.plan(),
+        options.message_cache_max_bytes,
+    )
+    .unwrap();
+    let points = vec![vec![0usize, 0], vec![1, 0], vec![0, 1], vec![1, 1]];
+
+    let actual = output_evaluator
+        .evaluate::<T>(&input_evaluators, &points)
+        .unwrap();
+    let coordinates = input_evaluators.expand_points(&points).unwrap();
+    let indices = state
+        .problem
+        .physical
+        .iter()
+        .flat_map(|physical| physical.indices.iter().cloned())
+        .collect::<Vec<_>>();
+    let expected = state
+        .output
+        .evaluate(
+            &indices,
+            ColMajorArrayRef::new(&coordinates, &[indices.len(), points.len()]).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        let expected = T::from_evaluated_scalar(expected).unwrap();
+        let residual = tensor4all_core::Scalar::abs_val(actual - expected);
+        let scale = tensor4all_core::Scalar::abs_val(expected).max(1.0);
+        assert!(
+            residual <= T::TOLERANCE * scale,
+            "guard result residual {residual} exceeds tolerance for {}",
+            std::any::type_name::<T>()
+        );
+    }
+}
+
+/// Dense oracle for a whole batch: materializes the tree's values once
+/// through the ordinary evaluator instead of re-contracting per element.
+fn dense_guard_oracle<T: GuardTestScalar>(
+    tree: &TreeTN<IdxTensor, usize>,
+    problem: &crate::problem::PreparedTreeProblem<usize>,
+    coordinates: &[usize],
+    n_points: usize,
+) -> Vec<T> {
+    let indices = problem
+        .physical
+        .iter()
+        .flat_map(|physical| physical.indices.iter().cloned())
+        .collect::<Vec<_>>();
+    tree.evaluate(
+        &indices,
+        ColMajorArrayRef::new(coordinates, &[indices.len(), n_points]).unwrap(),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|value| T::from_evaluated_scalar(value).unwrap())
+    .collect()
+}
+
+/// [AI Supplied] #709: the typed Guard input route must reproduce the
+/// `AnyScalar` route's values exactly, for every supported scalar kind and
+/// for the scan-shaped batches the floating-zone walk actually issues.
+fn assert_guard_input_typed_matches_wrapper<T: GuardTestScalar>() {
+    let (input, _, _) = typed_delta_tree::<T>();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let state = TreeAciState::<T, usize>::initialize(&inputs, &options).unwrap();
+    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    // A scan batch (one varying site) and a general batch take different
+    // evaluator routes, so both are compared.
+    for points in [
+        vec![vec![0usize, 0], vec![1, 0]],
+        vec![
+            vec![0usize, 0],
+            vec![1, 0],
+            vec![0, 1],
+            vec![1, 1],
+            vec![1, 0],
+        ],
+    ] {
+        let coordinates = input_evaluators.expand_points(&points).unwrap();
+        let expected =
+            dense_guard_oracle::<T>(&state.inputs[0], &state.problem, &coordinates, points.len());
+        let actual = input_evaluators.evaluate::<T>(&points).unwrap();
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(&expected) {
+            let residual = tensor4all_core::Scalar::abs_val(*actual - *expected);
+            let scale = tensor4all_core::Scalar::abs_val(*expected).max(1.0);
+            assert!(
+                residual <= T::TOLERANCE * scale,
+                "typed guard input residual {residual} exceeds tolerance for {}",
+                std::any::type_name::<T>()
+            );
+        }
+    }
+}
+
+/// [AI Supplied] #709 differential gate for the Guard's typed input route.
+#[test]
+fn guard_typed_input_evaluation_matches_the_dense_oracle_for_all_scalar_kinds() {
+    assert_guard_input_typed_matches_wrapper::<f32>();
+    assert_guard_input_typed_matches_wrapper::<f64>();
+    assert_guard_input_typed_matches_wrapper::<Complex32>();
+    assert_guard_input_typed_matches_wrapper::<Complex64>();
+}
+
+/// [AI Supplied] #709 invalidation gate. The Guard rebuilds its output
+/// evaluator whenever the output tensors change, but the immutable plan must
+/// survive that rebuild -- including a change of bond dimension -- while the
+/// numerical messages must not: the second evaluator has to answer with the
+/// new output's values.
+#[test]
+fn guard_output_evaluator_reuses_the_plan_when_output_tensors_change() {
+    let (input, left_site, right_site) = delta_tree();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+    let points = vec![vec![0usize, 0], vec![1, 0], vec![0, 1], vec![1, 1]];
+    let coordinates = input_evaluators.expand_points(&points).unwrap();
+
+    let first_values: Vec<f64> = {
+        let mut first = GuardOutputEvaluator::new(
+            &state.output,
+            input_evaluators.plan(),
+            options.message_cache_max_bytes,
+        )
+        .unwrap();
+        assert!(
+            first.evaluator.plan().is_same_as(input_evaluators.plan()),
+            "the output evaluator must share the retained input plan"
+        );
+        let values = first.evaluate::<f64>(&input_evaluators, &points).unwrap();
+        let expected =
+            dense_guard_oracle::<f64>(&state.output, &state.problem, &coordinates, points.len());
+        assert_eq!(values, expected);
+        values
+    };
+
+    // Replace the output with a same-topology tree that has different values
+    // and a different bond dimension, as pivot injection does.
+    state.output = zero_tree(left_site, right_site);
+    let mut second = GuardOutputEvaluator::new(
+        &state.output,
+        input_evaluators.plan(),
+        options.message_cache_max_bytes,
+    )
+    .unwrap();
+    assert!(
+        second.evaluator.plan().is_same_as(input_evaluators.plan()),
+        "a changed output must reuse the plan rather than rebuild it"
+    );
+    let second_values: Vec<f64> = second.evaluate(&input_evaluators, &points).unwrap();
+    let second_expected =
+        dense_guard_oracle::<f64>(&state.output, &state.problem, &coordinates, points.len());
+    assert_eq!(second_values, second_expected);
+    assert_ne!(
+        first_values, second_values,
+        "the fixture must actually change the output values"
+    );
+}
+
+/// [AI Supplied] #709: typed evaluation must keep reporting a dtype rejection
+/// as `TreeAciError::ScalarKind`, the class the `AnyScalar` route reported,
+/// rather than degrading it into an opaque evaluator failure.
+#[test]
+fn typed_guard_evaluation_still_reports_a_scalar_kind_error_for_complex_inputs() {
+    let (input, _, _) = typed_delta_tree::<Complex64>();
+    let options = TreeAciOptions::default();
+    let inputs = vec![input];
+    let state = TreeAciState::<Complex64, usize>::initialize(&inputs, &options).unwrap();
+    let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+
+    let error = input_evaluators
+        .evaluate::<f64>(&[vec![0usize, 0], vec![1, 0]])
+        .expect_err("a complex input tree cannot answer an f64 request");
+
+    match error {
+        crate::TreeAciError::ScalarKind { message } => {
+            assert!(
+                message.contains("f64"),
+                "the rejection must name the requested dtype: {message}"
+            );
+        }
+        other => panic!("expected a scalar-kind rejection, got {other:?}"),
+    }
+
+    // The same evaluator still answers a complex request.
+    let complex = input_evaluators
+        .evaluate::<Complex64>(&[vec![0usize, 0], vec![1, 0]])
+        .unwrap();
+    assert_eq!(complex.len(), 2);
 }
 
 #[test]
@@ -413,6 +667,77 @@ fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
 }
 
 #[test]
+fn injection_rank_overflow_rolls_back_every_staged_state_change() {
+    let (input, _, _) = delta_tree();
+    let options = TreeAciOptions {
+        max_bond_dim: Some(1),
+        ..TreeAciOptions::default()
+    };
+    let inputs = vec![input];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let output_before = state.output.to_dense().unwrap();
+    let candidates_before = state.candidates.clone();
+    let pivots_before = state.pivots.clone();
+    let frames_before = state.input_frames.clone();
+    let arena_records_before = state.sample_arena.record_count();
+    let arena_bytes_before = state.sample_arena.retained_bytes();
+    let frame_records_before = state.input_frames.records();
+    let frame_bytes_before = state.input_frames.retained_bytes();
+    let generation_before = state.generation;
+    let ranks_before = state.edge_ranks.clone();
+    state.edge_ranks[0] = usize::MAX;
+    let ranks_before_injected_overflow = state.edge_ranks.clone();
+
+    let error = inject_global_pivots(&mut state, &[vec![1, 1]], &[1])
+        .expect_err("rank overflow must be reported before publication");
+
+    assert!(matches!(
+        error,
+        crate::TreeAciError::SizeOverflow {
+            context: "global-pivot output rank"
+        }
+    ));
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&output_before, 0.0, 0.0)
+        .unwrap());
+    assert_eq!(state.candidates, candidates_before);
+    assert_eq!(state.pivots, pivots_before);
+    assert_eq!(state.sample_arena.record_count(), arena_records_before);
+    assert_eq!(state.sample_arena.retained_bytes(), arena_bytes_before);
+    for (input_index, edges) in frames_before.frames.iter().enumerate() {
+        for (edge, frame) in edges.iter().enumerate() {
+            assert_eq!(
+                state.input_frames.frames[input_index][edge].sample_count,
+                frame.sample_count
+            );
+            assert_eq!(
+                state.input_frames.frames[input_index][edge].bond_dim,
+                frame.bond_dim
+            );
+            for sample in 0..frame.sample_count {
+                assert_eq!(
+                    state
+                        .input_frames
+                        .frame_values(input_index, edge, sample)
+                        .unwrap(),
+                    frames_before
+                        .frame_values(input_index, edge, sample)
+                        .unwrap()
+                );
+            }
+        }
+    }
+    assert_eq!(state.input_frames.records(), frame_records_before);
+    assert_eq!(state.input_frames.retained_bytes(), frame_bytes_before);
+    assert_eq!(state.generation, generation_before);
+    assert_eq!(state.edge_ranks, ranks_before_injected_overflow);
+    assert_ne!(state.edge_ranks, ranks_before);
+}
+
+#[test]
 fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
     let (input, left_site, right_site) = delta_tree();
     let options = TreeAciOptions::default();
@@ -421,7 +746,7 @@ fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
     let input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let mut output_evaluator = GuardOutputEvaluator::new(
         &state.output,
-        &state.problem,
+        input_evaluators.plan(),
         options.message_cache_max_bytes,
     )
     .unwrap();
@@ -461,7 +786,7 @@ fn shared_guard_hint_preserves_input_and_output_values() {
     let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let mut output_evaluator = GuardOutputEvaluator::new(
         &state.output,
-        &state.problem,
+        input_evaluators.plan(),
         options.message_cache_max_bytes,
     )
     .unwrap();
@@ -486,6 +811,17 @@ fn shared_guard_hint_preserves_input_and_output_values() {
     for (actual, expected) in output_values.iter().zip(expected) {
         assert!((actual - expected.real()).abs() < 1.0e-12);
     }
+}
+
+/// [AI Supplied] Guard-facing dtype gate: the cached output evaluator and its
+/// `TreeAciScalar` conversion must agree with an ordinary dense evaluation for
+/// all four supported scalar kinds.
+#[test]
+fn guard_cached_evaluator_preserves_all_scalar_kinds() {
+    assert_guard_typed_evaluation::<f32>();
+    assert_guard_typed_evaluation::<f64>();
+    assert_guard_typed_evaluation::<Complex32>();
+    assert_guard_typed_evaluation::<Complex64>();
 }
 
 #[test]

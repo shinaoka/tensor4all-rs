@@ -5,7 +5,9 @@ use std::{collections::HashMap, mem::size_of};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
+use tensor4all_treetn::{
+    CachedEvaluatorOptions, CachedEvaluatorPlan, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
+};
 
 use crate::{
     state::TreeAciState, Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar,
@@ -78,7 +80,7 @@ where
         .collect::<Vec<_>>();
     let mut output_evaluator = GuardOutputEvaluator::new(
         &state.output,
-        &state.problem,
+        input_evaluators.plan(),
         per_evaluator_message_cache_budget(options.message_cache_max_bytes, state.inputs.len())?,
     )?;
     let mut evaluated_points = 0usize;
@@ -206,10 +208,18 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         return Ok(0);
     }
     let checkpoint = state.sample_arena.checkpoint();
+    #[cfg(test)]
+    let clone_started = std::time::Instant::now();
     let mut proposed_active = state.candidates.clone();
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.guard_candidate_clone += clone_started.elapsed();
+    });
     let mut injected = 0usize;
     let mut growth = vec![0usize; state.edge_ranks.len()];
     let staged = (|| {
+        #[cfg(test)]
+        let projection_started = std::time::Instant::now();
         for point in points {
             let activate_directed_cut = growth_capacity
                 .iter()
@@ -247,6 +257,10 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
                 }
             }
         }
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_projection += projection_started.elapsed();
+        });
         if growth
             .iter()
             .zip(growth_capacity)
@@ -259,11 +273,23 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         if injected == 0 {
             return Ok(None);
         }
+        #[cfg(test)]
+        let padding_started = std::time::Instant::now();
         let proposed_output = pad_output_bonds(state, &growth)?;
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_output_padding += padding_started.elapsed();
+        });
+        #[cfg(test)]
+        let frames_started = std::time::Instant::now();
         let proposed_frames =
             state
                 .input_frames
                 .extend(state.inputs, &state.problem, &state.sample_arena)?;
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_frame_extension += frames_started.elapsed();
+        });
         Ok(Some((proposed_output, proposed_frames)))
     })();
     let Some((proposed_output, proposed_frames)) = (match staged {
@@ -276,14 +302,33 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         state.sample_arena.rollback(checkpoint)?;
         return Ok(0);
     };
+    // Validate the last fallible arithmetic before publishing any staged
+    // state. The old order assigned `output`, `candidates`, and `input_frames`
+    // first, then used `checked_add` while updating `edge_ranks`; a malformed
+    // or test-injected rank overflow could therefore return an error with a
+    // partially committed state. This precomputed vector makes the following
+    // replacement block no-failure and preserves transaction atomicity.
+    let next_edge_ranks = state
+        .edge_ranks
+        .iter()
+        .zip(&growth)
+        .map(|(&rank, &added)| {
+            rank.checked_add(added).ok_or(TreeAciError::SizeOverflow {
+                context: "global-pivot output rank",
+            })
+        })
+        .collect::<Result<Vec<_>>>();
+    let next_edge_ranks = match next_edge_ranks {
+        Ok(ranks) => ranks,
+        Err(error) => {
+            state.sample_arena.rollback(checkpoint)?;
+            return Err(error);
+        }
+    };
     state.output = proposed_output;
     state.candidates = proposed_active;
     state.input_frames = proposed_frames;
-    for (rank, added) in state.edge_ranks.iter_mut().zip(growth) {
-        *rank = rank.checked_add(added).ok_or(TreeAciError::SizeOverflow {
-            context: "global-pivot output rank",
-        })?;
-    }
+    state.edge_ranks = next_edge_ranks;
     state.generation = state.candidates.generation;
     Ok(injected)
 }
@@ -528,6 +573,15 @@ fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
 
 pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
     inputs: Vec<TreeTNCachedEvaluator<'a, V>>,
+    /// Immutable topology, directed-component key layouts, and traversal
+    /// plans for this problem's tree shape and physical index list. TreeACI
+    /// already requires every input and the output to share that labelled
+    /// topology and site space (see `validate_initial_guess`), so one plan
+    /// serves every input evaluator and each rebuilt output evaluator. Only
+    /// the numerical message caches are per evaluator, so replacing the
+    /// output tensors after pivot injection invalidates messages without
+    /// discarding any plan.
+    plan: CachedEvaluatorPlan<V>,
     index_count: usize,
     indices_per_node: Vec<usize>,
     local_dims: Vec<usize>,
@@ -608,13 +662,18 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
             message_cache_max_bytes,
             ..CachedEvaluatorOptions::<V>::default()
         };
+        let first_input = inputs.first().ok_or(TreeAciError::InternalInvariant {
+            message: "global Guard requires at least one input tree",
+        })?;
+        let plan = CachedEvaluatorPlan::new(first_input, &indices)?;
         let inputs = inputs
             .iter()
-            .map(|input| TreeTNCachedEvaluator::new(input, &indices, options.clone()))
+            .map(|input| TreeTNCachedEvaluator::with_plan(input, &plan, options.clone()))
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let index_count = indices.len();
         Ok(Self {
             inputs,
+            plan,
             index_count,
             indices_per_node: problem
                 .physical
@@ -696,6 +755,8 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         coordinates: &[usize],
         hint: EvaluationHint<V>,
     ) -> Result<Vec<T>> {
+        #[cfg(test)]
+        let evaluation_started = std::time::Instant::now();
         let shape = [self.index_count, points.len()];
         let values = ColMajorArrayRef::new(coordinates, &shape).map_err(|error| {
             TreeAciError::Numerical {
@@ -714,15 +775,26 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 })?;
         let mut result = vec![T::default(); result_elements];
         for (input_number, evaluator) in self.inputs.iter_mut().enumerate() {
-            let evaluated = evaluator.evaluate_batched_with_hint(values, hint.clone())?;
+            let evaluated = evaluator
+                .evaluate_batched_typed::<T>(values, hint.clone())
+                .map_err(crate::scalar::typed_evaluation_error)?;
             for (point, value) in evaluated.into_iter().enumerate() {
-                result[input_number + input_count * point] = T::from_evaluated_scalar(value)
-                    .map_err(|message| TreeAciError::ScalarKind {
-                        message: message.into(),
-                    })?;
+                result[input_number + input_count * point] = value;
             }
         }
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_input_evaluation += evaluation_started.elapsed();
+            stats.guard_input_points += points.len() * input_count;
+            stats.guard_input_calls += 1;
+        });
         Ok(result)
+    }
+
+    /// The immutable evaluation plan shared by every Guard evaluator of this
+    /// problem, including each rebuilt output evaluator.
+    pub(crate) fn plan(&self) -> &CachedEvaluatorPlan<V> {
+        &self.plan
     }
 
     fn evaluation_hint(&self, points: &[Vec<usize>]) -> EvaluationHint<V> {
@@ -785,19 +857,21 @@ struct GuardOutputEvaluator<'a, V: TreeAciNode> {
 }
 
 impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
+    /// Builds the output evaluator for one Guard invocation.
+    ///
+    /// The output tensors change whenever pivot injection commits, so this
+    /// evaluator's numerical message cache is deliberately per invocation.
+    /// The immutable plan is not: it comes from the retained input
+    /// evaluators, so topology, directed-component key layouts, and rooted
+    /// traversal plans are built once per run rather than once per sweep.
     fn new(
         output: &'a TreeTN<IdxTensor, V>,
-        problem: &crate::problem::PreparedTreeProblem<V>,
+        plan: &CachedEvaluatorPlan<V>,
         message_cache_max_bytes: usize,
     ) -> Result<Self> {
-        let indices = problem
-            .physical
-            .iter()
-            .flat_map(|physical| physical.indices.iter().cloned())
-            .collect::<Vec<_>>();
-        let evaluator = TreeTNCachedEvaluator::new(
+        let evaluator = TreeTNCachedEvaluator::with_plan(
             output,
-            &indices,
+            plan,
             CachedEvaluatorOptions {
                 message_cache_max_bytes,
                 ..CachedEvaluatorOptions::<V>::default()
@@ -825,21 +899,25 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         coordinates: &[usize],
         hint: EvaluationHint<V>,
     ) -> Result<Vec<T>> {
+        #[cfg(test)]
+        let evaluation_started = std::time::Instant::now();
         let shape = [input_evaluators.index_count, points.len()];
         let values = ColMajorArrayRef::new(coordinates, &shape).map_err(|error| {
             TreeAciError::Numerical {
                 message: error.to_string(),
             }
         })?;
-        self.evaluator
-            .evaluate_batched_with_hint(values, hint)?
-            .into_iter()
-            .map(|value| {
-                T::from_evaluated_scalar(value).map_err(|message| TreeAciError::ScalarKind {
-                    message: message.into(),
-                })
-            })
-            .collect()
+        let result = self
+            .evaluator
+            .evaluate_batched_typed::<T>(values, hint)
+            .map_err(crate::scalar::typed_evaluation_error);
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.guard_output_evaluation += evaluation_started.elapsed();
+            stats.guard_output_points += points.len();
+            stats.guard_output_calls += 1;
+        });
+        result
     }
 }
 

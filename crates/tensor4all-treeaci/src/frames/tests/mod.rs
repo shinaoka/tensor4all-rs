@@ -182,6 +182,245 @@ fn extend_matches_a_full_rebuild_on_the_grown_arena() {
     }
 }
 
+#[test]
+fn extend_new_samples_matches_full_rebuild_on_chain_and_branch() {
+    let cases = [
+        (
+            chain_tree_for_batched_compute(),
+            vec![0, 0, 0],
+            vec![1, 0, 0],
+        ),
+        (y_tree::<f64>(), vec![0, 0, 0, 0], vec![0, 1, 1, 1]),
+    ];
+
+    for (input, seed0, seed1) in cases {
+        let problem =
+            prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        let (mut arena, mut candidates) =
+            SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
+        let initial =
+            InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+                .expect("initial store");
+        let previous_counts = initial.frames[0]
+            .iter()
+            .map(|frame| frame.sample_count)
+            .collect::<Vec<_>>();
+
+        arena
+            .inject_global_point(&mut candidates, &problem, &seed1)
+            .expect("grow the arena");
+        let extended = initial
+            .extend_new_samples(
+                std::slice::from_ref(&input),
+                &problem,
+                &arena,
+                std::slice::from_ref(&previous_counts),
+            )
+            .expect("extend only new samples");
+        let rebuilt =
+            InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+                .expect("rebuild from scratch");
+
+        for edge in 0..problem.directed_edges.len() {
+            let sample_count = arena.directed_record_count(edge).unwrap();
+            for sample in 0..sample_count {
+                assert_eq!(
+                    extended.frame_values(0, edge, sample).unwrap(),
+                    rebuilt.frame_values(0, edge, sample).unwrap(),
+                    "edge {edge} sample {sample} disagrees between cut-local extension and rebuild"
+                );
+            }
+        }
+
+        let unchanged = (0..problem.directed_edges.len())
+            .filter(|&edge| arena.directed_record_count(edge).unwrap() == previous_counts[edge]);
+        for edge in unchanged {
+            assert!(
+                Rc::ptr_eq(&initial.frames[0][edge], &extended.frames[0][edge]),
+                "unchanged edge {edge} must retain its frame allocation"
+            );
+        }
+    }
+}
+
+#[test]
+fn extend_new_samples_computes_only_new_ranges() {
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (mut arena, _candidates) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let previous_counts = initial.frames[0]
+        .iter()
+        .map(|frame| frame.sample_count)
+        .collect::<Vec<_>>();
+    let grown_edge = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == 1 && edge.to == 0)
+        .expect("chain must have the selected directed edge");
+    arena
+        .project_point_onto_edge(&problem, grown_edge, &[0, 0, 0, 0, 1])
+        .expect("project a new point onto one cut");
+
+    super::debug_stats::reset();
+    crate::state::profile_debug_stats::reset();
+    let extended = initial
+        .extend_new_samples(
+            std::slice::from_ref(&input),
+            &problem,
+            &arena,
+            std::slice::from_ref(&previous_counts),
+        )
+        .expect("extend only new samples");
+    let expected_new_values = (0..problem.directed_edges.len())
+        .map(|edge| {
+            let current = arena.directed_record_count(edge).unwrap();
+            (current - previous_counts[edge]) * initial.frames[0][edge].bond_dim
+        })
+        .sum::<usize>();
+
+    assert!(
+        super::debug_stats::compute_calls() > 0,
+        "the new ranges must still be contracted"
+    );
+    assert_eq!(
+        super::debug_stats::old_values_copied(),
+        0,
+        "cut-local extension must not copy old frame rows into a new allocation"
+    );
+    assert_eq!(super::debug_stats::new_values_copied(), expected_new_values);
+    assert!(
+        extended.frames[0][grown_edge]
+            .base
+            .as_ref()
+            .is_some_and(|base| { Rc::ptr_eq(base, &initial.frames[0][grown_edge]) }),
+        "grown frame must retain the old prefix by Rc"
+    );
+}
+
+#[test]
+#[ignore = "paired release measurement; correctness is covered by the non-ignored full matrix"]
+fn paired_release_measurement_for_cut_local_extension() {
+    use std::time::{Duration, Instant};
+
+    let input = chain5_tree_for_dedup_regression();
+    let problem =
+        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+    let (mut arena, _candidates) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
+    let initial =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("initial store");
+    let previous_counts = initial.frames[0]
+        .iter()
+        .map(|frame| frame.sample_count)
+        .collect::<Vec<_>>();
+    let grown_edge = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == 1 && edge.to == 0)
+        .expect("chain must have the selected directed edge");
+    arena
+        .project_point_onto_edge(&problem, grown_edge, &[0, 0, 0, 0, 1])
+        .expect("project a new point onto one cut");
+
+    for _ in 0..8 {
+        let extended = initial
+            .extend_new_samples(
+                std::slice::from_ref(&input),
+                &problem,
+                &arena,
+                std::slice::from_ref(&previous_counts),
+            )
+            .expect("cut-local extension");
+        let rebuilt =
+            InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+                .expect("full rebuild");
+        assert_eq!(
+            extended.frame_values(0, grown_edge, 1).unwrap(),
+            rebuilt.frame_values(0, grown_edge, 1).unwrap()
+        );
+    }
+
+    super::debug_stats::reset();
+    crate::state::profile_debug_stats::reset();
+    let extended = initial
+        .extend_new_samples(
+            std::slice::from_ref(&input),
+            &problem,
+            &arena,
+            std::slice::from_ref(&previous_counts),
+        )
+        .expect("cut-local extension");
+    let candidate_compute_calls = super::debug_stats::compute_calls();
+    let candidate_profile = crate::state::profile_debug_stats::snapshot();
+    let extended_bytes = extended.retained_bytes();
+
+    super::debug_stats::reset();
+    let rebuilt =
+        InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
+            .expect("full rebuild");
+    let full_rebuild_compute_calls = super::debug_stats::compute_calls();
+    assert_eq!(
+        extended.frame_values(0, grown_edge, 1).unwrap(),
+        rebuilt.frame_values(0, grown_edge, 1).unwrap()
+    );
+    eprintln!(
+        "#715 paired release resources: chain_nodes={}, max_degree=2, directed_edges={}, candidate_compute_calls={candidate_compute_calls}, full_rebuild_compute_calls={full_rebuild_compute_calls}, old_values_copied={}, new_values_copied={}, extension_calls={}, reused_edges={}, grown_edges={}, retained_bytes={extended_bytes}",
+        problem.node_order.len(),
+        problem.directed_edges.len(),
+        candidate_profile.frame_extension_old_values_copied,
+        candidate_profile.frame_extension_new_values_copied,
+        candidate_profile.frame_extension_calls,
+        candidate_profile.frame_extension_reused_edges,
+        candidate_profile.frame_extension_grown_edges,
+    );
+
+    const REPETITIONS: usize = 128;
+    const SAMPLES: usize = 7;
+    let mut cut_local = Vec::with_capacity(SAMPLES);
+    let mut full_rebuild = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let started = Instant::now();
+        for _ in 0..REPETITIONS {
+            let extended = initial
+                .extend_new_samples(
+                    std::slice::from_ref(&input),
+                    &problem,
+                    &arena,
+                    std::slice::from_ref(&previous_counts),
+                )
+                .expect("cut-local extension");
+            std::hint::black_box(extended.records());
+        }
+        cut_local.push(started.elapsed());
+
+        let started = Instant::now();
+        for _ in 0..REPETITIONS {
+            let rebuilt = InputFrameStore::<f64>::from_samples(
+                std::slice::from_ref(&input),
+                &problem,
+                &arena,
+            )
+            .expect("full rebuild");
+            std::hint::black_box(rebuilt.records());
+        }
+        full_rebuild.push(started.elapsed());
+    }
+    cut_local.sort_unstable();
+    full_rebuild.sort_unstable();
+    let median = |samples: &[Duration]| samples[samples.len() / 2];
+    eprintln!(
+        "#715 paired release measurement: repetitions={REPETITIONS}, samples={SAMPLES}, cut_local_median={:?}, full_rebuild_median={:?}, cut_local_all={cut_local:?}, full_rebuild_all={full_rebuild:?}",
+        median(&cut_local),
+        median(&full_rebuild),
+    );
+}
+
 /// `extend` must not repeat work: computing frames for samples the store
 /// already covers is the exact bug `commit_edge_proposal` had (see
 /// `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`). Growing
@@ -895,6 +1134,123 @@ fn two_incoming_core_matrix_batched_matches_complex_reference_for_every_axis_ord
 }
 
 #[test]
+fn packed_candidate_frame_batch_preserves_column_major_order() {
+    let batch =
+        super::PackedCandidateFrames::try_new(2, vec![1, 0], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
+
+    assert_eq!(batch.bond_dim(), 2);
+    assert_eq!(batch.candidate_count(), 2);
+    assert_eq!(batch.candidate_order(), &[1, 0]);
+    assert_eq!(batch.column(0), &[10.0, 20.0]);
+    assert_eq!(batch.column_for_candidate(0), Some(&[30.0, 40.0][..]));
+    assert_eq!(batch.as_col_major_slice(), &[10.0, 20.0, 30.0, 40.0]);
+
+    let matrix = batch.into_bond_by_candidate_matrix();
+    assert_eq!(matrix.nrows(), 2);
+    assert_eq!(matrix.ncols(), 2);
+    assert_eq!(matrix[[0, 0]], 10.0);
+    assert_eq!(matrix[[1, 1]], 40.0);
+
+    let row_batch = super::PackedCandidateFrames::try_new_with_layout(
+        2,
+        vec![0, 1],
+        vec![10.0, 30.0, 20.0, 40.0],
+        super::PackedCandidateFrameLayout::CandidateByBond,
+    )
+    .unwrap();
+    let row_matrix = row_batch.into_candidate_by_bond_matrix();
+    assert_eq!(row_matrix.as_col_major_slice(), &[10.0, 30.0, 20.0, 40.0]);
+}
+
+#[test]
+fn candidate_batches_reuse_one_oriented_core_for_distinct_candidates() {
+    let input = chain_tree_for_batched_compute();
+    let inputs = vec![input];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 1 && arc.to == 2)
+        .unwrap();
+    let incoming_edge = problem.directed_edges[edge].incoming_to_from[0];
+    let (arena, candidate_sets) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let incoming_sample = candidate_sets.ids[incoming_edge][0];
+
+    // Force the first candidate lookup to materialize the oriented core, then
+    // use a different local coordinate so the candidate-result cache cannot
+    // hide whether the oriented-core cache was reused.
+    frames.oriented_core_cache[0].borrow_mut().remove(&edge);
+    super::super::state::profile_debug_stats::reset();
+    for local_coordinate in [0, 1] {
+        frames
+            .candidate_frames_for_edge(
+                &inputs,
+                &problem,
+                0,
+                edge,
+                &[ComponentSample {
+                    local_coordinate,
+                    incoming: vec![(incoming_edge, incoming_sample)],
+                }],
+            )
+            .unwrap();
+    }
+
+    let profile = super::super::state::profile_debug_stats::snapshot();
+    assert_eq!(profile.candidate_core_pack_calls, 1);
+    assert!(frames.oriented_core_cache[0].borrow().contains_key(&edge));
+}
+
+#[test]
+fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
+    let input = y_tree::<Complex64>();
+    let inputs = vec![input];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .unwrap();
+    let directed = &problem.directed_edges[edge];
+    assert_eq!(directed.incoming_to_from.len(), 2);
+    let (arena, candidate_sets) =
+        SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0], vec![0, 1, 1, 1]]).unwrap();
+    let frames = InputFrameStore::<Complex64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let incoming_1 = directed.incoming_to_from[0];
+    let incoming_2 = directed.incoming_to_from[1];
+    let candidates = candidate_sets.ids[incoming_1]
+        .iter()
+        .flat_map(|&sample_1| {
+            candidate_sets.ids[incoming_2]
+                .iter()
+                .map(move |&sample_2| ComponentSample {
+                    local_coordinate: 0,
+                    incoming: vec![(incoming_1, sample_1), (incoming_2, sample_2)],
+                })
+        })
+        .collect::<Vec<_>>();
+
+    let packed = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(packed, scalar);
+    assert_eq!(packed.candidate_order(), &[0, 1, 2, 3]);
+    assert_eq!(packed.candidate_count(), candidates.len());
+    assert_eq!(packed.bond_dim(), 2);
+}
+
+#[test]
 fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
@@ -1161,8 +1517,10 @@ fn two_incoming_candidate_batch_obeys_the_working_byte_limit() {
 
 /// 4-arm star: hub node 0 with three leaves plus a fourth arm, so directed
 /// edge `0 -> 1` has exactly three incoming edges (`2 -> 0`, `3 -> 0`,
-/// `4 -> 0`). Used to pin that 3+-incoming-edge dispatch still uses the
-/// scalar fallback once the two-incoming case gets a batched path.
+/// `4 -> 0`). Small integer payloads only, so batched and scalar routes agree
+/// bit for bit. Used to pin the 3+-incoming candidate dispatch (now the
+/// generalized batched route) and the stored-frame dispatch (still scalar)
+/// against the scalar reference.
 fn four_arm_star_tree_for_three_incoming_fallback() -> TreeTN<IdxTensor, usize> {
     let s0 = DynIndex::new_dyn(1);
     let s1 = DynIndex::new_dyn(1);
@@ -1194,7 +1552,7 @@ fn four_arm_star_tree_for_three_incoming_fallback() -> TreeTN<IdxTensor, usize> 
 }
 
 #[test]
-fn candidate_frames_for_edge_still_falls_back_on_three_incoming_edges() {
+fn candidate_frames_for_edge_batches_three_incoming_edges() {
     let inputs = vec![four_arm_star_tree_for_three_incoming_fallback()];
     let options = TreeAciOptions::default();
     let problem = prepare_problem(&inputs, &options).unwrap();
@@ -1228,9 +1586,14 @@ fn candidate_frames_for_edge_still_falls_back_on_three_incoming_edges() {
         }
     }
 
+    super::multi_incoming_debug_stats::reset();
     let dispatched = frames
         .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
         .unwrap();
+    // The complete cross now takes the generalized batched route; the scalar
+    // `candidate_frame` path below stays the differential oracle.
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 1);
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 0);
     let scalar = candidates
         .iter()
         .map(|candidate| {
@@ -1265,9 +1628,11 @@ fn build_frame_builder<'a>(
         .collect::<Vec<_>>();
     super::FrameBuilder {
         input,
+        input_index: 0,
         problem,
         arena,
         cores,
+        oriented_core_cache: Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         memo,
         existing_frames: None,
     }
@@ -1326,8 +1691,7 @@ fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
     assert_eq!(result[0], result[1]);
     assert_eq!(
         frames.retained_bytes() - retained_before,
-        result[0].len() * std::mem::size_of::<f64>()
-            + std::mem::size_of::<super::CandidateCacheKey>()
+        std::mem::size_of_val(&result[0]) + std::mem::size_of::<super::CandidateCacheKey>()
     );
     assert_eq!(frames.candidate_cache.borrow().len(), 1);
 }
@@ -1753,7 +2117,7 @@ fn compute_batch_batches_a_branch_edge_with_two_incoming_edges() {
 }
 
 #[test]
-fn compute_batch_still_falls_back_on_three_incoming_edges() {
+fn compute_batch_keeps_the_scalar_route_on_three_incoming_edges() {
     let input = four_arm_star_tree_for_three_incoming_fallback();
     let problem =
         prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
@@ -1859,9 +2223,11 @@ fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputi
         .collect::<Vec<_>>();
     let mut builder = super::FrameBuilder {
         input: &input,
+        input_index: 0,
         problem: &problem,
         arena: &arena,
         cores,
+        oriented_core_cache: Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         memo,
         existing_frames: Some(initial.frames[0].as_slice()),
     };
@@ -2119,4 +2485,1322 @@ fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
         "batched (two-incoming fix): {batched_elapsed:?}\nscalar (old fallback, still used for 3+ incoming): {scalar_elapsed:?}\nspeedup: {:.2}x",
         scalar_elapsed.as_secs_f64() / batched_elapsed.as_secs_f64()
     );
+}
+
+/// [AI Supplied] Diagnostic-only A/B for the existing tensorbackend batch API.
+///
+/// Unlike the previously rejected two-GEMM experiment, this preserves the
+/// current first-stage contraction decomposition: every fixed-second-bond
+/// core slice is still multiplied by `v1` independently.  The only change is
+/// whether those same-shaped products are dispatched one at a time or through
+/// `batched_mat_mul_same_shape_owned`.  It therefore isolates backend dispatch
+/// consolidation from a change in the mathematical reduction tree.
+#[test]
+#[ignore]
+fn diagnostic_two_incoming_sequential_vs_upstream_same_shape_batch() {
+    use std::time::{Duration, Instant};
+
+    use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, Matrix};
+
+    const OUTGOING_DIM: usize = 32;
+    const INCOMING_DIM_1: usize = 256;
+    const INCOMING_DIM_2: usize = 256;
+    const N1: usize = 40;
+    const N2: usize = 40;
+    const REPEATS: usize = 9;
+
+    let dims = vec![1, OUTGOING_DIM, INCOMING_DIM_1, INCOMING_DIM_2];
+    let mut strides = Vec::with_capacity(dims.len());
+    let mut stride = 1usize;
+    for &dim in &dims {
+        strides.push(stride);
+        stride *= dim;
+    }
+    let core = super::PreparedCore {
+        indices: dims.iter().map(|&dim| DynIndex::new_dyn(dim)).collect(),
+        dims,
+        strides,
+        values: (0..stride)
+            .map(|i| ((i * 17 + 3) % 257) as f64 / 257.0)
+            .collect(),
+    };
+    let v1 = Matrix::from_col_major_vec(
+        INCOMING_DIM_1,
+        N1,
+        (0..INCOMING_DIM_1 * N1)
+            .map(|i| ((i * 13 + 5) % 251) as f64 / 251.0)
+            .collect(),
+    );
+    let v2 = Matrix::from_col_major_vec(
+        INCOMING_DIM_2,
+        N2,
+        (0..INCOMING_DIM_2 * N2)
+            .map(|i| ((i * 11 + 7) % 241) as f64 / 241.0)
+            .collect(),
+    );
+
+    let upstream = || {
+        let mut a = Vec::with_capacity(INCOMING_DIM_2 * OUTGOING_DIM * INCOMING_DIM_1);
+        let mut b = Vec::with_capacity(INCOMING_DIM_2 * INCOMING_DIM_1 * N1);
+        for i2 in 0..INCOMING_DIM_2 {
+            let core_matrix = super::single_incoming_core_matrix(
+                &core,
+                1,
+                2,
+                i2 * core.strides[3],
+                OUTGOING_DIM,
+                INCOMING_DIM_1,
+            );
+            a.extend(core_matrix.into_col_major_vec());
+            b.extend_from_slice(v1.as_col_major_slice());
+        }
+        let stage1 = batched_mat_mul_same_shape_owned(
+            INCOMING_DIM_2,
+            OUTGOING_DIM,
+            INCOMING_DIM_1,
+            N1,
+            a,
+            b,
+        )
+        .unwrap();
+        let stage1 = Matrix::from_col_major_vec(OUTGOING_DIM * N1, INCOMING_DIM_2, stage1);
+        mat_mul(&stage1, &v2).unwrap()
+    };
+
+    let sequential = || {
+        super::two_incoming_core_matrix_batched(
+            &core,
+            1,
+            2,
+            3,
+            0,
+            OUTGOING_DIM,
+            INCOMING_DIM_1,
+            INCOMING_DIM_2,
+            &v1,
+            &v2,
+        )
+        .unwrap()
+    };
+
+    let expected = sequential();
+    let actual = upstream();
+    let max_abs = expected
+        .as_col_major_slice()
+        .iter()
+        .zip(actual.as_col_major_slice())
+        .map(|(&left, &right)| (left - right).abs())
+        .fold(0.0_f64, f64::max);
+    let scale = expected
+        .as_col_major_slice()
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_abs <= 2.0e-14 * scale.max(1.0),
+        "max_abs={max_abs}, scale={scale}"
+    );
+
+    let mut sequential_times = Vec::with_capacity(REPEATS);
+    let mut upstream_times = Vec::with_capacity(REPEATS);
+    for repeat in 0..REPEATS {
+        if repeat % 2 == 0 {
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+        } else {
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+        }
+    }
+    sequential_times.sort_unstable();
+    upstream_times.sort_unstable();
+    let sequential_median: Duration = sequential_times[REPEATS / 2];
+    let upstream_median: Duration = upstream_times[REPEATS / 2];
+    let repeated_rhs_bytes = INCOMING_DIM_2 * INCOMING_DIM_1 * N1 * std::mem::size_of::<f64>();
+    eprintln!(
+        "sequential median: {sequential_median:?}\nupstream same-shape batch median: {upstream_median:?}\nupstream/sequential: {:.3}x\nrepeated RHS payload: {repeated_rhs_bytes} bytes\nmax relative disagreement: {:.3e}",
+        upstream_median.as_secs_f64() / sequential_median.as_secs_f64(),
+        max_abs / scale.max(1.0),
+    );
+}
+
+/// [AI Supplied] Diagnostic for the chain path's per-input dispatch loop.
+///
+/// The dimensions model a binary-physical chain plateau with two same-shaped
+/// operands. SimpleTT ACI already batches this dimension-compatible case, but
+/// TreeACI currently calls the backend separately for each input.
+#[test]
+#[ignore]
+fn diagnostic_chain_two_inputs_sequential_vs_upstream_same_shape_batch() {
+    use std::time::{Duration, Instant};
+
+    use tensor4all_tensorbackend::{
+        batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix,
+    };
+
+    const BATCH: usize = 2;
+    const M: usize = 512;
+    const K: usize = 256;
+    const N: usize = 256;
+    const REPEATS: usize = 9;
+
+    let a_items = M * K;
+    let b_items = K * N;
+    let a = (0..BATCH * a_items)
+        .map(|i| ((i * 17 + 3) % 257) as f64 / 257.0)
+        .collect::<Vec<_>>();
+    let b = (0..BATCH * b_items)
+        .map(|i| ((i * 13 + 5) % 251) as f64 / 251.0)
+        .collect::<Vec<_>>();
+
+    let sequential = || {
+        let mut outputs = Vec::with_capacity(BATCH * M * N);
+        for input in 0..BATCH {
+            let left = Matrix::from_col_major_vec(
+                M,
+                K,
+                a[input * a_items..(input + 1) * a_items].to_vec(),
+            );
+            let right = Matrix::from_col_major_vec(
+                K,
+                N,
+                b[input * b_items..(input + 1) * b_items].to_vec(),
+            );
+            outputs.extend(mat_mul(&left, &right).unwrap().into_col_major_vec());
+        }
+        outputs
+    };
+    let sequential_owned = || {
+        let mut outputs = Vec::with_capacity(BATCH * M * N);
+        for input in 0..BATCH {
+            let left = Matrix::from_col_major_vec(
+                M,
+                K,
+                a[input * a_items..(input + 1) * a_items].to_vec(),
+            );
+            let right = Matrix::from_col_major_vec(
+                K,
+                N,
+                b[input * b_items..(input + 1) * b_items].to_vec(),
+            );
+            outputs.extend(mat_mul_owned(left, right).unwrap().into_col_major_vec());
+        }
+        outputs
+    };
+    let upstream =
+        || batched_mat_mul_same_shape_owned(BATCH, M, K, N, a.clone(), b.clone()).unwrap();
+
+    let expected = sequential();
+    assert_eq!(expected, sequential_owned());
+    let actual = upstream();
+    let max_abs = expected
+        .iter()
+        .zip(&actual)
+        .map(|(&left, &right)| (left - right).abs())
+        .fold(0.0_f64, f64::max);
+    let scale = expected
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_abs <= 2.0e-14 * scale.max(1.0),
+        "max_abs={max_abs}, scale={scale}"
+    );
+
+    let mut sequential_times = Vec::with_capacity(REPEATS);
+    let mut sequential_owned_times = Vec::with_capacity(REPEATS);
+    let mut upstream_times = Vec::with_capacity(REPEATS);
+    for repeat in 0..REPEATS {
+        if repeat % 2 == 0 {
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential_owned());
+            sequential_owned_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+        } else {
+            let start = Instant::now();
+            std::hint::black_box(upstream());
+            upstream_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential_owned());
+            sequential_owned_times.push(start.elapsed());
+            let start = Instant::now();
+            std::hint::black_box(sequential());
+            sequential_times.push(start.elapsed());
+        }
+    }
+    sequential_times.sort_unstable();
+    sequential_owned_times.sort_unstable();
+    upstream_times.sort_unstable();
+    let sequential_median: Duration = sequential_times[REPEATS / 2];
+    let sequential_owned_median: Duration = sequential_owned_times[REPEATS / 2];
+    let upstream_median: Duration = upstream_times[REPEATS / 2];
+    eprintln!(
+        "two sequential borrowed inputs median: {sequential_median:?}\ntwo sequential owned inputs median: {sequential_owned_median:?}\nupstream same-shape batch median: {upstream_median:?}\nowned/borrowed: {:.3}x\nbatch/borrowed: {:.3}x\nmax relative disagreement: {:.3e}",
+        sequential_owned_median.as_secs_f64() / sequential_median.as_secs_f64(),
+        upstream_median.as_secs_f64() / sequential_median.as_secs_f64(),
+        max_abs / scale.max(1.0),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #713: arbitrary-degree candidate-frame batching
+// ---------------------------------------------------------------------------
+
+/// Deterministic fixture values whose complex instantiation has a genuinely
+/// nonzero imaginary part, so a "complex" differential test cannot silently
+/// degenerate into a second real test the way `T: From<f64>` fixtures do.
+trait FixtureScalar: TreeAciScalar {
+    fn fixture(index: usize) -> Self;
+}
+
+impl FixtureScalar for f64 {
+    fn fixture(index: usize) -> Self {
+        ((index * 37 % 23) as f64) / 7.0 - 1.5
+    }
+}
+
+impl FixtureScalar for Complex64 {
+    fn fixture(index: usize) -> Self {
+        Complex64::new(
+            ((index * 37 % 23) as f64) / 7.0 - 1.5,
+            ((index * 19 % 17) as f64) / 5.0 - 1.2,
+        )
+    }
+}
+
+/// 4-arm star with unequal bond dimensions, two physical legs on the hub, and
+/// a deliberately permuted hub axis order: the outgoing bond of `0 -> 1` is
+/// neither the first nor the last core axis, the two physical legs are
+/// interleaved between bonds, and the three incoming bonds do not appear in
+/// incoming-edge order. Directed edge `0 -> 1` therefore has exactly three
+/// incoming edges whose core axes and dimensions are all distinct.
+fn three_incoming_star<T: FixtureScalar>() -> TreeTN<IdxTensor, usize> {
+    let p0a = DynIndex::new_dyn(2);
+    let p0b = DynIndex::new_dyn(2);
+    let p1 = DynIndex::new_dyn(2);
+    let p2 = DynIndex::new_dyn(3);
+    let p3 = DynIndex::new_dyn(2);
+    let p4 = DynIndex::new_dyn(2);
+    let b01 = DynIndex::new_dyn(2);
+    let b02 = DynIndex::new_dyn(2);
+    let b03 = DynIndex::new_dyn(3);
+    let b04 = DynIndex::new_dyn(2);
+
+    let hub = IdxTensor::from_dense(
+        vec![b03.clone(), p0a, b01.clone(), b04.clone(), p0b, b02.clone()],
+        (0..96).map(T::fixture).collect(),
+    )
+    .unwrap();
+    let arm1 = IdxTensor::from_dense(vec![b01, p1], (100..104).map(T::fixture).collect()).unwrap();
+    let arm2 = IdxTensor::from_dense(vec![p2, b02], (200..206).map(T::fixture).collect()).unwrap();
+    let arm3 = IdxTensor::from_dense(vec![b03, p3], (300..306).map(T::fixture).collect()).unwrap();
+    let arm4 = IdxTensor::from_dense(vec![p4, b04], (400..404).map(T::fixture).collect()).unwrap();
+
+    TreeTN::from_tensors(vec![hub, arm1, arm2, arm3, arm4], vec![0, 1, 2, 3, 4]).unwrap()
+}
+
+/// 5-arm star with one unequal bond and a permuted hub axis order, so that
+/// directed edge `0 -> 1` has exactly four incoming edges. This is the
+/// `q > 3` case: no existing kernel covers it and the generalized path must
+/// chain three intermediate contractions after the first one.
+fn four_incoming_star<T: FixtureScalar>() -> TreeTN<IdxTensor, usize> {
+    let p0 = DynIndex::new_dyn(2);
+    let p1 = DynIndex::new_dyn(2);
+    let p2 = DynIndex::new_dyn(2);
+    let p3 = DynIndex::new_dyn(2);
+    let p4 = DynIndex::new_dyn(2);
+    let p5 = DynIndex::new_dyn(2);
+    let b01 = DynIndex::new_dyn(2);
+    let b02 = DynIndex::new_dyn(2);
+    let b03 = DynIndex::new_dyn(2);
+    let b04 = DynIndex::new_dyn(3);
+    let b05 = DynIndex::new_dyn(2);
+
+    let hub = IdxTensor::from_dense(
+        vec![
+            b04.clone(),
+            b01.clone(),
+            p0,
+            b05.clone(),
+            b02.clone(),
+            b03.clone(),
+        ],
+        (0..96).map(T::fixture).collect(),
+    )
+    .unwrap();
+    let arm1 = IdxTensor::from_dense(vec![b01, p1], (100..104).map(T::fixture).collect()).unwrap();
+    let arm2 = IdxTensor::from_dense(vec![p2, b02], (200..204).map(T::fixture).collect()).unwrap();
+    let arm3 = IdxTensor::from_dense(vec![b03, p3], (300..304).map(T::fixture).collect()).unwrap();
+    let arm4 = IdxTensor::from_dense(vec![b04, p4], (400..406).map(T::fixture).collect()).unwrap();
+    let arm5 = IdxTensor::from_dense(vec![p5, b05], (500..504).map(T::fixture).collect()).unwrap();
+
+    TreeTN::from_tensors(
+        vec![hub, arm1, arm2, arm3, arm4, arm5],
+        vec![0, 1, 2, 3, 4, 5],
+    )
+    .unwrap()
+}
+
+/// Locates the directed hub edge `0 -> 1` and asserts its incoming degree.
+fn hub_edge(problem: &PreparedTreeProblem<usize>, degree: usize) -> usize {
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|arc| arc.from == 0 && arc.to == 1)
+        .expect("the star fixture must have a directed edge 0 -> 1");
+    assert_eq!(
+        problem.directed_edges[edge].incoming_to_from.len(),
+        degree,
+        "fixture must expose exactly {degree} incoming edges on 0 -> 1"
+    );
+    edge
+}
+
+/// Builds the complete candidate cross exactly as `enumerate_candidates`
+/// does: `local_coordinate` fastest, then each incoming edge in
+/// `incoming_to_from` order.
+fn full_cross_candidates(
+    problem: &PreparedTreeProblem<usize>,
+    candidate_sets: &crate::samples::CandidateSets,
+    edge: usize,
+) -> Vec<ComponentSample> {
+    let directed = &problem.directed_edges[edge];
+    let node = problem.node_positions[&directed.from];
+    let local_dim = problem.physical[node].local_dim;
+    let mut count = local_dim;
+    for incoming in &directed.incoming_to_from {
+        count *= candidate_sets.ids[*incoming].len();
+    }
+    (0..count)
+        .map(|encoded| {
+            let mut quotient = encoded;
+            let local_coordinate = quotient % local_dim;
+            quotient /= local_dim;
+            let incoming = directed
+                .incoming_to_from
+                .iter()
+                .map(|incoming| {
+                    let ids = &candidate_sets.ids[*incoming];
+                    let sample = ids[quotient % ids.len()];
+                    quotient /= ids.len();
+                    (*incoming, sample)
+                })
+                .collect();
+            ComponentSample {
+                local_coordinate,
+                incoming,
+            }
+        })
+        .collect()
+}
+
+/// One whole-result residual between a packed batch and the scalar oracle:
+/// both sides are materialized once, subtracted elementwise, and reduced by
+/// maximum modulus. No per-candidate re-contraction happens here.
+fn packed_scalar_residual<T: TreeAciScalar>(
+    packed: &super::PackedCandidateFrames<T>,
+    scalar: &[Vec<T>],
+) -> f64 {
+    let packed_flat: Vec<T> = packed.to_candidate_vecs().into_iter().flatten().collect();
+    let scalar_flat: Vec<T> = scalar.iter().flatten().copied().collect();
+    assert_eq!(
+        packed_flat.len(),
+        scalar_flat.len(),
+        "packed and scalar results must have the same materialized size"
+    );
+    packed_flat
+        .iter()
+        .zip(&scalar_flat)
+        .map(|(packed, scalar)| tensor4all_core::Scalar::abs_val(*packed - *scalar))
+        .fold(0.0f64, f64::max)
+}
+
+fn max_modulus<T: TreeAciScalar>(values: &[Vec<T>]) -> f64 {
+    values
+        .iter()
+        .flatten()
+        .map(|value| tensor4all_core::Scalar::abs_val(*value))
+        .fold(0.0f64, f64::max)
+}
+
+/// Differential harness shared by every arbitrary-degree case: enumerate the
+/// complete candidate cross, contract it through the dispatched path, and
+/// compare the whole materialized result against the scalar
+/// `candidate_frame` oracle while asserting candidate order and routing.
+fn assert_multi_incoming_matches_scalar<T: FixtureScalar>(
+    input: TreeTN<IdxTensor, usize>,
+    seeds: &[Vec<usize>],
+    degree: usize,
+) {
+    let inputs = vec![input];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, degree);
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, seeds).unwrap();
+    let frames = InputFrameStore::<T>::from_samples(&inputs, &problem, &arena).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+    assert!(
+        candidates.len() > degree,
+        "fixture must enumerate a non-degenerate candidate cross"
+    );
+
+    super::multi_incoming_debug_stats::reset();
+    let packed = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let batched_groups = super::multi_incoming_debug_stats::batched_groups();
+
+    let scalar_frames = InputFrameStore::<T>::from_samples(&inputs, &problem, &arena).unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let node = problem.node_positions[&problem.directed_edges[edge].from];
+    assert_eq!(
+        batched_groups, problem.physical[node].local_dim as u64,
+        "every local-coordinate group of a complete cross must take the batched route"
+    );
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 0);
+    assert_eq!(packed.candidate_count(), candidates.len());
+    assert_eq!(
+        packed.candidate_order(),
+        (0..candidates.len()).collect::<Vec<_>>().as_slice()
+    );
+    assert_eq!(packed.bond_dim(), frames.bond_dim(0, edge).unwrap());
+
+    let scale = max_modulus(&scalar);
+    assert!(
+        scale > 1.0e-3,
+        "fixture must produce non-degenerate frame values, got scale {scale}"
+    );
+    let first_two_differ = scalar[0]
+        .iter()
+        .zip(&scalar[1])
+        .map(|(left, right)| tensor4all_core::Scalar::abs_val(*left - *right))
+        .fold(0.0f64, f64::max);
+    assert!(
+        first_two_differ > 1.0e-9 * scale,
+        "fixture must produce candidate-dependent frames"
+    );
+    let residual = packed_scalar_residual(&packed, &scalar);
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "batched degree-{degree} result differs from the scalar oracle: residual {residual:.3e}, scale {scale:.3e}"
+    );
+}
+
+#[test]
+fn three_incoming_candidate_batches_match_the_scalar_oracle() {
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    assert_multi_incoming_matches_scalar::<f64>(three_incoming_star::<f64>(), &seeds, 3);
+    assert_multi_incoming_matches_scalar::<Complex64>(
+        three_incoming_star::<Complex64>(),
+        &seeds,
+        3,
+    );
+}
+
+#[test]
+fn four_incoming_candidate_batches_match_the_scalar_oracle() {
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 1, 1],
+        vec![0, 1, 0, 1, 0, 1],
+    ];
+    assert_multi_incoming_matches_scalar::<f64>(four_incoming_star::<f64>(), &seeds, 4);
+    assert_multi_incoming_matches_scalar::<Complex64>(four_incoming_star::<Complex64>(), &seeds, 4);
+}
+
+#[test]
+fn multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+
+    // Reverse the complete cross and duplicate every third candidate: the
+    // packed batch must stay aligned with the caller's order, and a repeated
+    // candidate must not collapse into a single column.
+    let cross = full_cross_candidates(&problem, &candidate_sets, edge);
+    let mut candidates: Vec<ComponentSample> = cross.iter().rev().cloned().collect();
+    for index in (0..cross.len()).step_by(3) {
+        candidates.push(cross[index].clone());
+    }
+
+    super::multi_incoming_debug_stats::reset();
+    let packed = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
+
+    let scalar_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(packed.candidate_count(), candidates.len());
+    let scale = max_modulus(&scalar);
+    let residual = packed_scalar_residual(&packed, &scalar);
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "reordered/duplicated batch differs from the scalar oracle: {residual:.3e}"
+    );
+}
+
+#[test]
+fn multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let directed = &problem.directed_edges[edge];
+    let incoming: Vec<_> = directed.incoming_to_from.clone();
+    let ids: Vec<Vec<_>> = incoming
+        .iter()
+        .map(|edge| candidate_sets.ids[*edge].clone())
+        .collect();
+    let diagonal = ids.iter().map(Vec::len).min().unwrap();
+    assert!(
+        diagonal >= 2,
+        "fixture must offer at least two ids per edge"
+    );
+
+    // A strictly diagonal candidate set: `diagonal` candidates but a
+    // `diagonal^3` cross. The routing contract must not materialize that
+    // superset, so this group stays on the scalar route.
+    let candidates: Vec<ComponentSample> = (0..diagonal)
+        .map(|index| ComponentSample {
+            local_coordinate: 0,
+            incoming: incoming
+                .iter()
+                .enumerate()
+                .map(|(axis, edge)| (*edge, ids[axis][index]))
+                .collect(),
+        })
+        .collect();
+
+    super::multi_incoming_debug_stats::reset();
+    let packed = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 1);
+
+    let scalar_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(packed, scalar);
+}
+
+#[test]
+fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let mut problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+
+    let batched_bytes = frames
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .unwrap()
+        * std::mem::size_of::<f64>();
+    assert!(batched_bytes > 0);
+    problem.max_working_bytes = batched_bytes - 1;
+
+    // One byte under the batched intermediate's charge: the documented
+    // routing contract falls back to the scalar path instead of allocating
+    // over budget or raising a limit error.
+    super::multi_incoming_debug_stats::reset();
+    let packed = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+    assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
+
+    let scalar_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let scalar = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(packed, scalar);
+
+    // The over-budget estimate must also shrink back to the scalar charge, so
+    // the local update's pre-flight and the kernel agree on the same route.
+    let fallback_elements = frames
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .unwrap();
+    assert!(fallback_elements * std::mem::size_of::<f64>() <= problem.max_working_bytes);
+}
+
+#[test]
+fn multi_incoming_batch_is_deterministic_and_never_caches_candidates() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+
+    let mut runs = Vec::new();
+    for _ in 0..3 {
+        super::candidate_debug_stats::reset();
+        let packed = frames
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+            .unwrap();
+        // Three-or-more-incoming candidates are deliberately not cached: the
+        // repeat runs must keep missing, exactly as the scalar route did.
+        assert_eq!(
+            super::candidate_debug_stats::misses(),
+            candidates.len() as u64
+        );
+        assert_eq!(super::candidate_debug_stats::hits(), 0);
+        runs.push(packed.as_col_major_slice().to_vec());
+    }
+    assert_eq!(runs[0], runs[1]);
+    assert_eq!(runs[1], runs[2]);
+}
+
+/// Builds a synthetic prepared core whose axis order is deliberately the
+/// reverse of the natural `[physical, incoming.., outgoing]` order, so the
+/// outgoing axis is the fastest-varying one and the incoming axes appear in
+/// strictly decreasing axis order. Returns the core, the outgoing axis, the
+/// incoming axes in incoming-edge order, and the physical axis.
+fn reversed_axis_core<T: FixtureScalar>(
+    outgoing_dim: usize,
+    incoming_dims: &[usize],
+    physical_dim: usize,
+) -> (super::PreparedCore<T>, usize, Vec<usize>, usize) {
+    let mut natural = vec![physical_dim];
+    natural.extend_from_slice(incoming_dims);
+    natural.push(outgoing_dim);
+    let dims: Vec<usize> = natural.iter().copied().rev().collect();
+    let mut strides = Vec::with_capacity(dims.len());
+    let mut stride = 1usize;
+    for dim in &dims {
+        strides.push(stride);
+        stride *= dim;
+    }
+    let values: Vec<T> = (0..stride).map(T::fixture).collect();
+    let last = dims.len() - 1;
+    let incoming_axes = (0..incoming_dims.len()).map(|k| last - 1 - k).collect();
+    (
+        super::PreparedCore {
+            indices: Vec::new(),
+            dims,
+            strides,
+            values,
+        },
+        0,
+        incoming_axes,
+        last,
+    )
+}
+
+/// `incoming_batch_matrix` at one incoming degree, compared against the
+/// production scalar accumulator (`accumulate_incoming`, the exact reduction
+/// `contract_prepared_core` performs) over the complete candidate cross.
+fn assert_incoming_batch_matches_accumulator<T: FixtureScalar>(degree: usize) {
+    let outgoing_dim = 3usize;
+    let physical_dim = 2usize;
+    // Unequal bond dimensions and unequal candidate counts per component.
+    let incoming_dims: Vec<usize> = (0..degree).map(|axis| 2 + axis % 3).collect();
+    let counts: Vec<usize> = (0..degree).map(|axis| 1 + (axis + 1) % 3).collect();
+    let (core, outgoing_axis, incoming_axes, physical_axis) =
+        reversed_axis_core::<T>(outgoing_dim, &incoming_dims, physical_dim);
+
+    let frame_matrices: Vec<tensor4all_tensorbackend::Matrix<T>> = (0..degree)
+        .map(|axis| {
+            let data: Vec<T> = (0..incoming_dims[axis] * counts[axis])
+                .map(|index| T::fixture(1_000 + 97 * axis + index))
+                .collect();
+            tensor4all_tensorbackend::Matrix::from_col_major_vec(
+                incoming_dims[axis],
+                counts[axis],
+                data,
+            )
+        })
+        .collect();
+
+    for physical_coordinate in 0..physical_dim {
+        let physical_offset = physical_coordinate * core.strides[physical_axis];
+        let batch = super::incoming_batch_matrix(
+            &core,
+            outgoing_axis,
+            &incoming_axes,
+            physical_offset,
+            &frame_matrices,
+        )
+        .unwrap();
+
+        let cross: usize = counts.iter().product();
+        let mut batched_flat = Vec::with_capacity(cross * outgoing_dim);
+        let mut scalar_flat = Vec::with_capacity(cross * outgoing_dim);
+        for encoded in 0..cross {
+            let mut quotient = encoded;
+            let mut coordinates = Vec::with_capacity(degree);
+            for count in &counts {
+                coordinates.push(quotient % count);
+                quotient /= count;
+            }
+            let columns: Vec<&[T]> = (0..degree)
+                .map(|axis| {
+                    let start = coordinates[axis] * incoming_dims[axis];
+                    &frame_matrices[axis].as_col_major_slice()[start..start + incoming_dims[axis]]
+                })
+                .collect();
+            let accumulator_axes: Vec<(usize, &[T])> = (0..degree)
+                .map(|axis| (incoming_axes[axis], columns[axis]))
+                .collect();
+            batched_flat.extend_from_slice(batch.frame(&coordinates).unwrap());
+            for outgoing_value in 0..outgoing_dim {
+                let offset = physical_offset + outgoing_value * core.strides[outgoing_axis];
+                scalar_flat.push(super::accumulate_incoming(
+                    &core,
+                    &accumulator_axes,
+                    0,
+                    offset,
+                ));
+            }
+        }
+
+        let scale = scalar_flat
+            .iter()
+            .map(|value| tensor4all_core::Scalar::abs_val(*value))
+            .fold(0.0f64, f64::max);
+        assert!(
+            scale > 1.0e-3,
+            "degree {degree} fixture is degenerate: scale {scale}"
+        );
+        let residual = batched_flat
+            .iter()
+            .zip(&scalar_flat)
+            .map(|(batched, scalar)| tensor4all_core::Scalar::abs_val(*batched - *scalar))
+            .fold(0.0f64, f64::max);
+        assert!(
+            residual <= 1.0e-13 * scale,
+            "degree {degree} batch disagrees with the scalar accumulator: \
+             residual {residual:.3e}, scale {scale:.3e}"
+        );
+    }
+}
+
+#[test]
+fn incoming_batch_matrix_matches_the_scalar_accumulator_for_degree_zero_to_four() {
+    for degree in 0..=4 {
+        assert_incoming_batch_matches_accumulator::<f64>(degree);
+        assert_incoming_batch_matches_accumulator::<Complex64>(degree);
+    }
+}
+
+#[test]
+fn incoming_batch_matrix_rejects_inconsistent_shapes() {
+    let (core, outgoing_axis, incoming_axes, _physical_axis) =
+        reversed_axis_core::<f64>(3, &[2, 3, 2], 2);
+    let good: Vec<tensor4all_tensorbackend::Matrix<f64>> = [2usize, 3, 2]
+        .iter()
+        .map(|dim| tensor4all_tensorbackend::Matrix::from_col_major_vec(*dim, 1, vec![1.0; *dim]))
+        .collect();
+
+    let too_few = super::incoming_batch_matrix(&core, outgoing_axis, &incoming_axes, 0, &good[..2])
+        .unwrap_err();
+    assert!(matches!(
+        too_few,
+        crate::TreeAciError::InternalInvariant { .. }
+    ));
+
+    let mut wrong_rows = good.clone();
+    wrong_rows[1] = tensor4all_tensorbackend::Matrix::from_col_major_vec(4, 1, vec![1.0; 4]);
+    let mismatch =
+        super::incoming_batch_matrix(&core, outgoing_axis, &incoming_axes, 0, &wrong_rows)
+            .unwrap_err();
+    assert!(matches!(
+        mismatch,
+        crate::TreeAciError::InternalInvariant { .. }
+    ));
+
+    let unknown_axis =
+        super::incoming_batch_matrix(&core, core.dims.len(), &incoming_axes, 0, &good).unwrap_err();
+    assert!(matches!(
+        unknown_axis,
+        crate::TreeAciError::InternalInvariant { .. }
+    ));
+}
+
+#[test]
+fn multi_incoming_scratch_matches_the_two_incoming_specialization() {
+    for (outgoing, d1, d2, n1, n2) in [
+        (1usize, 1usize, 1usize, 1usize, 1usize),
+        (2, 3, 4, 5, 6),
+        (32, 32, 32, 40, 40),
+        (7, 1, 9, 3, 1),
+    ] {
+        // The literal pre-#713 two-incoming charge, kept here so the
+        // degree-two working-byte contract is pinned independently of the
+        // generalized implementation.
+        let expected = d1 * n1
+            + d2 * n2
+            + outgoing * d1
+            + outgoing * n1 * d2
+            + outgoing * n1
+            + outgoing * n1 * n2;
+        assert_eq!(
+            super::two_incoming_scratch_elements(outgoing, d1, d2, n1, n2).unwrap(),
+            expected
+        );
+        assert_eq!(
+            super::multi_incoming_scratch_elements(outgoing, &[d1, d2], &[n1, n2]).unwrap(),
+            expected
+        );
+    }
+
+    // Degree three charges both intermediate stages plus the final cross.
+    let (outgoing, dims, counts) = (3usize, [2usize, 3, 4], [5usize, 6, 7]);
+    let expected = 2 * 5
+        + 3 * 6
+        + 4 * 7
+        + outgoing * 2
+        + outgoing * 5
+        + outgoing * 5 * 3 * 4
+        + outgoing * 5 * 6 * 4
+        + outgoing * 5 * 6 * 7;
+    assert_eq!(
+        super::multi_incoming_scratch_elements(outgoing, &dims, &counts).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn multi_incoming_scratch_rejects_overflowing_or_inconsistent_shapes() {
+    let overflow =
+        super::multi_incoming_scratch_elements(usize::MAX / 3, &[3, 5, 7], &[11, 13, 17])
+            .unwrap_err();
+    assert!(matches!(overflow, crate::TreeAciError::SizeOverflow { .. }));
+
+    let mismatch = super::multi_incoming_scratch_elements(2, &[3, 4], &[5]).unwrap_err();
+    assert!(matches!(
+        mismatch,
+        crate::TreeAciError::InternalInvariant { .. }
+    ));
+
+    // Degrees below three build no grouped-GEMM job list at all.
+    assert_eq!(super::grouped_gemm_descriptor_bytes(&[4, 5]).unwrap(), 0);
+    assert!(super::grouped_gemm_descriptor_bytes(&[4, 5, 6]).unwrap() > 0);
+}
+
+/// [AI Supplied] #713 paired release measurement: how much of the
+/// 3+-incoming scalar cliff the generalized batched route removes, how the
+/// two routes scale with the candidate product, and what the remaining
+/// full-cross cost is once the cliff is gone.
+///
+/// Not run by default (`#[ignore]`): it is a timing and resource report, not
+/// a correctness gate; the differential tests above are the correctness gate.
+/// Every timed pair still asserts the whole-result residual against the
+/// scalar oracle before its times are reported. Run explicitly with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn three_incoming_batched_vs_scalar_release_measurement() {
+    for (m, d) in [(6usize, 16usize), (12, 16), (24, 16)] {
+        measure_three_incoming_case(m, d);
+    }
+}
+
+fn measure_three_incoming_case(m: usize, d: usize) {
+    use std::time::{Duration, Instant};
+
+    const SAMPLES: usize = 5;
+
+    let p0 = DynIndex::new_dyn(1);
+    let p1 = DynIndex::new_dyn(1);
+    let p2 = DynIndex::new_dyn(m);
+    let p3 = DynIndex::new_dyn(m);
+    let p4 = DynIndex::new_dyn(m);
+    let b01 = DynIndex::new_dyn(4);
+    let b02 = DynIndex::new_dyn(d);
+    let b03 = DynIndex::new_dyn(d);
+    let b04 = DynIndex::new_dyn(d);
+
+    let hub = IdxTensor::from_dense(
+        vec![p0, b01.clone(), b02.clone(), b03.clone(), b04.clone()],
+        (0..4 * d * d * d)
+            .map(|value| (value % 97) as f64)
+            .collect(),
+    )
+    .unwrap();
+    let arm1 =
+        IdxTensor::from_dense(vec![b01, p1], (0..4).map(|value| value as f64).collect()).unwrap();
+    let arm2 = IdxTensor::from_dense(
+        vec![b02, p2],
+        (0..d * m).map(|value| (value % 31) as f64).collect(),
+    )
+    .unwrap();
+    let arm3 = IdxTensor::from_dense(
+        vec![b03, p3],
+        (0..d * m).map(|value| (value % 37) as f64).collect(),
+    )
+    .unwrap();
+    let arm4 = IdxTensor::from_dense(
+        vec![b04, p4],
+        (0..d * m).map(|value| (value % 41) as f64).collect(),
+    )
+    .unwrap();
+    let inputs =
+        vec![TreeTN::from_tensors(vec![hub, arm1, arm2, arm3, arm4], vec![0, 1, 2, 3, 4]).unwrap()];
+
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds: Vec<Vec<usize>> = (0..m)
+        .map(|index| vec![0, 0, index, index, index])
+        .collect();
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+    let reference = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let outgoing_dim = reference.bond_dim(0, edge).unwrap();
+    let incoming: Vec<usize> = problem.directed_edges[edge]
+        .incoming_to_from
+        .iter()
+        .map(|incoming| reference.bond_dim(0, *incoming).unwrap())
+        .collect();
+    let counts: Vec<usize> = problem.directed_edges[edge]
+        .incoming_to_from
+        .iter()
+        .map(|incoming| candidate_sets.ids[*incoming].len())
+        .collect();
+
+    let mut batched_times = Vec::with_capacity(SAMPLES);
+    let mut scalar_times = Vec::with_capacity(SAMPLES);
+    let mut max_residual = 0.0f64;
+    let mut scale = 0.0f64;
+    for _ in 0..SAMPLES {
+        // Independent stores per timed section so neither path measures the
+        // other's candidate cache; 3+-incoming candidates are uncached on
+        // both routes, so this only isolates the frame stores themselves.
+        let batched_frames =
+            InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+        super::multi_incoming_debug_stats::reset();
+        let started = Instant::now();
+        let batched = batched_frames
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+            .unwrap();
+        batched_times.push(started.elapsed());
+        assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
+
+        let scalar_frames =
+            InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+        let started = Instant::now();
+        let scalar: Vec<Vec<f64>> = candidates
+            .iter()
+            .map(|candidate| {
+                scalar_frames
+                    .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                    .unwrap()
+            })
+            .collect();
+        scalar_times.push(started.elapsed());
+
+        scale = scale.max(max_modulus(&scalar));
+        max_residual = max_residual.max(packed_scalar_residual(&batched, &scalar));
+    }
+    assert!(
+        max_residual <= 1.0e-12 * scale,
+        "measured batch disagrees with the scalar oracle: {max_residual:.3e}"
+    );
+
+    batched_times.sort_unstable();
+    scalar_times.sort_unstable();
+    let batched_median: Duration = batched_times[SAMPLES / 2];
+    let scalar_median: Duration = scalar_times[SAMPLES / 2];
+    let batched_spread = (batched_times[SAMPLES - 1].as_secs_f64()
+        - batched_times[0].as_secs_f64())
+        / batched_median.as_secs_f64();
+    let scalar_spread = (scalar_times[SAMPLES - 1].as_secs_f64() - scalar_times[0].as_secs_f64())
+        / scalar_median.as_secs_f64();
+
+    // Topology-required work of one complete edge cross, and the candidate
+    // product it is independently normalized by (issue #713's two required
+    // normalizations).
+    let chi_product: usize = incoming.iter().product();
+    let candidate_product: usize = counts.iter().product();
+    let required = outgoing_dim * chi_product;
+    let peak_elements =
+        super::multi_incoming_scratch_elements(outgoing_dim, &incoming, &counts).unwrap();
+    let cross_elements = outgoing_dim * candidate_product;
+    let candidate_count = candidates.len();
+
+    eprintln!(
+        "#713 three-incoming release measurement: m={m}, d={d}, outgoing_dim={outgoing_dim}, \
+         chi={incoming:?}, counts={counts:?}, candidates={candidate_count}, samples={SAMPLES}\n\
+         batched_median={batched_median:?} scalar_median={scalar_median:?} speedup={:.2}x\n\
+         batched_all={batched_times:?}\n\
+         scalar_all={scalar_times:?}\n\
+         relative_spread: batched={batched_spread:.3} scalar={scalar_spread:.3}\n\
+         normalized_ns_per_d_times_chi_product: batched={:.4} scalar={:.4} \
+         (d*prod(chi_e)={required})\n\
+         normalized_ns_per_candidate_product: batched={:.4} scalar={:.4} \
+         (candidate product={candidate_product})\n\
+         full_cross_elements={cross_elements} peak_charged_elements={peak_elements} \
+         peak_charged_bytes={}",
+        scalar_median.as_secs_f64() / batched_median.as_secs_f64(),
+        batched_median.as_nanos() as f64 / required as f64,
+        scalar_median.as_nanos() as f64 / required as f64,
+        batched_median.as_nanos() as f64 / candidate_product as f64,
+        scalar_median.as_nanos() as f64 / candidate_product as f64,
+        peak_elements * std::mem::size_of::<f64>(),
+    );
+}
+
+/// One measured accounting record for a single candidate-frame contraction of
+/// the arbitrary-degree (three-or-more-incoming) route and of the scalar
+/// oracle it replaced, at one candidate count per incoming component.
+#[derive(Clone, Copy, Debug)]
+struct CandidateProductAccounting {
+    outgoing_dim: usize,
+    chi_product: usize,
+    candidate_product: usize,
+    batched_core_reads: u64,
+    scalar_core_reads: u64,
+    packed_cross_elements: usize,
+}
+
+/// Drives both documented routes of one degree-three candidate-frame
+/// contraction and returns their measured core-element read counts.
+///
+/// The hub carries a length-one physical index so the contraction is exactly
+/// one `local_coordinate` group; that keeps the measured counts equal to the
+/// per-group law under test instead of a group count times it.
+fn measure_candidate_product_accounting(
+    candidates_per_component: usize,
+    chi: usize,
+) -> CandidateProductAccounting {
+    let m = candidates_per_component;
+    let hub_physical = DynIndex::new_dyn(1);
+    let arm1_physical = DynIndex::new_dyn(1);
+    let arm_physical: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(m)).collect();
+    let outgoing_bond = DynIndex::new_dyn(4);
+    let incoming_bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(chi)).collect();
+
+    let mut hub_indices = vec![hub_physical, outgoing_bond.clone()];
+    hub_indices.extend(incoming_bonds.iter().cloned());
+    let hub = IdxTensor::from_dense(
+        hub_indices,
+        (0..4 * chi * chi * chi)
+            .map(|value| ((value % 97) as f64 - 48.0) / 32.0)
+            .collect(),
+    )
+    .unwrap();
+    let arm1 = IdxTensor::from_dense(
+        vec![outgoing_bond, arm1_physical],
+        (0..4).map(|value| (value as f64 + 1.0) / 4.0).collect(),
+    )
+    .unwrap();
+    let mut tensors = vec![hub, arm1];
+    for (arm, (bond, physical)) in incoming_bonds.iter().zip(&arm_physical).enumerate() {
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![bond.clone(), physical.clone()],
+                (0..chi * m)
+                    .map(|value| ((value % (29 + arm)) as f64 - 14.0) / 16.0)
+                    .collect(),
+            )
+            .unwrap(),
+        );
+    }
+    let inputs = vec![TreeTN::from_tensors(tensors, (0..5).collect()).unwrap()];
+
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds: Vec<Vec<usize>> = (0..m)
+        .map(|index| vec![0, 0, index, index, index])
+        .collect();
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+
+    let reference = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let outgoing_dim = reference.bond_dim(0, edge).unwrap();
+    let chi_product: usize = problem.directed_edges[edge]
+        .incoming_to_from
+        .iter()
+        .map(|incoming| reference.bond_dim(0, *incoming).unwrap())
+        .product();
+    let candidate_product: usize = problem.directed_edges[edge]
+        .incoming_to_from
+        .iter()
+        .map(|incoming| candidate_sets.ids[*incoming].len())
+        .product();
+
+    // Independent stores so neither route reads the other's cache, and a
+    // counter reset after each store is built so only the contraction under
+    // test is attributed.
+    let batched_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    super::debug_stats::reset();
+    super::multi_incoming_debug_stats::reset();
+    let batched = batched_frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let batched_core_reads = super::debug_stats::core_element_reads();
+    assert_eq!(
+        super::multi_incoming_debug_stats::batched_groups(),
+        1,
+        "the accounting fixture must take the batched route exactly once"
+    );
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 0);
+
+    let scalar_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    super::debug_stats::reset();
+    let scalar: Vec<Vec<f64>> = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect();
+    let scalar_core_reads = super::debug_stats::core_element_reads();
+
+    // Accounting is only meaningful for two routes that agree numerically.
+    let scale = max_modulus(&scalar);
+    assert!(scale > 1.0e-3, "degenerate accounting fixture: {scale}");
+    let residual = packed_scalar_residual(&batched, &scalar);
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "accounting fixture routes disagree: residual {residual:.3e}, scale {scale:.3e}"
+    );
+
+    CandidateProductAccounting {
+        outgoing_dim,
+        chi_product,
+        candidate_product,
+        batched_core_reads,
+        scalar_core_reads,
+        packed_cross_elements: outgoing_dim * candidate_product,
+    }
+}
+
+/// [AI Supplied] #718 Step 2 candidate-product accounting gate for #713.
+///
+/// The #713 closure measured a 16x-313x wall-time win on this route; a timing
+/// ratio cannot state which exponent changed. This gate states it with
+/// counters, at three candidate counts per incoming component (1x/2x/4x, so
+/// 1x/8x/64x in candidate product) at a fixed bond dimension:
+///
+/// * the scalar route reads `candidates * outgoing_dim * product(chi_k)` core
+///   elements, i.e. it is exactly linear in the candidate product;
+/// * the batched route reads `outgoing_dim * product(chi_k)`, i.e. it is
+///   exactly constant in the candidate product -- this is the removed cliff;
+/// * the full cross that both routes must still produce is
+///   `outgoing_dim * product(n_k)` values, which does grow with the candidate
+///   product. That remaining growth is the algorithmic limit #713 recorded at
+///   its measurement boundary, and this gate pins it so a later lazy/block
+///   formulation has a number to beat.
+#[test]
+fn candidate_product_accounting_separates_the_batched_and_scalar_exponents() {
+    const CHI: usize = 3;
+    const COUNTS: [usize; 3] = [2, 4, 8];
+
+    let records = COUNTS.map(|m| measure_candidate_product_accounting(m, CHI));
+
+    // Printed so the exact counts, not only the formulas they satisfy, are
+    // recoverable from a `--nocapture` run and quotable in the worklog.
+    for (m, record) in COUNTS.iter().zip(&records) {
+        eprintln!("#718 candidate-product accounting: m={m} {record:?}");
+    }
+
+    for (m, record) in COUNTS.iter().zip(&records) {
+        let required = record.outgoing_dim * record.chi_product;
+        assert_eq!(
+            record.chi_product,
+            CHI.pow(3),
+            "fixture must keep the bond product fixed while the candidate count varies"
+        );
+        assert_eq!(record.candidate_product, m.pow(3));
+        assert_eq!(
+            record.batched_core_reads, required as u64,
+            "batched core reads must equal d * product(chi_e) at m={m}: {record:?}"
+        );
+        assert_eq!(
+            record.scalar_core_reads,
+            (record.candidate_product * required) as u64,
+            "scalar core reads must equal candidates * d * product(chi_e) at m={m}: {record:?}"
+        );
+        assert_eq!(
+            record.packed_cross_elements,
+            record.outgoing_dim * record.candidate_product
+        );
+    }
+
+    // Stated as growth ratios as well as absolute formulas, because the
+    // exponent, not the constant, is the claim.
+    let batched: Vec<u64> = records.iter().map(|r| r.batched_core_reads).collect();
+    assert_eq!(
+        batched[0], batched[1],
+        "batched core reads must not grow with the candidate product"
+    );
+    assert_eq!(batched[1], batched[2]);
+
+    let scalar: Vec<u64> = records.iter().map(|r| r.scalar_core_reads).collect();
+    assert_eq!(scalar[1], 8 * scalar[0], "1x -> 8x candidate product");
+    assert_eq!(scalar[2], 64 * scalar[0], "1x -> 64x candidate product");
+
+    let cross: Vec<usize> = records.iter().map(|r| r.packed_cross_elements).collect();
+    assert_eq!(cross[1], 8 * cross[0]);
+    assert_eq!(cross[2], 64 * cross[0]);
 }

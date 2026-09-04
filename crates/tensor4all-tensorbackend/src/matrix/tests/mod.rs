@@ -1,5 +1,5 @@
 use super::*;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro::TypedTensor;
 
 #[test]
@@ -654,4 +654,292 @@ fn append_columns_reuses_spare_capacity_without_reallocating() {
         capacity_before,
         "append_columns should reuse existing spare capacity instead of reallocating"
     );
+}
+
+#[test]
+fn grouped_gemm_shared_buffers_matches_individual_column_major_gemms() {
+    let lhs = vec![
+        1.0_f64, 3.0, 2.0, 4.0, // 2 x 2, job 0
+        2.0, 0.0, 1.0, 3.0, // 2 x 2, job 1
+    ];
+    let rhs = vec![
+        5.0_f64, 7.0, 6.0, 8.0, // shared 2 x 2 rhs
+    ];
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 2, 2, 2),
+        GroupedGemmJob::new(4, 4, 0, 2, 2, 2),
+    ];
+    let mut output = vec![0.0_f64; 8];
+
+    grouped_mat_mul_shared(
+        &lhs,
+        &rhs,
+        &mut output,
+        &jobs,
+        GroupedGemmOptions {
+            max_working_bytes: usize::MAX,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(&output[0..4], &[19.0, 43.0, 22.0, 50.0]);
+    assert_eq!(&output[4..8], &[17.0, 21.0, 20.0, 24.0]);
+}
+
+#[test]
+fn grouped_gemm_shared_validation_rejects_overlap_and_budget_before_mutation() {
+    let lhs = vec![1.0_f64; 4];
+    let rhs = vec![1.0_f64; 4];
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 2, 2, 1),
+        GroupedGemmJob::new(1, 0, 0, 2, 2, 1),
+    ];
+    let mut output = vec![9.0_f64; 3];
+
+    let error = grouped_mat_mul_shared(
+        &lhs,
+        &rhs,
+        &mut output,
+        &jobs,
+        GroupedGemmOptions {
+            max_working_bytes: usize::MAX,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, GroupedGemmError::OverlappingOutputs { .. }));
+    assert_eq!(output, vec![9.0; 3]);
+
+    let error = grouped_mat_mul_shared(
+        &lhs,
+        &rhs,
+        &mut output,
+        &[GroupedGemmJob::new(0, 0, 0, 2, 2, 1)],
+        GroupedGemmOptions {
+            max_working_bytes: 0,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        GroupedGemmError::WorkingMemoryExceeded { .. }
+    ));
+    assert_eq!(output, vec![9.0; 3]);
+}
+
+#[test]
+fn grouped_gemm_shared_owned_preserves_output_owner_and_empty_is_noop() {
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+    let output = grouped_mat_mul_shared_owned(
+        vec![3.0_f64],
+        vec![4.0_f64],
+        vec![0.0_f64],
+        &jobs,
+        GroupedGemmOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(output, vec![12.0]);
+
+    let mut empty_output = vec![7.0_f64];
+    grouped_mat_mul_shared(
+        &[],
+        &[],
+        &mut empty_output,
+        &[],
+        GroupedGemmOptions {
+            max_working_bytes: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(empty_output, vec![7.0]);
+}
+
+fn assert_grouped_matches_individual<T: MatrixScalar + tenferro::TensorScalar>(
+    lhs: &[T],
+    rhs: &[T],
+    jobs: &[GroupedGemmJob],
+    tolerance: f64,
+) {
+    let mut output = vec![T::zero(); 16];
+    grouped_mat_mul_shared(lhs, rhs, &mut output, jobs, GroupedGemmOptions::default()).unwrap();
+
+    for job in jobs {
+        let lhs_end = job.lhs_offset() + job.rows() * job.contracted();
+        let rhs_end = job.rhs_offset() + job.contracted() * job.cols();
+        let expected = mat_mul(
+            &Matrix::from_col_major_vec(
+                job.rows(),
+                job.contracted(),
+                lhs[job.lhs_offset()..lhs_end].to_vec(),
+            ),
+            &Matrix::from_col_major_vec(
+                job.contracted(),
+                job.cols(),
+                rhs[job.rhs_offset()..rhs_end].to_vec(),
+            ),
+        )
+        .unwrap();
+        let output_end = job.out_offset() + job.rows() * job.cols();
+        for (actual, expected) in output[job.out_offset()..output_end]
+            .iter()
+            .zip(expected.as_col_major_slice())
+        {
+            assert!(
+                (*actual - *expected).matrix_abs_sq() <= tolerance * tolerance,
+                "grouped result differs from individual GEMM"
+            );
+        }
+    }
+}
+
+#[test]
+fn grouped_gemm_shared_all_scalar_kinds_match_individual_gemms() {
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 2, 2, 2),
+        GroupedGemmJob::new(4, 4, 0, 2, 2, 2),
+        GroupedGemmJob::new(8, 0, 4, 2, 2, 1),
+    ];
+    assert_grouped_matches_individual(
+        &[1.0_f32, 3.0, 2.0, 4.0, 2.0, 0.0, 1.0, 3.0],
+        &[5.0_f32, 7.0, 6.0, 8.0, 2.0, 4.0, 3.0, 1.0],
+        &jobs,
+        1.0e-5,
+    );
+    assert_grouped_matches_individual(
+        &[1.0_f64, 3.0, 2.0, 4.0, 2.0, 0.0, 1.0, 3.0],
+        &[5.0_f64, 7.0, 6.0, 8.0, 2.0, 4.0, 3.0, 1.0],
+        &jobs,
+        1.0e-12,
+    );
+    assert_grouped_matches_individual(
+        &[
+            Complex32::new(1.0, 0.5),
+            Complex32::new(3.0, -0.5),
+            Complex32::new(2.0, 0.25),
+            Complex32::new(4.0, -0.25),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(0.0, 1.0),
+            Complex32::new(1.0, -1.0),
+            Complex32::new(3.0, 0.5),
+        ],
+        &[
+            Complex32::new(5.0, -0.5),
+            Complex32::new(7.0, 0.5),
+            Complex32::new(6.0, 0.25),
+            Complex32::new(8.0, -0.25),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(4.0, 1.0),
+            Complex32::new(3.0, -1.0),
+            Complex32::new(1.0, 0.5),
+        ],
+        &jobs,
+        1.0e-4,
+    );
+    assert_grouped_matches_individual(
+        &[
+            Complex64::new(1.0, 0.5),
+            Complex64::new(3.0, -0.5),
+            Complex64::new(2.0, 0.25),
+            Complex64::new(4.0, -0.25),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 1.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(3.0, 0.5),
+        ],
+        &[
+            Complex64::new(5.0, -0.5),
+            Complex64::new(7.0, 0.5),
+            Complex64::new(6.0, 0.25),
+            Complex64::new(8.0, -0.25),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(4.0, 1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(1.0, 0.5),
+        ],
+        &jobs,
+        1.0e-12,
+    );
+}
+
+#[test]
+fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
+    let mut output = vec![9.0_f64; 1];
+    let error = grouped_mat_mul_shared(
+        &[1.0],
+        &[1.0],
+        &mut output,
+        &[GroupedGemmJob::new(0, 0, 0, 2, 1, 1)],
+        GroupedGemmOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, GroupedGemmError::BufferOutOfBounds { .. }));
+    assert_eq!(output, vec![9.0]);
+
+    let error = grouped_mat_mul_shared(
+        &[],
+        &[1.0_f64],
+        &mut [0.0_f64],
+        &[GroupedGemmJob::new(0, usize::MAX, 0, 1, 1, 1)],
+        GroupedGemmOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, GroupedGemmError::SpanOverflow { .. }));
+
+    let error = grouped_mat_mul_shared(
+        &[],
+        &[],
+        &mut [] as &mut [f64],
+        &[GroupedGemmJob::new(0, 0, 0, usize::MAX, 2, 1)],
+        GroupedGemmOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, GroupedGemmError::DimensionOverflow { .. }));
+
+    let error = grouped_mat_mul_shared(
+        &[1.0_f64; 6],
+        &[1.0_f64; 6],
+        &mut [0.0_f64; 8],
+        &[
+            GroupedGemmJob::new(0, 0, 0, 2, 2, 1),
+            GroupedGemmJob::new(2, 0, 0, 1, 2, 2),
+        ],
+        GroupedGemmOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        GroupedGemmError::IncompatibleSharedLhs { .. }
+    ));
+
+    let error = grouped_mat_mul_shared(
+        &[1.0_f64; 6],
+        &[1.0_f64; 6],
+        &mut [0.0_f64; 8],
+        &[
+            GroupedGemmJob::new(0, 0, 0, 1, 2, 2),
+            GroupedGemmJob::new(4, 2, 0, 2, 1, 2),
+        ],
+        GroupedGemmOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        GroupedGemmError::IncompatibleSharedRhs { .. }
+    ));
+}
+
+#[test]
+fn grouped_gemm_shared_with_backend_uses_configured_thread_context() {
+    let mut backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
+    let mut output = [0.0_f64];
+    grouped_mat_mul_shared_with_backend(
+        &mut backend,
+        &[3.0],
+        &[4.0],
+        &mut output,
+        &[GroupedGemmJob::new(0, 0, 0, 1, 1, 1)],
+        GroupedGemmOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(output, [12.0]);
+    assert_eq!(backend.num_threads(), 1);
 }

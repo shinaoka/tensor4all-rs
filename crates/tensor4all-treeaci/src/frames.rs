@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::size_of;
+use std::ops::Index;
 use std::rc::Rc;
 
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
@@ -28,6 +29,8 @@ fn checked_product(factors: &[usize], context: &'static str) -> Result<usize> {
     })
 }
 
+type OrientedCoreCache<T> = Rc<RefCell<HashMap<DirectedEdgeId, Rc<Matrix<T>>>>>;
+
 fn checked_sum(terms: &[usize], context: &'static str) -> Result<usize> {
     terms.iter().try_fold(0usize, |sum, &term| {
         sum.checked_add(term)
@@ -35,6 +38,71 @@ fn checked_sum(terms: &[usize], context: &'static str) -> Result<usize> {
     })
 }
 
+/// Every simultaneously live scalar buffer of one arbitrary-degree incoming
+/// batch, in elements.
+///
+/// The charge covers, for a directed edge whose source node has `q` incoming
+/// components with bond dimensions `incoming_dims` and distinct candidate
+/// counts `counts`:
+///
+/// * one packed frame matrix per incoming component (`d_k * n_k`);
+/// * the one gathered core block of the first contraction step
+///   (`outgoing_dim * d_0`) and that step's per-block product
+///   (`outgoing_dim * n_0`);
+/// * every intermediate stage buffer
+///   (`outgoing_dim * prod_{j<=k} n_j * prod_{j>k} d_j` for each step `k`),
+///   the last of which is the returned cross-product batch.
+///
+/// This is deliberately a sum, not a peak: the two-incoming kernel this
+/// generalizes has always charged the same conservative sum, so
+/// [`two_incoming_scratch_elements`] is exactly this function at `q = 2` and
+/// the degree-two working-byte contract is unchanged.
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::SizeOverflow`] when any Cartesian dimension or the
+/// total charge overflows `usize`, and [`TreeAciError::InternalInvariant`]
+/// when `incoming_dims` and `counts` disagree in length.
+fn multi_incoming_scratch_elements(
+    outgoing_dim: usize,
+    incoming_dims: &[usize],
+    counts: &[usize],
+) -> Result<usize> {
+    if incoming_dims.len() != counts.len() {
+        return Err(TreeAciError::InternalInvariant {
+            message: "incoming scratch estimate has mismatched dimension and count lists",
+        });
+    }
+    let degree = incoming_dims.len();
+    let mut terms = Vec::with_capacity(2 * degree + 2);
+    for (dim, count) in incoming_dims.iter().zip(counts) {
+        terms.push(checked_product(
+            &[*dim, *count],
+            "incoming batch frame matrix",
+        )?);
+    }
+    if degree > 0 {
+        terms.push(checked_product(
+            &[outgoing_dim, incoming_dims[0]],
+            "incoming batch core matrix",
+        )?);
+        terms.push(checked_product(
+            &[outgoing_dim, counts[0]],
+            "incoming batch stage slice",
+        )?);
+    }
+    for step in 0..degree {
+        let mut factors = Vec::with_capacity(degree + 1);
+        factors.push(outgoing_dim);
+        factors.extend_from_slice(&counts[..=step]);
+        factors.extend_from_slice(&incoming_dims[step + 1..]);
+        terms.push(checked_product(&factors, "incoming batch stage matrix")?);
+    }
+    checked_sum(&terms, "incoming batch scratch elements")
+}
+
+/// The degree-two specialization of [`multi_incoming_scratch_elements`],
+/// retained as the named entry point of the exactly-two-incoming kernel.
 fn two_incoming_scratch_elements(
     outgoing_dim: usize,
     incoming_dim_1: usize,
@@ -42,20 +110,7 @@ fn two_incoming_scratch_elements(
     n1: usize,
     n2: usize,
 ) -> Result<usize> {
-    checked_sum(
-        &[
-            checked_product(&[incoming_dim_1, n1], "two-incoming first frame matrix")?,
-            checked_product(&[incoming_dim_2, n2], "two-incoming second frame matrix")?,
-            checked_product(&[outgoing_dim, incoming_dim_1], "two-incoming core matrix")?,
-            checked_product(
-                &[outgoing_dim, n1, incoming_dim_2],
-                "two-incoming stage-one matrix",
-            )?,
-            checked_product(&[outgoing_dim, n1], "two-incoming stage-one slice")?,
-            checked_product(&[outgoing_dim, n1, n2], "two-incoming output matrix")?,
-        ],
-        "two-incoming scratch elements",
-    )
+    multi_incoming_scratch_elements(outgoing_dim, &[incoming_dim_1, incoming_dim_2], &[n1, n2])
 }
 
 fn enforce_frame_working_elements<T: TreeAciScalar, V: TreeAciNode>(
@@ -79,6 +134,57 @@ fn enforce_frame_working_elements_with_extra_bytes<T: TreeAciScalar, V: TreeAciN
     enforce_limit("working bytes", bytes, problem.max_working_bytes)
 }
 
+/// Metadata bytes charged for the grouped-GEMM job lists of one
+/// arbitrary-degree incoming batch.
+///
+/// Charged twice per job: once for the descriptor list this crate builds and
+/// once for the equivalent translated list the tensorbackend facade owns for
+/// the duration of the call. Degrees below three never build a job list.
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::SizeOverflow`] when the block count or its byte
+/// charge overflows `usize`.
+fn grouped_gemm_descriptor_bytes(incoming_dims: &[usize]) -> Result<usize> {
+    if incoming_dims.len() < 3 {
+        return Ok(0);
+    }
+    let blocks = checked_product(&incoming_dims[1..], "incoming batch grouped-GEMM blocks")?;
+    blocks
+        .checked_mul(2 * size_of::<tensor4all_tensorbackend::GroupedGemmJob>())
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "incoming batch grouped-GEMM descriptor bytes",
+        })
+}
+
+/// Whether `elements` scalars plus `extra_bytes` of metadata fit the
+/// configured working-byte budget, without raising an error.
+///
+/// The arbitrary-degree routing contract needs to *choose* a route rather
+/// than reject a request, so an overflowing or over-budget estimate reports
+/// `false` here and the caller falls back to the scalar path.
+fn frame_working_elements_fit<T: TreeAciScalar, V: TreeAciNode>(
+    problem: &PreparedTreeProblem<V>,
+    elements: usize,
+    extra_bytes: usize,
+) -> bool {
+    elements
+        .checked_mul(size_of::<T>())
+        .and_then(|bytes| bytes.checked_add(extra_bytes))
+        .is_some_and(|bytes| bytes <= problem.max_working_bytes)
+}
+
+// [AI Supplied] Test-only A/B switch for aggregate candidate-cache cost.
+#[cfg(test)]
+fn candidate_cache_enabled() -> bool {
+    std::env::var("T4A_TREEACI_DISABLE_CANDIDATE_CACHE").as_deref() != Ok("1")
+}
+
+#[cfg(not(test))]
+fn candidate_cache_enabled() -> bool {
+    true
+}
+
 /// Test-only counter of `contract_prepared_core` invocations via the
 /// memoized `FrameBuilder::compute` path, used to prove
 /// `InputFrameStore::extend` recomputes only newly interned samples (see
@@ -98,6 +204,21 @@ pub(crate) mod debug_stats {
         static SCALAR_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
         static BATCHED_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
         static MEMO_HIT_COPIES: Cell<u64> = const { Cell::new(0) };
+        static CORE_ELEMENT_READS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Records how many prepared-core elements a contraction route reads.
+    ///
+    /// Recorded once per gather or per scalar contraction call, from the
+    /// shape that call is about to walk, so the inner reduction loops keep
+    /// their exact pre-instrumentation form and the `#713`/`#718` timing
+    /// measurements are not perturbed by a per-element counter.
+    pub(crate) fn record_core_element_reads(count: usize) {
+        CORE_ELEMENT_READS.with(|total| total.set(total.get().saturating_add(count as u64)));
+    }
+
+    pub(crate) fn core_element_reads() -> u64 {
+        CORE_ELEMENT_READS.with(Cell::get)
     }
 
     pub(crate) fn record_scalar_compute_call() {
@@ -130,11 +251,56 @@ pub(crate) mod debug_stats {
         MEMO_HIT_COPIES.with(Cell::get)
     }
 
+    pub(crate) fn old_values_copied() -> usize {
+        crate::state::profile_debug_stats::snapshot().frame_extension_old_values_copied
+    }
+
+    pub(crate) fn new_values_copied() -> usize {
+        crate::state::profile_debug_stats::snapshot().frame_extension_new_values_copied
+    }
+
     pub(crate) fn reset() {
         COMPUTE_CALLS.with(|count| count.set(0));
         SCALAR_COMPUTE_CALLS.with(|count| count.set(0));
         BATCHED_COMPUTE_CALLS.with(|count| count.set(0));
         MEMO_HIT_COPIES.with(|count| count.set(0));
+        CORE_ELEMENT_READS.with(|count| count.set(0));
+    }
+}
+
+/// Test-only routing counters for the arbitrary-degree (three-or-more
+/// incoming) candidate-frame route, used to prove which of the two
+/// documented routes a degree-`q >= 3` group actually took (see
+/// `InputFrameStore::candidate_frames_for_edge_multi_incoming`'s routing
+/// contract). `thread_local!` for the same reason as `debug_stats` below.
+#[cfg(test)]
+pub(crate) mod multi_incoming_debug_stats {
+    use std::cell::Cell;
+
+    thread_local! {
+        static BATCHED_GROUPS: Cell<u64> = const { Cell::new(0) };
+        static SCALAR_GROUPS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record_batched_group() {
+        BATCHED_GROUPS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn record_scalar_group() {
+        SCALAR_GROUPS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn batched_groups() -> u64 {
+        BATCHED_GROUPS.with(Cell::get)
+    }
+
+    pub(crate) fn scalar_groups() -> u64 {
+        SCALAR_GROUPS.with(Cell::get)
+    }
+
+    pub(crate) fn reset() {
+        BATCHED_GROUPS.with(|count| count.set(0));
+        SCALAR_GROUPS.with(|count| count.set(0));
     }
 }
 
@@ -177,12 +343,30 @@ pub(crate) mod candidate_debug_stats {
 pub(crate) struct DirectedFrame<T> {
     pub(crate) sample_count: usize,
     pub(crate) bond_dim: usize,
-    /// Sample-major frame values, so one sample's bond vector is contiguous.
+    /// An optional immutable prefix retained by a cut-local extension.
+    ///
+    /// The prefix is kept as an `Rc` instead of being copied into `values` when
+    /// an append-only sample arena grows. This makes a grown frame a persistent
+    /// frame segment: old rows remain addressable and only the newly interned
+    /// rows consume a new payload allocation. This is an **[AI Supplied]**
+    /// storage design; numerical equivalence is established by the differential
+    /// frame tests.
+    base: Option<Rc<DirectedFrame<T>>>,
+    /// Sample-major values for this frame segment, so one sample's bond vector
+    /// is contiguous. For a full frame this contains every row; for a grown
+    /// frame it contains rows in `base.sample_count..sample_count`.
     pub(crate) values: Vec<T>,
 }
 
 impl<T: TreeAciScalar> DirectedFrame<T> {
     fn row_slice(&self, sample: SampleId) -> &[T] {
+        if let Some(base) = &self.base {
+            if sample < base.sample_count {
+                return base.row_slice(sample);
+            }
+            let start = (sample - base.sample_count) * self.bond_dim;
+            return &self.values[start..start + self.bond_dim];
+        }
         let start = sample * self.bond_dim;
         &self.values[start..start + self.bond_dim]
     }
@@ -214,10 +398,257 @@ struct CandidateCacheKey {
     incoming: CandidateIncomingKey,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PackedCandidateFrameLayout {
+    BondByCandidate,
+    CandidateByBond,
+}
+
+/// Column-major storage for a set of candidate frame vectors.
+///
+/// Each packed column contains one complete frame vector. `candidate_order`
+/// records which input candidate each column represents, so grouping and
+/// cache lookups cannot silently change candidate order while eliminating the
+/// old `Vec<Vec<T>>` intermediate.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PackedCandidateFrames<T> {
+    bond_dim: usize,
+    candidate_order: Vec<usize>,
+    layout: PackedCandidateFrameLayout,
+    values: Vec<T>,
+}
+
+impl<T> PackedCandidateFrames<T> {
+    #[cfg(test)]
+    fn try_new(bond_dim: usize, candidate_order: Vec<usize>, values: Vec<T>) -> Result<Self> {
+        Self::try_new_with_layout(
+            bond_dim,
+            candidate_order,
+            values,
+            PackedCandidateFrameLayout::BondByCandidate,
+        )
+    }
+
+    fn try_new_with_layout(
+        bond_dim: usize,
+        candidate_order: Vec<usize>,
+        values: Vec<T>,
+        layout: PackedCandidateFrameLayout,
+    ) -> Result<Self> {
+        let candidate_count = candidate_order.len();
+        let expected = bond_dim
+            .checked_mul(candidate_count)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "packed candidate frame elements",
+            })?;
+        if values.len() != expected {
+            return Err(TreeAciError::InternalInvariant {
+                message: "packed candidate frame payload has the wrong length",
+            });
+        }
+        Ok(Self {
+            bond_dim,
+            candidate_order,
+            layout,
+            values,
+        })
+    }
+
+    pub(crate) fn bond_dim(&self) -> usize {
+        self.bond_dim
+    }
+
+    pub(crate) fn candidate_count(&self) -> usize {
+        self.candidate_order.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.candidate_count()
+    }
+
+    #[cfg(test)]
+    fn candidate_order(&self) -> &[usize] {
+        &self.candidate_order
+    }
+
+    #[cfg(test)]
+    pub(crate) fn as_col_major_slice(&self) -> &[T] {
+        &self.values
+    }
+
+    fn column(&self, packed_column: usize) -> &[T] {
+        let start = packed_column * self.bond_dim;
+        &self.values[start..start + self.bond_dim]
+    }
+
+    #[cfg(test)]
+    fn column_for_candidate(&self, candidate: usize) -> Option<&[T]> {
+        self.candidate_order
+            .iter()
+            .position(|&value| value == candidate)
+            .map(|column| self.column(column))
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &[T]> {
+        self.values.chunks_exact(self.bond_dim.max(1))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_candidate_vecs(&self) -> Vec<Vec<T>>
+    where
+        T: Clone,
+    {
+        let candidate_count = self.candidate_count();
+        (0..candidate_count)
+            .map(|candidate| match self.layout {
+                PackedCandidateFrameLayout::BondByCandidate => self.column(candidate).to_vec(),
+                PackedCandidateFrameLayout::CandidateByBond => (0..self.bond_dim)
+                    .map(|bond| self.values[candidate + candidate_count * bond].clone())
+                    .collect(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn into_bond_by_candidate_matrix(self) -> Matrix<T>
+    where
+        T: Copy + Default,
+    {
+        let bond_dim = self.bond_dim;
+        let candidate_count = self.candidate_count();
+        match self.layout {
+            PackedCandidateFrameLayout::BondByCandidate => {
+                Matrix::from_col_major_vec(bond_dim, candidate_count, self.values)
+            }
+            PackedCandidateFrameLayout::CandidateByBond => {
+                self.into_transposed_matrix(bond_dim, candidate_count)
+            }
+        }
+    }
+
+    /// Transposes the packed candidate columns into a matrix whose rows are
+    /// candidates and whose columns are bond coordinates. This is one flat
+    /// layout conversion at the dense-matrix boundary; it does not recreate
+    /// per-candidate vectors.
+    pub(crate) fn into_candidate_by_bond_matrix(self) -> Matrix<T>
+    where
+        T: Copy + Default,
+    {
+        let candidate_count = self.candidate_count();
+        let bond_dim = self.bond_dim;
+        match self.layout {
+            PackedCandidateFrameLayout::CandidateByBond => {
+                Matrix::from_col_major_vec(candidate_count, bond_dim, self.values)
+            }
+            PackedCandidateFrameLayout::BondByCandidate => {
+                self.into_transposed_matrix(candidate_count, bond_dim)
+            }
+        }
+    }
+
+    fn into_transposed_matrix(self, nrows: usize, ncols: usize) -> Matrix<T>
+    where
+        T: Copy + Default,
+    {
+        let mut values = vec![T::default(); self.values.len()];
+        for col in 0..ncols {
+            for row in 0..nrows {
+                values[row + nrows * col] = self.values[col + ncols * row];
+            }
+        }
+        Matrix::from_col_major_vec(nrows, ncols, values)
+    }
+}
+
+fn pack_candidate_results<T: TreeAciScalar>(
+    bond_dim: usize,
+    candidate_order: Vec<usize>,
+    results: Vec<Option<Rc<[T]>>>,
+    layout: PackedCandidateFrameLayout,
+) -> Result<PackedCandidateFrames<T>> {
+    let candidate_count = candidate_order.len();
+    if results.len() != candidate_count {
+        return Err(TreeAciError::InternalInvariant {
+            message: "packed candidate result count differs from its order mapping",
+        });
+    }
+    let expected = bond_dim
+        .checked_mul(candidate_count)
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "packed candidate result elements",
+        })?;
+    let mut values = vec![T::default(); expected];
+    for (candidate, result) in results.into_iter().enumerate() {
+        let result = result.ok_or(TreeAciError::InternalInvariant {
+            message: "packed candidate result was left unfilled",
+        })?;
+        if result.len() != bond_dim {
+            return Err(TreeAciError::InternalInvariant {
+                message: "packed candidate result has the wrong bond dimension",
+            });
+        }
+        match layout {
+            PackedCandidateFrameLayout::BondByCandidate => {
+                let start = candidate * bond_dim;
+                values[start..start + bond_dim].copy_from_slice(&result);
+            }
+            PackedCandidateFrameLayout::CandidateByBond => {
+                for (bond, value) in result.iter().copied().enumerate() {
+                    values[candidate + candidate_count * bond] = value;
+                }
+            }
+        }
+    }
+    PackedCandidateFrames::try_new_with_layout(bond_dim, candidate_order, values, layout)
+}
+
+impl<T> Index<usize> for PackedCandidateFrames<T> {
+    type Output = [T];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.column(index)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a PackedCandidateFrames<T> {
+    type Item = &'a [T];
+    type IntoIter = std::slice::ChunksExact<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.chunks_exact(self.bond_dim.max(1))
+    }
+}
+
+impl<T: PartialEq> PartialEq<Vec<Vec<T>>> for PackedCandidateFrames<T> {
+    fn eq(&self, other: &Vec<Vec<T>>) -> bool {
+        self.candidate_count() == other.len()
+            && self
+                .iter()
+                .zip(other)
+                .all(|(packed, scalar)| packed == scalar.as_slice())
+    }
+}
+
+fn cached_oriented_core<T>(
+    cache: &OrientedCoreCache<T>,
+    directed_edge: DirectedEdgeId,
+    build: impl FnOnce() -> Matrix<T>,
+) -> (Rc<Matrix<T>>, bool) {
+    if let Some(core) = cache.borrow().get(&directed_edge).cloned() {
+        return (core, false);
+    }
+    let core = Rc::new(build());
+    cache.borrow_mut().insert(directed_edge, Rc::clone(&core));
+    (core, true)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct InputFrameStore<T> {
     pub(crate) frames: Vec<Vec<Rc<DirectedFrame<T>>>>,
     cores: Vec<Rc<Vec<PreparedCore<T>>>>,
+    /// Lazily prepared oriented core matrices, shared by frame construction,
+    /// candidate evaluation, and append-only extensions for one input.
+    oriented_core_cache: Vec<OrientedCoreCache<T>>,
     /// Number of retained directed frames, across every input and edge.
     records: usize,
     /// Logical payload bytes retained by those frames.
@@ -225,7 +656,9 @@ pub(crate) struct InputFrameStore<T> {
     /// The cache's own accounting, not an allocator or process measurement:
     /// `sample_count * bond_dim * size_of::<T>()` summed over what is retained.
     retained_bytes: usize,
-    /// Memoized `candidate_frame` results, keyed by candidate identity.
+    /// Memoized `candidate_frame` results, keyed by candidate identity. Each
+    /// payload is an `Rc`-owned frame slice so cache hits do not clone a
+    /// candidate vector before the caller's packed batch is assembled.
     ///
     /// Unlike `frames`, these candidates are usually never interned into a
     /// `SampleArena` (most are proposed, not selected, by one pivot search),
@@ -247,7 +680,7 @@ pub(crate) struct InputFrameStore<T> {
     /// candidate cache instead. An initial deep-clone version was measured
     /// to be a net regression at chi=128 for exactly this reason; see the
     /// worklog for the before/after numbers.
-    candidate_cache: Rc<RefCell<HashMap<CandidateCacheKey, Vec<T>>>>,
+    candidate_cache: Rc<RefCell<HashMap<CandidateCacheKey, Rc<[T]>>>>,
     candidate_cache_bytes: Rc<std::cell::Cell<usize>>,
 }
 
@@ -265,7 +698,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
     ) -> Result<Self> {
-        Self::build_or_extend(inputs, problem, arena, None)
+        Self::build_or_extend(inputs, problem, arena, None, None)
     }
 
     /// Extends this store to cover every sample now retained by `arena`,
@@ -287,7 +720,69 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
     ) -> Result<Self> {
-        Self::build_or_extend(inputs, problem, arena, Some(self))
+        let previous_counts = self
+            .frames
+            .iter()
+            .map(|edges| edges.iter().map(|frame| frame.sample_count).collect())
+            .collect::<Vec<Vec<_>>>();
+        self.extend_new_samples(inputs, problem, arena, &previous_counts)
+    }
+
+    /// Extends the store using the explicitly supplied append-only prefix
+    /// counts.
+    ///
+    /// `previous_counts[input][edge]` must equal the number of rows retained
+    /// by `self.frames[input][edge]`. Only rows in each newly grown range are
+    /// contracted and allocated; unchanged edges are `Rc`-shared and grown
+    /// edges retain their old prefix through [`DirectedFrame::base`]. The
+    /// explicit counts are an internal transaction seam so callers can stage
+    /// an arena extension without treating a whole-store rebuild as the
+    /// default. The seam and its cost policy are **[AI Supplied]** and are
+    /// guarded by complete differential tests.
+    pub(crate) fn extend_new_samples<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        arena: &SampleArena,
+        previous_counts: &[Vec<usize>],
+    ) -> Result<Self> {
+        if previous_counts.len() != self.frames.len()
+            || inputs.len() != self.frames.len()
+            || self.cores.len() != self.frames.len()
+            || self.oriented_core_cache.len() != self.frames.len()
+        {
+            return Err(TreeAciError::InternalInvariant {
+                message: "frame extension prefix counts differ from input count",
+            });
+        }
+        let edge_count = problem.directed_edges.len();
+        for (input_index, (counts, frames)) in previous_counts.iter().zip(&self.frames).enumerate()
+        {
+            if counts.len() != edge_count || frames.len() != edge_count {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "frame extension prefix counts differ from directed edge count",
+                });
+            }
+            for (edge, (&count, frame)) in counts.iter().zip(frames).enumerate() {
+                if count != frame.sample_count {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "frame extension prefix count disagrees with stored frame",
+                    });
+                }
+                let current = arena.directed_record_count(edge)?;
+                if count > current {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "frame extension prefix exceeds the sample arena",
+                    });
+                }
+            }
+            let _ = inputs
+                .get(input_index)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "frame extension is missing an input tensor",
+                })?;
+        }
+        Self::build_or_extend(inputs, problem, arena, Some(self), Some(previous_counts))
     }
 
     fn build_or_extend<V: TreeAciNode>(
@@ -295,7 +790,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
         existing: Option<&Self>,
+        previous_counts: Option<&[Vec<usize>]>,
     ) -> Result<Self> {
+        #[cfg(test)]
+        let extension_profile = existing.is_some();
+        #[cfg(test)]
+        let extension_setup_started = std::time::Instant::now();
         let edge_count = problem.directed_edges.len();
         let sample_counts = (0..edge_count)
             .map(|edge| arena.directed_record_count(edge))
@@ -303,6 +803,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         let frame_order = &problem.directed_dependency_order;
         let mut all_inputs = Vec::with_capacity(inputs.len());
         let mut all_cores = Vec::with_capacity(inputs.len());
+        let mut all_oriented_core_caches = Vec::with_capacity(inputs.len());
         // `max_frame_elements` bounds one frame; this cache keeps one per input
         // per directed edge, so without an aggregate the retained total grows as
         // inputs x directed_edges x that per-frame ceiling. Accumulated and
@@ -310,12 +811,26 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         // rather than reaching the ceiling first.
         let mut retained_bytes = 0usize;
         let mut records = 0usize;
+        #[cfg(test)]
+        if extension_profile {
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.frame_extension_calls += 1;
+                stats.frame_extension_setup += extension_setup_started.elapsed();
+            });
+        }
         for (input_index, input) in inputs.iter().enumerate() {
+            #[cfg(test)]
+            let input_setup_started = std::time::Instant::now();
             let existing_input = existing.and_then(|store| store.frames.get(input_index));
             let cores = match existing.and_then(|store| store.cores.get(input_index)) {
                 Some(cores) => Rc::clone(cores),
                 None => Rc::new(prepare_cores::<T, V>(input, problem)?),
             };
+            let oriented_core_cache =
+                match existing.and_then(|store| store.oriented_core_cache.get(input_index)) {
+                    Some(cache) => Rc::clone(cache),
+                    None => Rc::new(RefCell::new(HashMap::new())),
+                };
             // Every directed edge gets a memo spine, including the ones this
             // call will reuse wholesale: a grown edge's `compute_batch`
             // priming recursion walks its ancestor chain regardless of
@@ -338,17 +853,32 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .iter()
                 .map(|&count| vec![None; count])
                 .collect::<Vec<_>>();
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_memo_slots += sample_counts.iter().sum::<usize>();
+                });
+            }
             let mut builder = FrameBuilder {
                 input,
+                #[cfg(test)]
+                input_index,
                 problem,
                 arena,
                 cores,
+                oriented_core_cache: Rc::clone(&oriented_core_cache),
                 memo,
                 existing_frames: existing_input.map(Vec::as_slice),
             };
             let bond_dims = (0..edge_count)
                 .map(|edge| builder.outgoing_bond(edge).map(IndexLike::dim))
                 .collect::<Result<Vec<_>>>()?;
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_setup += input_setup_started.elapsed();
+                });
+            }
 
             // Pass 1: account for every edge (in edge-index order, so the
             // running `retained_bytes` total and the point at which a
@@ -365,6 +895,8 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let mut input_frames: Vec<Option<Rc<DirectedFrame<T>>>> = vec![None; edge_count];
             let mut frame_elements = vec![0usize; edge_count];
             let mut known_samples = vec![0usize; edge_count];
+            #[cfg(test)]
+            let scan_started = std::time::Instant::now();
             for edge in 0..edge_count {
                 let sample_count = sample_counts[edge];
                 let bond_dim = bond_dims[edge];
@@ -406,7 +938,21 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 })?;
 
                 let previous = existing_input.and_then(|frames| frames.get(edge));
-                let known = previous.map_or(0, |frame| frame.sample_count);
+                let known = previous_counts
+                    .and_then(|counts| counts.get(input_index))
+                    .and_then(|counts| counts.get(edge))
+                    .copied()
+                    .unwrap_or_else(|| previous.map_or(0, |frame| frame.sample_count));
+                if known > sample_count {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "stored frame prefix exceeds the sample arena",
+                    });
+                }
+                if previous.is_some_and(|frame| frame.bond_dim != bond_dim) {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "stored frame prefix has a different bond dimension",
+                    });
+                }
                 known_samples[edge] = known;
                 // `SampleArena` is append-only with immutable `SampleId`s (see
                 // `samples.rs`), so an unchanged sample count means an
@@ -423,6 +969,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     continue;
                 }
             }
+            #[cfg(test)]
+            if extension_profile {
+                let reused = input_frames.iter().filter(|frame| frame.is_some()).count();
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_scan += scan_started.elapsed();
+                    stats.frame_extension_scanned_edges += edge_count;
+                    stats.frame_extension_reused_edges += reused;
+                    stats.frame_extension_grown_edges += edge_count - reused;
+                });
+            }
 
             // Materialize missing edges only after their incoming frame
             // dependencies have been materialized. The old edge-index order
@@ -432,16 +988,26 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             // first materialization. `frame_order` is a topological order of
             // this directed-frame dependency graph, so a single-incoming
             // ancestor is fully batched before it is read by its dependent.
+            #[cfg(test)]
+            let compute_started = std::time::Instant::now();
             for &edge in frame_order {
                 if input_frames[edge].is_some() {
                     continue;
                 }
                 builder.compute_batch(edge, known_samples[edge]..sample_counts[edge])?;
             }
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_compute += compute_started.elapsed();
+                });
+            }
 
             // Pass 2: rebuild only the edges pass 1 left empty (grown or
             // brand new). Reused edges keep the `Rc` pass 1 put in their slot
             // and are not touched.
+            #[cfg(test)]
+            let rebuild_started = std::time::Instant::now();
             for edge in 0..edge_count {
                 if input_frames[edge].is_some() {
                     continue;
@@ -449,23 +1015,28 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 let sample_count = sample_counts[edge];
                 let bond_dim = bond_dims[edge];
                 let previous = existing_input.and_then(|frames| frames.get(edge));
-                let mut data = Vec::with_capacity(frame_elements[edge]);
-                for sample in 0..sample_count {
-                    // Samples at or above `known` were just materialized into
-                    // `memo` by pass 1's `compute_batch`. Samples below it are
-                    // in `memo` only if something read them -- an ancestor
-                    // priming recursion, which lazily pulls through
-                    // `existing_frames` -- so an untouched old sample is
-                    // pulled from the previous store right here instead.
-                    let values = match std::mem::take(&mut builder.memo[edge][sample]) {
-                        Some(values) => values,
-                        None => previous
-                            .filter(|frame| sample < frame.sample_count)
-                            .map(|frame| frame.row(sample))
-                            .ok_or(TreeAciError::InternalInvariant {
-                                message: "directed frame memoization left a sample uncomputed",
-                            })?,
-                    };
+                #[cfg(test)]
+                if extension_profile {
+                    crate::state::profile_debug_stats::record(|stats| {
+                        stats.frame_extension_new_values_copied +=
+                            (sample_count - known_samples[edge]) * bond_dim;
+                    });
+                }
+                let new_elements = (sample_count - known_samples[edge])
+                    .checked_mul(bond_dim)
+                    .ok_or(TreeAciError::SizeOverflow {
+                        context: "new directed frame elements",
+                    })?;
+                let mut data = Vec::with_capacity(new_elements);
+                for sample in known_samples[edge]..sample_count {
+                    // Only newly interned rows are materialized here. Old rows
+                    // remain in `previous` and are addressed through the
+                    // persistent prefix rather than copied into this vector.
+                    let values = std::mem::take(&mut builder.memo[edge][sample]).ok_or(
+                        TreeAciError::InternalInvariant {
+                            message: "new directed frame memoization left a sample uncomputed",
+                        },
+                    )?;
                     if values.len() != bond_dim {
                         return Err(TreeAciError::InternalInvariant {
                             message: "computed frame length differs from cut bond dimension",
@@ -474,12 +1045,21 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     data.extend(values);
                 }
                 input_frames[edge] = Some(Rc::new(DirectedFrame {
+                    base: previous.cloned(),
                     sample_count,
                     bond_dim,
                     values: data,
                 }));
             }
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_rebuild += rebuild_started.elapsed();
+                });
+            }
 
+            #[cfg(test)]
+            let finalize_started = std::time::Instant::now();
             let input_frames = input_frames
                 .into_iter()
                 .map(|frame| {
@@ -490,6 +1070,13 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .collect::<Result<Vec<_>>>()?;
             all_inputs.push(input_frames);
             all_cores.push(builder.cores);
+            all_oriented_core_caches.push(oriented_core_cache);
+            #[cfg(test)]
+            if extension_profile {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.frame_extension_finalize += finalize_started.elapsed();
+                });
+            }
         }
         let (candidate_cache, candidate_cache_bytes) = match existing {
             Some(store) => (
@@ -510,6 +1097,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         Ok(Self {
             frames: all_inputs,
             cores: all_cores,
+            oriented_core_cache: all_oriented_core_caches,
             records,
             retained_bytes,
             candidate_cache,
@@ -528,12 +1116,24 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             .saturating_add(self.candidate_cache_bytes.get())
     }
 
+    #[cfg(test)]
+    pub(crate) fn cache_debug_totals(&self) -> (usize, usize, usize) {
+        (
+            self.retained_bytes,
+            self.candidate_cache.borrow().len(),
+            self.candidate_cache_bytes.get(),
+        )
+    }
+
     fn cache_candidate_if_fits(
         &self,
         problem: &PreparedTreeProblem<impl TreeAciNode>,
         key: CandidateCacheKey,
-        values: &[T],
+        values: Rc<[T]>,
     ) {
+        if !candidate_cache_enabled() {
+            return;
+        }
         let Some(entry_bytes) = values
             .len()
             .checked_mul(size_of::<T>())
@@ -556,11 +1156,17 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 // Duplicate candidates in one batched call are all cache
                 // misses during grouping. `entry` hashes once and ensures
                 // their shared key is stored and charged only once.
-                entry.insert(values.to_vec());
+                entry.insert(values);
                 self.candidate_cache_bytes
                     .set(candidate_bytes + entry_bytes);
             }
         }
+    }
+
+    fn cached_candidate(&self, key: &CandidateCacheKey) -> Option<Rc<[T]>> {
+        candidate_cache_enabled()
+            .then(|| self.candidate_cache.borrow().get(key).cloned())
+            .flatten()
     }
 
     fn candidate_cache_key<V: TreeAciNode>(
@@ -605,11 +1211,27 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         }))
     }
 
-    /// Peak scalar scratch for candidates produced by `enumerate_candidates`,
+    /// Peak scratch for candidates produced by `enumerate_candidates`,
     /// excluding the returned vectors. That enumerator emits the complete
     /// local-coordinate/incoming-sample Cartesian product, so its group sizes
     /// are available directly from `candidate_sets`; no hot-path regrouping or
     /// hashing is needed merely to enforce the working-byte limit.
+    ///
+    /// The estimate reports the route
+    /// [`Self::candidate_frames_for_edge`] will actually take: the batched
+    /// kernel's live buffers for one and two incoming components, and for
+    /// three or more the batched charge when the complete Cartesian cross
+    /// fits `max_working_bytes` and the per-candidate scalar charge when it
+    /// does not (see
+    /// [`Self::candidate_frames_for_edge_multi_incoming`]'s routing
+    /// contract). This keeps the local update's pre-flight budget and the
+    /// kernel's own routing decision from disagreeing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeAciError::InternalInvariant`] when the directed edge,
+    /// node position, or a candidate set is unknown, and
+    /// [`TreeAciError::SizeOverflow`] on checked scratch arithmetic.
     pub(crate) fn enumerated_candidate_frame_scratch_elements<V: TreeAciNode>(
         &self,
         problem: &PreparedTreeProblem<V>,
@@ -681,13 +1303,46 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     .len();
                 two_incoming_scratch_elements(outgoing_dim, incoming_dim_1, incoming_dim_2, n1, n2)
             }
-            incoming_edges => incoming_edges.iter().try_fold(0usize, |sum, &edge| {
-                let dimension = self.bond_dim(input, edge)?;
-                sum.checked_add(dimension)
-                    .ok_or(TreeAciError::SizeOverflow {
-                        context: "scalar candidate incoming frame elements",
-                    })
-            }),
+            // Three or more incoming components: report the peak of the
+            // route `candidate_frames_for_edge_multi_incoming` will actually
+            // take for this edge, so the local update's pre-flight budget and
+            // the kernel's own routing decision cannot disagree. The batched
+            // charge covers the complete Cartesian candidate cross and every
+            // intermediate stage; the scalar charge is the previous
+            // per-candidate incoming frame slices.
+            incoming_edges => {
+                let mut incoming_dims = Vec::with_capacity(incoming_edges.len());
+                let mut counts = Vec::with_capacity(incoming_edges.len());
+                for &edge in incoming_edges {
+                    incoming_dims.push(self.bond_dim(input, edge)?);
+                    counts.push(
+                        candidate_sets
+                            .ids
+                            .get(edge)
+                            .ok_or(TreeAciError::InternalInvariant {
+                                message: "candidate sets are missing an incoming directed edge",
+                            })?
+                            .len(),
+                    );
+                }
+                let scalar =
+                    checked_sum(&incoming_dims, "scalar candidate incoming frame elements")?;
+                let batched =
+                    multi_incoming_scratch_elements(outgoing_dim, &incoming_dims, &counts)
+                        .ok()
+                        .filter(|elements| {
+                            grouped_gemm_descriptor_bytes(&incoming_dims).is_ok_and(
+                                |descriptor_bytes| {
+                                    frame_working_elements_fit::<T, V>(
+                                        problem,
+                                        *elements,
+                                        descriptor_bytes,
+                                    )
+                                },
+                            )
+                        });
+                Ok(batched.unwrap_or(scalar))
+            }
         }
     }
 
@@ -735,13 +1390,18 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// Computes every candidate's frame vector for one input and directed
     /// edge. Dispatches to a batched BLAS path when the edge's source node
     /// has exactly one incoming edge (one `mat_mul` call per distinct
-    /// `local_coordinate`) or exactly two incoming edges (see
+    /// `local_coordinate`), exactly two incoming edges (see
     /// [`Self::candidate_frames_for_edge_two_incoming`] and
-    /// [`two_incoming_core_matrix_batched`]), and falls back to the scalar
-    /// [`Self::candidate_frame`] path for a leaf edge (zero incoming edges)
-    /// or a node with three or more incoming edges (out of scope for the
-    /// batched paths -- see issue #671 and
-    /// `docs/worklogs/2026-08-22-treeaci-branch-batched-frames.md`).
+    /// [`two_incoming_core_matrix_batched`]), or three or more incoming edges
+    /// (see [`Self::candidate_frames_for_edge_multi_incoming`] and
+    /// [`incoming_batch_matrix`], which generalize the exactly-two-incoming
+    /// decomposition to arbitrary degree -- issues #671 and #713 and
+    /// `docs/worklogs/2026-08-22-treeaci-branch-batched-frames.md`). A leaf
+    /// edge (zero incoming edges) keeps the scalar [`Self::candidate_frame`]
+    /// path, whose contraction is a plain gather that batching cannot
+    /// improve, and so does any three-or-more-incoming group whose requested
+    /// candidates are not a complete cross or whose intermediates do not fit
+    /// the working-byte budget.
     /// Leaves use the compact candidate cache; 3+-incoming candidates skip
     /// it because their exact identity would require an unbounded vector key.
     ///
@@ -763,7 +1423,44 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         input: usize,
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
-    ) -> Result<Vec<Vec<T>>> {
+    ) -> Result<PackedCandidateFrames<T>> {
+        self.candidate_frames_for_edge_with_layout(
+            inputs,
+            problem,
+            input,
+            directed_edge,
+            candidates,
+            PackedCandidateFrameLayout::BondByCandidate,
+        )
+    }
+
+    pub(crate) fn candidate_frames_for_edge_rows<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        input: usize,
+        directed_edge: DirectedEdgeId,
+        candidates: &[ComponentSample],
+    ) -> Result<PackedCandidateFrames<T>> {
+        self.candidate_frames_for_edge_with_layout(
+            inputs,
+            problem,
+            input,
+            directed_edge,
+            candidates,
+            PackedCandidateFrameLayout::CandidateByBond,
+        )
+    }
+
+    fn candidate_frames_for_edge_with_layout<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        input: usize,
+        directed_edge: DirectedEdgeId,
+        candidates: &[ComponentSample],
+        layout: PackedCandidateFrameLayout,
+    ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
                 .directed_edges
@@ -778,15 +1475,34 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 input,
                 directed_edge,
                 candidates,
+                layout,
             );
         }
-        if directed.incoming_to_from.len() != 1 {
-            return candidates
-                .iter()
-                .map(|candidate| {
-                    self.candidate_frame(inputs, problem, input, directed_edge, candidate)
-                })
-                .collect();
+        if directed.incoming_to_from.len() >= 3 {
+            return self.candidate_frames_for_edge_multi_incoming(
+                inputs,
+                problem,
+                input,
+                directed_edge,
+                candidates,
+                layout,
+            );
+        }
+        if directed.incoming_to_from.is_empty() {
+            let bond_dim = self.bond_dim(input, directed_edge)?;
+            let mut results = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let values: Rc<[T]> = self
+                    .candidate_frame(inputs, problem, input, directed_edge, candidate)?
+                    .into();
+                results.push(Some(values));
+            }
+            return pack_candidate_results(
+                bond_dim,
+                (0..candidates.len()).collect(),
+                results,
+                layout,
+            );
         }
 
         let node =
@@ -828,25 +1544,27 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         // both simpler and substantially cheaper than one small BLAS dispatch
         // per physical coordinate.
         let mut pending: Vec<(usize, CandidateCacheKey)> = Vec::new();
-        let mut results: Vec<Option<Vec<T>>> = vec![None; candidates.len()];
+        let mut results: Vec<Option<Rc<[T]>>> = vec![None; candidates.len()];
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         let (mut diag_hits, mut diag_misses) = (0u64, 0u64);
+        #[cfg(test)]
+        let cache_scan_started = std::time::Instant::now();
         for (candidate_index, candidate) in candidates.iter().enumerate() {
             let key = self
                 .candidate_cache_key(problem, input, directed_edge, candidate)?
                 .ok_or(TreeAciError::InternalInvariant {
                     message: "single-incoming candidate has no compact cache key",
                 })?;
-            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            if let Some(cached) = self.cached_candidate(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
                 {
                     diag_hits += 1;
                 }
-                results[candidate_index] = Some(cached.clone());
+                results[candidate_index] = Some(cached);
                 continue;
             }
             #[cfg(test)]
@@ -865,8 +1583,15 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
             pending.push((candidate_index, key));
         }
+        #[cfg(test)]
+        crate::state::profile_debug_stats::record(|stats| {
+            stats.candidate_cache_scan += cache_scan_started.elapsed();
+            stats.candidate_scan_items += candidates.len();
+        });
 
         if !pending.is_empty() {
+            #[cfg(test)]
+            let group_setup_started = std::time::Instant::now();
             let mut incoming_ids = Vec::new();
             let mut incoming_positions = HashMap::new();
             for &(candidate_index, _) in &pending {
@@ -902,15 +1627,43 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 scratch,
                 physical_offset_bytes,
             )?;
-            let core_matrix = single_incoming_all_physical_core_matrix(
-                core,
-                outgoing_axis,
-                incoming_axis,
-                physical,
-                &physical_axes,
-                outgoing_dim,
-                incoming_dim,
-            );
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_group_setup += group_setup_started.elapsed();
+            });
+            #[cfg(test)]
+            let core_pack_started = std::time::Instant::now();
+            let (core_matrix, _core_was_packed) =
+                cached_oriented_core(&self.oriented_core_cache[input], directed_edge, || {
+                    single_incoming_all_physical_core_matrix(
+                        core,
+                        outgoing_axis,
+                        incoming_axis,
+                        physical,
+                        &physical_axes,
+                        outgoing_dim,
+                        incoming_dim,
+                    )
+                });
+            #[cfg(test)]
+            if _core_was_packed {
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.candidate_core_pack += core_pack_started.elapsed();
+                    stats.candidate_core_pack_calls += 1;
+                    stats.candidate_core_pack_values +=
+                        outgoing_dim * physical.local_dim * incoming_dim;
+                });
+            }
+            #[cfg(test)]
+            if _core_was_packed {
+                crate::state::profile_debug_stats::record_core_pack_identity(
+                    input,
+                    directed_edge,
+                    outgoing_dim * physical.local_dim * incoming_dim,
+                );
+            }
+            #[cfg(test)]
+            let frame_pack_started = std::time::Instant::now();
             let mut frame_data = Vec::with_capacity(incoming_dim * incoming_ids.len());
             for &sample in &incoming_ids {
                 let values = self.frame_slice(input, incoming_edge, sample)?;
@@ -923,16 +1676,44 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
             let frame_matrix =
                 Matrix::from_col_major_vec(incoming_dim, incoming_ids.len(), frame_data);
-            let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_frame_pack += frame_pack_started.elapsed();
+            });
+            #[cfg(test)]
+            let backend_started = std::time::Instant::now();
+            // [AI Supplied] Test-only A/B for consuming the two ephemeral
+            // matrices instead of copying them through borrowed `mat_mul`.
+            #[cfg(test)]
+            let batched =
+                if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
+                    contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?
+                } else {
+                    contract_prepared_core_batched(&core_matrix, &frame_matrix)?
+                };
+            #[cfg(not(test))]
+            let batched =
+                contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_backend += backend_started.elapsed();
+            });
+            #[cfg(test)]
+            let result_cache_started = std::time::Instant::now();
             for (candidate_index, key) in pending {
                 let candidate = &candidates[candidate_index];
                 let column = incoming_positions[&candidate.incoming[0].1];
-                let values: Vec<T> = (0..outgoing_dim)
+                let values: Rc<[T]> = (0..outgoing_dim)
                     .map(|row| batched[[row + outgoing_dim * candidate.local_coordinate, column]])
-                    .collect();
-                self.cache_candidate_if_fits(problem, key, &values);
+                    .collect::<Vec<_>>()
+                    .into();
+                self.cache_candidate_if_fits(problem, key, Rc::clone(&values));
                 results[candidate_index] = Some(values);
             }
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.candidate_result_cache += result_cache_started.elapsed();
+            });
         }
 
         #[cfg(feature = "diagnostics")]
@@ -947,14 +1728,244 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             diag_misses,
         );
 
-        results
-            .into_iter()
-            .map(|value| {
-                value.ok_or(TreeAciError::InternalInvariant {
-                    message: "candidate frame batching left a candidate unfilled",
-                })
-            })
-            .collect()
+        pack_candidate_results(
+            outgoing_dim,
+            (0..candidates.len()).collect(),
+            results,
+            layout,
+        )
+    }
+
+    /// Arbitrary-degree counterpart to
+    /// [`Self::candidate_frames_for_edge_two_incoming`], for directed edges
+    /// whose source node has three or more incoming edges.
+    ///
+    /// # Routing contract
+    ///
+    /// Candidates are grouped by `local_coordinate` exactly as the one- and
+    /// two-incoming paths group them, and each group takes one of exactly two
+    /// documented routes:
+    ///
+    /// * the **batched** route, [`incoming_batch_matrix`], when the group's
+    ///   complete Cartesian cross is no larger than the number of candidates
+    ///   the caller actually asked for *and* every simultaneously live buffer
+    ///   of that cross fits `max_working_bytes`
+    ///   ([`multi_incoming_scratch_elements`] plus
+    ///   [`grouped_gemm_descriptor_bytes`]);
+    /// * the **scalar** route, the same
+    ///   [`contract_prepared_core_slices`] contraction
+    ///   [`Self::candidate_frame`] performs, otherwise.
+    ///
+    /// The cross-size condition is what keeps a sparse or diagonal candidate
+    /// set from silently materializing the full edge cross: the batched
+    /// kernel computes every combination, so it is used only where every
+    /// combination was requested. `enumerate_candidates` always emits the
+    /// complete cross, so production groups take the batched route whenever
+    /// their intermediates are affordable. The budget condition selects a
+    /// route instead of raising a limit error, so a tight budget degrades to
+    /// the previous per-candidate cost rather than failing.
+    ///
+    /// Cache semantics are unchanged from the scalar route this replaces:
+    /// three-or-more-incoming candidates are still never cached, because
+    /// their exact identity would need an unbounded vector key
+    /// ([`Self::candidate_cache_key`]).
+    fn candidate_frames_for_edge_multi_incoming<V: TreeAciNode>(
+        &self,
+        inputs: &[TreeTN<IdxTensor, V>],
+        problem: &PreparedTreeProblem<V>,
+        input: usize,
+        directed_edge: DirectedEdgeId,
+        candidates: &[ComponentSample],
+        layout: PackedCandidateFrameLayout,
+    ) -> Result<PackedCandidateFrames<T>> {
+        let directed =
+            problem
+                .directed_edges
+                .get(directed_edge)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate frame references an unknown directed edge",
+                })?;
+        let node =
+            *problem
+                .node_positions
+                .get(&directed.from)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "candidate source has no prepared node position",
+                })?;
+        let tree = inputs.get(input).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame references an unknown input",
+        })?;
+        let cores = self
+            .cores
+            .get(input)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "candidate frame has no prepared input cores",
+            })?;
+        let core = cores.get(node).ok_or(TreeAciError::InternalInvariant {
+            message: "candidate frame source node has no prepared core",
+        })?;
+        let outgoing = outgoing_bond(tree, problem, directed_edge)?;
+        let outgoing_axis = axis_of(&core.indices, outgoing)?;
+        let outgoing_dim = core.dims[outgoing_axis];
+        let physical = &problem.physical[node];
+        let physical_axes = physical
+            .indices
+            .iter()
+            .map(|index| axis_of(&core.indices, index))
+            .collect::<Result<Vec<_>>>()?;
+        let incoming_edges = &directed.incoming_to_from;
+        let mut incoming_axes = Vec::with_capacity(incoming_edges.len());
+        let mut incoming_dims = Vec::with_capacity(incoming_edges.len());
+        for &incoming_edge in incoming_edges {
+            let incoming_bond = outgoing_bond(tree, problem, incoming_edge)?;
+            let axis = axis_of(&core.indices, incoming_bond)?;
+            incoming_axes.push(axis);
+            incoming_dims.push(core.dims[axis]);
+        }
+
+        let mut groups: std::collections::BTreeMap<usize, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        #[cfg(feature = "diagnostics")]
+        let diag_start = std::time::Instant::now();
+        for (candidate_index, candidate) in candidates.iter().enumerate() {
+            // The same ordered-incoming validation the scalar route performs
+            // while deriving its (deliberately absent) cache key.
+            if candidate.incoming.len() != incoming_edges.len()
+                || candidate
+                    .incoming
+                    .iter()
+                    .map(|(edge, _)| *edge)
+                    .ne(incoming_edges.iter().copied())
+            {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "candidate cache key has the wrong ordered incoming branches",
+                });
+            }
+            #[cfg(test)]
+            candidate_debug_stats::record_miss();
+            groups
+                .entry(candidate.local_coordinate)
+                .or_default()
+                .push(candidate_index);
+        }
+
+        let mut results: Vec<Option<Rc<[T]>>> = vec![None; candidates.len()];
+        for (local_coordinate, indices) in groups {
+            let mut base_offset = 0usize;
+            for (physical_axis, &axis) in physical_axes.iter().enumerate() {
+                let wanted = (local_coordinate / physical.strides[physical_axis])
+                    % physical.dims[physical_axis];
+                base_offset += wanted * core.strides[axis];
+            }
+
+            let mut ids: Vec<Vec<SampleId>> = vec![Vec::new(); incoming_edges.len()];
+            let mut positions: Vec<HashMap<SampleId, usize>> =
+                vec![HashMap::new(); incoming_edges.len()];
+            for &candidate_index in &indices {
+                for (axis_index, &(_, sample)) in
+                    candidates[candidate_index].incoming.iter().enumerate()
+                {
+                    positions[axis_index].entry(sample).or_insert_with(|| {
+                        ids[axis_index].push(sample);
+                        ids[axis_index].len() - 1
+                    });
+                }
+            }
+            let counts = ids.iter().map(Vec::len).collect::<Vec<_>>();
+            let cross = checked_product(&counts, "multi-incoming candidate cross")?;
+            let scratch = multi_incoming_scratch_elements(outgoing_dim, &incoming_dims, &counts)?;
+            let descriptor_bytes = grouped_gemm_descriptor_bytes(&incoming_dims)?;
+            let batched = cross <= indices.len()
+                && frame_working_elements_fit::<T, V>(problem, scratch, descriptor_bytes);
+
+            if !batched {
+                #[cfg(test)]
+                multi_incoming_debug_stats::record_scalar_group();
+                for &candidate_index in &indices {
+                    let candidate = &candidates[candidate_index];
+                    let incoming = candidate
+                        .incoming
+                        .iter()
+                        .map(|&(edge, id)| {
+                            self.frame_slice(input, edge, id)
+                                .map(|values| (edge, values))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let values = contract_prepared_core_slices(
+                        tree,
+                        problem,
+                        cores,
+                        directed_edge,
+                        candidate.local_coordinate,
+                        &incoming,
+                    )?;
+                    results[candidate_index] = Some(values.into());
+                }
+                continue;
+            }
+
+            #[cfg(test)]
+            multi_incoming_debug_stats::record_batched_group();
+            let mut frame_matrices = Vec::with_capacity(incoming_edges.len());
+            for (axis_index, &incoming_edge) in incoming_edges.iter().enumerate() {
+                let incoming_dim = incoming_dims[axis_index];
+                let mut data = Vec::with_capacity(incoming_dim * counts[axis_index]);
+                for &sample in &ids[axis_index] {
+                    let values = self.frame_slice(input, incoming_edge, sample)?;
+                    if values.len() != incoming_dim {
+                        return Err(TreeAciError::InternalInvariant {
+                            message: "incoming frame length differs from its bond dimension",
+                        });
+                    }
+                    data.extend_from_slice(values);
+                }
+                frame_matrices.push(Matrix::from_col_major_vec(
+                    incoming_dim,
+                    counts[axis_index],
+                    data,
+                ));
+            }
+
+            let batch = incoming_batch_matrix(
+                core,
+                outgoing_axis,
+                &incoming_axes,
+                base_offset,
+                &frame_matrices,
+            )?;
+            let mut coordinates = vec![0usize; incoming_edges.len()];
+            for &candidate_index in &indices {
+                for (axis_index, &(_, sample)) in
+                    candidates[candidate_index].incoming.iter().enumerate()
+                {
+                    coordinates[axis_index] = *positions[axis_index].get(&sample).ok_or(
+                        TreeAciError::InternalInvariant {
+                            message: "multi-incoming candidate lost its packed column",
+                        },
+                    )?;
+                }
+                results[candidate_index] = Some(batch.frame(&coordinates)?.into());
+            }
+        }
+
+        #[cfg(feature = "diagnostics")]
+        diagnostics_record_frame(
+            tree,
+            problem,
+            directed,
+            directed_edge,
+            input,
+            diag_start.elapsed(),
+            0,
+            candidates.len() as u64,
+        );
+
+        pack_candidate_results(
+            outgoing_dim,
+            (0..candidates.len()).collect(),
+            results,
+            layout,
+        )
     }
 
     /// Batched counterpart to [`Self::candidate_frames_for_edge`]'s
@@ -976,7 +1987,8 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         input: usize,
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
-    ) -> Result<Vec<Vec<T>>> {
+        layout: PackedCandidateFrameLayout,
+    ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
                 .directed_edges
@@ -1023,7 +2035,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
 
         let mut groups: std::collections::BTreeMap<usize, Vec<(usize, CandidateCacheKey)>> =
             std::collections::BTreeMap::new();
-        let mut results: Vec<Option<Vec<T>>> = vec![None; candidates.len()];
+        let mut results: Vec<Option<Rc<[T]>>> = vec![None; candidates.len()];
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
@@ -1034,14 +2046,14 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 .ok_or(TreeAciError::InternalInvariant {
                     message: "two-incoming candidate has no compact cache key",
                 })?;
-            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            if let Some(cached) = self.cached_candidate(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
                 {
                     diag_hits += 1;
                 }
-                results[candidate_index] = Some(cached.clone());
+                results[candidate_index] = Some(cached);
                 continue;
             }
             #[cfg(test)]
@@ -1142,10 +2154,11 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 let (_, sample_2) = candidates[candidate_index].incoming[1];
                 let n1 = position_1[&sample_1];
                 let n2 = position_2[&sample_2];
-                let values: Vec<T> = (0..outgoing_dim)
+                let values: Rc<[T]> = (0..outgoing_dim)
                     .map(|out| batched[[out + outgoing_dim * n1, n2]])
-                    .collect();
-                self.cache_candidate_if_fits(problem, key, &values);
+                    .collect::<Vec<_>>()
+                    .into();
+                self.cache_candidate_if_fits(problem, key, Rc::clone(&values));
                 results[candidate_index] = Some(values);
             }
         }
@@ -1162,14 +2175,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             diag_misses,
         );
 
-        results
-            .into_iter()
-            .map(|value| {
-                value.ok_or(TreeAciError::InternalInvariant {
-                    message: "two-incoming candidate frame batching left a candidate unfilled",
-                })
-            })
-            .collect()
+        pack_candidate_results(
+            outgoing_dim,
+            (0..candidates.len()).collect(),
+            results,
+            layout,
+        )
     }
 
     pub(crate) fn candidate_frame<V: TreeAciNode>(
@@ -1199,7 +2210,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     message: "candidate frame references an unknown directed edge",
                 })?;
         if let Some(key) = cache_key {
-            if let Some(cached) = self.candidate_cache.borrow().get(&key) {
+            if let Some(cached) = self.cached_candidate(&key) {
                 #[cfg(test)]
                 candidate_debug_stats::record_hit();
                 #[cfg(feature = "diagnostics")]
@@ -1213,7 +2224,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     1,
                     0,
                 );
-                return Ok(cached.clone());
+                return Ok(cached.to_vec());
             }
         }
         #[cfg(test)]
@@ -1241,7 +2252,20 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             &incoming,
         )?;
         if let Some(key) = cache_key {
-            self.cache_candidate_if_fits(problem, key, &values);
+            let values: Rc<[T]> = values.into();
+            self.cache_candidate_if_fits(problem, key, Rc::clone(&values));
+            #[cfg(feature = "diagnostics")]
+            diagnostics_record_frame(
+                tree,
+                problem,
+                directed,
+                directed_edge,
+                input,
+                diag_start.elapsed(),
+                0,
+                1,
+            );
+            return Ok(values.to_vec());
         }
         #[cfg(feature = "diagnostics")]
         diagnostics_record_frame(
@@ -1264,9 +2288,12 @@ where
     V: TreeAciNode,
 {
     input: &'a TreeTN<IdxTensor, V>,
+    #[cfg(test)]
+    input_index: usize,
     problem: &'a PreparedTreeProblem<V>,
     arena: &'a SampleArena,
     cores: Rc<Vec<PreparedCore<T>>>,
+    oriented_core_cache: OrientedCoreCache<T>,
     memo: Vec<Vec<Option<Vec<T>>>>,
     /// The previous `InputFrameStore`'s frames for this same input, indexed
     /// by directed edge, when this builder is extending an existing store.
@@ -1490,15 +2517,36 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             scratch,
             physical_offset_bytes,
         )?;
-        let core_matrix = single_incoming_all_physical_core_matrix(
-            core,
-            outgoing_axis,
-            incoming_axis,
-            physical,
-            &physical_axes,
-            outgoing_dim,
-            incoming_dim,
-        );
+        #[cfg(test)]
+        let core_pack_started = std::time::Instant::now();
+        let (core_matrix, _core_was_packed) =
+            cached_oriented_core(&self.oriented_core_cache, edge, || {
+                single_incoming_all_physical_core_matrix(
+                    core,
+                    outgoing_axis,
+                    incoming_axis,
+                    physical,
+                    &physical_axes,
+                    outgoing_dim,
+                    incoming_dim,
+                )
+            });
+        #[cfg(test)]
+        if _core_was_packed {
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.stored_core_pack += core_pack_started.elapsed();
+                stats.stored_core_pack_calls += 1;
+                stats.stored_core_pack_values += outgoing_dim * physical.local_dim * incoming_dim;
+            });
+        }
+        #[cfg(test)]
+        if _core_was_packed {
+            crate::state::profile_debug_stats::record_core_pack_identity(
+                self.input_index,
+                edge,
+                outgoing_dim * physical.local_dim * incoming_dim,
+            );
+        }
         let mut frame_data = Vec::with_capacity(incoming_dim * incoming_ids.len());
         for &incoming_sample in &incoming_ids {
             let values = self.memo[incoming_edge][incoming_sample].as_ref().ok_or(
@@ -1514,7 +2562,18 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
             frame_data.extend_from_slice(values);
         }
         let frame_matrix = Matrix::from_col_major_vec(incoming_dim, incoming_ids.len(), frame_data);
-        let batched = contract_prepared_core_batched(&core_matrix, &frame_matrix)?;
+        // [AI Supplied] Keep the diagnostic A/B switch in tests. In
+        // production the frame matrix is consumed; the oriented core cache
+        // supplies the already-permuted values and is cloned only at this
+        // owned dense boundary.
+        #[cfg(test)]
+        let batched = if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
+            contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?
+        } else {
+            contract_prepared_core_batched(&core_matrix, &frame_matrix)?
+        };
+        #[cfg(not(test))]
+        let batched = contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?;
         for (sample, record) in pending {
             let incoming_sample = record.incoming[0].1;
             let column = incoming_positions[&incoming_sample];
@@ -1809,6 +2868,18 @@ fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
     }
     let outgoing_stride = core.strides[outgoing_axis];
 
+    // `accumulate_incoming` bottoms out in exactly one core read per point of
+    // the incoming Cartesian product, for every outgoing coordinate, so the
+    // read count of this call is fixed by its shape alone.
+    #[cfg(test)]
+    debug_stats::record_core_element_reads(
+        outgoing.dim()
+            * incoming_axes
+                .iter()
+                .map(|(_, values)| values.len())
+                .product::<usize>(),
+    );
+
     let mut result = vec![T::default(); outgoing.dim()];
     for (outgoing_value, slot) in result.iter_mut().enumerate() {
         let outgoing_offset = base_offset + outgoing_value * outgoing_stride;
@@ -1856,6 +2927,8 @@ fn single_incoming_core_matrix<T: TreeAciScalar>(
 ) -> Matrix<T> {
     let outgoing_stride = core.strides[outgoing_axis];
     let incoming_stride = core.strides[incoming_axis];
+    #[cfg(test)]
+    debug_stats::record_core_element_reads(outgoing_dim * incoming_dim);
     let mut data = Vec::with_capacity(outgoing_dim * incoming_dim);
     for incoming_value in 0..incoming_dim {
         for outgoing_value in 0..outgoing_dim {
@@ -1899,6 +2972,8 @@ fn single_incoming_all_physical_core_matrix<T: TreeAciScalar>(
                 .sum::<usize>()
         })
         .collect::<Vec<_>>();
+    #[cfg(test)]
+    debug_stats::record_core_element_reads(rows * incoming_dim);
     let mut data = Vec::with_capacity(rows * incoming_dim);
     for incoming_value in 0..incoming_dim {
         for &physical_offset in &physical_offsets {
@@ -1926,6 +3001,17 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
     incoming_frame_matrix: &Matrix<T>,
 ) -> Result<Matrix<T>> {
     tensor4all_tensorbackend::mat_mul(core_matrix, incoming_frame_matrix).map_err(|error| {
+        TreeAciError::Numerical {
+            message: error.to_string(),
+        }
+    })
+}
+
+fn contract_prepared_core_batched_owned<T: TreeAciScalar>(
+    core_matrix: Matrix<T>,
+    incoming_frame_matrix: Matrix<T>,
+) -> Result<Matrix<T>> {
+    tensor4all_tensorbackend::mat_mul_owned(core_matrix, incoming_frame_matrix).map_err(|error| {
         TreeAciError::Numerical {
             message: error.to_string(),
         }
@@ -1974,6 +3060,321 @@ fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
     }
     let stage1_matrix = Matrix::from_col_major_vec(outgoing_dim * n1, incoming_dim_2, stage1_data);
     contract_prepared_core_batched(&stage1_matrix, v2)
+}
+
+/// The complete Cartesian product of candidate frame vectors produced by
+/// [`incoming_batch_matrix`] for one fixed physical coordinate.
+///
+/// The payload is one column-major buffer whose fastest index is the outgoing
+/// bond coordinate, followed by one candidate index per incoming component in
+/// incoming-edge order. `strides[k] = outgoing_dim * n_0 * ... * n_{k-1}` are
+/// therefore the checked prefix strides of that mixed-radix layout, and the
+/// frame vector of one candidate combination is a contiguous
+/// `outgoing_dim`-length slice.
+///
+/// This is the degree-generic counterpart of the two matrices the existing
+/// one- and two-incoming kernels return: at `q = 1` it is an
+/// `outgoing_dim x n_0` matrix and at `q = 2` an `(outgoing_dim * n_0) x n_1`
+/// matrix, both read back with exactly the same flat offsets those kernels
+/// already use. [`PackedCandidateFrames`] is the caller-facing batch of the
+/// candidates actually requested; this type is the intermediate cross the
+/// requested candidates are read out of.
+#[derive(Clone, Debug)]
+pub(crate) struct PackedCandidateBatch<T> {
+    outgoing_dim: usize,
+    counts: Vec<usize>,
+    strides: Vec<usize>,
+    values: Vec<T>,
+}
+
+impl<T> PackedCandidateBatch<T> {
+    /// Wraps a completed cross-product payload, deriving and checking its
+    /// prefix strides.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeAciError::SizeOverflow`] when the Cartesian element
+    /// count overflows `usize`, and [`TreeAciError::InternalInvariant`] when
+    /// `values` does not have exactly that many elements.
+    fn try_new(outgoing_dim: usize, counts: Vec<usize>, values: Vec<T>) -> Result<Self> {
+        let mut strides = Vec::with_capacity(counts.len());
+        let mut span = outgoing_dim;
+        for &count in &counts {
+            strides.push(span);
+            span = span.checked_mul(count).ok_or(TreeAciError::SizeOverflow {
+                context: "incoming batch cross elements",
+            })?;
+        }
+        if values.len() != span {
+            return Err(TreeAciError::InternalInvariant {
+                message: "incoming batch payload has the wrong Cartesian length",
+            });
+        }
+        Ok(Self {
+            outgoing_dim,
+            counts,
+            strides,
+            values,
+        })
+    }
+
+    /// Returns the frame vector of one candidate combination, addressed by
+    /// one packed column index per incoming component.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeAciError::InternalInvariant`] when the coordinate count
+    /// differs from the incoming degree or a coordinate is out of range.
+    fn frame(&self, coordinates: &[usize]) -> Result<&[T]> {
+        if coordinates.len() != self.counts.len() {
+            return Err(TreeAciError::InternalInvariant {
+                message: "incoming batch lookup has the wrong incoming degree",
+            });
+        }
+        let mut offset = 0usize;
+        for ((coordinate, count), stride) in coordinates.iter().zip(&self.counts).zip(&self.strides)
+        {
+            if coordinate >= count {
+                return Err(TreeAciError::InternalInvariant {
+                    message: "incoming batch lookup references an unknown packed column",
+                });
+            }
+            offset += coordinate * stride;
+        }
+        self.values
+            .get(offset..offset + self.outgoing_dim)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "incoming batch lookup left the packed payload",
+            })
+    }
+}
+
+/// Contracts one fixed-physical core slice against a batch of candidate frame
+/// vectors on every incoming component, for an arbitrary incoming degree.
+///
+/// `incoming_axes` are the core axes of the incoming components in
+/// incoming-edge order and `frame_matrices[k]` is the `d_k x n_k` column-major
+/// matrix of the `k`-th component's candidate frame vectors.
+/// `physical_offset` is the flat core offset that already fixes every
+/// physical axis.
+///
+/// Degrees `0`, `1` and `2` delegate to the existing gather, single-incoming
+/// and [`two_incoming_core_matrix_batched`] kernels so their numerics and
+/// launch structure are untouched; degree `3` and above extend the same
+/// decomposition one incoming component at a time (see
+/// [`generalized_incoming_batch`]). All four routes produce the identical
+/// column-major layout documented on [`PackedCandidateBatch`].
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::InternalInvariant`] when the axis, frame-matrix,
+/// or core-offset shapes disagree, [`TreeAciError::SizeOverflow`] on checked
+/// Cartesian arithmetic, and [`TreeAciError::Numerical`] when the backend
+/// rejects a contraction.
+fn incoming_batch_matrix<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    outgoing_axis: usize,
+    incoming_axes: &[usize],
+    physical_offset: usize,
+    frame_matrices: &[Matrix<T>],
+) -> Result<PackedCandidateBatch<T>> {
+    if frame_matrices.len() != incoming_axes.len() {
+        return Err(TreeAciError::InternalInvariant {
+            message: "incoming batch has a frame matrix per incoming axis mismatch",
+        });
+    }
+    let outgoing_dim = *core
+        .dims
+        .get(outgoing_axis)
+        .ok_or(TreeAciError::InternalInvariant {
+            message: "incoming batch references an unknown outgoing core axis",
+        })?;
+    let outgoing_stride =
+        *core
+            .strides
+            .get(outgoing_axis)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "incoming batch references an unknown outgoing core axis",
+            })?;
+    let mut incoming_dims = Vec::with_capacity(incoming_axes.len());
+    let mut incoming_strides = Vec::with_capacity(incoming_axes.len());
+    for (axis_index, &axis) in incoming_axes.iter().enumerate() {
+        let dim = *core.dims.get(axis).ok_or(TreeAciError::InternalInvariant {
+            message: "incoming batch references an unknown incoming core axis",
+        })?;
+        let stride = *core
+            .strides
+            .get(axis)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "incoming batch references an unknown incoming core axis",
+            })?;
+        if frame_matrices[axis_index].nrows() != dim {
+            return Err(TreeAciError::InternalInvariant {
+                message: "incoming batch frame matrix has the wrong bond dimension",
+            });
+        }
+        incoming_dims.push(dim);
+        incoming_strides.push(stride);
+    }
+    let counts = frame_matrices.iter().map(Matrix::ncols).collect::<Vec<_>>();
+
+    let values = match incoming_axes.len() {
+        0 => (0..outgoing_dim)
+            .map(|outgoing_value| {
+                #[cfg(test)]
+                debug_stats::record_core_element_reads(1);
+                core.values
+                    .get(physical_offset + outgoing_value * outgoing_stride)
+                    .copied()
+                    .ok_or(TreeAciError::InternalInvariant {
+                        message: "incoming batch left the prepared core payload",
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        1 => {
+            let core_matrix = single_incoming_core_matrix(
+                core,
+                outgoing_axis,
+                incoming_axes[0],
+                physical_offset,
+                outgoing_dim,
+                incoming_dims[0],
+            );
+            contract_prepared_core_batched(&core_matrix, &frame_matrices[0])?.into_col_major_vec()
+        }
+        2 => two_incoming_core_matrix_batched(
+            core,
+            outgoing_axis,
+            incoming_axes[0],
+            incoming_axes[1],
+            physical_offset,
+            outgoing_dim,
+            incoming_dims[0],
+            incoming_dims[1],
+            &frame_matrices[0],
+            &frame_matrices[1],
+        )?
+        .into_col_major_vec(),
+        _ => generalized_incoming_batch(
+            core,
+            outgoing_axis,
+            incoming_axes,
+            &incoming_dims,
+            &incoming_strides,
+            &counts,
+            outgoing_dim,
+            physical_offset,
+            frame_matrices,
+        )?,
+    };
+
+    PackedCandidateBatch::try_new(outgoing_dim, counts, values)
+}
+
+/// Contracts three or more incoming components one at a time, extending the
+/// exactly-two-incoming decomposition rather than replacing it.
+///
+/// Step one reproduces [`two_incoming_core_matrix_batched`]'s first stage: for
+/// every combination of the remaining incoming bond coordinates it gathers one
+/// `outgoing_dim x d_0` core block and multiplies it by the first component's
+/// frame matrix, so the peak gathered core memory stays `outgoing_dim * d_0`
+/// and the complete `outgoing_dim * prod d_k` core cross is never
+/// materialized. Each later step contracts the next component out of the whole
+/// running buffer through one shared-operand grouped GEMM
+/// (`tensor4all_tensorbackend::grouped_mat_mul_shared`, the #712 facade): the
+/// blocks all reuse the same frame matrix and write disjoint output spans, so
+/// no block is copied into its own matrix and no intermediate is duplicated.
+///
+/// Contraction proceeds in incoming-edge order, the same order and the same
+/// association the exactly-two-incoming kernel already uses, so degree three
+/// and above are the literal continuation of the accepted degree-two
+/// reduction rather than a new one.
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::SizeOverflow`] on checked Cartesian arithmetic and
+/// [`TreeAciError::Numerical`] when the backend rejects a contraction.
+#[allow(clippy::too_many_arguments)]
+fn generalized_incoming_batch<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    outgoing_axis: usize,
+    incoming_axes: &[usize],
+    incoming_dims: &[usize],
+    incoming_strides: &[usize],
+    counts: &[usize],
+    outgoing_dim: usize,
+    physical_offset: usize,
+    frame_matrices: &[Matrix<T>],
+) -> Result<Vec<T>> {
+    let degree = incoming_axes.len();
+    let mut remaining = checked_product(&incoming_dims[1..], "incoming batch stage-one blocks")?;
+    let mut rows = checked_product(&[outgoing_dim, counts[0]], "incoming batch stage-one rows")?;
+    let mut stage = Vec::with_capacity(checked_product(
+        &[rows, remaining],
+        "incoming batch stage-one elements",
+    )?);
+    for block in 0..remaining {
+        let mut offset = physical_offset;
+        let mut quotient = block;
+        for axis_index in 1..degree {
+            offset += (quotient % incoming_dims[axis_index]) * incoming_strides[axis_index];
+            quotient /= incoming_dims[axis_index];
+        }
+        let core_matrix = single_incoming_core_matrix(
+            core,
+            outgoing_axis,
+            incoming_axes[0],
+            offset,
+            outgoing_dim,
+            incoming_dims[0],
+        );
+        let product = contract_prepared_core_batched(&core_matrix, &frame_matrices[0])?;
+        stage.extend(product.into_col_major_vec());
+    }
+
+    for axis_index in 1..degree {
+        let contracted = incoming_dims[axis_index];
+        remaining /= contracted.max(1);
+        let next_rows = rows
+            .checked_mul(counts[axis_index])
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "incoming batch stage rows",
+            })?;
+        let next_elements = next_rows
+            .checked_mul(remaining)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "incoming batch stage elements",
+            })?;
+        let mut next = vec![T::default(); next_elements];
+        if !stage.is_empty() && !next.is_empty() {
+            let lhs_span = rows * contracted;
+            let jobs = (0..remaining)
+                .map(|block| {
+                    tensor4all_tensorbackend::GroupedGemmJob::new(
+                        block * next_rows,
+                        block * lhs_span,
+                        0,
+                        rows,
+                        contracted,
+                        counts[axis_index],
+                    )
+                })
+                .collect::<Vec<_>>();
+            tensor4all_tensorbackend::grouped_mat_mul_shared(
+                &stage,
+                frame_matrices[axis_index].as_col_major_slice(),
+                &mut next,
+                &jobs,
+                tensor4all_tensorbackend::GroupedGemmOptions::default(),
+            )
+            .map_err(|error| TreeAciError::Numerical {
+                message: error.to_string(),
+            })?;
+        }
+        stage = next;
+        rows = next_rows;
+    }
+    Ok(stage)
 }
 
 /// Summarizes a directed edge's source node for the branch diagnostics

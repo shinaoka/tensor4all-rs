@@ -249,54 +249,149 @@ fn full_rank_chain_initial_guess_is_accepted_and_preserved() {
 #[test]
 #[ignore]
 fn profile_high_rank_chain_phases_and_candidate_cache() {
-    let guess = full_rank_chain_guess(16, 128);
-    let inputs = vec![guess.clone(), guess.clone()];
-    let options = TreeAciOptions {
-        tolerance: 1.0e-8,
-        max_bond_dim: Some(4096),
-        max_sweeps: 20,
-        min_sweeps: 2,
-        initial_guess: Some(guess),
-        enable_global_guard: false,
-        ..TreeAciOptions::default()
-    };
+    // [AI Supplied] Use non-smoke bond dimensions and expose the phase scaling.
+    for chi in [64, 128, 256] {
+        let enable_global_guard =
+            std::env::var("T4A_TREEACI_ENABLE_PROFILE_GUARD").as_deref() == Ok("1");
+        let guess = full_rank_chain_guess(32, chi);
+        let inputs = vec![guess.clone(), guess.clone()];
+        let options = TreeAciOptions {
+            tolerance: 1.0e-8,
+            max_bond_dim: Some(4096),
+            max_sweeps: 20,
+            min_sweeps: 2,
+            initial_guess: Some(guess),
+            enable_global_guard,
+            ..TreeAciOptions::default()
+        };
 
-    crate::frames::candidate_debug_stats::reset();
-    super::profile_debug_stats::reset();
-    let initialize_started = std::time::Instant::now();
-    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    let initialize_elapsed = initialize_started.elapsed();
-    let sweep_started = std::time::Instant::now();
-    let history = run_local_sweeps(&mut state, &options, &mut |batch, output| {
-        for (point, value) in output.iter_mut().enumerate() {
-            *value = batch.get(0, point)? * batch.get(1, point)?;
+        crate::frames::candidate_debug_stats::reset();
+        crate::frames::debug_stats::reset();
+        super::profile_debug_stats::reset();
+        let initialize_started = std::time::Instant::now();
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        let initialize_elapsed = initialize_started.elapsed();
+        let sweep_started = std::time::Instant::now();
+        let history = run_local_sweeps(&mut state, &options, &mut |batch, output| {
+            for (point, value) in output.iter_mut().enumerate() {
+                *value = batch.get(0, point)? * batch.get(1, point)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let sweep_elapsed = sweep_started.elapsed();
+        let profile = super::profile_debug_stats::snapshot();
+        let (base_frame_bytes, candidate_cache_entries, candidate_cache_bytes) =
+            state.input_frames.cache_debug_totals();
+
+        let owned_matmul =
+            std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1");
+        let candidate_cache =
+            std::env::var("T4A_TREEACI_DISABLE_CANDIDATE_CACHE").as_deref() != Ok("1");
+        eprintln!(
+            "high-rank chain owned_matmul={owned_matmul} candidate_cache={candidate_cache} chi={chi}: initialize={initialize_elapsed:?} [prepare={:?}, output={:?}, bootstrap={:?}, frames={:?}], sweeps={sweep_elapsed:?} [proposals={:?}: prepare={:?}, input_frames={:?} {{row={:?}, col={:?}, pack={:?}, matmul={:?}, scatter={:?}}}, operator={:?}, luci={:?}; output_staging={:?} {{clone={:?}, replace={:?}}}, sample_staging={:?}, frame_extension={:?}, commits={}], completed={}, candidate_hits={}, candidate_misses={}",
+            profile.preparation,
+            profile.output,
+            profile.bootstrap,
+            profile.frames,
+            profile.proposals,
+            profile.local_preparation,
+            profile.local_input_frames,
+            profile.local_row_frames,
+            profile.local_col_frames,
+            profile.local_frame_pack,
+            profile.local_frame_matmul,
+            profile.local_frame_scatter,
+            profile.operator,
+            profile.luci,
+            profile.output_staging,
+            profile.output_clone,
+            profile.output_replace,
+            profile.sample_staging,
+            profile.frame_extension,
+            profile.commits,
+            history.max_ranks.len(),
+            crate::frames::candidate_debug_stats::hits(),
+            crate::frames::candidate_debug_stats::misses(),
+        );
+        eprintln!(
+            "high-rank chain chi={chi} cumulative small-work ledger: core_pack candidate={:?}/{} calls/{} values, stored={:?}/{} calls/{} values, unique={} calls/{} values; extend={:?} over {} calls {{setup={:?}, scan={:?} across {} edge-input visits (reused={}, grown={}), compute={:?}, rebuild={:?}, finalize={:?}, memo_slots={}, old_values_copied={}, new_values_copied={}}}",
+            profile.candidate_core_pack,
+            profile.candidate_core_pack_calls,
+            profile.candidate_core_pack_values,
+            profile.stored_core_pack,
+            profile.stored_core_pack_calls,
+            profile.stored_core_pack_values,
+            profile.unique_core_pack_calls,
+            profile.unique_core_pack_values,
+            profile.frame_extension,
+            profile.frame_extension_calls,
+            profile.frame_extension_setup,
+            profile.frame_extension_scan,
+            profile.frame_extension_scanned_edges,
+            profile.frame_extension_reused_edges,
+            profile.frame_extension_grown_edges,
+            profile.frame_extension_compute,
+            profile.frame_extension_rebuild,
+            profile.frame_extension_finalize,
+            profile.frame_extension_memo_slots,
+            profile.frame_extension_old_values_copied,
+            profile.frame_extension_new_values_copied,
+        );
+        eprintln!(
+            "high-rank chain chi={chi} recursive frame builder: compute_calls={} (scalar={}, batched={}), memo_hit_vec_clones={}",
+            crate::frames::debug_stats::compute_calls(),
+            crate::frames::debug_stats::scalar_compute_calls(),
+            crate::frames::debug_stats::batched_compute_calls(),
+            crate::frames::debug_stats::memo_hit_copies(),
+        );
+        eprintln!(
+            "high-rank chain chi={chi} pass metadata: schedule_clone={:?}, deferred_canonicalization={:?}",
+            profile.schedule_clone, profile.deferred_canonicalization,
+        );
+        eprintln!(
+            "high-rank chain chi={chi} retained frame payload: base={base_frame_bytes} bytes, candidate_cache={candidate_cache_entries} entries/{candidate_cache_bytes} bytes"
+        );
+        eprintln!(
+            "high-rank chain chi={chi} output replacement details: factor_indices={:?}, tensor_build={:?}, lookup={:?}, bond_replace={:?}, tensor_replace={:?}, metadata={:?}",
+            profile.output_factor_indices,
+            profile.output_tensor_build,
+            profile.output_lookup,
+            profile.output_bond_replace,
+            profile.output_tensor_replace,
+            profile.output_metadata,
+        );
+        eprintln!(
+            "high-rank chain chi={chi} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, output_padding={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
+            profile.global_guard,
+            profile.global_injection,
+            profile.guard_candidate_clone,
+            profile.guard_projection,
+            profile.guard_output_padding,
+            profile.guard_frame_extension,
+            profile.guard_input_evaluation,
+            profile.guard_input_calls,
+            profile.guard_input_points,
+            profile.guard_output_evaluation,
+            profile.guard_output_calls,
+            profile.guard_output_points,
+        );
+        eprintln!(
+            "high-rank chain chi={chi} single-incoming candidate details: cache_scan={:?}/{} items, group_setup={:?}, core_pack={:?}, frame_pack={:?}, backend={:?}, result_extract_and_cache={:?}",
+            profile.candidate_cache_scan,
+            profile.candidate_scan_items,
+            profile.candidate_group_setup,
+            profile.candidate_core_pack,
+            profile.candidate_frame_pack,
+            profile.candidate_backend,
+            profile.candidate_result_cache,
+        );
+        if enable_global_guard {
+            assert!(history.max_ranks.len() >= 2);
+        } else {
+            assert_eq!(history.max_ranks.len(), 2);
         }
-        Ok(())
-    })
-    .unwrap();
-    let sweep_elapsed = sweep_started.elapsed();
-    let profile = super::profile_debug_stats::snapshot();
-
-    eprintln!(
-        "high-rank chain: initialize={initialize_elapsed:?} [prepare={:?}, output={:?}, bootstrap={:?}, frames={:?}], sweeps={sweep_elapsed:?} [proposals={:?}: prepare={:?}, input_frames={:?}, operator={:?}, luci={:?}; output_staging={:?}, sample_staging={:?}, frame_extension={:?}, commits={}], completed={}, candidate_hits={}, candidate_misses={}",
-        profile.preparation,
-        profile.output,
-        profile.bootstrap,
-        profile.frames,
-        profile.proposals,
-        profile.local_preparation,
-        profile.local_input_frames,
-        profile.operator,
-        profile.luci,
-        profile.output_staging,
-        profile.sample_staging,
-        profile.frame_extension,
-        profile.commits,
-        history.max_ranks.len(),
-        crate::frames::candidate_debug_stats::hits(),
-        crate::frames::candidate_debug_stats::misses(),
-    );
-    assert_eq!(history.max_ranks.len(), 2);
+    }
 }
 
 #[test]

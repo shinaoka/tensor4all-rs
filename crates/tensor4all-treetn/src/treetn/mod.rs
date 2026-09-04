@@ -45,8 +45,8 @@ pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
 
 // Re-export cached evaluator types
 pub use cached_evaluator::{
-    CachedEvaluatorOptions, CenterSearchResult, EvaluationHint, GreedyCenterSearch,
-    TreeTNCachedEvaluator,
+    CachedEvaluatorOptions, CachedEvaluatorPlan, CenterSearchResult, EvaluatedScalarKindMismatch,
+    EvaluationHint, GreedyCenterSearch, TreeTNCachedEvaluator,
 };
 
 // Re-export evaluator types

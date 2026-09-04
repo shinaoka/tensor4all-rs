@@ -131,14 +131,26 @@ where
                             message: "enabled global Guard has no input evaluators",
                         })?;
                 let seed = options.rng_seed.wrapping_add((pass + 1) as u64);
+                #[cfg(test)]
+                let guard_started = std::time::Instant::now();
                 let search = find_global_pivots(state, input_evaluators, options, seed, operator)?;
+                #[cfg(test)]
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.global_guard += guard_started.elapsed();
+                });
                 evaluated_points = evaluated_points
                     .checked_add(search.evaluated_points)
                     .ok_or(TreeAciError::SizeOverflow {
                         context: "sweep evaluated point count",
                     })?;
                 let found = search.pivots.len();
+                #[cfg(test)]
+                let injection_started = std::time::Instant::now();
                 inject_global_pivots(state, &search.pivots, &injection_capacities)?;
+                #[cfg(test)]
+                crate::state::profile_debug_stats::record(|stats| {
+                    stats.global_injection += injection_started.elapsed();
+                });
                 found
             } else {
                 0
@@ -199,10 +211,16 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
+    #[cfg(test)]
+    let schedule_clone_started = std::time::Instant::now();
     let phases = match direction {
         PassDirection::Forward => state.problem.schedule.forward.clone(),
         PassDirection::Reverse => state.problem.schedule.reverse.clone(),
     };
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.schedule_clone += schedule_clone_started.elapsed();
+    });
     let mut update_trace = UpdateTrace::with_capacity(state.problem.directed_edges.len() / 2);
     let mut evaluated_points = 0u64;
 
@@ -250,6 +268,8 @@ where
 fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
     state: &mut TreeAciState<'_, T, V>,
 ) -> Result<()> {
+    #[cfg(test)]
+    let canonicalization_started = std::time::Instant::now();
     if state.output.canonical_form().is_none() {
         let center = state
             .output
@@ -262,6 +282,10 @@ fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
             CanonicalizationOptions::default().with_form(CanonicalForm::CI),
         )?;
     }
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.deferred_canonicalization += canonicalization_started.elapsed();
+    });
     Ok(())
 }
 

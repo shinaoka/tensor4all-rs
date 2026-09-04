@@ -16,7 +16,7 @@ use crate::{
 
 #[cfg(test)]
 pub(crate) mod profile_debug_stats {
-    use std::{cell::RefCell, time::Duration};
+    use std::{cell::RefCell, collections::HashSet, time::Duration};
 
     #[derive(Clone, Copy, Debug, Default)]
     pub(crate) struct Snapshot {
@@ -25,22 +25,93 @@ pub(crate) mod profile_debug_stats {
         pub(crate) bootstrap: Duration,
         pub(crate) frames: Duration,
         pub(crate) proposals: Duration,
+        pub(crate) schedule_clone: Duration,
+        pub(crate) deferred_canonicalization: Duration,
         pub(crate) local_preparation: Duration,
         pub(crate) local_input_frames: Duration,
+        // [AI Supplied] Diagnostic-only decomposition of `local_input_frames`.
+        pub(crate) local_row_frames: Duration,
+        pub(crate) local_col_frames: Duration,
+        pub(crate) local_frame_pack: Duration,
+        pub(crate) local_frame_matmul: Duration,
+        pub(crate) local_frame_scatter: Duration,
+        // [AI Supplied] Paired #714 counters: the legacy diagnostic extracts
+        // one owned vector per candidate, while the production path consumes
+        // one packed batch per side.
+        pub(crate) local_legacy_frame_vectors: usize,
+        pub(crate) local_legacy_frame_values: usize,
+        pub(crate) local_packed_frame_batches: usize,
+        pub(crate) local_packed_frame_values: usize,
         pub(crate) operator: Duration,
         pub(crate) luci: Duration,
         pub(crate) output_staging: Duration,
+        // [AI Supplied] Diagnostic-only split of whole-tree metadata cloning
+        // from the local edge-core replacement performed during a commit.
+        pub(crate) output_clone: Duration,
+        pub(crate) output_replace: Duration,
+        pub(crate) output_factor_indices: Duration,
+        pub(crate) output_tensor_build: Duration,
+        pub(crate) output_lookup: Duration,
+        pub(crate) output_bond_replace: Duration,
+        pub(crate) output_tensor_replace: Duration,
+        pub(crate) output_metadata: Duration,
         pub(crate) sample_staging: Duration,
         pub(crate) frame_extension: Duration,
+        // [AI Supplied] Diagnostic-only accounting for the default global
+        // Guard and its dynamic-scalar TreeTN evaluator boundary.
+        pub(crate) global_guard: Duration,
+        pub(crate) global_injection: Duration,
+        pub(crate) guard_candidate_clone: Duration,
+        pub(crate) guard_projection: Duration,
+        pub(crate) guard_output_padding: Duration,
+        pub(crate) guard_frame_extension: Duration,
+        pub(crate) guard_input_evaluation: Duration,
+        pub(crate) guard_output_evaluation: Duration,
+        pub(crate) guard_input_points: usize,
+        pub(crate) guard_output_points: usize,
+        pub(crate) guard_input_calls: usize,
+        pub(crate) guard_output_calls: usize,
+        // [AI Supplied] Diagnostic-only decomposition and work counts for
+        // repeated `InputFrameStore::extend` calls.
+        pub(crate) frame_extension_setup: Duration,
+        pub(crate) frame_extension_scan: Duration,
+        pub(crate) frame_extension_compute: Duration,
+        pub(crate) frame_extension_rebuild: Duration,
+        pub(crate) frame_extension_finalize: Duration,
+        pub(crate) frame_extension_calls: usize,
+        pub(crate) frame_extension_scanned_edges: usize,
+        pub(crate) frame_extension_reused_edges: usize,
+        pub(crate) frame_extension_grown_edges: usize,
+        pub(crate) frame_extension_memo_slots: usize,
+        pub(crate) frame_extension_old_values_copied: usize,
+        pub(crate) frame_extension_new_values_copied: usize,
+        // [AI Supplied] Core-repacking telemetry for the two one-incoming
+        // call sites, separated into candidate and stored-frame work.
+        pub(crate) candidate_core_pack: Duration,
+        pub(crate) candidate_core_pack_calls: usize,
+        pub(crate) candidate_core_pack_values: usize,
+        pub(crate) candidate_cache_scan: Duration,
+        pub(crate) candidate_group_setup: Duration,
+        pub(crate) candidate_frame_pack: Duration,
+        pub(crate) candidate_backend: Duration,
+        pub(crate) candidate_result_cache: Duration,
+        pub(crate) candidate_scan_items: usize,
+        pub(crate) stored_core_pack: Duration,
+        pub(crate) stored_core_pack_calls: usize,
+        pub(crate) stored_core_pack_values: usize,
+        pub(crate) unique_core_pack_calls: usize,
+        pub(crate) unique_core_pack_values: usize,
         pub(crate) commits: usize,
     }
 
     thread_local! {
         static STATS: RefCell<Snapshot> = RefCell::new(Snapshot::default());
+        static CORE_PACK_KEYS: RefCell<HashSet<(usize, usize)>> = RefCell::new(HashSet::new());
     }
 
     pub(crate) fn reset() {
         STATS.with(|stats| *stats.borrow_mut() = Snapshot::default());
+        CORE_PACK_KEYS.with(|keys| keys.borrow_mut().clear());
     }
 
     pub(crate) fn record(update: impl FnOnce(&mut Snapshot)) {
@@ -49,6 +120,16 @@ pub(crate) mod profile_debug_stats {
 
     pub(crate) fn snapshot() -> Snapshot {
         STATS.with(|stats| *stats.borrow())
+    }
+
+    pub(crate) fn record_core_pack_identity(input: usize, edge: usize, values: usize) {
+        let inserted = CORE_PACK_KEYS.with(|keys| keys.borrow_mut().insert((input, edge)));
+        if inserted {
+            record(|stats| {
+                stats.unique_core_pack_calls += 1;
+                stats.unique_core_pack_values += values;
+            });
+        }
     }
 }
 

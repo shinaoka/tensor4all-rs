@@ -100,7 +100,9 @@ pub use treetn::{
     weighted_sum_over_index_pairs,
     BoundaryEdge,
     CachedEvaluatorOptions,
+    CachedEvaluatorPlan,
     CenterSearchResult,
+    EvaluatedScalarKindMismatch,
     EvaluationHint,
     FitOptions,
     // Core type

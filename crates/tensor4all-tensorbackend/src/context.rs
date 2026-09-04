@@ -395,8 +395,25 @@ fn build_eager_runtime(backend: CpuBackend) -> Result<Arc<EagerRuntime>, CpuExec
         .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?
         .build()
         .map_err(|source| CpuExecutionContextError::initialization("AD context", source))?;
-    EagerRuntime::with_cpu_backend_and_ad_context(backend, &ad_context)
-        .map_err(|source| CpuExecutionContextError::initialization("eager runtime", source))
+    let runtime = EagerRuntime::with_cpu_backend_and_ad_context(backend, &ad_context)
+        .map_err(|source| CpuExecutionContextError::initialization("eager runtime", source))?;
+    // [AI Supplied] Install the built-in extension modules before publishing
+    // the shared context. Lazy first use reconfigures the runtime and advances
+    // its epoch; doing that after tensors have prepared AD derivatives can
+    // invalidate those prepared programs under parallel first use.
+    let engine_id = tenferro_cpu::runtime_engine_id()
+        .map_err(|source| CpuExecutionContextError::initialization("CPU runtime engine", source))?;
+    let einsum_module = tenferro_einsum::extension_module::<CpuBackend>(engine_id.clone())
+        .map_err(|source| CpuExecutionContextError::initialization("einsum extension", source))?;
+    runtime
+        .install_extension_module(einsum_module)
+        .map_err(|source| CpuExecutionContextError::initialization("einsum runtime", source))?;
+    let linalg_module = tenferro_linalg::extension_module::<CpuBackend>(engine_id)
+        .map_err(|source| CpuExecutionContextError::initialization("linalg extension", source))?;
+    runtime
+        .install_extension_module(linalg_module)
+        .map_err(|source| CpuExecutionContextError::initialization("linalg runtime", source))?;
+    Ok(runtime)
 }
 
 #[cfg(feature = "global-defaults")]

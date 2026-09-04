@@ -68,11 +68,12 @@ pub use logical_tensor::{LogicalTensor, LogicalTensorData, LogicalTensorError};
 #[cfg(feature = "global-defaults")]
 pub use matrix::{
     batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d,
+    grouped_mat_mul_shared, grouped_mat_mul_shared_owned, grouped_mat_mul_shared_with_backend,
     hermitian_eigendecomposition, hermitian_exponential_first_column, lowest_hermitian_eigenpair,
     mat_mul, mat_mul_owned, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose,
-    try_from_vec2d, BlasMul, HermitianEigenError, HermitianEigenScalar,
-    HermitianEigendecomposition, HermitianEigenpair, Matrix, MatrixScalar, MatrixShapeError,
-    MatrixTensorConversionError,
+    try_from_vec2d, BlasMul, GroupedGemmError, GroupedGemmJob, GroupedGemmOptions,
+    HermitianEigenError, HermitianEigenScalar, HermitianEigendecomposition, HermitianEigenpair,
+    Matrix, MatrixScalar, MatrixShapeError, MatrixTensorConversionError,
 };
 #[cfg(feature = "global-defaults")]
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
@@ -84,7 +85,8 @@ pub use storage::{
 #[cfg(feature = "global-defaults")]
 pub use tenferro_bridge::{
     axpby_native_tensor, axpby_storage_native, conj_native_tensor, contract_native_tensor,
-    contract_storage_native, dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
+    contract_storage_native, dense_native_tensor_from_col_major,
+    dense_native_tensor_from_col_major_owned, diag_native_tensor_from_col_major,
     einsum_native_tensor_reads, einsum_native_tensors, einsum_native_tensors_owned,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag,
     native_tensor_primal_to_storage, outer_product_native_tensor, outer_product_storage_native,

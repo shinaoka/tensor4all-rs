@@ -1,8 +1,12 @@
 use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
 
-use super::update_edge_transaction;
-use crate::{state::TreeAciState, TreeAciError, TreeAciOptions};
+use super::{commit_edge_proposal, update_edge_transaction};
+use crate::{
+    local_update::LocalUpdateResult, samples::ComponentSample, state::TreeAciState, TreeAciError,
+    TreeAciOptions,
+};
 
 fn input_tree() -> TreeTN<IdxTensor, usize> {
     let left_site = DynIndex::new_dyn(2);
@@ -195,4 +199,97 @@ fn frame_extension_error_rolls_back_interned_samples() {
         .unwrap()
         .isapprox(&output_before, 0.0, 0.0)
         .unwrap());
+}
+
+#[test]
+fn invalid_factor_shape_is_rejected_before_any_commit_mutation() {
+    let options = TreeAciOptions::default();
+    let inputs = vec![input_tree()];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let output_before = state.output.to_dense().unwrap();
+    let candidates_before = state.candidates.clone();
+    let pivots_before = state.pivots.clone();
+    let records_before = state.sample_arena.record_count();
+    let generation_before = state.generation;
+    let sample = ComponentSample {
+        local_coordinate: 0,
+        incoming: Vec::new(),
+    };
+    let proposal = LocalUpdateResult {
+        row_samples: vec![sample.clone(), sample.clone()],
+        col_samples: vec![sample.clone(), sample],
+        left: Matrix::from_col_major_vec(1, 2, vec![1.0, 2.0]),
+        right: Matrix::from_col_major_vec(1, 1, vec![1.0]),
+        pivot_errors: vec![0.0],
+        sampled_scale: 1.0,
+        row_count: 1,
+        col_count: 1,
+        local_values: Vec::new(),
+    };
+
+    let error = commit_edge_proposal(&mut state, 0, proposal)
+        .expect_err("incompatible factor shapes must be rejected");
+
+    assert!(matches!(
+        error,
+        TreeAciError::InternalInvariant {
+            message: "edge proposal factors and selected samples disagree on rank"
+        }
+    ));
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&output_before, 0.0, 0.0)
+        .unwrap());
+    assert_eq!(state.candidates, candidates_before);
+    assert_eq!(state.pivots, pivots_before);
+    assert_eq!(state.sample_arena.record_count(), records_before);
+    assert_eq!(state.generation, generation_before);
+}
+
+#[test]
+fn incomplete_commit_metadata_is_rejected_before_staging() {
+    let options = TreeAciOptions::default();
+    let inputs = vec![input_tree()];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let mut identity = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            *value = batch.get(0, point)?;
+        }
+        Ok(())
+    };
+    let proposal = crate::local_update::materialize_and_factor_edge(
+        state.inputs,
+        &state.problem,
+        &state.candidates,
+        &state.input_frames,
+        0,
+        &options,
+        true,
+        &mut identity,
+    )
+    .unwrap();
+    let output_before = state.output.to_dense().unwrap();
+    let records_before = state.sample_arena.record_count();
+    let generation_before = state.generation;
+    state.candidates.ids.pop();
+
+    let error = commit_edge_proposal(&mut state, 0, proposal)
+        .expect_err("incomplete candidate metadata must be rejected");
+
+    assert!(matches!(
+        error,
+        TreeAciError::InternalInvariant {
+            message: "edge proposal state metadata is incomplete"
+        }
+    ));
+    assert!(state
+        .output
+        .to_dense()
+        .unwrap()
+        .isapprox(&output_before, 0.0, 0.0)
+        .unwrap());
+    assert_eq!(state.sample_arena.record_count(), records_before);
+    assert_eq!(state.generation, generation_before);
 }

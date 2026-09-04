@@ -86,6 +86,19 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
             message: "edge proposal factors and selected samples disagree on rank",
         });
     }
+    let edge_number = forward / 2;
+    if state.edge_ranks.get(edge_number).is_none()
+        || state.algebraic_edge_bounds.get(edge_number).is_none()
+        || state.edge_errors.get(edge_number).is_none()
+        || state.edge_scales.get(edge_number).is_none()
+        || state.pivots.per_edge.get(edge_number).is_none()
+        || state.candidates.ids.get(forward).is_none()
+        || state.candidates.ids.get(reverse).is_none()
+    {
+        return Err(TreeAciError::InternalInvariant {
+            message: "edge proposal state metadata is incomplete",
+        });
+    }
 
     let next_generation = state
         .generation
@@ -95,10 +108,19 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         })?;
     #[cfg(test)]
     let output_started = std::time::Instant::now();
+    #[cfg(test)]
+    let clone_started = std::time::Instant::now();
     let mut proposed_output = state.output.clone();
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_clone += clone_started.elapsed();
+    });
+    #[cfg(test)]
+    let replace_started = std::time::Instant::now();
     replace_edge_cores(&mut proposed_output, &state.problem, forward, left, right)?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
+        stats.output_replace += replace_started.elapsed();
         stats.output_staging += output_started.elapsed();
     });
     let checkpoint = state.sample_arena.checkpoint();
@@ -145,7 +167,6 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         }
     };
 
-    let edge_number = forward / 2;
     // The commit rule: pivot pairs set the bond rank and own `P_e`, while the
     // candidate sets are *replaced* by the same selections so that neighbouring
     // edges see them. Replacement rather than union is what keeps candidate
@@ -195,12 +216,20 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
     left: tensor4all_tensorbackend::Matrix<T>,
     right: tensor4all_tensorbackend::Matrix<T>,
 ) -> Result<()> {
+    #[cfg(test)]
+    let phase_started = std::time::Instant::now();
     let directed = &problem.directed_edges[forward];
     let reverse = directed.reverse;
     let new_bond = DynIndex::new_dyn(left.ncols());
     let left_indices = factor_indices(output, problem, forward, Some(new_bond.clone()))?;
     let mut right_indices = vec![new_bond.clone()];
     right_indices.extend(factor_indices(output, problem, reverse, None)?);
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_factor_indices += phase_started.elapsed();
+    });
+    #[cfg(test)]
+    let phase_started = std::time::Instant::now();
     let left_tensor =
         IdxTensor::from_dense(left_indices, left.into_col_major_vec()).map_err(|error| {
             TreeAciError::Numerical {
@@ -213,6 +242,12 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
                 message: error.to_string(),
             }
         })?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_tensor_build += phase_started.elapsed();
+    });
+    #[cfg(test)]
+    let phase_started = std::time::Instant::now();
     let graph_edge = output.edge_between(&directed.from, &directed.to).ok_or(
         TreeAciError::InternalInvariant {
             message: "output is missing the committed edge",
@@ -228,11 +263,33 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
         .ok_or(TreeAciError::InternalInvariant {
             message: "output is missing the committed target node",
         })?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_lookup += phase_started.elapsed();
+    });
+    #[cfg(test)]
+    let phase_started = std::time::Instant::now();
     output.replace_edge_bond(graph_edge, new_bond)?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_bond_replace += phase_started.elapsed();
+    });
+    #[cfg(test)]
+    let phase_started = std::time::Instant::now();
     output.replace_tensor(left_node, left_tensor)?;
     output.replace_tensor(right_node, right_tensor)?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_tensor_replace += phase_started.elapsed();
+    });
+    #[cfg(test)]
+    let phase_started = std::time::Instant::now();
     output.set_edge_ortho_towards(graph_edge, Some(directed.to.clone()))?;
     output.set_canonical_region([directed.to.clone()])?;
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.output_metadata += phase_started.elapsed();
+    });
     Ok(())
 }
 

@@ -5,7 +5,7 @@
 //! directly comparable, and a difference in fitted scaling exponent against bond
 //! dimension would be an algorithmic defect that no amount of interface work
 //! would fix. At small bond dimension almost all of the cost is a per-call
-//! constant, so such a defect is invisible there; this runs at 16 through 128.
+//! constant, so such a defect is invisible there; this runs at 16 through 256.
 //!
 //! Both arms start from the same first input, converted to their native network
 //! type. This keeps initialization, numerical state, and canonicalization work
@@ -15,6 +15,24 @@
 //! own test asserts its manifest does not mention `tensor4all-aci`. The
 //! dependency direction is one-way by design, so the comparison belongs on this
 //! side.
+//!
+//! # #718 complete-ACI parity report
+//!
+//! This is the parity gate #718 requires to be preserved, including its
+//! bond-256 reference point. Each case reports, before its timed loop:
+//! callback invocations and evaluated points for both arms, sweeps, maximum
+//! output rank, the last pivot error, the dense residual against the exact
+//! elementwise product, the tree arm's retained frame/sample/candidate cache
+//! accounting, the configured cache and working-byte budgets, and the fact
+//! that the run completed without a `ResourceLimit` refusal. Set
+//! `T4A_TREEACI_PARITY_ENABLE_GUARD=1` for the default-Guard comparison.
+//!
+//! Two of the counters #718 lists are **not** observable from this level and
+//! are deliberately not invented here: the cached evaluator's message-cache
+//! hit/miss/eviction counts and a process peak-byte figure. `TreeACI`'s public
+//! diagnostics expose retained records and logical retained bytes, not cache
+//! hit rates; the hit/miss/eviction properties are gated by the crate-internal
+//! counter tests in `tensor4all-treetn` and `tensor4all-treeaci` instead.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
@@ -30,7 +48,7 @@ const TOLERANCE: f64 = 1e-8;
 const MAX_BOND_DIM: usize = 4096;
 const MAX_SWEEPS: usize = 20;
 const MIN_SWEEPS: usize = 2;
-const CHI_VALUES: [usize; 4] = [16, 32, 64, 128];
+const CHI_VALUES: [usize; 5] = [16, 32, 64, 128, 256];
 const MAX_PARITY_ERROR_FACTOR: f64 = 10.0;
 
 fn link_dims(n_sites: usize, local_dim: usize, chi: usize) -> Vec<usize> {
@@ -211,32 +229,114 @@ fn accuracy_oracle(
     }
 }
 
-fn train_options(guess: Option<SimpleTensorTrain<f64>>) -> AciOptions<f64> {
+fn train_options(
+    guess: Option<SimpleTensorTrain<f64>>,
+    enable_global_guard: bool,
+) -> AciOptions<f64> {
     AciOptions {
         tolerance: TOLERANCE,
         max_bond_dim: Some(MAX_BOND_DIM),
         max_iters: MAX_SWEEPS,
         min_iters: MIN_SWEEPS,
         initial_guess: guess,
-        enable_global_guard: false,
+        enable_global_guard,
         ..AciOptions::default()
     }
 }
 
-fn tree_options(guess: Option<TreeTN<IdxTensor, usize>>) -> TreeAciOptions<usize> {
+fn tree_options(
+    guess: Option<TreeTN<IdxTensor, usize>>,
+    enable_global_guard: bool,
+) -> TreeAciOptions<usize> {
     TreeAciOptions {
         tolerance: TOLERANCE,
         max_bond_dim: Some(MAX_BOND_DIM),
         max_sweeps: MAX_SWEEPS,
         min_sweeps: MIN_SWEEPS,
         initial_guess: guess,
-        enable_global_guard: false,
+        enable_global_guard,
         ..TreeAciOptions::default()
     }
 }
 
+/// Prints the reproducibility metadata #718 requires on every report.
+fn print_provenance_header(enable_global_guard: bool) {
+    let environment = |key: &str| std::env::var(key).unwrap_or_else(|_| "unset".to_owned());
+    let cpu_model = std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|info| {
+            info.lines()
+                .find(|line| line.starts_with("model name"))
+                .and_then(|line| line.split_once(':'))
+                .map(|(_, value)| value.trim().to_owned())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    let affinity = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with("Cpus_allowed_list"))
+                .and_then(|line| line.split_once(':'))
+                .map(|(_, value)| value.trim().to_owned())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    let options = tree_options(None, enable_global_guard);
+    println!("=== #718 complete-ACI parity gate: reproducibility metadata ===");
+    println!(
+        "baseline_commit={} candidate_commit={}",
+        environment("T4A_ACI_SCALING_BASELINE"),
+        environment("T4A_ACI_SCALING_CANDIDATE")
+    );
+    println!("hardware={cpu_model} | cpu_affinity={affinity}");
+    println!(
+        "provider/threads: RAYON_NUM_THREADS={} OMP_NUM_THREADS={} TENFERRO_NUM_THREADS={}",
+        environment("RAYON_NUM_THREADS"),
+        environment("OMP_NUM_THREADS"),
+        environment("TENFERRO_NUM_THREADS")
+    );
+    println!(
+        "build_profile={} | global_guard={enable_global_guard} | rng_seed={} | \
+         tolerance={TOLERANCE:e} | min_sweeps={MIN_SWEEPS} max_sweeps={MAX_SWEEPS} | \
+         max_bond_dim={MAX_BOND_DIM} | sites={N_SITES} local_dim={LOCAL_DIM} inputs={N_INPUTS}",
+        if cfg!(debug_assertions) {
+            "debug-or-unoptimized"
+        } else {
+            "release/bench"
+        },
+        options.rng_seed
+    );
+    println!(
+        "budgets: message_cache_max_bytes={} max_frame_bytes={} max_sample_arena_bytes={} \
+         max_working_bytes={} max_candidate_rows={} max_candidate_cols={}",
+        options.message_cache_max_bytes,
+        options.max_frame_bytes,
+        options.max_sample_arena_bytes,
+        options.max_working_bytes,
+        options.max_candidate_rows,
+        options.max_candidate_cols
+    );
+    println!(
+        "statistic=Criterion median with a 95% bootstrap confidence interval | samples=10 | \
+         noise gate = run-to-run spread of per-run medians over at least three whole-binary \
+         repetitions; predeclared MDE = above that spread"
+    );
+    println!("chi sweep = {CHI_VALUES:?} (the bond-256 rung is the #699 reference point)");
+    println!("===============================================================");
+}
+
 fn bench_parity(c: &mut Criterion) {
-    let mut group = c.benchmark_group("aci_vs_treeaci_chain");
+    // [AI Supplied] Keep the established no-Guard sweep comparison as the
+    // default, while allowing an explicit default-path run that includes the
+    // global guard without maintaining a second copy of this fixture.
+    let enable_global_guard = std::env::var_os("T4A_TREEACI_PARITY_ENABLE_GUARD").is_some();
+    let group_name = if enable_global_guard {
+        "aci_vs_treeaci_chain_guard"
+    } else {
+        "aci_vs_treeaci_chain"
+    };
+    print_provenance_header(enable_global_guard);
+    let mut group = c.benchmark_group(group_name);
     group.sample_size(10);
 
     for chi in CHI_VALUES {
@@ -246,20 +346,29 @@ fn bench_parity(c: &mut Criterion) {
         // a case where an arm failed to converge is visible rather than merely
         // fast.
         let mut train_evaluated_points = 0u64;
+        let mut train_callbacks = 0u64;
         let train = elementwise_batched(
             |batch, output| {
+                train_callbacks = train_callbacks.saturating_add(1);
                 train_evaluated_points = train_evaluated_points
                     .saturating_add(u64::try_from(batch.n_points()).unwrap_or(u64::MAX));
                 multiply_train(batch, output)
             },
             &case.trains,
-            &train_options(Some(case.trains[0].clone())),
+            &train_options(Some(case.trains[0].clone()), enable_global_guard),
         )
         .unwrap();
+        let mut tree_callbacks = 0u64;
+        let mut tree_callback_points = 0u64;
         let tree = tree_elementwise_batched::<f64, _, _>(
-            multiply_tree,
+            |batch, output| {
+                tree_callbacks = tree_callbacks.saturating_add(1);
+                tree_callback_points = tree_callback_points
+                    .saturating_add(u64::try_from(batch.n_points()).unwrap_or(u64::MAX));
+                multiply_tree(batch, output)
+            },
             &case.trees,
-            &tree_options(Some(case.trees[0].clone())),
+            &tree_options(Some(case.trees[0].clone()), enable_global_guard),
         )
         .unwrap();
         let accuracy = accuracy_oracle(&case, &train, &tree);
@@ -274,11 +383,43 @@ fn bench_parity(c: &mut Criterion) {
             tree.termination,
         );
         println!(
-            "         evaluated_points: train {} | tree {} | tree frame records {} | frame bytes {}",
-            train_evaluated_points,
-            tree.diagnostics.evaluated_points,
+            "         callbacks: train {train_callbacks} | tree {tree_callbacks} | \
+             evaluated_points: train {} | tree {} (callback-observed {tree_callback_points})",
+            train_evaluated_points, tree.diagnostics.evaluated_points,
+        );
+        let tree_candidate_entries: usize = tree
+            .diagnostics
+            .candidate_set_sizes
+            .iter()
+            .map(|(_, _, len)| *len)
+            .sum();
+        println!(
+            "         tree retained: frame_records {} frame_bytes {} sample_records {} \
+             sample_bytes {} candidate_entries {} saturated_edges {} global_pivots {:?}",
             tree.diagnostics.frame_records,
-            tree.diagnostics.frame_retained_bytes
+            tree.diagnostics.frame_retained_bytes,
+            tree.diagnostics.sample_arena_records,
+            tree.diagnostics.sample_arena_retained_bytes,
+            tree_candidate_entries,
+            tree.diagnostics.saturated_edges.len(),
+            tree.global_pivots_found,
+        );
+        // Working-limit compliance: the run above returned `Ok`, so every
+        // prepared allocation stayed inside the configured budgets. The
+        // complementary refusal path is exercised by the treeaci scaling
+        // benchmark's working-budget ladder and by the crate's unit tests.
+        let budgets = tree_options(None, enable_global_guard);
+        assert!(
+            tree.diagnostics.frame_retained_bytes <= budgets.max_frame_bytes,
+            "chi={chi}: retained frame bytes {} exceed max_frame_bytes {}",
+            tree.diagnostics.frame_retained_bytes,
+            budgets.max_frame_bytes
+        );
+        assert!(
+            tree.diagnostics.sample_arena_retained_bytes <= budgets.max_sample_arena_bytes,
+            "chi={chi}: retained sample bytes {} exceed max_sample_arena_bytes {}",
+            tree.diagnostics.sample_arena_retained_bytes,
+            budgets.max_sample_arena_bytes
         );
         println!(
             "         exact scale {:.3e} | train maxabs {:.3e} rel {:.3e} | tree maxabs {:.3e} rel {:.3e}",
@@ -303,7 +444,7 @@ fn bench_parity(c: &mut Criterion) {
                 elementwise_batched(
                     multiply_train,
                     black_box(&case.trains),
-                    &train_options(Some(case.trains[0].clone())),
+                    &train_options(Some(case.trains[0].clone()), enable_global_guard),
                 )
                 .unwrap()
             })
@@ -313,7 +454,7 @@ fn bench_parity(c: &mut Criterion) {
                 tree_elementwise_batched::<f64, _, _>(
                     multiply_tree,
                     black_box(&case.trees),
-                    &tree_options(Some(case.trees[0].clone())),
+                    &tree_options(Some(case.trees[0].clone()), enable_global_guard),
                 )
                 .unwrap()
             })

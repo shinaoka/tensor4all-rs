@@ -22,9 +22,9 @@ use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
 use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{
     contract_native_tensor, default_eager_ctx, dense_native_tensor_from_col_major,
-    diag_native_tensor_from_col_major, native_tensor_primal_to_diag,
-    storage_payload_native_read_input, storage_to_native_tensor, ExecutionContext,
-    NativeTensorReadInput, TensorElement,
+    dense_native_tensor_from_col_major_owned, diag_native_tensor_from_col_major,
+    native_tensor_primal_to_diag, storage_payload_native_read_input, storage_to_native_tensor,
+    ExecutionContext, NativeTensorReadInput, TensorElement,
 };
 use tensor4all_tensorbackend::{src_error_estimate as backend_src_error_estimate, Matrix};
 use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
@@ -6948,7 +6948,7 @@ impl IdxTensor {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_dense_payload_len(data.len(), &dims)?;
-        let native = dense_native_tensor_from_col_major(&data, &dims)?;
+        let native = dense_native_tensor_from_col_major_owned(data, &dims)?;
         Self::from_native(indices, native).map_err(IdxTensorError::from)
     }
 
