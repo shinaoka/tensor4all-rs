@@ -31,8 +31,6 @@ mod phase_timing {
     pub static PLAN_BUILD_NS: AtomicU64 = AtomicU64::new(0);
     pub static LAYOUT_BUILD_NS: AtomicU64 = AtomicU64::new(0);
     pub static PLAN_COUNT: AtomicU64 = AtomicU64::new(0);
-    pub static PLAN_SUBTREE_NODE_REFS: AtomicU64 = AtomicU64::new(0);
-    pub static LAYOUT_INPUT_POSITION_REFS: AtomicU64 = AtomicU64::new(0);
     // [AI Supplied] Diagnostic-only value counts for distinguishing all-hit
     // descendant reconstruction from the messages that reach the center.
     pub static RECONSTRUCT_VALUES: AtomicU64 = AtomicU64::new(0);
@@ -65,8 +63,6 @@ mod phase_timing {
         PLAN_BUILD_NS.store(0, Ordering::Relaxed);
         LAYOUT_BUILD_NS.store(0, Ordering::Relaxed);
         PLAN_COUNT.store(0, Ordering::Relaxed);
-        PLAN_SUBTREE_NODE_REFS.store(0, Ordering::Relaxed);
-        LAYOUT_INPUT_POSITION_REFS.store(0, Ordering::Relaxed);
         RECONSTRUCT_VALUES.store(0, Ordering::Relaxed);
         FINAL_ENV_VALUES.store(0, Ordering::Relaxed);
         RAW_CENTER_PREP_NS.store(0, Ordering::Relaxed);
@@ -215,7 +211,7 @@ use anyhow::{bail, ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{
     contract_with_options,
-    index_key::{FlatIndexer, IndexKey},
+    index_key::{FlatIndexer, IndexKey, KeyBuilder},
     AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor, IndexLike,
     TensorContractionLike, TensorIndex, TensorLike,
 };
@@ -229,6 +225,7 @@ type KeyId = usize;
 type EnvironmentCache<V> = HashMap<V, StackedMessage>;
 type CacheBuildResult<V> = (Vec<ComponentBatch<V>>, EnvironmentCache<V>);
 type ParentMap<V> = HashMap<V, Option<V>>;
+type DirectedComponentLayouts<V> = HashMap<(V, V), Arc<DirectedComponentLayout<V>>>;
 
 /// Minimum scalar multiply count before the backend setup cost is amortized
 /// by the grouped chain kernel. Smaller contractions keep the existing scalar
@@ -307,9 +304,19 @@ struct MessageCacheLayout {
     indexer: FlatIndexer,
 }
 
+/// Immutable metadata for one directed tree component. The component is the
+/// side containing `from` after removing the edge `(from, to)`; `child_nodes`
+/// records the checked append order used to compose its key.
+#[derive(Clone, Debug)]
+struct DirectedComponentLayout<V> {
+    layout: MessageCacheLayout,
+    child_nodes: Vec<V>,
+}
+
 #[derive(Clone, Debug)]
 struct EvaluatorLayout<V> {
     entries_by_node: HashMap<V, Vec<SiteEntry>>,
+    local_layouts_by_node: HashMap<V, MessageCacheLayout>,
     n_indices: usize,
 }
 
@@ -335,6 +342,7 @@ where
 struct AssignmentBatch {
     point_to_assignment: Vec<usize>,
     first_points: Vec<usize>,
+    keys: Vec<IndexKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -385,12 +393,14 @@ struct CachedEvaluationStats {
     batched_center_contract_count: usize,
     message_cache_hits: usize,
     message_cache_misses: usize,
+    message_cache_key_count: usize,
+    message_cache_logical_bytes: usize,
+    message_cache_owned_bytes_estimate: usize,
 }
 
 #[derive(Clone, Debug)]
 struct RootedMessagePlan<V> {
     children: HashMap<V, Vec<V>>,
-    subtree_nodes: HashMap<V, Vec<V>>,
     postorder: Vec<V>,
     parent: ParentMap<V>,
 }
@@ -651,18 +661,6 @@ where
             node_children.sort();
         }
 
-        let mut subtree_nodes = HashMap::<V, Vec<V>>::with_capacity(order.len());
-        for node in order.iter().rev() {
-            let mut subtree = vec![node.clone()];
-            for child in children.get(node).map(Vec::as_slice).unwrap_or(&[]) {
-                let child_subtree = subtree_nodes.get(child).ok_or_else(|| {
-                    anyhow::anyhow!("missing rooted subtree for child {:?}", child)
-                })?;
-                subtree.extend(child_subtree.iter().cloned());
-            }
-            subtree_nodes.insert(node.clone(), subtree);
-        }
-
         let postorder = order
             .into_iter()
             .rev()
@@ -671,7 +669,6 @@ where
 
         Ok(Self {
             children,
-            subtree_nodes,
             postorder,
             parent,
         })
@@ -1016,11 +1013,14 @@ where
     /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
     /// lookups that cost real time if repeated on every call.
     parent_bond_indices: HashMap<(V, V), DynIndex>,
-    /// Rootings and cache layouts depend only on the center and tree topology.
-    /// Keep one immutable plan per center so scan-aware callers can move the
-    /// center without rebuilding O(nodes) metadata for every small batch.
+    /// Rooted traversal state depends on the center and tree topology. Keep
+    /// one immutable traversal plan per center so scan-aware callers can move
+    /// the center without rebuilding O(nodes) traversal metadata for every
+    /// small batch.
     rooted_plans: HashMap<V, Arc<RootedMessagePlan<V>>>,
-    message_cache_layouts_by_center: HashMap<V, Arc<HashMap<V, MessageCacheLayout>>>,
+    /// Immutable physical layouts are keyed by directed edge. A layout is
+    /// therefore shared by every rooted plan that traverses the same edge.
+    directed_component_layouts: HashMap<(V, V), Arc<DirectedComponentLayout<V>>>,
     prepared_branch_slices_f64: PreparedBranchSliceCache<V, f64>,
     prepared_branch_slices_c64: PreparedBranchSliceCache<V, Complex64>,
     raw_messages: bool,
@@ -1076,6 +1076,14 @@ where
         }
         let center = options.center.clone();
         let branch_slice_cache_max_bytes = options.branch_slice_cache_max_bytes;
+        #[cfg(test)]
+        let layout_build_started = std::time::Instant::now();
+        let directed_component_layouts = build_directed_component_layouts(tree, &layout)?;
+        #[cfg(test)]
+        phase_timing::add(
+            &phase_timing::LAYOUT_BUILD_NS,
+            layout_build_started.elapsed(),
+        );
         Ok(Self {
             tree,
             layout,
@@ -1085,7 +1093,7 @@ where
             message_caches: HashMap::new(),
             parent_bond_indices: HashMap::new(),
             rooted_plans: HashMap::new(),
-            message_cache_layouts_by_center: HashMap::new(),
+            directed_component_layouts,
             prepared_branch_slices_f64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
             prepared_branch_slices_c64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
             raw_messages: false,
@@ -1284,42 +1292,13 @@ where
                 use std::sync::atomic::Ordering;
                 phase_timing::add(&phase_timing::PLAN_BUILD_NS, plan_build_started.elapsed());
                 phase_timing::PLAN_COUNT.fetch_add(1, Ordering::Relaxed);
-                phase_timing::PLAN_SUBTREE_NODE_REFS.fetch_add(
-                    plan.subtree_nodes.values().map(Vec::len).sum::<usize>() as u64,
-                    Ordering::Relaxed,
-                );
-            }
-            #[cfg(test)]
-            let layout_build_started = std::time::Instant::now();
-            let layouts = Arc::new(self.build_message_cache_layouts(&plan)?);
-            #[cfg(test)]
-            {
-                use std::sync::atomic::Ordering;
-                phase_timing::add(
-                    &phase_timing::LAYOUT_BUILD_NS,
-                    layout_build_started.elapsed(),
-                );
-                phase_timing::LAYOUT_INPUT_POSITION_REFS.fetch_add(
-                    layouts
-                        .values()
-                        .map(|layout| layout.input_positions.len())
-                        .sum::<usize>() as u64,
-                    Ordering::Relaxed,
-                );
             }
             self.rooted_plans.insert(center.clone(), plan);
-            self.message_cache_layouts_by_center
-                .insert(center.clone(), layouts);
         }
         let plan = Arc::clone(
             self.rooted_plans
                 .get(center)
                 .ok_or_else(|| anyhow::anyhow!("missing rooted message plan"))?,
-        );
-        let message_cache_layouts = Arc::clone(
-            self.message_cache_layouts_by_center
-                .get(center)
-                .ok_or_else(|| anyhow::anyhow!("missing message cache layouts"))?,
         );
         #[cfg(test)]
         let raw_capability_started = std::time::Instant::now();
@@ -1352,7 +1331,6 @@ where
                 node,
                 values,
                 &plan,
-                &message_cache_layouts,
                 &assignment_batches,
                 &messages,
             )?;
@@ -1404,44 +1382,26 @@ where
         self.last_stats.subtree_environment_count = subtree_environment_count;
         self.last_stats.directed_message_count = directed_message_count;
         self.last_stats.batched_message_contract_count = batched_message_contract_count;
-        Ok((component_batches, cache))
-    }
-
-    fn build_message_cache_layouts(
-        &self,
-        plan: &RootedMessagePlan<V>,
-    ) -> Result<HashMap<V, MessageCacheLayout>> {
-        let mut layouts = HashMap::with_capacity(plan.subtree_nodes.len());
-        for (node, subtree_nodes) in &plan.subtree_nodes {
-            let mut entries = subtree_nodes
-                .iter()
-                .flat_map(|subtree_node| {
-                    self.layout
-                        .entries_by_node
-                        .get(subtree_node)
-                        .into_iter()
-                        .flatten()
-                })
-                .collect::<Vec<_>>();
-            entries.sort_by_key(|entry| entry.input_position);
-            let input_positions = entries
-                .iter()
-                .map(|entry| entry.input_position)
-                .collect::<Vec<_>>();
-            let dimensions = entries
-                .iter()
-                .map(|entry| entry.index.dim())
-                .collect::<Vec<_>>();
-            let indexer = FlatIndexer::try_new(&dimensions).map_err(anyhow::Error::from)?;
-            layouts.insert(
-                node.clone(),
-                MessageCacheLayout {
-                    input_positions,
-                    indexer,
-                },
-            );
+        #[cfg(test)]
+        {
+            self.last_stats.message_cache_logical_bytes = self
+                .message_caches
+                .values()
+                .map(PackedMessageCache::logical_payload_bytes)
+                .sum();
+            self.last_stats.message_cache_key_count = self
+                .message_caches
+                .values()
+                .map(PackedMessageCache::key_count)
+                .sum();
+            self.last_stats.message_cache_owned_bytes_estimate = self
+                .message_caches
+                .values()
+                .map(PackedMessageCache::owned_retained_bytes_estimate)
+                .sum::<usize>()
+                .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches));
         }
-        Ok(layouts)
+        Ok((component_batches, cache))
     }
 
     fn build_message_assignment_batches(
@@ -1450,8 +1410,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<HashMap<V, AssignmentBatch>> {
         let n_points = values.shape()[1];
-        let mut local_interner = KeyInterner::<Vec<usize>>::default();
-        let mut local_keys = HashMap::<V, Vec<KeyId>>::new();
+        let mut local_keys = HashMap::<V, Vec<IndexKey>>::new();
 
         let mut node_names = self.tree.node_names();
         node_names.sort();
@@ -1462,9 +1421,14 @@ where
                 .get(node)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
+            let local_layout = self
+                .layout
+                .local_layouts_by_node
+                .get(node)
+                .ok_or_else(|| anyhow::anyhow!("missing local layout for node {:?}", node))?;
             let mut keys = Vec::with_capacity(n_points);
             for point in 0..n_points {
-                let key = entries
+                let raw = entries
                     .iter()
                     .map(|entry| {
                         value_at(
@@ -1475,8 +1439,13 @@ where
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                validate_entry_values(entries, &key, "TreeTNCachedEvaluator::evaluate_batched")?;
-                keys.push(local_interner.intern(key));
+                validate_entry_values(entries, &raw, "TreeTNCachedEvaluator::evaluate_batched")?;
+                keys.push(
+                    local_layout
+                        .indexer
+                        .encode(&raw)
+                        .map_err(anyhow::Error::from)?,
+                );
             }
             local_keys.insert(node.clone(), keys);
         }
@@ -1501,8 +1470,69 @@ where
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let assignment_batch =
-                build_compact_assignment_batch(local_keys, &child_batches, n_points);
+            let parent = plan
+                .parent
+                .get(node)
+                .and_then(Clone::clone)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batched: missing parent for {:?}",
+                        node
+                    )
+                })?;
+            let component_layout = self
+                .directed_component_layouts
+                .get(&(node.clone(), parent))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batched: missing directed component layout for {:?}",
+                        node
+                    )
+                })?;
+            ensure!(
+                component_layout.child_nodes == children,
+                "TreeTNCachedEvaluator::evaluate_batched: component child order disagrees with rooted plan for {:?}",
+                node
+            );
+
+            let mut assignment_ids = HashMap::<IndexKey, usize>::new();
+            let mut first_points = Vec::new();
+            let mut assignment_keys = Vec::new();
+            let mut point_to_assignment = Vec::with_capacity(n_points);
+            for (point, local_key) in local_keys.iter().enumerate().take(n_points) {
+                let mut builder =
+                    KeyBuilder::with_capacity_bits(component_layout.layout.indexer.width_bits())
+                        .map_err(anyhow::Error::from)?;
+                builder.push(local_key).map_err(anyhow::Error::from)?;
+                for child_batch in &child_batches {
+                    let child_assignment = child_batch.point_to_assignment[point];
+                    let child_key = child_batch
+                        .keys
+                        .get(child_assignment)
+                        .ok_or_else(|| anyhow::anyhow!("missing child key for point {point}"))?;
+                    builder.push(child_key).map_err(anyhow::Error::from)?;
+                }
+                ensure!(
+                    builder.width_bits() == component_layout.layout.indexer.width_bits(),
+                    "TreeTNCachedEvaluator: composed key width does not match its component layout"
+                );
+                let key = builder.finish();
+                let assignment_id = if let Some(&assignment_id) = assignment_ids.get(&key) {
+                    assignment_id
+                } else {
+                    let assignment_id = assignment_keys.len();
+                    assignment_ids.insert(key.clone(), assignment_id);
+                    assignment_keys.push(key);
+                    first_points.push(point);
+                    assignment_id
+                };
+                point_to_assignment.push(assignment_id);
+            }
+            let assignment_batch = AssignmentBatch {
+                point_to_assignment,
+                first_points,
+                keys: assignment_keys,
+            };
             assignment_batches.insert(node.clone(), assignment_batch);
         }
 
@@ -1554,30 +1584,6 @@ where
             scalar_kind,
             Some(ScalarKind::F64 | ScalarKind::C64)
         ))
-    }
-
-    fn message_cache_key(
-        &self,
-        values: ColMajorArrayRef<'_, usize>,
-        point: usize,
-        cache_layout: &MessageCacheLayout,
-    ) -> Result<IndexKey> {
-        let raw = cache_layout
-            .input_positions
-            .iter()
-            .map(|&row| {
-                value_at(
-                    values,
-                    row,
-                    point,
-                    "TreeTNCachedEvaluator::evaluate_batched",
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-        cache_layout
-            .indexer
-            .encode(&raw)
-            .map_err(anyhow::Error::from)
     }
 
     /// Computes a leaf node's message directly from the tree tensor's raw
@@ -3157,7 +3163,6 @@ where
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         plan: &RootedMessagePlan<V>,
-        message_cache_layouts: &HashMap<V, MessageCacheLayout>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
     ) -> Result<StackedMessage> {
@@ -3188,16 +3193,7 @@ where
             (neighbors.len(), bond_dims)
         };
         let points = assignment_batch.first_points.clone();
-        let cache_layout = message_cache_layouts.get(node).ok_or_else(|| {
-            anyhow::anyhow!(
-                "TreeTNCachedEvaluator::evaluate_batched: missing message cache layout for {:?}",
-                node
-            )
-        })?;
-        let keys = points
-            .iter()
-            .map(|&point| self.message_cache_key(values, point, cache_layout))
-            .collect::<Result<Vec<_>>>()?;
+        let keys = assignment_batch.keys.clone();
 
         let Some(Some(parent)) = plan.parent.get(node) else {
             // No parent under this rooting: `node` is not the fixed centre but
@@ -4634,42 +4630,122 @@ where
         entries.sort_by_key(|entry| entry.local_axis);
     }
 
+    let mut local_layouts_by_node = HashMap::with_capacity(tree.node_count());
+    let mut node_names = tree.node_names();
+    node_names.sort();
+    for node in node_names {
+        let entries = entries_by_node.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+        let input_positions = entries
+            .iter()
+            .map(|entry| entry.input_position)
+            .collect::<Vec<_>>();
+        let dimensions = entries
+            .iter()
+            .map(|entry| entry.index.dim())
+            .collect::<Vec<_>>();
+        let indexer = FlatIndexer::try_new(&dimensions).map_err(anyhow::Error::from)?;
+        local_layouts_by_node.insert(
+            node,
+            MessageCacheLayout {
+                input_positions,
+                indexer,
+            },
+        );
+    }
+
     Ok(EvaluatorLayout {
         entries_by_node,
+        local_layouts_by_node,
         n_indices: indices.len(),
     })
 }
 
-fn build_compact_assignment_batch(
-    local_keys: &[KeyId],
-    child_batches: &[&AssignmentBatch],
-    n_points: usize,
-) -> AssignmentBatch {
-    let mut assignment_ids = HashMap::<Vec<KeyId>, usize>::new();
-    let mut first_points = Vec::<usize>::new();
-    let mut point_to_assignment = Vec::with_capacity(n_points);
-    for (point, &local_key) in local_keys.iter().enumerate().take(n_points) {
-        let mut assignment = Vec::with_capacity(1 + child_batches.len());
-        assignment.push(local_key);
-        for child_batch in child_batches {
-            assignment.push(child_batch.point_to_assignment[point]);
+fn append_directed_component_layout<V>(
+    layout: &EvaluatorLayout<V>,
+    node: &V,
+    blocked: &V,
+    neighbors: &HashMap<V, Vec<V>>,
+    input_positions: &mut Vec<usize>,
+    dimensions: &mut Vec<usize>,
+    visited: &mut HashSet<V>,
+) -> Result<Vec<V>>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let mut child_nodes = Vec::new();
+    let mut stack = vec![(node.clone(), blocked.clone(), true)];
+    while let Some((current, current_blocked, is_root)) = stack.pop() {
+        ensure!(
+            visited.insert(current.clone()),
+            "TreeTNCachedEvaluator: directed component traversal encountered a cycle at {:?}",
+            current
+        );
+        if let Some(entries) = layout.entries_by_node.get(&current) {
+            for entry in entries {
+                input_positions.push(entry.input_position);
+                dimensions.push(entry.index.dim());
+            }
         }
-
-        let assignment_id = if let Some(&assignment_id) = assignment_ids.get(&assignment) {
-            assignment_id
-        } else {
-            let assignment_id = assignment_ids.len();
-            assignment_ids.insert(assignment, assignment_id);
-            first_points.push(point);
-            assignment_id
-        };
-        point_to_assignment.push(assignment_id);
+        let current_neighbors = neighbors
+            .get(&current)
+            .ok_or_else(|| anyhow::anyhow!("missing neighbors for node {:?}", current))?;
+        let children = current_neighbors
+            .iter()
+            .filter(|neighbor| *neighbor != &current_blocked)
+            .cloned()
+            .collect::<Vec<_>>();
+        if is_root {
+            child_nodes.extend(children.iter().cloned());
+        }
+        for child in children.into_iter().rev() {
+            stack.push((child, current.clone(), false));
+        }
     }
+    Ok(child_nodes)
+}
 
-    AssignmentBatch {
-        point_to_assignment,
-        first_points,
+fn build_directed_component_layouts<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    layout: &EvaluatorLayout<V>,
+) -> Result<DirectedComponentLayouts<V>>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let neighbors = sorted_neighbors(tree);
+    let mut node_names = tree.node_names();
+    node_names.sort();
+    let mut directed_layouts = HashMap::with_capacity(tree.edge_count() * 2);
+    for node in node_names {
+        let node_neighbors = neighbors
+            .get(&node)
+            .ok_or_else(|| anyhow::anyhow!("missing neighbors for node {:?}", node))?;
+        for neighbor in node_neighbors {
+            let mut input_positions = Vec::new();
+            let mut dimensions = Vec::new();
+            let mut visited = HashSet::new();
+            let child_nodes = append_directed_component_layout(
+                layout,
+                &node,
+                neighbor,
+                &neighbors,
+                &mut input_positions,
+                &mut dimensions,
+                &mut visited,
+            )?;
+            let indexer = FlatIndexer::try_new(&dimensions).map_err(anyhow::Error::from)?;
+            directed_layouts.insert(
+                (node.clone(), neighbor.clone()),
+                Arc::new(DirectedComponentLayout {
+                    layout: MessageCacheLayout {
+                        input_positions,
+                        indexer,
+                    },
+                    child_nodes,
+                }),
+            );
+        }
     }
+    Ok(directed_layouts)
 }
 
 fn validate_values_shape(
@@ -5054,7 +5130,10 @@ where
 /// evaluator that owns it, so nothing outside can hold a handle that would
 /// need clearing. Columns are stored contiguously in a single flat buffer
 /// (column-major: column `i` occupies `columns[i * bond_dim .. (i+1) *
-/// bond_dim]`) instead of one heap allocation per message.
+/// bond_dim]`) instead of one heap allocation per message. The configured
+/// budget applies to logical column payload; observability separately reports
+/// an owned-storage estimate that includes retained vector capacity and the
+/// key map.
 struct PackedMessageCache<K, T> {
     bond_dim: usize,
     max_bytes: usize,
@@ -5062,6 +5141,20 @@ struct PackedMessageCache<K, T> {
     columns: Vec<T>,
     hits: usize,
     misses: usize,
+}
+
+// A deterministic estimate for the control bytes and bucket bookkeeping of
+// the standard-library hash table. HashMap does not expose its allocator
+// layout, so this is deliberately documented as an estimate rather than an
+// allocator-specific byte measurement.
+const HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES: usize = 16;
+
+#[cfg(test)]
+fn hash_map_owned_bytes_estimate<K, V>(map: &HashMap<K, V>) -> usize {
+    let per_bucket = std::mem::size_of::<K>()
+        .saturating_add(std::mem::size_of::<V>())
+        .saturating_add(HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES);
+    std::mem::size_of::<HashMap<K, V>>().saturating_add(map.capacity().saturating_mul(per_bucket))
 }
 
 /// Where one requested key's column ended up.
@@ -5235,8 +5328,44 @@ where
         self.positions.get(key).copied()
     }
 
+    /// Logical payload bytes admitted by the cache budget.
+    ///
+    /// This intentionally uses the vector length, not capacity: it describes
+    /// the message columns that are logically retained. Use
+    /// [`Self::owned_retained_bytes_estimate`] for the storage estimate that
+    /// also includes spare vector capacity and the key map.
     fn retained_bytes(&self) -> usize {
-        self.columns.len() * std::mem::size_of::<T>()
+        self.logical_payload_bytes()
+    }
+
+    fn logical_payload_bytes(&self) -> usize {
+        self.columns.len().saturating_mul(std::mem::size_of::<T>())
+    }
+
+    fn key_count(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Estimates bytes owned by this cache, including vector capacity, key
+    /// storage, map entries/buckets, and the cache's fixed metadata.
+    ///
+    /// The `HashMap` bucket term uses
+    /// [`HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES`] because its allocator
+    /// layout is an implementation detail of the standard library. This
+    /// estimate is for observability and is not the logical admission budget.
+    fn owned_retained_bytes_estimate(&self) -> usize {
+        let key_bytes = std::mem::size_of::<K>();
+        let value_bytes = std::mem::size_of::<usize>();
+        let per_bucket = key_bytes
+            .saturating_add(value_bytes)
+            .saturating_add(HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES);
+        std::mem::size_of::<Self>()
+            .saturating_add(
+                self.columns
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<T>()),
+            )
+            .saturating_add(self.positions.capacity().saturating_mul(per_bucket))
     }
 
     fn hits(&self) -> usize {
@@ -5282,10 +5411,35 @@ where
         let mut computed_values: HashMap<K, Vec<T>> = HashMap::new();
         if !missing_keys.is_empty() {
             let computed = compute_missing(&missing_keys)?;
-            let bytes_per_column = self.bond_dim * std::mem::size_of::<T>();
+            if computed.len() != missing_keys.len() {
+                return Err(anyhow::anyhow!(
+                    "PackedMessageCache::get_or_compute_batch: compute_missing returned fewer columns ({} for {} keys)",
+                    computed.len(),
+                    missing_keys.len()
+                )
+                .into());
+            }
+            let bytes_per_column = self
+                .bond_dim
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "PackedMessageCache::get_or_compute_batch: column byte count overflows usize"
+                    )
+                })?;
+            for column in &computed {
+                if column.len() != self.bond_dim {
+                    return Err(anyhow::anyhow!(
+                        "PackedMessageCache::get_or_compute_batch: computed column has length {}, expected {}",
+                        column.len(),
+                        self.bond_dim
+                    )
+                    .into());
+                }
+            }
             for (key, column) in missing_keys.into_iter().zip(computed) {
-                let would_retain_bytes = self.retained_bytes() + bytes_per_column;
-                if would_retain_bytes <= self.max_bytes {
+                let would_retain_bytes = self.logical_payload_bytes().checked_add(bytes_per_column);
+                if would_retain_bytes.is_some_and(|bytes| bytes <= self.max_bytes) {
                     let position = self.columns.len() / self.bond_dim;
                     self.columns.extend(column);
                     self.positions.insert(key, position);
@@ -5630,7 +5784,11 @@ mod tests {
             .message_caches
             .values()
             .all(|cache| cache.retained_bytes() == 0));
-        assert_eq!(zero_budget.stats_for_test().message_cache_hits, 0);
+        let zero_stats = zero_budget.stats_for_test();
+        assert_eq!(zero_stats.message_cache_hits, 0);
+        assert_eq!(zero_stats.message_cache_key_count, 0);
+        assert_eq!(zero_stats.message_cache_logical_bytes, 0);
+        assert!(zero_stats.message_cache_owned_bytes_estimate > 0);
 
         let one_column_bytes = std::mem::size_of::<CachedScalar>() * 2;
         let mut bounded = TreeTNCachedEvaluator::new(
@@ -5649,6 +5807,13 @@ mod tests {
             .message_caches
             .values()
             .all(|cache| cache.retained_bytes() <= one_column_bytes));
+        let bounded_stats = bounded.stats_for_test();
+        assert!(bounded_stats.message_cache_key_count > 0);
+        assert!(bounded_stats.message_cache_logical_bytes <= one_column_bytes * 2);
+        assert!(
+            bounded_stats.message_cache_owned_bytes_estimate
+                >= bounded_stats.message_cache_logical_bytes
+        );
         bounded.message_caches.clear();
         let after_clear = bounded.evaluate_batched(points).unwrap();
         assert_typed_results::<T>(&after_clear, &expected);
@@ -5667,6 +5832,261 @@ mod tests {
         assert_cache_capacity_and_clear_reuse::<f64>();
         assert_cache_capacity_and_clear_reuse::<Complex32>();
         assert_cache_capacity_and_clear_reuse::<Complex64>();
+    }
+
+    /// [AI Supplied] A directed component is a graph property, not a property
+    /// of the center chosen for one evaluation. Moving the center across a
+    /// chain must therefore reuse the same `2E` physical component layouts.
+    #[test]
+    fn directed_component_layouts_are_shared_across_centers() {
+        let (tree, indices) = typed_three_node_chain::<f64>();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let values = [0usize, 0, 0, 1, 1, 1];
+        let points = ColMajorArrayRef::new(&values, &[3usize, 2usize]).unwrap();
+
+        for center in 0..3 {
+            evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+                .unwrap();
+        }
+
+        assert_eq!(evaluator.directed_component_layouts.len(), 4);
+        assert_eq!(
+            evaluator
+                .directed_component_layouts
+                .values()
+                .map(|layout| layout.layout.input_positions.len())
+                .sum::<usize>(),
+            6
+        );
+    }
+
+    /// [AI Supplied] The composed key is checked against the direct encoder
+    /// for every unique assignment in a nested directed component. This keeps
+    /// the cache-key representation an exact equality-preserving encoding,
+    /// rather than an opaque tuple of temporary assignment IDs.
+    #[test]
+    fn directed_component_composition_matches_direct_encoding() {
+        let (tree, indices) = typed_three_node_chain::<f64>();
+        let evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let values = [0usize, 0, 0, 1, 1, 1, 2, 0, 1];
+        let points = ColMajorArrayRef::new(&values, &[3usize, 3usize]).unwrap();
+        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+
+        for node in &plan.postorder {
+            let parent = plan.parent.get(node).and_then(Clone::clone).unwrap();
+            let component = evaluator
+                .directed_component_layouts
+                .get(&(*node, parent))
+                .unwrap();
+            let batch = assignment_batches.get(node).unwrap();
+            for (assignment_id, &point) in batch.first_points.iter().enumerate() {
+                let raw = component
+                    .layout
+                    .input_positions
+                    .iter()
+                    .map(|&row| value_at(points, row, point, "test").unwrap())
+                    .collect::<Vec<_>>();
+                let direct = component.layout.indexer.encode(&raw).unwrap();
+                assert_eq!(batch.keys[assignment_id], direct, "node={node:?}");
+            }
+        }
+    }
+
+    /// [AI Supplied] KeyBuilder coverage includes zero-width, nested, wide,
+    /// duplicate/reordered assignments, invalid values, and checked overflow.
+    #[test]
+    fn key_builder_component_edge_cases_are_checked() {
+        assert!(FlatIndexer::try_new(&[0]).is_err());
+        let empty = FlatIndexer::try_new(&[]).unwrap().encode(&[]).unwrap();
+        let mut empty_builder = KeyBuilder::with_capacity_bits(0).unwrap();
+        empty_builder.push(&empty).unwrap();
+        assert_eq!(empty_builder.finish(), empty);
+
+        let left_indexer = FlatIndexer::try_new(&[2, 3]).unwrap();
+        let right_indexer = FlatIndexer::try_new(&[5]).unwrap();
+        let whole_indexer = FlatIndexer::try_new(&[2, 3, 5]).unwrap();
+        let left = left_indexer.encode(&[1, 2]).unwrap();
+        let right = right_indexer.encode(&[4]).unwrap();
+        let mut nested = KeyBuilder::with_capacity_bits(whole_indexer.width_bits()).unwrap();
+        nested.push(&left).unwrap();
+        nested.push(&right).unwrap();
+        assert_eq!(nested.finish(), whole_indexer.encode(&[1, 2, 4]).unwrap());
+
+        let duplicate = whole_indexer.encode(&[1, 2, 4]).unwrap();
+        let reordered = whole_indexer.encode(&[1, 2, 4]).unwrap();
+        assert_eq!(duplicate, reordered);
+        assert!(whole_indexer.encode(&[1, 2, 4]).is_ok());
+        assert!(whole_indexer.encode(&[1, 3, 4]).is_err());
+
+        let wide_indexer = FlatIndexer::try_new(&[2; 130]).unwrap();
+        let wide_values = vec![1usize; 130];
+        let wide = wide_indexer.encode(&wide_values).unwrap();
+        let mut wide_builder = KeyBuilder::with_capacity_bits(wide.width_bits()).unwrap();
+        wide_builder.push(&wide).unwrap();
+        assert_eq!(wide_builder.finish(), wide);
+
+        let mut overflow = KeyBuilder::with_capacity_bits(left.width_bits()).unwrap();
+        overflow.push(&left).unwrap();
+        assert!(overflow.push(&right).is_err());
+    }
+
+    /// [AI Supplied] Logical payload and owned-storage accounting must be
+    /// distinguishable: spare vector capacity and the key map are not part of
+    /// the logical byte budget but are still evaluator-owned storage.
+    #[test]
+    fn packed_message_cache_reports_logical_and_owned_bytes() {
+        let indexer = FlatIndexer::try_new(&[2]).unwrap();
+        let key = indexer.encode(&[1]).unwrap();
+        let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
+        cache
+            .get_or_compute_batch(&[key], |_| {
+                Ok::<_, anyhow::Error>(vec![vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)]])
+            })
+            .unwrap();
+
+        let logical = 2 * std::mem::size_of::<CachedScalar>();
+        assert_eq!(cache.logical_payload_bytes(), logical);
+        assert_eq!(cache.retained_bytes(), logical);
+        assert!(cache.owned_retained_bytes_estimate() >= logical);
+        assert!(cache.owned_retained_bytes_estimate() > logical);
+    }
+
+    /// [AI Supplied] Packed message lookup must preserve the full bit width of
+    /// a component key; wide keys must not be truncated to a machine word.
+    #[test]
+    fn packed_message_cache_accepts_wide_index_keys() {
+        let indexer = FlatIndexer::try_new(&[2; 130]).unwrap();
+        let key = indexer.encode(&vec![1usize; 130]).unwrap();
+        let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(1, usize::MAX);
+        let slots = cache
+            .get_or_compute_batch(std::slice::from_ref(&key), |_| {
+                Ok::<_, anyhow::Error>(vec![vec![CachedScalar::F64(3.0)]])
+            })
+            .unwrap();
+        assert!(matches!(slots.as_slice(), [CacheSlot::Cached(0)]));
+        assert!(cache.contains(&key));
+        assert_eq!(cache.key_count(), 1);
+    }
+
+    fn topology_tree(edges: &[(usize, usize)]) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        let n_nodes = edges
+            .iter()
+            .flat_map(|&(left, right)| [left, right])
+            .max()
+            .map_or(1, |node| node + 1);
+        let physical = (0..n_nodes)
+            .map(|_| DynIndex::new_dyn(2))
+            .collect::<Vec<_>>();
+        let bonds = edges
+            .iter()
+            .enumerate()
+            .map(|(edge, _)| DynIndex::new_dyn(2 + edge))
+            .collect::<Vec<_>>();
+        let mut tensors = Vec::with_capacity(n_nodes);
+        for (node, physical_index) in physical.iter().enumerate() {
+            let mut tensor_indices = vec![physical_index.clone()];
+            for (edge, &(left, right)) in edges.iter().enumerate() {
+                if node == left || node == right {
+                    tensor_indices.push(bonds[edge].clone());
+                }
+            }
+            let size = tensor_indices.iter().map(IndexLike::dim).product();
+            tensors.push(IdxTensor::from_dense(tensor_indices, vec![1.0_f64; size]).unwrap());
+        }
+        (
+            TreeTN::from_tensors(tensors, (0..n_nodes).collect()).unwrap(),
+            physical,
+        )
+    }
+
+    fn assert_shared_metadata_for_topology(edges: &[(usize, usize)], expected_refs: usize) {
+        let (tree, indices) = topology_tree(edges);
+        let n_nodes = tree.node_count();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
+                .unwrap();
+        let values = vec![0usize; n_nodes];
+        let shape = [n_nodes, 1];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        for center in tree.node_names() {
+            evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+                .unwrap();
+        }
+
+        assert_eq!(evaluator.directed_component_layouts.len(), edges.len() * 2);
+        assert_eq!(
+            evaluator
+                .directed_component_layouts
+                .values()
+                .map(|layout| layout.layout.input_positions.len())
+                .sum::<usize>(),
+            expected_refs
+        );
+    }
+
+    /// [AI Supplied] Path, Y, comb, and unequal-bond topologies retain one
+    /// component layout per directed edge. For one physical index per node,
+    /// the position census is `N * E`, independent of how many centers were
+    /// visited.
+    #[test]
+    fn directed_component_metadata_scales_with_edges_not_centers() {
+        for n_sites in [4usize, 8, 16] {
+            let path_edges = (0..n_sites - 1)
+                .map(|node| (node, node + 1))
+                .collect::<Vec<_>>();
+            assert_shared_metadata_for_topology(&path_edges, n_sites * (n_sites - 1));
+        }
+
+        let y_edges = [(0, 1), (0, 2), (0, 3)];
+        assert_shared_metadata_for_topology(&y_edges, 4 * 3);
+
+        let comb_edges = [(0, 1), (1, 2), (2, 3), (1, 4), (2, 5), (3, 6)];
+        assert_shared_metadata_for_topology(&comb_edges, 7 * 6);
+
+        let (unequal_tree, unequal_indices) = typed_unequal_y_tree::<f64>();
+        let mut unequal_evaluator = TreeTNCachedEvaluator::new(
+            &unequal_tree,
+            &unequal_indices,
+            CachedEvaluatorOptions::<usize>::default(),
+        )
+        .unwrap();
+        let unequal_values = [0usize; 4];
+        let unequal_points = ColMajorArrayRef::new(&unequal_values, &[4usize, 1usize]).unwrap();
+        for center in unequal_tree.node_names() {
+            unequal_evaluator
+                .evaluate_batched_with_hint(unequal_points, EvaluationHint::around(center))
+                .unwrap();
+        }
+        assert_eq!(unequal_evaluator.directed_component_layouts.len(), 6);
+        assert_eq!(
+            unequal_evaluator
+                .directed_component_layouts
+                .values()
+                .map(|layout| layout.layout.input_positions.len())
+                .sum::<usize>(),
+            12
+        );
     }
 
     fn assert_unequal_y_tree_matches<T: CachedEvaluatorTestScalar>() {
@@ -8992,44 +9412,37 @@ mod tests {
                 let plan_build_ns = phase_timing::PLAN_BUILD_NS.load(Ordering::Relaxed);
                 let layout_build_ns = phase_timing::LAYOUT_BUILD_NS.load(Ordering::Relaxed);
                 let new_plan_count = phase_timing::PLAN_COUNT.load(Ordering::Relaxed);
-                let new_subtree_refs = phase_timing::PLAN_SUBTREE_NODE_REFS.load(Ordering::Relaxed);
-                let new_layout_refs =
-                    phase_timing::LAYOUT_INPUT_POSITION_REFS.load(Ordering::Relaxed);
 
                 let second_scan_started = Instant::now();
                 scan_all_centers(&mut evaluator);
                 let second_scan_ns = second_scan_started.elapsed().as_nanos() as u64;
-                let retained_subtree_refs = evaluator
-                    .rooted_plans
-                    .values()
-                    .flat_map(|plan| plan.subtree_nodes.values())
-                    .map(Vec::len)
-                    .sum::<usize>();
                 let retained_layout_refs = evaluator
-                    .message_cache_layouts_by_center
+                    .directed_component_layouts
                     .values()
-                    .flat_map(|layouts| layouts.values())
-                    .map(|layout| layout.input_positions.len())
+                    .map(|layout| layout.layout.input_positions.len())
                     .sum::<usize>();
+                let unique_directed_components = 2 * (N_SITES - 1);
                 let unique_directed_component_refs = N_SITES * (N_SITES - 1);
                 eprintln!(
-                    "moving-center bond={bond_dim}: first_scan={:.3}ms second_scan={:.3}ms newly_built_plans={} plan_build={:.3}ms layout_build={:.3}ms new_subtree_refs={} new_layout_refs={} retained_centers={} retained_subtree_refs={} retained_layout_refs={} unique_directed_component_refs={}",
+                    "moving-center bond={bond_dim}: first_scan={:.3}ms second_scan={:.3}ms newly_built_plans={} plan_build={:.3}ms layout_build={:.3}ms retained_centers={} retained_directed_layouts={} retained_layout_refs={} unique_directed_components={} unique_directed_component_refs={}",
                     first_scan_ns as f64 / 1e6,
                     second_scan_ns as f64 / 1e6,
                     new_plan_count,
                     plan_build_ns as f64 / 1e6,
                     layout_build_ns as f64 / 1e6,
-                    new_subtree_refs,
-                    new_layout_refs,
                     evaluator.rooted_plans.len(),
-                    retained_subtree_refs,
+                    evaluator.directed_component_layouts.len(),
                     retained_layout_refs,
+                    unique_directed_components,
                     unique_directed_component_refs,
                 );
                 assert_eq!(new_plan_count, (N_SITES - 1) as u64);
                 assert_eq!(evaluator.rooted_plans.len(), N_SITES);
-                assert_eq!(retained_subtree_refs, 1_616);
-                assert_eq!(retained_layout_refs, 1_616);
+                assert_eq!(
+                    evaluator.directed_component_layouts.len(),
+                    unique_directed_components
+                );
+                assert_eq!(retained_layout_refs, unique_directed_component_refs);
                 assert_eq!(unique_directed_component_refs, 240);
             }
         }

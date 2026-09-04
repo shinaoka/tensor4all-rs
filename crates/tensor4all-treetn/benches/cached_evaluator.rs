@@ -9,7 +9,7 @@ use tensor4all_simplett::{
     tensor3_zeros, MultiIndex, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
 };
 use tensor4all_treetn::{
-    tensor_train_to_treetn, CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator,
+    tensor_train_to_treetn, CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
 };
 
 fn generate_tci_like_indices(
@@ -764,6 +764,68 @@ fn bench_prepared_branch_slice_reuse(c: &mut Criterion) {
     group.finish();
 }
 
+/// Measures the complete moving-center scan after #710's directed-component
+/// metadata is built once. This is an evaluator-level measurement: the
+/// primitive 51.2 ns versus 29.1 ns key result is intentionally not used as a
+/// speedup claim. The paired cold/warm cases separate one-time metadata
+/// construction from repeated lookup and evaluation work.
+fn bench_directed_component_scan(c: &mut Criterion) {
+    const N_SITES: usize = 32;
+    const LOCAL_DIM: usize = 2;
+    const BOND_DIM: usize = 8;
+
+    let tt = create_tt_with_bond_dim(N_SITES, LOCAL_DIM, BOND_DIM);
+    let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
+    let values = vec![0usize; N_SITES];
+    let shape = [N_SITES, 1usize];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let mut group = c.benchmark_group("treetn_directed_component_scan");
+    group.sample_size(10);
+
+    group.bench_function("cold_scan", |b| {
+        b.iter_batched_ref(
+            || {
+                TreeTNCachedEvaluator::new(
+                    &tree,
+                    &site_indices,
+                    CachedEvaluatorOptions::<usize>::default(),
+                )
+                .unwrap()
+            },
+            |evaluator| {
+                for center in 0..N_SITES {
+                    evaluator
+                        .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+                        .unwrap();
+                }
+            },
+            BatchSize::LargeInput,
+        )
+    });
+
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &site_indices,
+        CachedEvaluatorOptions::<usize>::default(),
+    )
+    .unwrap();
+    for center in 0..N_SITES {
+        evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+            .unwrap();
+    }
+    group.bench_function("warm_scan", |b| {
+        b.iter(|| {
+            for center in 0..N_SITES {
+                evaluator
+                    .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+                    .unwrap();
+            }
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_chain_size_scaling,
@@ -773,6 +835,7 @@ criterion_group!(
     bench_hiroshi_chain_evaluator_parity,
     bench_warm_center_coordination_vs_bond,
     bench_cached_evaluator_scalar_kinds,
-    bench_prepared_branch_slice_reuse
+    bench_prepared_branch_slice_reuse,
+    bench_directed_component_scan
 );
 criterion_main!(benches);

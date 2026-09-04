@@ -1762,7 +1762,7 @@ without one of those locators.
 | `D` determinism | **PASS** | Fixed fixtures, axis permutations, oracle results, cache counters, downstream stages, and release test outcomes are repeatable. Timing outliers are explicitly reported as noise rather than used as correctness evidence. |
 | `S` scaling law | **N/A** | #711 is a constant-factor setup/copy reduction, not an asymptotic claim. The 64/128/256 paired benchmark demonstrates the target-path resource reduction; the plan's formal 1x/2x/4x scaling-law gate remains owned by #718. |
 | `P` provenance/observability | **PASS** | All #711 design and performance claims are labelled **[AI Supplied]**. No new literature claim was introduced. The API dump was regenerated successfully, the new public option is documented with its budget semantics, and commands, backend settings, raw medians, counters, and clean downstream path are recorded here. `tensor4all-benchmark` remains **N/A** because its maintained checkout has no semantically comparable TreeACI workload. |
-| `CI6` remote regression | **REPAIRED; RERUN PENDING** | The preceding failed CI_rs run was inspected before push: run `33820251118`, head `d5de28f0d77b0dde667e0dfddb5c5892c6b78c9a`, failed job `Maintenance scripts`, step `Audit public Result APIs`, with the concrete log anchor `dense_native_tensor_from_col_major_owned: # Errors does not name a concrete variant or condition`; the Test, Coverage, Doctests, and Lint jobs passed and rollup failed because Maintenance failed. The first #711 run `33856026628`, head `11904ad4503d1d3d7ddf41b28853a122faabf907`, reached the same Maintenance job but failed earlier at `Audit library panic paths`, log anchor `crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:5181:debug_assert_eq`; the new assertion was test-only scoped and the exact local `python3 scripts/audit-library-panics.py` now passes with zero unbaselined findings. The local `python3 scripts/check-public-error-docs.py` is also green with its complete 15-test suite passing. A new required-check run after this repair must still be inspected and recorded; a pending check is not a pass. |
+| `CI6` remote regression | **PASS** | The preceding failed CI_rs run was inspected before push: run `33820251118`, head `d5de28f0d77b0dde667e0dfddb5c5892c6b78c9a`, failed job `Maintenance scripts`, step `Audit public Result APIs`, with the concrete log anchor `dense_native_tensor_from_col_major_owned: # Errors does not name a concrete variant or condition`; the Test, Coverage, Doctests, and Lint jobs passed and rollup failed because Maintenance failed. The first #711 run `33856026628`, head `11904ad4503d1d3d7ddf41b28853a122faabf907`, reached the same Maintenance job but failed earlier at `Audit library panic paths`, log anchor `crates/tensor4all-treetn/src/treetn/cached_evaluator.rs:5181:debug_assert_eq`; the new assertion was test-only scoped and the exact local `python3 scripts/audit-library-panics.py` passes with zero unbaselined findings. Replacement run `33856551145` at head `898548186fe842eb700521ac3328399d43ace7f7` passed Lint, Doctests, Maintenance scripts, Test, Coverage, and `rollup-rs`. The local `python3 scripts/check-public-error-docs.py` is also green with its complete 15-test suite passing. This CI result closes the prior failure regression independently of the in-progress #710 work. |
 
 ### #711 verification commands and raw measurements
 
@@ -1815,6 +1815,94 @@ python3 scripts/audit-library-panics.py
 Audit passed: 0 unbaselined findings, 0 stale baseline entries
 ```
 
-The next implementation subissue is **#710** (directed-component keys,
-layouts, and cache accounting). Per the execution protocol, stop after this
-#711 report; do not begin #710 in the same run.
+The next implementation subissue identified by the #711 report was **#710**
+(directed-component keys, layouts, and cache accounting). The execution rule
+was subsequently updated so a pending remote CI result does not block this
+independent task; its implementation and gates are recorded below.
+
+## 2026-09-04 #710 directed-component keys, layouts, and cache accounting
+
+This entry records the #710 implementation and its local/downstream gates.
+The ownership boundary, append ordering, metadata census, cache accounting
+formula, and benchmark interpretation are **[AI Supplied]** engineering
+decisions. The checked primitive used here is the existing `tensor4all-core`
+`KeyBuilder`; its concrete source locator is
+`crates/tensor4all-core/src/index_key/mod.rs:436-521`, and the evidence
+register above records the audited commit and full-source archive. No new
+literature-derived algorithmic claim is introduced by this change.
+
+### Implementation
+
+- `TreeTNCachedEvaluator` now builds one immutable
+  `DirectedComponentLayout` per directed edge `(from, to)`. It stores the
+  component's physical input positions, checked `FlatIndexer`, and deterministic
+  child append order. `RootedMessagePlan` retains only center-specific
+  traversal state; its duplicated subtree node lists and center-indexed layout
+  maps were removed.
+- Per-call assignment batches encode local coordinates once and compose nested
+  `IndexKey` values with checked `KeyBuilder` capacity/push/finish operations.
+  The message cache now receives exact component keys directly, without
+  gathering a full rooted-subtree `Vec<usize>` for every cache lookup. The
+  component layout's direct encoder is tested against the composed key for each
+  unique assignment, including nested components and wide keys.
+- `PackedMessageCache` preserves #626's append-only, no-eviction, over-budget
+  uncached-miss policy. Its logical payload bytes remain the admission budget;
+  `owned_retained_bytes_estimate` additionally counts vector capacity, key
+  storage, map entry/bucket overhead, and fixed metadata. The standard-library
+  `HashMap` bucket contribution is explicitly documented as a deterministic
+  estimate (`16` control/bucket bytes per allocated slot), because its exact
+  allocator layout is not a stable API. Test-only evaluator statistics expose
+  key count, logical bytes, and owned-storage estimate without adding a hot-path
+  production scan.
+- The cache validates both the number and width of computed columns before any
+  insertion, so a malformed compute result cannot partially mutate the packed
+  cache. Zero-budget, bounded, clear/reuse, partial-hit, and over-budget
+  behavior remains covered by the existing four-dtype matrix.
+
+### #710 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C7` correctness | **PASS** | The complete TreeTN release library matrix passed: 516 tests passed and 2 existing tests remained ignored; all TreeTN integration targets passed (3, 61, 6, 18, 12, 20, 1, 35, 2, 27, 2, 28, 20, 18, 1, 11, 2, and 2 tests respectively); 141 doctests passed. New tests cover exact direct/composed key equality, empty/singleton/nested/duplicate/reordered/wide/invalid/overflow cases, directed-layout sharing across centers, and 4/8/16-site path, Y, comb, and unequal-bond metadata. `tensor4all-core/common_basic` passed all 9 tests. |
+| `BC7` benchmark correctness | **PASS** | The full affected TreeTN release library/integration/doctest matrix passed before accepting timing data. The evaluator benchmark uses a complete fixed topology/assignment scan; numerical correctness is established by the full scalar-oracle and downstream matrices, not by the benchmark's timing loop alone. |
+| `E7` efficiency | **PASS** through causal resource reduction with no measured target-path regression | The prior N=16, χ=256 diagnostic recorded 1,616 retained subtree/layout position references; the new same diagnostic retained 240 positions across 30 directed layouts, an 85.15% reduction (6.73x less duplicate position storage). Old/new moving-center timings were `8.906/4.373 ms` versus `8.992/4.318 ms` (cold/second scan): cold delta is within measurement noise and warm scan improved about 1.3%. Pinned evaluator-level Criterion scan (N=32, χ=8, CPU 0, 10 samples) measured cold median `2.3161 ms` and warm median `1.8195 ms`; the primitive 51.2 ns versus 29.1 ns key result is not used as an evaluator-speedup claim. |
+| `R7` release/regression/downstream | **PASS** | `tensor4all-treetn`, `tensor4all-core/common_basic`, `tensor4all-treeaci`, and `tensor4all-aci` release matrices passed. Clean archive `/tmp/sgw-treeaci-gate.3XdbB5` with `SGW_RUN_TAG=aci-gate-710 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0` passed SimpleTT/TreeACI/CTTN, all checkpoint stages, slices, assembly, and plotting. Isolated TreeACI diagnostics converged: `pi_rtau` 7 sweeps/177646 evaluated points and `sigma_rtau` 5 sweeps/99554 evaluated points. The original dirty SGW checkout remained untouched. |
+| `N` numerical stability/convergence | **PASS** | Complete four-dtype TreeTN tests and scalar/generic message-oracle comparisons passed; no tolerance was relaxed. Downstream `pi_rtau` and `sigma_rtau` retained convergence and configured error bounds. |
+| `M` metamorphic semantics | **PASS** | Reordered/duplicate/partial-hit batches, all directed orientations, all visited centers, empty and wide keys, unequal bonds, path/Y/comb topologies, and capacity-zero/over-budget cache policies passed with preserved output ordering. |
+| `F` fallback parity | **PASS** | f32/Complex32 generic routes, unsupported raw shapes, zero budget, insufficient budget, and uncached over-budget misses remain valid and pass the release matrix. Malformed column-count/width errors are reported before insertion. |
+| `I` invalidation/retention | **PASS** | No center-specific component layout remains; evaluator-owned directed layouts are immutable for evaluator lifetime. Logical payload budget is unchanged, while owned capacity/map storage is measured separately. Clearing the evaluator cache forces misses and no hidden dense full-network copy was added. |
+| `D` determinism | **PASS** | Sorted topology traversal and explicit child order make composed keys deterministic. Direct/composed equality, cache counters, topology census, complete release tests, and downstream output checks passed repeatedly; timing outliers were not used as correctness evidence. |
+| `S` scaling law | **PASS** for the scoped metadata law | The release test gates 4/8/16-site paths at `N(N-1)` retained one-physical-index positions and 2E directed layouts, plus Y/comb/unequal-bond trees. This establishes the scoped O(N²) chain metadata law versus the previous center × component retention; it makes no claim about full evaluator contraction complexity. |
+| `P` provenance/observability | **PASS** | New design and performance statements are labelled **[AI Supplied]**. The checked key operation points to the exact core source range and prior full-source audit register; no new literature claim or direct `tenferro-*` dependency was added. `tensor4all-benchmark` remains N/A because its checkout has no comparable maintained TreeACI workload. |
+| `CI` remote regression | **PENDING after #710 push** | Per the updated execution rule, #711's prior CI failure was repaired and independently closed by run `33856551145` at head `898548186fe842eb700521ac3328399d43ace7f7`; the new #710 push will start a fresh required-check run. A pending CI run is recorded and monitored in parallel, not used to block the next independent implementation task. |
+
+### #710 verification commands and raw measurements
+
+```text
+cargo test --release -p tensor4all-treetn --tests --quiet
+516 library tests passed; all integration targets passed
+cargo test --doc --release -p tensor4all-treetn --quiet
+141 doctests passed
+cargo test --release -p tensor4all-core --test common_basic --no-fail-fast --quiet
+9 tests passed
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+passed
+cargo bench -p tensor4all-treetn --bench cached_evaluator directed_component_scan -- --noplot
+10 samples per evaluator case; unpinned repeated medians remained within noise
+taskset -c 0 cargo bench -p tensor4all-treetn --bench cached_evaluator directed_component_scan -- --noplot
+cold [2.2415 ms, 2.3161 ms, 2.3575 ms]; warm [1.8042 ms, 1.8195 ms, 1.8428 ms]
+taskset -c 0 cargo bench -p tensor4all-treetn --bench cached_evaluator -- --noplot --sample-size 10 --warm-up-time 0.5 --measurement-time 1
+all 101 benchmark IDs in the affected benchmark binary completed; raw Criterion data is retained under ignored target/criterion/
+cargo test --release -p tensor4all-treetn --lib diagnostic_same_batch_warm_environment_vs_center_cost -- --ignored --nocapture --test-threads=1
+moving-center N=16 chi=256: first=8.992 ms, second=4.318 ms, layouts=30, refs=240
+cargo test --release -p tensor4all-treeaci --no-fail-fast --quiet
+145 unit, 7 public_api, 1 rank_scaling, 18 doctests passed; 6 existing ignored
+cargo test --release -p tensor4all-aci --no-fail-fast --quiet
+85 unit, 4 integration, 1 rank_scaling, 19 doctests passed; 1 existing ignored
+SGW_RUN_TAG=aci-gate-710 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0
+complete clean-copy A/B workflow passed
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-710/treeaci pi_rtau
+Converged; sweeps=7; evaluated_points=177646
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T1.0_mu0.5_aci-gate-710/treeaci sigma_rtau
+Converged; sweeps=5; evaluated_points=99554
+```

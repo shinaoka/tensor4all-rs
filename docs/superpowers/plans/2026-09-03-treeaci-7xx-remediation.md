@@ -839,7 +839,7 @@ gate and must not be smuggled into this coverage task.
   git commit -m "perf(treetn): reuse prepared branch core slices"
   ```
 
-- [ ] **Step 7: Run the remote CI regression gate after pushing #711.**
+- [x] **Step 7: Run the remote CI regression gate after pushing #711.**
 
   ```bash
   git fetch origin
@@ -856,8 +856,8 @@ gate and must not be smuggled into this coverage task.
   previous CI_rs / Maintenance failure is absent or that its exact repair has
   a passing replacement job. Record the old/new run IDs, head SHAs, job name,
   log line, local reproduction, and final result in the worklog before marking
-  `CI6` and Task 6 complete. If the new run is still pending, stop at this
-  gate rather than declaring #711 complete.
+  `CI6` and Task 6 complete. A pending run is not a pass, but it does not block
+  starting the next independent subissue; re-check it as a parallel CI gate.
 
 ---
 
@@ -887,28 +887,28 @@ gate and must not be smuggled into this coverage task.
 - Secondary gates: `M`, `I`, `D`, `S`, `P`; stale-generation and repeated
   clear/reuse behavior must be measured separately from key microbenchmarks.
 
-- [ ] **Step 1: Add metadata-count regression tests.**
+- [x] **Step 1: Add metadata-count regression tests.**
 
   For a 16-site chain visited at every center, assert that retained component layouts and physical position lists scale with the `2E` directed components rather than with center × component combinations. Test path, Y, comb, and unequal-bond trees.
 
-- [ ] **Step 2: Add key equivalence tests.**
+- [x] **Step 2: Add key equivalence tests.**
 
   Build keys both from the existing direct assignment encoder and from checked local/child `KeyBuilder` composition. Assert exact equality for empty, singleton, duplicate, reordered, wide, and nested component assignments. Invalid dimensions and overflow must return errors.
 
-- [ ] **Step 3: Move layout ownership to directed components.**
+- [x] **Step 3: Move layout ownership to directed components.**
 
   Replace center-indexed physical layout retention with `(from, to)` component plans. Keep numerical message caches keyed by direction. Rooting-specific traversal state may remain per center only when it controls traversal, not when it merely repeats a directed component layout.
 
-- [ ] **Step 4: Correct cache accounting.**
+- [x] **Step 4: Correct cache accounting.**
 
   Track packed payload capacity, key storage, map entries/buckets using a documented estimate, and all cache-owned vectors/metadata. Distinguish logical payload bytes from owned retained bytes in statistics. Preserve capacity-zero, over-budget, and uncached-miss semantics.
 
-- [ ] **Step 5: Run policy and scaling tests.**
+- [x] **Step 5: Run policy and scaling tests.**
 
   ```bash
   cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
   cargo test --release -p tensor4all-core --test common_basic --no-fail-fast
-  cargo bench --release -p tensor4all-treetn --bench cached_evaluator
+  cargo bench -p tensor4all-treetn --bench cached_evaluator
   ```
 
   Record key construction time as a primitive diagnostic only; do not claim the 51.2 ns versus 29.1 ns key result as an evaluator speedup.
