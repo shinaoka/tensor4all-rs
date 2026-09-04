@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorLike};
+use tensor4all_tensorbackend::ExecutionContext;
 
 use super::src_probe::{
     connect_result_edge, contract_retaining, factorize_probe_batches, initial_width,
@@ -37,6 +38,7 @@ type EnvironmentSegment<T, V> = (
     DirectedEnvironment<T, V>,
 );
 
+#[allow(clippy::too_many_arguments)]
 /// Execute successive randomized compression on a chain or a rooted tree.
 pub(super) fn contract<T, V, R>(
     tn_a: &TreeTN<T, V>,
@@ -46,6 +48,7 @@ pub(super) fn contract<T, V, R>(
     max_bond_dim: usize,
     src_options: &SrcOptions,
     rng: R,
+    context: &ExecutionContext,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -66,6 +69,7 @@ where
                 max_bond_dim,
                 src_options,
                 rng,
+                context,
             );
         }
     }
@@ -147,6 +151,7 @@ where
         &outputs,
         &mut probes,
         sketch_options.rank_increment,
+        context,
     );
 
     let mut result_tensors = HashMap::with_capacity(nodes.len());
@@ -176,7 +181,7 @@ where
             // A scalar-only subtree still needs a structural bridge. Its
             // scalar value stays in the projected source absorbed by parent.
             let cap = T::Index::new_link(1)?;
-            let factor = T::ones(std::slice::from_ref(&cap)).map_err(|error| {
+            let factor = T::ones_in(context, std::slice::from_ref(&cap)).map_err(|error| {
                 anyhow::anyhow!("contract_src: scalar tree cap construction failed: {error}")
             })?;
             let source = contract_factors(&source_factors, "contract_src: scalar tree source")?;
@@ -210,10 +215,11 @@ where
                     )
                 })?;
                 let factorized = sketch
-                    .factorize_full_rank(
+                    .factorize_full_rank_in(
                         &left_indices,
                         tensor4all_core::FactorizeAlg::QR,
                         tensor4all_core::Canonical::Left,
+                        context,
                     )
                     .map_err(|error| {
                         anyhow::anyhow!(
@@ -244,6 +250,7 @@ where
                                 )
                             })
                     },
+                    context,
                 )?
             };
             let factor_conj = factor.conj();
@@ -290,11 +297,12 @@ where
     }
 
     if src_options.final_svd {
-        result.truncate_impl(
+        result.truncate_impl_in(
             [center.clone()],
             svd_policy,
             Some(max_bond_dim),
             "contract_src: tree final truncate",
+            context,
         )?;
     } else {
         mark_result_canonical(&mut result, center, &edges)?;
@@ -317,6 +325,7 @@ where
     batch_size: usize,
     segments: Vec<EnvironmentSegment<T, V>>,
     segment_total_width: usize,
+    context: &'a ExecutionContext,
 }
 
 impl<'a, T, V, R> EnvironmentCache<'a, T, V, R>
@@ -326,6 +335,7 @@ where
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
     R: Rng,
 {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         tn: &'a TreeTN<T, V>,
         edges: &'a [(V, V)],
@@ -334,6 +344,7 @@ where
         outputs: &'a HashMap<V, Vec<T::Index>>,
         probes: &'a mut ProbeBank<T::Index, R>,
         batch_size: usize,
+        context: &'a ExecutionContext,
     ) -> Self {
         Self {
             tn,
@@ -342,6 +353,7 @@ where
             local,
             outputs,
             probes,
+            context,
             batched_environments: HashMap::new(),
             batch_size: batch_size.max(1),
             segments: Vec::new(),
@@ -378,7 +390,14 @@ where
                     .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
                 Ok((
                     node.clone(),
-                    probe_batch_tensors::<T, R>(site_outputs, self.probes, 0, width, &batch)?,
+                    probe_batch_tensors::<T, R>(
+                        site_outputs,
+                        self.probes,
+                        0,
+                        width,
+                        &batch,
+                        self.context,
+                    )?,
                 ))
             })
             .collect::<Result<HashMap<_, _>>>()?;
@@ -427,7 +446,14 @@ where
                     .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
                 Ok((
                     node.clone(),
-                    probe_batch_tensors::<T, R>(site_outputs, self.probes, start, width, &batch)?,
+                    probe_batch_tensors::<T, R>(
+                        site_outputs,
+                        self.probes,
+                        start,
+                        width,
+                        &batch,
+                        self.context,
+                    )?,
                 ))
             })
             .collect::<Result<HashMap<_, _>>>()?;
@@ -909,8 +935,19 @@ mod tests {
         let mut probes = ProbeBank::from_seed(std::mem::take(&mut probe_indices), 1, 99).unwrap();
         // The first width-3 request is narrower than batch_size 5, so this
         // exercises the permitted short initial segment and its direct replay.
-        let mut cache =
-            EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 5);
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
+        let mut cache = EnvironmentCache::new(
+            &tn_a,
+            &edges,
+            &nodes,
+            &local,
+            &outputs,
+            &mut probes,
+            5,
+            &context,
+        );
         assert!(cache
             .request(&"B".to_string(), &"A".to_string(), 0, 0)
             .is_err());
@@ -975,8 +1012,19 @@ mod tests {
             .collect::<Vec<_>>();
 
         let mut probes = ProbeBank::from_seed(index_list, 1, 7).unwrap();
-        let mut cache =
-            EnvironmentCache::new(&tn_a, &edges, &nodes, &local, &outputs, &mut probes, 2);
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
+        let mut cache = EnvironmentCache::new(
+            &tn_a,
+            &edges,
+            &nodes,
+            &local,
+            &outputs,
+            &mut probes,
+            2,
+            &context,
+        );
 
         let (_wide, wide_batch) = cache
             .request(&"B".to_string(), &"A".to_string(), 0, 5)
@@ -1057,6 +1105,9 @@ mod tests {
             .iter()
             .map(|node| {
                 let (tensor_a, tensor_b) = local[node];
+                let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+                    tensor4all_tensorbackend::default_cpu_execution_context(),
+                );
                 let tensor = probed_site_pair_batch_range(
                     tensor_a,
                     tensor_b,
@@ -1065,6 +1116,7 @@ mod tests {
                     0,
                     3,
                     &batch,
+                    &context,
                 )
                 .unwrap();
                 (node.clone(), tensor)
@@ -1072,12 +1124,15 @@ mod tests {
             .collect::<std::collections::HashMap<_, _>>();
         let reference = directed_messages_batched(&tn_a, &edges, &prepaired, &batch).unwrap();
 
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let probe_batches = nodes
             .iter()
             .map(|node| {
                 (
                     node.clone(),
-                    probe_batch_tensors(&outputs[node], &probes, 0, 3, &batch).unwrap(),
+                    probe_batch_tensors(&outputs[node], &probes, 0, 3, &batch, &context).unwrap(),
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();

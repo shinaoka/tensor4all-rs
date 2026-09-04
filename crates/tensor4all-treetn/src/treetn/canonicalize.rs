@@ -224,7 +224,9 @@ where
                     context_name,
                     execution,
                 )?,
-                None => self.sweep_edge_full_rank(*src, *dst, alg, Canonical::Left, context_name)?,
+                None => {
+                    self.sweep_edge_full_rank(*src, *dst, alg, Canonical::Left, context_name)?
+                }
             }
         }
 

@@ -167,50 +167,8 @@ where
         .map_err(|error| anyhow::anyhow!("contract_src: probe construction failed: {error}"))
 }
 
-/// Context-scoped single probe column: the result belongs to `context`.
-fn single_probe_in<T, R>(
-    index: &T::Index,
-    probes: &ProbeBank<T::Index, R>,
-    column: usize,
-    context: &ExecutionContext,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    let data = probes.column(index, column)?.to_vec();
-    T::from_dense_in(context, vec![index.clone()], data)
-        .map_err(|error| anyhow::anyhow!("contract_src: probe construction failed: {error}"))
-}
-
-fn single_probe_batch<T, R>(
-    index: &T::Index,
-    probes: &ProbeBank<T::Index, R>,
-    first_column: usize,
-    width: usize,
-    batch: &T::Index,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    let capacity = index
-        .dim()
-        .checked_mul(width)
-        .ok_or_else(|| anyhow::anyhow!("contract_src: probe batch size overflow"))?;
-    let end_column = first_column
-        .checked_add(width)
-        .ok_or_else(|| anyhow::anyhow!("contract_src: probe batch column range overflow"))?;
-    let mut data = Vec::with_capacity(capacity);
-    for column in first_column..end_column {
-        data.extend_from_slice(probes.column(index, column)?);
-    }
-    T::from_dense(vec![index.clone(), batch.clone()], data)
-        .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
-}
-
 /// Context-scoped probe batch: the result belongs to `context`.
-fn single_probe_batch_in<T, R>(
+fn single_probe_batch<T, R>(
     index: &T::Index,
     probes: &ProbeBank<T::Index, R>,
     first_column: usize,
@@ -237,38 +195,8 @@ where
         .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
 }
 
-/// Build the factorized probe tensors for one batch of SRC columns.
-///
-/// Each returned tensor carries one physical output index and the shared
-/// `batch` index. Keeping these tensors separate lets a tree-message
-/// contraction eliminate incoming branch bonds before joining the two local
-/// operands, instead of materializing their full virtual-bond product.
-pub(super) fn probe_batch_tensors<T, R>(
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index, R>,
-    first_column: usize,
-    width: usize,
-    batch: &T::Index,
-) -> Result<Vec<T>>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    if width == 0 || batch.dim() != width {
-        anyhow::bail!(
-            "contract_src: probe batch dimension {} does not match width {}",
-            batch.dim(),
-            width
-        );
-    }
-    outputs
-        .iter()
-        .map(|index| single_probe_batch::<T, R>(index, probes, first_column, width, batch))
-        .collect()
-}
-
 /// Context-scoped probe batch tensors: every result belongs to `context`.
-pub(super) fn probe_batch_tensors_in<T, R>(
+pub(super) fn probe_batch_tensors<T, R>(
     outputs: &[T::Index],
     probes: &ProbeBank<T::Index, R>,
     first_column: usize,
@@ -289,7 +217,7 @@ where
     }
     outputs
         .iter()
-        .map(|index| single_probe_batch_in::<T, R>(index, probes, first_column, width, batch, context))
+        .map(|index| single_probe_batch::<T, R>(index, probes, first_column, width, batch, context))
         .collect()
 }
 
@@ -329,72 +257,9 @@ where
     })
 }
 
-/// Context-scoped factorized probed site pair.
-fn probed_site_pair_in<T, R>(
-    tensor_a: &T,
-    tensor_b: &T,
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index, R>,
-    column: usize,
-    context: &ExecutionContext,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    let probe_tensors = outputs
-        .iter()
-        .map(|index| single_probe_in::<T, R>(index, probes, column, context))
-        .collect::<Result<Vec<_>>>()?;
-    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    let probed_a = contract_operand_with_probes(tensor_a, &a_probes, None)?;
-    let probed_b = contract_operand_with_probes(tensor_b, &b_probes, None)?;
-    T::contract(&[&probed_a, &probed_b]).map_err(|error| {
-        anyhow::anyhow!("contract_src: factorized probe contraction failed: {error}")
-    })
-}
-
-/// Contract two local operands with a block of factorized probes.
-pub(super) fn probed_site_pair_batch_range<T, R>(
-    tensor_a: &T,
-    tensor_b: &T,
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index, R>,
-    first_column: usize,
-    width: usize,
-    batch: &T::Index,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    if width == 0 || batch.dim() != width {
-        anyhow::bail!(
-            "contract_src: probe batch dimension {} does not match width {}",
-            batch.dim(),
-            width
-        );
-    }
-    if outputs.is_empty() {
-        let local = T::contract(&[tensor_a, tensor_b]).map_err(|error| {
-            anyhow::anyhow!("contract_src: scalar local pair contraction failed: {error}")
-        })?;
-        let batch_values = T::ones(std::slice::from_ref(batch)).map_err(|error| {
-            anyhow::anyhow!("contract_src: scalar probe batch construction failed: {error}")
-        })?;
-        return local.outer_product(&batch_values).map_err(|error| {
-            anyhow::anyhow!("contract_src: scalar probe batch broadcast failed: {error}")
-        });
-    }
-    let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
-    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    let probed_a = contract_operand_with_probes(tensor_a, &a_probes, Some(batch))?;
-    let probed_b = contract_operand_with_probes(tensor_b, &b_probes, Some(batch))?;
-    contract_retaining(&[&probed_a, &probed_b], batch)
-}
-
 /// Context-scoped batched probed site pair.
-fn probed_site_pair_batch_range_in<T, R>(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn probed_site_pair_batch_range<T, R>(
     tensor_a: &T,
     tensor_b: &T,
     outputs: &[T::Index],
@@ -426,8 +291,7 @@ where
             anyhow::anyhow!("contract_src: scalar probe batch broadcast failed: {error}")
         });
     }
-    let probe_tensors =
-        probe_batch_tensors_in(outputs, probes, first_column, width, batch, context)?;
+    let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch, context)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, Some(batch))?;
     let probed_b = contract_operand_with_probes(tensor_b, &b_probes, Some(batch))?;
@@ -481,37 +345,7 @@ where
     contract_operand_with_probes(&result, &b_probes, None)
 }
 
-/// Context-scoped unbatched probed prefix contraction.
-fn contract_prefix_with_probed_site_pair_in<T, R>(
-    prefix: &T,
-    tensor_a: &T,
-    tensor_b: &T,
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index, R>,
-    column: usize,
-    context: &ExecutionContext,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    let probe_tensors = outputs
-        .iter()
-        .map(|index| single_probe_in::<T, R>(index, probes, column, context))
-        .collect::<Result<Vec<_>>>()?;
-    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-    let mut result = T::contract(&[prefix, tensor_a])
-        .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
-    result = contract_operand_with_probes(&result, &a_probes, None)?;
-    result = T::contract(&[&result, tensor_b])
-        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
-    contract_operand_with_probes(&result, &b_probes, None)
-}
-
-/// Contract a factorized local pair with an incoming batched prefix.
-// INVARIANT: `prefix`, the two local operands, the probe bank, and the batch
-// range are all one contraction step; keeping them explicit prevents the
-// factorized MPO--MPO path from hiding a fused physical product.
+/// Context-scoped batched probed prefix contraction.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn contract_prefix_with_probed_site_pair_batch_range<T, R>(
     prefix: &T,
@@ -522,47 +356,6 @@ pub(super) fn contract_prefix_with_probed_site_pair_batch_range<T, R>(
     first_column: usize,
     width: usize,
     batch: &T::Index,
-) -> Result<T>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-{
-    if width == 0 || batch.dim() != width {
-        anyhow::bail!(
-            "contract_src: probe batch dimension {} does not match width {}",
-            batch.dim(),
-            width
-        );
-    }
-    let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
-    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
-
-    let mut a_factors = Vec::with_capacity(a_probes.len() + 2);
-    a_factors.push(tensor_a);
-    a_factors.push(prefix);
-    a_factors.extend(a_probes.iter().copied());
-    let result = contract_retaining(&a_factors, batch)
-        .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
-
-    let mut b_factors = Vec::with_capacity(b_probes.len() + 2);
-    b_factors.push(tensor_b);
-    b_factors.push(&result);
-    b_factors.extend(b_probes.iter().copied());
-    contract_retaining(&b_factors, batch)
-        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))
-}
-
-/// Context-scoped batched probed prefix contraction.
-#[allow(clippy::too_many_arguments)]
-fn contract_prefix_with_probed_site_pair_batch_range_in<T, R>(
-    prefix: &T,
-    tensor_a: &T,
-    tensor_b: &T,
-    outputs: &[T::Index],
-    probes: &ProbeBank<T::Index, R>,
-    first_column: usize,
-    width: usize,
-    batch: &T::Index,
     context: &ExecutionContext,
 ) -> Result<T>
 where
@@ -576,8 +369,7 @@ where
             width
         );
     }
-    let probe_tensors =
-        probe_batch_tensors_in(outputs, probes, first_column, width, batch, context)?;
+    let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch, context)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
 
     let mut a_factors = Vec::with_capacity(a_probes.len() + 2);
@@ -850,73 +642,12 @@ pub(super) fn initial_width(maximum_width: usize, src_options: &SrcOptions) -> u
     src_options.min_rank.min(maximum_width).max(1)
 }
 
-/// Batch-native adaptive sketch growth loop: `make_batch` receives
-/// `(start, width)` and returns one batch-indexed tensor covering exactly
-/// `[start, start + width)`, instead of being asked for individual columns
-/// one at a time. See
-/// `docs/superpowers/specs/2026-08-30-src-adaptive-batch-probe-columns-design.md`.
-pub(super) fn factorize_probe_batches<T, F>(
-    left_indices: &[T::Index],
-    initial_width: usize,
-    maximum_width: usize,
-    src_options: &SrcOptions,
-    label: &str,
-    mut make_batch: F,
-) -> Result<(T, T::Index)>
-where
-    T: TensorLike,
-    T::Index: IndexLike + Clone + Hash + Eq,
-    F: FnMut(usize, usize) -> Result<(T, T::Index)>,
-{
-    if maximum_width == 0 {
-        anyhow::bail!("contract_src: {label} has no usable probe columns");
-    }
-    let mut width = initial_width.min(maximum_width).max(1);
-    let mut previous_width = 0;
-    let mut previous = None;
-    loop {
-        let (batch_tensor, batch_index) = make_batch(previous_width, width - previous_width)?;
-        let factorized = T::factorize_probe_batch_incremental(
-            previous.as_ref(),
-            &batch_tensor,
-            &batch_index,
-            left_indices,
-        )
-        .map_err(|error| anyhow::anyhow!("contract_src: {label} QR failed: {error}"))?;
-        let saturated = factorized.rank < width || width == maximum_width;
-        let stop = if src_options.rtol.is_none() || saturated {
-            true
-        } else {
-            match factorized.right.src_error_estimate() {
-                Ok(estimate) => {
-                    estimate.error
-                        <= src_options.atol + src_options.rtol.unwrap_or(0.0) * estimate.norm
-                }
-                Err(error) => {
-                    return Err(anyhow::anyhow!(
-                        "contract_src: {label} adaptive estimator unavailable: {error}"
-                    ));
-                }
-            }
-        };
-        if !stop {
-            previous_width = width;
-            previous = Some(factorized);
-            width = width
-                .saturating_add(src_options.rank_increment)
-                .min(maximum_width);
-            continue;
-        }
-        return Ok((factorized.left, factorized.bond_index));
-    }
-}
-
 /// Context-scoped batch-native adaptive sketch growth loop.
 ///
 /// The batch tensors produced by `make_batch` must already belong to
-/// `context` (callers build them with the `_in` probe constructors);
+/// `context` (callers build them with the scoped probe constructors);
 /// factorization and estimation run through the scoped entries.
-pub(super) fn factorize_probe_batches_in<T, F>(
+pub(super) fn factorize_probe_batches<T, F>(
     left_indices: &[T::Index],
     initial_width: usize,
     maximum_width: usize,
@@ -1180,6 +911,9 @@ mod tests {
             IdxTensor::from_dense(vec![shared, output_b.clone()], vec![5.0, 6.0, 7.0, 8.0])
                 .unwrap();
         let probes = ProbeBank::from_seed(vec![output_a.clone(), output_b.clone()], 2, 23).unwrap();
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let actual = probed_site_pair_batch_range(
             &tensor_a,
             &tensor_b,
@@ -1188,6 +922,7 @@ mod tests {
             0,
             2,
             &batch,
+            &context,
         )
         .unwrap();
         assert_eq!(actual.indices(), std::slice::from_ref(&batch));
@@ -1260,6 +995,9 @@ mod tests {
         )
         .unwrap();
         let probes = ProbeBank::from_seed(vec![output_a.clone(), output_b.clone()], 2, 31).unwrap();
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let local = probed_site_pair_batch_range(
             &tensor_a,
             &tensor_b,
@@ -1268,9 +1006,13 @@ mod tests {
             0,
             2,
             &batch,
+            &context,
         )
         .unwrap();
         let reference = contract_retaining(&[&prefix, &local], &batch).unwrap();
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let actual = contract_prefix_with_probed_site_pair_batch_range(
             &prefix,
             &tensor_a,
@@ -1280,6 +1022,7 @@ mod tests {
             0,
             2,
             &batch,
+            &context,
         )
         .unwrap();
         let error = actual.distance(&reference).unwrap();
@@ -1331,6 +1074,9 @@ mod tests {
 
     #[test]
     fn scalar_probed_site_pair_batch_range_broadcasts_over_the_batch_axis() {
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let batch = DynIndex::new_dyn(3);
         let bank = ProbeBank::from_seed(vec![], 3, 17).unwrap();
 
@@ -1339,7 +1085,8 @@ mod tests {
         let local =
             IdxTensor::from_dense(vec![left.clone(), shared.clone()], vec![2.0, 3.0]).unwrap();
         let other = IdxTensor::from_dense(vec![shared], vec![4.0]).unwrap();
-        let pair = probed_site_pair_batch_range(&local, &other, &[], &bank, 0, 3, &batch).unwrap();
+        let pair = probed_site_pair_batch_range(&local, &other, &[], &bank, 0, 3, &batch, &context)
+            .unwrap();
         assert_eq!(pair.indices(), &[left, batch]);
         assert_eq!(
             pair.to_vec::<f64>().unwrap(),
@@ -1417,6 +1164,9 @@ mod tests {
         let src_options = SrcOptions::adaptive(1.0e-10, 4)
             .with_min_rank(1)
             .with_rank_increment(2);
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let (result, result_batch) = factorize_probe_batches::<IdxTensor, _>(
             &[row],
             2,
@@ -1431,6 +1181,7 @@ mod tests {
                     Ok((last_two.clone(), batch1.clone()))
                 }
             },
+            &context,
         )
         .unwrap();
 

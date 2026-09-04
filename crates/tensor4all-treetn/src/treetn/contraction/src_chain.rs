@@ -17,6 +17,7 @@ use std::hash::Hash;
 use tensor4all_core::{
     Canonical as FactorizeCanonical, FactorizeAlg, IndexLike, SvdTruncationPolicy, TensorLike,
 };
+use tensor4all_tensorbackend::ExecutionContext;
 
 use super::src_probe::{
     connect_result_edge, contract_prefix_with_probed_site_pair_batch_range, contract_retaining,
@@ -27,6 +28,7 @@ use super::src_probe::{
 use super::{SrcOptions, TreeTN};
 use crate::algorithm::CanonicalForm;
 
+#[allow(clippy::too_many_arguments)]
 /// Execute the paper's successive randomized compression schedule on a chain.
 pub(super) fn contract<T, V, R>(
     tn_a: &TreeTN<T, V>,
@@ -36,6 +38,7 @@ pub(super) fn contract<T, V, R>(
     max_bond_dim: usize,
     src_options: &SrcOptions,
     rng: R,
+    context: &ExecutionContext,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -61,10 +64,11 @@ where
         let mut result = TreeTN::new();
         let tensor = contract_site_pair(local[0].0, local[0].1, &[])?;
         result.add_tensor(chain[0].clone(), tensor)?;
-        result.canonicalize_impl(
+        result.canonicalize_impl_in(
             [center.clone()],
             CanonicalForm::Unitary,
             "contract_src: single-site canonicalization",
+            context,
         )?;
         return Ok(result);
     }
@@ -103,11 +107,17 @@ where
             cut_dimensions: &cut_dimensions,
             probes: &mut probes,
             final_svd: src_options.final_svd,
+            context,
         });
     }
     let sketch_options = src_options.sketch_options(svd_policy.is_some());
-    let mut prefixes =
-        PrefixCache::new(&local, &outputs, &mut probes, sketch_options.rank_increment);
+    let mut prefixes = PrefixCache::new(
+        &local,
+        &outputs,
+        &mut probes,
+        sketch_options.rank_increment,
+        context,
+    );
 
     let last = chain.len() - 1;
     let mut factors: Vec<Option<T>> = (0..chain.len()).map(|_| None).collect();
@@ -120,7 +130,7 @@ where
     };
     let (last_factor, last_cap, mut cap_environment) = if outputs[last].is_empty() {
         let cap = T::Index::new_link(1)?;
-        let factor = T::ones(std::slice::from_ref(&cap)).map_err(|error| {
+        let factor = T::ones_in(context, std::slice::from_ref(&cap)).map_err(|error| {
             anyhow::anyhow!("contract_src: scalar last-site cap construction failed: {error}")
         })?;
         let local_product = contract_site_pair(local[last].0, local[last].1, &[])?;
@@ -141,6 +151,7 @@ where
                 maximum_width: last_maximum_width,
                 src_options: &sketch_options,
                 label: "last-site",
+                context,
             },
             |start, width| {
                 let (prefix, batch_index) = prefixes.request(last - 1, start, width)?;
@@ -194,6 +205,7 @@ where
                 maximum_width: site_max_width,
                 src_options: &sketch_options,
                 label: &label,
+                context,
             },
             |start, width| {
                 let (stacked, batch_index) = prefixes.request(site - 1, start, width)?;
@@ -266,6 +278,7 @@ where
     cut_dimensions: &'a [usize],
     probes: &'a mut ProbeBank<T::Index, R>,
     final_svd: bool,
+    context: &'a ExecutionContext,
 }
 
 fn contract_fixed<T, V, R>(request: FixedContractionRequest<'_, T, V, R>) -> Result<TreeTN<T, V>>
@@ -286,6 +299,7 @@ where
         cut_dimensions,
         probes,
         final_svd,
+        context,
     } = request;
     let last = chain.len() - 1;
     let fixed_options = SrcOptions::fixed().with_final_svd(final_svd);
@@ -300,13 +314,13 @@ where
     if last_maximum_width == 0 {
         anyhow::bail!("contract_src: last-site output space has zero dimension");
     }
-    let mut prefixes = BatchedPrefixCache::new(local, outputs, probes);
+    let mut prefixes = BatchedPrefixCache::new(local, outputs, probes, context);
     let mut factors: Vec<Option<T>> = (0..chain.len()).map(|_| None).collect();
     let mut caps: Vec<Option<T::Index>> = (0..chain.len()).map(|_| None).collect();
 
     let (last_factor, last_cap, mut cap_environment) = if outputs[last].is_empty() {
         let cap = T::Index::new_link(1)?;
-        let factor = T::ones(std::slice::from_ref(&cap)).map_err(|error| {
+        let factor = T::ones_in(context, std::slice::from_ref(&cap)).map_err(|error| {
             anyhow::anyhow!("contract_src: scalar last-site cap construction failed: {error}")
         })?;
         let local_product = contract_site_pair(local[last].0, local[last].1, &[])?;
@@ -327,9 +341,10 @@ where
             0,
             last_maximum_width,
             &batch,
+            context,
         )
         .map_err(|error| anyhow::anyhow!("contract_src: last-site sketch failed: {error}"))?;
-        let (factor, cap) = factorize_fixed_batch(&sketch, &outputs[last], "last-site")?;
+        let (factor, cap) = factorize_fixed_batch(&sketch, &outputs[last], "last-site", context)?;
         let factor_conj = factor.conj();
         let environment = contract_site_pair(local[last].0, local[last].1, &[&factor_conj])
             .map_err(|error| {
@@ -368,13 +383,15 @@ where
             0,
             site_max_width,
             &batch,
+            context,
         )
         .map_err(|error| {
             anyhow::anyhow!("contract_src: site {site} prefix contraction failed: {error}")
         })?;
         let sketch = T::contract(&[&prefix_local, &right_environment])
             .map_err(|error| anyhow::anyhow!("contract_src: site {site} sketch failed: {error}"))?;
-        let (factor, cap) = factorize_fixed_batch(&sketch, &left_indices, &format!("site {site}"))?;
+        let (factor, cap) =
+            factorize_fixed_batch(&sketch, &left_indices, &format!("site {site}"), context)?;
         let factor_conj = factor.conj();
         let next_environment = contract_site_pair(
             local[site].0,
@@ -404,11 +421,12 @@ where
         connect_result_edge(&mut result, &chain[site - 1], &chain[site])?;
     }
     if final_svd {
-        result.truncate_impl(
+        result.truncate_impl_in(
             [center.clone()],
             svd_policy,
             Some(max_bond_dim),
             "contract_src: final truncate",
+            context,
         )?;
     } else {
         let rooted_edges = chain
@@ -460,13 +478,19 @@ fn factorize_fixed_batch<T>(
     sketch: &T,
     left_indices: &[T::Index],
     label: &str,
+    context: &ExecutionContext,
 ) -> Result<(T, T::Index)>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq,
 {
     let factorized = sketch
-        .factorize_full_rank(left_indices, FactorizeAlg::QR, FactorizeCanonical::Left)
+        .factorize_full_rank_in(
+            left_indices,
+            FactorizeAlg::QR,
+            FactorizeCanonical::Left,
+            context,
+        )
         .map_err(|error| {
             anyhow::anyhow!(
                 "contract_src: {label} QR failed: {error}; sketch indices={:?}, left indices={:?}",
@@ -484,6 +508,7 @@ where
     local: &'a [(&'a T, &'a T)],
     outputs: &'a [Vec<T::Index>],
     probes: &'a mut ProbeBank<T::Index, R>,
+    context: &'a ExecutionContext,
     batch_size: usize,
     // Per-site list of (batch tensor, batch index, width) segments, storing
     // whatever chunk each `grow_segment` call actually produced. The first
@@ -518,6 +543,7 @@ where
     combined: Vec<T>,
     combined_batch: Option<T::Index>,
     generated_width: usize,
+    context: &'a ExecutionContext,
 }
 
 impl<'a, T, R> BatchedPrefixCache<'a, T, R>
@@ -530,11 +556,13 @@ where
         local: &'a [(&'a T, &'a T)],
         outputs: &'a [Vec<T::Index>],
         probes: &'a mut ProbeBank<T::Index, R>,
+        context: &'a ExecutionContext,
     ) -> Self {
         Self {
             local,
             outputs,
             probes,
+            context,
             combined: Vec::new(),
             combined_batch: None,
             generated_width: 0,
@@ -564,6 +592,7 @@ where
                 start,
                 segment_width,
                 &segment_batch,
+                self.context,
             )?;
             let mut segment_prefixes = vec![prefix.clone()];
             for prefix_site in 1..self.local.len() - 1 {
@@ -576,6 +605,7 @@ where
                     start,
                     segment_width,
                     &segment_batch,
+                    self.context,
                 )?;
                 segment_prefixes.push(prefix.clone());
             }
@@ -629,11 +659,13 @@ where
         outputs: &'a [Vec<T::Index>],
         probes: &'a mut ProbeBank<T::Index, R>,
         batch_size: usize,
+        context: &'a ExecutionContext,
     ) -> Self {
         Self {
             local,
             outputs,
             probes,
+            context,
             batch_size: batch_size.max(1),
             segments: (0..local.len() - 1).map(|_| Vec::new()).collect(),
             segment_total_width: 0,
@@ -652,6 +684,7 @@ where
             start,
             width,
             &batch,
+            self.context,
         )?;
         self.segments[0].push((prefix, batch, width));
         self.segment_total_width += width;
@@ -680,6 +713,7 @@ where
                     covered,
                     width,
                     &batch,
+                    self.context,
                 )?;
                 debug_assert_eq!(self.segments[next_site].len(), segment);
                 self.segments[next_site].push((extended, batch, width));
@@ -786,6 +820,7 @@ where
     maximum_width: usize,
     src_options: &'a SrcOptions,
     label: &'a str,
+    context: &'a ExecutionContext,
 }
 
 fn factorize_site_adaptive<T, F>(
@@ -806,6 +841,7 @@ where
         maximum_width,
         src_options,
         label,
+        context,
     } = request;
     let mut left = outputs.to_vec();
     if let Some(right_cap) = right_cap {
@@ -818,6 +854,7 @@ where
         src_options,
         label,
         make_batch,
+        context,
     )?;
     let factor_conj = factor.conj();
     let environment = if let Some(right_environment) = right_environment {
@@ -849,6 +886,9 @@ mod tests {
 
     #[test]
     fn request_grows_a_fresh_segment_and_reuses_a_previously_cached_one() {
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let (a0, b0, a1, b1) = two_site_local(3);
         let local = vec![(&a0, &b0), (&a1, &b1)];
         let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
@@ -858,7 +898,7 @@ mod tests {
             42,
         )
         .unwrap();
-        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3);
+        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3, &context);
 
         let (first, first_batch) = cache.request(0, 0, 3).unwrap();
         assert_eq!(first_batch.dim(), 3);
@@ -884,6 +924,9 @@ mod tests {
 
     #[test]
     fn request_overgenerates_a_full_post_initial_segment_for_reuse() {
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let (a0, b0, a1, b1) = two_site_local(3);
         let local = vec![(&a0, &b0), (&a1, &b1)];
         let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
@@ -895,7 +938,7 @@ mod tests {
         .unwrap();
         // batch_size 3, first caller only needs width 4. The cache computes
         // a full second increment so a later width-3 request can reuse it.
-        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3);
+        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 3, &context);
         let (_first, _) = cache.request(0, 0, 4).unwrap();
         assert_eq!(cache.segments[0].len(), 2, "expected two width-3 segments");
         assert_eq!(
@@ -915,6 +958,9 @@ mod tests {
 
     #[test]
     fn request_extends_only_needed_segments_to_requested_site() {
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let outputs = (0..3).map(|_| DynIndex::new_dyn(3)).collect::<Vec<_>>();
         let inner = (0..3).map(|_| DynIndex::new_dyn(3)).collect::<Vec<_>>();
         let tensors = (0..3)
@@ -936,7 +982,7 @@ mod tests {
             .map(|output| vec![output])
             .collect::<Vec<_>>();
         let mut probes = ProbeBank::from_seed(outputs.clone(), 1, 42).unwrap();
-        let mut cache = PrefixCache::new(&local, &site_outputs, &mut probes, 2);
+        let mut cache = PrefixCache::new(&local, &site_outputs, &mut probes, 2, &context);
 
         cache.request(0, 0, 2).unwrap();
         cache.request(0, 2, 2).unwrap();
@@ -954,7 +1000,7 @@ mod tests {
         );
 
         let mut direct_probes = ProbeBank::from_seed(outputs, 1, 42).unwrap();
-        let mut direct = PrefixCache::new(&local, &site_outputs, &mut direct_probes, 2);
+        let mut direct = PrefixCache::new(&local, &site_outputs, &mut direct_probes, 2, &context);
         let (expected, _) = direct.request(1, 0, 2).unwrap();
         assert_eq!(
             lazy.to_vec::<f64>().unwrap(),
@@ -983,6 +1029,9 @@ mod tests {
 
     #[test]
     fn request_misaligned_range_spanning_a_segment_boundary_matches_a_direct_reference() {
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let (a0, b0, a1, b1) = two_site_local(3);
         let local = vec![(&a0, &b0), (&a1, &b1)];
         let outputs = vec![vec![a0.indices()[0].clone()], vec![a1.indices()[0].clone()]];
@@ -998,7 +1047,7 @@ mod tests {
         // fallback (unlike the ragged-reuse test above, whose second
         // request re-reads an existing segment exactly and so never
         // exercises this branch).
-        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 2);
+        let mut cache = PrefixCache::new(&local, &outputs, &mut probes, 2, &context);
         let (_first, _) = cache.request(0, 0, 2).unwrap();
         assert_eq!(
             cache.segments[0].len(),
@@ -1022,6 +1071,9 @@ mod tests {
         let mut reference_probes = ProbeBank::from_seed(index_list, 1, 42).unwrap();
         reference_probes.extend_to(3).unwrap();
         let reference_batch = DynIndex::new_link(2).unwrap();
+        let context = tensor4all_tensorbackend::ExecutionContext::Cpu(
+            tensor4all_tensorbackend::default_cpu_execution_context(),
+        );
         let reference = crate::treetn::contraction::src_probe::probed_site_pair_batch_range(
             &a0,
             &b0,
@@ -1030,6 +1082,7 @@ mod tests {
             1,
             2,
             &reference_batch,
+            &context,
         )
         .unwrap();
 

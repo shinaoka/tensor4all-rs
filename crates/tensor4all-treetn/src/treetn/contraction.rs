@@ -37,6 +37,7 @@ use tensor4all_core::{
     validate_svd_truncation_options, Canonical, FactorizeAlg, FactorizeOptions, IndexLike,
     SvdTruncationPolicy, TensorIndex, TensorLike,
 };
+use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
 
 use super::TreeTN;
 
@@ -2052,7 +2053,11 @@ where
         }
         ContractionMethod::Src => {
             let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
-            contract_src_with_rng_impl(tn_a, tn_b, center, &options, &mut rng)
+            // Legacy CPU-global compatibility boundary: host tensors built
+            // through the global default validate against this exact context.
+            // CUDA-resident inputs fail validation with a typed error.
+            let context = ExecutionContext::Cpu(default_cpu_execution_context());
+            contract_src_with_rng_impl(tn_a, tn_b, center, &options, &mut rng, &context)
         }
     }
 }
@@ -2124,7 +2129,99 @@ where
         .src_options
         .validate(options.max_bond_dim)
         .context("contract_src_with_rng: invalid SRC options")?;
-    contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng)
+    // Legacy CPU-global compatibility boundary (see `contract` Src arm).
+    let context = ExecutionContext::Cpu(default_cpu_execution_context());
+    contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng, &context)
+}
+
+/// Contract two TreeTNs with SRC in a caller-owned execution context.
+///
+/// This is the context-scoped counterpart of [`contract_src_with_rng`]: both
+/// input trees, every probe/cap tensor, all intermediates, and the result
+/// belong to `context`, with only bounded decision payloads crossing the
+/// explicit readback boundary on CUDA. Mixed host/CUDA inputs and foreign
+/// CUDA contexts fail validation before RNG advancement or contraction.
+///
+/// # Arguments
+/// * `tn_a`, `tn_b` - Input trees, both belonging to `context`.
+/// * `center` - Canonical center of the result.
+/// * `options` - Contraction options selecting [`ContractionMethod::Src`].
+/// * `rng` - Caller-owned RNG consumed for Gaussian probe randomness.
+/// * `context` - Caller-owned execution context owning inputs and results.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{DynIndex, ExecutionContext, TensorConstructionLike};
+/// use tensor4all_core::IdxTensor;
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tensor4all_treetn::{
+///     contraction::{contract_src_with_rng_in, ContractionOptions, SrcOptions},
+///     TreeTN,
+/// };
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = ExecutionContext::Cpu(Arc::new(
+///     CpuExecutionContext::from_backend(CpuBackend::new()),
+/// ));
+/// let shared = DynIndex::new_dyn(2);
+/// let output_a = DynIndex::new_dyn(2);
+/// let output_b = DynIndex::new_dyn(2);
+/// let tensor_a = <IdxTensor as TensorConstructionLike>::from_dense_in(
+///     &context,
+///     vec![shared.clone(), output_a],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// )?;
+/// let tensor_b = <IdxTensor as TensorConstructionLike>::from_dense_in(
+///     &context,
+///     vec![shared, output_b],
+///     vec![2.0, 0.0, 0.0, 3.0],
+/// )?;
+/// let tn_a = TreeTN::from_tensors(vec![tensor_a], vec![0])?;
+/// let tn_b = TreeTN::from_tensors(vec![tensor_b], vec![0])?;
+/// let options = ContractionOptions::src()
+///     .with_max_bond_dim(1)
+///     .with_src_options(SrcOptions::fixed());
+/// let mut rng = ChaCha8Rng::seed_from_u64(7);
+/// let result = contract_src_with_rng_in(&tn_a, &tn_b, &0, options, &mut rng, &context)?;
+/// assert_eq!(result.node_count(), 1);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// # Errors
+/// Returns an error when `options` does not select [`ContractionMethod::Src`],
+/// an option is invalid, the networks are incompatible, either input fails
+/// context validation, or probe generation, contraction, or factorization
+/// fails.
+pub fn contract_src_with_rng_in<T, V, R>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: ContractionOptions,
+    rng: &mut R,
+    context: &ExecutionContext,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    R: Rng + ?Sized,
+{
+    if options.method != ContractionMethod::Src {
+        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_src_with_rng_in requires ContractionMethod::Src"
+        )));
+    }
+    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
+        .context("contract_src_with_rng_in: invalid contraction options")?;
+    options
+        .src_options
+        .validate(options.max_bond_dim)
+        .context("contract_src_with_rng_in: invalid SRC options")?;
+    contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng, context)
 }
 
 fn contract_src_with_rng_impl<T, V, R>(
@@ -2133,6 +2230,7 @@ fn contract_src_with_rng_impl<T, V, R>(
     center: &V,
     options: &ContractionOptions,
     rng: R,
+    context: &ExecutionContext,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -2140,6 +2238,19 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     R: Rng,
 {
+    // Validate both complete input trees against the caller-owned context
+    // before RNG advancement or contraction: mixed host/CUDA inputs and
+    // foreign CUDA contexts fail here with the offending node identified.
+    tn_a.validate_context(context).map_err(|error| {
+        TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_src: input A validation failed: {error}"
+        ))
+    })?;
+    tn_b.validate_context(context).map_err(|error| {
+        TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_src: input B validation failed: {error}"
+        ))
+    })?;
     let output_rank = options
         .max_bond_dim
         .or(options.src_options.max_rank)
@@ -2152,6 +2263,7 @@ where
         output_rank,
         &options.src_options,
         rng,
+        context,
     )
     .map_err(TreeTNOperationError::from)
 }

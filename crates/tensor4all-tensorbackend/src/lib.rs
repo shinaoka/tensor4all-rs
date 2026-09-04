@@ -54,7 +54,9 @@ pub use backend::{
     MatrixSolveScalar, MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,
 };
 #[cfg(feature = "global-defaults")]
-pub use context::{default_cpu_execution_context, default_eager_ctx, with_default_backend, EagerContextError};
+pub use context::{
+    default_cpu_execution_context, default_eager_ctx, with_default_backend, EagerContextError,
+};
 #[cfg(feature = "explicit-context")]
 pub use context::{CpuExecutionContext, CpuExecutionContextError, ExecutionContext};
 #[cfg(feature = "tenferro-cuda")]

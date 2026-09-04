@@ -137,7 +137,13 @@ where
         V: Ord,
         <T::Index as IndexLike>::Id: Ord,
     {
-        self.truncate_impl_scoped(canonical_region, svd_policy, max_bond_dim, context_name, None)
+        self.truncate_impl_scoped(
+            canonical_region,
+            svd_policy,
+            max_bond_dim,
+            context_name,
+            None,
+        )
     }
 
     /// Context-scoped truncation.
@@ -236,9 +242,7 @@ where
 
         // Step 3: Apply truncation sweep
         let mut updater = match context {
-            Some(execution) => {
-                TruncateUpdater::new_in(max_bond_dim, svd_policy, execution.clone())
-            }
+            Some(execution) => TruncateUpdater::new_in(max_bond_dim, svd_policy, execution.clone()),
             None => TruncateUpdater::new(max_bond_dim, svd_policy),
         };
         apply_local_update_sweep(self, &plan, &mut updater)
