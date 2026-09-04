@@ -966,6 +966,80 @@ fn bench_warm_edge_cut_vs_vertex_center(c: &mut Criterion) {
     group.finish();
 }
 
+/// [AI Supplied] #709 paired result-boundary measurement. Both arms use one
+/// warm evaluator, one fixture, one hint, and one batch, so the only
+/// difference is whether each result is wrapped in a dynamic rank-zero tensor
+/// (`evaluate_batched_with_hint`) or returned as a typed scalar
+/// (`evaluate_batched_typed`). The two-point arm is the batch shape TreeACI's
+/// global guard actually issues; the 64-point arm is the audited evaluator
+/// fixture.
+fn bench_typed_vs_any_scalar_results(c: &mut Criterion) {
+    const N_SITES: usize = 16;
+    const LOCAL_DIM: usize = 2;
+    const VARYING: usize = N_SITES / 2;
+
+    let mut group = c.benchmark_group("treetn_typed_vs_any_scalar_results");
+    group.sample_size(10);
+
+    for bond_dim in [16usize, 64, 256] {
+        let tt = create_tt_with_bond_dim(N_SITES, LOCAL_DIM, bond_dim);
+        let (tree, indices) = tensor_train_to_treetn(&tt).unwrap();
+
+        for n_points in [2usize, 64] {
+            let mut values = vec![0usize; N_SITES * n_points];
+            for (point, slot) in values
+                .iter_mut()
+                .skip(VARYING)
+                .step_by(N_SITES)
+                .enumerate()
+                .take(n_points)
+            {
+                *slot = point % LOCAL_DIM;
+            }
+            let shape = [N_SITES, n_points];
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &indices,
+                CachedEvaluatorOptions {
+                    center: Some(VARYING),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let hint = EvaluationHint::around(VARYING);
+            let wrapped = evaluator
+                .evaluate_batched_with_hint(points, hint.clone())
+                .unwrap();
+            let typed = evaluator
+                .evaluate_batched_typed::<f64>(points, hint.clone())
+                .unwrap();
+            assert_eq!(wrapped.len(), typed.len());
+            for (wrapped, typed) in wrapped.iter().zip(&typed) {
+                assert_eq!(wrapped.real(), *typed);
+            }
+
+            let label = format!("chi{bond_dim}_p{n_points}");
+            group.bench_function(BenchmarkId::new("any_scalar", &label), |b| {
+                b.iter(|| {
+                    evaluator
+                        .evaluate_batched_with_hint(black_box(points), hint.clone())
+                        .unwrap()
+                })
+            });
+            group.bench_function(BenchmarkId::new("typed", &label), |b| {
+                b.iter(|| {
+                    evaluator
+                        .evaluate_batched_typed::<f64>(black_box(points), hint.clone())
+                        .unwrap()
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_chain_size_scaling,
@@ -977,6 +1051,7 @@ criterion_group!(
     bench_cached_evaluator_scalar_kinds,
     bench_prepared_branch_slice_reuse,
     bench_directed_component_scan,
-    bench_warm_edge_cut_vs_vertex_center
+    bench_warm_edge_cut_vs_vertex_center,
+    bench_typed_vs_any_scalar_results
 );
 criterion_main!(benches);
