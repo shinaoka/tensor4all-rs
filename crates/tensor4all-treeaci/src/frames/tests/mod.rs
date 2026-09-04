@@ -3607,3 +3607,194 @@ fn measure_three_incoming_case(m: usize, d: usize) {
         peak_elements * std::mem::size_of::<f64>(),
     );
 }
+
+/// One measured accounting record for a single candidate-frame contraction of
+/// the arbitrary-degree (three-or-more-incoming) route and of the scalar
+/// oracle it replaced, at one candidate count per incoming component.
+#[derive(Clone, Copy, Debug)]
+struct CandidateProductAccounting {
+    outgoing_dim: usize,
+    chi_product: usize,
+    candidate_product: usize,
+    batched_core_reads: u64,
+    scalar_core_reads: u64,
+    packed_cross_elements: usize,
+}
+
+/// Drives both documented routes of one degree-three candidate-frame
+/// contraction and returns their measured core-element read counts.
+///
+/// The hub carries a length-one physical index so the contraction is exactly
+/// one `local_coordinate` group; that keeps the measured counts equal to the
+/// per-group law under test instead of a group count times it.
+fn measure_candidate_product_accounting(
+    candidates_per_component: usize,
+    chi: usize,
+) -> CandidateProductAccounting {
+    let m = candidates_per_component;
+    let hub_physical = DynIndex::new_dyn(1);
+    let arm1_physical = DynIndex::new_dyn(1);
+    let arm_physical: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(m)).collect();
+    let outgoing_bond = DynIndex::new_dyn(4);
+    let incoming_bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(chi)).collect();
+
+    let mut hub_indices = vec![hub_physical, outgoing_bond.clone()];
+    hub_indices.extend(incoming_bonds.iter().cloned());
+    let hub = IdxTensor::from_dense(
+        hub_indices,
+        (0..4 * chi * chi * chi)
+            .map(|value| ((value % 97) as f64 - 48.0) / 32.0)
+            .collect(),
+    )
+    .unwrap();
+    let arm1 = IdxTensor::from_dense(
+        vec![outgoing_bond, arm1_physical],
+        (0..4).map(|value| (value as f64 + 1.0) / 4.0).collect(),
+    )
+    .unwrap();
+    let mut tensors = vec![hub, arm1];
+    for (arm, (bond, physical)) in incoming_bonds.iter().zip(&arm_physical).enumerate() {
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![bond.clone(), physical.clone()],
+                (0..chi * m)
+                    .map(|value| ((value % (29 + arm)) as f64 - 14.0) / 16.0)
+                    .collect(),
+            )
+            .unwrap(),
+        );
+    }
+    let inputs = vec![TreeTN::from_tensors(tensors, (0..5).collect()).unwrap()];
+
+    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds: Vec<Vec<usize>> = (0..m)
+        .map(|index| vec![0, 0, index, index, index])
+        .collect();
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+
+    let reference = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let outgoing_dim = reference.bond_dim(0, edge).unwrap();
+    let chi_product: usize = problem.directed_edges[edge]
+        .incoming_to_from
+        .iter()
+        .map(|incoming| reference.bond_dim(0, *incoming).unwrap())
+        .product();
+    let candidate_product: usize = problem.directed_edges[edge]
+        .incoming_to_from
+        .iter()
+        .map(|incoming| candidate_sets.ids[*incoming].len())
+        .product();
+
+    // Independent stores so neither route reads the other's cache, and a
+    // counter reset after each store is built so only the contraction under
+    // test is attributed.
+    let batched_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    super::debug_stats::reset();
+    super::multi_incoming_debug_stats::reset();
+    let batched = batched_frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .unwrap();
+    let batched_core_reads = super::debug_stats::core_element_reads();
+    assert_eq!(
+        super::multi_incoming_debug_stats::batched_groups(),
+        1,
+        "the accounting fixture must take the batched route exactly once"
+    );
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 0);
+
+    let scalar_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    super::debug_stats::reset();
+    let scalar: Vec<Vec<f64>> = candidates
+        .iter()
+        .map(|candidate| {
+            scalar_frames
+                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .unwrap()
+        })
+        .collect();
+    let scalar_core_reads = super::debug_stats::core_element_reads();
+
+    // Accounting is only meaningful for two routes that agree numerically.
+    let scale = max_modulus(&scalar);
+    assert!(scale > 1.0e-3, "degenerate accounting fixture: {scale}");
+    let residual = packed_scalar_residual(&batched, &scalar);
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "accounting fixture routes disagree: residual {residual:.3e}, scale {scale:.3e}"
+    );
+
+    CandidateProductAccounting {
+        outgoing_dim,
+        chi_product,
+        candidate_product,
+        batched_core_reads,
+        scalar_core_reads,
+        packed_cross_elements: outgoing_dim * candidate_product,
+    }
+}
+
+/// [AI Supplied] #718 Step 2 candidate-product accounting gate for #713.
+///
+/// The #713 closure measured a 16x-313x wall-time win on this route; a timing
+/// ratio cannot state which exponent changed. This gate states it with
+/// counters, at three candidate counts per incoming component (1x/2x/4x, so
+/// 1x/8x/64x in candidate product) at a fixed bond dimension:
+///
+/// * the scalar route reads `candidates * outgoing_dim * product(chi_k)` core
+///   elements, i.e. it is exactly linear in the candidate product;
+/// * the batched route reads `outgoing_dim * product(chi_k)`, i.e. it is
+///   exactly constant in the candidate product -- this is the removed cliff;
+/// * the full cross that both routes must still produce is
+///   `outgoing_dim * product(n_k)` values, which does grow with the candidate
+///   product. That remaining growth is the algorithmic limit #713 recorded at
+///   its measurement boundary, and this gate pins it so a later lazy/block
+///   formulation has a number to beat.
+#[test]
+fn candidate_product_accounting_separates_the_batched_and_scalar_exponents() {
+    const CHI: usize = 3;
+    const COUNTS: [usize; 3] = [2, 4, 8];
+
+    let records = COUNTS.map(|m| measure_candidate_product_accounting(m, CHI));
+
+    for (m, record) in COUNTS.iter().zip(&records) {
+        let required = record.outgoing_dim * record.chi_product;
+        assert_eq!(
+            record.chi_product,
+            CHI.pow(3),
+            "fixture must keep the bond product fixed while the candidate count varies"
+        );
+        assert_eq!(record.candidate_product, m.pow(3));
+        assert_eq!(
+            record.batched_core_reads, required as u64,
+            "batched core reads must equal d * product(chi_e) at m={m}: {record:?}"
+        );
+        assert_eq!(
+            record.scalar_core_reads,
+            (record.candidate_product * required) as u64,
+            "scalar core reads must equal candidates * d * product(chi_e) at m={m}: {record:?}"
+        );
+        assert_eq!(
+            record.packed_cross_elements,
+            record.outgoing_dim * record.candidate_product
+        );
+    }
+
+    // Stated as growth ratios as well as absolute formulas, because the
+    // exponent, not the constant, is the claim.
+    let batched: Vec<u64> = records.iter().map(|r| r.batched_core_reads).collect();
+    assert_eq!(
+        batched[0], batched[1],
+        "batched core reads must not grow with the candidate product"
+    );
+    assert_eq!(batched[1], batched[2]);
+
+    let scalar: Vec<u64> = records.iter().map(|r| r.scalar_core_reads).collect();
+    assert_eq!(scalar[1], 8 * scalar[0], "1x -> 8x candidate product");
+    assert_eq!(scalar[2], 64 * scalar[0], "1x -> 64x candidate product");
+
+    let cross: Vec<usize> = records.iter().map(|r| r.packed_cross_elements).collect();
+    assert_eq!(cross[1], 8 * cross[0]);
+    assert_eq!(cross[2], 64 * cross[0]);
+}

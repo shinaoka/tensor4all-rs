@@ -7581,6 +7581,102 @@ mod tests {
         assert_eq!(stats.warm_edge_cut_assembly_visits, 7 * 2);
     }
 
+    /// [AI Supplied] #718 Step 2 scaling gate for the #708 warm assembly law.
+    ///
+    /// The claim under test is `points * chi_edge` **and nothing else**: the
+    /// assembly is a dot product over the cut bond, so doubling either factor
+    /// must double the work count and changing a descendant bond dimension
+    /// must not change it at all. A single fixed size cannot separate those
+    /// three statements, so each factor is swept independently at 1x/2x/4x
+    /// while the other two are held fixed. The exponent claim is carried by
+    /// the deterministic counter, never by wall clock.
+    ///
+    /// Chain `0-1-2-3-4` centred on `2`: sorted neighbours of `2` are
+    /// `[1, 3]`, so the deterministic cut is the `(1, 2)` bond, which is
+    /// `bond_dims[1]` in [`typed_tree_from_edges`] edge order.
+    #[test]
+    fn warm_edge_cut_assembly_work_is_points_times_edge_bond_only() {
+        const CUT_BONDS: [usize; 3] = [2, 4, 8];
+        const POINT_COUNTS: [usize; 3] = [2, 4, 8];
+        const DESCENDANT_BONDS: [usize; 3] = [2, 4, 8];
+
+        fn measure_warm_assembly_visits(
+            cut_bond: usize,
+            descendant_bond: usize,
+            n_points: usize,
+        ) -> usize {
+            let (tree, indices) = typed_tree_from_edges::<f64>(
+                &[(0, 1), (1, 2), (2, 3), (3, 4)],
+                &[descendant_bond, cut_bond, descendant_bond, descendant_bond],
+            );
+            let values = (0..n_points)
+                .flat_map(|point| (0..indices.len()).map(move |site| (site + point) % 2))
+                .collect::<Vec<_>>();
+            let shape = [indices.len(), n_points];
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+            let expected = tree.evaluate(&indices, points).unwrap();
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &indices,
+                CachedEvaluatorOptions {
+                    center: Some(2),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let cold = evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+                .unwrap();
+            assert_scalars_close(&cold, &expected);
+            let warm = evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+                .unwrap();
+            assert_scalars_close(&warm, &expected);
+
+            let stats = evaluator.stats_for_test();
+            assert_eq!(
+                stats.message_cache_misses, 0,
+                "the second identical call must be fully warm: {stats:?}"
+            );
+            assert!(
+                stats.warm_edge_cut_assembly_visits > 0,
+                "fixture did not take the warm edge-cut route: {stats:?}"
+            );
+            stats.warm_edge_cut_assembly_visits
+        }
+
+        // Factor 1: the requested point count, at fixed cut bond and fixed
+        // descendant bonds.
+        for &n_points in &POINT_COUNTS {
+            assert_eq!(
+                measure_warm_assembly_visits(4, 4, n_points),
+                n_points * 4,
+                "warm assembly must be linear in the point count"
+            );
+        }
+
+        // Factor 2: the cut bond dimension, at a fixed point count.
+        for &cut_bond in &CUT_BONDS {
+            assert_eq!(
+                measure_warm_assembly_visits(cut_bond, 4, 4),
+                4 * cut_bond,
+                "warm assembly must be linear in the cut bond dimension"
+            );
+        }
+
+        // Factor 3: the descendant bonds, which the law says do not appear.
+        // This is the property the #708 redesign actually bought: the old
+        // vertex centre paid `d * product(incident bonds)` here.
+        let descendant_visits = DESCENDANT_BONDS
+            .map(|descendant_bond| measure_warm_assembly_visits(4, descendant_bond, 4));
+        assert_eq!(
+            descendant_visits,
+            [4 * 4, 4 * 4, 4 * 4],
+            "warm assembly must not depend on any descendant bond dimension"
+        );
+    }
+
     fn typed_tree_from_edges<T: CachedEvaluatorTestScalar>(
         edges: &[(usize, usize)],
         bond_dims: &[usize],

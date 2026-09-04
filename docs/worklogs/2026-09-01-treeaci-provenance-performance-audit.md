@@ -2535,3 +2535,70 @@ counting allocator includes in the 138 blocks; removing it needs an ownership
 change in the component-batch boundary rather than a scratch buffer, so it was
 left for a follow-up instead of being bundled into this closure.
 
+
+## 2026-09-04 #718 predeclared protocol
+
+This section is written **before** any #718 timing is collected, so that the
+primary metric, the minimum detectable effect, and the pass rule of each lane
+cannot be chosen after seeing a result. It is committed together with the
+benchmark and complexity-test code, ahead of the measurement commit; `git log`
+on this file is the record of that ordering. Every policy statement here is
+**[AI Supplied]** evidence policy, not a literature claim.
+
+### Terminology fixed for this task
+
+`z` is a node's **tree coordination number**: its number of incident bonds.
+The candidate-frame kernel is selected by the number of **incoming
+components** of a directed edge, which is `z - 1` (`incoming_to_from` in
+`crates/tensor4all-treeaci/src/problem.rs`), because an outward arc excludes
+its own target. Therefore:
+
+| `z` | incoming components | candidate-frame route |
+|---|---|---|
+| 2 | 1 | single-incoming kernel (chain interior) |
+| 3 | 2 | exactly-two-incoming kernel (Y junction, comb branch point) |
+| 4 | 3 | #713 arbitrary-degree kernel |
+| 5 | 4 | #713 arbitrary-degree kernel |
+
+Every number reported below states which of the two conventions it uses. The
+#713 route is first reached at `z >= 4`; a coordination-3 branch point does
+**not** reach it.
+
+### Lanes, primary metrics, and MDEs
+
+| lane | primary metric | MDE / pass rule |
+|---|---|---|
+| `L1` reported slow workload | Criterion median of `aci_vs_treeaci_chain_guard/tree/256` and its ratio to the `train/256` arm in the same run | The ratio must be resolved more tightly than the observed run-to-run spread of per-run medians over three whole-binary repetitions. The recorded #699 reference is `2.47x` slower with the default Guard and `0.88x` with it disabled; the lane passes only if the current ratio is measured, paired in the same run, and stated against that reference. No target-path regression versus the reference is allowed. |
+| `L2` complexity laws | exact deterministic counters | Equality, not a threshold: raw-centre visits `= d * product(chi_e)`; warm edge-cut assembly visits `= points * chi_edge` and independent of every descendant bond; arbitrary-degree candidate core reads `= outgoing_dim * product(chi_k)` for the batched route and `= candidates * outgoing_dim * product(chi_k)` for the scalar route. A single failing size fails the lane. |
+| `L3` independent scaling fixtures | Criterion median per swept point, one dimension varied at a time | Reported as observed growth with the noise floor stated. This lane establishes the gate, so it makes **no** speedup claim; a claim would need a baseline/candidate pair on the same fixture. |
+| `L4` #709 downstream Guard stage (carry-over) | isolated `pi_rtau` / `sigma_rtau` stage wall time from identical checkpoint inputs, baseline `4713ba8` versus candidate `a7632cc`, three repetitions per side, `taskset -c 0` | Complete output parity **first**: identical convergence flag, sweep count, evaluated points, and maximum error, plus identical hub/reference node identity, coordination number, and bond dimensions in the stage diagnostics JSON. Only then are paired medians compared, and only a difference above the observed run-to-run spread is reported as a difference. |
+| `L5` #713 downstream applicability | structural verification of the downstream topology, not a timing | Pass means the maximum coordination number actually used downstream is read out of the downstream source at its clean `HEAD` and shown to be `< 4`, i.e. the #713 route is unreachable there. Otherwise the gate must be run, not recorded `N/A`. |
+
+### Fixed measurement configuration
+
+- `taskset -c 0`; `RAYON_NUM_THREADS=1`, `OMP_NUM_THREADS=1`,
+  `TENFERRO_NUM_THREADS=1`.
+- Release/bench profile; ten Criterion samples per case; `0.5 s` warm-up and a
+  `2 s` measurement window in the new scaling benchmark; the existing parity
+  benchmark keeps its ten-sample configuration.
+- Statistic: Criterion's median with its 95% bootstrap confidence interval.
+- Noise floor: the spread of per-run medians across at least three repetitions
+  of the whole benchmark binary. This is the number every wall-clock claim is
+  compared against; nothing below it is reported as an effect.
+- Fixtures are analytic and seed-free apart from one recorded constant, so
+  repeated runs build bit-identical inputs.
+- Correctness precedes timing in every harness: each case checks one dense
+  materialization against one dense reference and aborts on a residual above
+  its bound before its timed loop starts.
+
+### Observability limits recorded in advance
+
+Two counters #718 lists are not reachable from a benchmark through the public
+surface, and are therefore gated by crate-internal counter tests rather than
+invented at the benchmark level:
+
+- the cached evaluator's message-cache hit/miss/eviction counts
+  (`CachedEvaluationStats` is private; `TreeAciDiagnostics` exposes retained
+  records and logical retained bytes, not hit rates);
+- a process peak-byte figure. All byte numbers in this task are the documented
+  logical payload accounting, never allocator or RSS measurements.

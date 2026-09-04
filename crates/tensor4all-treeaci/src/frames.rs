@@ -204,6 +204,21 @@ pub(crate) mod debug_stats {
         static SCALAR_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
         static BATCHED_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
         static MEMO_HIT_COPIES: Cell<u64> = const { Cell::new(0) };
+        static CORE_ELEMENT_READS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Records how many prepared-core elements a contraction route reads.
+    ///
+    /// Recorded once per gather or per scalar contraction call, from the
+    /// shape that call is about to walk, so the inner reduction loops keep
+    /// their exact pre-instrumentation form and the `#713`/`#718` timing
+    /// measurements are not perturbed by a per-element counter.
+    pub(crate) fn record_core_element_reads(count: usize) {
+        CORE_ELEMENT_READS.with(|total| total.set(total.get().saturating_add(count as u64)));
+    }
+
+    pub(crate) fn core_element_reads() -> u64 {
+        CORE_ELEMENT_READS.with(Cell::get)
     }
 
     pub(crate) fn record_scalar_compute_call() {
@@ -249,6 +264,7 @@ pub(crate) mod debug_stats {
         SCALAR_COMPUTE_CALLS.with(|count| count.set(0));
         BATCHED_COMPUTE_CALLS.with(|count| count.set(0));
         MEMO_HIT_COPIES.with(|count| count.set(0));
+        CORE_ELEMENT_READS.with(|count| count.set(0));
     }
 }
 
@@ -2852,6 +2868,18 @@ fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
     }
     let outgoing_stride = core.strides[outgoing_axis];
 
+    // `accumulate_incoming` bottoms out in exactly one core read per point of
+    // the incoming Cartesian product, for every outgoing coordinate, so the
+    // read count of this call is fixed by its shape alone.
+    #[cfg(test)]
+    debug_stats::record_core_element_reads(
+        outgoing.dim()
+            * incoming_axes
+                .iter()
+                .map(|(_, values)| values.len())
+                .product::<usize>(),
+    );
+
     let mut result = vec![T::default(); outgoing.dim()];
     for (outgoing_value, slot) in result.iter_mut().enumerate() {
         let outgoing_offset = base_offset + outgoing_value * outgoing_stride;
@@ -2899,6 +2927,8 @@ fn single_incoming_core_matrix<T: TreeAciScalar>(
 ) -> Matrix<T> {
     let outgoing_stride = core.strides[outgoing_axis];
     let incoming_stride = core.strides[incoming_axis];
+    #[cfg(test)]
+    debug_stats::record_core_element_reads(outgoing_dim * incoming_dim);
     let mut data = Vec::with_capacity(outgoing_dim * incoming_dim);
     for incoming_value in 0..incoming_dim {
         for outgoing_value in 0..outgoing_dim {
@@ -2942,6 +2972,8 @@ fn single_incoming_all_physical_core_matrix<T: TreeAciScalar>(
                 .sum::<usize>()
         })
         .collect::<Vec<_>>();
+    #[cfg(test)]
+    debug_stats::record_core_element_reads(rows * incoming_dim);
     let mut data = Vec::with_capacity(rows * incoming_dim);
     for incoming_value in 0..incoming_dim {
         for &physical_offset in &physical_offsets {
@@ -3189,6 +3221,8 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
     let values = match incoming_axes.len() {
         0 => (0..outgoing_dim)
             .map(|outgoing_value| {
+                #[cfg(test)]
+                debug_stats::record_core_element_reads(1);
                 core.values
                     .get(physical_offset + outgoing_value * outgoing_stride)
                     .copied()

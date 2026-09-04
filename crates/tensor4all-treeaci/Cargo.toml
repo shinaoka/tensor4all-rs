@@ -29,3 +29,10 @@ thiserror.workspace = true
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "aci_scaling"
+harness = false
