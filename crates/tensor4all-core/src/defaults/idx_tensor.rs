@@ -5827,7 +5827,7 @@ impl TensorFactorizationLike for IdxTensor {
                 left_inds,
             );
         }
-        Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds)
+        Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds, context)
     }
 
     fn src_error_estimate(
@@ -5909,6 +5909,7 @@ impl IdxTensor {
         batch_tensor: &IdxTensor,
         batch_index: &DynIndex,
         left_inds: &[DynIndex],
+        context: &ExecutionContext,
     ) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError> {
         use crate::defaults::idx_tensor::unfold_split_inner;
 
@@ -5973,11 +5974,51 @@ impl IdxTensor {
                 anyhow::Error::new(error).context("resident probe batch QR failed"),
             )
         })?;
-        let rank = q_full.shape().get(1).copied().ok_or_else(|| {
+        let full_rank = q_full.shape().get(1).copied().ok_or_else(|| {
             FactorizeError::ComputationError(anyhow::anyhow!(
                 "resident probe batch Q factor is not rank-2"
             ))
         })?;
+        let appended_norm = batch_tensor
+            .norm_in(context)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let tolerance = 32.0 * f64::EPSILON * m.max(b) as f64 * appended_norm.max(1.0);
+        let mut rank = 0;
+        for diagonal in 0..full_rank {
+            let scalar = r_full
+                .slice_axis(0, diagonal..diagonal + 1)
+                .and_then(|value| value.slice_axis(1, diagonal..diagonal + 1))
+                .and_then(|value| value.reshape(&[1]))
+                .map_err(|error| {
+                    FactorizeError::ComputationError(
+                        anyhow::Error::new(error).context("resident QR rank guard failed"),
+                    )
+                })?;
+            let scalar = Self::from_inner(vec![DynIndex::new_dyn(1)], scalar)
+                .map_err(FactorizeError::ComputationError)?;
+            let value = scalar
+                .read_decision_data(context)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?[0]
+                .abs();
+            if !value.is_finite() || value <= tolerance {
+                break;
+            }
+            rank += 1;
+        }
+        if let Some(previous) = previous {
+            if rank < previous.rank {
+                return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                    "resident SRC QR rank decreased from {} to {rank}",
+                    previous.rank
+                )));
+            }
+        }
+        let q_full = q_full
+            .slice_axis(1, 0..rank)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let r_full = r_full
+            .slice_axis(0, 0..rank)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let cap = DynIndex::new_bond(rank)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let batch = DynIndex::new_link(total_width)
