@@ -877,6 +877,14 @@ fn tensor_like_default_context_seam_reports_unsupported() {
     assert!(tensor.validate_context(&context).is_err());
     assert!(DefaultOnlyTensor::ones_in(&context, &[]).is_err());
     assert!(DefaultOnlyTensor::from_dense_in(&context, Vec::new(), Vec::<f64>::new()).is_err());
+    assert!(tensor.scale_in(2.0, &context).is_err());
+    assert!(tensor.norm_in(&context).is_err());
+    assert!(tensor
+        .factorize_in(&[], &FactorizeOptions::qr(), &context)
+        .is_err());
+    assert!(tensor
+        .factorize_full_rank_in(&[], FactorizeAlg::QR, Canonical::Left, &context)
+        .is_err());
     let error = tensor.src_error_estimate_in(&context).unwrap_err();
     assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
     let error = DefaultOnlyTensor::factorize_probe_batch_incremental_in(
