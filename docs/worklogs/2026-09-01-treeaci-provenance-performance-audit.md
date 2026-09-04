@@ -1695,6 +1695,13 @@ cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_
 converged; sweeps=5; evaluated_points=98210; diagnostics JSON written
 ```
 
+After the eager-context race repair, the same complete downstream workflow was
+rerun with `SGW_RUN_TAG=aci-gate-final`; SimpleTT, TreeACI, CTTN, all slice
+extraction, and all plotting stages passed. The final isolated TreeACI checks
+also converged: `pi_rtau` in 7 sweeps with 177,766 evaluated points and
+`sigma_rtau` in 5 sweeps with 99,374 evaluated points. These observed gate
+results are **[AI Supplied]** and do not change the literature evidence.
+
 The first SGW attempt stopped before workload execution because the existing
 SGW binary requires the fixed path `/tensor4all-rust/tensor4all-rs`; this was
 resolved by an explicit temporary symlink to the candidate worktree and the
