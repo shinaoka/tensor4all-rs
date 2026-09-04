@@ -672,6 +672,26 @@ pub trait TensorVectorSpace: TensorIndex {
     /// failure.
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error>;
 
+    /// Real scalar multiplication in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::scale`] for real factors: the
+    /// scalar is constructed in the tensor's owning runtime (explicit upload
+    /// for CUDA), so explicit-context tensors never enter the process-global
+    /// default context.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when scoped scaling is unsupported for this
+    /// tensor type, when the tensor does not belong to `context`, or when
+    /// the construction, upload, or multiplication fails.
+    fn scale_in(
+        &self,
+        _factor: f64,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(anyhow::anyhow!("context-scoped scaling is not supported for this tensor type").into())
+    }
+
     /// Inner product (dot product) of two tensors.
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
@@ -703,6 +723,25 @@ pub trait TensorVectorSpace: TensorIndex {
     /// ```
     fn norm(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.norm_squared()?.sqrt())
+    }
+
+    /// Frobenius norm in a caller-owned execution context.
+    ///
+    /// Context-scoped counterpart of [`Self::norm`]: reductions run in the
+    /// tensor's owning runtime and only the scalar result crosses the
+    /// explicit readback boundary on CUDA. CPU contexts delegate to
+    /// [`Self::norm`] unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when scoped norm evaluation is unsupported for
+    /// this tensor type, when the tensor does not belong to `context`, or
+    /// when the reductions or explicit readback fail.
+    fn norm_in(
+        &self,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<f64, Self::Error> {
+        Err(anyhow::anyhow!("context-scoped norm is not supported for this tensor type").into())
     }
 
     /// Compute the maximum absolute value of all tensor elements.

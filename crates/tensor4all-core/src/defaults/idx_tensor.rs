@@ -5715,6 +5715,18 @@ impl TensorVectorSpace for IdxTensor {
         IdxTensor::scale(self, scalar)
     }
 
+    fn scale_in(
+        &self,
+        factor: f64,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::scale_in(self, factor, context)
+    }
+
+    fn norm_in(&self, context: &ExecutionContext) -> std::result::Result<f64, Self::Error> {
+        IdxTensor::norm_in(self, context)
+    }
+
     fn inner_product(&self, other: &Self) -> std::result::Result<crate::AnyScalar, Self::Error> {
         IdxTensor::inner_product(self, other)
     }
@@ -7839,6 +7851,190 @@ impl IdxTensor {
                 anyhow::anyhow!("decision payloads support f64 and Complex64 storage only"),
             ))
         }
+    }
+
+    /// Scale every element by a real factor in a caller-owned context.
+    ///
+    /// The scalar is built in the tensor's owning runtime (explicit upload
+    /// for CUDA) and multiplied there; host-storage CPU tensors are adopted
+    /// into `context` first via explicit construction. With a CPU context
+    /// this matches [`IdxTensor::scale`] bit-for-bit.
+    ///
+    /// # Arguments
+    ///
+    /// * `factor` - Real scaling factor.
+    /// * `context` - Caller-owned execution context the tensor belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let tensor = IdxTensor::from_dense_in(
+    ///     &context,
+    ///     vec![DynIndex::new_dyn(2)],
+    ///     vec![1.0_f64, 2.0],
+    /// )?;
+    /// let scaled = tensor.scale_in(3.0, &context)?;
+    /// assert_eq!(scaled.to_vec::<f64>()?, vec![3.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the tensor does not belong to
+    /// `context`, when the storage is neither `f64` nor `Complex64`, or when
+    /// the scalar construction, upload, or multiplication fails.
+    pub fn scale_in(
+        &self,
+        factor: f64,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        self.validate_context(context)?;
+        let adopted_storage;
+        let operand: &EagerTensor = match self.eager_runtime() {
+            Some(_) => self.as_inner()?,
+            // Host storage (CPU only; CUDA validated above): adopt into the
+            // context through explicit construction.
+            None => {
+                adopted_storage = Self::adopt_host_into_context(self, context)?;
+                adopted_storage.as_inner()?
+            }
+        };
+        let scalar = Self::context_scalar_in(operand, factor, context)?;
+        let scaled = operand.mul(&scalar).map_err(|error| {
+            IdxTensorError::operation(
+                "context-scoped scaling",
+                anyhow::Error::new(error).context("eager multiplication failed"),
+            )
+        })?;
+        Self::from_inner(self.indices.clone(), scaled).map_err(IdxTensorError::from)
+    }
+
+    /// Adopt host storage into a context through explicit construction.
+    fn adopt_host_into_context(
+        tensor: &Self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        if tensor.is_f64() {
+            let values = tensor.to_vec::<f64>().map_err(|error| {
+                IdxTensorError::operation("context adoption", anyhow::Error::new(error))
+            })?;
+            Self::from_dense_in(context, tensor.indices.clone(), values)
+        } else if tensor.is_c64() {
+            let values = tensor.to_vec::<Complex64>().map_err(|error| {
+                IdxTensorError::operation("context adoption", anyhow::Error::new(error))
+            })?;
+            Self::from_dense_in(context, tensor.indices.clone(), values)
+        } else {
+            Err(IdxTensorError::operation(
+                "context adoption",
+                anyhow::anyhow!("adoption supports f64 and Complex64 storage only"),
+            ))
+        }
+    }
+
+    /// Build a scalar in the operand's owning runtime (explicit upload for CUDA).
+    fn context_scalar_in(
+        operand: &EagerTensor,
+        factor: f64,
+        context: &ExecutionContext,
+    ) -> std::result::Result<EagerTensor, IdxTensorError> {
+        let native: NativeTensor = match operand.dtype() {
+            DType::F64 => NativeTensor::from_vec_col_major(vec![], vec![factor]),
+            DType::C64 => {
+                NativeTensor::from_vec_col_major(vec![], vec![Complex64::new(factor, 0.0)])
+            }
+            other => {
+                return Err(IdxTensorError::operation(
+                    "context-scoped scaling",
+                    anyhow::anyhow!("unsupported scalar dtype {other:?}"),
+                ));
+            }
+        }
+        .map_err(|error| {
+            IdxTensorError::operation("context-scoped scaling", anyhow::anyhow!("{error}"))
+        })?;
+        let runtime = Self::context_eager_runtime(context)?;
+        let resident = match context {
+            ExecutionContext::Cpu(_) => native,
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(cuda) => cuda.upload_cuda(&native).map_err(|error| {
+                IdxTensorError::operation(
+                    "context-scoped scaling",
+                    anyhow::Error::new(error).context("scalar upload failed"),
+                )
+            })?,
+        };
+        EagerTensor::from_tensor_in(resident, runtime).map_err(|error| {
+            IdxTensorError::operation(
+                "context-scoped scaling",
+                anyhow::Error::new(error).context("scalar wrapping failed"),
+            )
+        })
+    }
+
+    /// Resolve the eager runtime owned by a context.
+    fn context_eager_runtime(
+        context: &ExecutionContext,
+    ) -> std::result::Result<Arc<EagerRuntime>, IdxTensorError> {
+        match context {
+            ExecutionContext::Cpu(context) => context.eager_runtime().map_err(|error| {
+                IdxTensorError::operation("context-scoped scaling", anyhow::Error::new(error))
+            }),
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(context) => context.eager_runtime().map_err(|error| {
+                IdxTensorError::operation("context-scoped scaling", anyhow::Error::new(error))
+            }),
+        }
+    }
+
+    /// Frobenius norm in a caller-owned execution context.
+    ///
+    /// Reductions run in the tensor's owning runtime; only the scalar result
+    /// crosses the explicit readback boundary on CUDA. With a CPU context
+    /// this delegates to [`IdxTensor::norm`] unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the tensor does not belong to
+    /// `context`, when the storage is neither `f64` nor `Complex64`, or when
+    /// the reductions or explicit readback fail.
+    pub fn norm_in(&self, context: &ExecutionContext) -> std::result::Result<f64, IdxTensorError> {
+        self.validate_context(context)?;
+        #[cfg(feature = "tenferro-cuda")]
+        if matches!(context, ExecutionContext::Cuda(_)) {
+            let inner = self.cuda_eager_inner().ok_or_else(|| {
+                IdxTensorError::operation(
+                    "context-scoped norm",
+                    anyhow::anyhow!("tensor has no resident eager value"),
+                )
+            })?;
+            let rank = inner.shape().len();
+            let axes: Vec<usize> = (0..rank).collect();
+            let squared = inner
+                .abs()
+                .and_then(|magnitudes| magnitudes.reduce_sum_squares(&axes))
+                .map_err(|error| {
+                    IdxTensorError::operation("context-scoped norm", anyhow::anyhow!("{error}"))
+                })?;
+            let scalar = squared.reshape(&[1]).map_err(|error| {
+                IdxTensorError::operation("context-scoped norm", anyhow::anyhow!("{error}"))
+            })?;
+            let values = Self::read_resident_vector(&scalar, 1, context).map_err(|error| {
+                IdxTensorError::operation("context-scoped norm", anyhow::Error::new(error))
+            })?;
+            return Ok(values[0].sqrt());
+        }
+        #[cfg(not(feature = "tenferro-cuda"))]
+        let _ = context;
+        self.norm()
     }
 }
 

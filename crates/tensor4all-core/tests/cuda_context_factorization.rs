@@ -344,3 +344,25 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
     )
     .is_err());
 }
+
+#[test]
+fn cuda_scale_and_norm_in_match_cpu() {
+    use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+
+    let cuda = Arc::new(CudaExecutionContext::new().unwrap());
+    let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+    let tensor = IdxTensor::from_dense_in(
+        &context,
+        vec![DynIndex::new_dyn(3)],
+        vec![1.0_f64, 2.0, 3.0],
+    )
+    .unwrap();
+
+    let norm = tensor.norm_in(&context).unwrap();
+    assert!((norm - 14.0_f64.sqrt()).abs() < 1e-12, "norm {norm}");
+
+    let scaled = tensor.scale_in(2.0, &context).unwrap();
+    scaled.validate_context(&context).unwrap();
+    let back = scaled.download(&cuda).unwrap();
+    assert_eq!(back.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
+}
