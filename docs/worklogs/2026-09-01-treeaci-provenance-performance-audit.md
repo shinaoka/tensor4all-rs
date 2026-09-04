@@ -2343,3 +2343,195 @@ separate derivation with its own correctness and convergence review.
 - The zero-incoming leaf route is unchanged: its contraction is a plain
   gather of `outgoing_dim` values with a compact cache key, and batching it
   would change cache semantics for no arithmetic gain.
+
+## 2026-09-04 #709 closure: typed batch evaluation and reusable Guard plans
+
+This entry records the implementation and gates for #709. The typed result
+boundary, the plan/message lifetime split, the counting-allocator measurement
+method, and the acceptance interpretation below are **[AI Supplied]**
+engineering design and evidence policy. No new literature-derived claim is
+introduced: the numerical contraction order, candidate order, pivot selection,
+tolerance semantics, and evaluated-point accounting are unchanged, and the
+existing full-text ACI/TCI/tenferro source clones plus their page/equation/
+pseudocode locators remain the evidence register for every algorithmic claim.
+The dtype conversion policy is not new either -- it is the dynamic
+`AnyScalar` + `TreeAciScalar::from_evaluated_scalar` contract, restated at a
+typed seam.
+
+### #709 changes
+
+- `TreeTNCachedEvaluator::evaluate_batched_typed<T: TensorElement>(values,
+  hint)` returns `Vec<T>` directly. `evaluate_batched` and
+  `evaluate_batched_with_hint` remain the `AnyScalar` compatibility wrappers
+  over the same internal result, so no caller loses the dynamic route.
+- The evaluator's internal raw leaf/chain/branch centre paths, the
+  degree-2/3 raw centre path, the warm edge-cut path, and the generic
+  `contract_with_options` centre path now all return `Vec<CachedScalar>`, the
+  lightweight typed carrier the message cache already used.
+  `AnyScalar::from_value` -- which eagerly builds a rank-zero `IdxTensor` --
+  is constructed only inside the compatibility wrapper. The typed route
+  constructs no rank-zero tensor for any result.
+- The typed route keeps the dynamic wrapper's dtype rules exactly: precision
+  conversion within a kind, a real payload widened into a complex request,
+  and a complex payload never silently narrowed into a real request. The
+  refusal is the new public `EvaluatedScalarKindMismatch`, wrapped in
+  `TreeTNOperationError`; `tensor4all-treeaci`'s `scalar::typed_evaluation_error`
+  downcasts it back to `TreeAciError::ScalarKind`, so the Guard's error class
+  is unchanged and every other evaluator failure still propagates as
+  `TreeAciError::TreeTN`.
+- `CachedEvaluatorPlan` separates the dtype-independent plan -- topology,
+  physical entry table, per-node and per-directed-component key layouts,
+  sorted node and neighbour tables, and memoized rooted traversal plans --
+  from the numerical message caches, which stay per evaluator.
+  `TreeTNCachedEvaluator::with_plan` shares one `Arc` plan; `new` builds a
+  private one. `with_plan` validates the node set, the sorted neighbour
+  structure, the site-index count, and each physical index's node, and
+  deliberately does not compare bond dimensions, values, or dtype: those are
+  what a plan is allowed to outlive.
+- TreeACI's Guard now uses the typed method for all four scalar kinds on both
+  the input and output routes. `InputEvaluators` builds one plan for the
+  problem and hands it to every input evaluator and to each per-invocation
+  `GuardOutputEvaluator`, so pivot injection rebuilds only numerical
+  messages. This is sound because `validate_initial_guess` already requires
+  the output to share the inputs' labelled topology and site space; the
+  invariant is now also enforced by `with_plan` on every rebuild.
+- Assignment allocations: `build_message_assignment_batches` and
+  `build_directed_assignment_batch` reuse one coordinate scratch buffer per
+  call instead of one vector per node and point, `validate_entry_values`
+  bounds-checks borrowed entries instead of cloning index/value pairs into a
+  temporary, and the per-call `tree.node_names()` sort and
+  `sorted_neighbors(tree)` rebuild are replaced by the plan's immutable
+  tables.
+
+### #709 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C10` correctness | **PASS** | `evaluate_batched_typed_matches_any_scalar_wrapper_for_all_scalar_kinds` compares the typed and `AnyScalar` routes for f32/f64/Complex32/Complex64 on cold, warm, and hinted calls: exact equality of value *and* of the wrapper's dtype debug string, preserved batch order, duplicate columns equal, empty batch empty, shape mismatch and unknown-hint errors on both routes, real-to-complex widening, complex-to-real refusal naming the requested dtype, and full `CachedEvaluationStats` equality (message hits/misses, environment count, edge-cut work count, centre-contract count) after every call, which is the evaluated-point accounting. `guard_typed_input_evaluation_matches_the_dense_oracle_for_all_scalar_kinds` repeats the check at the Guard boundary for scan-shaped and general batches against one dense materialization. Release matrices: tensor4all-treetn 523 lib tests passed / 2 pre-existing ignored, all treetn integration targets passed, 152 doctests passed; tensor4all-treeaci 148 lib / 6 pre-existing ignored, 7 public_api, 1 rank_scaling, 18 doctests; tensor4all-aci 85 lib / 1 ignored, 4 elementwise, 1 rank_scaling, 19 doctests. No tolerance was changed. The typed path creates no rank-zero result tensors; that is measured, not asserted from the diff (see `E10`). |
+| `BC10` benchmark correctness | **PASS** | The complete affected release matrices above (TreeTN, TreeACI, ACI, plus doctests and clippy with `-D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`) completed before any timing was accepted. Both timed harnesses also check themselves: the microbenchmark asserts wrapper and typed results agree element-wise before timing, and the end-to-end parity benchmark asserts the TreeACI relative error against the chain arm for every bond dimension. |
+| `E10` efficiency | **PASS** on both an end-to-end Guard improvement and a causal resource reduction | Primary metric, predeclared as the end-to-end Guard-enabled TreeACI stage time with an MDE of "above the measured run-to-run noise floor". Paired runs, same machine, `taskset -c 0`, release, identical fixture/seed/options, 3 runs per side of 10 Criterion samples each. Baseline `4ec3bcd`, candidate `6cd9c9a`. Medians of the per-run medians (ms), chi=16/32/64/128/256: baseline `145.69/251.75/120.22/143.55/181.50`, candidate `64.11/99.19/50.39/66.99/98.13`, i.e. `2.27x/2.54x/2.39x/2.14x/1.85x` (`-56.0%/-60.6%/-58.1%/-53.3%/-45.9%`). The observed noise floor is the run-to-run median spread, at worst 6.1% (baseline chi=32) and typically 1-3%, so every improvement is an order of magnitude above it. The causal resource reduction is measured by a test-only counting allocator on a warm 16-site chain (the counter is new, so its "before" point is this branch with the typed API present but the assignment-allocation reductions not yet applied, which still carries the pre-change per-result wrapping and per-call assignment work): the `AnyScalar` route needed 3,939 heap blocks per 64-point call at that point and 1,739 after, while the typed route needs 138 -- 28.6x fewer than the pre-change wrapper and far below the audited minimum of 3,072 short-lived assignment vectors per 16-site/64-point call. A warm two-point Guard-shaped call fell from 230 to 138 blocks, and the per-call count is now the same for 2 and 64 points, i.e. no longer proportional to the batch size. No target-path time regression was observed: every arm of the paired microbenchmark and every bond dimension of the end-to-end benchmark improved. |
+| `R10` release/regression | **PASS locally; the cross-repo downstream Guard stage was NOT RUN** | The changed-crate release matrices, integration targets, and doctests listed under `C10` all pass, and unchanged chain/simplett behaviour is visible in the end-to-end fixture: the SimpleTT arm's ranks, errors, sweeps, and evaluated points are byte-identical between baseline and candidate, as are TreeACI's (ranks 32/24/19/16/17, sweeps 4/5/2/2/2, errors 9.869e-9/8.622e-9/9.321e-9/9.794e-9/9.416e-9, evaluated points 71,972/66,226/29,452/34,756/37,752, frame records 60, frame retained bytes identical at every chi). Every new public item (`evaluate_batched_typed`, `CachedEvaluatorPlan` and its methods, `TreeTNCachedEvaluator::with_plan`/`plan`, `EvaluatedScalarKindMismatch`) has rustdoc stating shape, column-major layout, dtype policy, ownership, and error contract with a runnable asserted example; no `ignore`/`no_run` fence was added and no `unwrap`/`expect` was added to library code. **Limit:** the `../../gw-rs/sgw` downstream stage isolation was deliberately not run in this task, because it requires a clean cross-repo copy plus a full non-crate-scoped build that this task's build discipline excludes; the whole-workspace and downstream gates are owned by the integrating run. The Guard-enabled end-to-end parity benchmark above exercises the same `find_global_pivots` / `GuardOutputEvaluator` path with identical trajectories, but it is not a substitute for the SGW stage gate, which remains open for #709. |
+| `N` numerical stability/convergence | **PASS** | All four scalar kinds are compared against the ordinary evaluator and against a dense oracle at the Guard boundary. The typed conversion is exact for a matching kind, and its only lossy cases (f64 to f32, Complex64 to Complex32, real widened to complex) are exactly the dynamic wrapper's, covered by the existing `TreeAciScalar` precision tests. The end-to-end fixture converges identically at every bond dimension with unchanged errors and ranks, and the parity benchmark's chain-comparison error bound is unchanged. No tolerance and no reduction order was touched. |
+| `M` metamorphic semantics | **PASS** | Reordered, duplicated, partially cached, and empty batches, and the same batch answered cold, warm, and hinted, all agree between the typed and `AnyScalar` routes; duplicate columns produce identical results and the hinted and unhinted answers of the same batch are equal. The Guard-level test repeats this for a one-varying-site scan batch and a general five-point batch with a repeat. |
+| `F` fallback parity | **PASS** | The `AnyScalar` wrapper is retained and still exercised by the entire pre-existing release matrix, including the f32/Complex32 generic centre route, the f64/Complex64 raw routes, the zero-budget and over-budget message caches, the no-hint vertex-centre route, and the unsupported-raw-shape fallbacks. Both routes were also compared on the same evaluator after a partial-hit batch, and the dtype refusal path was checked on both the TreeTN and TreeACI sides. |
+| `I` invalidation/retention | **PASS** | `guard_output_evaluator_reuses_the_plan_when_output_tensors_change` replaces the Guard's output with a same-topology tree of a *different bond dimension* and different values, then rebuilds the output evaluator from the retained plan: the plan handle is asserted identical (`CachedEvaluatorPlan::is_same_as`), the new answers match a dense oracle of the new output, and they differ from the previous answers, so no numerical message survives a value change. Message caches remain keyed by directed component and assignment; the existing clear/reuse, zero-budget, bounded-budget, and subtree-invalidation tests remain green. |
+| `D` determinism | **PASS** | Three end-to-end runs per side produced identical ranks, sweeps, errors, evaluated points, and frame counters at every bond dimension, with only wall time varying. The typed conversion is a per-element `match` with no accumulation, so it cannot reorder a reduction; the shared plan's memoized rooted plans are keyed by centre and built from the same sorted neighbour table as before. |
+| `S` scaling law | **PASS for the scoped per-call resource law** | The warm per-call allocation count is now 138 for both a 2-point and a 64-point 16-site call, where the audited assignment work was proportional to nodes times points (at least 3,072 vectors at 16 sites and 64 points). The paired microbenchmark separates the same effect from bond dimension: the typed advantage on a warm hinted call is 1.76-2.01x at 2 points and 5.26-6.77x at 64 points across chi=16/64/256, i.e. it grows with batch size and not with chi, which is what a per-result wrapper cost predicts. This is a scoped result-boundary and per-call-overhead claim, not a claim about the evaluator's asymptotic contraction cost. |
+| `P` provenance/observability | **PASS** | Every design and gate-policy statement here is labelled **[AI Supplied]**; no new paper claim is made and no source locator is repurposed. No new direct `tenferro-*` dependency was added, and TreeACI reaches TreeTN only through the public typed API, the public plan type, and the public error type. Every performance claim above has its command, configuration, baseline/candidate commit, and raw output recorded below. `tensor4all-benchmark` is N/A: it maintains SimpleTT/chain ACI cases only and cannot be used to claim a TreeACI improvement. |
+| `CI` remote regression | **NOT RUN** | The #709 commit is local only; this task was instructed not to push and not to touch a PR, so the required GitHub checks have not been triggered. The gate stays open for the integrating run, which must also compare against the immediately preceding run's failure record. |
+
+### #709 verification commands and raw measurement output
+
+```text
+cargo fmt --all -- --check
+(clean)
+
+cargo clippy --release -p tensor4all-treetn -p tensor4all-treeaci --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+Finished `release` profile [optimized] target(s)
+
+cargo test --release -p tensor4all-treetn treetn::cached_evaluator --no-fail-fast
+running 77 tests
+test result: ok. 75 passed; 0 failed; 2 ignored; 0 measured; 448 filtered out
+
+cargo test --release -p tensor4all-treetn --lib --no-fail-fast
+test result: ok. 523 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+
+cargo test --release -p tensor4all-treetn --tests --no-fail-fast
+all 22 targets passed (523/3/61/6/0/0/18/12/20/1/35/2/27/2/28/3/20/18/1/11/2/2)
+
+cargo test --doc --release -p tensor4all-treetn
+test result: ok. 152 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+cargo test --release -p tensor4all-treeaci global_guard --no-fail-fast
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 131 filtered out
+
+cargo test --release -p tensor4all-treeaci --no-fail-fast
+test result: ok. 148 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out   (lib)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out     (tests/public_api.rs)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out     (tests/rank_scaling.rs)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out    (doctests)
+
+cargo test --release -p tensor4all-aci --no-fail-fast
+test result: ok. 85 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out    (lib)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out     (tests/elementwise.rs)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out     (tests/rank_scaling.rs)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out    (doctests)
+
+cargo test --release -p tensor4all-treetn --lib treetn::cached_evaluator::tests::typed_batch_and_warm -- --nocapture
+#709 warm allocation counts: sites=16 points=64 wrapper=1739 typed=138 two_point_typed=138
+test result: ok. 1 passed
+(the same test, run earlier on this branch with the typed API present but
+ before the assignment-allocation reductions -- i.e. with the pre-change
+ per-result wrapping and per-call assignment work -- reported
+ wrapper=3939 typed=2338 two_point_typed=230)
+```
+
+Paired result-boundary microbenchmark, candidate `6cd9c9a`, warm hinted call on
+one evaluator per case, 10 samples, pinned to CPU 0:
+
+```text
+taskset -c 0 cargo bench -p tensor4all-treetn --bench cached_evaluator -- treetn_typed_vs_any_scalar_results
+any_scalar/chi16_p2      time:   [18.394 µs 18.737 µs 19.123 µs]
+typed/chi16_p2           time:   [9.3009 µs 9.3170 µs 9.3480 µs]
+any_scalar/chi16_p64     time:   [481.65 µs 499.78 µs 516.89 µs]
+typed/chi16_p64          time:   [76.061 µs 76.217 µs 76.406 µs]
+any_scalar/chi64_p2      time:   [23.016 µs 23.274 µs 23.579 µs]
+typed/chi64_p2           time:   [11.929 µs 12.073 µs 12.216 µs]
+any_scalar/chi64_p64     time:   [549.77 µs 573.12 µs 631.71 µs]
+typed/chi64_p64          time:   [84.427 µs 84.646 µs 85.040 µs]
+any_scalar/chi256_p2     time:   [28.055 µs 28.450 µs 28.771 µs]
+typed/chi256_p2          time:   [15.980 µs 16.187 µs 16.379 µs]
+any_scalar/chi256_p64    time:   [623.38 µs 632.07 µs 638.42 µs]
+typed/chi256_p64         time:   [119.12 µs 120.07 µs 120.99 µs]
+```
+
+End-to-end Guard-enabled TreeACI stage, 16-site two-input chain, tree arm only,
+identical options and seeds on both sides, `taskset -c 0`, three runs per side:
+
+```text
+T4A_TREEACI_PARITY_ENABLE_GUARD=1 taskset -c 0 cargo bench -p tensor4all-aci \
+  --bench treeaci_parity -- "aci_vs_treeaci_chain_guard/tree"
+
+baseline 4ec3bcd, per-run Criterion medians (ms)
+chi=16    145.69   143.14   146.62
+chi=32    259.51   244.48   251.75
+chi=64    122.60   119.30   120.22
+chi=128   143.58   139.85   143.55
+chi=256   181.83   177.89   181.50
+
+candidate 6cd9c9a, per-run Criterion medians (ms)
+chi=16     64.212   63.186   64.113
+chi=32     99.893   98.619   99.185
+chi=64     50.803   50.385   50.297
+chi=128    66.994   65.758   67.612
+chi=256    96.015  101.54    98.126
+
+median-of-medians ratio (baseline / candidate)
+chi=16  2.27x   chi=32  2.54x   chi=64  2.39x   chi=128  2.14x   chi=256  1.85x
+
+identical trajectory on both sides at every chi (candidate lines shown; the
+baseline lines are byte-identical apart from wall time)
+chi=16   tree: rank 32 err 9.869e-9 sweeps 4 (Converged)  evaluated_points 71972
+chi=32   tree: rank 24 err 8.622e-9 sweeps 5 (Converged)  evaluated_points 66226
+chi=64   tree: rank 19 err 9.321e-9 sweeps 2 (Converged)  evaluated_points 29452
+chi=128  tree: rank 16 err 9.794e-9 sweeps 2 (Converged)  evaluated_points 34756
+chi=256  tree: rank 17 err 9.416e-9 sweeps 2 (Converged)  evaluated_points 37752
+```
+
+The audit's own Guard-enabled 16-site reference point at chi=256 was 374.37 ms
+per run with rank 17, two sweeps, and 37,752 evaluated points. The candidate
+reaches the same rank, sweep count, and point count in 98.13 ms. Only the
+`181.50 ms` baseline measured here is a paired #709 comparison; the 374.37 ms
+figure predates Tasks 6-9 and is quoted only to place this result in the
+audit's own trajectory.
+
+Two items are deliberately left open rather than claimed. The `../../gw-rs/sgw`
+downstream Guard stage gate and the remote `CI` gate were not run in this task
+for the reasons recorded in the ledger. One smaller allocation source also
+remains: each component batch still clones its `point_to_assignment` vector out
+of the assignment batch (two clones per call in the chain fixture), which the
+counting allocator includes in the 138 blocks; removing it needs an ownership
+change in the component-batch boundary rather than a scratch buffer, so it was
+left for a follow-up instead of being bundled into this closure.
+
