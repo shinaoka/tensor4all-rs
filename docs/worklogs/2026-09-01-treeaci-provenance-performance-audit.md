@@ -1603,6 +1603,19 @@ standalone release command failed with 32 unresolved backend imports; after
 the repair the complete package matrix passed. This is a manifest/CI
 integration repair, not a tenferro functionality change.
 
+After synchronizing the branch with `origin/main` at `2a4fb6b` (PR #723), the
+full core release test exposed a parallel first-use race in the shared eager
+context. The reproducible failure was
+`defaults::contract::tests::test_mixed_dtype_tensordot_result_remains_a_valid_ad_constant`:
+`Runtime::run_prepared` rejected a prepared epoch `1` while the current epoch
+was `2`; the test passed alone and with `--test-threads=1`. The shared
+`CpuExecutionContext` now installs the built-in einsum and linalg extension
+modules while constructing the eager runtime, before the context can be
+observed by another thread. This is **[AI Supplied]** lifecycle hardening; it
+keeps lazy extension registration from invalidating AD derivative plans during
+parallel first use. The post-fix core release library matrix passed `446`
+tests with `1` existing ignored test, and the full core package target passed.
+
 ### #714 implementation
 
 - `PackedCandidateFrames<T>` is an internal packed owner with explicit bond
