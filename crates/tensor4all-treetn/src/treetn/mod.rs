@@ -623,6 +623,35 @@ where
         canonical: Canonical,
         context_name: &str,
     ) -> Result<()> {
+        self.sweep_edge_full_rank_scoped(src, dst, alg, canonical, context_name, None)
+    }
+
+    /// Context-scoped full-rank edge sweep.
+    ///
+    /// Factorizes through `factorize_full_rank_in`, so LU/CI forms and scalar
+    /// edge normalization (which needs unscoped scalar construction) return
+    /// typed errors instead of running.
+    pub(crate) fn sweep_edge_full_rank_in(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        canonical: Canonical,
+        context_name: &str,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> Result<()> {
+        self.sweep_edge_full_rank_scoped(src, dst, alg, canonical, context_name, Some(context))
+    }
+
+    fn sweep_edge_full_rank_scoped(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        canonical: Canonical,
+        context_name: &str,
+        context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+    ) -> Result<()> {
         // Find edge between src and dst
         let edge = {
             let g = self.graph.graph();
@@ -658,6 +687,16 @@ where
 
         let tensor_external_indices = tensor_src.external_indices();
         if left_inds.is_empty() {
+            // Compatibility boundary: the process-global CPU context keeps the
+            // historical scalar-norm transfer. Other explicit contexts have no
+            // scoped scalar-construction path, so they fail loudly here.
+            let legacy = context.is_none_or(|execution| execution.is_global_default_cpu());
+            if !legacy {
+                return Err(anyhow::anyhow!(
+                    "scalar edge normalization has no context-scoped path"
+                ))
+                .with_context(|| format!("{}: unsupported scalar edge", context_name))?;
+            }
             let tensor_dst = self
                 .tensor(dst)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
@@ -707,11 +746,17 @@ where
             .with_context(|| format!("{}: invalid tensor rank for factorization", context_name));
         }
 
-        // Perform factorization
-        let factorize_result = tensor_src
-            .factorize_full_rank(&left_inds, alg, canonical)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-            .with_context(|| format!("{}: factorization failed", context_name))?;
+        // Perform factorization (context-scoped when a context is supplied).
+        let factorize_result = match context {
+            Some(execution) => tensor_src
+                .factorize_full_rank_in(&left_inds, alg, canonical, execution)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .with_context(|| format!("{}: factorization failed", context_name))?,
+            None => tensor_src
+                .factorize_full_rank(&left_inds, alg, canonical)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .with_context(|| format!("{}: factorization failed", context_name))?,
+        };
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
@@ -1240,6 +1285,62 @@ where
     /// Get all node indices in the tree tensor network.
     pub fn node_indices(&self) -> Vec<NodeIndex> {
         self.graph.graph().node_indices().collect()
+    }
+
+    /// Validate that every node tensor belongs to the supplied execution context.
+    ///
+    /// Generic SRC entries call this on both input trees before RNG advancement
+    /// or contraction, so mixed host/CUDA inputs and foreign CUDA contexts fail
+    /// at the boundary with the offending node identified.
+    ///
+    /// # Arguments
+    /// * `context` - Caller-owned execution context both inputs must belong to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorConstructionLike};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tensor4all_treetn::TreeTN;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new()),
+    /// ));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = <IdxTensor as TensorConstructionLike>::from_dense_in(
+    ///     &context,
+    ///     vec![index],
+    ///     vec![1.0_f64, 2.0],
+    /// )?;
+    /// let tree = TreeTN::from_tensors(vec![tensor], vec![0])?;
+    /// tree.validate_context(&context)?;
+    /// assert_eq!(tree.node_count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`TreeTNOperationError`] identifying the offending node when any
+    /// tensor does not belong to `context`.
+    pub fn validate_context(
+        &self,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        for node in self.graph.graph().node_indices() {
+            let tensor = self.tensor(node).ok_or_else(|| {
+                TreeTNOperationError::from(anyhow::anyhow!(
+                    "context validation: node {node:?} has no tensor"
+                ))
+            })?;
+            tensor.validate_context(context).map_err(|error| {
+                let name = self.graph.node_name(node);
+                TreeTNOperationError::from(anyhow::anyhow!(
+                    "context validation: node {name:?} does not belong to the supplied execution context: {error}"
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     /// Get all node names in the tree tensor network.

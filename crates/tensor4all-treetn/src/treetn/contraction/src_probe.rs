@@ -21,6 +21,7 @@ use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_tensorbackend::ExecutionContext;
 
 use super::{SrcOptions, TreeTN};
 use crate::algorithm::CanonicalForm;
@@ -166,6 +167,22 @@ where
         .map_err(|error| anyhow::anyhow!("contract_src: probe construction failed: {error}"))
 }
 
+/// Context-scoped single probe column: the result belongs to `context`.
+fn single_probe_in<T, R>(
+    index: &T::Index,
+    probes: &ProbeBank<T::Index, R>,
+    column: usize,
+    context: &ExecutionContext,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    let data = probes.column(index, column)?.to_vec();
+    T::from_dense_in(context, vec![index.clone()], data)
+        .map_err(|error| anyhow::anyhow!("contract_src: probe construction failed: {error}"))
+}
+
 fn single_probe_batch<T, R>(
     index: &T::Index,
     probes: &ProbeBank<T::Index, R>,
@@ -189,6 +206,34 @@ where
         data.extend_from_slice(probes.column(index, column)?);
     }
     T::from_dense(vec![index.clone(), batch.clone()], data)
+        .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
+}
+
+/// Context-scoped probe batch: the result belongs to `context`.
+fn single_probe_batch_in<T, R>(
+    index: &T::Index,
+    probes: &ProbeBank<T::Index, R>,
+    first_column: usize,
+    width: usize,
+    batch: &T::Index,
+    context: &ExecutionContext,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    let capacity = index
+        .dim()
+        .checked_mul(width)
+        .ok_or_else(|| anyhow::anyhow!("contract_src: probe batch size overflow"))?;
+    let end_column = first_column
+        .checked_add(width)
+        .ok_or_else(|| anyhow::anyhow!("contract_src: probe batch column range overflow"))?;
+    let mut data = Vec::with_capacity(capacity);
+    for column in first_column..end_column {
+        data.extend_from_slice(probes.column(index, column)?);
+    }
+    T::from_dense_in(context, vec![index.clone(), batch.clone()], data)
         .map_err(|error| anyhow::anyhow!("contract_src: probe batch construction failed: {error}"))
 }
 
@@ -222,6 +267,32 @@ where
         .collect()
 }
 
+/// Context-scoped probe batch tensors: every result belongs to `context`.
+pub(super) fn probe_batch_tensors_in<T, R>(
+    outputs: &[T::Index],
+    probes: &ProbeBank<T::Index, R>,
+    first_column: usize,
+    width: usize,
+    batch: &T::Index,
+    context: &ExecutionContext,
+) -> Result<Vec<T>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    if width == 0 || batch.dim() != width {
+        anyhow::bail!(
+            "contract_src: probe batch dimension {} does not match width {}",
+            batch.dim(),
+            width
+        );
+    }
+    outputs
+        .iter()
+        .map(|index| single_probe_batch_in::<T, R>(index, probes, first_column, width, batch, context))
+        .collect()
+}
+
 /// Return the checked product of a list of index dimensions.
 pub(super) fn product_dim<I: IndexLike>(indices: &[I]) -> Result<usize> {
     indices.iter().try_fold(1usize, |size, index| {
@@ -249,6 +320,31 @@ where
     let probe_tensors = outputs
         .iter()
         .map(|index| single_probe::<T, R>(index, probes, column))
+        .collect::<Result<Vec<_>>>()?;
+    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
+    let probed_a = contract_operand_with_probes(tensor_a, &a_probes, None)?;
+    let probed_b = contract_operand_with_probes(tensor_b, &b_probes, None)?;
+    T::contract(&[&probed_a, &probed_b]).map_err(|error| {
+        anyhow::anyhow!("contract_src: factorized probe contraction failed: {error}")
+    })
+}
+
+/// Context-scoped factorized probed site pair.
+fn probed_site_pair_in<T, R>(
+    tensor_a: &T,
+    tensor_b: &T,
+    outputs: &[T::Index],
+    probes: &ProbeBank<T::Index, R>,
+    column: usize,
+    context: &ExecutionContext,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    let probe_tensors = outputs
+        .iter()
+        .map(|index| single_probe_in::<T, R>(index, probes, column, context))
         .collect::<Result<Vec<_>>>()?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, None)?;
@@ -291,6 +387,47 @@ where
         });
     }
     let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
+    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
+    let probed_a = contract_operand_with_probes(tensor_a, &a_probes, Some(batch))?;
+    let probed_b = contract_operand_with_probes(tensor_b, &b_probes, Some(batch))?;
+    contract_retaining(&[&probed_a, &probed_b], batch)
+}
+
+/// Context-scoped batched probed site pair.
+fn probed_site_pair_batch_range_in<T, R>(
+    tensor_a: &T,
+    tensor_b: &T,
+    outputs: &[T::Index],
+    probes: &ProbeBank<T::Index, R>,
+    first_column: usize,
+    width: usize,
+    batch: &T::Index,
+    context: &ExecutionContext,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    if width == 0 || batch.dim() != width {
+        anyhow::bail!(
+            "contract_src: probe batch dimension {} does not match width {}",
+            batch.dim(),
+            width
+        );
+    }
+    if outputs.is_empty() {
+        let local = T::contract(&[tensor_a, tensor_b]).map_err(|error| {
+            anyhow::anyhow!("contract_src: scalar local pair contraction failed: {error}")
+        })?;
+        let batch_values = T::ones_in(context, std::slice::from_ref(batch)).map_err(|error| {
+            anyhow::anyhow!("contract_src: scalar probe batch construction failed: {error}")
+        })?;
+        return local.outer_product(&batch_values).map_err(|error| {
+            anyhow::anyhow!("contract_src: scalar probe batch broadcast failed: {error}")
+        });
+    }
+    let probe_tensors =
+        probe_batch_tensors_in(outputs, probes, first_column, width, batch, context)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
     let probed_a = contract_operand_with_probes(tensor_a, &a_probes, Some(batch))?;
     let probed_b = contract_operand_with_probes(tensor_b, &b_probes, Some(batch))?;
@@ -344,6 +481,33 @@ where
     contract_operand_with_probes(&result, &b_probes, None)
 }
 
+/// Context-scoped unbatched probed prefix contraction.
+fn contract_prefix_with_probed_site_pair_in<T, R>(
+    prefix: &T,
+    tensor_a: &T,
+    tensor_b: &T,
+    outputs: &[T::Index],
+    probes: &ProbeBank<T::Index, R>,
+    column: usize,
+    context: &ExecutionContext,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    let probe_tensors = outputs
+        .iter()
+        .map(|index| single_probe_in::<T, R>(index, probes, column, context))
+        .collect::<Result<Vec<_>>>()?;
+    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
+    let mut result = T::contract(&[prefix, tensor_a])
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
+    result = contract_operand_with_probes(&result, &a_probes, None)?;
+    result = T::contract(&[&result, tensor_b])
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))?;
+    contract_operand_with_probes(&result, &b_probes, None)
+}
+
 /// Contract a factorized local pair with an incoming batched prefix.
 // INVARIANT: `prefix`, the two local operands, the probe bank, and the batch
 // range are all one contraction step; keeping them explicit prevents the
@@ -371,6 +535,49 @@ where
         );
     }
     let probe_tensors = probe_batch_tensors(outputs, probes, first_column, width, batch)?;
+    let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
+
+    let mut a_factors = Vec::with_capacity(a_probes.len() + 2);
+    a_factors.push(tensor_a);
+    a_factors.push(prefix);
+    a_factors.extend(a_probes.iter().copied());
+    let result = contract_retaining(&a_factors, batch)
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-A contraction failed: {error}"))?;
+
+    let mut b_factors = Vec::with_capacity(b_probes.len() + 2);
+    b_factors.push(tensor_b);
+    b_factors.push(&result);
+    b_factors.extend(b_probes.iter().copied());
+    contract_retaining(&b_factors, batch)
+        .map_err(|error| anyhow::anyhow!("contract_src: prefix-B contraction failed: {error}"))
+}
+
+/// Context-scoped batched probed prefix contraction.
+#[allow(clippy::too_many_arguments)]
+fn contract_prefix_with_probed_site_pair_batch_range_in<T, R>(
+    prefix: &T,
+    tensor_a: &T,
+    tensor_b: &T,
+    outputs: &[T::Index],
+    probes: &ProbeBank<T::Index, R>,
+    first_column: usize,
+    width: usize,
+    batch: &T::Index,
+    context: &ExecutionContext,
+) -> Result<T>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+{
+    if width == 0 || batch.dim() != width {
+        anyhow::bail!(
+            "contract_src: probe batch dimension {} does not match width {}",
+            batch.dim(),
+            width
+        );
+    }
+    let probe_tensors =
+        probe_batch_tensors_in(outputs, probes, first_column, width, batch, context)?;
     let (a_probes, b_probes) = partition_probes(tensor_a, tensor_b, outputs, &probe_tensors)?;
 
     let mut a_factors = Vec::with_capacity(a_probes.len() + 2);
@@ -681,6 +888,69 @@ where
             true
         } else {
             match factorized.right.src_error_estimate() {
+                Ok(estimate) => {
+                    estimate.error
+                        <= src_options.atol + src_options.rtol.unwrap_or(0.0) * estimate.norm
+                }
+                Err(error) => {
+                    return Err(anyhow::anyhow!(
+                        "contract_src: {label} adaptive estimator unavailable: {error}"
+                    ));
+                }
+            }
+        };
+        if !stop {
+            previous_width = width;
+            previous = Some(factorized);
+            width = width
+                .saturating_add(src_options.rank_increment)
+                .min(maximum_width);
+            continue;
+        }
+        return Ok((factorized.left, factorized.bond_index));
+    }
+}
+
+/// Context-scoped batch-native adaptive sketch growth loop.
+///
+/// The batch tensors produced by `make_batch` must already belong to
+/// `context` (callers build them with the `_in` probe constructors);
+/// factorization and estimation run through the scoped entries.
+pub(super) fn factorize_probe_batches_in<T, F>(
+    left_indices: &[T::Index],
+    initial_width: usize,
+    maximum_width: usize,
+    src_options: &SrcOptions,
+    label: &str,
+    mut make_batch: F,
+    context: &ExecutionContext,
+) -> Result<(T, T::Index)>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    F: FnMut(usize, usize) -> Result<(T, T::Index)>,
+{
+    if maximum_width == 0 {
+        anyhow::bail!("contract_src: {label} has no usable probe columns");
+    }
+    let mut width = initial_width.min(maximum_width).max(1);
+    let mut previous_width = 0;
+    let mut previous = None;
+    loop {
+        let (batch_tensor, batch_index) = make_batch(previous_width, width - previous_width)?;
+        let factorized = T::factorize_probe_batch_incremental_in(
+            previous.as_ref(),
+            &batch_tensor,
+            &batch_index,
+            left_indices,
+            context,
+        )
+        .map_err(|error| anyhow::anyhow!("contract_src: {label} QR failed: {error}"))?;
+        let saturated = factorized.rank < width || width == maximum_width;
+        let stop = if src_options.rtol.is_none() || saturated {
+            true
+        } else {
+            match factorized.right.src_error_estimate_in(context) {
                 Ok(estimate) => {
                     estimate.error
                         <= src_options.atol + src_options.rtol.unwrap_or(0.0) * estimate.norm

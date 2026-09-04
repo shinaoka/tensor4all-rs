@@ -167,7 +167,9 @@ pub mod svd {
 
 // Re-export linear algebra items for top-level access
 pub use defaults::direct_sum::direct_sum;
-pub use defaults::factorize::{factorize, factorize_full_rank};
+pub use defaults::factorize::{
+    factorize, factorize_full_rank, factorize_full_rank_in, factorize_in,
+};
 pub use defaults::qr::{default_qr_rtol, qr, qr_with, set_default_qr_rtol, QrError, QrOptions};
 pub use defaults::svd::{
     default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdError,

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tenferro::{
     DType, DotGeneralConfig, Tensor as NativeTensor, TensorRead, TensorValue, TensorView,
 };
-use tenferro_ad::{extension::adopt_untracked_eager_value, EagerTensor};
+use tenferro_ad::{extension::adopt_untracked_eager_value, EagerRuntime, EagerTensor};
 use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
 use tenferro_linalg::EagerTensorLinalgExt;
 use tensor4all_tensorbackend::{
@@ -1754,7 +1754,29 @@ impl IdxTensor {
             &refs,
             &plan.output_payload_roots,
         )?;
-        let payload_inner = EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?;
+        // Wrap the result in the operands' common eager runtime when they share
+        // one, so explicit-context tensors (e.g. SVD factors) stay in their
+        // context instead of falling back to the process-global default.
+        // Mixed runtimes keep the legacy default wrap; rejecting them is #623
+        // scope, not this seam's.
+        let mut common: Option<Arc<EagerRuntime>> = None;
+        let mut mixed = false;
+        for operand in operands {
+            if let Some(inner) = operand.storage.eager() {
+                match &common {
+                    None => common = Some(Arc::clone(inner.runtime())),
+                    Some(runtime) => {
+                        if runtime.id() != inner.ctx_id() {
+                            mixed = true;
+                        }
+                    }
+                }
+            }
+        }
+        let payload_inner = match (common, mixed) {
+            (Some(runtime), false) => EagerTensor::from_tensor_in(payload, runtime)?,
+            _ => EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?,
+        };
         Self::from_structured_payload_inner(
             result_indices,
             payload_inner,
@@ -5690,6 +5712,15 @@ impl TensorFactorizationLike for IdxTensor {
         crate::factorize::factorize(self, left_inds, options)
     }
 
+    fn factorize_in(
+        &self,
+        left_inds: &[DynIndex],
+        options: &FactorizeOptions,
+        context: &ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_in(self, left_inds, options, context)
+    }
+
     fn factorize_auto(
         &self,
         left_inds: &[DynIndex],
@@ -5705,6 +5736,16 @@ impl TensorFactorizationLike for IdxTensor {
         canonical: crate::Canonical,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize_full_rank(self, left_inds, alg, canonical)
+    }
+
+    fn factorize_full_rank_in(
+        &self,
+        left_inds: &[DynIndex],
+        alg: crate::FactorizeAlg,
+        canonical: crate::Canonical,
+        context: &ExecutionContext,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_full_rank_in(self, left_inds, alg, canonical, context)
     }
 
     fn factorize_probe_columns_incremental(
@@ -5745,13 +5786,19 @@ impl TensorFactorizationLike for IdxTensor {
         batch_tensor
             .validate_context(context)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        #[cfg(feature = "tenferro-cuda")]
-        if matches!(context, ExecutionContext::Cuda(_)) {
-            return Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds);
+        // Compatibility boundary: the process-global CPU context keeps the
+        // historical host `IncrementalQr` matrix path (bitwise-identical
+        // numerics for legacy callers). Every other explicit context uses the
+        // scoped recompute path with no host round-trip.
+        if context.is_global_default_cpu() {
+            return factorize_probe_batch_incremental_impl(
+                previous,
+                batch_tensor,
+                batch_index,
+                left_inds,
+            );
         }
-        #[cfg(not(feature = "tenferro-cuda"))]
-        let _ = context;
-        factorize_probe_batch_incremental_impl(previous, batch_tensor, batch_index, left_inds)
+        Self::resident_probe_batch_qr(previous, batch_tensor, batch_index, left_inds)
     }
 
     fn src_error_estimate(
@@ -5828,7 +5875,6 @@ impl IdxTensor {
     /// SRC probe blocks are iid random draws, for which dependence is
     /// measure-zero; a device-side rank guard plus a dependent-block test is a
     /// tracked follow-up, not part of this primitive.
-    #[cfg(feature = "tenferro-cuda")]
     fn resident_probe_batch_qr(
         previous: Option<&FactorizeResult<IdxTensor>>,
         batch_tensor: &IdxTensor,
@@ -6562,6 +6608,20 @@ impl TensorConstructionLike for IdxTensor {
         IdxTensor::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
     }
 
+    fn ones_in(
+        context: &tensor4all_tensorbackend::ExecutionContext,
+        indices: &[DynIndex],
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::ones_in(context, indices)
+    }
+
+    fn validate_context(
+        &self,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<(), Self::Error> {
+        IdxTensor::validate_context(self, context)
+    }
+
     fn from_dense_any(
         indices: Vec<DynIndex>,
         data: Vec<AnyScalar>,
@@ -6574,6 +6634,14 @@ impl TensorConstructionLike for IdxTensor {
         data: Vec<T>,
     ) -> std::result::Result<Self, Self::Error> {
         IdxTensor::from_dense(indices, data)
+    }
+
+    fn from_dense_in<T: TensorElement + Into<AnyScalar>>(
+        context: &tensor4all_tensorbackend::ExecutionContext,
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::from_dense_in(context, indices, data)
     }
 
     fn stack_along_new_index(
