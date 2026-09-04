@@ -1994,3 +1994,116 @@ The new implementation has been committed and pushed as the #708 subissue
 closure. The next implementation subissue is **#712** (the budgeted
 shared-operand grouped-GEMM tensorbackend facade); per the execution protocol,
 stop after reporting this #708 closure and do not begin #712 in the same run.
+
+## 2026-09-04 #712 predeclared protocol
+
+This section is recorded before implementing or timing #712. The public
+grouped-GEMM facade, validation policy, benchmark workload, and downstream
+acceptance interpretation are **[AI Supplied]** engineering design. No new
+paper-derived numerical or algorithmic claim is introduced for this subissue.
+The upstream tenferro API is software source provenance, not literature: the
+full cargo checkout at commit
+`007e3bb6c1187a2569d237b2bc6e6ad486f2b4f4` was inspected, especially
+`crates/tenferro-cpu/benches/grouped_gemm.rs` lines 1--165
+(`GroupedGemmJob::new`, `GroupedGemmConfig::new`, borrowed views, and
+`BackendCachedDot::grouped_gemm_cached`) and
+`crates/tenferro-cpu/src/dot_runtime.rs` lines 461--490 and 796--940
+(validation and configured-provider dispatch). This is an implementation
+reference only; it is not cited as a paper result.
+
+The fixed acceptance protocol is:
+
+- correctness: all four supported scalar kinds (f32, f64, Complex32,
+  Complex64), empty/singleton/shared-LHS/shared-RHS batches, valid offsets,
+  every validation error class, and every tensorbackend release unit,
+  integration, and doctest target; valid outputs are compared to sequential
+  individual GEMMs before timing is accepted;
+- efficiency: pinned CPU 0, one configured backend thread, ten Criterion
+  samples per case, complete declared cases consisting of 1, 2, 8, and 32
+  jobs with shared RHS/LHS spans and matching duplicated-input baselines;
+  report median runtime and exact input-copy/allocation accounting, with no
+  post-hoc case or metric selection;
+- downstream: `T=1.0` is smoke-only. The mandatory SGW gate is the complete
+  `T=0.1` A/B workflow with all configured extraction, checkpoint, row-slice,
+  assembly, and plotting stages, followed by isolated `pi_rtau` and
+  `sigma_rtau` convergence. T=1 can expose gross failures but never closes
+  #712 correctness, efficiency, or downstream readiness;
+- regression/provenance: run complete release matrices for tensorbackend,
+  TreeACI, and ACI; preserve configured provider/thread behavior; report
+  unrelated remote CI failures separately, and do not wait for pending CI to
+  start implementation.
+
+## 2026-09-04 #712 completion
+
+The implementation and all #712 gate interpretations in this section are
+**[AI Supplied]** engineering evidence. No new literature-derived claim is
+made. The upstream tenferro software reference remains the full checkout at
+`007e3bb6c1187a2569d237b2bc6e6ad486f2b4f4`; the exact source locations used
+were `crates/tenferro-cpu/benches/grouped_gemm.rs:1-165` for the descriptor,
+borrowed-view, and cached grouped-call shape, and
+`crates/tenferro-cpu/src/dot_runtime.rs:461-490,796-940` for session/provider
+validation and dispatch. These are source-code locators, not paper citations.
+
+### Implementation summary
+
+- Added tensorbackend-owned `GroupedGemmJob`, `GroupedGemmOptions`, and
+  `GroupedGemmError` APIs. Public jobs contain only offsets and matrix
+  dimensions; tenferro descriptors remain private to the bridge.
+- Added borrowed and consuming grouped execution functions. Input payloads are
+  borrowed directly as one-dimensional column-major views; only the translated
+  descriptor metadata is allocated. A configured `CpuBackend` entry point is
+  available for caller-owned provider/thread semantics, while the legacy
+  convenience entry uses the configured process-global context.
+- Validation runs before session entry: checked dimension/offset arithmetic,
+  bounds, output disjointness, compatible exact shared LHS/RHS shapes, and
+  descriptor translation budget. The output is not mutated on validation error.
+- Added all-four-scalar differential tests (f32, f64, Complex32, Complex64),
+  shared LHS/RHS cases, empty/singleton/owned cases, layout/order checks,
+  overflow/bounds/overlap/shared-shape/budget failures, and configured
+  one-thread backend coverage.
+- TreeACI production adoption is deferred. The facade's need probe is positive,
+  but the current TreeACI frame implementation has no clean grouped-GEMM seam;
+  forcing a call-site change would violate the no-regression gate. This is a
+  deliberate scope decision, not an end-to-end TreeACI performance claim.
+
+### #712 gate ledger
+
+| gate | result | evidence and limit |
+|---|---|---|
+| `C9` correctness | **PASS** | Complete tensorbackend release unit/integration matrix: 227 passed, 1 existing ignored; all 153 tensorbackend release doctests passed. New tests cover all four supported scalar kinds, shared LHS/RHS, column-major offsets, individual-GEMM oracles, empty/singleton/owned behavior, bounds, checked overflow, output overlap, incompatible shared shapes, and budget rejection. |
+| `BC9` benchmark correctness | **PASS** | The complete declared matrix (1/2/8/32 jobs × shared LHS/RHS × shared/duplicated) performed an oracle comparison before each timed pair; every case printed `oracle=pass`. No smoke-only benchmark result was accepted. |
+| `E9` efficiency | **PASS for the scoped facade; adoption deferred** | Pinned CPU 0, one configured backend thread, ten Criterion samples per timed case. Median µs (shared vs duplicated): shared LHS jobs 1 `9.6069` vs `9.8413` (2.4%), 2 `9.8085` vs `10.179` (3.6%), 8 `11.947` vs `12.379` (3.5%), 32 `19.094` vs `23.089` (17.3%); shared RHS jobs 1 `9.5049` vs `9.7545` (2.6%), 2 `9.7798` vs `10.192` (4.0%), 8 `11.439` vs `12.554` (8.9%), 32 `19.524` vs `23.372` (16.5%). The baseline copied/allocated the shared payload each call; duplicated-input bytes were 2,048/4,096/16,384/65,536 for 1/2/8/32 jobs. This proves a causal facade-level benefit, not a promoted TreeACI end-to-end result. |
+| `R9` release/regression | **PASS** | `cargo test --release --workspace --exclude tensor4all-hdf5 --no-fail-fast --quiet` passed every target; separate HDF5 release tests passed 1 active + 4 ignored unit, 46 integration, and 10 additional tests. TreeACI passed 145/6 ignored plus 7 public API, 1 rank-scaling, and 18 doctests; ACI passed 85/1 ignored plus 4 integration, 1 rank-scaling, and 19 doctests. |
+| `DS9` downstream T=0.1 | **PASS** | Clean SGW archive `/tmp/sgw-treeaci-gate-712.xUgPMJ` at source HEAD `ba6fbf3e4461bd4b6ba6447d6d22f63151637ac4`, with all tensor4all dependencies patched to this worktree, ran `SGW_RUN_TAG=aci-gate-712-t01 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 0.1`. SimpleTT, TreeACI, SRC, and CTTN completed all configured pipelines, four checkpoint stages, five row slices, assembly, and plotting. Isolated TreeACI `pi_rtau` converged in 7 sweeps with 2,027,526 evaluated points; `sigma_rtau` converged in 6 sweeps with 933,280 evaluated points. |
+| `T=1` smoke distinction | **PASS as smoke only** | The prior T=1 run is retained only for gross-breakage diagnosis. It is not used to close `C9`, `BC9`, `E9`, or `DS9`; T=0.1 is the mandatory downstream evidence. |
+| `F` fallback/provider | **PASS** | Empty jobs are a no-op; valid jobs dispatch through configured session/provider; invalid requests fail before backend mutation; the explicit `CpuBackend::with_threads(1)` test preserves the configured thread count. |
+| `D` determinism | **PASS** | Fixed job order, fixed column-major buffers, deterministic data, pinned CPU, one thread, and fixed ten-sample Criterion protocol were used. Timing outliers are disclosed by Criterion and are not used as correctness evidence. |
+| `P` provenance/observability | **PASS** | New engineering statements are labelled **[AI Supplied]**; the tenferro source commit and exact source-line locators are recorded above. No new paper claim, direct downstream tenferro dependency, or tensor4all-benchmark claim was added. `tensor4all-benchmark` was not used because no maintained comparable grouped-GEMM workload was available in scope. |
+| `CI` prior-round check | **PASS / pending coverage** | Prior #708 CI run `33868111483` at `afcb350fe41c112d68138e953b1f9b41af52fddf` passed Doctests, Lint, Maintenance scripts, and Test; Coverage remained pending when checked. Review bot run `33868108624` passed. No failure was observed to become a repair task; pending CI did not block #712. |
+
+### #712 verification commands and raw anchors
+
+```text
+cargo test --release -p tensor4all-tensorbackend --no-fail-fast --quiet
+227 passed; 1 existing ignored; 153 release doctests passed
+taskset -c 0 cargo bench --profile release -p tensor4all-tensorbackend --bench grouped_gemm -- --noplot
+complete 1/2/8/32 × shared_lhs/shared_rhs × shared/duplicated matrix; 10 samples each; every oracle=pass
+cargo test --release --workspace --exclude tensor4all-hdf5 --no-fail-fast --quiet
+all targets passed
+cargo test --release -p tensor4all-hdf5 --no-fail-fast --quiet
+1 active + 4 ignored unit; 46 integration; 10 additional tests passed
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+passed
+cargo doc --workspace --no-deps
+passed; existing unrelated rustdoc link warnings only
+cargo run -p xtask --release -- api-dump
+generated complete tensorbackend API inventory; new GroupedGemm surface present
+python3 scripts/repository-rules-review.py --base main --worktree --dry-run
+pass; python3 scripts/test-repository-rules-review.py: 90 tests passed
+SGW_RUN_TAG=aci-gate-712-t01 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 0.1
+clean T=0.1 complete workflow passed; all extraction/assembly/plotting stages passed
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T0.1_mu0.5_aci-gate-712-t01/treeaci pi_rtau
+Converged; sweeps=7; evaluated_points=2027526
+cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- runs/R10_nblock_T0.1_mu0.5_aci-gate-712-t01/treeaci sigma_rtau
+Converged; sweeps=6; evaluated_points=933280
+```

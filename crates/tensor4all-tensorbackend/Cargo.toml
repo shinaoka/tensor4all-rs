@@ -75,6 +75,11 @@ tenferro-gpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "grouped_gemm"
+harness = false
 
 [[test]]
 name = "bench_einsum_native"

@@ -1014,6 +1014,9 @@ gate and must not be smuggled into this coverage task.
 - Modify: `crates/tensor4all-tensorbackend/src/lib.rs`
 - Modify: `crates/tensor4all-tensorbackend/src/backend.rs` only for configured-provider dispatch
 - Test: `crates/tensor4all-tensorbackend/src/matrix.rs` tests and `tests/bench_einsum_native.rs`
+- Benchmark: `crates/tensor4all-tensorbackend/benches/grouped_gemm.rs` with the
+  complete declared case matrix
+- Modify: `crates/tensor4all-tensorbackend/Cargo.toml` for the benchmark target
 - Modify: `crates/tensor4all-treeaci/src/frames.rs` only when Task 11 adopts the facade
 - Modify: `crates/tensor4all-tensorbackend/README.md` if the crate documents public matrix operations there
 
@@ -1032,30 +1035,66 @@ gate and must not be smuggled into this coverage task.
 - `R9`: tensorbackend tests pass, no direct tenferro dependency leaks, and any
   optional sibling benchmark result is reported only as shared-backend
   evidence, never as a TreeACI claim.
+- `BC9`: correctness and speed evidence must come from the complete affected
+  release test matrices and the complete declared benchmark case matrix; a
+  smoke test is never sufficient. Every timed case is paired with an
+  individual-GEMM numerical oracle before its timing is accepted.
+- `DS9`: the downstream SGW workflow is run with `T=0.1` for the mandatory
+  complete A/B, extraction, assembly, and plotting gate, including isolated
+  `pi_rtau` and `sigma_rtau` convergence. `T=1` is retained only as a smoke
+  test and can never close `R9` or the subissue.
 - Secondary gates: `F`, `D`, `S`, `P`; shared-operand benefit must be causal,
   and unsupported-provider/over-budget behavior must match the fallback.
 
-- [ ] **Step 1: Define and test the public job contract.**
+- [x] **Step 1: Define and test the public job contract.**
 
   The job descriptor must contain checked output, left, and right offsets plus `rows`, `contracted`, and `cols`. Document that jobs may share input spans, output spans must be disjoint unless an explicit reduction mode is added, all buffers are column-major, and validation occurs before backend execution.
 
-- [ ] **Step 2: Add red validation tests.**
+- [x] **Step 2: Add red validation tests.**
 
   Cover f32/f64/Complex32/Complex64, empty and singleton jobs, mismatched dimensions, out-of-bounds offsets, checked overflow, overlapping outputs, shared RHS/LHS spans, unsupported dtype/layout, zero working budget, and configured provider/thread behavior. Compare every valid job to an individual GEMM result.
 
-- [ ] **Step 3: Implement the tensorbackend facade.**
+- [x] **Step 3: Implement the tensorbackend facade.**
 
   Validate all spans and the total peak working memory before entering the backend. Translate the validated generic jobs to tenferro grouped descriptors inside `tensor4all-tensorbackend`; preserve the caller-owned buffer/lifetime contract and return backend errors with context.
 
-- [ ] **Step 4: Add the need-gated TreeACI adoption probe.**
+- [x] **Step 4: Resolve the need-gated TreeACI adoption decision.**
 
-  Keep the existing two-incoming decomposition and reduction order. Add a test/benchmark-only switch that replaces duplicated-RHS batching with shared-operand grouped jobs, then compare output, peak memory, and runtime. Promote the path only if the end-to-end branch gate wins without a chain regression.
+  The tensorbackend facade benchmark is the scoped adoption probe: it compares
+  shared and duplicated operand payloads with the same grouped GEMM oracle.
+  The facade wins its copy/allocation/runtime gate, but no TreeACI call site is
+  changed because the existing two-incoming frame path has no clean grouped
+  GEMM seam in this subissue. Keep that decomposition and reduction order;
+  defer production TreeACI promotion until a dedicated end-to-end branch gate
+  can compare peak memory and runtime without a chain regression.
 
-- [ ] **Step 5: Verify and commit the facade separately from adoption.**
+- [x] **Step 5: Verify and commit the facade separately from adoption.**
+
+  Before accepting any benchmark or downstream result, run the complete
+  affected release test matrix and record the exact command/output. The SGW
+  gate is:
+
+  ```bash
+  # Optional smoke only; never a subissue-closure gate.
+  SGW_RUN_TAG=aci-gate-712-t1 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 1.0
+
+  # Mandatory downstream gate: complete configured workflow at T=0.1.
+  SGW_RUN_TAG=aci-gate-712-t01 SGW_ACI_GLOBAL_GUARD=1 ./run_r10_nblock_treeaci_ab.sh 0.1
+  cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- <T=0.1-run>/treeaci pi_rtau
+  cargo run --release --locked --features isolation-diagnostics --bin isolate_aci_stage -- <T=0.1-run>/treeaci sigma_rtau
+  ```
+
+  The mandatory T=0.1 invocation must complete all configured extraction,
+  checkpoint, row-slice, assembly, and plotting stages; both isolated stages
+  must converge. A T=1 result may diagnose gross breakage but cannot be used
+  to claim correctness, efficiency, or downstream readiness.
 
   ```bash
   cargo test --release -p tensor4all-tensorbackend --no-fail-fast
-  cargo test --release -p tensor4all-treeaci frames --no-fail-fast
+  cargo test --release -p tensor4all-treeaci --no-fail-fast
+  cargo test --release -p tensor4all-aci --no-fail-fast
+  cargo test --doc --release -p tensor4all-tensorbackend --no-fail-fast
+  cargo test --doc --release -p tensor4all-treeaci --no-fail-fast
   cargo fmt --all
   git add crates/tensor4all-tensorbackend
   git commit -m "feat(tensorbackend): add budgeted shared grouped GEMM"

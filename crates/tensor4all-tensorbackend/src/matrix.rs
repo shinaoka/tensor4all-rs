@@ -174,6 +174,506 @@ impl From<anyhow::Error> for MatrixMulError {
     }
 }
 
+/// One column-major matrix multiply in a shared-buffer grouped GEMM.
+///
+/// The three offsets address element positions in the caller-owned flat
+/// buffers. The left block has shape `rows x contracted`, the right block has
+/// shape `contracted x cols`, and the output block has shape `rows x cols`.
+/// Jobs may share either input block, but output spans must be disjoint because
+/// the operation has no reduction mode.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::GroupedGemmJob;
+///
+/// let job = GroupedGemmJob::new(8, 4, 0, 2, 3, 5);
+/// assert_eq!(job.out_offset(), 8);
+/// assert_eq!(job.lhs_offset(), 4);
+/// assert_eq!(job.rhs_offset(), 0);
+/// assert_eq!((job.rows(), job.contracted(), job.cols()), (2, 3, 5));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GroupedGemmJob {
+    out_offset: usize,
+    lhs_offset: usize,
+    rhs_offset: usize,
+    rows: usize,
+    contracted: usize,
+    cols: usize,
+}
+
+impl GroupedGemmJob {
+    /// Construct a column-major grouped-GEMM job.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        out_offset: usize,
+        lhs_offset: usize,
+        rhs_offset: usize,
+        rows: usize,
+        contracted: usize,
+        cols: usize,
+    ) -> Self {
+        Self {
+            out_offset,
+            lhs_offset,
+            rhs_offset,
+            rows,
+            contracted,
+            cols,
+        }
+    }
+
+    /// Return the output element offset.
+    pub fn out_offset(&self) -> usize {
+        self.out_offset
+    }
+
+    /// Return the left-input element offset.
+    pub fn lhs_offset(&self) -> usize {
+        self.lhs_offset
+    }
+
+    /// Return the right-input element offset.
+    pub fn rhs_offset(&self) -> usize {
+        self.rhs_offset
+    }
+
+    /// Return the output row count.
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Return the contracted dimension.
+    pub fn contracted(&self) -> usize {
+        self.contracted
+    }
+
+    /// Return the output column count.
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+}
+
+/// Resource limits for a shared-buffer grouped GEMM.
+///
+/// `max_working_bytes` bounds the temporary descriptor translation owned by
+/// the tensorbackend facade. It does not attempt to account for provider-owned
+/// internal workspace. The default is unlimited; callers with a strict memory
+/// contract should set an explicit limit and include the descriptor metadata
+/// in that budget.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::GroupedGemmOptions;
+///
+/// let options = GroupedGemmOptions { max_working_bytes: 4096 };
+/// assert_eq!(options.max_working_bytes, 4096);
+/// assert_eq!(GroupedGemmOptions::default().max_working_bytes, usize::MAX);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupedGemmOptions {
+    /// Maximum temporary bytes used to translate jobs for the provider.
+    pub max_working_bytes: usize,
+}
+
+impl Default for GroupedGemmOptions {
+    fn default() -> Self {
+        Self {
+            max_working_bytes: usize::MAX,
+        }
+    }
+}
+
+/// Validation or backend error from a shared-buffer grouped GEMM.
+///
+/// Validation is completed before the configured backend session is entered,
+/// so these errors leave the caller's output unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     grouped_mat_mul_shared, GroupedGemmError, GroupedGemmJob, GroupedGemmOptions,
+/// };
+///
+/// let error = grouped_mat_mul_shared(
+///     &[1.0_f64],
+///     &[1.0_f64],
+///     &mut [0.0_f64],
+///     &[GroupedGemmJob::new(1, 0, 0, 1, 1, 1)],
+///     GroupedGemmOptions::default(),
+/// )
+/// .unwrap_err();
+/// assert!(matches!(error, GroupedGemmError::BufferOutOfBounds { .. }));
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum GroupedGemmError {
+    /// A matrix dimension product overflowed `usize`.
+    #[error("grouped GEMM job {job} {dimension} dimensions overflow usize")]
+    DimensionOverflow {
+        /// Zero-based job index.
+        job: usize,
+        /// Dimension product that overflowed.
+        dimension: &'static str,
+    },
+    /// An offset plus the required span overflowed `usize`.
+    #[error("grouped GEMM job {job} {buffer} span overflows usize")]
+    SpanOverflow {
+        /// Zero-based job index.
+        job: usize,
+        /// Buffer whose span overflowed.
+        buffer: &'static str,
+    },
+    /// A job's input or output span exceeds its caller-owned buffer.
+    #[error(
+        "grouped GEMM job {job} {buffer} span [{offset}, {required_end}) exceeds buffer length {available}"
+    )]
+    BufferOutOfBounds {
+        /// Zero-based job index.
+        job: usize,
+        /// Buffer whose span was rejected.
+        buffer: &'static str,
+        /// Starting element offset.
+        offset: usize,
+        /// Exclusive required end offset.
+        required_end: usize,
+        /// Available element count.
+        available: usize,
+    },
+    /// Two output spans overlap without a reduction contract.
+    #[error("grouped GEMM output spans for jobs {first} and {second} overlap")]
+    OverlappingOutputs {
+        /// First job in source order.
+        first: usize,
+        /// Later overlapping job in source order.
+        second: usize,
+    },
+    /// Jobs sharing one left-input offset disagree on its matrix shape.
+    #[error(
+        "grouped GEMM jobs {first} and {second} share lhs offset with incompatible dimensions"
+    )]
+    IncompatibleSharedLhs {
+        /// First job in source order.
+        first: usize,
+        /// Later incompatible job in source order.
+        second: usize,
+    },
+    /// Jobs sharing one right-input offset disagree on its matrix shape.
+    #[error(
+        "grouped GEMM jobs {first} and {second} share rhs offset with incompatible dimensions"
+    )]
+    IncompatibleSharedRhs {
+        /// First job in source order.
+        first: usize,
+        /// Later incompatible job in source order.
+        second: usize,
+    },
+    /// The descriptor translation exceeds the caller's working-memory limit.
+    #[error(
+        "grouped GEMM descriptor translation needs {required} working bytes, limit is {limit}"
+    )]
+    WorkingMemoryExceeded {
+        /// Bytes required for the translated descriptor array.
+        required: usize,
+        /// Caller-provided maximum.
+        limit: usize,
+    },
+    /// The configured provider or tensor view rejected an otherwise validated request.
+    #[error("grouped GEMM backend execution failed: {source}")]
+    Backend {
+        /// Original tenferro diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+type GroupedGemmSpan = (usize, usize);
+
+fn grouped_gemm_dimension_spans(
+    job_index: usize,
+    job: &GroupedGemmJob,
+) -> std::result::Result<(usize, usize, usize), GroupedGemmError> {
+    let lhs = job
+        .rows
+        .checked_mul(job.contracted)
+        .ok_or(GroupedGemmError::DimensionOverflow {
+            job: job_index,
+            dimension: "lhs",
+        })?;
+    let rhs = job
+        .contracted
+        .checked_mul(job.cols)
+        .ok_or(GroupedGemmError::DimensionOverflow {
+            job: job_index,
+            dimension: "rhs",
+        })?;
+    let output = job
+        .rows
+        .checked_mul(job.cols)
+        .ok_or(GroupedGemmError::DimensionOverflow {
+            job: job_index,
+            dimension: "output",
+        })?;
+    Ok((lhs, rhs, output))
+}
+
+fn grouped_gemm_checked_span(
+    job_index: usize,
+    buffer: &'static str,
+    offset: usize,
+    elements: usize,
+    available: usize,
+) -> std::result::Result<GroupedGemmSpan, GroupedGemmError> {
+    let end = offset
+        .checked_add(elements)
+        .ok_or(GroupedGemmError::SpanOverflow {
+            job: job_index,
+            buffer,
+        })?;
+    if end > available {
+        return Err(GroupedGemmError::BufferOutOfBounds {
+            job: job_index,
+            buffer,
+            offset,
+            required_end: end,
+            available,
+        });
+    }
+    Ok((offset, end))
+}
+
+fn grouped_gemm_validate<T>(
+    lhs: &[T],
+    rhs: &[T],
+    output: &[T],
+    jobs: &[GroupedGemmJob],
+    options: GroupedGemmOptions,
+) -> std::result::Result<(), GroupedGemmError> {
+    let descriptor_bytes = jobs
+        .len()
+        .checked_mul(std::mem::size_of::<tenferro_tensor::backend::GroupedGemmJob>())
+        .ok_or(GroupedGemmError::WorkingMemoryExceeded {
+            required: usize::MAX,
+            limit: options.max_working_bytes,
+        })?;
+    if descriptor_bytes > options.max_working_bytes {
+        return Err(GroupedGemmError::WorkingMemoryExceeded {
+            required: descriptor_bytes,
+            limit: options.max_working_bytes,
+        });
+    }
+
+    for (job_index, job) in jobs.iter().enumerate() {
+        let (lhs_elements, rhs_elements, output_elements) =
+            grouped_gemm_dimension_spans(job_index, job)?;
+        let output_span = grouped_gemm_checked_span(
+            job_index,
+            "output",
+            job.out_offset,
+            output_elements,
+            output.len(),
+        )?;
+        grouped_gemm_checked_span(job_index, "lhs", job.lhs_offset, lhs_elements, lhs.len())?;
+        grouped_gemm_checked_span(job_index, "rhs", job.rhs_offset, rhs_elements, rhs.len())?;
+
+        for (previous_index, previous) in jobs[..job_index].iter().enumerate() {
+            let (_, _, previous_output_elements) =
+                grouped_gemm_dimension_spans(previous_index, previous)?;
+            let previous_output = grouped_gemm_checked_span(
+                previous_index,
+                "output",
+                previous.out_offset,
+                previous_output_elements,
+                output.len(),
+            )?;
+            if output_span.0 < previous_output.1 && previous_output.0 < output_span.1 {
+                return Err(GroupedGemmError::OverlappingOutputs {
+                    first: previous_index,
+                    second: job_index,
+                });
+            }
+            if job.lhs_offset == previous.lhs_offset
+                && (job.rows, job.contracted) != (previous.rows, previous.contracted)
+            {
+                return Err(GroupedGemmError::IncompatibleSharedLhs {
+                    first: previous_index,
+                    second: job_index,
+                });
+            }
+            if job.rhs_offset == previous.rhs_offset
+                && (job.contracted, job.cols) != (previous.contracted, previous.cols)
+            {
+                return Err(GroupedGemmError::IncompatibleSharedRhs {
+                    first: previous_index,
+                    second: job_index,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
+    lhs: &[T],
+    rhs: &[T],
+    output: &mut [T],
+    jobs: &[GroupedGemmJob],
+    session: &mut dyn tenferro_tensor::BackendSession,
+) -> std::result::Result<(), GroupedGemmError> {
+    // Reference: tenferro-rs commit 007e3bb6c1187a2569d237b2bc6e6ad486f2b4f4,
+    // crates/tenferro-cpu/benches/grouped_gemm.rs lines 1--165. The upstream
+    // descriptor is translated here so it never becomes tensorbackend's
+    // downstream public API.
+    let native_jobs: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            tenferro_tensor::backend::GroupedGemmJob::new(
+                job.out_offset,
+                job.lhs_offset,
+                job.rhs_offset,
+                job.rows,
+                job.contracted,
+                job.cols,
+            )
+        })
+        .collect();
+    let config = tenferro_tensor::backend::GroupedGemmConfig::new(
+        &native_jobs,
+        tenferro_tensor::DotGeneralAccumulation::overwrite(T::dtype()).map_err(|source| {
+            GroupedGemmError::Backend {
+                source: anyhow::Error::new(source),
+            }
+        })?,
+    );
+    let lhs_view = tenferro_tensor::TypedTensorView::from_slice([lhs.len()], [1], 0, lhs).map_err(
+        |source| GroupedGemmError::Backend {
+            source: anyhow::Error::new(source),
+        },
+    )?;
+    let rhs_view = tenferro_tensor::TypedTensorView::from_slice([rhs.len()], [1], 0, rhs).map_err(
+        |source| GroupedGemmError::Backend {
+            source: anyhow::Error::new(source),
+        },
+    )?;
+    let output_view =
+        tenferro_tensor::TypedTensorViewMut::from_slice([output.len()], [1], 0, output).map_err(
+            |source| GroupedGemmError::Backend {
+                source: anyhow::Error::new(source),
+            },
+        )?;
+    use tenferro_tensor::{TensorRead, TensorWrite};
+    session
+        .grouped_gemm_cached(
+            Some(0),
+            TensorRead::from_view(T::tensor_view(lhs_view)),
+            TensorRead::from_view(T::tensor_view(rhs_view)),
+            &config,
+            TensorWrite::from_view(T::tensor_view_mut(output_view)),
+        )
+        .map_err(|source| GroupedGemmError::Backend {
+            source: anyhow::Error::new(source),
+        })
+}
+
+/// Execute grouped column-major GEMMs over shared caller-owned buffers.
+///
+/// Each job computes `output[out_offset..] = lhs[lhs_offset..] *
+/// rhs[rhs_offset..]` for its declared matrix dimensions. Input spans may be
+/// reused by multiple jobs without copying their payload. The output buffer is
+/// mutated only after all descriptor, span, alias, and working-budget checks
+/// pass. The default process-global context supplies the configured provider;
+/// use [`grouped_mat_mul_shared_with_backend`] when the caller owns the
+/// backend explicitly.
+///
+/// # Errors
+///
+/// Returns [`GroupedGemmError`] for checked arithmetic, buffer bounds,
+/// incompatible shared shapes, overlapping outputs, working-budget, view, or
+/// configured-provider failures. Invalid requests are rejected before backend
+/// execution and leave `output` unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     grouped_mat_mul_shared, GroupedGemmJob, GroupedGemmOptions,
+/// };
+///
+/// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+/// let mut output = [0.0_f64];
+/// grouped_mat_mul_shared(
+///     &[3.0], &[4.0], &mut output, &jobs, GroupedGemmOptions::default(),
+/// )?;
+/// assert_eq!(output, [12.0]);
+/// # Ok::<(), tensor4all_tensorbackend::GroupedGemmError>(())
+/// ```
+pub fn grouped_mat_mul_shared<T: MatrixScalar + TensorScalar>(
+    lhs: &[T],
+    rhs: &[T],
+    output: &mut [T],
+    jobs: &[GroupedGemmJob],
+    options: GroupedGemmOptions,
+) -> std::result::Result<(), GroupedGemmError> {
+    grouped_gemm_validate(lhs, rhs, output, jobs, options)?;
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    crate::context::with_default_session(|session| {
+        grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
+    })
+}
+
+/// Execute grouped GEMMs through one caller-configured CPU backend.
+///
+/// This is the explicit-provider counterpart to [`grouped_mat_mul_shared`].
+/// The backend's configured provider, thread count, and execution domain are
+/// preserved; this function never constructs a fallback backend.
+///
+/// # Errors
+///
+/// Returns the same validation and backend errors as
+/// [`grouped_mat_mul_shared`].
+pub fn grouped_mat_mul_shared_with_backend<T: MatrixScalar + TensorScalar>(
+    backend: &mut tenferro_cpu::CpuBackend,
+    lhs: &[T],
+    rhs: &[T],
+    output: &mut [T],
+    jobs: &[GroupedGemmJob],
+    options: GroupedGemmOptions,
+) -> std::result::Result<(), GroupedGemmError> {
+    grouped_gemm_validate(lhs, rhs, output, jobs, options)?;
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    use tenferro_tensor::BackendSessionHost;
+    backend.with_backend_session(|session| {
+        grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
+    })
+}
+
+/// Execute grouped GEMMs while consuming all three flat buffers.
+///
+/// The returned vector is the supplied output buffer after the grouped
+/// operation. Consuming the inputs avoids caller-side ownership bookkeeping;
+/// it does not duplicate their payloads inside the grouped descriptor bridge.
+///
+/// # Errors
+///
+/// Returns [`GroupedGemmError`] using the same validation and provider rules as
+/// [`grouped_mat_mul_shared`].
+pub fn grouped_mat_mul_shared_owned<T: MatrixScalar + TensorScalar>(
+    lhs: Vec<T>,
+    rhs: Vec<T>,
+    mut output: Vec<T>,
+    jobs: &[GroupedGemmJob],
+    options: GroupedGemmOptions,
+) -> std::result::Result<Vec<T>, GroupedGemmError> {
+    grouped_mat_mul_shared(&lhs, &rhs, &mut output, jobs, options)?;
+    Ok(output)
+}
+
 /// Error returned by [`lowest_hermitian_eigenpair`].
 ///
 /// The eigensolver is intended for small Rayleigh-Ritz projected matrices; it validates shape and Hermitian structure before calling the backend Hermitian
