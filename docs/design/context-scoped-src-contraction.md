@@ -10,12 +10,12 @@ process-global CPU eager runtime. Combining the resulting tensors with inputs
 uploaded into a caller-selected `CudaExecutionContext` therefore crosses both
 placement and eager-runtime identities.
 
-On an NVIDIA A100, same-context CUDA pairwise contraction succeeds, while the
-first general SRC contraction reaches a CPU extension and fails because its
-operand is device-resident. CUDA eager QR/SVD also fail on the current pin even
-though current tenferro direct CUDA-session QR/SVD kernels pass. The upstream
-prerequisite is the separately reviewed placement-aware eager extension
-dispatch design in tenferro.
+The original NVIDIA A100 baseline reached a CPU extension from general SRC and
+failed on a device-resident operand. The merged context-aware execution phases
+removed that fallback. The final rank-revealing follow-up pins tenferro commit
+`0457a2ed0aeea21b14f4297f7f4731e09b3a0507`, whose eager extension provides
+fixed-output, traced-compatible RRQR on CPU-faer, CPU-BLAS/LAPACK, and native
+CUDA.
 
 ## Invariants
 
@@ -95,7 +95,7 @@ checked without using them.
 Make the factorization operations required by SRC context-aware before changing
 SRC itself:
 
-- QR, including incremental probe QR;
+- QR and column-pivoted RRQR for incremental probe factorization;
 - SVD and device-resident slicing/truncation;
 - the Appendix-C adaptive SRC error estimate;
 - final-SVD factor absorption.
@@ -111,9 +111,10 @@ singular-value vector on host to choose rank. Current
 CUDA SRC.
 
 Replace the adaptive estimator's CPU fallback with eager operations in the
-same runtime: form `R†`, solve the triangular system there, compute norm terms
-there, and read back only the bounded scalar/vector decision payload needed by
-Rust control flow. SVD factors and slicing remain resident; only singular
+same runtime: form the sketch factor's adjoint, solve the small square general
+system there (the factor is restored from RRQR pivot order and is not generally
+triangular), compute norm terms there, and read back only the bounded
+scalar/vector decision payload needed by Rust control flow. SVD factors and slicing remain resident; only singular
 values needed for rank selection/public diagnostics cross the explicit
 `read_decision_data` boundary. Validate results after each factorization and
 slice.
@@ -168,6 +169,7 @@ or results.
 
 Decision readbacks are a separate category and are limited to:
 
+- the scalar I64 rank returned by RRQR (permutation metadata stays resident);
 - singular values needed to choose/return retained rank;
 - final scalar estimates required by adaptive stopping.
 
@@ -245,8 +247,25 @@ than adding local compatibility shims.
 - A process-global CUDA registry or thread-local current device.
 - Migrating every tensor4all algorithm to explicit contexts in #720; the seam
   is reusable and #623 owns subsequent entry-point migrations.
-- Changing tolerances, AD rules, structured-storage semantics, or index
-  equality.
+- Changing AD rules, structured-storage semantics, or index equality.
+
+## Rank-revealing QR follow-up
+
+The transitional resident rank guard inspected successive diagonal entries of
+non-pivoted QR and therefore could miss independent columns after an
+interspersed dependent column. The follow-up replaces that loop with upstream
+column-pivoted RRQR. Its scale-invariant SRC policy is
+`rtol = 32 * f64::EPSILON * max(rows, columns)` and `atol = 0`; rank is the
+strict leading RRQR diagonal prefix defined by tenferro. Only the scalar rank
+is explicitly synchronized to host control flow.
+
+RRQR returns `A[:, permutation] = Q R`. To retain the tensor4all factorization
+contract without downloading permutation metadata, tensor4all computes
+`right = Q_rank^H A` in the owning context. This restores the original sketch
+column order. The resulting square right factor is generally non-triangular,
+so the Appendix-C estimator uses a general solve for this small sketch matrix;
+the legacy global-CPU `IncrementalQr` path and its triangular update remain
+unchanged.
 
 ## Review and verification gates
 

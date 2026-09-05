@@ -393,8 +393,9 @@ pub struct SrcErrorEstimate {
 ///
 /// # Errors
 ///
-/// Returns [`BackendLinalgError`] when `r` is empty, non-square, singular, or
-/// contains non-finite values, or when the backend triangular solve fails.
+/// Returns [`BackendLinalgError`] when `r` is empty, non-square,
+/// non-triangular, singular, or contains non-finite values, or when the backend
+/// triangular solve fails.
 ///
 /// # Examples
 ///
@@ -414,6 +415,68 @@ where
 {
     let inverse_adjoint = src_inverse_adjoint(r)?;
     src_error_estimate_from_inverse_adjoint(r, &inverse_adjoint)
+}
+
+/// Compute the Appendix C SRC estimates from a general square sketch factor.
+///
+/// This variant is equivalent to [`src_error_estimate`] but uses a general
+/// solve for factors whose columns have been restored from pivoted QR order.
+/// The matrix is a small SRC sketch factor, not a full tensor materialization.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] when `factor` is empty, non-square, singular,
+/// contains non-finite values, or when the configured general solve fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{src_error_estimate_general, Matrix};
+///
+/// let factor = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 3.0, 2.0, 1.0]);
+/// let estimate = src_error_estimate_general(&factor).unwrap();
+/// assert!(estimate.error.is_finite());
+/// assert!((estimate.norm - (14.0_f64 / 2.0).sqrt()).abs() < 1.0e-12);
+/// ```
+pub fn src_error_estimate_general<T>(
+    factor: &Matrix<T>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixSolveScalar + ComplexFloat,
+{
+    let nrows = factor.nrows();
+    let ncols = factor.ncols();
+    if nrows != ncols {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a square factor, got {nrows}x{ncols}"
+        )));
+    }
+    if nrows == 0 {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires a non-empty factor"
+        )));
+    }
+    if factor
+        .as_col_major_slice()
+        .iter()
+        .any(|value| !value.matrix_abs_sq().is_finite())
+    {
+        return Err(BackendLinalgError::from(anyhow!(
+            "SRC estimator requires finite entries in its factor"
+        )));
+    }
+    let mut adjoint = Matrix::zeros(nrows, ncols);
+    let mut identity = Matrix::zeros(nrows, ncols);
+    for col in 0..ncols {
+        for row in 0..nrows {
+            adjoint[[row, col]] = factor[[col, row]].conj();
+        }
+        identity[[col, col]] = T::one();
+    }
+    let inverse_adjoint = solve_matrix(&adjoint, &identity).map_err(|error| {
+        BackendLinalgError::from(anyhow!("SRC inverse-adjoint general solve failed: {error}"))
+    })?;
+    src_error_estimate_from_inverse_adjoint(factor, &inverse_adjoint)
 }
 
 /// Compute the inverse adjoint `R^{-†}` used by the Appendix C estimator.
@@ -454,6 +517,13 @@ where
                 "SRC estimator requires a finite, nonzero diagonal in R at ({col}, {col})"
             )));
         }
+        for row in col + 1..nrows {
+            if r[[row, col]].matrix_abs_sq() != 0.0 {
+                return Err(BackendLinalgError::from(anyhow!(
+                    "SRC triangular estimator requires upper-triangular R; entry ({row}, {col}) is nonzero"
+                )));
+            }
+        }
     }
 
     let mut adjoint = Matrix::zeros(nrows, ncols);
@@ -486,7 +556,7 @@ pub(crate) fn src_error_estimate_from_inverse_adjoint<T>(
     inverse_adjoint: &Matrix<T>,
 ) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
 where
-    T: MatrixTriangularSolveScalar + ComplexFloat,
+    T: crate::matrix::MatrixScalar + ComplexFloat,
 {
     let nrows = r.nrows();
     let ncols = r.ncols();
